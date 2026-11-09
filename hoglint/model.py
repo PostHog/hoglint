@@ -133,6 +133,9 @@ class Finding:
     remedies: tuple[Remedy, ...] = ()
     owners: tuple[str, ...] = ()
     status: FindingStatus = FindingStatus.NEW
+    subjects: tuple[str, ...] = ()  # modules or entities the finding is about; levels group by them
+    ledgerable: bool = True  # False for on_unresolved = "block": the ledger may not accept it
+    unknown: bool = False  # exists because something did not resolve; forbids levels even when ledgered
 
 
 @dataclass(frozen=False, slots=True)
