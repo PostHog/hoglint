@@ -7,6 +7,7 @@ from pathlib import Path
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig, SettingsProxy
 
 FIRST_PARTY = ("posthog", "ee", "products", "common")
+REPO_PACKAGES = frozenset(FIRST_PARTY)
 
 POSTHOG_DJANGO = DjangoPackConfig(
     first_party=FIRST_PARTY,

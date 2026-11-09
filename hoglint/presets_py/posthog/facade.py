@@ -21,12 +21,12 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
+from hoglint.packs.django.relations import flag
+from hoglint.presets_py.posthog.config import REPO_PACKAGES
 from hoglint.spike.core import TYPE_ONLY, Core, const_of
 
 FACADE_PRODUCER = "posthog.facade-facts@1"
-REPO_PACKAGES = frozenset({"common", "ee", "posthog", "products"})
 DATACLASS_DECORATORS = frozenset({"dataclass", "frozen"})
-REEXPORT_DUNDERS = frozenset({"__getattr__", "__dir__"})
 SPECIAL_FORMS = frozenset({"Literal", "Annotated"})
 MUTATORS = ("append", "extend", "insert", "add", "update")
 CLASS_BODY = 8  # context flag of a statement directly in a top-level class body
@@ -217,6 +217,14 @@ class Origin:
     via: tuple[str, ...] = ()
 
 
+def facade_product(module: str) -> str | None:
+    """The product of a module under `products/<name>/backend/`."""
+    parts = module.split(".")
+    if len(parts) >= 3 and parts[0] == "products" and parts[2] == "backend":
+        return parts[1]
+    return None
+
+
 def is_name(value: object) -> bool:
     return isinstance(value, str) and "." not in value
 
@@ -399,10 +407,6 @@ def mutated(facts: ModuleFacts, name: str) -> bool:
     return False
 
 
-def flag(value: bool) -> str:
-    return "true" if value else "false"
-
-
 @dataclass(frozen=True)
 class Handed:
     bound: str
@@ -421,13 +425,6 @@ class FacadeFacts:
         self.signatures: Counter[tuple[str, str]] = Counter()
 
     @staticmethod
-    def product_of(module: str) -> str | None:
-        parts = module.split(".")
-        if len(parts) >= 3 and parts[0] == "products" and parts[2] == "backend":
-            return parts[1]
-        return None
-
-    @staticmethod
     def backend_rel(module: str, is_package: bool) -> str:
         parts = module.split(".")[3:]
         if not parts:
@@ -436,7 +433,7 @@ class FacadeFacts:
 
     def surface_rel(self, module: str) -> str | None:
         is_package = self.index.locate(module)
-        if is_package is None or self.product_of(module) is None:
+        if is_package is None or facade_product(module) is None:
             return None
         return self.backend_rel(module, is_package)
 
@@ -604,7 +601,9 @@ class FacadeFacts:
         ordinal = self.signatures[(dotted, symbol)]
         self.signatures[(dotted, symbol)] += 1
         base = [*(extra or []), ("signature", str(ordinal))]
-        self.slot(d.get("ret"), facts, dotted, symbol, "return", base)
+        # The facts write `-> None` and a missing return annotation both as null, so neither is "untyped".
+        if d.get("ret") is not None:
+            self.slot(d["ret"], facts, dotted, symbol, "return", base)
         for param in d.get("params", ()):
             if param[0] in ("self", "cls"):
                 continue
@@ -633,6 +632,8 @@ class FacadeFacts:
                 if row["op"] != ":" or not is_name(target):
                     continue
                 ann = row.get("ann")
+                if ann is None:
+                    continue  # `x: None`: an annotated row always has an annotation
                 if isinstance(ann, dict) and "sub" in ann and decorator_bare(ann["sub"]) == "ClassVar":
                     continue
                 attrs = [("signature", f"field-{ordinal}")]

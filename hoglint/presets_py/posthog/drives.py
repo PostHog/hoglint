@@ -9,10 +9,10 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
 
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
-from hoglint.spike.core import CLASS, SITE_MARKER, Core, absolute_import, module_of_path, qualname
+from hoglint.packs.django.sites import PathKinds
+from hoglint.spike.core import CLASS, SITE_MARKER, Core, absolute_import, is_const, module_of_path, qualname
 
 SCANNED_ROOTS = ("posthog/", "ee/", "products/", "common/")
 QUERY_DISPATCHER = "posthog/hogql_queries/query_runner.py"
@@ -103,17 +103,10 @@ class FileFacts:
     scopes: dict[str, ScopeFacts]
     mentions: list[Mention]
     pending: list[Pending]
-    name_uses: Counter = field(default_factory=Counter)
-    attr_uses: Counter = field(default_factory=Counter)
+    name_uses: Counter[str] = field(default_factory=Counter)
+    attr_uses: Counter[tuple[str, str]] = field(default_factory=Counter)
     dispatch_branches: list[tuple[list[str], list[str], list[str]]] = field(default_factory=list)
     enum_members: dict[str, dict[str, str]] = field(default_factory=dict)
-
-
-def is_test_path(rel: str) -> bool:
-    path = PurePosixPath(rel)
-    if "test" in path.parts or "tests" in path.parts:
-        return True
-    return path.name.startswith("test_") or path.name.endswith("_test.py") or path.name == "conftest.py"
 
 
 def callee_name(callee: str) -> str | None:
@@ -128,14 +121,6 @@ def is_client_call(callee: str) -> bool:
         return False
     receiver, _, method = callee.rpartition(".")
     return method in TEST_CLIENT_METHODS and receiver.endswith("client")
-
-
-def is_sv_constant(value: object) -> bool:
-    if value is None or isinstance(value, (bool, int)):
-        return True
-    if isinstance(value, dict):
-        return "s" in value or value.get("o") in ("float", "complex", "bytes", "...", "int", "longstr", "badstr")
-    return False
 
 
 def str_of(value: object) -> str | None:
@@ -265,7 +250,7 @@ class FactAdapter:
         bodies: dict[str, Body] = {}
         for idx, fid in self.fids.items():
             d = defs[idx]
-            const_params = frozenset(p[0] for p in d.get("params", []) if len(p) > 3 and is_sv_constant(p[3]))
+            const_params = frozenset(p[0] for p in d.get("params", []) if len(p) > 3 and is_const(p[3]))
             bodies[fid] = Body(
                 fid, d["n"], frozenset(calls_in[idx]), idx in client_in, frozenset(patches_in[idx]), const_params
             )
@@ -305,7 +290,7 @@ class FactAdapter:
         facts = FileFacts(
             rel=self.rel,
             dotted=self.dotted,
-            is_test=is_test_path(self.rel),
+            is_test=PathKinds.is_test(self.rel),
             imports=imports,
             module_aliases=aliases,
             top_names=[n for n in top_names if not n.startswith("_")],
@@ -328,7 +313,14 @@ class FactAdapter:
             facts.enum_members = self.enum_members()
         return facts
 
-    def scope_facts(self, idx: int, calls, client: bool, patch_rows, bases: list[str] | None = None) -> ScopeFacts:
+    def scope_facts(
+        self,
+        idx: int,
+        calls: frozenset[str] | set[str],
+        client: bool,
+        patch_rows: list[tuple[int, str]],
+        bases: list[str] | None = None,
+    ) -> ScopeFacts:
         methods: dict[str, list[str]] = defaultdict(list)
         test_children: set[int] = set()
         for child in self.children[idx]:
@@ -347,12 +339,12 @@ class FactAdapter:
             rest.add(leaf)
         return ScopeFacts(frozenset(calls), client, frozenset(rest), dict(methods), bases or [])
 
-    def mentions(self, bound: set[str]) -> tuple[list[Mention], list[Pending], Counter, Counter]:
+    def mentions(self, bound: set[str]) -> tuple[list[Mention], list[Pending], Counter[str], Counter[tuple[str, str]]]:
         record = self.record
         mentions: list[Mention] = []
         pending: list[Pending] = []
-        name_uses: Counter = Counter()
-        attr_uses: Counter = Counter()
+        name_uses: Counter[str] = Counter()
+        attr_uses: Counter[tuple[str, str]] = Counter()
 
         for s, h, value, count, line, _c in record.get("names", []):
             if CAMEL.match(value):
@@ -386,7 +378,7 @@ class FactAdapter:
             under = step in ("dict:val:query", "dict:val:source")
             if callee is None and not under:
                 continue
-            if is_sv_constant(value):
+            if is_const(value):
                 continue
             fid, cls = self.enclosing(s, h)
             if isinstance(value, str) and "." not in value:
@@ -406,7 +398,19 @@ class FactAdapter:
                 pending.append(Pending(callee, under, "other", None, None, fid, cls))
         return mentions, pending, name_uses, attr_uses
 
-    def root_use(self, root, tokens, count, s, h, line, bound, mentions, name_uses, attr_uses) -> None:
+    def root_use(
+        self,
+        root: str,
+        tokens: list[str],
+        count: int,
+        s: int,
+        h: int,
+        line: int,
+        bound: set[str],
+        mentions: list[Mention],
+        name_uses: Counter[str],
+        attr_uses: Counter[tuple[str, str]],
+    ) -> None:
         if root in bound:
             name_uses[root] += count
         fid = cls = None
@@ -510,7 +514,7 @@ class Reads:
 class CallView:
     def __init__(self, facts: dict[str, FileFacts]) -> None:
         self.facts = facts
-        self.memo: dict[tuple, tuple[bool, list[str], Reads]] = {}
+        self.memo: dict[tuple[str, str, frozenset[str], bool], tuple[bool, list[str], Reads]] = {}
 
     def body_executes(self, body: Body, dispatchers: frozenset[str]) -> bool:
         return body.client or bool(body.calls & dispatchers)
@@ -538,7 +542,9 @@ class CallView:
                 reads.symbols.add(f"{edge.module}:{fid}")
         return found
 
-    def executes(self, module: str, name: str, patched: frozenset[str], depth: int = 0, local: bool = False):
+    def executes(
+        self, module: str, name: str, patched: frozenset[str], depth: int = 0, local: bool = False
+    ) -> tuple[bool, list[str], Reads, bool]:
         if name in patched:
             return False, [], Reads(), True
         if depth >= MAX_CALL_DEPTH or module not in self.facts:
@@ -629,7 +635,7 @@ class Deriver:
             root = f"products/{product}/{loc.rstrip('/')}"
             facade = f"products/{product}/backend/facade/"
             for ff in self.facts.values():
-                if not ff.rel.startswith(facade) or is_test_path(ff.rel[len(facade) :]):
+                if not ff.rel.startswith(facade) or PathKinds.is_test(ff.rel[len(facade) :]):
                     continue
                 for name, value in ff.lazy_map.items():
                     for cand in [value, *(p + value for p in ff.lazy_prefixes), f"products.{product}.backend.{value}"]:
@@ -730,7 +736,9 @@ class Deriver:
         edges += self.kind_edges(ff, owner)
         return edges
 
-    def executions(self, ff: FileFacts, dispatchers: frozenset[str], fid: str | None, cls: str | None):
+    def executions(
+        self, ff: FileFacts, dispatchers: frozenset[str], fid: str | None, cls: str | None
+    ) -> tuple[str, list[str], bool, Reads]:
         reads = Reads({ff.rel}, set())
         body = ff.bodies.get(fid) if fid else None
         scope_key = cls if cls is not None else "<module>"
@@ -744,7 +752,7 @@ class Deriver:
             for n, fids in self.class_helpers(ff, cls).items():
                 helpers.setdefault(n, []).extend(fids)
         seen: set[str] = set()
-        pending = [(body.fid, [])]
+        pending: list[tuple[str, list[str]]] = [(body.fid, [])]
         outward: set[str] = set()
         while pending:
             cur, chain = pending.pop()
@@ -791,7 +799,7 @@ class Deriver:
         enum_bases = frozenset({e.bound for e in ff.imports if e.exported in self.enums}) | self.enums
         dispatchers = frozenset({e.bound for e in ff.imports if e.exported in DISPATCH_CALLS}) | DISPATCH_CALLS
         edges: list[DriveEdge] = []
-        cache: dict[tuple, tuple] = {}
+        cache: dict[tuple[str | None, str | None], tuple[str, list[str], bool, Reads]] = {}
         resolved_fids: set[str | None] = set()
         for m in ff.mentions:
             kind = self.kind_of(m, constructors, enum_bases)

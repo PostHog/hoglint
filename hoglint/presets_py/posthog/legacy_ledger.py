@@ -17,14 +17,14 @@ from typing import cast
 from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.packs.django.pack import DjangoPack
 from hoglint.presets_py.posthog import facade
-from hoglint.presets_py.posthog.config import POSTHOG_DJANGO
+from hoglint.presets_py.posthog.config import POSTHOG_DJANGO, REPO_PACKAGES
 from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
+from hoglint.presets_py.posthog.facade import facade_product
 from hoglint.spike.core import Core, FactStore, const_of
 
 ISOLATION_PATH = "tools/hogli-commands/hogli_commands/product/isolation.py"
 BASELINE_PATH = "products/model_crossing_uses_baseline.txt"
 NOT_ISOLATED_PATH = "products/isolation_baseline.txt"
-REPO_PACKAGES = frozenset({"common", "ee", "posthog", "products"})
 GARAGE_PREFIXES = (
     "backend/hogql_queries/",
     "backend/max_tools.py",
@@ -171,13 +171,6 @@ class LegacyLedger:
         out = set(self.reverse_accessors())
         out.update(f"{target} {module} {kind} {n}" for (target, module, kind), n in counts.items())
         return sorted(out)
-
-
-def facade_product(module: str) -> str | None:
-    parts = module.split(".")
-    if len(parts) >= 3 and parts[0] == "products" and parts[2] == "backend":
-        return parts[1]
-    return None
 
 
 def backend_rel(module: str) -> str:
