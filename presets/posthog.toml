@@ -229,8 +229,8 @@ select        = "src.package != dst.package and dst.tier == 'product'"
 endpoint      = "surface"
 allow         = "dst.exported"
 on_unresolved = "finding"
-identity      = "module-symbol"
-growth_key    = ["dst.symbol", "edge.label"]
+identity      = ["dst.symbol", "src.module", "edge.kind"]
+growth_key    = ["dst.symbol", "edge.kind"]
 
 [rules.export-shape]
 primitive  = "export"
