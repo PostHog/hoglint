@@ -1,8 +1,10 @@
 """Read audit: a rule's decision reads only what the rule declares.
 
-Grouped evaluation judges one edge per group and gives the others the same decision, so a
-decision that reads a field its rule does not declare would hand out a wrong answer. In audit
-mode every read a decision makes is recorded:
+Grouped evaluation judges one edge per group and gives the others the same judgment, so a
+decision that reads a field its rule does not declare would hand out a wrong answer. A decision
+is `droppable` and `decide`; what a finding says about its own edge (identity, subjects, owner,
+message) is made per edge from the judgment, so it is not audited. In audit mode every read a
+decision makes is recorded:
 - label and endpoint fields, where `read_endpoint` reads them;
 - edge fields, where `EdgeEnv.edge_value` reads them;
 - the Edge and Endpoint attributes a primitive's own Python code reads.
@@ -21,7 +23,7 @@ from typing import Any
 
 from hoglint.model import Edge
 from hoglint.rules import base
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext, project
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext, StagedSelection
 from hoglint.rules.reads import decision_reads, granularity
 
 EDGE_FIELDS = {
@@ -135,6 +137,7 @@ class ReadAudit:
         patch(EdgeEnv, "edge_value", audited_edge_value)
         patch(EdgeEnv, "endpoint_value", audited_endpoint_value)
         patch(EdgeEnv, "__init__", self.quietly(EdgeEnv.__init__))
+        patch(StagedSelection, "rest_key", staticmethod(self.quietly(StagedSelection.rest_key)))
         patch(EdgeEnv, "__getattribute__", env_getattribute)
         patch(Edge, "attr", audited_attr)
         patch(Edge, "__getattribute__", edge_getattribute)
@@ -154,8 +157,9 @@ class ReadAudit:
     def check(
         self, rule: EdgeRule, edge: Edge, src: Endpoint, dst: Endpoint, granted: frozenset[tuple[str, str]]
     ) -> None:
-        """Runs the rule's decision for one edge (`droppable` and its identity) and records a
-        failure for each read outside `granted`."""
+        """Runs the rule's decision for one edge (`droppable` and `decide`, the judgment a group
+        shares) and records a failure for each read outside `granted`. What a finding says about
+        its own edge is made per edge from the judgment, so it is not audited."""
         self.reads = set()
         self.src, self.dst = src, dst
         self.checked += 1
@@ -163,7 +167,7 @@ class ReadAudit:
         try:
             env = rule.env(edge, src, dst)
             rule.droppable(env)
-            project(rule.spec.identity, env.resolve)
+            rule.decide(env)
         finally:
             self.active = False
         extra = tuple(sorted(self.reads - granted))
@@ -172,15 +176,14 @@ class ReadAudit:
 
 
 def audit_rule(audit: ReadAudit, rule: EdgeRule, edges: Iterable[Edge]) -> None:
-    """Audits `rule`'s decision for every environment of `edges`; failures go to `audit`."""
+    """Audits `rule`'s decision for every environment of `edges`; failures go to `audit`. An edge
+    the rule does not see is audited too: a group's representative can be one."""
     reads = decision_reads(rule)
     if reads is None:
         return
     src_scope, dst_entity = granularity(reads, rule.ctx.labeler)
     granted = reads.granted(src_scope, dst_entity)
     for edge in edges:
-        if not rule.sees(edge):
-            continue
         src = rule.ctx.src_endpoint(edge.site)
         for dst in rule.ctx.dst_endpoints(edge, rule.spec.endpoint):
             audit.check(rule, edge, src, dst, granted)

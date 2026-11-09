@@ -5,7 +5,7 @@ from __future__ import annotations
 from hoglint.config.model import RuleSpec
 from hoglint.index import is_core
 from hoglint.model import Edge, EntityId, Remedy
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext
 from hoglint.selectors import Ref, Selector, Truth
 
 EXPORTED = Selector.parse("dst.exported")
@@ -119,29 +119,27 @@ class SignaturePrimitive(EdgeRule):
     def own_reads(self) -> list[Ref]:
         return [Ref(("edge", "annotation")), Ref(("dst", "symbol"))]
 
-    def droppable(self, env: EdgeEnv) -> bool:
+    def decide(self, env: EdgeEnv) -> Judgment:
         if self.selection(env) is Truth.FALSE:
-            return True
+            return Judgment.CLEAN
         if not env.dst.unresolved and self.unknown_type(env):
-            return False
-        return super().droppable(env)
+            return Judgment.UNKNOWN_TYPE
+        return super().decide(env)
 
     def unknown_type(self, env: EdgeEnv) -> bool:
         if env.edge.attr("annotation") == "missing":
             return True
         return (env.dst.symbol or "") in self.spec.unknown_types
 
-    def judge(self, env: EdgeEnv, describe: str) -> None:
-        if self.selection(env) is Truth.FALSE:
+    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
+        if judgment is not Judgment.UNKNOWN_TYPE:
+            super().report(env, judgment, describe)
             return
-        if not env.dst.unresolved and self.unknown_type(env):
-            message = f"{env.src.symbol}: {env.edge.attr('slot') or 'signature'} has no usable type ({env.edge.surface or 'missing'})"
-            if self.spec.on_unknown == "incomplete":
-                self.incomplete(env, message)
-                return
-            self.emit(env, message, ledgerable=self.spec.on_unknown == "finding", unknown=True)
+        message = f"{env.src.symbol}: {env.edge.attr('slot') or 'signature'} has no usable type ({env.edge.surface or 'missing'})"
+        if self.spec.on_unknown == "incomplete":
+            self.incomplete(env, message)
             return
-        super().judge(env, describe)
+        self.emit(env, message, ledgerable=self.spec.on_unknown == "finding", unknown=True)
 
     def describe(self, env: EdgeEnv) -> str:
         slot = env.edge.attr("slot") or "signature"

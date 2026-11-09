@@ -3,9 +3,11 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
+import pytest
+
 from hoglint.model import Edge, Resolution
 from hoglint.rules.audit import ReadAudit, audit_rule
-from hoglint.rules.base import EdgeEnv, EdgeRule, context_class
+from hoglint.rules.base import EdgeEnv, EdgeRule, Judgment, context_class
 from hoglint.rules.edges import EdgePrimitive
 from hoglint.rules.engine import Engine, primitive_of
 
@@ -128,6 +130,20 @@ class ReadsSurface(EdgePrimitive):
         return env.edge.surface.endswith("charge") and super().droppable(env)
 
 
+class DecidesBySurface(EdgePrimitive):
+    """A primitive whose judgment, not its own `droppable`, reads a field it does not declare."""
+
+    def decide(self, env: EdgeEnv) -> Judgment:
+        return super().decide(env) if env.edge.surface.endswith("charge") else Judgment.CLEAN
+
+
+class SeesNothing(ReadsSurface):
+    """`ReadsSurface` on edges the rule never sees: a group's representative can be one."""
+
+    def sees(self, edge: Edge) -> bool:
+        return False
+
+
 def audited(tmp_path: Path, rules: dict[str, type[EdgeRule]] | None = None) -> list[str]:
     config = config_from(tmp_path, FIELDS)
     built = graph().graph
@@ -148,6 +164,7 @@ def test_every_built_in_decision_reads_only_what_its_rule_declares(tmp_path: Pat
     assert "__getattribute__" not in Edge.__dict__
 
 
-def test_a_decision_that_reads_an_undeclared_field_fails_the_audit(tmp_path: Path) -> None:
-    failures = audited(tmp_path, {"no-product-from-core": ReadsSurface})
+@pytest.mark.parametrize("primitive", [ReadsSurface, DecidesBySurface, SeesNothing])
+def test_a_decision_that_reads_an_undeclared_field_fails_the_audit(tmp_path: Path, primitive: type[EdgeRule]) -> None:
+    failures = audited(tmp_path, {"no-product-from-core": primitive})
     assert failures and all(f.startswith("no-product-from-core: reads edge.surface") for f in failures)

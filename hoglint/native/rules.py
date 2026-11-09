@@ -24,10 +24,11 @@ from typing import Any
 from hoglint.config.model import Config
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
+from hoglint.ledger.envelope import EngineError
 from hoglint.model import Edge, Finding, FindingDetail, Graph
 from hoglint.native.graph import CONTEXT_BITS, RESOLUTIONS, NativeGraph
 from hoglint.rules.audit import ReadAudit, audit_rule
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext, column_ref, conjuncts, joined, read_endpoint
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext, conjuncts, joined, read_endpoint
 from hoglint.rules.graphs import Hop
 from hoglint.rules.reads import Reads, granularity
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
@@ -102,22 +103,29 @@ NO_CLASS = 0xFFFFFFFF
 
 
 class Rejudged:
-    """The detail of a finding grouped evaluation copied from its group's template: the rule
-    judges the edge again when something reads the message, site, witnesses or remedies."""
+    """The detail of a finding made from its group's judgment: the rule judges the edge again
+    when something reads the message, site, witnesses or remedies. An edge judged apart from its
+    group is an engine error, never a silent difference."""
 
-    __slots__ = ("edge", "made", "rule")
+    __slots__ = ("edge", "judgment", "made", "rule")
 
-    def __init__(self, rule: EdgeRule, edge: Edge) -> None:
+    def __init__(self, rule: EdgeRule, edge: Edge, judgment: Judgment) -> None:
         self.rule = rule
         self.edge = edge
+        self.judgment = judgment
         self.made: FindingDetail | None = None
 
     def get(self) -> FindingDetail:
         if self.made is None:
-            run = self.rule.recorded(self.rule.edge_envs(self.edge))
-            if len(run.findings) != 1 or run.incomplete:
-                raise RuntimeError(f"rule {self.rule.spec.id} no longer makes one finding for {self.edge}")
-            self.made = run.findings[0].detail.get()
+            envs = list(self.rule.edge_envs(self.edge))
+            judged = [self.rule.decide(env) for env in envs]
+            if judged != [self.judgment]:
+                site = self.edge.site
+                raise EngineError(
+                    f"rule {self.rule.spec.id} judges {self.edge.kind} {site.path}:{site.line} {judged}, "
+                    f"apart from its group's {self.judgment}"
+                )
+            self.made = self.rule.recorded(envs).findings[0].detail.get()
         return self.made
 
 
@@ -205,7 +213,7 @@ class Grouper:
         self.tables = ctx.endpoint_classes
         self.role = rule.spec.endpoint
         self.exports = list(ctx.config.exports.values())
-        self.templates: dict[int, Finding] = {}
+        self.judgments: dict[int, Judgment] = {}
 
     def env(self, edge: Edge) -> EdgeEnv:
         dst = self.ctx.dst_endpoints(edge, self.role)[0]
@@ -301,34 +309,40 @@ class Grouper:
         ]
         return type(self.link).group(raw, layers)
 
-    def decide(self, ids: array[int], reads: Reads) -> array[int]:
-        """Drops the edges whose group the rule's whole decision drops."""
+    def shared(self, env: EdgeEnv) -> tuple[bool, Judgment | None]:
+        """Whether the group of `env`'s edge stays, and the judgment its edges share: one whose
+        report is one finding, which each edge then makes from its own env."""
+        judgment = self.rule.decide(env)
+        if judgment is Judgment.CLEAN:
+            return False, None
+        run = self.rule.reported(env, judgment)
+        return True, judgment if len(run.findings) == 1 and not run.incomplete else None
+
+    def decide(self, ids: array[int], reads: Reads, record: bool) -> array[int]:
+        """Drops the edges whose group the rule's whole decision drops. With `record`, a group
+        whose judgment makes one finding gives that judgment to every edge left in it."""
         group_of, reps = self.layers(ids, reads)
         rep_edges = self.core.get(array("I", reps))
         self.audit(rep_edges)
-        keep = [not self.rule.droppable(self.env(edge)) for edge in rep_edges]
-        return self.keep(ids, group_of, keep)
+        keep: list[bool] = []
+        judgments: list[Judgment | None] = []
+        for edge in rep_edges:
+            env = self.env(edge)
+            kept, judgment = self.shared(env) if record else (not self.rule.droppable(env), None)
+            keep.append(kept)
+            judgments.append(judgment)
+        kept_ids, groups = type(self.link).keep_keys(ids.tobytes(), group_of, bytes(keep))
+        for edge_id, group in zip(array("I", kept_ids), array("I", groups)):
+            judgment = judgments[group]
+            if judgment is not None:
+                self.judgments[edge_id] = judgment
+        return array("I", kept_ids)
 
     def audit(self, edges: list[Edge]) -> None:
         """In audit mode, checks the decision of each representative for undeclared reads."""
         audit = self.ctx.audit
         if audit is not None:
             audit_rule(audit, self.rule, edges)
-
-    def record(self, ids: array[int], reads: Reads) -> None:
-        """Templates for the edges left: `reads` hold the rule's identity too, so the one finding a
-        group's representative makes is every edge's in the group."""
-        group_of, reps = self.layers(ids, reads)
-        templates: list[Finding | None] = []
-        rep_edges = self.core.get(array("I", reps))
-        self.audit(rep_edges)
-        for edge in rep_edges:
-            made = self.rule.recorded([self.env(edge)])
-            templates.append(made.findings[0] if len(made.findings) == 1 and not made.incomplete else None)
-        for edge_id, group in zip(ids, array("I", group_of)):
-            template = templates[group]
-            if template is not None:
-                self.templates[edge_id] = template
 
     def survivors(self) -> array[int]:
         rule = self.rule
@@ -338,8 +352,6 @@ class Grouper:
         reads = Reads.of(rule.read_refs(), self.ctx.config)
         if reads is None or self.role not in GROUPED_ROLES or not ids:
             return ids
-        decided = Reads.of([*rule.read_refs(), *(column_ref(column) for column in rule.spec.identity)], self.ctx.config)
-        record = decided is not None and type(rule).evaluate is EdgeRule.evaluate
         parts = conjuncts(rule.selectors())
         for root in ("edge", "src", "dst"):
             mine = [part for part in parts if self.part_roots(part) == {root}]
@@ -350,10 +362,7 @@ class Grouper:
                     ids = self.stage(ids, node, part_reads)
         if not ids:
             return ids
-        ids = self.decide(ids, reads)
-        if record and decided is not None and ids:
-            self.record(ids, decided)
-        return ids
+        return self.decide(ids, reads, type(rule).evaluate is EdgeRule.evaluate)
 
     def part_roots(self, node: Node) -> set[str]:
         reads = Reads.of(refs(node), self.ctx.config)
@@ -373,7 +382,7 @@ class NativeRuleContext(RuleContext):
         assert isinstance(index, NativeGraphIndex)
         self.native = index
         self.endpoint_classes = EndpointClasses(self)
-        self.templates: dict[EdgeRule, dict[int, Finding]] = {}
+        self.judgments: dict[EdgeRule, dict[int, Judgment]] = {}
 
     def edge_of(self, edge: Edge | int) -> Edge:
         return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
@@ -405,11 +414,15 @@ class NativeRuleContext(RuleContext):
                         out.append(Hop(env.edge, env.dst, selected, env.edge.surface))
         return out
 
-    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
-        template = self.templates.get(rule, {}).get(id(edge))
-        if template is None:
+    def replica(self, rule: EdgeRule, edge: Edge, handle: int) -> Finding | None:
+        """The finding of a grouped edge: its group's judgment, reported from the edge's own env.
+        The message is made when something reads it."""
+        judgment = self.judgments.get(rule, {}).get(handle) if handle >= 0 else None
+        if judgment is None:
             return None
-        return dataclasses.replace(template, detail=Rejudged(rule, edge))
+        env = rule.env(edge, self.src_endpoint(edge.site), self.dst_endpoints(edge, rule.spec.endpoint)[0])
+        finding = rule.reported(env, judgment).findings[0]
+        return dataclasses.replace(finding, detail=Rejudged(rule, edge, judgment))
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
         return list(dict.fromkeys(kinds)) if kinds else self.native.kind_order()
@@ -421,20 +434,18 @@ class NativeRuleContext(RuleContext):
         grouper = Grouper(self, rule)
         ids = grouper.survivors()
         survivors = self.native.native.core.get(ids)
-        self.templates[rule] = {
-            id(edge): grouper.templates[edge_id]
-            for edge_id, edge in zip(ids, survivors)
-            if edge_id in grouper.templates
-        }
-        by_place: dict[tuple[str, str], list[Edge]] = {}
-        for edge in survivors:
-            by_place.setdefault((edge.kind, edge.site.module), []).append(edge)
+        self.judgments[rule] = grouper.judgments
+        by_place: dict[tuple[str, str], tuple[list[Edge], list[int]]] = {}
+        for edge_id, edge in zip(ids, survivors):
+            edges, handles = by_place.setdefault((edge.kind, edge.site.module), ([], []))
+            edges.append(edge)
+            handles.append(edge_id)
         for kind in self.kinds_or_all(rule.kinds()):
             extra = self.native.extra_by.get(kind, {})
             for module in self.native.modules_of(kind):
-                core = by_place.get((kind, module), [])
+                core, handles = by_place.get((kind, module), ([], []))
                 if core or module in extra:
-                    yield module, self.native.group(kind, module, core)
+                    yield module, self.native.group(kind, module, core, handles)
 
 
 class NativeGraphIndex(GraphIndex):
@@ -479,13 +490,19 @@ class NativeGraphIndex(GraphIndex):
             return True
         return bool(site.path) and site.path != self.graph.modules.get(site.module)
 
-    def group(self, kind: str, module: str, core: list[Edge] | None = None) -> EdgeGroup:
-        """One module's edges of one kind: its core edges (all, or the ones given), then its
-        pack edges."""
+    def group(
+        self, kind: str, module: str, core: list[Edge] | None = None, handles: list[int] | None = None
+    ) -> EdgeGroup:
+        """One module's edges of one kind: its core edges (all, or the ones given with their
+        handles), then its pack edges, which have no handle."""
         if core is None:
-            core = self.native.core.get(array("I", self.native.link.ids_from(kind, module)))
-        edges = core + self.extra_by.get(kind, {}).get(module, [])
-        return EdgeGroup(edges, [edge for edge in edges if self.is_irregular(edge)])
+            ids = array("I", self.native.link.ids_from(kind, module))
+            core, handles = self.native.core.get(ids), list(ids)
+        extra = self.extra_by.get(kind, {}).get(module, [])
+        edges = core + extra
+        all_handles = list(handles or ()) + [-1] * len(extra)
+        irregular = [at for at, edge in enumerate(edges) if self.is_irregular(edge)]
+        return EdgeGroup(edges, [edges[at] for at in irregular], all_handles, [all_handles[at] for at in irregular])
 
     def group_maker(self, kind: str) -> Any:
         return lambda module: self.group(kind, module)

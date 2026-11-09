@@ -42,10 +42,13 @@ def has_endpoint_attrs(edge: Edge) -> bool:
 class EdgeGroup:
     """The edges of one kind from one module. `irregular` holds the ones a module-wide answer
     cannot speak for: an edge with its own `src.*`/`dst.*` attributes, or a site path that is not
-    the module's."""
+    the module's. An engine that keeps edges outside Python gives each edge's run-local handle in
+    `handles` and `irregular_handles` (-1 for an edge without one); empty lists mean no handles."""
 
     edges: list[Edge] = field(default_factory=list)
     irregular: list[Edge] = field(default_factory=list)
+    handles: list[int] = field(default_factory=list)
+    irregular_handles: list[int] = field(default_factory=list)
 
 
 class SymbolFacts:

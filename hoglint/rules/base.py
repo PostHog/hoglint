@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import cache, cached_property
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,19 @@ class RuleRun:
     spec: RuleSpec
     findings: list[Finding] = field(default_factory=list)
     incomplete: list[IncompleteItem] = field(default_factory=list)
+
+
+class Judgment(StrEnum):
+    """What a rule decides for one edge, and nothing that names the edge: a group of edges shares
+    it. What a finding says about its edge (identity, subjects, owner, message) is made per edge
+    from the judgment (`EdgeRule.report`)."""
+
+    CLEAN = "clean"
+    UNRESOLVED = "unresolved"
+    UNKNOWN_SELECTION = "unknown-selection"
+    UNKNOWN_VIOLATION = "unknown-violation"
+    VIOLATION = "violation"
+    UNKNOWN_TYPE = "unknown-type"  # a signature slot with no usable type
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,8 +175,9 @@ class RuleContext:
         assert isinstance(edge, Edge)
         return edge
 
-    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
-        """The finding grouped evaluation already decided for this edge, or None to judge it."""
+    def replica(self, rule: EdgeRule, edge: Edge, handle: int) -> Finding | None:
+        """The finding of an edge whose group's verdict grouped evaluation already decided, or
+        None to judge it. `handle` is the edge's run-local handle, -1 for none."""
         return None
 
     @property
@@ -266,11 +281,15 @@ class RuleContext:
             detail=FindingDetail(
                 message, site if site is not None or not witnesses else witnesses[0].site, witnesses, remedies
             ),
-            owner=Owners(owner, self.owners_of) if owner is not None and self.config.roles.owner else None,
+            owner=self.owner(owner),
             subjects=subjects,
             ledgerable=ledgerable and spec.ledger,
             unknown=unknown,
         )
+
+    def owner(self, module: str | None) -> Owners | None:
+        """A finding's owners, looked up from `module` when something reads them."""
+        return Owners(module, self.owners_of) if module is not None and self.config.roles.owner else None
 
     def owners_of(self, module: str | None) -> tuple[str, ...]:
         owner = self.config.roles.owner
@@ -538,12 +557,17 @@ class StagedSelection:
         """The rest of the selection; one evaluation per module pair when it reads only module fields."""
         if not self.rest_modules or self.bypass(env.edge):
             return evaluate(rest, env.resolve)
-        src, dst = env.src, env.dst
-        key = (src.module, src.path, dst.module, dst.path, dst.external, dst.unresolved)
+        key = self.rest_key(env)
         cached = self.rest_cache.get(key)
         if cached is None:
             cached = self.rest_cache[key] = evaluate(rest, env.resolve)
         return cached
+
+    @staticmethod
+    def rest_key(env: EdgeEnv) -> tuple[object, ...]:
+        """The module pair the rest of the selection is cached under: a cache key, not a read."""
+        src, dst = env.src, env.dst
+        return (src.module, src.path, dst.module, dst.path, dst.external, dst.unresolved)
 
     def truth(self, env: EdgeEnv) -> Truth:
         parts = [self.src_truth(env.edge, env.src), self.dst_truth(env.edge, env.dst)]
@@ -641,12 +665,23 @@ class EdgeRule:
 
     def droppable(self, env: EdgeEnv) -> bool:
         """True when `judge` makes no finding and no incomplete for this environment."""
+        return self.decide(env) is Judgment.CLEAN
+
+    def decide(self, env: EdgeEnv) -> Judgment:
+        """The rule's judgment of one environment: the decision, and nothing that names the edge."""
         selected = self.selection(env)
         if selected is Truth.FALSE:
-            return True
-        if env.dst.unresolved or selected is Truth.UNKNOWN:
-            return False
-        return self.violation(env) is Truth.FALSE or self.excused(env)
+            return Judgment.CLEAN
+        if env.dst.unresolved:
+            return Judgment.UNRESOLVED
+        if selected is Truth.UNKNOWN:
+            return Judgment.UNKNOWN_SELECTION
+        verdict = self.violation(env)
+        if verdict is Truth.FALSE or self.excused(env):
+            return Judgment.CLEAN
+        if verdict is Truth.UNKNOWN:
+            return Judgment.UNKNOWN_VIOLATION
+        return Judgment.VIOLATION
 
     def selection(self, env: EdgeEnv) -> Truth:
         return self.staged.truth(env)
@@ -718,41 +753,54 @@ class EdgeRule:
             return
         self.emit(env, what, ledgerable=self.spec.on_unresolved == "finding", unknown=True)
 
-    def judge(self, env: EdgeEnv, describe: str) -> None:
-        """The common decision for one edge; `describe` is the finding message."""
-        selected = self.selection(env)
-        if selected is Truth.FALSE:
-            return
-        if env.dst.unresolved:
+    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
+        """The finding or incomplete `judgment` makes for one environment, all of it from the
+        environment's own edge; `describe` is the finding message."""
+        if judgment is Judgment.UNRESOLVED:
             self.on_unresolved(env)
-            return
-        if selected is Truth.UNKNOWN:
+        elif judgment is Judgment.UNKNOWN_SELECTION:
             unknown = self.unknown_refs(self.spec.from_, env) or self.unknown_refs(self.spec.select, env)
             self.incomplete(env, f"selection reads unknown {unknown or 'values'}")
-            return
-        verdict = self.violation(env)
-        if verdict is Truth.FALSE or self.excused(env):
-            return
-        if verdict is Truth.UNKNOWN:
+        elif judgment is Judgment.UNKNOWN_VIOLATION:
             unknown = ", ".join(
                 filter(None, (self.unknown_refs(s, env) for s in (self.spec.deny, self.spec.allow, self.spec.require)))
             )
             self.emit(env, f"{describe}; cannot tell, unassigned: {unknown or 'a value'}", unknown=True)
-            return
-        self.emit(env, describe)
+        elif judgment is Judgment.VIOLATION:
+            self.emit(env, describe)
+
+    def judge(self, env: EdgeEnv, describe: str) -> None:
+        """The decision for one edge, then what it reports; `describe` is the finding message."""
+        self.report(env, self.decide(env), describe)
 
     def evaluate(self) -> RuleRun:
         for module, group in self.ctx.rule_groups(self):
-            for edge in self.group_edges(module, group):
+            for edge, handle in self.group_items(module, group):
                 if not self.sees(edge):
                     continue
-                replica = self.ctx.replica(self, edge)
+                replica = self.ctx.replica(self, edge, handle)
                 if replica is not None:
                     self.run.findings.append(replica)
                     continue
                 for env in self.edge_envs(edge):
                     self.judge(env, self.describe(env))
         return self.run
+
+    def group_items(self, module: str, group: EdgeGroup) -> list[tuple[Edge, int]]:
+        """`group_edges` with each edge's handle (-1 for an edge without one)."""
+        if self.staged.module_false(module):
+            return list(zip(group.irregular, group.irregular_handles or [-1] * len(group.irregular)))
+        return list(zip(group.edges, group.handles or [-1] * len(group.edges)))
+
+    def reported(self, env: EdgeEnv, judgment: Judgment) -> RuleRun:
+        """What `judgment` reports for `env` with no message, kept out of this rule's run: a
+        group's judgment applied to one of its edges."""
+        saved, self.run = self.run, RuleRun(self.spec)
+        try:
+            self.report(env, judgment, "")
+            return self.run
+        finally:
+            self.run = saved
 
     def recorded(self, envs: Iterable[EdgeEnv]) -> RuleRun:
         """What judging `envs` makes, kept out of this rule's run."""

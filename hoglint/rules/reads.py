@@ -11,22 +11,13 @@ from dataclasses import dataclass
 
 from hoglint.config.model import Config
 from hoglint.labels import Labeler
-from hoglint.rules.base import EDGE_DEPENDENT_FIELDS, EdgeRule, column_ref
+from hoglint.rules.base import EDGE_DEPENDENT_FIELDS, EdgeRule
 from hoglint.selectors import Ref, refs
 
-# What a grouping key holds whatever a rule reads: the edge's kind, and each endpoint's module
-# with what follows from it.
-IMPLIED: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("edge", "kind"),
-        ("src", "module"),
-        ("src", "path"),
-        ("dst", "module"),
-        ("dst", "path"),
-        ("dst", "external"),
-        ("dst", "unresolved"),
-    }
-)
+# What a grouping key holds whatever a rule reads: the edge's kind, and whether the destination
+# resolved. Endpoint modules and paths are not in it: a key holds label values, so two modules
+# with equal values share a group.
+IMPLIED: frozenset[tuple[str, str]] = frozenset({("edge", "kind"), ("dst", "unresolved")})
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +86,7 @@ class Reads:
         if "context" in self.edge:
             out.update({("edge", "context"), ("src", "context"), ("dst", "context")})
         if self.exported:
-            out.add(("dst", "exported"))
+            out.update({("dst", "exported"), ("dst", "external")})
         if src_scope:
             out.update({("src", "scope"), ("src", "symbol"), ("src", "name")})
         if dst_entity:
@@ -114,6 +105,6 @@ def granularity(reads: Reads, labeler: Labeler) -> tuple[bool, bool]:
 
 
 def decision_reads(rule: EdgeRule) -> Reads | None:
-    """The reads a grouped decision of `rule` keys on: its declared reads and its identity."""
-    identity = [column_ref(column) for column in rule.spec.identity]
-    return Reads.of([*rule.read_refs(), *identity], rule.ctx.config)
+    """The reads a grouped decision of `rule` keys on: its declared reads. A finding's identity is
+    made per edge, so it is not part of the decision."""
+    return Reads.of(rule.read_refs(), rule.ctx.config)
