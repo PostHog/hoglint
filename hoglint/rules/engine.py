@@ -26,7 +26,6 @@ from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile, apply_exce
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, ReachPrimitive
 from hoglint.rules.levels import LevelEvaluator, LevelResult
-from hoglint.selectors import Truth
 
 
 class Primitive(Protocol):
@@ -136,12 +135,11 @@ class Engine:
 
     def empty_expected_kinds(self) -> set[str]:
         """Kinds marked `expected` that no symbol matched: whatever produces them found nothing."""
-        labeler = self.labeler
+        symbols = self.graph.symbols
         return {
             name
             for name, spec in self.config.kinds.items()
-            if spec.expected
-            and not any(labeler.kind_matches(spec, symbol) is Truth.TRUE for symbol in self.graph.symbols)
+            if spec.expected and not any(symbol in symbols for symbol in self.labeler.kind_members(spec))
         }
 
     def kinds_read(self, spec: RuleSpec) -> set[str]:

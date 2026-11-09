@@ -118,6 +118,31 @@ class SymbolFacts:
     def is_frozen(self, symbol: str) -> bool:
         return symbol in self.frozen or self.get(symbol, "frozen") == "true"
 
+    @cached_property
+    def children(self) -> dict[str, list[str]]:
+        """base -> the classes that name it as a base: `bases` read backwards. Read after every
+        base is added."""
+        out: dict[str, list[str]] = {}
+        for owner, bases in self.base_map.items():
+            for base in bases:
+                out.setdefault(base, []).append(owner)
+        for symbol, facts in self.symbols.items():
+            for base in split_list(facts.get("bases", "")):
+                out.setdefault(base, []).append(symbol)
+        return out
+
+    def descendants(self, targets: tuple[str, ...]) -> set[str]:
+        """Every name whose ancestors (`walk_ancestors`) include one of `targets`."""
+        children = self.children
+        seen: set[str] = set()
+        queue = list(targets)
+        while queue:
+            for child in children.get(queue.pop(), ()):
+                if child not in seen:
+                    seen.add(child)
+                    queue.append(child)
+        return seen
+
     def walk_ancestors(self, symbol: str) -> tuple[frozenset[str], bool]:
         """Every base class reachable from `symbol`, and whether the walk saw every base."""
         seen: set[str] = set()

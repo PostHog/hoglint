@@ -146,6 +146,7 @@ class Labeler:
         self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
         self.kind_match = Memo(self.match_kinds)
+        self.members_of_kind: dict[str, set[str]] = {}
         self.export_member = Memo(self.find_export_member)
         self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
         self.exported_cache: dict[tuple[str | None, str | None, str | None, str | None], Truth] = {}
@@ -575,12 +576,42 @@ class Labeler:
 
     def find_kind_conflicts(self) -> None:
         """A symbol with facts can match several kinds; a name without facts only when two kinds
-        list it in `subclass_of`."""
+        list it in `subclass_of`. Each kind's members are found as one set, so the check reads a
+        symbol's facts once per kind that could hold it, not once per kind and symbol."""
         if not self.kinds_can_overlap():
             return
-        listed = {name for spec in self.config.kinds.values() for name in spec.subclass_of}
-        for symbol in (*self.graph.symbols, *sorted(listed)):
-            self.kind_match(symbol)
+        matched: dict[str, list[str]] = {}
+        for spec in self.config.kinds.values():
+            for symbol in self.kind_members(spec):
+                matched.setdefault(symbol, []).append(spec.name)
+        for symbol, kinds in matched.items():
+            if len(kinds) > 1:
+                self.conflicts.append(f"{symbol}: matches kinds {', '.join(kinds)}")
+
+    def kind_members(self, spec: KindSpec) -> set[str]:
+        """Every name `kind_matches` holds TRUE for, among the graph's symbols and the names
+        `subclass_of` lists. The same tests, run over the classes that could pass them."""
+        found = self.members_of_kind.get(spec.name)
+        if found is None:
+            found = self.members_of_kind[spec.name] = self.find_kind_members(spec)
+        return found
+
+    def find_kind_members(self, spec: KindSpec) -> set[str]:
+        facts = self.facts
+        out = set(spec.subclass_of)
+        if spec.subclass_of:
+            pool: Iterable[str] = [symbol for symbol in facts.descendants(spec.subclass_of) if facts.has(symbol)]
+        else:
+            pool = self.graph.symbols
+        for symbol in pool:
+            if spec.abstract is False and facts.get(symbol, "abstract") == "true":
+                continue
+            if spec.decl and facts.decl(symbol) != spec.decl:
+                continue
+            if spec.decorated_by and not set(spec.decorated_by) & set(facts.decorators(symbol)):
+                continue
+            out.add(symbol)
+        return out
 
     def rival_symbol_assigns(self) -> list[Assignment]:
         """Symbol assignments that set a field another symbol assignment sets to a different value."""
