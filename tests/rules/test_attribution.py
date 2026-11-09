@@ -21,6 +21,7 @@ from hoglint.ledger.envelope import (
     EngineError,
     EngineSources,
     Envelope,
+    Framework,
     PolicyFiles,
     policy_digest,
 )
@@ -393,3 +394,32 @@ def test_a_side_input_the_tree_does_not_hold_keeps_the_summary_out_of_the_cache(
     staged = hoglint(repo, "check", "--index")
     assert "not stored: turbo.json differs from the tree" in staged.stderr
     assert not list((tmp_path / "repo-cache" / "hoglint" / "summaries").rglob("*.json.gz"))
+
+
+SITE = {
+    "django/__init__.py": "VERSION = 1",
+    "django-6.1.3.dist-info/RECORD": "django/__init__.py,sha256=abc,11\n",
+    "rest_framework/__init__.py": "",
+    "djangorestframework-3.18.3.dist-info/top_level.txt": "rest_framework\n",
+    "djangorestframework-3.18.3.dist-info/RECORD": "rest_framework/__init__.py,sha256=def,0\n",
+}
+
+
+@pytest.mark.parametrize(
+    "edited, content, changes",
+    [
+        # an install or upgrade rewrites RECORD
+        ("django-6.1.3.dist-info/RECORD", "django/__init__.py,sha256=xyz,11\n", True),
+        ("djangorestframework-3.18.3.dist-info/RECORD", "", True),
+        # sources are never read: only the metadata stands for them
+        ("django/__init__.py", "VERSION = 2", False),
+    ],
+)
+def test_the_framework_digest_comes_from_distribution_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edited: str, content: str, changes: bool
+) -> None:
+    write_files(tmp_path, SITE)
+    monkeypatch.setattr(Framework, "site", staticmethod(lambda: tmp_path))
+    before = Framework.digest(("django", "rest_framework"))
+    (tmp_path / edited).write_text(content)
+    assert (Framework.digest(("django", "rest_framework")) != before) is changes

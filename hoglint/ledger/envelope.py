@@ -10,8 +10,8 @@ summary made on Linux CI and one made on a Mac agree:
   the platform.
 - policy: a digest of the config hash, the exceptions as written and the content of every policy
   data file the config names (a rule's `classify` file, a pack's `policy_file_keys`).
-- framework: a digest of the versions and sources of the `[discovery] external` packages that
-  the extractor reads from site-packages.
+- framework: a digest of the name, version and RECORD of each installed distribution that ships
+  a `[discovery] external` package, the packages the extractor reads from site-packages.
 `Envelope.key` prints the four as one string, for a CI cache step.
 """
 
@@ -20,9 +20,9 @@ from __future__ import annotations
 import os
 import fnmatch
 import hashlib
+import sysconfig
 import subprocess
 import dataclasses
-import importlib.metadata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +30,6 @@ from typing import Any
 
 from hoglint.config.model import Config
 from hoglint.config.schema import as_tuple, canonical
-from hoglint.facts import site_packages_files
 from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
@@ -224,20 +223,51 @@ class EngineId:
 
 
 class Framework:
-    """Versions and sources of the external packages the extractor reads from site-packages."""
+    """The installed distributions that ship the `[discovery] external` packages: name and version
+    (the dist-info directory) and a hash of RECORD, which lists every installed file with its own
+    hash. An install or upgrade rewrites RECORD, so no source file is read."""
+
+    @staticmethod
+    def site() -> Path:
+        return Path(sysconfig.get_paths()["purelib"])
+
+    @staticmethod
+    def dist_infos(site: Path, packages: tuple[str, ...]) -> dict[str, Path]:
+        """The dist-info directory of each package: the one named after it, else the one whose
+        top_level.txt or RECORD names it. A package with no metadata is left out."""
+        infos = sorted(site.glob("*.dist-info"))
+        found: dict[str, Path] = {}
+        by_name = {info.name.split("-", 1)[0].lower(): info for info in infos}
+        for package in packages:
+            named = by_name.get(package.lower().replace("-", "_"))
+            if named is not None:
+                found[package] = named
+        for listing, provides in (("top_level.txt", Framework.top_level), ("RECORD", Framework.recorded)):
+            missing = [package for package in packages if package not in found]
+            for info in infos:
+                if not missing:
+                    break
+                text = (info / listing).read_text() if (info / listing).is_file() else ""
+                for package in [p for p in missing if provides(text, p)]:
+                    found[package] = info
+                    missing.remove(package)
+        return found
+
+    @staticmethod
+    def top_level(text: str, package: str) -> bool:
+        return package in text.split()
+
+    @staticmethod
+    def recorded(text: str, package: str) -> bool:
+        return text.startswith(f"{package}/") or f"\n{package}/" in text
 
     @staticmethod
     def digest(packages: tuple[str, ...]) -> str:
+        infos = Framework.dist_infos(Framework.site(), packages)
         parts: list[str | bytes] = []
         for package in sorted(packages):
-            try:
-                version = importlib.metadata.version(package)
-            except importlib.metadata.PackageNotFoundError:
-                version = ""
-            parts += [package, version]
-        files = site_packages_files(tuple(sorted(packages)))
-        for path, name in sorted(files.items(), key=lambda item: item[1]):
-            parts += [name, file_digest(Path(path))]
+            info = infos.get(package)
+            parts += [package, info.name, file_digest(info / "RECORD")] if info is not None else [package, MISSING]
         return short_digest(parts)
 
     @staticmethod
