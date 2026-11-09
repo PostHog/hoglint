@@ -7,6 +7,7 @@ import pytest
 
 from hoglint.core.config import PathGlobs
 from hoglint.core.discovery import StagedIndex
+from hoglint.facts import SiteRoots
 from hoglint.outputs.tach_map import TachResolver
 
 TACH_EXCLUDES = ("**/*__pycache__", "**/*egg-info", "docs", "products/posthog_ai/eval_harness", "products/*/evals")
@@ -59,3 +60,18 @@ def test_index_mode_reads_staged_blobs_not_the_working_tree(tmp_path: Path) -> N
         assert (snapshot.root / "a.py").read_text() == "STAGED = 1\n"
     finally:
         snapshot.close()
+
+
+@pytest.mark.parametrize(
+    "path, inside",
+    [
+        ("/env/lib/python3.14/site-packages/django/db/models.py", "django/db/models.py"),
+        ("/opt/py/purelib/attr/__init__.py", "attr/__init__.py"),
+        (".venv/lib/python3.14/site-packages/django/apps.py", "django/apps.py"),
+        ("/usr/lib/python3/dist-packages/yaml/__init__.py", "yaml/__init__.py"),
+        ("tools/my-site-packages/x.py", None),
+        ("posthog/models.py", None),
+    ],
+)
+def test_site_roots_know_third_party_paths(path: str, inside: str | None) -> None:
+    assert SiteRoots(("/opt/py/purelib",)).relative(path) == inside

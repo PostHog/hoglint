@@ -5,6 +5,7 @@ import pytest
 from hoglint.core.producers import use_position
 from hoglint.core.symbols import FUNC, TC_ELSE, TRY, TYPE_ONLY
 from hoglint.model import Context, Resolution
+from hoglint.outputs.tach_map import TachMap
 
 from core.support import FileFacts, build, edges_of
 
@@ -23,6 +24,9 @@ def repo() -> list[FileFacts]:
         .assign("_BASE", {"s": "checkout."})
         .assign("_LAZY", {"dict": [[{"s": "refund"}, {"s": "logic"}]]}),
         FileFacts("nspkg/sub/mod.py"),
+        FileFacts("checkout/optional.py")
+        .import_from("checkout.logic", "refund", flags=TRY)
+        .assign("refund", None, flags=TRY),
         FileFacts(VIEWS)
         .import_from("checkout.facade", "charge")
         .import_from("checkout.compat", "models")
@@ -31,6 +35,7 @@ def repo() -> list[FileFacts]:
         .import_module("requests")
         .import_from("too_far", "x", level=3)
         .import_module("nspkg.sub")
+        .import_from("checkout.optional", "refund")
         .ref("charge", chain="()", up="expr")
         .string("checkout.facade.api.charge", up="arg:0:mock.patch decorator")
         .string("checkout.logic.gone", up="expr")
@@ -48,6 +53,7 @@ def repo() -> list[FileFacts]:
         ("requests", Resolution.EXTERNAL, "requests", []),
         ("...too_far.x", Resolution.UNRESOLVED, None, []),
         ("nspkg.sub", Resolution.RESOLVED, "nspkg.sub", []),
+        ("checkout.optional.refund", Resolution.RESOLVED, "checkout.logic.refund", []),
     ],
 )
 def test_import_edges_keep_surface_via_and_origin(
@@ -83,7 +89,7 @@ def test_dotted_path_strings(surface: str, resolution: Resolution, role: str) ->
     [
         ("web/a.py", 0, {Context.PROD}),
         ("web/a.py", TYPE_ONLY, {Context.PROD, Context.TYPE_ONLY}),
-        ("web/a.py", TC_ELSE, {Context.PROD, Context.TYPE_ONLY}),
+        ("web/a.py", TC_ELSE, {Context.PROD}),
         ("web/a.py", FUNC, {Context.PROD, Context.FUNCTION_LOCAL}),
         ("web/a.py", TRY, {Context.PROD, Context.CONDITIONAL}),
         ("web/tests/test_a.py", 0, {Context.TEST}),
@@ -109,6 +115,7 @@ def test_contexts_come_from_syntax_and_path(path: str, flags: int, expected: set
         (None, "await return", "return"),
         (None, "assign:x", "store"),
         (None, "param-ann:x", "annotation"),
+        (None, "returns", "annotation"),
         (None, "base:0", "base"),
         (None, "for-iter", "iterate"),
         (None, "assign-target", "target"),
@@ -116,3 +123,52 @@ def test_contexts_come_from_syntax_and_path(path: str, flags: int, expected: set
 )
 def test_use_positions_are_neutral(next_token: str | None, up: str, position: str) -> None:
     assert use_position(next_token, up) == position
+
+
+@pytest.mark.parametrize("kind", ["reference", "dotted-path", "dynamic-import"])
+def test_site_flags_give_refs_strs_and_calls_their_statement_context(kind: str) -> None:
+    files = [
+        FileFacts("checkout/logic.py").define("charge"),
+        FileFacts(VIEWS)
+        .import_from("checkout.logic", "charge")
+        .import_module("importlib")
+        .ref("charge", chain="()", flags=TYPE_ONLY)
+        .string("checkout.logic.charge", flags=TYPE_ONLY)
+        .call("importlib.import_module", [{"s": "checkout.logic"}], [], flags=TYPE_ONLY),
+    ]
+    [edge] = edges_of(build(files), kind, VIEWS)
+    assert edge.contexts == {Context.PROD, Context.TYPE_ONLY}
+
+
+@pytest.mark.parametrize(
+    "args, kws, surface, argument",
+    [
+        ([{"s": "checkout.logic"}], [], "checkout.logic", "literal"),
+        ([], [["name", {"s": "checkout.logic"}]], "checkout.logic", "literal"),
+        ([], [["package", {"s": "checkout"}]], "", "missing"),
+        ([], [[None, "options"]], "", "missing"),
+    ],
+)
+def test_dynamic_import_reads_the_module_name_argument(args: list, kws: list, surface: str, argument: str) -> None:
+    files = [
+        FileFacts("checkout/logic.py"),
+        FileFacts(VIEWS).import_module("importlib").call("importlib.import_module", args, kws),
+    ]
+    [edge] = edges_of(build(files), "dynamic-import", VIEWS)
+    assert (edge.surface, edge.attr("argument")) == (surface, argument)
+
+
+@pytest.mark.parametrize(
+    "facts, counted",
+    [
+        (FileFacts(VIEWS).import_from("checkout.logic", "charge", flags=TYPE_ONLY), False),
+        (FileFacts(VIEWS).import_from("checkout.logic", "charge", flags=TC_ELSE), False),
+        (FileFacts(VIEWS).import_from("checkout.logic", "charge", flags=TRY), True),
+        (FileFacts(VIEWS).string("checkout.logic.charge", flags=TYPE_ONLY), True),
+    ],
+)
+def test_tach_map_skips_imports_in_either_type_checking_branch(facts: FileFacts, counted: bool) -> None:
+    files = [FileFacts("checkout/__init__.py"), FileFacts("checkout/logic.py").define("charge"), facts]
+    graph = build(files)
+    mapping = TachMap(graph, [f.record["path"] for f in files]).dependents()
+    assert mapping == ({"checkout/logic.py": [VIEWS]} if counted else {})

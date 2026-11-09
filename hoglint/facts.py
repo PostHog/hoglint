@@ -13,9 +13,40 @@ from pathlib import Path
 
 import orjson
 
-HOGLINT_DIR = Path(__file__).resolve().parent.parent
 BINARY_NAME = "hoglint-facts"
-SITE_MARKER = "site-packages/"
+# Where tools/hoglint/bin/build puts the binary when CARGO_TARGET_DIR is not set.
+DEFAULT_TARGET_DIR = Path.home() / ".cache" / "hoglint-target"
+SITE_DIR_NAMES = ("site-packages", "dist-packages")
+
+
+class SiteRoots:
+    """Directories that hold third-party sources: the interpreter's purelib and platlib, and
+    any `site-packages` or `dist-packages` directory on a path (another environment's)."""
+
+    def __init__(self, roots: tuple[str, ...]) -> None:
+        self.roots = tuple(sorted({root.rstrip("/") for root in roots}, key=len, reverse=True))
+
+    @classmethod
+    def of_interpreter(cls) -> SiteRoots:
+        paths = sysconfig.get_paths()
+        return cls((paths["purelib"], paths["platlib"]))
+
+    def relative(self, path: str) -> str | None:
+        """The path inside its site root, or None for a path outside every site root."""
+        for root in self.roots:
+            if path.startswith(root + "/"):
+                return path[len(root) + 1 :]
+        parts = path.split("/")
+        for at, part in enumerate(parts[:-1]):
+            if part in SITE_DIR_NAMES:
+                return "/".join(parts[at + 1 :])
+        return None
+
+    def contains(self, path: str) -> bool:
+        return self.relative(path) is not None
+
+
+SITE_ROOTS = SiteRoots.of_interpreter()
 
 
 @dataclass(frozen=True)
@@ -43,15 +74,12 @@ class ExtractRequest:
 class Extractor:
     """Runs the hoglint-facts binary. The binary only reads files; it never imports them."""
 
-    def __init__(self, binary: Path | None = None) -> None:
-        self.binary = binary or self.find_binary()
-
     @staticmethod
     def find_binary() -> Path:
         override = os.environ.get("HOGLINT_FACTS_BIN")
         if override:
             return Path(override)
-        target_dir = Path(os.environ.get("CARGO_TARGET_DIR", HOGLINT_DIR / "target"))
+        target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or DEFAULT_TARGET_DIR)
         built = target_dir / "release" / BINARY_NAME
         if built.exists():
             return built
@@ -61,6 +89,9 @@ class Extractor:
         raise FileNotFoundError(
             f"{BINARY_NAME} not found; build it with tools/hoglint/bin/build or set HOGLINT_FACTS_BIN"
         )
+
+    def __init__(self, binary: Path | None = None) -> None:
+        self.binary = binary or self.find_binary()
 
     def build_id(self) -> str:
         return subprocess.run(
@@ -84,7 +115,7 @@ class Extractor:
         return out
 
     def external_files(self, repo_root: Path, packages: tuple[str, ...]) -> list[str]:
-        return [os.path.relpath(path, repo_root) for path in self.site_packages_files(packages)]
+        return [str(path.relative_to(repo_root.resolve(), walk_up=True)) for path in self.site_packages_files(packages)]
 
     def extract(self, request: ExtractRequest) -> Path:
         request.out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +170,7 @@ class FactStore:
         return store
 
     def repo_paths(self) -> list[str]:
-        return sorted(p for p in self.records if SITE_MARKER not in p)
+        return sorted(p for p in self.records if not SITE_ROOTS.contains(p))
 
 
 def default_cache_dir() -> Path:

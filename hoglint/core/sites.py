@@ -9,7 +9,6 @@ from hoglint.core.modules import ModuleIndex
 from hoglint.core.symbols import (
     FUNC,
     IF,
-    TC_ELSE,
     TRY,
     TYPE_ONLY,
     Binding,
@@ -55,11 +54,6 @@ class Classifier:
     def __init__(self, index: ModuleIndex) -> None:
         self.index = index
 
-    def classify_lookup(self, found: Lookup) -> Resolved:
-        if found.local:
-            return Resolved(Resolution.NOT_APPLICABLE, (), ())
-        return self.classify(found.surface, found.hit)
-
     def classify(self, surface: str, hit: Hit | None) -> Resolved:
         """A hit on a module or name with no sources is external when its head is not repo code."""
         if hit is not None:
@@ -75,25 +69,14 @@ class Classifier:
             return Resolved(Resolution.EXTERNAL, (entity(surface),), ())
         return Resolved(Resolution.UNRESOLVED, (), ())
 
+    def classify_lookup(self, found: Lookup) -> Resolved:
+        if found.local:
+            return Resolved(Resolution.NOT_APPLICABLE, (), ())
+        return self.classify(found.surface, found.hit)
+
 
 class FileScope:
     """Scopes, contexts and bindings of one analyzed file."""
-
-    def __init__(self, path: str, module: str, is_package: bool, record: dict, config: CoreConfig) -> None:
-        self.path = path
-        self.module = module
-        self.is_package = is_package
-        self.record = record
-        self.defs: list[dict] = record.get("defs", [])
-        self.qualnames = self.build_qualnames()
-        self.in_function = self.build_in_function()
-        self.base_contexts = self.path_contexts(config)
-        self.local_bindings = self.build_local_bindings()
-        self.members = self.build_members()
-        self.scoped_names = {name for _, name in self.members} | {
-            name for scope, name in self.local_bindings if scope != -1
-        }
-        self.module_lookups: dict[str, Lookup | None] = {}
 
     def build_qualnames(self) -> list[str]:
         out: list[str] = []
@@ -147,6 +130,23 @@ class FileScope:
                     out.setdefault((owner, name), ("variable", f"{self.qualnames[owner]}.{name}"))
         return out
 
+    def __init__(self, path: str, module: str, is_package: bool, record: dict, config: CoreConfig) -> None:
+        self.path = path
+        self.module = module
+        self.is_package = is_package
+        self.record = record
+        self.defs: list[dict] = record.get("defs", [])
+        self.qualnames = self.build_qualnames()
+        self.in_function = self.build_in_function()
+        self.base_contexts = self.path_contexts(config)
+        self.local_bindings = self.build_local_bindings()
+        self.members = self.build_members()
+        self.scoped_names = {name for _, name in self.members} | {
+            name for scope, name in self.local_bindings if scope != -1
+        }
+        self.module_lookups: dict[str, Lookup | None] = {}
+        self.site_flags = {(line, column): flags for line, column, flags in record.get("site_flags", ())}
+
     def scope_name(self, scope: int) -> str:
         return MODULE_SCOPE if scope == -1 else self.qualnames[scope]
 
@@ -158,10 +158,15 @@ class FileScope:
     def site(self, scope: int, line: int, column: int) -> Site:
         return Site(self.path, self.module, self.scope_name(scope), line, column)
 
+    def flags_at(self, line: int, column: int) -> int:
+        """Statement flags at a `refs`, `strs` or `calls` row; those rows carry none of their own."""
+        return self.site_flags.get((line, column), 0)
+
     def contexts(self, flags: int = 0, scope: int = -1) -> frozenset[Context]:
-        """Path contexts plus syntax contexts. A TYPE_CHECKING else branch counts as type-only."""
+        """Path contexts plus syntax contexts. The else branch of `if TYPE_CHECKING:` runs at
+        runtime, so only the body is type-only."""
         extra: set[Context] = set()
-        if flags & (TYPE_ONLY | TC_ELSE):
+        if flags & TYPE_ONLY:
             extra.add(Context.TYPE_ONLY)
         if flags & FUNC or self.is_function_scope(scope):
             extra.add(Context.FUNCTION_LOCAL)
@@ -193,6 +198,25 @@ class NameLookup:
     def __init__(self, resolver: Resolver) -> None:
         self.resolver = resolver
 
+    def module_level(self, scope: FileScope, name: str, line: int) -> Lookup | None:
+        table = self.resolver.tables.get(scope.module)
+        if table is not None and name in table.names:
+            binding = table.names[name]
+            if binding[0] in ("module", "from"):
+                return Lookup(binding_surface(binding), self.resolver.resolve_binding(scope.module, binding))
+            return Lookup(f"{scope.module}.{name}", self.resolver.resolve_name(scope.module, name))
+        binding = scope.binding_at(-1, name, line)
+        if binding is not None:
+            return Lookup(binding_surface(binding), self.resolver.resolve_binding(scope.module, binding))
+        return None
+
+    def module_lookup(self, scope: FileScope, name: str, line: int) -> Lookup | None:
+        if len(scope.local_bindings.get((-1, name), ())) > 1:
+            return self.module_level(scope, name, line)
+        if name not in scope.module_lookups:
+            scope.module_lookups[name] = self.module_level(scope, name, line)
+        return scope.module_lookups[name]
+
     def lookup(self, scope: FileScope, name: str, at_scope: int, line: int) -> Lookup | None:
         """Python scoping: enclosing function scopes and the starting class body, then the module."""
         if at_scope == -1 or name not in scope.scoped_names:
@@ -210,25 +234,6 @@ class NameLookup:
                 kind, qualname = member
                 return Lookup(f"{scope.module}.{qualname}", Hit((entity(scope.module, qualname),), kind))
         return self.module_lookup(scope, name, line)
-
-    def module_lookup(self, scope: FileScope, name: str, line: int) -> Lookup | None:
-        if len(scope.local_bindings.get((-1, name), ())) > 1:
-            return self.module_level(scope, name, line)
-        if name not in scope.module_lookups:
-            scope.module_lookups[name] = self.module_level(scope, name, line)
-        return scope.module_lookups[name]
-
-    def module_level(self, scope: FileScope, name: str, line: int) -> Lookup | None:
-        table = self.resolver.tables.get(scope.module)
-        if table is not None and name in table.names:
-            binding = table.names[name]
-            if binding[0] in ("module", "from"):
-                return Lookup(binding_surface(binding), self.resolver.resolve_binding(scope.module, binding))
-            return Lookup(f"{scope.module}.{name}", self.resolver.resolve_name(scope.module, name))
-        binding = scope.binding_at(-1, name, line)
-        if binding is not None:
-            return Lookup(binding_surface(binding), self.resolver.resolve_binding(scope.module, binding))
-        return None
 
     def descend(self, found: Lookup, attrs: list[str]) -> tuple[Lookup, list[str]]:
         """Follow attributes while the name stands for a module; the surface grows with them.

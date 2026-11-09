@@ -12,9 +12,18 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
+from hoglint.core.modules import longest_prefix
 from hoglint.model import Context, Edge, Graph, Resolution
 
 GroupOf = Callable[[str], str | None]
+
+
+def reverse_dependents(pairs: Iterable[tuple[str, str]]) -> dict[str, list[str]]:
+    """(importer, target) pairs as `tach map --direction dependents`: target -> sorted importers."""
+    reverse: dict[str, set[str]] = {}
+    for importer, target in pairs:
+        reverse.setdefault(target, set()).add(importer)
+    return {target: sorted(importers) for target, importers in sorted(reverse.items())}
 
 
 class Endpoint(StrEnum):
@@ -38,14 +47,6 @@ class ModuleLookup:
     def __init__(self, graph: Graph) -> None:
         self.modules = graph.modules
 
-    def longest(self, dotted: str) -> str | None:
-        parts = dotted.split(".")
-        for end in range(len(parts), 0, -1):
-            candidate = ".".join(parts[:end])
-            if candidate in self.modules:
-                return candidate
-        return None
-
     def surface_module(self, edge: Edge) -> str | None:
         declared = edge.attr("module")
         if declared:
@@ -54,7 +55,7 @@ class ModuleLookup:
             return None
         if edge.resolution == Resolution.EXTERNAL:
             return edge.surface
-        return self.longest(edge.surface)
+        return longest_prefix(edge.surface, self.modules.__contains__)
 
     def endpoint_modules(self, edge: Edge, endpoint: Endpoint) -> list[str | None]:
         """Destination modules; None stands for an unresolved end and is kept, never dropped."""
@@ -118,10 +119,7 @@ class FileImportsView:
                 yield FileEdge(edge.site.path, path, edge)
 
     def dependents(self) -> dict[str, list[str]]:
-        reverse: dict[str, set[str]] = {}
-        for file_edge in self.edges():
-            reverse.setdefault(file_edge.dst, set()).add(file_edge.src)
-        return {target: sorted(importers) for target, importers in sorted(reverse.items())}
+        return reverse_dependents((file_edge.src, file_edge.dst) for file_edge in self.edges())
 
 
 class GroupedView:

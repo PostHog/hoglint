@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import ModuleIndex
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
-from hoglint.core.symbols import Hit, Resolver, absolute_import, entity
+from hoglint.core.symbols import TC_ELSE, Hit, Resolver, absolute_import, entity
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
@@ -23,10 +23,16 @@ BUILTIN_NAMES = frozenset(dir(builtins))
 CHAIN_TOKEN = re.compile(r"\.(\w+)|\(\)|\[\]")
 WRAPPER_STEPS = ("await", "ifexp:body", "ifexp:else", "star", "bool:and", "bool:or", "walrus:")
 
-# First step of the escape path above a name -> neutral use position. Checked as prefixes.
+# The `guard` attribute of an import in the else branch of `if TYPE_CHECKING:`. It runs at
+# runtime, but some consumers (tach) skip that whole `if`.
+TYPE_CHECKING_ELSE = "type-checking-else"
+
+# First step of the escape path above a name -> neutral use position. Checked as prefixes, in
+# order, so a longer step comes before any step it starts with.
 UP_POSITIONS: tuple[tuple[str, str], ...] = (
     ("arg:", "argument"),
     ("kw:", "argument"),
+    ("returns", "annotation"),
     ("return", "return"),
     ("yield", "yield"),
     ("assign:", "store"),
@@ -38,7 +44,6 @@ UP_POSITIONS: tuple[tuple[str, str], ...] = (
     ("classkw:", "class-keyword"),
     ("decorator", "decorator"),
     ("param-ann:", "annotation"),
-    ("returns", "annotation"),
     ("annotation", "annotation"),
     ("typealias:", "annotation"),
     ("typeparam", "annotation"),
@@ -253,6 +258,8 @@ class ImportProducer(Producer):
                         loaded = surface if index.exists(surface) else source
                         binds = asname or name
                 attrs = [("binds", binds)]
+                if flags & TC_ELSE:
+                    attrs.append(("guard", TYPE_CHECKING_ELSE))
                 if index.exists(loaded):
                     attrs.append(("module", loaded))
                 resolved = classifier.classify(surface, hit)
@@ -292,7 +299,7 @@ class ReferenceProducer(Producer):
                     column,
                     found.surface,
                     resolved,
-                    scope.contexts(0, at_scope),
+                    scope.contexts(scope.flags_at(line, column), at_scope),
                     use=use,
                     attrs=tuple(extra),
                 )
@@ -305,12 +312,6 @@ class DeclarationProducer(Producer):
     kind = "declaration"
     kinds = ("inherit", "decorate", "exposes", "declares")
 
-    def run(self, context: BuildContext, graph: Graph) -> None:
-        for scope in context.files:
-            fields = self.fields_by_class(scope)
-            for idx, node in enumerate(scope.defs):
-                self.declare(context, graph, scope, idx, node, fields)
-
     @staticmethod
     def fields_by_class(scope: FileScope) -> dict[int, list[dict]]:
         out: dict[int, list[dict]] = {}
@@ -318,6 +319,67 @@ class DeclarationProducer(Producer):
             if row["op"] == ":" and len(row["t"]) == 1 and isinstance(row["t"][0], str) and "." not in row["t"][0]:
                 out.setdefault(row["s"], []).append(row)
         return out
+
+    def mentions(self, value: object, position: str) -> list[tuple[str, str]]:
+        """Every dotted name in a type expression, with whether it is the whole annotation."""
+        if isinstance(value, str):
+            return [(value, position)]
+        if not isinstance(value, dict):
+            return []
+        if "sa" in value:
+            return self.mentions(value["sa"], position)
+        if "sub" in value:
+            outer = self.mentions(value["sub"], position)
+            container = value["sub"] if isinstance(value["sub"], str) else ""
+            last = container.rpartition(".")[2]
+            if last == "Literal":
+                return outer
+            index = value.get("i")
+            if last == "Annotated" and isinstance(index, dict) and "tuple" in index and index["tuple"]:
+                return outer + self.mentions(index["tuple"][0], "nested")
+            return outer + self.mentions(index, "nested")
+        if "bin" in value and value["bin"] == "|":
+            return self.mentions(value["l"], position) + self.mentions(value["r"], position)
+        for key in ("tuple", "list"):
+            if key in value:
+                return [m for item in value[key] for m in self.mentions(item, "nested")]
+        return []
+
+    def expose(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        scope: FileScope,
+        idx: int,
+        annotation: object,
+        slot: str,
+        callable_name: str,
+        line: int,
+    ) -> None:
+        node = scope.defs[idx]
+        enclosing = node["s"]
+        contexts = scope.contexts(node.get("f", 0), enclosing)
+        for value, position in self.mentions(annotation, "whole"):
+            head = value.split(".")[0]
+            found = context.value_lookup(scope, value, enclosing, line)
+            if found is None or (found.hit is None and found.surface == f"builtins.{head}"):
+                continue
+            resolved = context.classifier.classify_lookup(found)
+            attrs = (("callable", callable_name), ("slot", slot), ("position", position))
+            graph.edges.append(
+                self.edge(
+                    "exposes",
+                    scope,
+                    enclosing,
+                    line,
+                    node["c"],
+                    found.surface,
+                    resolved,
+                    contexts,
+                    use="annotation",
+                    attrs=attrs,
+                )
+            )
 
     def declare(
         self,
@@ -398,66 +460,11 @@ class DeclarationProducer(Producer):
         if node.get("ret") is not None:
             self.expose(context, graph, scope, idx, node["ret"], "return", qualname, line)
 
-    def expose(
-        self,
-        context: BuildContext,
-        graph: Graph,
-        scope: FileScope,
-        idx: int,
-        annotation: object,
-        slot: str,
-        callable_name: str,
-        line: int,
-    ) -> None:
-        node = scope.defs[idx]
-        enclosing = node["s"]
-        contexts = scope.contexts(node.get("f", 0), enclosing)
-        for value, position in self.mentions(annotation, "whole"):
-            head = value.split(".")[0]
-            found = context.value_lookup(scope, value, enclosing, line)
-            if found is None or (found.hit is None and found.surface == f"builtins.{head}"):
-                continue
-            resolved = context.classifier.classify_lookup(found)
-            attrs = (("callable", callable_name), ("slot", slot), ("position", position))
-            graph.edges.append(
-                self.edge(
-                    "exposes",
-                    scope,
-                    enclosing,
-                    line,
-                    node["c"],
-                    found.surface,
-                    resolved,
-                    contexts,
-                    use="annotation",
-                    attrs=attrs,
-                )
-            )
-
-    def mentions(self, value: object, position: str) -> list[tuple[str, str]]:
-        """Every dotted name in a type expression, with whether it is the whole annotation."""
-        if isinstance(value, str):
-            return [(value, position)]
-        if not isinstance(value, dict):
-            return []
-        if "sa" in value:
-            return self.mentions(value["sa"], position)
-        if "sub" in value:
-            outer = self.mentions(value["sub"], position)
-            container = value["sub"] if isinstance(value["sub"], str) else ""
-            last = container.rpartition(".")[2]
-            if last == "Literal":
-                return outer
-            index = value.get("i")
-            if last == "Annotated" and isinstance(index, dict) and "tuple" in index and index["tuple"]:
-                return outer + self.mentions(index["tuple"][0], "nested")
-            return outer + self.mentions(index, "nested")
-        if "bin" in value and value["bin"] == "|":
-            return self.mentions(value["l"], position) + self.mentions(value["r"], position)
-        for key in ("tuple", "list"):
-            if key in value:
-                return [m for item in value[key] for m in self.mentions(item, "nested")]
-        return []
+    def run(self, context: BuildContext, graph: Graph) -> None:
+        for scope in context.files:
+            fields = self.fields_by_class(scope)
+            for idx, node in enumerate(scope.defs):
+                self.declare(context, graph, scope, idx, node, fields)
 
 
 class StringProducer(Producer):
@@ -468,6 +475,26 @@ class StringProducer(Producer):
     """
 
     kind = "dotted-path"
+
+    @staticmethod
+    def path_like(text: str, role: str) -> bool:
+        """An unresolved string still counts when it reads as a path: a patch target, or two dots
+        or more. One-dot strings that resolve to nothing are labels or names, not paths."""
+        return role == "patch-target" or text.count(".") >= 2
+
+    @staticmethod
+    def role(up: str, patch_callees: tuple[str, ...]) -> str:
+        first = up.split(" ")[0]
+        kind, _, rest = first.partition(":")
+        if kind == "arg":
+            position, _, callee = rest.partition(":")
+            if position == "0" and callee.rpartition(".")[2] in patch_callees:
+                return "patch-target"
+        if kind == "kw":
+            keyword, _, callee = rest.partition(":")
+            if keyword == "target" and callee.rpartition(".")[2] in patch_callees:
+                return "patch-target"
+        return "literal"
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         patch_callees = context.config.patch_callees
@@ -507,36 +534,45 @@ class StringProducer(Producer):
                         column,
                         text,
                         resolved,
-                        scope.contexts(0, at_scope),
+                        scope.contexts(scope.flags_at(line, column), at_scope),
                         attrs=tuple(attrs),
                     )
                     graph.edges.append(edge)
-
-    @staticmethod
-    def path_like(text: str, role: str) -> bool:
-        """An unresolved string still counts when it reads as a path: a patch target, or two dots
-        or more. One-dot strings that resolve to nothing are labels or names, not paths."""
-        return role == "patch-target" or text.count(".") >= 2
-
-    @staticmethod
-    def role(up: str, patch_callees: tuple[str, ...]) -> str:
-        first = up.split(" ")[0]
-        kind, _, rest = first.partition(":")
-        if kind == "arg":
-            position, _, callee = rest.partition(":")
-            if position == "0" and callee.rpartition(".")[2] in patch_callees:
-                return "patch-target"
-        if kind == "kw":
-            keyword, _, callee = rest.partition(":")
-            if keyword == "target" and callee.rpartition(".")[2] in patch_callees:
-                return "patch-target"
-        return "literal"
 
 
 class DynamicImportProducer(Producer):
     """Calls to declared loaders. A literal module name resolves; anything else is unresolved."""
 
     kind = "dynamic-import"
+
+    @staticmethod
+    def module_argument(args: list, kws: list) -> object:
+        """The module name: the first positional argument, else the `name` keyword."""
+        if args:
+            return args[0]
+        for keyword, value in kws:
+            if keyword == "name":
+                return value
+        return None
+
+    @staticmethod
+    def resolve_literal(context: BuildContext, dotted: str) -> Resolved:
+        if not dotted or dotted.startswith("."):
+            return UNRESOLVED
+        found = context.resolve_dotted(dotted)
+        if found is None:
+            return Resolved(Resolution.EXTERNAL, (entity(dotted),), ())
+        return found[0]
+
+    @staticmethod
+    def describe(argument: object) -> str:
+        if argument is None:
+            return "missing"
+        if isinstance(argument, str):
+            return f"name:{argument}"
+        if isinstance(argument, dict) and "o" in argument:
+            return f"expr:{argument['o']}"
+        return "expr"
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         loaders = frozenset(context.config.dynamic_loaders)
@@ -551,8 +587,8 @@ class DynamicImportProducer(Producer):
                 origin = str(found.hit.origin) if found.hit is not None else ""
                 if loader not in loaders and origin not in loaders:
                     continue
-                argument = args[0] if args else (kws[0][1] if kws else None)
-                contexts = scope.contexts(0, at_scope)
+                argument = self.module_argument(args, kws)
+                contexts = scope.contexts(scope.flags_at(line, column), at_scope)
                 attrs = [("loader", loader)]
                 if isinstance(argument, dict) and set(argument) == {"s"}:
                     surface = argument["s"]
@@ -576,25 +612,6 @@ class DynamicImportProducer(Producer):
                         attrs=tuple(attrs),
                     )
                 )
-
-    @staticmethod
-    def resolve_literal(context: BuildContext, dotted: str) -> Resolved:
-        if not dotted or dotted.startswith("."):
-            return UNRESOLVED
-        found = context.resolve_dotted(dotted)
-        if found is None:
-            return Resolved(Resolution.EXTERNAL, (entity(dotted),), ())
-        return found[0]
-
-    @staticmethod
-    def describe(argument: object) -> str:
-        if argument is None:
-            return "missing"
-        if isinstance(argument, str):
-            return f"name:{argument}"
-        if isinstance(argument, dict) and "o" in argument:
-            return f"expr:{argument['o']}"
-        return "expr"
 
 
 class ParseFailureProducer(Producer):

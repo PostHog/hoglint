@@ -3,7 +3,8 @@
 Consumers that read tach's map (test selection) keep working unchanged. The adapter follows
 tach's own file resolution, not hoglint's: a dotted name maps to `__init__.pyi`, `__init__.py`,
 `.pyi`, `.py` under a source root, else the same for its parent; a string counts when it has
-at least two dots and each literal part is checked alone.
+at least two dots and each literal part is checked alone. tach also has its own rule for
+`if TYPE_CHECKING:`: it skips imports in both branches of that `if`, and keeps strings there.
 
 Usage: python -m hoglint.outputs.tach_map --repo <root> --out <map.json>
            [--tach-toml <tach.toml>] [--index] [--no-cache] [--case-insensitive]
@@ -17,13 +18,14 @@ import json
 import tomllib
 import argparse
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
 from hoglint.core.config import CoreConfig
+from hoglint.core.producers import TYPE_CHECKING_ELSE
 from hoglint.model import Context, Edge, Graph
-from hoglint.views import RefsView
+from hoglint.views import RefsView, reverse_dependents
 
 STRING_LITERALS = frozenset({"whole", "part"})
 
@@ -85,20 +87,24 @@ class TachMap:
 
     @staticmethod
     def counts(edge: Edge) -> bool:
+        if edge.site.path.endswith(".pyi"):
+            return False
         if edge.kind == "import":
-            return not edge.surface.startswith(".")
+            type_checking = Context.TYPE_ONLY in edge.contexts or edge.attr("guard") == TYPE_CHECKING_ELSE
+            return not type_checking and not edge.surface.startswith(".")
         return edge.attr("literal") in STRING_LITERALS and edge.surface.count(".") >= 2
 
-    def dependents(self) -> dict[str, list[str]]:
-        view = RefsView(self.graph, kinds=("import", "dotted-path"), contexts_out=(Context.TYPE_ONLY,))
-        reverse: dict[str, set[str]] = {}
+    def pairs(self) -> Iterator[tuple[str, str]]:
+        view = RefsView(self.graph, kinds=("import", "dotted-path"))
         for edge in view.edges():
             if not self.counts(edge):
                 continue
             target = self.resolver.resolve(edge.surface)
             if target is not None:
-                reverse.setdefault(target, set()).add(edge.site.path)
-        return {target: sorted(importers) for target, importers in sorted(reverse.items())}
+                yield edge.site.path, target
+
+    def dependents(self) -> dict[str, list[str]]:
+        return reverse_dependents(self.pairs())
 
     def write(self, path: Path) -> dict[str, list[str]]:
         mapping = self.dependents()

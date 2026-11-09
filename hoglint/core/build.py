@@ -7,12 +7,16 @@ from hoglint.core.modules import ModuleIndex, ModuleNamer
 from hoglint.core.producers import PRODUCERS, BuildContext, DeclarationProducer, producer_id
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import ClassIndex, Resolver, Tables
-from hoglint.facts import SITE_MARKER, FactStore
+from hoglint.facts import SITE_ROOTS, FactStore
 from hoglint.model import Graph
 
 
 class CoreBuild:
     """Everything producers and packs share for one snapshot: index, resolver, classes, files."""
+
+    def file_scope(self, path: str) -> FileScope:
+        module, is_package = self.namer.module_of(path)
+        return FileScope(path, module, is_package, self.store.records[path], self.config)
 
     def __init__(self, config: CoreConfig, store: FactStore, analyzed: list[str] | None = None) -> None:
         self.config = config
@@ -23,12 +27,10 @@ class CoreBuild:
         self.resolver = Resolver(self.tables)
         self.classes = ClassIndex(self.resolver)
         paths = analyzed if analyzed is not None else store.repo_paths()
-        self.files = [self.file_scope(path) for path in paths if path in store.records and SITE_MARKER not in path]
+        self.files = [
+            self.file_scope(path) for path in paths if path in store.records and not SITE_ROOTS.contains(path)
+        ]
         self.context = BuildContext(config, store, self.index, self.resolver, self.files)
-
-    def file_scope(self, path: str) -> FileScope:
-        module, is_package = self.namer.module_of(path)
-        return FileScope(path, module, is_package, self.store.records[path], self.config)
 
     def graph(self) -> Graph:
         graph = Graph(modules=self.index.repo_modules())

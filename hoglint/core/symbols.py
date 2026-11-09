@@ -22,6 +22,8 @@ BLOCK = 64
 
 # Module-level statements: module body plus if, try, with, loop and TYPE_CHECKING bodies.
 MODULE_LEVEL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY | BLOCK
+# Statements that may not run, or run instead of another branch.
+CONDITIONAL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY
 
 MODULE_ATTRIBUTES = frozenset(
     {"__doc__", "__file__", "__name__", "__path__", "__spec__", "__loader__", "__package__", "__dict__", "__all__"}
@@ -128,63 +130,47 @@ class Tables:
         path = self.index.stub_of.get(module)
         return self.store.records.get(path) if path is not None else None
 
-    def get(self, module: str) -> ModuleTable | None:
-        if module not in self.cache:
-            self.cache[module] = self.build(module)
-        return self.cache[module]
-
-    def build(self, module: str) -> ModuleTable | None:
-        """The module's own names; a `.pyi` beside the `.py` adds the names the source leaves
-        dynamic (generated protobuf modules, for example). Stub defs carry a "stub" marker."""
-        if not self.index.exists(module):
-            return None
-        table = ModuleTable(module, self.index.path_of.get(module), self.index.is_package(module))
-        record = self.record(module)
-        if record is not None and record.get("status") == "ok":
-            self.collect(table, record, "")
-            if table.names.get("__getattr__", ("",))[0] == "def":
-                table.lazy = self.lazy_map(module, table.is_package, record)
-        stub = self.stub_record(module)
-        if stub is not None and stub.get("status") == "ok":
-            stub_table = ModuleTable(module, self.index.stub_of[module], table.is_package)
-            self.collect(stub_table, stub, "stub")
-            for name, binding in stub_table.names.items():
-                table.names.setdefault(name, binding)
-        return table
-
     def collect(self, table: ModuleTable, record: dict, marker: str) -> None:
+        """Later bindings win, except that a conditional def or assignment never replaces an
+        import: `except ImportError: Bar = None` and `else: Foo = Any` are fallbacks."""
         module = table.name
-        events: list[tuple[int, int, int, Binding | None, str, object]] = []
+        events: list[tuple[int, int, int, int, Binding | None, str, object]] = []
         for i, d in enumerate(record.get("defs", ())):
-            if d["s"] == -1 and not d.get("f", 0) & ~MODULE_LEVEL_FLAGS:
+            flags = d.get("f", 0)
+            if d["s"] == -1 and not flags & ~MODULE_LEVEL_FLAGS:
                 kind = "class" if d["k"] == "class" else "def"
-                events.append((d["l"], d["c"], 0, (kind, i, marker), d["n"], None))
+                events.append((d["l"], d["c"], 0, flags, (kind, i, marker), d["n"], None))
         for row in record.get("imports", ()):
             if row[0] != -1 or row[3] & ~MODULE_LEVEL_FLAGS:
                 continue
             if row[6] == "*":
                 source = absolute_import(module, table.is_package, row[4], row[5])
-                events.append((row[1], row[2], 1, None, "*", source))
+                events.append((row[1], row[2], 1, row[3], None, "*", source))
                 continue
             bound = import_binding(module, table.is_package, row)
             if bound is not None:
-                events.append((row[1], row[2], 1, bound[1], bound[0], None))
+                events.append((row[1], row[2], 1, row[3], bound[1], bound[0], None))
         for row in record.get("assigns", ()):
-            if row["s"] != -1 or row.get("f", 0) & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
+            flags = row.get("f", 0)
+            if row["s"] != -1 or flags & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
                 continue
             value = row.get("v")
             for target in row["t"]:
                 if isinstance(target, str) and "." not in target:
                     assigned: Binding = ("alias", value) if isinstance(value, str) else ("variable",)
-                    events.append((row["l"], row["c"], 2, assigned, target, None))
+                    events.append((row["l"], row["c"], 2, flags, assigned, target, None))
                     continue
                 for name in unpacked_names(target):
-                    events.append((row["l"], row["c"], 2, ("variable",), name, None))
+                    events.append((row["l"], row["c"], 2, flags, ("variable",), name, None))
         events.sort(key=lambda e: (e[0], e[1], e[2]))
-        for _, _, _, binding, name, source in events:
+        for _, _, _, flags, binding, name, source in events:
             if binding is None:
                 if source:
                     table.star_imports.append(str(source))
+                continue
+            current = table.names.get(name)
+            is_import = binding[0] in ("module", "from")
+            if not is_import and flags & CONDITIONAL_FLAGS and current is not None and current[0] in ("module", "from"):
                 continue
             table.names[name] = binding
 
@@ -217,6 +203,30 @@ class Tables:
                         out[key["s"]] = candidate
                         break
         return out
+
+    def build(self, module: str) -> ModuleTable | None:
+        """The module's own names; a `.pyi` beside the `.py` adds the names the source leaves
+        dynamic (generated protobuf modules, for example). Stub defs carry a "stub" marker."""
+        if not self.index.exists(module):
+            return None
+        table = ModuleTable(module, self.index.path_of.get(module), self.index.is_package(module))
+        record = self.record(module)
+        if record is not None and record.get("status") == "ok":
+            self.collect(table, record, "")
+            if table.names.get("__getattr__", ("",))[0] == "def":
+                table.lazy = self.lazy_map(module, table.is_package, record)
+        stub = self.stub_record(module)
+        if stub is not None and stub.get("status") == "ok":
+            stub_table = ModuleTable(module, self.index.stub_of[module], table.is_package)
+            self.collect(stub_table, stub, "stub")
+            for name, binding in stub_table.names.items():
+                table.names.setdefault(name, binding)
+        return table
+
+    def get(self, module: str) -> ModuleTable | None:
+        if module not in self.cache:
+            self.cache[module] = self.build(module)
+        return self.cache[module]
 
 
 class Resolver:
@@ -251,6 +261,55 @@ class Resolver:
         self.met_cycle = outer or self.met_cycle
         return hit
 
+    def resolve_from(self, source: str, attr: str) -> Hit | None:
+        if not self.index.exists(source):
+            return Hit((entity(f"{source}.{attr}"),), "missing")
+        found = self.resolve_name(source, attr)
+        if found is not None:
+            return found
+        if self.index.exists(f"{source}.{attr}"):
+            return self.module_hit(f"{source}.{attr}")
+        return None
+
+    def descend(self, hit: Hit | None, attrs: list[str]) -> tuple[Hit | None, list[str]]:
+        """Follow attributes through modules. Inside a module with no sources every attribute is
+        part of one dotted name, and the hit becomes `missing`."""
+        rest = list(attrs)
+        while hit is not None and hit.kind == "module" and rest:
+            module = hit.origin.module
+            if not self.index.exists(module):
+                return Hit((*hit.chain, entity(".".join([module, *rest]))), "missing"), []
+            nxt = self.resolve_name(module, rest[0])
+            if nxt is None:
+                break
+            hit = nxt
+            rest.pop(0)
+        return hit, rest
+
+    def resolve_chain(self, module: str, chain: str) -> tuple[Hit | None, list[str]]:
+        """Resolve `a.b.c` from `module`; returns the deepest hit and the attributes left over."""
+        head, *rest = chain.split(".")
+        return self.descend(self.resolve_name(module, head), rest)
+
+    def resolve_binding(self, module: str, binding: Binding) -> Hit | None:
+        """Resolve one binding as seen from `module`. Bindings to unknown modules still hit."""
+        if binding[0] == "from":
+            key = (binding[1], binding[2])
+            if key in self.from_cache:
+                return self.from_cache[key]
+            outer = self.met_cycle
+            self.met_cycle = False
+            hit = self.resolve_from(binding[1], binding[2])
+            if not self.met_cycle:
+                self.from_cache[key] = hit
+            self.met_cycle = outer or self.met_cycle
+            return hit
+        kind = binding[0]
+        if kind == "module":
+            return self.module_hit(binding[1])
+        hit, rest = self.resolve_chain(module, binding[1])
+        return hit if not rest else None
+
     def lookup(self, module: str, name: str) -> Hit | None:
         table = self.tables.get(module)
         if table is None:
@@ -281,40 +340,6 @@ class Resolver:
             return Hit((step, entity(f"{unknown[0]}.{name}")), "missing")
         return None
 
-    def resolve_binding(self, module: str, binding: Binding) -> Hit | None:
-        """Resolve one binding as seen from `module`. Bindings to unknown modules still hit."""
-        if binding[0] == "from":
-            key = (binding[1], binding[2])
-            if key in self.from_cache:
-                return self.from_cache[key]
-            outer = self.met_cycle
-            self.met_cycle = False
-            hit = self.resolve_from(binding[1], binding[2])
-            if not self.met_cycle:
-                self.from_cache[key] = hit
-            self.met_cycle = outer or self.met_cycle
-            return hit
-        kind = binding[0]
-        if kind == "module":
-            return self.module_hit(binding[1])
-        hit, rest = self.resolve_chain(module, binding[1])
-        return hit if not rest else None
-
-    def resolve_from(self, source: str, attr: str) -> Hit | None:
-        if not self.index.exists(source):
-            return Hit((entity(f"{source}.{attr}"),), "missing")
-        found = self.resolve_name(source, attr)
-        if found is not None:
-            return found
-        if self.index.exists(f"{source}.{attr}"):
-            return self.module_hit(f"{source}.{attr}")
-        return None
-
-    def resolve_chain(self, module: str, chain: str) -> tuple[Hit | None, list[str]]:
-        """Resolve `a.b.c` from `module`; returns the deepest hit and the attributes left over."""
-        head, *rest = chain.split(".")
-        return self.descend(self.resolve_name(module, head), rest)
-
     def resolve_value(self, module: str, value: object) -> Hit | None:
         """A value tree from the extractor: a chain, a subscript's value, an attribute, a string annotation."""
         if isinstance(value, str):
@@ -331,21 +356,6 @@ class Resolver:
             if base is not None and base.kind == "module":
                 return self.resolve_name(base.origin.module, value["a"])
         return None
-
-    def descend(self, hit: Hit | None, attrs: list[str]) -> tuple[Hit | None, list[str]]:
-        """Follow attributes through modules. Inside a module with no sources every attribute is
-        part of one dotted name, and the hit becomes `missing`."""
-        rest = list(attrs)
-        while hit is not None and hit.kind == "module" and rest:
-            module = hit.origin.module
-            if not self.index.exists(module):
-                return Hit((*hit.chain, entity(".".join([module, *rest]))), "missing"), []
-            nxt = self.resolve_name(module, rest[0])
-            if nxt is None:
-                break
-            hit = nxt
-            rest.pop(0)
-        return hit, rest
 
     def resolve_dotted(self, dotted: str) -> tuple[Hit | None, list[str]]:
         """A dotted path with no local scope: the longest module prefix, then names inside it."""

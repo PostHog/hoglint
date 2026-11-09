@@ -20,19 +20,6 @@ class PathGlobs:
     A pattern matches a path when it matches the path itself or one of its parent directories.
     """
 
-    def __init__(self, patterns: tuple[str, ...]) -> None:
-        self.patterns = patterns
-        self.component_res: list[re.Pattern[str]] = []
-        self.anchored_res: list[re.Pattern[str]] = []
-        for pattern in patterns:
-            stripped = pattern.strip("/")
-            if not stripped:
-                continue
-            if "/" in stripped:
-                self.anchored_res.append(re.compile(self.translate(stripped)))
-            else:
-                self.component_res.append(re.compile(self.translate(stripped)))
-
     @staticmethod
     def translate_segment(segment: str) -> str:
         out = []
@@ -69,6 +56,19 @@ class PathGlobs:
             else:
                 regex += cls.translate_segment(segment) + ("" if last else "/")
         return "^" + regex + "$"
+
+    def __init__(self, patterns: tuple[str, ...]) -> None:
+        self.patterns = patterns
+        self.component_res: list[re.Pattern[str]] = []
+        self.anchored_res: list[re.Pattern[str]] = []
+        for pattern in patterns:
+            stripped = pattern.strip("/")
+            if not stripped:
+                continue
+            if "/" in stripped:
+                self.anchored_res.append(re.compile(self.translate(stripped)))
+            else:
+                self.component_res.append(re.compile(self.translate(stripped)))
 
     def matches(self, path: str) -> bool:
         parts = path.split("/")

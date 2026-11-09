@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
-from hoglint.facts import SITE_MARKER
+from collections.abc import Callable
+
+from hoglint.facts import SITE_ROOTS
+
+
+def longest_prefix(dotted: str, exists: Callable[[str], bool]) -> str | None:
+    """The longest dotted prefix of `dotted` (itself included) that `exists` accepts."""
+    parts = dotted.split(".")
+    for end in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:end])
+        if exists(candidate):
+            return candidate
+    return None
 
 
 class ModuleNamer:
@@ -13,8 +25,9 @@ class ModuleNamer:
         self.roots = sorted(("" if root in ("", ".") else root for root in roots), key=len, reverse=True)
 
     def relative(self, path: str) -> str:
-        if SITE_MARKER in path:
-            return path.split(SITE_MARKER, 1)[1]
+        inside_site = SITE_ROOTS.relative(path)
+        if inside_site is not None:
+            return inside_site
         for root in self.roots:
             if not root:
                 return path
@@ -48,13 +61,14 @@ class ModuleIndex:
         self.dirs: set[str] = set()
         self.stub_of: dict[str, str] = {}
         self.repo_heads: set[str] = set(first_party)
-        for path in sorted(paths, key=lambda p: (SITE_MARKER in p, p.endswith(".pyi"), p)):
+        self.site_paths = {path for path in paths if SITE_ROOTS.contains(path)}
+        for path in sorted(paths, key=lambda p: (p in self.site_paths, p.endswith(".pyi"), p)):
             module, is_package = namer.module_of(path)
             if not module:
                 continue
             self.module_of[path] = module
             parts = module.split(".")
-            if SITE_MARKER not in path:
+            if path not in self.site_paths:
                 self.repo_heads.add(parts[0])
             for end in range(1, len(parts)):
                 self.dirs.add(".".join(parts[:end]))
@@ -78,20 +92,15 @@ class ModuleIndex:
         """Third-party: loaded from site-packages, or named under a head that no repo file has."""
         path = self.path_of.get(module)
         if path is not None:
-            return SITE_MARKER in path
+            return path in self.site_paths
         return module.split(".")[0] not in self.repo_heads
 
     def longest_module(self, dotted: str) -> str | None:
         """The longest prefix of `dotted` that is a module or a namespace package."""
-        parts = dotted.split(".")
-        for end in range(len(parts), 0, -1):
-            candidate = ".".join(parts[:end])
-            if self.exists(candidate):
-                return candidate
-        return None
+        return longest_prefix(dotted, self.exists)
 
     def repo_modules(self) -> dict[str, str]:
-        return {module: path for module, path in self.path_of.items() if SITE_MARKER not in path}
+        return {module: path for module, path in self.path_of.items() if path not in self.site_paths}
 
     def namespaces(self) -> set[str]:
         return {
