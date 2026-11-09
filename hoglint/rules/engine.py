@@ -15,7 +15,7 @@ from hoglint.config.loader import ConfigError
 from hoglint.config.model import Config, RuleSpec
 from hoglint.labels import Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
-from hoglint.ledger.file import LedgerFile, LineKey
+from hoglint.ledger.file import LedgerFile, LineKey, level_line
 from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph, IncompleteCause, Outcome, RuleResult
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, rule_kinds
 from hoglint.rules.edges import EdgePrimitive, EntrypointPrimitive, SignaturePrimitive, UseShapePrimitive
@@ -37,7 +37,6 @@ PRIMITIVES = {
     "coverage": CoveragePrimitive,
     "inventory": InventoryPrimitive,
 }
-LEVEL_PREFIX = "level:"
 
 
 def ledger_key(finding: Finding) -> LineKey:
@@ -109,7 +108,7 @@ class Engine:
 
     def failed_producers(self, spec: RuleSpec) -> list[str]:
         """A producer named in `requires`, or one that makes an edge kind the rule reads."""
-        kinds = set(rule_kinds(spec))
+        kinds = set(rule_kinds(spec, self.config.views))
         out = []
         for name, reason in sorted(self.graph.failed_producers.items()):
             stem = name.split("@", 1)[0]
@@ -187,7 +186,7 @@ class Engine:
             level = LevelEvaluator(spec, self.labeler, result.runs).evaluate()
             result.levels[name] = level
             for group in level.passing:
-                result.scan[(LEVEL_PREFIX + name, (group,))] = 1
+                result.scan[level_line(name, group)] = 1
         if rewrite_ledger and ledger is not None:
             ledger.lines = dict(result.scan)
             result.ledger = ledger

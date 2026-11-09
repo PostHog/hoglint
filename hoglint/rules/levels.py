@@ -4,7 +4,7 @@ A level is specified apart from lint acceptance:
 - A group passes when every rule in `requires` ran for it and none of its findings is new.
 - Ledgered debt may coexist with the level, except where it is safety-relevant: a finding that
   exists because something did not resolve, an incomplete result, or any finding of a rule in
-  `strict` (unwatched wiring) forbids the level even when the ledger accepts it.
+  `strict` forbids the level even when the ledger accepts it.
 - Exceptions make a use allowed, so an allowed finding does not count against the group. They
   never remove impact edges; test selection reads edges, not this result.
 """
@@ -81,7 +81,13 @@ class LevelEvaluator:
             blocking = finding.unknown or strict or finding.status is FindingStatus.NEW
             if not blocking:
                 continue
-            why = "unknown" if finding.unknown else "unwatched" if strict else "new finding"
+            why = (
+                "unknown"
+                if finding.unknown
+                else "strict, so the ledger does not excuse it"
+                if strict
+                else "new finding"
+            )
             for group in {self.group_of(subject) for subject in finding.subjects}:
                 if group in reasons:
                     reasons[group].append(f"{rule_id}: {why}: {finding.message}")

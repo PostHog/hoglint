@@ -174,7 +174,6 @@ class RuleSpec:
     deny: Selector | None = None
     allow: Selector | None = None
     require: Selector | None = None
-    require_text: str = ""
     unless: Selector | None = None
     on_unresolved: str = "finding"
     on_unknown: str = "finding"
@@ -217,7 +216,6 @@ class LevelSpec:
     doc: str = ""
     select: Selector | None = None
     strict: tuple[str, ...] = ()
-    unknown: str = "fails"
     source: str = ""
 
 
@@ -225,9 +223,15 @@ class LevelSpec:
 class LedgerSpec:
     file: str = "hoglint.ledger"
     exceptions: str = "hoglint.exceptions.toml"
-    equality: str = "exact"
-    growth: str = "attribution"
-    report_by: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Roles:
+    """Fields that generic code reads by role. `owner` lists a finding's owners; `group` groups
+    modules into the units cycles and compare's new-pair report are about."""
+
+    owner: str = ""
+    group: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +257,8 @@ class Config:
     ledger: LedgerSpec = LedgerSpec()
     outputs: dict[str, OutputSpec] = field(default_factory=dict)
     identities: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    roles: Roles = Roles()
+    views: dict[str, tuple[str, ...]] = field(default_factory=dict)  # view name -> the edge kinds it reads
     edge_kinds: tuple[str, ...] = ()
     use_shapes: tuple[str, ...] = ()
     sections: dict[str, Any] = field(default_factory=dict)  # discovery and pack sections, unvalidated by core

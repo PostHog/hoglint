@@ -14,6 +14,9 @@ package = { type = "id" }
 owners  = { type = "set" }
 silo    = { type = "enum", values = ["cell", "control", "all"], on = "symbol", required_on = "kind == 'model'" }
 
+[roles]
+owner = "owners"
+
 [providers.codeowners]
 use  = "codeowners"
 file = ".github/CODEOWNERS"

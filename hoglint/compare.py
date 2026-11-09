@@ -22,8 +22,8 @@ from hoglint.ledger.growth import AttributionCheck, GrowthKey, GrowthResult, Ren
 from hoglint.ledger.scan import ScanSummary, Triple
 
 EXCEPTION_ENTRY = "exception"
-RULE_PREFIX = "rules."
-LEVEL_PREFIX = "levels."
+RULE_SECTION = "rules."
+LEVEL_SECTION = "levels."
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +95,7 @@ class CompareReport:
             [f"{render_key(key)}  {count}" for key, count in self.touched_debt],
         )
         section("policy entries changed", [f"{c.label:8} {c.change:8} {c.entry}  ({c.why})" for c in self.policy])
-        section("new package edges (pair, kind, context)", [" ".join(t) for t in self.new_triples])
+        section("new group edges (pair, kind, context)", [" ".join(t) for t in self.new_triples])
         if self.growth.skipped:
             out.append(f"growth check skipped: {self.growth.skipped}")
         section(
@@ -172,11 +172,11 @@ class PolicyClassifier:
         evidence = self.evidence
         if evidence is None:
             return "relax", "base scanner unavailable, so the effect cannot be classified"
-        if entry.startswith(RULE_PREFIX):
-            rule = entry.removeprefix(RULE_PREFIX)
+        if entry.startswith(RULE_SECTION):
+            rule = entry.removeprefix(RULE_SECTION)
             return self.judge(evidence.lost.get(rule, 0), evidence.gained.get(rule, 0), set(), set())
-        if entry.startswith(LEVEL_PREFIX):
-            name = entry.removeprefix(LEVEL_PREFIX)
+        if entry.startswith(LEVEL_SECTION):
+            name = entry.removeprefix(LEVEL_SECTION)
             gained = {name} & evidence.levels_gained
             lost = {name} & evidence.levels_lost
             return self.judge(0, 0, gained, lost)

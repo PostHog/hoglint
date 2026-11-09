@@ -27,6 +27,7 @@ from hoglint.config.model import (
     OutputSpec,
     ProviderSpec,
     RegistrySpec,
+    Roles,
     RuleSpec,
     ShapePolicy,
     SymbolMatch,
@@ -77,7 +78,12 @@ PRIMITIVES = (
     "coverage",
     "inventory",
 )
-VIEWS = ("refs", "file-imports", "zones", "packages", "migrations")
+CORE_VIEWS: dict[str, tuple[str, ...]] = {
+    "refs": (),
+    "file-imports": ("import", "dotted-path"),
+    "zones": ("import",),
+    "packages": ("import", "reference", "dotted-path"),
+}
 ENDPOINTS = ("surface", "origin", "via")
 ON_UNRESOLVED = ("finding", "block", "incomplete")
 LIFECYCLES = ("setup", "first-request", "worker-start", "on-demand")
@@ -120,13 +126,14 @@ KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expec
 SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "doc"})
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
-LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "unknown"})
-LEDGER_KEYS = frozenset({"file", "exceptions", "equality", "growth", "report"})
+LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict"})
+LEDGER_KEYS = frozenset({"file", "exceptions"})
+ROLE_KEYS = frozenset({"owner", "group"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
 DISCOVERY_KEYS = frozenset(
     {"source_roots", "first_party", "exclude", "include", "scripts", "external", "tests", "migrations", "plugins"}
 )
-VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections"})
+VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections", "views"})
 BUILTIN_NAMES = frozenset(
     {
         "module",
@@ -143,6 +150,8 @@ BUILTIN_NAMES = frozenset(
         "subject",
     }
 )
+
+CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles")
 
 CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -167,6 +176,7 @@ class SchemaBuilder:
         self.kind_names: tuple[str, ...] = ()
         self.edge_kinds: tuple[str, ...] = ()
         self.use_shapes: tuple[str, ...] = ()
+        self.views: dict[str, tuple[str, ...]] = dict(CORE_VIEWS)
         self.identities: dict[str, tuple[str, ...]] = dict(NAMED_IDENTITIES)
 
     # ── helpers ──
@@ -292,15 +302,12 @@ class SchemaBuilder:
         rules = self.read_rules(registries, exports)
         levels = self.read_levels(rules)
         ledger = self.read_ledger()
+        roles = self.read_roles(rules)
         outputs = self.read_outputs()
         self.read_discovery()
         if self.problems:
             raise ConfigError(self.problems)
-        sections = {
-            name: value
-            for name, value in self.raw.items()
-            if name not in (*NAMED_SECTIONS, "assign", "zones", "vocabulary", "ledger")
-        }
+        sections = {name: value for name, value in self.raw.items() if name not in (*NAMED_SECTIONS, *CORE_SECTIONS)}
         return Config(
             fields=self.fields,
             assigns=assigns,
@@ -315,6 +322,8 @@ class SchemaBuilder:
             ledger=ledger,
             outputs=outputs,
             identities=self.identities,
+            roles=roles,
+            views=self.views,
             edge_kinds=self.edge_kinds,
             use_shapes=self.use_shapes,
             sections=sections,
@@ -325,7 +334,7 @@ class SchemaBuilder:
 
     def check_top_level(self) -> None:
         pack_sections = tuple(self.raw.get("vocabulary", {}).get("sections", ()))
-        allowed = frozenset({*NAMED_SECTIONS, "assign", "zones", "vocabulary", "ledger", "discovery", *pack_sections})
+        allowed = frozenset({*NAMED_SECTIONS, *CORE_SECTIONS, "discovery", *pack_sections})
         for name in self.raw:
             if name not in allowed:
                 self.problems.append(f"{name}: unknown section{suggest(name, allowed)}  [{self.source(name)}]")
@@ -335,6 +344,16 @@ class SchemaBuilder:
         self.check_keys("vocabulary", vocabulary, VOCABULARY_KEYS)
         self.edge_kinds = (*CORE_EDGE_KINDS, *(k for k in vocabulary.get("edge_kinds", ()) if k not in CORE_EDGE_KINDS))
         self.use_shapes = (*CORE_USES, *(k for k in vocabulary.get("use_shapes", ()) if k not in CORE_USES))
+        views = vocabulary.get("views", {})
+        if not isinstance(views, dict):
+            self.fail("vocabulary.views", "must be a table of view name -> edge kinds")
+            views = {}
+        for name, kinds in views.items():
+            for kind in kinds:
+                if kind not in self.edge_kinds:
+                    self.fail(f"vocabulary.views.{name}", f"unknown edge kind {kind!r}{suggest(kind, self.edge_kinds)}")
+            current = self.views.get(name, ())
+            self.views[name] = (*current, *(kind for kind in kinds if kind not in current))
 
     def read_zone_names(self, zones_raw: dict[str, Any]) -> tuple[str, ...]:
         names = [name for name in zones_raw if name not in ("within", "default")]
@@ -760,7 +779,6 @@ class SchemaBuilder:
             inputs = self.read_inputs(f"{key}.inputs", inputs)
         if primitive == "inventory" and not (table.get("classify") or table.get("exactly_one")):
             self.fail(key, "an inventory needs `classify` (edges) or `exactly_one` (entities)")
-        require_text = table.get("require", "")
         return RuleSpec(
             id=rule_id,
             primitive=primitive,
@@ -768,7 +786,7 @@ class SchemaBuilder:
             kinds=kinds,
             contexts_include=include,
             contexts_exclude=exclude,
-            view=self.check_enum(f"{key}.view", table.get("view", "refs"), VIEWS),
+            view=self.check_enum(f"{key}.view", table.get("view", "refs"), tuple(self.views)),
             endpoint=self.check_enum(
                 f"{key}.endpoint",
                 table.get("endpoint", "surface" if primitive == "entrypoint" else "origin"),
@@ -778,8 +796,7 @@ class SchemaBuilder:
             select=self.parse(f"{key}.select", table.get("select"), predicate_catalog),
             deny=self.parse(f"{key}.deny", table.get("deny"), predicate_catalog),
             allow=self.parse(f"{key}.allow", table.get("allow"), predicate_catalog),
-            require=self.parse(f"{key}.require", require_text or None, predicate_catalog),
-            require_text=str(require_text),
+            require=self.parse(f"{key}.require", table.get("require"), predicate_catalog),
             unless=self.parse(f"{key}.unless", table.get("unless"), predicate_catalog),
             on_unresolved=on_unresolved,
             on_unknown=self.check_enum(f"{key}.on_unknown", table.get("on_unknown", "finding"), ON_UNRESOLVED),
@@ -833,7 +850,6 @@ class SchemaBuilder:
                 str(table.get("doc", "")),
                 self.parse(f"{key}.select", table.get("select"), self.entity_catalog()),
                 strict,
-                self.check_enum(f"{key}.unknown", table.get("unknown", "fails"), ("fails",)),
                 self.source(key),
             )
         return out
@@ -841,17 +857,22 @@ class SchemaBuilder:
     def read_ledger(self) -> LedgerSpec:
         table = self.raw.get("ledger", {})
         self.check_keys("ledger", table, LEDGER_KEYS)
-        report = table.get("report", {})
-        report_by = str(report.get("by", "")) if isinstance(report, dict) else ""
-        if report_by and report_by not in self.fields:
-            self.fail("ledger.report", f"report by {report_by!r}: not a declared field")
         return LedgerSpec(
-            str(table.get("file", "hoglint.ledger")),
-            str(table.get("exceptions", "hoglint.exceptions.toml")),
-            self.check_enum("ledger.equality", table.get("equality", "exact"), ("exact",)),
-            self.check_enum("ledger.growth", table.get("growth", "attribution"), ("attribution",)),
-            report_by,
+            str(table.get("file", "hoglint.ledger")), str(table.get("exceptions", "hoglint.exceptions.toml"))
         )
+
+    def read_roles(self, rules: dict[str, RuleSpec]) -> Roles:
+        table = self.raw.get("roles", {})
+        self.check_keys("roles", table, ROLE_KEYS)
+        for role in ROLE_KEYS:
+            name = table.get(role)
+            if name is not None and name not in self.fields:
+                self.fail(f"roles.{role}", f"{name!r} is not a declared field{suggest(str(name), self.fields)}")
+        roles = Roles(str(table.get("owner", "")), str(table.get("group", "")))
+        for rule in rules.values():
+            if rule.primitive == "cycle" and rule.view == "packages" and not roles.group:
+                self.fail(f"rules.{rule.id}", "a cycle over the packages view needs `[roles] group = <field>`")
+        return roles
 
     def read_outputs(self) -> dict[str, OutputSpec]:
         out: dict[str, OutputSpec] = {}
@@ -860,7 +881,7 @@ class SchemaBuilder:
             self.check_keys(key, table, OUTPUT_KEYS)
             out[name] = OutputSpec(
                 name,
-                self.check_enum(f"{key}.view", table.get("view", "file-imports"), VIEWS),
+                self.check_enum(f"{key}.view", table.get("view", "file-imports"), tuple(self.views)),
                 self.check_enum(f"{key}.format", table.get("format", "tach-map"), ("tach-map", "edges-json")),
                 str(table.get("path", f".hoglint/{name}.json")),
             )

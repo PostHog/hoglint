@@ -8,7 +8,7 @@ Merge rules:
 - A setting in a plain table (`[discovery]`, `[ledger]`, ...) set twice is an error unless the
   value is a list patch or the later table says `replace = true`.
 - `[[assign]]` entries append.
-- `[vocabulary]` lists are unions: packs add edge kinds and use shapes.
+- `[vocabulary]` lists are unions: packs add edge kinds, use shapes and the edge kinds of a view.
 """
 
 from __future__ import annotations
@@ -172,14 +172,20 @@ class Merger:
         if not isinstance(value, dict):
             self.fail(f"`{section}` must be a table")
             return
-        target = self.merged.data.setdefault(section, {})
-        for key, items in value.items():
-            if not isinstance(items, list):
-                self.fail(f"`{section}.{key}` must be a list")
+        self.union_into(section, value, self.merged.data.setdefault(section, {}))
+
+    def union_into(self, key: str, value: dict[str, Any], target: dict[str, Any]) -> None:
+        """Lists union item by item; a nested table (`[vocabulary.views]`) unions per key."""
+        for name, items in value.items():
+            if isinstance(items, dict):
+                self.union_into(f"{key}.{name}", items, target.setdefault(name, {}))
                 continue
-            existing = target.setdefault(key, [])
+            if not isinstance(items, list):
+                self.fail(f"`{key}.{name}` must be a list")
+                continue
+            existing = target.setdefault(name, [])
             existing.extend(item for item in items if item not in existing)
-            self.merged.note(f"{section}.{key}", self.source, patched=True)
+            self.merged.note(f"{key}.{name}", self.source, patched=True)
 
     def merge_named(self, section: str, value: Any) -> None:
         if not isinstance(value, dict):

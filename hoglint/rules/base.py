@@ -35,15 +35,10 @@ from hoglint.selectors import (
 )
 
 MODULE_SCOPE = "<module>"
-VIEW_KINDS: dict[str, tuple[str, ...]] = {
-    "file-imports": ("import", "dotted-path"),
-    "zones": ("import",),
-    "packages": ("import", "reference", "dotted-path", "model-label"),
-    "migrations": ("migration-parent",),
-}
 PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "use-shape": ("reference",),
     "signature": ("exposes",),
+    "export": ("import", "exposes", "inherit", "decorate"),
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
 EDGE_DEPENDENT_FIELDS = frozenset({"context", "exported"})
@@ -224,23 +219,22 @@ class RuleContext:
         return endpoint
 
     def owners_of(self, module: str | None) -> tuple[str, ...]:
-        if module is None or "owners" not in self.config.fields:
+        owner = self.config.roles.owner
+        if module is None or not owner:
             return ()
-        value, _ = self.labeler.field_value(module, None, "owners")
+        value, _ = self.labeler.field_value(module, None, owner)
         if value.state is State.KNOWN and isinstance(value.data, frozenset):
             return tuple(sorted(value.data))
         return ()
 
 
-def rule_kinds(spec: RuleSpec) -> tuple[str, ...]:
+def rule_kinds(spec: RuleSpec, views: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
     """Edge kinds a rule reads: its own list, else the primitive's or the view's default."""
     if spec.kinds:
         return spec.kinds
     if spec.primitive in PRIMITIVE_KINDS:
         return PRIMITIVE_KINDS[spec.primitive]
-    if spec.primitive == "export":
-        return ("import", "exposes", "inherit", "decorate")
-    return VIEW_KINDS.get(spec.view, ())
+    return views.get(spec.view, ())
 
 
 def contexts_of(edge: Edge) -> frozenset[str]:
@@ -517,7 +511,7 @@ class EdgeRule:
         self.staged = StagedSelection(ctx, self.selectors())
 
     def kinds(self) -> tuple[str, ...]:
-        return rule_kinds(self.spec)
+        return rule_kinds(self.spec, self.ctx.config.views)
 
     def selectors(self) -> tuple[Selector | None, ...]:
         """The selectors that pick edges, in the order they apply."""

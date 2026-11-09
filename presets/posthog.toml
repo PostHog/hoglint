@@ -22,6 +22,11 @@ database  = { type = "string", on = "symbol", required_on = "kind == 'model'" }
 generated = { type = "bool", required_on = ["posthog/schema.py", "posthog/schema_enums.py"] }
 producer  = { type = "set" }
 
+# Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
+[roles]
+owner = "owners"
+group = "package"
+
 # ── Products ───────────────────────────────────────────────────
 
 [[assign]]
@@ -553,4 +558,3 @@ requires = [
   "installs", "wiring-watched", "dynamic-imports",
 ]
 strict   = ["wiring-watched"]
-unknown  = "fails"

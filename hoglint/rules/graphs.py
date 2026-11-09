@@ -120,7 +120,7 @@ class CyclePrimitive(EdgeRule):
     """Strongly connected parts of a grouped view: every pair inside one is a finding."""
 
     def group_field(self) -> str:
-        return "package" if self.spec.view == "packages" else "module"
+        return self.ctx.config.roles.group if self.spec.view == "packages" else "module"
 
     def group(self, env: EdgeEnv, root: str) -> str | None:
         value = env.resolve(Ref((root, self.group_field())))

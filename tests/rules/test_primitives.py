@@ -125,6 +125,9 @@ def test_edge_rule_unknown_never_escapes_a_deny(tmp_path: Path) -> None:
 
 
 CYCLE = """
+[roles]
+group = "package"
+
 [rules.no-cycles]
 primitive = "cycle"
 view = "packages"
@@ -604,7 +607,7 @@ def test_level_lets_ledgered_debt_coexist_but_not_unknowns_or_unwatched_wiring(t
     ledger = LedgerFile(schema=1, policy=first.config.policy_hash, lines=dict(first.scan), exists=True)
     second = run(tmp_path, LEVEL, graph, ledger)
     assert second.levels["isolated"].passing == ["billing"]
-    assert "unwatched" in second.levels["isolated"].failing["alerts"][0]
+    assert "wiring-watched: strict" in second.levels["isolated"].failing["alerts"][0]
 
 
 EXCEPTIONS = """

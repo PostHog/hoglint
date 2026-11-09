@@ -15,7 +15,7 @@ from hoglint.model import Edge, FindingStatus, Graph
 from hoglint.rules.engine import RunResult
 
 Coupling = tuple[str, str, str]  # (src module, dst symbol or module, edge kind)
-Triple = tuple[str, str, str, str]  # (src package, dst package, edge kind, context)
+Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
 
 
 def coupling_of(edge: Edge) -> list[Coupling]:
@@ -64,7 +64,7 @@ class ScanSummary:
         for item in result.incomplete():
             summary.incomplete[(item.rule, item.key)] = item.reason
         summary.levels = {name: list(level.passing) for name, level in result.levels.items()}
-        summary.triples = package_triples(result, graph)
+        summary.triples = group_triples(result, graph)
         if with_couplings:
             for edge in graph.edges:
                 for coupling in coupling_of(edge):
@@ -113,9 +113,10 @@ class ScanSummary:
         return ScanSummary.from_json(json.loads(path.read_text()))
 
 
-def package_triples(result: RunResult, graph: Graph) -> set[Triple]:
-    """(src package, dst package, kind, context) for every edge between two known packages."""
-    if "package" not in result.config.fields:
+def group_triples(result: RunResult, graph: Graph) -> set[Triple]:
+    """(src group, dst group, kind, context) for every edge between two known groups (`[roles] group`)."""
+    group = result.config.roles.group
+    if not group:
         return set()
     labeler = result.labeler
     out: set[Triple] = set()
@@ -125,7 +126,7 @@ def package_triples(result: RunResult, graph: Graph) -> set[Triple]:
         if module is None:
             return None
         if module not in packages:
-            value, _ = labeler.field_value(module, None, "package")
+            value, _ = labeler.field_value(module, None, group)
             packages[module] = str(value.data) if value.state.value == "known" else None
         return packages[module]
 

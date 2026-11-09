@@ -21,9 +21,6 @@ oracles              = ["registry", "migration-loader"]
 [ledger]
 file       = "hoglint.ledger"
 exceptions = "hoglint.exceptions.toml"
-equality   = "exact"
-growth     = "attribution"
-report     = { by = "owners" }
 
 [outputs.import-map]
 view   = "file-imports"

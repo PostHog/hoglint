@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from hoglint.ledger.file import LineKey
+from hoglint.ledger.file import LineKey, is_level_line
 from hoglint.ledger.scan import Coupling, ScanSummary
 
 GrowthKey = tuple[str, tuple[str, ...]]  # (rule, growth columns)
@@ -49,7 +49,7 @@ def growth_key(line: LineKey, growth: dict[str, tuple[int, ...]]) -> GrowthKey |
     rule, identity = line
     indexes = growth.get(rule)
     if indexes is None:
-        if rule.startswith("level:"):
+        if is_level_line(line):
             return None
         return rule, identity
     return rule, tuple(identity[i] for i in indexes if i < len(identity))

@@ -10,3 +10,8 @@ use_shapes = [
   "prefetch", "scalar-chain", "subquery", "type-use", "write",
 ]
 sections = ["django"]
+
+# The Django kinds the core views read: a model label couples packages, a migration parent orders migrations.
+[vocabulary.views]
+packages   = ["model-label"]
+migrations = ["migration-parent"]
