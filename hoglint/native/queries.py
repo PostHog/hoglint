@@ -14,6 +14,7 @@ their rows here; a native row query by spelling replaces that when it exists.
 from __future__ import annotations
 
 import re
+import hashlib
 from array import array
 from collections.abc import Collection, Iterable, Iterator
 from typing import Any, NamedTuple
@@ -148,6 +149,11 @@ class PackQueries:
         """`edges_to` as fields, for a pack that makes its own edges from them."""
         return [EdgeFields.of(edge) for edge in self.edges_to(kind, targets)]
 
+    def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
+        """A digest of a file's facts of `kinds`, for a pack that caches what it reads from one
+        file. None when the engine has no fact text to digest: the pack reads the file instead."""
+        return None
+
 
 class NativePackQueries(PackQueries):
     """The native engine's answers: edge queries go to the link, and row queries read the fact
@@ -172,6 +178,16 @@ class NativePackQueries(PackQueries):
     def has_rows(self, scope: FileScope, kind: str) -> bool:
         text = self.text(scope, kind)
         return text is not None and len(text) > EMPTY_LIST
+
+    def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
+        """The facts are the extractor's text of the blob, so their digest stands for the blob."""
+        digest = hashlib.blake2b(digest_size=16)
+        for kind in kinds:
+            text = record.texts.take(record.file, kind)
+            digest.update(kind.encode())
+            digest.update(b"\0" if text is None else text)
+            digest.update(b"\0")
+        return digest.hexdigest()
 
     def core_edges(self, ids: bytes) -> list[Edge]:
         graph: Any = self.graph

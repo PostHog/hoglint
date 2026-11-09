@@ -11,6 +11,7 @@ from hoglint.core.build import CoreBuild
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
+from hoglint.ledger.store import cache_root
 from hoglint.model import Edge, Graph
 from hoglint.native.queries import PackQueries
 from hoglint.packs.django.apps import AppRegistry
@@ -23,6 +24,7 @@ from hoglint.packs.django.migrations import (
     MigrationEdges,
     MigrationGraph,
     MigrationReader,
+    SummaryCache,
 )
 from hoglint.packs.django.models import ModelRegistry, RelationBuilder
 from hoglint.packs.django.relations import RELATIONS_PRODUCER, ModelFacts, RelationEdges
@@ -93,7 +95,8 @@ class DjangoRun:
     def migration_edges(self) -> list[Edge]:
         assert self.apps is not None
         projection = AliasProjection(self.repo_root, self.config.routing)
-        self.migrations = MigrationReader(self.build, self.apps, self.config).read(projection)
+        cache = SummaryCache(cache_root() / "packs")
+        self.migrations = MigrationReader(self.build, self.apps, self.config, self.queries, cache).read(projection)
         return MigrationEdges(self.migrations, self.build.external).produce()
 
     def relation_edges(self) -> list[Edge]:

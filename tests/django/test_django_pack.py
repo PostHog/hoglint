@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import orjson
 from core.support import (
     assign_row as assign,
     class_def,
     func_def,
     import_row as import_from,
 )
-from django_facts import FactRepo
+from django_facts import FIRST_PARTY, FactRepo
+from hoglint.core.config import CoreConfig
 from hoglint.core.symbols import FUNC
-from hoglint.model import Resolution
-from hoglint.packs.django.config import DatabaseRouting
+from hoglint.model import Graph, Resolution
+from hoglint.native.queries import PackQueries
+from hoglint.packs.django.apps import AppRegistry
+from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
+from hoglint.packs.django.migrations import AliasProjection, MigrationReader, SummaryCache
 from hoglint.packs.django.pack import MODEL_KINDS
 
 RECEIVERS = {
@@ -255,3 +263,43 @@ def test_a_failed_migration_read_fails_the_symbols_that_carry_its_databases() ->
     assert failed["django.migrations@1"].reason.startswith("FileNotFoundError")
     assert failed["django.symbols@1"].reason == "django.migrations@1 failed"
     assert failed["django.symbols@1"].kinds == MODEL_KINDS
+
+
+class DigestQueries(PackQueries):
+    """The Python engine's queries with a digest of each record's facts, as the native engine has."""
+
+    def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
+        return hashlib.blake2b(orjson.dumps([record.get(kind) for kind in kinds])).hexdigest()
+
+
+def migration_parents(settings_value: str, cache: SummaryCache) -> list[str]:
+    swappable = {"call": "swappable_dependency", "args": ["settings.AUTH_USER_MODEL"]}
+    migrations = {
+        "proj/settings.py": {
+            "assigns": [
+                assign("INSTALLED_APPS", {"list": [{"s": "shop"}, {"s": "billing"}]}, 1),
+                assign("AUTH_USER_MODEL", {"s": settings_value}, 2),
+            ]
+        },
+        "shop/migrations/__init__.py": {},
+        "shop/migrations/0001_initial.py": {
+            "defs": [class_def("Migration", [], 1)],
+            "assigns": [assign("dependencies", {"list": [swappable]}, 2, scope=0, flags=8)],
+        },
+        "billing/migrations/__init__.py": {},
+        "billing/migrations/0001_initial.py": {"defs": [class_def("Migration", [], 1)]},
+    }
+    build = FactRepo(migrations).build(CoreConfig(first_party=FIRST_PARTY))
+    config = DjangoPackConfig(settings_modules=("proj.settings",))
+    reader = MigrationReader(build, AppRegistry(build, config), config, DigestQueries(build, Graph()), cache)
+    graph = reader.read(AliasProjection(Path("."), None))
+    edges = [f"{child[0]}.{child[1]} -> {parent[0]}.{parent[1]}" for child, parent in graph.graph.edges()]
+    return edges + [f"unresolved {key[0]}.{key[1]}" for _, key in graph.graph.unresolved_keys]
+
+
+def test_a_cached_migration_summary_reads_the_settings_of_each_run(tmp_path: Path) -> None:
+    first = migration_parents("billing.Invoice", SummaryCache(tmp_path))
+    second = migration_parents("ghost.User", SummaryCache(tmp_path))
+
+    assert first == ["shop.0001_initial -> billing.0001_initial"]
+    assert second == ["unresolved ghost.__first__"]
