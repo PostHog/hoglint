@@ -119,9 +119,8 @@ class SignalProducer:
             hit = self.lookup(scope, root + attrs, enclosing, line)
             if hit is not None and self.is_signal(hit):
                 found.extend([(line, column, str(hit.origin))] * count)
-        for row in scope.record.get("refs", ()):
-            _, header, line, column, root, chain = row[:6]
-            if len(row) > 7 or header != idx or not PLAIN_ATTRS.fullmatch(chain):
+        for _, header, line, column, _, root, chain, _ in scope.record.get("refs", ()):
+            if header != idx or not PLAIN_ATTRS.fullmatch(chain):
                 continue
             hit = self.lookup(scope, root + chain, enclosing, line)
             if hit is not None and self.is_signal(hit):
@@ -199,7 +198,7 @@ class SignalProducer:
         """`<signal>.connect(fn, sender=X)`; without argument facts the edge stays unresolved."""
         out: list[Edge] = []
         with_args: set[tuple[int, str]] = set()
-        for at_scope, _, line, column, callee, args, kws in scope.record.get("calls", ()):
+        for at_scope, _, line, column, flags, callee, args, kws in scope.record.get("calls", ()):
             signal = self.connected_signal(scope, callee, at_scope, line)
             if signal is None:
                 continue
@@ -207,7 +206,6 @@ class SignalProducer:
             receiver = self.receiver_name(scope, at_scope, args[0], line) if args else UNKNOWN
             site = scope.site(at_scope, line, column)
             sender = self.sender(scope, kws, at_scope, line)
-            flags = scope.flags_at(line, column)
             out.append(self.edge(scope, site, flags, sender, str(signal.origin), receiver, "connect"))
         for at_scope, _, callee, count, line, column in scope.record.get("callees", ()):
             if (at_scope, callee) in with_args:

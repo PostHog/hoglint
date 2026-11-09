@@ -389,8 +389,7 @@ class RelationBuilder:
             return None
         record, idx = found
         defs = record["defs"]
-        for row in record.get("calls", ()):
-            scope, header, callee, args = row[0], row[1], row[4], row[5]
+        for scope, header, _, _, _, callee, args, _ in record.get("calls", ()):
             if header != idx and idx not in ancestry(defs, scope):
                 continue
             if not callee.endswith(".setdefault") or len(args) != 2:

@@ -1,4 +1,4 @@
-//! L1 fact extractor (schema v2, see schema.md) on the ruff parser: the pure core.
+//! L1 fact extractor (schema v3, see schema.md) on the ruff parser: the pure core.
 //!
 //! `extract` turns one file's bytes into a typed `FileRecord`; `record_line` encodes it.
 //! Nothing here reads files, the clock or global state. The `hoglint-facts` binary is the
@@ -18,12 +18,12 @@ mod walker;
 
 pub mod config;
 
-pub use config::{BUILD_ID, ExtractConfig, SCHEMA_VERSION, sha256_hex};
+pub use config::{BUILD_ID, ExtractConfig, Kind, Kinds, SCHEMA_VERSION, sha256_hex};
 pub use encode::record_line;
 pub use extract::extract;
 pub use facts::{
     Assign, Branch, Count, Def, DefKind, DottedStr, Facts, FileRecord, Import, Param, Ref, Site,
-    SiteFlags, Status, Tag, TextKey, UseKey, WatchedCall, WatchedKey, flags,
+    Status, Tag, TextKey, UseKey, WatchedCall, WatchedKey, flags,
 };
 pub use value::{Keyword, Value};
 

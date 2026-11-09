@@ -1,9 +1,8 @@
 //! One traversal of a parsed module that collects every row list of an L1 record.
 //! Mirrors `FileWalker` in reference_l1.py.
 
-use crate::config::ExtractConfig;
+use crate::config::{ExtractConfig, Kind};
 use crate::defs::{Bound, DefNode, DefTable};
-use crate::derive::Candidate;
 use crate::facts::flags::{BLOCK, CLASS, FUNC, IF, TC_ELSE, TRY, TYPE_ONLY};
 use crate::facts::{
     Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
@@ -18,16 +17,18 @@ use ruff_python_ast::{self as ast, Expr, ExprContext, InterpolatedStringElement,
 use ruff_text_size::{Ranged, TextSize};
 use std::collections::{HashMap, HashSet};
 
-const WATCHED_CALLEES: [&str; 6] = [
-    "get_model",
-    "patch",
-    "object",
-    "setdefault",
-    "append",
-    "connect",
+/// Kinds whose rows come from expressions. Without any of them the walk skips expressions.
+const EXPRESSION_KINDS: [Kind; 9] = [
+    Kind::Callees,
+    Kind::Calls,
+    Kind::Derived,
+    Kind::Names,
+    Kind::Refs,
+    Kind::Strs,
+    Kind::Tags,
+    Kind::Uses,
+    Kind::Watched,
 ];
-const WATCHED_PREFIXES: [&str; 1] = ["register_"];
-const WATCHED_DICT_KEY: &str = "kind";
 
 /// Occurrence count and first position per aggregate key.
 pub type Counts<K> = HashMap<K, (i64, i64, i64)>;
@@ -72,6 +73,7 @@ impl At {
             header: self.header,
             l,
             c,
+            flags: self.flags,
         }
     }
 }
@@ -83,7 +85,8 @@ pub struct Walk {
     pub assigns: Vec<Assign>,
     /// Use sites of import-bound names.
     pub refs: Vec<Ref>,
-    pub candidates: Vec<Candidate>,
+    /// Loads that become `derived` rows once their name is derived.
+    pub candidates: Vec<Ref>,
     pub calls: Vec<WatchedCall>,
     pub strs: Vec<DottedStr>,
     pub tags: Vec<Tag>,
@@ -94,16 +97,6 @@ pub struct Walk {
     pub names: Counts<TextKey>,
     /// Statement flags by def index.
     pub def_flags: Vec<u32>,
-    /// Statement flags at the position of `refs`, `strs` and `calls` rows, where not 0.
-    pub site_flags: HashMap<(i64, i64), u32>,
-}
-
-impl Walk {
-    pub fn flag_site(&mut self, l: i64, c: i64, flags: u32) {
-        if flags != 0 {
-            self.site_flags.insert((l, c), flags);
-        }
-    }
 }
 
 pub struct Walker<'a, 'w> {
@@ -113,6 +106,8 @@ pub struct Walker<'a, 'w> {
     bound: &'w Bound<'a>,
     stored: &'w HashSet<&'a str>,
     config: &'w ExtractConfig,
+    /// Whether any requested kind needs the expression walk.
+    exprs: bool,
     enc: Encoder,
     path: Vec<Frame<'a>>,
     out: Walk,
@@ -138,6 +133,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             bound,
             stored,
             config,
+            exprs: config.kinds.any(&EXPRESSION_KINDS),
             enc: Encoder::default(),
             path: Vec::new(),
             out,
@@ -154,12 +150,12 @@ impl<'a, 'w> Walker<'a, 'w> {
         self.out
     }
 
-    fn is_watched(&self, last: &str) -> bool {
-        WATCHED_CALLEES.contains(&last)
-            || WATCHED_PREFIXES
-                .iter()
-                .any(|prefix| last.starts_with(prefix))
-            || self.config.watch_callees.iter().any(|name| name == last)
+    fn wants(&self, kind: Kind) -> bool {
+        self.config.kinds.has(kind)
+    }
+
+    fn wants_any(&self, kinds: &[Kind]) -> bool {
+        self.config.kinds.any(kinds)
     }
 
     /// A value tree under the assignment budget.
@@ -170,6 +166,9 @@ impl<'a, 'w> Walker<'a, 'w> {
     // ---- traversal ----------------------------------------------------------------------
 
     fn child(&mut self, frame: Frame<'a>, expr: &'a Expr, at: At) {
+        if !self.exprs {
+            return;
+        }
         self.path.push(frame);
         self.expr(expr, at);
         self.path.pop();
@@ -194,8 +193,9 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    fn assign_scope(&self, scope: i64) -> bool {
-        scope == -1 || self.defs.is_class(scope)
+    /// Assignments get a row at module and class scope only.
+    fn emits_assign(&self, scope: i64) -> bool {
+        self.wants(Kind::Assigns) && (scope == -1 || self.defs.is_class(scope))
     }
 
     fn stmt(&mut self, stmt: &'a Stmt, at: At) {
@@ -204,19 +204,18 @@ impl<'a, 'w> Walker<'a, 'w> {
             Stmt::ClassDef(c) => self.visit_def(DefNode::Class(c), at),
             Stmt::Import(i) => {
                 for alias in &i.names {
-                    let module = Some(alias.name.to_string());
-                    self.push_import(alias, at, module, 0, None);
+                    self.push_import(alias, at, Some(alias.name.as_str()), 0, None);
                 }
             }
             Stmt::ImportFrom(i) => {
+                let module = i.module.as_ref().map(|m| m.as_str());
                 for alias in &i.names {
-                    let module = i.module.as_ref().map(|m| m.to_string());
-                    let name = Some(alias.name.to_string());
+                    let name = Some(alias.name.as_str());
                     self.push_import(alias, at, module, i.level, name);
                 }
             }
             Stmt::Assign(a) => {
-                if self.assign_scope(at.scope) {
+                if self.emits_assign(at.scope) {
                     let t = a
                         .targets
                         .iter()
@@ -231,7 +230,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.child(Frame::AssignValue(&a.targets), &a.value, at);
             }
             Stmt::AnnAssign(a) => {
-                if self.assign_scope(at.scope) {
+                if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.target), false)];
                     let ann = self.value(Some(&a.annotation), true);
                     let v = self.value(a.value.as_deref(), false);
@@ -244,7 +243,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Stmt::AugAssign(a) => {
                 let op = binop(a.op);
-                if self.assign_scope(at.scope) {
+                if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.target), false)];
                     let v = self.value(Some(&a.value), false);
                     self.emit_assign(stmt, at, format!("{op}="), t, None, v);
@@ -253,7 +252,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.child(Frame::AugAssignValue(op, &a.target), &a.value, at);
             }
             Stmt::TypeAlias(a) => {
-                if self.assign_scope(at.scope) {
+                if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.name), false)];
                     let v = self.value(Some(&a.value), true);
                     self.emit_assign(stmt, at, "type".to_string(), t, None, v);
@@ -390,6 +389,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     ) {
         if let Expr::Compare(cmp) = test
             && cmp.operands[0].is_name_expr()
+            && self.wants(Kind::Branches)
         {
             let (l, c) = self.lines.pos(start);
             let last = body.last().map(|s| s.range().end()).unwrap_or(start);
@@ -466,19 +466,22 @@ impl<'a, 'w> Walker<'a, 'w> {
         &mut self,
         alias: &ast::Alias,
         at: At,
-        module: Option<String>,
+        module: Option<&str>,
         level: u32,
-        name: Option<String>,
+        name: Option<&str>,
     ) {
+        if !self.wants(Kind::Imports) {
+            return;
+        }
         let (l, c) = self.lines.pos(alias.range.start());
         self.out.imports.push(Import {
             scope: at.scope,
             l,
             c,
             flags: at.flags,
-            module,
+            module: module.map(str::to_string),
             level,
-            name,
+            name: name.map(str::to_string),
             asname: alias.asname.as_ref().map(|a| a.to_string()),
         });
     }
@@ -663,16 +666,22 @@ impl<'a, 'w> Walker<'a, 'w> {
     // ---- emitters -------------------------------------------------------------------------
 
     fn emit_call(&mut self, call: &'a ast::ExprCall, at: At) {
+        let (want_callees, want_calls) = (self.wants(Kind::Callees), self.wants(Kind::Calls));
+        if !want_callees && !want_calls {
+            return;
+        }
         let callee = callee_text(call);
         let (l, c) = self.lines.pos(call.range().start());
-        let key = TextKey {
-            scope: at.scope,
-            header: at.header,
-            text: callee.clone(),
-        };
-        count(&mut self.out.callees, key, l, c);
+        if want_callees {
+            let key = TextKey {
+                scope: at.scope,
+                header: at.header,
+                text: callee.clone(),
+            };
+            count(&mut self.out.callees, key, l, c);
+        }
         let last = callee.rsplit('.').next().unwrap_or("");
-        if !self.is_watched(last) {
+        if !want_calls || !self.config.is_watched_callee(last) {
             return;
         }
         let row = WatchedCall {
@@ -682,14 +691,16 @@ impl<'a, 'w> Walker<'a, 'w> {
             callee,
         };
         self.out.calls.push(row);
-        self.out.flag_site(l, c, at.flags);
     }
 
     fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, at: At) {
+        if !self.wants_any(&[Kind::Strs, Kind::Names, Kind::Tags]) {
+            return;
+        }
         let v = StrValue::of(lit, self.src);
         let value = v.text.as_str();
         let (l, c) = self.lines.pos(lit.range().start());
-        if value.contains('<') {
+        if value.contains('<') && self.wants(Kind::Tags) {
             for name in tag_names(value) {
                 self.out.tags.push(Tag {
                     site: at.site((l, c)),
@@ -713,7 +724,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 .any(|(p, s)| is_symbolic(p, *s) && is_dotted_path(p));
         }
         if !dotted {
-            if symbolic {
+            if symbolic && self.wants(Kind::Names) {
                 let key = TextKey {
                     scope: at.scope,
                     header: at.header,
@@ -721,6 +732,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                 };
                 count(&mut self.out.names, key, l, c);
             }
+            return;
+        }
+        if !self.wants(Kind::Strs) {
             return;
         }
         let (chain, up) = climb(&self.path);
@@ -737,26 +751,30 @@ impl<'a, 'w> Walker<'a, 'w> {
             up,
             parts,
         });
-        self.out.flag_site(l, c, at.flags);
     }
 
     /// An import-bound name is a `refs` row when it is first-party and class-like, else a
-    /// `uses` count. Another load may be a derived local: it becomes a candidate.
+    /// `uses` count. Another load may be a derived local: it becomes a candidate. `derived`
+    /// needs the `refs` rows too: they seed the derivation.
     fn emit_ref(&mut self, name: &'a ast::ExprName, at: At) {
+        if !self.wants_any(&[Kind::Refs, Kind::Derived, Kind::Uses]) {
+            return;
+        }
         let id = name.id.as_str();
         let (l, c) = self.lines.pos(name.range.start());
         let Some(binding) = self.bound.get(id).copied() else {
-            if name.ctx == ExprContext::Load && self.stored.contains(id) {
+            if name.ctx == ExprContext::Load
+                && self.wants(Kind::Derived)
+                && self.stored.contains(id)
+            {
                 let (chain, up) = climb(&self.path);
-                let row = Ref {
+                self.out.candidates.push(Ref {
                     site: at.site((l, c)),
                     root: id.to_string(),
                     chain,
                     up,
                     origin: None,
-                };
-                let flags = at.flags;
-                self.out.candidates.push(Candidate { row, flags });
+                });
             }
             return;
         };
@@ -765,6 +783,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             .strip_prefix('.')
             .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_uppercase()));
         if !(binding.first_party && (binding.class_like || attr_upper)) {
+            if !self.wants(Kind::Uses) {
+                return;
+            }
             let key = UseKey {
                 scope: at.scope,
                 header: at.header,
@@ -774,6 +795,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             count(&mut self.out.uses, key, l, c);
             return;
         }
+        if !self.wants_any(&[Kind::Refs, Kind::Derived]) {
+            return;
+        }
         self.out.refs.push(Ref {
             site: at.site((l, c)),
             root: id.to_string(),
@@ -781,16 +805,23 @@ impl<'a, 'w> Walker<'a, 'w> {
             up,
             origin: None,
         });
-        self.out.flag_site(l, c, at.flags);
     }
 
     fn emit_watched(&mut self, dict: &'a ast::ExprDict, at: At) {
+        if !self.wants(Kind::Watched) || self.config.watch_keys.is_empty() {
+            return;
+        }
         for item in dict.items.iter() {
             let Some(Expr::StringLiteral(key)) = &item.key else {
                 continue;
             };
             let key_text = key.value.to_str();
-            if key_text != WATCHED_DICT_KEY {
+            if !self
+                .config
+                .watch_keys
+                .iter()
+                .any(|watched| watched == key_text)
+            {
                 continue;
             }
             let (chain, up) = climb(&self.path);

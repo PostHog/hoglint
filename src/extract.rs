@@ -1,14 +1,15 @@
 //! One file's bytes to its L1 record (reference `FileRecord`).
 
-use crate::config::ExtractConfig;
+use crate::config::{ExtractConfig, Kind};
 use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
-use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, SiteFlags, Status};
+use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status};
 use crate::source::{LineIndex, parse_py314, source_text};
 use crate::value::{Encoder, Keyword, MAX_HEADER_NODES, Value, keyword_name};
 use crate::walker::{Counts, Walk, Walker};
 use ruff_python_ast::{Expr, Parameters};
 use ruff_python_parser::Mode;
+use std::collections::HashSet;
 
 /// Builds the record for one file's bytes and their `sha256_hex`. Never fails: a file CPython
 /// rejects gets a status.
@@ -56,39 +57,45 @@ impl<'s, 'c> FileFacts<'s, 'c> {
     }
 
     fn collect(&self, suite: &'s [ruff_python_ast::Stmt]) -> Facts {
+        let kinds = self.config.kinds;
         let (defs, bound) = DefTable::build(suite, self.src, &self.lines, self.config);
-        let stored = stored_names(suite);
+        let stored = if kinds.has(Kind::Derived) {
+            stored_names(suite)
+        } else {
+            HashSet::new()
+        };
         let walker = Walker::new(self.src, &self.lines, &defs, &bound, &stored, self.config);
         let mut walk = walker.run(suite);
-        let candidates = std::mem::take(&mut walk.candidates);
-        for derived in Derivation::new(&defs).resolve(&walk.refs, candidates) {
-            walk.flag_site(derived.row.site.l, derived.row.site.c, derived.flags);
-            walk.refs.push(derived.row);
-        }
-        let def_rows = (0..defs.entries.len())
-            .map(|idx| self.def_record(&defs, &walk.def_flags, idx))
-            .collect();
-        let mut facts = Self::facts_of(walk, def_rows);
+        let derived = if kinds.has(Kind::Derived) {
+            let candidates = std::mem::take(&mut walk.candidates);
+            Derivation::new(&defs).resolve(&walk.refs, candidates)
+        } else {
+            Vec::new()
+        };
+        let def_rows = if kinds.has(Kind::Defs) {
+            (0..defs.entries.len())
+                .map(|idx| self.def_record(&defs, &walk.def_flags, idx))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut facts = Self::facts_of(walk, def_rows, derived);
+        facts.keep(kinds);
         facts.sort();
         facts
     }
 
-    fn facts_of(walk: Walk, defs: Vec<Def>) -> Facts {
-        let site_flags = walk
-            .site_flags
-            .into_iter()
-            .map(|((l, c), flags)| SiteFlags { l, c, flags })
-            .collect();
+    fn facts_of(walk: Walk, defs: Vec<Def>, derived: Vec<Ref>) -> Facts {
         Facts {
             assigns: walk.assigns,
             branches: walk.branches,
             callees: counts(walk.callees),
             calls: walk.calls,
             defs,
+            derived,
             imports: walk.imports,
             names: counts(walk.names),
             refs: walk.refs,
-            site_flags,
             strs: walk.strs,
             tags: walk.tags,
             uses: counts(walk.uses),

@@ -284,10 +284,7 @@ class ReferenceProducer(Producer):
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
-            for row in scope.record.get("refs", ()):
-                if len(row) > 7:
-                    continue
-                at_scope, header, line, column, name, chain, up = row
+            for at_scope, header, line, column, flags, name, chain, up in scope.record.get("refs", ()):
                 tokens = chain_tokens(chain)
                 attrs = leading_attrs(tokens)
                 found, rest = context.names.descend(context.name_lookup(scope, name, at_scope, line), attrs)
@@ -305,7 +302,7 @@ class ReferenceProducer(Producer):
                     column,
                     found.surface,
                     resolved,
-                    scope.contexts(scope.flags_at(line, column), at_scope),
+                    scope.contexts(flags, at_scope),
                     use=use,
                     attrs=tuple(extra),
                 )
@@ -511,9 +508,8 @@ class StringProducer(Producer):
         patch_callees = context.config.patch_callees
         for scope in context.files:
             for row in scope.record.get("strs", ()):
-                at_scope, header, line, column, value = row[:5]
-                up = row[6]
-                parts = row[7] if len(row) > 7 else None
+                at_scope, _header, line, column, flags, value, _chain, up = row[:8]
+                parts = row[8] if len(row) > 8 else None
                 candidates: list[tuple[str, str]] = []
                 if parts is None:
                     if value is not None:
@@ -545,7 +541,7 @@ class StringProducer(Producer):
                         column,
                         text,
                         resolved,
-                        scope.contexts(scope.flags_at(line, column), at_scope),
+                        scope.contexts(flags, at_scope),
                         attrs=tuple(attrs),
                     )
                     graph.edges.append(edge)
@@ -591,7 +587,7 @@ class DynamicImportProducer(Producer):
         names = frozenset(context.config.loader_callee_names())
         for scope in context.files:
             for row in scope.record.get("calls", ()):
-                at_scope, _header, line, column, callee, args, kws = row
+                at_scope, _header, line, column, flags, callee, args, kws = row
                 if callee.rpartition(".")[2] not in names or callee.startswith("?"):
                     continue
                 found, rest = context.chain_lookup(scope, callee, at_scope, line)
@@ -600,7 +596,7 @@ class DynamicImportProducer(Producer):
                 if loader not in loaders and origin not in loaders:
                     continue
                 argument = self.module_argument(args, kws)
-                contexts = scope.contexts(scope.flags_at(line, column), at_scope)
+                contexts = scope.contexts(flags, at_scope)
                 attrs = [("loader", loader)]
                 if isinstance(argument, dict) and set(argument) == {"s"}:
                     surface = argument["s"]

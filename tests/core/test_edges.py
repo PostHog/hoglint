@@ -126,7 +126,7 @@ def test_use_positions_are_neutral(next_token: str | None, up: str, position: st
 
 
 @pytest.mark.parametrize("kind", ["reference", "dotted-path", "dynamic-import"])
-def test_site_flags_give_refs_strs_and_calls_their_statement_context(kind: str) -> None:
+def test_row_flags_give_refs_strs_and_calls_their_statement_context(kind: str) -> None:
     files = [
         FileFacts("checkout/logic.py").define("charge"),
         FileFacts(VIEWS)

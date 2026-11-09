@@ -147,7 +147,6 @@ class FileScope:
         }
         self.module_lookups: dict[str, Lookup | None] = {}
         self.context_sets: dict[tuple[int, bool], frozenset[Context]] = {}
-        self.site_flags = {(line, column): flags for line, column, flags in record.get("site_flags", ())}
 
     def scope_name(self, scope: int) -> str:
         return MODULE_SCOPE if scope == -1 else self.qualnames[scope]
@@ -159,10 +158,6 @@ class FileScope:
 
     def site(self, scope: int, line: int, column: int) -> Site:
         return Site(self.path, self.module, self.scope_name(scope), line, column)
-
-    def flags_at(self, line: int, column: int) -> int:
-        """Statement flags at a `refs`, `strs` or `calls` row; those rows carry none of their own."""
-        return self.site_flags.get((line, column), 0)
 
     def contexts(self, flags: int = 0, scope: int = -1) -> frozenset[Context]:
         """Path contexts plus syntax contexts. The else branch of `if TYPE_CHECKING:` runs at

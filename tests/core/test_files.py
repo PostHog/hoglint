@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from hoglint.core import symbols
 from hoglint.core.config import PathGlobs
 from hoglint.core.discovery import StagedIndex
 from hoglint.outputs.tach_map import TachResolver
@@ -59,3 +61,10 @@ def test_index_mode_reads_staged_blobs_not_the_working_tree(tmp_path: Path) -> N
         assert (snapshot.root / "a.py").read_text() == "STAGED = 1\n"
     finally:
         snapshot.close()
+
+
+def test_python_flag_constants_match_the_extractor() -> None:
+    facts_rs = (Path(__file__).resolve().parents[2] / "src" / "facts.rs").read_text()
+    block = facts_rs[facts_rs.index("pub mod flags {") : facts_rs.index("}", facts_rs.index("pub mod flags {"))]
+    rust = {name: int(value) for name, value in re.findall(r"pub const (\w+): u32 = (\d+);", block)}
+    assert rust and rust == {name: getattr(symbols, name) for name in rust}

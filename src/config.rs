@@ -2,25 +2,153 @@
 
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Hash of the extractor sources, from build.rs. Part of the cache key.
 pub const BUILD_ID: &str = env!("HOGLINT_BUILD_ID");
+
+/// One fact list of a record (schema.md section 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Assigns,
+    Branches,
+    Callees,
+    Calls,
+    Defs,
+    Derived,
+    Imports,
+    Names,
+    Refs,
+    Strs,
+    Tags,
+    Uses,
+    Watched,
+}
+
+impl Kind {
+    /// In name order, which is also the order `cfg` lists them in.
+    pub const ALL: [Kind; 13] = [
+        Kind::Assigns,
+        Kind::Branches,
+        Kind::Callees,
+        Kind::Calls,
+        Kind::Defs,
+        Kind::Derived,
+        Kind::Imports,
+        Kind::Names,
+        Kind::Refs,
+        Kind::Strs,
+        Kind::Tags,
+        Kind::Uses,
+        Kind::Watched,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Assigns => "assigns",
+            Kind::Branches => "branches",
+            Kind::Callees => "callees",
+            Kind::Calls => "calls",
+            Kind::Defs => "defs",
+            Kind::Derived => "derived",
+            Kind::Imports => "imports",
+            Kind::Names => "names",
+            Kind::Refs => "refs",
+            Kind::Strs => "strs",
+            Kind::Tags => "tags",
+            Kind::Uses => "uses",
+            Kind::Watched => "watched",
+        }
+    }
+
+    fn bit(self) -> u16 {
+        1 << (self as u16)
+    }
+}
+
+/// A set of fact kinds: the lists a record carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Kinds(u16);
+
+impl Kinds {
+    pub const ALL: Kinds = Kinds((1 << Kind::ALL.len()) - 1);
+
+    pub fn of(kinds: &[Kind]) -> Kinds {
+        Kinds(kinds.iter().fold(0, |bits, kind| bits | kind.bit()))
+    }
+
+    /// Kind names as given on the command line; an empty list means every kind.
+    pub fn parse(names: &[String]) -> Result<Kinds, String> {
+        if names.is_empty() {
+            return Ok(Kinds::ALL);
+        }
+        let mut kinds = Vec::new();
+        for name in names {
+            let Some(kind) = Kind::ALL.into_iter().find(|kind| kind.name() == name) else {
+                return Err(format!("unknown fact kind {name:?}"));
+            };
+            kinds.push(kind);
+        }
+        Ok(Kinds::of(&kinds))
+    }
+
+    pub fn has(self, kind: Kind) -> bool {
+        self.0 & kind.bit() != 0
+    }
+
+    pub fn any(self, kinds: &[Kind]) -> bool {
+        self.0 & Kinds::of(kinds).0 != 0
+    }
+
+    fn names(self) -> Vec<&'static str> {
+        Kind::ALL
+            .into_iter()
+            .filter(|kind| self.has(*kind))
+            .map(Kind::name)
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractConfig {
     /// Top-level module names whose imports are first-party. Sorted, no duplicates.
     pub first_party: Vec<String>,
-    /// Extra callee names (last dotted part) whose calls get a `calls` row. Sorted, no duplicates.
+    /// A call whose callee's last dotted part equals one of these gets a `calls` row.
     pub watch_callees: Vec<String>,
+    /// A call whose callee's last dotted part starts with one of these gets a `calls` row.
+    pub watch_prefixes: Vec<String>,
+    /// A dict entry whose key is one of these str constants gets a `watched` row.
+    pub watch_keys: Vec<String>,
+    pub kinds: Kinds,
 }
 
 impl ExtractConfig {
-    pub fn new(first_party: Vec<String>, watch_callees: Vec<String>) -> Self {
+    /// Every fact kind, nothing watched.
+    pub fn new(first_party: Vec<String>) -> Self {
         ExtractConfig {
             first_party: sorted_unique(first_party),
-            watch_callees: sorted_unique(watch_callees),
+            watch_callees: Vec::new(),
+            watch_prefixes: Vec::new(),
+            watch_keys: Vec::new(),
+            kinds: Kinds::ALL,
         }
+    }
+
+    pub fn watching(
+        mut self,
+        callees: Vec<String>,
+        prefixes: Vec<String>,
+        keys: Vec<String>,
+    ) -> Self {
+        self.watch_callees = sorted_unique(callees);
+        self.watch_prefixes = sorted_unique(prefixes);
+        self.watch_keys = sorted_unique(keys);
+        self
+    }
+
+    pub fn with_kinds(mut self, kinds: Kinds) -> Self {
+        self.kinds = kinds;
+        self
     }
 
     pub fn is_first_party(&self, module: &str) -> bool {
@@ -28,15 +156,25 @@ impl ExtractConfig {
         self.first_party.iter().any(|root| root == head)
     }
 
-    /// Short hash of the options that change record content: the record's `cfg`. Without
-    /// extra callees it keeps the first-party-only value, so older records keep their `cfg`.
+    /// Whether a call whose callee ends in `last` gets a `calls` row.
+    pub fn is_watched_callee(&self, last: &str) -> bool {
+        self.watch_callees.iter().any(|name| name == last)
+            || self
+                .watch_prefixes
+                .iter()
+                .any(|prefix| last.starts_with(prefix.as_str()))
+    }
+
+    /// Short hash of every option that changes record content: the record's `cfg`.
     pub fn config_id(&self) -> String {
-        let mut key = self.first_party.join(",");
-        if !self.watch_callees.is_empty() {
-            key.push('|');
-            key.push_str(&self.watch_callees.join(","));
-        }
-        sha256_hex(key.as_bytes())[..8].to_string()
+        let parts = [
+            self.first_party.join(","),
+            self.watch_callees.join(","),
+            self.watch_prefixes.join(","),
+            self.watch_keys.join(","),
+            self.kinds.names().join(","),
+        ];
+        sha256_hex(parts.join("|").as_bytes())[..8].to_string()
     }
 
     /// Cache directory name: schema version, build id and every option that changes records.

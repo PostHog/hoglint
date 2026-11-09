@@ -2,44 +2,50 @@
 //! thread pool, keeps the content-hash cache and writes records.
 //!
 //! Usage:
-//!   hoglint-facts --discover <repo_root> [--v1.1] > files.txt
 //!   hoglint-facts --build-id
-//!   hoglint-facts <repo_root> <file_list|-> [--jobs N] [--first-party a,b] [--watch-callees a,b]
-//!      [--mode stream|cache] [--out PATH] [--cache DIR] [--timing] [--v1.1]
+//!   hoglint-facts <repo_root> <file_list|-> [--jobs N] [--first-party a,b]
+//!      [--watch-callees a,b] [--watch-prefixes a,b] [--watch-keys a,b]
+//!      [--kinds k,k] [--lite-list PATH] [--lite-kinds k,k]
+//!      [--mode stream|cache] [--out PATH] [--cache DIR] [--timing]
 //!
-//! `--v1.1` is accepted and changes nothing: the v1.1 caps are the only caps.
-//! `--watch-callees` adds callee names (last dotted part) whose calls get a `calls` row.
+//! `--watch-callees` / `--watch-prefixes`: a call whose callee's last dotted part equals / starts
+//! with one of these gets a `calls` row. `--watch-keys`: a dict entry whose key is one of these
+//! str constants gets a `watched` row. All empty by default.
+//! `--kinds` names the fact lists records carry (default: all). Files listed in `--lite-list`
+//! (a subset of the main list, same format) carry only `--lite-kinds` (default:
+//! imports,defs,assigns). Both kind sets are part of the record `cfg`.
 //! `--timing` prints wall time, output size and per-stage CPU seconds to stderr.
 //!
 //! Modes: `stream` writes JSON lines to --out (default stdout); `cache` keeps one record per
 //! source sha256 under --cache and only parses files whose content has no entry yet (records
 //! still stream to --out). The cache directory name holds the schema version, the build id and
-//! every option that changes records.
+//! the record `cfg`.
 //!
-//! A file that cannot be read gets a `read_error` record and the run goes on. Bad arguments,
-//! an unwritable output and a failing git exit non-zero.
+//! A file that cannot be read gets a `read_error` record and the run goes on. Bad arguments and
+//! an unwritable output exit non-zero.
 
 use hoglint_facts::{
-    BUILD_ID, ExtractConfig, Facts, FileRecord, Status, extract, record_line, sha256_hex,
+    BUILD_ID, ExtractConfig, Facts, FileRecord, Kinds, Status, extract, record_line, sha256_hex,
 };
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Cache entries store this path; a hit swaps in the real one.
 const PATH_PLACEHOLDER: &str = "\"path\":\"\"";
 
+const DEFAULT_LITE_KINDS: &str = "imports,defs,assigns";
+
 #[derive(Debug)]
 enum ShellError {
     Usage(String),
     Io { what: String, error: std::io::Error },
     Encode(serde_json::Error),
-    Git(String),
 }
 
 impl fmt::Display for ShellError {
@@ -48,7 +54,6 @@ impl fmt::Display for ShellError {
             ShellError::Usage(message) => write!(f, "usage: {message}"),
             ShellError::Io { what, error } => write!(f, "{what}: {error}"),
             ShellError::Encode(error) => write!(f, "encode a record: {error}"),
-            ShellError::Git(message) => write!(f, "git ls-files: {message}"),
         }
     }
 }
@@ -68,48 +73,18 @@ fn usage(message: impl Into<String>) -> ShellError {
     ShellError::Usage(message.into())
 }
 
-struct Discovery;
-
-impl Discovery {
-    fn is_excluded(rel: &str) -> bool {
-        let parts: Vec<&str> = rel.split('/').collect();
-        if parts.iter().any(|p| p.starts_with('.')) {
-            return true;
-        }
-        parts[..parts.len() - 1]
-            .iter()
-            .any(|p| *p == "docs" || p.ends_with("__pycache__") || p.ends_with("egg-info"))
-    }
-
-    /// Git-visible sources minus hidden paths, docs, caches and egg-info. v1.1 adds `.pyi`.
-    /// Project excludes are applied by the caller (hoglint.core.discovery).
-    fn files(root: &Path, v11: bool) -> Result<Vec<String>, ShellError> {
-        let patterns: &[&str] = if v11 { &["*.py", "*.pyi"] } else { &["*.py"] };
-        let out = Command::new("git")
-            .args(["ls-files", "-z", "-co", "--exclude-standard", "--"])
-            .args(patterns)
-            .current_dir(root)
-            .output()
-            .map_err(|error| ShellError::Git(error.to_string()))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(ShellError::Git(stderr.trim().to_string()));
-        }
-        let text = String::from_utf8(out.stdout)
-            .map_err(|_| ShellError::Git("a path is not UTF-8".to_string()))?;
-        let mut seen = HashSet::new();
-        let mut files: Vec<String> = Vec::new();
-        for rel in text.split('\0') {
-            if rel.is_empty() || Self::is_excluded(rel) || !seen.insert(rel) {
-                continue;
-            }
-            if root.join(rel).is_file() {
-                files.push(rel.to_string());
-            }
-        }
-        files.sort();
-        Ok(files)
-    }
+/// One path per non-blank line; `-` reads stdin.
+fn read_list(listing: &str) -> Result<Vec<String>, ShellError> {
+    let text = if listing == "-" {
+        std::io::read_to_string(std::io::stdin()).map_err(io_error("read the file list"))?
+    } else {
+        std::fs::read_to_string(listing).map_err(io_error(format!("read {listing}")))?
+    };
+    Ok(text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,6 +97,8 @@ struct Options {
     root: PathBuf,
     files: Vec<String>,
     config: ExtractConfig,
+    /// Paths that carry only the lite kinds, and the configuration they are extracted with.
+    lite: Option<(HashSet<String>, ExtractConfig)>,
     mode: OutputMode,
     out: Option<PathBuf>,
     cache: Option<PathBuf>,
@@ -164,9 +141,20 @@ impl Args {
     }
 
     fn list(&mut self, flag: &str) -> Result<Vec<String>, ShellError> {
-        let text = self.value(flag)?.unwrap_or_default();
-        Ok(text.split(',').map(str::to_string).collect())
+        Ok(split_list(&self.value(flag)?.unwrap_or_default()))
     }
+
+    fn kinds(&mut self, flag: &str, default: &str) -> Result<Kinds, ShellError> {
+        let text = self.value(flag)?.unwrap_or_else(|| default.to_string());
+        Kinds::parse(&split_list(&text)).map_err(|error| usage(format!("{flag}: {error}")))
+    }
+}
+
+fn split_list(text: &str) -> Vec<String> {
+    text.split(',')
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 impl Options {
@@ -174,7 +162,12 @@ impl Options {
         let mut args = Args { rest: argv };
         let jobs = args.number("--jobs")?.unwrap_or(0);
         let first_party = args.list("--first-party")?;
-        let watch_callees = args.list("--watch-callees")?;
+        let callees = args.list("--watch-callees")?;
+        let prefixes = args.list("--watch-prefixes")?;
+        let keys = args.list("--watch-keys")?;
+        let kinds = args.kinds("--kinds", "")?;
+        let lite_list = args.value("--lite-list")?;
+        let lite_kinds = args.kinds("--lite-kinds", DEFAULT_LITE_KINDS)?;
         let mode = match args.value("--mode")?.as_deref() {
             None | Some("stream") => OutputMode::Stream,
             Some("cache") => OutputMode::Cache,
@@ -182,30 +175,60 @@ impl Options {
         };
         let out = args.value("--out")?.map(PathBuf::from);
         let cache = args.value("--cache")?.map(PathBuf::from);
-        args.switch("--v1.1");
         let timing = args.switch("--timing");
+        if let Some(flag) = args.rest.iter().find(|a| a.starts_with("--")) {
+            return Err(usage(format!("unknown option {flag}")));
+        }
         let [root, listing] = args.rest.as_slice() else {
             return Err(usage("hoglint-facts <repo_root> <file_list|-> [options]"));
         };
-        let text = if listing == "-" {
-            std::io::read_to_string(std::io::stdin()).map_err(io_error("read the file list"))?
-        } else {
-            std::fs::read_to_string(listing).map_err(io_error(format!("read {listing}")))?
+        let files = read_list(listing)?;
+        let config = ExtractConfig::new(first_party).watching(callees, prefixes, keys);
+        let lite = match lite_list {
+            None => None,
+            Some(listing) => {
+                let paths: HashSet<String> = read_list(&listing)?.into_iter().collect();
+                let listed: HashSet<&str> = files.iter().map(String::as_str).collect();
+                if let Some(missing) = paths.iter().find(|p| !listed.contains(p.as_str())) {
+                    return Err(usage(format!(
+                        "--lite-list path {missing} is not in the file list"
+                    )));
+                }
+                Some((paths, config.clone().with_kinds(lite_kinds)))
+            }
         };
-        let files = text
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .collect();
         Ok(Options {
             root: PathBuf::from(root),
             files,
-            config: ExtractConfig::new(first_party, watch_callees),
+            config: config.with_kinds(kinds),
+            lite,
             mode,
             out,
             cache,
             timing,
             jobs,
+        })
+    }
+}
+
+/// How one file is extracted: the configuration, its `cfg` id and, in cache mode, its cache
+/// directory.
+struct Profile<'o> {
+    config: &'o ExtractConfig,
+    cfg: String,
+    dir: Option<PathBuf>,
+}
+
+impl<'o> Profile<'o> {
+    fn new(config: &'o ExtractConfig, cache: Option<&Path>) -> Result<Self, ShellError> {
+        let dir = cache.map(|base| base.join(config.cache_namespace()));
+        if let Some(dir) = &dir {
+            std::fs::create_dir_all(dir).map_err(io_error(format!("create {}", dir.display())))?;
+        }
+        Ok(Profile {
+            config,
+            cfg: config.config_id(),
+            dir,
         })
     }
 }
@@ -223,7 +246,8 @@ const STAGES: [&str; 4] = ["read", "extract", "serialize", "cache_io"];
 
 struct Runner<'o> {
     opts: &'o Options,
-    cfg: String,
+    full: Profile<'o>,
+    lite: Option<Profile<'o>>,
     tmp_counter: AtomicU64,
     /// Per stage: calls and nanoseconds. Only `--timing` fills them.
     calls: [AtomicU64; 4],
@@ -231,13 +255,32 @@ struct Runner<'o> {
 }
 
 impl<'o> Runner<'o> {
-    fn new(opts: &'o Options) -> Self {
-        Runner {
+    fn new(opts: &'o Options) -> Result<Self, ShellError> {
+        let cache = match opts.mode {
+            OutputMode::Stream => None,
+            OutputMode::Cache => match &opts.cache {
+                Some(base) => Some(base.as_path()),
+                None => return Err(usage("--mode cache needs --cache DIR")),
+            },
+        };
+        let lite = match &opts.lite {
+            Some((_, config)) => Some(Profile::new(config, cache)?),
+            None => None,
+        };
+        Ok(Runner {
             opts,
-            cfg: opts.config.config_id(),
+            full: Profile::new(&opts.config, cache)?,
+            lite,
             tmp_counter: AtomicU64::new(0),
             calls: Default::default(),
             nanos: Default::default(),
+        })
+    }
+
+    fn profile(&self, rel: &str) -> &Profile<'o> {
+        match (&self.opts.lite, &self.lite) {
+            (Some((paths, _)), Some(lite)) if paths.contains(rel) => lite,
+            _ => &self.full,
         }
     }
 
@@ -289,36 +332,46 @@ impl<'o> Runner<'o> {
         }
     }
 
-    fn extract(&self, raw: &[u8], sha256: String) -> FileRecord {
-        self.timed(Stage::Extract, || extract(raw, sha256, &self.opts.config))
+    fn extract(&self, raw: &[u8], sha256: String, profile: &Profile) -> FileRecord {
+        self.timed(Stage::Extract, || extract(raw, sha256, profile.config))
     }
 
-    fn encode(&self, record: &FileRecord, path: &str) -> Result<String, ShellError> {
-        let line = self.timed(Stage::Serialize, || record_line(record, &self.cfg, path))?;
+    fn encode(&self, record: &FileRecord, cfg: &str, path: &str) -> Result<String, ShellError> {
+        let line = self.timed(Stage::Serialize, || record_line(record, cfg, path))?;
         Ok(line)
     }
 
-    /// stream: parse every file.
+    /// The record line of one file: from the cache when its profile has a cache directory.
     fn line(&self, rel: &str) -> Result<String, ShellError> {
-        let record = match self.read(rel) {
-            Some(raw) => self.extract(&raw, sha256_hex(&raw)),
-            None => Self::unreadable(),
-        };
-        self.encode(&record, rel)
-    }
-
-    /// cache: reuse the entry for this content hash, else extract and store one.
-    fn cached_line(&self, rel: &str, dir: &Path) -> Result<String, ShellError> {
+        let profile = self.profile(rel);
         let Some(raw) = self.read(rel) else {
-            return self.encode(&Self::unreadable(), rel);
+            return self.encode(&Self::unreadable(), &profile.cfg, rel);
         };
         let sha256 = sha256_hex(&raw);
+        match &profile.dir {
+            None => {
+                let record = self.extract(&raw, sha256, profile);
+                self.encode(&record, &profile.cfg, rel)
+            }
+            Some(dir) => self.cached_line(rel, &raw, sha256, profile, dir),
+        }
+    }
+
+    /// Reuses the entry for this content hash, else extracts and stores one.
+    fn cached_line(
+        &self,
+        rel: &str,
+        raw: &[u8],
+        sha256: String,
+        profile: &Profile,
+        dir: &Path,
+    ) -> Result<String, ShellError> {
         let entry = dir.join(format!("{sha256}.json"));
         if let Ok(text) = self.timed(Stage::CacheIo, || std::fs::read_to_string(&entry)) {
             return with_path(&text, rel);
         }
-        let record = self.extract(&raw, sha256);
-        let body = self.encode(&record, "")?;
+        let record = self.extract(raw, sha256, profile);
+        let body = self.encode(&record, &profile.cfg, "")?;
         self.timed(Stage::CacheIo, || {
             self.store(dir, &record.sha256, &entry, &body)
         });
@@ -374,26 +427,13 @@ fn run_extract(opts: &Options) -> Result<(), ShellError> {
             .build_global()
             .map_err(|error| usage(format!("--jobs {}: {error}", opts.jobs)))?;
     }
-    let runner = Runner::new(opts);
+    let runner = Runner::new(opts)?;
     let started = Instant::now();
-    let lines: Vec<String> = match opts.mode {
-        OutputMode::Stream => opts
-            .files
-            .par_iter()
-            .map(|rel| runner.line(rel))
-            .collect::<Result<_, _>>()?,
-        OutputMode::Cache => {
-            let Some(base) = &opts.cache else {
-                return Err(usage("--mode cache needs --cache DIR"));
-            };
-            let dir = base.join(opts.config.cache_namespace());
-            std::fs::create_dir_all(&dir).map_err(io_error(format!("create {}", dir.display())))?;
-            opts.files
-                .par_iter()
-                .map(|rel| runner.cached_line(rel, &dir))
-                .collect::<Result<_, _>>()?
-        }
-    };
+    let lines: Vec<String> = opts
+        .files
+        .par_iter()
+        .map(|rel| runner.line(rel))
+        .collect::<Result<_, _>>()?;
     let written = write_lines(&opts.out, &lines)?;
     if opts.timing {
         runner.report(started.elapsed().as_secs_f64(), written);
@@ -402,24 +442,11 @@ fn run_extract(opts: &Options) -> Result<(), ShellError> {
 }
 
 fn run(argv: Vec<String>) -> Result<(), ShellError> {
-    match argv.first().map(String::as_str) {
-        Some("--build-id") => {
-            println!("{BUILD_ID}");
-            Ok(())
-        }
-        Some("--discover") => {
-            let Some(root) = argv.get(1) else {
-                return Err(usage("hoglint-facts --discover <repo_root> [--v1.1]"));
-            };
-            let files = Discovery::files(Path::new(root), argv.iter().any(|a| a == "--v1.1"))?;
-            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
-            for f in files {
-                writeln!(out, "{f}").map_err(io_error("write the file list"))?;
-            }
-            out.flush().map_err(io_error("write the file list"))
-        }
-        _ => run_extract(&Options::parse(argv)?),
+    if argv.first().map(String::as_str) == Some("--build-id") {
+        println!("{BUILD_ID}");
+        return Ok(());
     }
+    run_extract(&Options::parse(argv)?)
 }
 
 fn main() -> ExitCode {

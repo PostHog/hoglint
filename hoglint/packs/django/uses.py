@@ -91,8 +91,8 @@ class UseProducer:
             positions.append(position)
             out.append(replace(edge, producer=USES_PRODUCER, shape=shape.kind, shape_detail=shape.detail))
         later: dict[int, list[UsePosition]] = defaultdict(list)
-        derived = sorted((row for row in scope.record.get("refs", ()) if len(row) > 7), key=lambda r: (r[2], r[3]))
-        for at_scope, _, line, column, root, chain, up, origin in derived:
+        derived = sorted(scope.record.get("derived", ()), key=lambda r: (r[2], r[3]))
+        for at_scope, _, line, column, _, root, chain, up, origin in derived:
             index = sources.held(scope.scope_name(origin), root, line, column)
             if index is None:
                 continue
@@ -150,7 +150,7 @@ class GetModelProducer:
     def file_edges(self, scope: FileScope) -> list[Edge]:
         out = []
         for row in scope.record.get("calls", ()):
-            callee = row[4]
+            callee = row[5]
             if "." in callee and callee.endswith(f".{GET_MODEL}"):
                 out.append(self.edge(scope, row))
         return out
@@ -166,10 +166,10 @@ class GetModelProducer:
         return app_label, class_name
 
     def edge(self, scope: FileScope, row: list) -> Edge:
-        at_scope, _, line, column, callee, args, kws = row
+        at_scope, _, line, column, flags, callee, args, kws = row
         app_label, class_name = self.label_of(args, kws)
         site = scope.site(at_scope, line, column)
-        contexts = scope.contexts(scope.flags_at(line, column), at_scope)
+        contexts = scope.contexts(flags, at_scope)
         if app_label is None or class_name is None:
             receiver = callee.split(".", 1)[0]
             resolution = Resolution.NOT_APPLICABLE if receiver in NOT_A_REGISTRY else Resolution.UNRESOLVED

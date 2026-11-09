@@ -73,14 +73,18 @@ def site_packages_files(packages: tuple[str, ...]) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class ExtractRequest:
-    """One extractor run over an explicit file list. `root` may be a temp tree of staged blobs."""
+    """One extractor run over an explicit file list. `root` may be a temp tree of staged blobs.
+
+    `lite` files (third-party sources) only need what module tables and class ancestry read.
+    """
 
     root: Path
     files: tuple[str, ...]
     first_party: tuple[str, ...]
     out_path: Path
     cache_dir: Path | None = None
-    needs: FactNeeds = FactNeeds()
+    needs: FactNeeds = FactNeeds(kinds=FACT_KINDS)
+    lite: tuple[str, ...] = ()
 
 
 class Extractor:
@@ -105,22 +109,38 @@ class Extractor:
     def __init__(self, binary: Path | None = None) -> None:
         self.binary = binary or self.find_binary()
 
-    def extract(self, request: ExtractRequest) -> Path:
-        request.out_path.parent.mkdir(parents=True, exist_ok=True)
-        list_path = request.out_path.with_suffix(".files")
-        list_path.write_text("\n".join(request.files) + "\n")
+    @staticmethod
+    def write_list(path: Path, files: tuple[str, ...]) -> Path:
+        path.write_text("\n".join(files) + "\n")
+        return path
+
+    def command(self, request: ExtractRequest) -> list[str]:
+        needs = request.needs
         command = [
             str(self.binary),
             str(request.root),
-            str(list_path),
-            "--v1.1",
+            str(self.write_list(request.out_path.with_suffix(".files"), request.files)),
             "--first-party",
             ",".join(request.first_party),
+            "--kinds",
+            ",".join(sorted(needs.kinds)),
             "--out",
             str(request.out_path),
         ]
-        if request.needs.watch_callees:
-            command += ["--watch-callees", ",".join(sorted(request.needs.watch_callees))]
+        for flag, values in (
+            ("--watch-callees", needs.watch_callees),
+            ("--watch-prefixes", needs.watch_prefixes),
+            ("--watch-keys", needs.watch_keys),
+        ):
+            if values:
+                command += [flag, ",".join(sorted(values))]
+        if request.lite:
+            command += ["--lite-list", str(self.write_list(request.out_path.with_suffix(".lite"), request.lite))]
+        return command
+
+    def extract(self, request: ExtractRequest) -> Path:
+        request.out_path.parent.mkdir(parents=True, exist_ok=True)
+        command = self.command(request)
         if request.cache_dir is not None:
             command += ["--mode", "cache", "--cache", str(request.cache_dir)]
         else:

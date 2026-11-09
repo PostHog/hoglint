@@ -3,19 +3,13 @@
 //! A use whose escape path starts with an assignment to plain names derives those names in
 //! its scope. Loads of a derived name in that scope or a nested def are use sites too, and
 //! they can derive further names. The walk records every load that could become such a use
-//! (a candidate); the worklist activates candidates as their names get derived.
+//! (a candidate row); the worklist activates candidates as their names get derived.
 
 use crate::defs::DefTable;
 use crate::facts::Ref;
 use std::collections::{HashMap, HashSet};
 
 const WRAPPER_STEPS: [&str; 4] = ["await", "ifexp:body", "ifexp:else", "star"];
-
-/// A load of a name no import binds: its row once derived, and its statement flags.
-pub struct Candidate {
-    pub row: Ref,
-    pub flags: u32,
-}
 
 /// The names a use derives: the plain-name targets of the assignment it flows into.
 fn derived_names(up: &str) -> Option<Vec<&str>> {
@@ -76,18 +70,15 @@ impl<'d, 'a> Derivation<'d, 'a> {
             })
     }
 
-    /// The active candidates, each row with its deriving scope as `origin`.
-    pub fn resolve(mut self, tracked: &[Ref], candidates: Vec<Candidate>) -> Vec<Candidate> {
+    /// The `derived` rows: the active candidates, each with its deriving scope as `origin`.
+    pub fn resolve(mut self, tracked: &[Ref], candidates: Vec<Ref>) -> Vec<Ref> {
         let mut queue: Vec<String> = Vec::new();
         for row in tracked {
             self.note(row.site.scope, &row.up, &mut queue);
         }
         let mut waiting: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, candidate) in candidates.iter().enumerate() {
-            waiting
-                .entry(candidate.row.root.as_str())
-                .or_default()
-                .push(i);
+            waiting.entry(candidate.root.as_str()).or_default().push(i);
         }
         let mut active = vec![false; candidates.len()];
         while let Some(name) = queue.pop() {
@@ -95,7 +86,7 @@ impl<'d, 'a> Derivation<'d, 'a> {
                 continue;
             };
             for &i in indexes {
-                let row = &candidates[i].row;
+                let row = &candidates[i];
                 if active[i] || self.deriving_scope(&row.root, row.site.scope).is_none() {
                     continue;
                 }
@@ -104,13 +95,12 @@ impl<'d, 'a> Derivation<'d, 'a> {
             }
         }
         let mut rows = Vec::new();
-        for (mut candidate, is_active) in candidates.into_iter().zip(active) {
+        for (mut row, is_active) in candidates.into_iter().zip(active) {
             if !is_active {
                 continue;
             }
-            let row = &mut candidate.row;
             row.origin = self.deriving_scope(&row.root, row.site.scope);
-            rows.push(candidate);
+            rows.push(row);
         }
         rows
     }

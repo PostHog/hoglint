@@ -1,11 +1,13 @@
 //! Typed L1 facts of one file (schema.md section 5). Rows serialize as positional JSON arrays,
 //! defs and assigns as objects with their keys in code point order.
 
+use crate::config::{Kind, Kinds};
 use crate::value::{Keyword, Value};
 use serde::Serialize;
 use serde::ser::{SerializeSeq, Serializer};
 
-/// Statement context flags (schema.md section 3). Flags accumulate down the statement tree.
+/// Statement context flags. Keep in step with schema.md section 3 ("Context flags"); the
+/// Python side parses these constants in a test.
 pub mod flags {
     /// Body of `if TYPE_CHECKING:`.
     pub const TYPE_ONLY: u32 = 1;
@@ -32,13 +34,14 @@ pub enum Status {
 }
 
 /// Where a row sits: enclosing scope (def index, -1 = module), the def whose header holds it
-/// (-1 = none), line and byte column.
+/// (-1 = none), line, byte column and the statement flags there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Site {
     pub scope: i64,
     pub header: i64,
     pub l: i64,
     pub c: i64,
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,7 +119,8 @@ pub struct Assign {
     pub v: Value,
 }
 
-/// A use site of a tracked name. `origin` is the deriving scope of a local-derived name.
+/// A use site of a tracked name. `origin` is the deriving scope of a local-derived name: set
+/// on `derived` rows only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ref {
     pub site: Site,
@@ -194,14 +198,6 @@ pub struct TextKey {
     pub text: String,
 }
 
-/// Statement flags at the position of `refs`, `strs` and `calls` rows, where not 0.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SiteFlags {
-    pub l: i64,
-    pub c: i64,
-    pub flags: u32,
-}
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
     pub assigns: Vec<Assign>,
@@ -209,10 +205,10 @@ pub struct Facts {
     pub callees: Vec<Count<TextKey>>,
     pub calls: Vec<WatchedCall>,
     pub defs: Vec<Def>,
+    pub derived: Vec<Ref>,
     pub imports: Vec<Import>,
     pub names: Vec<Count<TextKey>>,
     pub refs: Vec<Ref>,
-    pub site_flags: Vec<SiteFlags>,
     pub strs: Vec<DottedStr>,
     pub tags: Vec<Tag>,
     pub uses: Vec<Count<UseKey>>,
@@ -253,16 +249,38 @@ fn row_text<T: Serialize>(row: &T) -> String {
 }
 
 impl Facts {
+    /// Drops the lists of kinds the configuration does not ask for.
+    pub fn keep(&mut self, kinds: Kinds) {
+        fn clear<T>(list: &mut Vec<T>, kinds: Kinds, kind: Kind) {
+            if !kinds.has(kind) {
+                list.clear();
+            }
+        }
+        clear(&mut self.assigns, kinds, Kind::Assigns);
+        clear(&mut self.branches, kinds, Kind::Branches);
+        clear(&mut self.callees, kinds, Kind::Callees);
+        clear(&mut self.calls, kinds, Kind::Calls);
+        clear(&mut self.defs, kinds, Kind::Defs);
+        clear(&mut self.derived, kinds, Kind::Derived);
+        clear(&mut self.imports, kinds, Kind::Imports);
+        clear(&mut self.names, kinds, Kind::Names);
+        clear(&mut self.refs, kinds, Kind::Refs);
+        clear(&mut self.strs, kinds, Kind::Strs);
+        clear(&mut self.tags, kinds, Kind::Tags);
+        clear(&mut self.uses, kinds, Kind::Uses);
+        clear(&mut self.watched, kinds, Kind::Watched);
+    }
+
     /// Puts every list in record order. Defs keep their scope-id order.
     pub fn sort(&mut self) {
         sort_rows(&mut self.assigns);
         sort_rows(&mut self.branches);
         sort_rows(&mut self.callees);
         sort_rows(&mut self.calls);
+        sort_rows(&mut self.derived);
         sort_rows(&mut self.imports);
         sort_rows(&mut self.names);
         sort_rows(&mut self.refs);
-        sort_rows(&mut self.site_flags);
         sort_rows(&mut self.strs);
         sort_rows(&mut self.tags);
         sort_rows(&mut self.uses);
@@ -292,7 +310,7 @@ macro_rules! positioned_by_lc {
     };
 }
 
-positioned_by_lc!(Import, Assign, SiteFlags, Count<TextKey>, Count<UseKey>);
+positioned_by_lc!(Import, Assign, Count<TextKey>, Count<UseKey>);
 
 impl Serialize for Import {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -326,13 +344,14 @@ impl Serialize for Param {
 }
 
 impl Site {
-    /// Starts a row with the site columns `[s, h, l, c]`.
+    /// Starts a row with the site columns `[s, h, l, c, f]`.
     fn head<S: Serializer>(&self, s: S) -> Result<S::SerializeSeq, S::Error> {
         let mut row = s.serialize_seq(None)?;
         row.serialize_element(&self.scope)?;
         row.serialize_element(&self.header)?;
         row.serialize_element(&self.l)?;
         row.serialize_element(&self.c)?;
+        row.serialize_element(&self.flags)?;
         Ok(row)
     }
 }
@@ -415,11 +434,5 @@ impl Serialize for Count<TextKey> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let key = &self.key;
         (key.scope, key.header, &key.text, self.count, self.l, self.c).serialize(s)
-    }
-}
-
-impl Serialize for SiteFlags {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        (self.l, self.c, self.flags).serialize(s)
     }
 }

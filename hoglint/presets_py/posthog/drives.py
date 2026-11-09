@@ -207,7 +207,7 @@ class FactReader:
     def read_patches(self) -> tuple[dict[int, set[str]], list[tuple[int, str]]]:
         patches_in: dict[int, set[str]] = defaultdict(set)
         patch_rows: list[tuple[int, str]] = []
-        for s, h, _l, _c, callee, args, _kws in self.record.get("calls", []):
+        for s, h, _l, _c, _f, callee, args, _kws in self.record.get("calls", []):
             if last_name(callee) not in PATCH_CALLS:
                 continue
             site = self.site(s, h)
@@ -304,7 +304,7 @@ class FactReader:
             if CAMEL.match(value):
                 fid, cls = self.enclosing(s, h)
                 mentions.extend([Mention("const", value, None, fid, cls, line)] * count)
-        for s, h, line, _c, name in record.get("tags", []):
+        for s, h, line, _c, _f, name in record.get("tags", []):
             fid, cls = self.enclosing(s, h)
             mentions.append(Mention("tag", name, None, fid, cls, line))
         for s, h, callee, count, line, _c in record.get("callees", []):
@@ -313,15 +313,12 @@ class FactReader:
                 fid, cls = self.enclosing(s, h)
                 mentions.extend([Mention("call", name, None, fid, cls, line)] * count)
         # Name and attribute uses of import-bound roots: refs (tracked) and uses (the rest).
-        for row in record.get("refs", []):
-            if len(row) > 7:
-                continue  # local-derived rows: the root is not import-bound
-            s, h, line, _c, root, chain = row[:6]
+        for s, h, line, _c, _f, root, chain, _up in record.get("refs", []):
             uses = RootUse(root, chain_tokens(chain), 1, s, h, line)
             self.root_use(uses, bound, mentions, name_uses, attr_uses)
         for s, h, root, attrs, count, line, _c in record.get("uses", []):
             self.root_use(RootUse(root, chain_tokens(attrs), count, s, h, line), bound, mentions, name_uses, attr_uses)
-        for s, h, _line, _c, _key, value, chain, up in record.get("watched", []):
+        for s, h, _line, _c, _f, _key, value, chain, up in record.get("watched", []):
             found = self.pending(s, h, value, chain, up)
             if found is not None:
                 pending.append(found)
@@ -384,7 +381,7 @@ class FactReader:
     def dispatch_branches(self) -> list[tuple[list[str], list[str], list[str]]]:
         out = []
         imports = self.record.get("imports", [])
-        for _s, _h, line, _c, body_end, test in self.record.get("branches", []):
+        for _s, _h, line, _c, _f, body_end, test in self.record.get("branches", []):
             if test.get("cmp") != "kind":
                 continue
             target = test["cs"][0]

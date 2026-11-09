@@ -106,13 +106,13 @@ class SettingsReader:
                 events.extend((row["l"], row["c"], "assign", name, row["v"]) for name in names)
             elif row["op"] == "+=":
                 events.extend((row["l"], row["c"], "extend", name, row["v"]) for name in names)
-        for row in record.get("calls", ()):
-            receiver, _, attr = row[4].rpartition(".")
-            if attr != "append" or not receiver or "." in receiver or receiver == "?" or len(row[5]) != 1:
+        for _, _, line, column, _, callee, args, _ in record.get("calls", ()):
+            receiver, _, attr = callee.rpartition(".")
+            if attr != "append" or not receiver or "." in receiver or receiver == "?" or len(args) != 1:
                 continue
-            found = str_literal(row[5][0])
+            found = str_literal(args[0])
             if found is not None:
-                events.append((row[2], row[3], "append", receiver, found))
+                events.append((line, column, "append", receiver, found))
         for _, _, kind, name, value in sorted(events, key=lambda e: (e[0], e[1])):
             if kind == "assign":
                 values.assign(name, value)

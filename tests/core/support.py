@@ -45,7 +45,7 @@ class Repo:
 
 
 class FileFacts:
-    """One file's record. Rows follow schema v1: positions are (line, column)."""
+    """One file's record in fact schema v3: every site row starts with [scope, header, line, column, flags]."""
 
     def __init__(self, path: str) -> None:
         self.record: dict = {
@@ -57,7 +57,6 @@ class FileFacts:
             "assigns": [],
             "strs": [],
             "calls": [],
-            "site_flags": [],
         }
         self.line = 0
 
@@ -85,23 +84,20 @@ class FileFacts:
         self.record["assigns"].append(row)
         return self
 
-    def site_line(self, flags: int) -> int:
-        """A new line for a refs, strs or calls row; their statement flags go to `site_flags`."""
-        line = self.next_line()
-        if flags:
-            self.record["site_flags"].append([line, 0, flags])
-        return line
+    def head(self, scope: int, flags: int) -> list[int]:
+        """The site head every site row starts with: scope, header, line, column, statement flags."""
+        return [scope, -1, self.next_line(), 0, flags]
 
     def ref(self, name: str, chain: str = "", up: str = "expr", scope: int = -1, flags: int = 0) -> FileFacts:
-        self.record["refs"].append([scope, -1, self.site_line(flags), 0, name, chain, up])
+        self.record["refs"].append([*self.head(scope, flags), name, chain, up])
         return self
 
     def string(self, value: str, up: str = "expr", scope: int = -1, flags: int = 0) -> FileFacts:
-        self.record["strs"].append([scope, -1, self.site_line(flags), 0, value, "", up])
+        self.record["strs"].append([*self.head(scope, flags), value, "", up])
         return self
 
     def call(self, callee: str, args: list, kws: list, scope: int = -1, flags: int = 0) -> FileFacts:
-        self.record["calls"].append([scope, -1, self.site_line(flags), 0, callee, args, kws])
+        self.record["calls"].append([*self.head(scope, flags), callee, args, kws])
         return self
 
 

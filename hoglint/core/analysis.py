@@ -84,6 +84,7 @@ class CoreAnalysis:
             out_path=self.options.work_dir / "facts.jsonl",
             cache_dir=self.options.cache_dir,
             needs=self.needs(),
+            lite=tuple(external),
         )
         return FactStore.from_jsonl(self.extractor.extract(request))
 

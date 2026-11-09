@@ -197,11 +197,10 @@ VIEWS = {
         "imports": [import_from("shop.models", "Order"), import_from("billing.models", "Invoice", line=2)],
         "defs": [func_def("close", 3)],
         "refs": [
-            [0, -1, 4, 9, "Order", ".objects.filter()", "assign:qs"],
-            [0, -1, 5, 4, "qs", ".update()", "expr", 0],
-            [0, -1, 6, 9, "Invoice", ".objects.filter()", "assign:qs"],
-            [0, -1, 7, 4, "qs", ".count()", "expr", 0],
+            [0, -1, 4, 9, 4, "Order", ".objects.filter()", "assign:qs"],
+            [0, -1, 6, 9, 4, "Invoice", ".objects.filter()", "assign:qs"],
         ],
+        "derived": [[0, -1, 5, 4, 4, "qs", ".update()", "expr", 0], [0, -1, 7, 4, 4, "qs", ".count()", "expr", 0]],
     }
 }
 

@@ -1,20 +1,49 @@
-//! One small Python snippet per fact kind. Expected rows come from the reference extractor.
+//! One small Python snippet per fact kind. Expected rows and `cfg` ids come from the
+//! reference extractor.
 
-use crate::{ExtractConfig, FileRecord, Status, extract, record_line, sha256_hex};
+use crate::{ExtractConfig, FileRecord, Kind, Kinds, Status, extract, record_line, sha256_hex};
 
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| item.to_string()).collect()
+}
+
+/// `--first-party app --watch-callees import_module,get_model --watch-prefixes register_
+/// --watch-keys kind`.
 fn config() -> ExtractConfig {
-    ExtractConfig::new(vec!["app".to_string()], vec!["import_module".to_string()])
+    ExtractConfig::new(strings(&["app"])).watching(
+        strings(&["import_module", "get_model"]),
+        strings(&["register_"]),
+        strings(&["kind"]),
+    )
+}
+
+fn record_with(raw: &[u8], config: &ExtractConfig) -> FileRecord {
+    extract(raw, sha256_hex(raw), config)
 }
 
 fn record(raw: &[u8]) -> FileRecord {
-    extract(raw, sha256_hex(raw), &config())
+    record_with(raw, &config())
+}
+
+fn line_with(source: &str, config: &ExtractConfig) -> serde_json::Value {
+    let record = record_with(source.as_bytes(), config);
+    let line = record_line(&record, &config.config_id(), "f.py").unwrap();
+    serde_json::from_str(&line).unwrap()
 }
 
 /// The JSON of one fact list of the record for `source`, or "" when the list is empty.
 fn facts(source: &str, kind: &str) -> String {
-    let line = record_line(&record(source.as_bytes()), "cfg", "f.py").unwrap();
-    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let value = line_with(source, &config());
     value.get(kind).map(|v| v.to_string()).unwrap_or_default()
+}
+
+/// The fact list keys of a record line.
+fn kinds_of(value: &serde_json::Value) -> Vec<String> {
+    let envelope = ["bytes", "cfg", "path", "sha256", "status", "v"];
+    let keys = value.as_object().unwrap().keys();
+    keys.filter(|key| !envelope.contains(&key.as_str()))
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -74,7 +103,7 @@ def local():
 }
 
 #[test]
-fn refs_follow_tracked_names_and_derived_locals() {
+fn refs_and_derived_locals_carry_their_statement_flags() {
     let source = "\
 from app.models import Thing
 from app import models
@@ -91,11 +120,11 @@ if TYPE_CHECKING:
 ";
     assert_eq!(
         facts(source, "refs"),
-        r#"[[0,-1,5,8,"Thing",".objects","assign:x"],[0,-1,6,8,"x",".filter()","assign:y",0],[0,-1,7,11,"y",".first()","elt:tuple return",0],[0,-1,7,22,"models",".Other","elt:tuple return"],[-1,-1,12,4,"Thing",".check()","expr"]]"#
+        r#"[[0,-1,5,8,4,"Thing",".objects","assign:x"],[0,-1,7,22,4,"models",".Other","elt:tuple return"],[-1,-1,12,4,1,"Thing",".check()","expr"]]"#
     );
     assert_eq!(
-        facts(source, "site_flags"),
-        "[[5,8,4],[6,8,4],[7,11,4],[7,22,4],[12,4,1]]"
+        facts(source, "derived"),
+        r#"[[0,-1,6,8,4,"x",".filter()","assign:y",0],[0,-1,7,11,4,"y",".first()","elt:tuple return",0]]"#
     );
 }
 
@@ -111,8 +140,8 @@ def view():
     first = Thing.objects
 ";
     assert_eq!(
-        facts(source, "refs"),
-        r#"[[1,-1,5,15,"later",".go()","return",0],[0,-1,6,12,"first",".all()","assign:later",0],[0,-1,7,12,"Thing",".objects","assign:first"]]"#
+        facts(source, "derived"),
+        r#"[[1,-1,5,15,4,"later",".go()","return",0],[0,-1,6,12,4,"first",".all()","assign:later",0]]"#
     );
 }
 
@@ -131,12 +160,10 @@ def load():
 "#;
     assert_eq!(
         facts(source, "calls"),
-        r#"[[0,-1,5,8,"importlib.import_module",[{"s":"app.plugins"}],[["package",null]]],[0,-1,8,4,"apps.get_model",[{"s":"app"},{"s":"Thing"}],[]],[0,-1,10,4,"register_hook",[{"tuple":["a.b","c"]},{"o":"List"}],[]]]"#
+        r#"[[0,-1,5,8,20,"importlib.import_module",[{"s":"app.plugins"}],[["package",null]]],[0,-1,8,4,4,"apps.get_model",[{"s":"app"},{"s":"Thing"}],[]],[0,-1,10,4,4,"register_hook",[{"tuple":["a.b","c"]},{"o":"List"}],[]]]"#
     );
-    assert_eq!(
-        facts(source, "site_flags"),
-        "[[5,8,20],[5,32,20],[8,4,4],[10,4,4]]"
-    );
+    let unwatched = ExtractConfig::new(strings(&["app"]));
+    assert!(line_with(source, &unwatched).get("calls").is_none());
 }
 
 #[test]
@@ -150,14 +177,13 @@ if TYPE_CHECKING:
 "#;
     assert_eq!(
         facts(source, "strs"),
-        r#"[[-1,-1,1,7,"app.models.Thing","","assign:PATH"],[-1,-1,2,9,"app.views.Home","","assign:PARTS",[null,"Home"]],[-1,-1,6,13,"app.typing.Alias","","assign:TARGET"]]"#
+        r#"[[-1,-1,1,7,0,"app.models.Thing","","assign:PATH"],[-1,-1,2,9,0,"app.views.Home","","assign:PARTS",[null,"Home"]],[-1,-1,6,13,1,"app.typing.Alias","","assign:TARGET"]]"#
     );
     assert_eq!(
         facts(source, "tags"),
-        r#"[[-1,-1,4,7,"Box"],[-1,-1,4,7,"Widget"]]"#
+        r#"[[-1,-1,4,7,0,"Box"],[-1,-1,4,7,0,"Widget"]]"#
     );
     assert_eq!(facts(source, "names"), r#"[[-1,-1,"Thing",1,3,8]]"#);
-    assert_eq!(facts(source, "site_flags"), "[[6,13,1]]");
 }
 
 #[test]
@@ -190,12 +216,61 @@ if mode == "fast":
 "#;
     assert_eq!(
         facts(source, "watched"),
-        r#"[[-1,-1,1,17,"kind",{"s":"TrendsQuery"},"","assign:QUERY"],[-1,-1,3,17,"kind","Kind.FAST","","arg:0:run expr"]]"#
+        r#"[[-1,-1,1,17,0,"kind",{"s":"TrendsQuery"},"","assign:QUERY"],[-1,-1,3,17,32,"kind","Kind.FAST","","arg:0:run expr"]]"#
     );
     assert_eq!(
         facts(source, "branches"),
-        r#"[[-1,-1,2,0,3,{"cmp":"mode","cs":[{"s":"fast"}],"ops":["=="]}]]"#
+        r#"[[-1,-1,2,0,0,3,{"cmp":"mode","cs":[{"s":"fast"}],"ops":["=="]}]]"#
     );
+    let unwatched = ExtractConfig::new(strings(&["app"]));
+    assert!(line_with(source, &unwatched).get("watched").is_none());
+}
+
+#[test]
+fn records_carry_only_the_requested_kinds_and_name_them_in_cfg() {
+    let source = r#"import importlib
+from app.models import Thing
+
+def load():
+    try:
+        importlib.import_module("app.plugins", package=None)
+    except ImportError:
+        pass
+    x = Thing.objects
+    return x.first()
+"#;
+    let full = line_with(source, &config());
+    assert_eq!(full["cfg"], "2d2704ec");
+    assert_eq!(
+        kinds_of(&full),
+        strings(&[
+            "callees", "calls", "defs", "derived", "imports", "refs", "strs", "uses"
+        ])
+    );
+    let cases: [(&[Kind], &str, &[&str]); 2] = [
+        (
+            &[Kind::Imports, Kind::Strs],
+            "e7f751b1",
+            &["imports", "strs"],
+        ),
+        (&[Kind::Derived], "e61ee8e4", &["derived"]),
+    ];
+    for (kinds, cfg, expected) in cases {
+        let selected = ExtractConfig::new(strings(&["app"])).with_kinds(Kinds::of(kinds));
+        let line = line_with(source, &selected);
+        assert_eq!(line["cfg"], cfg);
+        assert_eq!(kinds_of(&line), strings(expected));
+        for kind in expected {
+            assert_eq!(line[*kind], full[*kind]);
+        }
+    }
+}
+
+#[test]
+fn lite_kinds_get_their_own_cfg() {
+    let lite = config().with_kinds(Kinds::of(&[Kind::Imports, Kind::Defs, Kind::Assigns]));
+    assert_eq!(lite.config_id(), "fc74c9c7");
+    assert_ne!(lite.cache_namespace(), config().cache_namespace());
 }
 
 #[test]

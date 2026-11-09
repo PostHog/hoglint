@@ -12,6 +12,7 @@ from hoglint.core.modules import ModuleIndex
 from hoglint.facts import FactStore
 from hoglint.model import LANGUAGE_PYTHON, EntityId
 
+# Statement context flags; the extractor's `flags` module (src/facts.rs, schema.md section 3) is the source.
 TYPE_ONLY = 1
 TC_ELSE = 2
 FUNC = 4
