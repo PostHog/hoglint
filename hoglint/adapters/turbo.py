@@ -101,8 +101,17 @@ class TurboInputs:
         self.root_config = self.read_config(repo_root / "turbo.json")
         self.tracked_cache: dict[str, frozenset[str] | None] = {}
         self.directories = self.package_dirs()
+        self.directory_set = frozenset(self.directories)
         self.tasks = self.package_tasks()
         self.task_by_directory = {task.directory: task for task in self.tasks}
+        self.globs = {
+            task.directory: (
+                [compile_glob(glob, Braces.ALTERNATION) for glob in task.excludes],
+                [compile_glob(glob, Braces.ALTERNATION) for glob in task.includes],
+            )
+            for task in self.tasks
+        }
+        self.answers: dict[str, tuple[bool, str]] = {}
 
     def read_config(self, path: Path) -> dict[str, Any]:
         return read_json(path) if path.is_file() else {}
@@ -201,20 +210,32 @@ class TurboInputs:
         return path in files
 
     def watches(self, task: PackageTask, path: str) -> bool:
-        if any(compile_glob(glob, Braces.ALTERNATION).match(path) for glob in task.excludes):
+        excludes, includes = self.globs[task.directory]
+        if any(pattern.match(path) for pattern in excludes):
             return False
-        if any(compile_glob(glob, Braces.ALTERNATION).match(path) for glob in task.includes):
+        if any(pattern.match(path) for pattern in includes):
             return True
         inside = not task.directory or path.startswith(task.directory + "/")
         return task.default and inside and self.tracked(task.directory, path)
 
     def holder(self, path: str) -> str:
         """The innermost workspace package directory that holds the path; "" for the repo root."""
-        holders = [directory for directory in self.directories if path.startswith(directory + "/")]
-        return max(holders, key=len, default="")
+        parts = path.split("/")[:-1]
+        for end in range(len(parts), 0, -1):
+            directory = "/".join(parts[:end])
+            if directory in self.directory_set:
+                return directory
+        return ""
 
     def covered(self, path: str) -> tuple[bool, str]:
-        """(covered, why): the turbo.json that decided, or why a change there runs everything anyway."""
+        """(covered, why): the turbo.json that decided, or why a change there runs everything
+        anyway. Answered once per path."""
+        found = self.answers.get(path)
+        if found is None:
+            found = self.answers[path] = self.find_covered(path)
+        return found
+
+    def find_covered(self, path: str) -> tuple[bool, str]:
         for task in self.tasks:
             if self.watches(task, path):
                 return True, task.decided_by
