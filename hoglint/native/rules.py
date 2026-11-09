@@ -26,18 +26,10 @@ from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.model import Edge, Finding, FindingDetail, Graph
 from hoglint.native.graph import CONTEXT_BITS, RESOLUTIONS, NativeGraph
-from hoglint.rules.base import (
-    EDGE_DEPENDENT_FIELDS,
-    EdgeEnv,
-    EdgeRule,
-    Endpoint,
-    RuleContext,
-    column_ref,
-    conjuncts,
-    joined,
-    read_endpoint,
-)
+from hoglint.rules.audit import ReadAudit, audit_rule
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext, column_ref, conjuncts, joined, read_endpoint
 from hoglint.rules.graphs import Hop
+from hoglint.rules.reads import Reads, granularity
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
 
 GROUPED_ROLES = ("origin", "surface")
@@ -102,61 +94,6 @@ class NativeSymbolFacts(SymbolFacts):
         for owner, surface, names in graph.link.class_facts("decorate", "decorated"):
             self.add_decorator(owner, surface, names)
         self.add_edges(inherits, decorates)
-
-
-@dataclass(frozen=True, slots=True)
-class Reads:
-    """What a rule's decision reads, split by where the value comes from."""
-
-    edge: frozenset[str]
-    src: frozenset[str]
-    dst: frozenset[str]
-    exported: bool
-
-    @staticmethod
-    def of(ref_list: list[Ref], config: Config) -> Reads | None:
-        """None when a read has no grouped form (a per-edge ordinal, a src export)."""
-        edge: set[str] = set()
-        src: set[str] = set()
-        dst: set[str] = set()
-        exported = False
-        pending = list(ref_list)
-        while pending:
-            ref = pending.pop()
-            if len(ref.path) != 2:
-                continue
-            root, name = ref.path
-            if root == "edge":
-                if name == "ordinal":
-                    return None
-                if name == "label":
-                    dst.add("unresolved")
-                edge.add("kind" if name == "label" else name)
-            elif root in ("src", "dst") and name == "context":
-                edge.add("context")
-            elif root == "src" and name in EDGE_DEPENDENT_FIELDS:
-                return None
-            elif root == "dst" and name == "exported":
-                if not exported:
-                    exported = True
-                    for spec in config.exports.values():
-                        if spec.audience is not None:
-                            pending.extend(refs(spec.audience.node))
-            elif root == "src":
-                src.add(name)
-            elif root == "dst":
-                dst.add(name)
-        return Reads(frozenset(edge), frozenset(src), frozenset(dst), exported)
-
-    def roots(self) -> set[str]:
-        out = set()
-        if self.edge:
-            out.add("edge")
-        if self.src:
-            out.add("src")
-        if self.dst or self.exported:
-            out.add("dst")
-        return out
 
 
 NO_CLASS = 0xFFFFFFFF
@@ -272,16 +209,11 @@ class Grouper:
         dst = self.ctx.dst_endpoints(edge, self.role)[0]
         return self.rule.env(edge, self.ctx.src_endpoint(edge.site), dst)
 
-    def module_level(self, root: str, names: frozenset[str]) -> bool:
-        return all(self.labeler.module_level(Ref((root, name))) for name in names if name != "unresolved")
-
     def dst_entity(self, reads: Reads) -> bool:
-        if not self.module_level("dst", reads.dst):
-            return True
-        return reads.exported and any(spec.subclass_of for spec in self.exports)
+        return granularity(reads, self.labeler)[1]
 
     def src_table(self, reads: Reads) -> str:
-        return "src" if self.module_level("src", reads.src) else "src-scope"
+        return "src-scope" if granularity(reads, self.labeler)[0] else "src"
 
     def dst_table(self, reads: Reads) -> str:
         return f"dst-{self.role}-entity" if self.dst_entity(reads) else f"dst-{self.role}"
@@ -370,15 +302,25 @@ class Grouper:
     def decide(self, ids: array[int], reads: Reads) -> array[int]:
         """Drops the edges whose group the rule's whole decision drops."""
         group_of, reps = self.layers(ids, reads)
-        keep = [not self.rule.droppable(self.env(edge)) for edge in self.core.get(array("I", reps))]
+        rep_edges = self.core.get(array("I", reps))
+        self.audit(rep_edges)
+        keep = [not self.rule.droppable(self.env(edge)) for edge in rep_edges]
         return self.keep(ids, group_of, keep)
+
+    def audit(self, edges: list[Edge]) -> None:
+        """In audit mode, checks the decision of each representative for undeclared reads."""
+        audit = self.ctx.audit
+        if audit is not None:
+            audit_rule(audit, self.rule, edges)
 
     def record(self, ids: array[int], reads: Reads) -> None:
         """Templates for the edges left: `reads` hold the rule's identity too, so the one finding a
         group's representative makes is every edge's in the group."""
         group_of, reps = self.layers(ids, reads)
         templates: list[Finding | None] = []
-        for edge in self.core.get(array("I", reps)):
+        rep_edges = self.core.get(array("I", reps))
+        self.audit(rep_edges)
+        for edge in rep_edges:
             made = self.rule.recorded([self.env(edge)])
             templates.append(made.findings[0] if len(made.findings) == 1 and not made.incomplete else None)
         for edge_id, group in zip(ids, array("I", group_of)):
@@ -419,6 +361,9 @@ class Grouper:
 class NativeRuleContext(RuleContext):
     """RuleContext over a NativeGraphIndex: groups come from the link, and a rule's groups hold
     only the core edges that can make output for it."""
+
+    # Set by the parity tool's audit: every grouped decision is checked for undeclared reads.
+    audit: ReadAudit | None = None
 
     def __init__(self, config: Config, graph: Graph, labeler: Labeler, repo_root: Path | None = None) -> None:
         super().__init__(config, graph, labeler, repo_root)

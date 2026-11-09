@@ -607,13 +607,20 @@ class EdgeRule:
             yield from self.group_envs(module, group)
 
     def read_refs(self) -> list[Ref]:
-        """Every field `judge` reads besides the edge's identity: what grouped evaluation keys on."""
+        """Every field the rule's decision reads besides the edge's identity: the fields its parsed
+        selectors name, then the ones its primitive's code reads (`own_reads`). Grouped evaluation
+        keys on them; the read audit (`hoglint.rules.audit`) fails a decision that reads more."""
         out: list[Ref] = []
         spec = self.spec
         for selector in (spec.from_, spec.select, spec.deny, spec.allow, spec.require, spec.unless):
             if selector is not None:
                 out.extend(selector.refs())
-        return out
+        return out + self.own_reads()
+
+    def own_reads(self) -> list[Ref]:
+        """The fields this primitive's Python code reads in a decision, besides its selectors.
+        `sees` is applied to each edge on its own, so its reads need no declaration."""
+        return []
 
     def droppable(self, env: EdgeEnv) -> bool:
         """True when `judge` makes no finding and no incomplete for this environment."""

@@ -185,8 +185,8 @@ class CyclePrimitive(EdgeRule):
         self.group_field = ctx.config.roles.group if spec.view == "packages" else "module"
         self.group_cache: dict[tuple[str, Endpoint], str | None] = {}
 
-    def read_refs(self) -> list[Ref]:
-        return [*super().read_refs(), Ref(("src", self.group_field)), Ref(("dst", self.group_field))]
+    def own_reads(self) -> list[Ref]:
+        return [Ref(("src", self.group_field)), Ref(("dst", self.group_field))]
 
     def droppable(self, env: EdgeEnv) -> bool:
         """True when `evaluate` neither pairs this environment nor reports it."""
