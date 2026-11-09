@@ -263,7 +263,10 @@ impl Link {
             symbols: Symbols::default(),
         };
         producers.run();
-        let edges = std::mem::take(&mut producers.edges);
+        let mut edges = std::mem::take(&mut producers.edges);
+        edges.rows.shrink_to_fit();
+        edges.via.shrink_to_fit();
+        edges.attrs.shrink_to_fit();
         let symbols = std::mem::take(&mut producers.symbols);
         timings.mark("producers", started);
         Ok(Link {

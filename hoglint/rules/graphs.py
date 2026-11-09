@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from hoglint.config.model import RuleSpec
+from hoglint.index import has_endpoint_attrs
 from hoglint.model import Edge
 from hoglint.rules.base import (
     EDGE_DEPENDENT_FIELDS,
@@ -103,7 +104,7 @@ class ReachPrimitive(EdgeRule):
         """(`deny`, `unless` excuses) for one hop seen from `origin`. When neither reads the edge,
         the answer depends on the two endpoints alone and is kept."""
         edge = hop.edge
-        if not self.endpoint_verdicts or (isinstance(edge, Edge) and id(edge) in self.ctx.endpoint_attr_edges):
+        if not self.endpoint_verdicts or (isinstance(edge, Edge) and has_endpoint_attrs(edge)):
             return self.judge_hop(self.hop_env(hop, origin))
         key = (origin, hop.dst)
         found = self.verdicts.get(key)

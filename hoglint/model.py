@@ -63,6 +63,13 @@ class Site:
     column: int = 0
 
 
+def set_handle(edge: Edge, handle: int) -> None:
+    """Gives an edge its row in the graph that holds it. The handle is run-local bookkeeping
+    outside the edge's value (see `Edge`), so it is set on the frozen edge in place. An edge
+    object a producer repeats keeps the handle of its last row."""
+    object.__setattr__(edge, "handle", handle)
+
+
 def flag(value: bool) -> str:
     """A boolean edge attr or symbol fact."""
     return "true" if value else "false"
@@ -77,6 +84,10 @@ class Edge:
     use position from core (call, attribute, subscript, argument, return, ...); framework
     packs add their own meaning in `shape`. `producer` names the pass that made the edge, so
     a failed producer marks the rules that need it incomplete.
+
+    `handle` is the edge's run-local row in its graph's one edge table (its position in
+    `Graph.edges`), -1 before the graph holds it. Like `run_id` it is never part of an identity,
+    a ledger key or an exception key, so it is left out of equality, hashing and repr.
     """
 
     kind: str
@@ -91,6 +102,7 @@ class Edge:
     shape: str = ""
     shape_detail: str = ""
     attrs: tuple[tuple[str, str], ...] = ()
+    handle: int = field(default=-1, compare=False, repr=False)
 
     @property
     def target(self) -> EntityId | None:
@@ -215,8 +227,9 @@ class RuleResult:
 class Graph:
     """Everything producers made from one snapshot. Rules and views read only this.
 
-    Add edges with `add` or `extend`. Edges appended to `edges` directly are indexed on the
-    next `by_kind` call, because nothing removes an edge.
+    Add edges with `add` or `extend`, which give each edge its handle (its position). Edges
+    appended to `edges` directly are indexed on the next `by_kind` call, because nothing
+    removes an edge.
     """
 
     edges: list[Edge] = field(default_factory=list)
@@ -231,7 +244,10 @@ class Graph:
         self.extend((edge,))
 
     def extend(self, edges: Iterable[Edge]) -> None:
+        start = len(self.edges)
         self.edges.extend(edges)
+        for at in range(start, len(self.edges)):
+            set_handle(self.edges[at], at)
         self.catch_up()
 
     def catch_up(self) -> None:

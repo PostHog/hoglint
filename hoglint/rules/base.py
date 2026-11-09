@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Config, RuleSpec
-from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex
+from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
 from hoglint.labels import BUILTIN_ENTITY_NAMES, Labeler
 from hoglint.model import (
     Context,
@@ -128,7 +128,6 @@ class RuleContext:
         index = labeler.index
         self.by_kind = index.by_kind
         self.groups = index.groups
-        self.endpoint_attr_edges = index.endpoint_attr_edges
         self.index = index
         self.results: dict[str, RuleRun] = {}
         self.src_cache: dict[tuple[str, str, str], Endpoint] = {}
@@ -175,9 +174,9 @@ class RuleContext:
         assert isinstance(edge, Edge)
         return edge
 
-    def replica(self, rule: EdgeRule, edge: Edge, handle: int) -> Finding | None:
-        """The finding of an edge whose group's verdict grouped evaluation already decided, or
-        None to judge it. `handle` is the edge's run-local handle, -1 for none."""
+    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
+        """The finding of an edge whose group's judgment grouped evaluation already decided, or
+        None to judge it."""
         return None
 
     @property
@@ -186,7 +185,7 @@ class RuleContext:
 
     def ordinal(self, edge: Edge) -> int:
         """The edge's place among edges with the same module, scope, kind and surface."""
-        return self.labeler.index.ordinals.get(id(edge), 0)
+        return self.labeler.index.ordinals.get(edge.handle, 0)
 
     def src_endpoint(self, site: Site) -> Endpoint:
         return self.src_endpoint_at(site.module, site.scope, site.path)
@@ -354,7 +353,7 @@ def read_endpoint(ctx: RuleContext, endpoint: Endpoint, name: str, edge: Edge | 
         return ctx.labeler.kind(endpoint.symbol, first_party=endpoint.external is None)[0]
     if name in BUILTIN_ENTITY_NAMES:
         return ctx.labeler.builtin(endpoint.module, endpoint.symbol, name)
-    attr = edge.attr(f"{root}.{name}") if edge is not None and id(edge) in ctx.endpoint_attr_edges else ""
+    attr = edge.attr(f"{root}.{name}") if edge is not None and has_endpoint_attrs(edge) else ""
     if attr:
         spec = ctx.config.fields.get(name)
         if spec is not None and spec.type.value == "set":
@@ -525,7 +524,7 @@ class StagedSelection:
 
     def bypass(self, edge: Edge) -> bool:
         """An edge with its own `src.*`/`dst.*` attributes is judged alone: they override labels."""
-        return id(edge) in self.ctx.endpoint_attr_edges
+        return has_endpoint_attrs(edge)
 
     def module_false(self, module: str) -> bool:
         """True when the `src` part is false for every regular edge of the module."""
@@ -775,22 +774,16 @@ class EdgeRule:
 
     def evaluate(self) -> RuleRun:
         for module, group in self.ctx.rule_groups(self):
-            for edge, handle in self.group_items(module, group):
+            for edge in self.group_edges(module, group):
                 if not self.sees(edge):
                     continue
-                replica = self.ctx.replica(self, edge, handle)
+                replica = self.ctx.replica(self, edge)
                 if replica is not None:
                     self.run.findings.append(replica)
                     continue
                 for env in self.edge_envs(edge):
                     self.judge(env, self.describe(env))
         return self.run
-
-    def group_items(self, module: str, group: EdgeGroup) -> list[tuple[Edge, int]]:
-        """`group_edges` with each edge's handle (-1 for an edge without one)."""
-        if self.staged.module_false(module):
-            return list(zip(group.irregular, group.irregular_handles or [-1] * len(group.irregular)))
-        return list(zip(group.edges, group.handles or [-1] * len(group.edges)))
 
     def reported(self, env: EdgeEnv, judgment: Judgment) -> RuleRun:
         """What `judgment` reports for `env` with no message, kept out of this rule's run: a

@@ -414,10 +414,10 @@ class NativeRuleContext(RuleContext):
                         out.append(Hop(env.edge, env.dst, selected, env.edge.surface))
         return out
 
-    def replica(self, rule: EdgeRule, edge: Edge, handle: int) -> Finding | None:
+    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
         """The finding of a grouped edge: its group's judgment, reported from the edge's own env.
         The message is made when something reads it."""
-        judgment = self.judgments.get(rule, {}).get(handle) if handle >= 0 else None
+        judgment = self.judgments.get(rule, {}).get(edge.handle)
         if judgment is None:
             return None
         env = rule.env(edge, self.src_endpoint(edge.site), self.dst_endpoints(edge, rule.spec.endpoint)[0])
@@ -435,17 +435,15 @@ class NativeRuleContext(RuleContext):
         ids = grouper.survivors()
         survivors = self.native.native.core.get(ids)
         self.judgments[rule] = grouper.judgments
-        by_place: dict[tuple[str, str], tuple[list[Edge], list[int]]] = {}
-        for edge_id, edge in zip(ids, survivors):
-            edges, handles = by_place.setdefault((edge.kind, edge.site.module), ([], []))
-            edges.append(edge)
-            handles.append(edge_id)
+        by_place: dict[tuple[str, str], list[Edge]] = {}
+        for edge in survivors:
+            by_place.setdefault((edge.kind, edge.site.module), []).append(edge)
         for kind in self.kinds_or_all(rule.kinds()):
             extra = self.native.extra_by.get(kind, {})
             for module in self.native.modules_of(kind):
-                core, handles = by_place.get((kind, module), ([], []))
+                core = by_place.get((kind, module), [])
                 if core or module in extra:
-                    yield module, self.native.group(kind, module, core, handles)
+                    yield module, self.native.group(kind, module, core)
 
 
 class NativeGraphIndex(GraphIndex):
@@ -459,7 +457,6 @@ class NativeGraphIndex(GraphIndex):
         self.extra_by: dict[str, dict[str, list[Edge]]] = {}
         for edge in extra:
             self.extra_by.setdefault(edge.kind, {}).setdefault(edge.site.module, []).append(edge)
-        self.endpoint_attr_edges = {id(edge) for edge in extra if edge.attrs and has_endpoint_attrs(edge)}
         self.by_kind = LazyKinds(graph, self.kind_order())
         self.groups = {kind: LazyModules(self.modules_of(kind), self.group_maker(kind)) for kind in self.kind_order()}
         pack_inherits = [edge for edge in extra if edge.kind == "inherit"]
@@ -486,23 +483,17 @@ class NativeGraphIndex(GraphIndex):
 
     def is_irregular(self, edge: Edge) -> bool:
         site = edge.site
-        if id(edge) in self.endpoint_attr_edges:
+        if has_endpoint_attrs(edge):
             return True
         return bool(site.path) and site.path != self.graph.modules.get(site.module)
 
-    def group(
-        self, kind: str, module: str, core: list[Edge] | None = None, handles: list[int] | None = None
-    ) -> EdgeGroup:
-        """One module's edges of one kind: its core edges (all, or the ones given with their
-        handles), then its pack edges, which have no handle."""
+    def group(self, kind: str, module: str, core: list[Edge] | None = None) -> EdgeGroup:
+        """One module's edges of one kind: its core edges (all, or the ones given), then its
+        pack edges."""
         if core is None:
-            ids = array("I", self.native.link.ids_from(kind, module))
-            core, handles = self.native.core.get(ids), list(ids)
-        extra = self.extra_by.get(kind, {}).get(module, [])
-        edges = core + extra
-        all_handles = list(handles or ()) + [-1] * len(extra)
-        irregular = [at for at, edge in enumerate(edges) if self.is_irregular(edge)]
-        return EdgeGroup(edges, [edges[at] for at in irregular], all_handles, [all_handles[at] for at in irregular])
+            core = self.native.core.get(array("I", self.native.link.ids_from(kind, module)))
+        edges = core + self.extra_by.get(kind, {}).get(module, [])
+        return EdgeGroup(edges, [edge for edge in edges if self.is_irregular(edge)])
 
     def group_maker(self, kind: str) -> Any:
         return lambda module: self.group(kind, module)
@@ -534,7 +525,7 @@ class NativeGraphIndex(GraphIndex):
         counters: dict[tuple[str, str, str, str], int] = {}
         for edge in self.graph.edges:
             key = (edge.site.module, edge.site.scope, edge.kind, edge.surface)
-            out[id(edge)] = counters.get(key, 0)
+            out[edge.handle] = counters.get(key, 0)
             counters[key] = counters.get(key, 0) + 1
         return out
 

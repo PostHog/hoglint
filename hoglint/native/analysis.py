@@ -116,8 +116,7 @@ class NativeAnalysis(CoreAnalysis):
         if drifted:
             WorktreeStatus.of(self.options.repo).mark_drifted(drifted)
         started = time.perf_counter()
-        symbols = {name: {"kind": kind, "path": path} for name, kind, path in link.symbols()}
-        graph = NativeGraph(link, {}, symbols)
+        graph = NativeGraph(link, {})
         build = NativeBuild(config, link, external, graph.core.maker)
         graph.modules = build.index.repo_modules()
         if snapshot.conflicts:

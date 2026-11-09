@@ -1,19 +1,22 @@
 """The graph of the native engine: core edges stay in the Rust link, pack edges are Python.
 
 `NativeGraph.edges` is the whole graph in graph order: core edges first, then what packs add.
-A core edge becomes an Edge object only when something reads it, and stays the same object
-after that, so identity-keyed tables (ordinals, witnesses) hold. Readers that need only some
-edges ask the link by kind (`by_kind`) instead of walking every edge.
+A core edge becomes an Edge object only when something reads it, and nothing keeps it: each
+read makes a new object. Tables key edges by their handle (`Edge.handle`), the edge's row in
+the graph, never by object identity. Readers that need only some edges ask the link by kind
+(`by_kind`) instead of walking every edge.
+
+`NativeGraph.symbols` keeps the core's symbols as columns, with no dict per symbol.
 """
 
 from __future__ import annotations
 
 from array import array
-from collections.abc import Collection, Iterable, Iterator, Sequence
-from typing import Any, SupportsIndex, cast, overload
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
+from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site, set_handle
 
 # Bit order of the link's context bits (src/link/scope.rs `ctx`).
 CONTEXT_BITS = (
@@ -31,6 +34,8 @@ CONTEXT_SETS = tuple(
 )
 RESOLUTIONS = {resolution.value: resolution for resolution in Resolution}
 BATCH = 65536
+# The link's symbol kinds by code (`Link.symbol_columns`).
+SYMBOL_KINDS = ("def", "async", "class")
 
 
 def producer_of(kind: str) -> str:
@@ -51,7 +56,7 @@ class EdgeMaker:
             found = self.entities[key] = EntityId(LANGUAGE_PYTHON, module, symbol)
         return found
 
-    def edge(self, row: tuple[Any, ...]) -> Edge:
+    def edge(self, row: tuple[Any, ...], handle: int) -> Edge:
         kind, path, module, scope, line, column, surface, target_module, target_symbol, res, bits, via, use, attrs = row
         producer = self.producers.get(kind)
         if producer is None:
@@ -70,16 +75,17 @@ class EdgeMaker:
             "",
             "",
             attrs,
+            handle,
         )
 
 
 class CoreEdges:
-    """The link's core edges, made into Edge objects on first read and kept."""
+    """The link's core edges, made into Edge objects on each read. The handle of a core edge is
+    its row in the link."""
 
     def __init__(self, link: Any) -> None:
         self.link = link
         self.count: int = link.edge_count()
-        self.made: list[Edge | None] = [None] * self.count
         self.maker = EdgeMaker()
         self.kind_ids: dict[str, array[int]] = {}
 
@@ -90,12 +96,12 @@ class CoreEdges:
         return found
 
     def get(self, ids: Sequence[int]) -> list[Edge]:
-        missing = array("I", (i for i in ids if self.made[i] is None))
-        for start in range(0, len(missing), BATCH):
-            chunk = missing[start : start + BATCH]
-            for i, row in zip(chunk, self.link.edges(chunk.tobytes())):
-                self.made[i] = self.maker.edge(row)
-        return cast(list[Edge], [self.made[i] for i in ids])
+        wanted = ids if isinstance(ids, array) else array("I", ids)
+        out: list[Edge] = []
+        for start in range(0, len(wanted), BATCH):
+            chunk = wanted[start : start + BATCH]
+            out.extend(self.maker.edge(row, i) for i, row in zip(chunk, self.link.edges(chunk.tobytes())))
+        return out
 
     def all(self) -> list[Edge]:
         return self.get(range(self.count))
@@ -135,17 +141,60 @@ class EdgeList(Sequence[Edge]):
         yield from self.extra
 
     def append(self, edge: Edge) -> None:
-        self.extra.append(edge)
+        self.extend((edge,))
 
     def extend(self, edges: Iterable[Edge]) -> None:
+        start = len(self.extra)
         self.extra.extend(edges)
+        for at in range(start, len(self.extra)):
+            set_handle(self.extra[at], self.core.count + at)
+
+
+class NativeSymbols(Mapping[str, Mapping[str, str]]):
+    """`graph.symbols` of the native engine: the core's symbols as columns, with no dict per
+    symbol, and over them the facts packs add, which replace a symbol's facts as `dict.update`
+    does. Iteration order is a dict's: the core's symbols, then the names packs add."""
+
+    def __init__(self, names: list[str], kinds: bytes, files: array[int], paths: list[str]) -> None:
+        self.names = names
+        self.at = {name: at for at, name in enumerate(names)}
+        self.kinds = kinds
+        self.files = files
+        self.paths = paths
+        self.added: dict[str, Mapping[str, str]] = {}
+        self.new_names = 0
+
+    def __getitem__(self, name: str) -> Mapping[str, str]:
+        found = self.added.get(name)
+        if found is not None:
+            return found
+        at = self.at[name]
+        return {"kind": SYMBOL_KINDS[self.kinds[at]], "path": self.paths[self.files[at]]}
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.added or name in self.at
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self.names
+        yield from (name for name in self.added if name not in self.at)
+
+    def __len__(self) -> int:
+        return len(self.names) + self.new_names
+
+    def update(self, facts: Mapping[str, Mapping[str, str]]) -> None:
+        for name, values in facts.items():
+            if name not in self.at and name not in self.added:
+                self.new_names += 1
+            self.added[name] = values
 
 
 class NativeGraph(Graph):
     """A Graph whose core edges live in the link. `by_kind` asks the link for core kinds."""
 
-    def __init__(self, link: Any, modules: dict[str, str], symbols: dict[str, dict[str, str]]) -> None:
+    def __init__(self, link: Any, modules: dict[str, str]) -> None:
         self.core = CoreEdges(link)
+        names, kinds, files = link.symbol_columns()
+        symbols = NativeSymbols(names, kinds, array("I", files), link.paths())
         super().__init__(edges=EdgeList(self.core), modules=modules, symbols=symbols)  # type: ignore[arg-type]
         self.extra_index: dict[str, list[Edge]] = {}
         self.extra_indexed = 0

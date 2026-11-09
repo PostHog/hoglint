@@ -293,6 +293,24 @@ impl Link {
             .collect()
     }
 
+    /// `graph.symbols` of the core as columns, in insertion order: (names, kind code of each
+    /// (0 def, 1 async, 2 class) as bytes, file id of each as u32 bytes). No dict per symbol
+    /// crosses.
+    fn symbol_columns<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> (Vec<Bound<'py, PyString>>, Bound<'py, PyBytes>, Bound<'py, PyBytes>) {
+        let order = &self.inner.symbols.order;
+        let it = &self.inner.core.it;
+        let names = order
+            .iter()
+            .map(|&(name, _, _)| PyString::new(py, it.s(name)))
+            .collect();
+        let kinds: Vec<u8> = order.iter().map(|&(_, kind, _)| kind).collect();
+        let files: Vec<u32> = order.iter().map(|&(_, _, file)| file).collect();
+        (names, PyBytes::new(py, &kinds), ids_bytes(py, &files))
+    }
+
     /// Core edge kinds in the order their first edge appears.
     fn kind_order(&self) -> Vec<&'static str> {
         self.inner

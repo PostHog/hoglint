@@ -138,6 +138,9 @@ class ReadAudit:
         patch(EdgeEnv, "endpoint_value", audited_endpoint_value)
         patch(EdgeEnv, "__init__", self.quietly(EdgeEnv.__init__))
         patch(StagedSelection, "rest_key", staticmethod(self.quietly(StagedSelection.rest_key)))
+        # Whether an edge's own attributes override its endpoints' labels is how a field is
+        # read, not a read of its own.
+        patch(base, "has_endpoint_attrs", self.quietly(base.has_endpoint_attrs))
         patch(EdgeEnv, "__getattribute__", env_getattribute)
         patch(Edge, "attr", audited_attr)
         patch(Edge, "__getattribute__", edge_getattribute)

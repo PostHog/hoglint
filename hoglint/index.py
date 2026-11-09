@@ -4,12 +4,13 @@ so compare's runs under two policies over one snapshot index it once."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable, Mapping
+from bisect import bisect_left
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Generic, TypeVar
 
-from hoglint.model import Edge, Graph, Resolution
+from hoglint.model import Edge, Graph, Resolution, set_handle
 from hoglint.selectors import split_list
 
 K = TypeVar("K", bound=Hashable)
@@ -35,20 +36,63 @@ class Memo(Generic[K, V]):
 
 
 def has_endpoint_attrs(edge: Edge) -> bool:
-    return any(name.startswith(("src.", "dst.")) for name, _ in edge.attrs)
+    """Whether the edge sets `src.*`/`dst.*` attributes, which override its endpoints' labels."""
+    return bool(edge.attrs) and any(name.startswith(("src.", "dst.")) for name, _ in edge.attrs)
 
 
 @dataclass(frozen=False, slots=True)
 class EdgeGroup:
     """The edges of one kind from one module. `irregular` holds the ones a module-wide answer
     cannot speak for: an edge with its own `src.*`/`dst.*` attributes, or a site path that is not
-    the module's. An engine that keeps edges outside Python gives each edge's run-local handle in
-    `handles` and `irregular_handles` (-1 for an edge without one); empty lists mean no handles."""
+    the module's."""
 
     edges: list[Edge] = field(default_factory=list)
     irregular: list[Edge] = field(default_factory=list)
-    handles: list[int] = field(default_factory=list)
-    irregular_handles: list[int] = field(default_factory=list)
+
+
+def written_facts(symbols: Mapping[str, Mapping[str, str]]) -> Iterable[tuple[str, Mapping[str, str]]]:
+    """The symbols whose facts a producer wrote as a dict. A graph that keeps the core's symbols
+    as columns (kind and path only) lists the facts packs added in `added`."""
+    added = getattr(symbols, "added", None)
+    return added.items() if isinstance(added, dict) else symbols.items()
+
+
+class TopLevel(Mapping[str, list[str]]):
+    """Public top-level symbols per module, sorted. A module's are found on its first read by
+    bisecting the sorted symbols, so a run that asks for few modules reads few symbols."""
+
+    def __init__(self, symbols: list[str], module_of: Callable[[str], str | None]) -> None:
+        self.symbols = symbols
+        self.module_of = module_of
+        self.found: dict[str, list[str]] = {}
+
+    def of(self, module: str) -> list[str]:
+        found = self.found.get(module)
+        if found is not None:
+            return found
+        prefix = f"{module}."
+        found = self.found[module] = []
+        for at in range(bisect_left(self.symbols, prefix), len(self.symbols)):
+            symbol = self.symbols[at]
+            if not symbol.startswith(prefix):
+                break
+            name = symbol[len(prefix) :]
+            if name and "." not in name and not name.startswith("_") and self.module_of(symbol) == module:
+                found.append(symbol)
+        return found
+
+    def __getitem__(self, module: str) -> list[str]:
+        found = self.of(module)
+        if not found:
+            raise KeyError(module)
+        return found
+
+    def __iter__(self) -> Iterator[str]:
+        modules = {self.module_of(symbol) for symbol in self.symbols}
+        return iter(sorted(module for module in modules if module and self.of(module)))
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
 
 
 class SymbolFacts:
@@ -129,7 +173,7 @@ class SymbolFacts:
         for owner, bases in self.base_map.items():
             for base in bases:
                 out.setdefault(base, []).append(owner)
-        for symbol, facts in self.symbols.items():
+        for symbol, facts in written_facts(self.symbols):
             for base in split_list(facts.get("bases", "")):
                 out.setdefault(base, []).append(symbol)
         return out
@@ -186,18 +230,16 @@ class GraphIndex:
         self.graph = graph
         by_kind: dict[str, list[Edge]] = {}
         groups: dict[str, dict[str, EdgeGroup]] = {}
-        self.endpoint_attr_edges: set[int] = set()
-        for edge in graph.edges:
+        for at, edge in enumerate(graph.edges):
+            if edge.handle != at:
+                set_handle(edge, at)  # an edge appended to `Graph.edges` directly
             site = edge.site
             by_kind.setdefault(edge.kind, []).append(edge)
             group = groups.setdefault(edge.kind, {}).get(site.module)
             if group is None:
                 group = groups[edge.kind][site.module] = EdgeGroup()
             group.edges.append(edge)
-            attrs = bool(edge.attrs) and has_endpoint_attrs(edge)
-            if attrs:
-                self.endpoint_attr_edges.add(id(edge))
-            if attrs or (site.path and site.path != graph.modules.get(site.module)):
+            if has_endpoint_attrs(edge) or (site.path and site.path != graph.modules.get(site.module)):
                 group.irregular.append(edge)
         self.by_kind: Mapping[str, list[Edge]] = by_kind
         self.groups: Mapping[str, Mapping[str, EdgeGroup]] = groups
@@ -226,12 +268,13 @@ class GraphIndex:
 
     @cached_property
     def ordinals(self) -> dict[int, int]:
-        """Each edge's place among edges with the same module, scope, kind and surface."""
+        """Each edge's place among edges with the same module, scope, kind and surface, by its
+        handle. An edge object a producer repeats has one handle, so it keeps its last place."""
         out: dict[int, int] = {}
         counters: dict[tuple[str, str, str, str], int] = {}
         for edge in self.graph.edges:
             key = (edge.site.module, edge.site.scope, edge.kind, edge.surface)
-            out[id(edge)] = counters.get(key, 0)
+            out[edge.handle] = counters.get(key, 0)
             counters[key] = counters.get(key, 0) + 1
         return out
 
@@ -244,15 +287,9 @@ class GraphIndex:
         return sorted(self.graph.symbols)
 
     @cached_property
-    def top_level(self) -> dict[str, list[str]]:
+    def top_level(self) -> TopLevel:
         """Public top-level symbols per module, sorted."""
-        out: dict[str, list[str]] = {}
-        for symbol in self.sorted_symbols:
-            module = self.module_of_symbol(symbol)
-            name = symbol[len(module) + 1 :] if module else ""
-            if module and name and "." not in name and not name.startswith("_"):
-                out.setdefault(module, []).append(symbol)
-        return out
+        return TopLevel(self.sorted_symbols, self.module_of_symbol)
 
     @cached_property
     def module_imports(self) -> dict[str, list[Edge]]:
