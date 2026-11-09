@@ -8,9 +8,10 @@ position into a Django shape. Precedence follows today's crossings scanner: `loc
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from hoglint.model import Edge
+from hoglint.core.producers import ESCAPE_WRAPPERS, chain_tokens
+from hoglint.core.records import last_name
 
 MANAGERS = frozenset(
     {
@@ -101,7 +102,6 @@ STEP_PARENT = {
 }
 ANNOTATION_TERMINALS = ("param-ann:", "returns", "annotation")
 LOCAL_ASSIGN_STEPS = ("assign:", "annassign:", "walrus:")
-WRAPPER_STEPS = frozenset({"await", "ifexp:body", "ifexp:else", "star"})
 
 
 @dataclass(frozen=True)
@@ -111,29 +111,6 @@ class Shape:
 
     def text(self) -> str:
         return f"{self.kind}({self.detail})" if self.detail else self.kind
-
-
-def split_chain(chain: str) -> tuple[str, ...]:
-    """`.a.b()[]` -> ('.a', '.b', '()', '[]')."""
-    out: list[str] = []
-    i = 0
-    while i < len(chain):
-        if chain[i] == ".":
-            j = i + 1
-            while j < len(chain) and chain[j] not in ".([":
-                j += 1
-            out.append(chain[i:j])
-            i = j
-        else:
-            out.append(chain[i : i + 2])
-            i += 2
-    return tuple(out)
-
-
-def call_name(callee: str) -> str | None:
-    if callee == "?":
-        return None
-    return callee.rsplit(".", 1)[-1]
 
 
 def step_parent(step: str) -> str:
@@ -155,13 +132,8 @@ class UsePosition:
     up: tuple[str, ...]
 
     @classmethod
-    def from_row(cls, chain: str, up: str, cut: int = 0) -> UsePosition:
-        return cls(split_chain(chain)[cut:], tuple(up.split()))
-
-    @classmethod
-    def from_edge(cls, edge: Edge) -> UsePosition:
-        """The position a core `reference` edge carries in its `chain` and `up` attrs."""
-        return cls.from_row(edge.attr("chain"), edge.attr("up"))
+    def of(cls, chain: str, up: str) -> UsePosition:
+        return cls(tuple(chain_tokens(chain)), tuple(up.split()))
 
     def methods(self) -> tuple[list[str], tuple[str, ...]]:
         """Attribute names before the first subscript, and the trailers from that subscript on."""
@@ -176,7 +148,7 @@ class UsePosition:
     def local_target(self) -> str | None:
         """The plain local name a use is assigned to (`qs = M.objects.filter()`), else None."""
         steps = list(self.up)
-        while steps and steps[0] in WRAPPER_STEPS:
+        while steps and steps[0] in ESCAPE_WRAPPERS:
             steps.pop(0)
         if not steps or not steps[0].startswith(LOCAL_ASSIGN_STEPS):
             return None
@@ -197,7 +169,7 @@ class OrmShapes:
         previous = rest[-1] if rest else None
         for step in position.up:
             if step.startswith(("arg:", "kw:")):
-                name = call_name(step.split(":", 2)[2])
+                name = last_name(step.split(":", 2)[2])
                 if name:
                     return name
             elif step == "()" and previous is not None and previous.startswith("."):
@@ -277,11 +249,6 @@ class OrmShapes:
         if step.startswith(("elt:", "dict:")) or step == "slice":
             return Shape("in-collection")
         return Shape("other", step_parent(step))
-
-    def shaped(self, edge: Edge) -> Edge:
-        """A core `reference` edge with its Django shape filled in."""
-        shape = self.classify(UsePosition.from_edge(edge))
-        return replace(edge, shape=shape.kind, shape_detail=shape.detail)
 
     def refine(self, source: UsePosition, later: list[UsePosition]) -> Shape | None:
         """The shape of a manager chain held in a local and used again (`qs = ...; qs.update()`).

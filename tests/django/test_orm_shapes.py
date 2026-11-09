@@ -23,7 +23,7 @@ from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition
     ],
 )
 def test_classify(chain: str, up: str, expected: Shape) -> None:
-    assert OrmShapes().classify(UsePosition.from_row(chain, up)) == expected
+    assert OrmShapes().classify(UsePosition.of(chain, up)) == expected
 
 
 @pytest.mark.parametrize(
@@ -38,5 +38,5 @@ def test_classify(chain: str, up: str, expected: Shape) -> None:
 )
 def test_refine_sees_writes_through_a_local(source: str, later: list[str], expected: Shape | None) -> None:
     shapes = OrmShapes()
-    positions = [UsePosition.from_row(chain, "expr") for chain in later]
-    assert shapes.refine(UsePosition.from_row(source, "assign:qs"), positions) == expected
+    positions = [UsePosition.of(chain, "expr") for chain in later]
+    assert shapes.refine(UsePosition.of(source, "assign:qs"), positions) == expected

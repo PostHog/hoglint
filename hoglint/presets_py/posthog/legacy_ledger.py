@@ -9,18 +9,23 @@ from __future__ import annotations
 
 import sys
 import json
+import tomllib
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
+from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
+from hoglint.core.build import CoreBuild
+from hoglint.core.config import CoreConfig
+from hoglint.core.modules import FirstParty
+from hoglint.core.records import sequence_items, str_literal
 from hoglint.model import Context, Edge, Graph, Resolution
+from hoglint.packs.django.config import SECTION, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
-from hoglint.presets_py.posthog import facade
-from hoglint.presets_py.posthog.config import POSTHOG_DJANGO, REPO_PACKAGES
-from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
-from hoglint.presets_py.posthog.facade import facade_product
-from hoglint.spike.core import Core, FactStore, const_of
+from hoglint.presets_py.posthog.facade import FACADE_PRODUCER
+from hoglint.presets_py.posthog.layout import CORE, backend_product, backend_rel, product_of_module, product_of_path
+from hoglint.presets_py.posthog.pack import POSTHOG_PACK
 
 ISOLATION_PATH = "tools/hogli-commands/hogli_commands/product/isolation.py"
 BASELINE_PATH = "products/model_crossing_uses_baseline.txt"
@@ -49,21 +54,38 @@ CARVE_OUTS = frozenset(
     {("customer_analytics", "TeamCustomerAnalyticsConfig"), ("tasks", "Task"), ("workflows", "TeamWorkflowsConfig")}
 )
 REEXPORT_DUNDERS = frozenset({"__getattr__", "__dir__"})
-FACADE_PREFIX = "products/"
 ANY = ("typing", "Any")
 ALLOWED_SHAPES = ("annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch")
-CORE = "core"
 OUT_OF_SCOPE = frozenset({Context.TEST, Context.MIGRATION})
-
-
-def product_of_module(module: str) -> str:
-    parts = module.split(".")
-    return parts[1] if parts[0] == "products" and len(parts) > 2 else CORE
-
-
-def product_of_path(path: str) -> str | None:
-    parts = path.split("/")
-    return parts[1] if parts[0] == "products" and len(parts) > 2 else None
+ROOT_CONFIG = "hoglint.toml"
+# The roots today's scanner treats as repo code.
+FIRST_PARTY = ("posthog", "ee", "products", "common")
+REPO = FirstParty(FIRST_PARTY)
+EXTERNAL_PACKAGES = (
+    "axes",
+    "corsheaders",
+    "django",
+    "django_admin_inline_paginator",
+    "django_filters",
+    "django_linear_migrations",
+    "django_otp",
+    "django_structlog",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
+    "loginas",
+    "oauth2_provider",
+    "rest_framework",
+    "social_django",
+    "social_core",
+    "two_factor",
+    "whitenoise",
+)
+# Today's scanner reads every file, evals included, so the parity run excludes nothing.
+PARITY_CONFIG = CoreConfig(
+    first_party=FIRST_PARTY,
+    external_packages=EXTERNAL_PACKAGES,
+    migration_paths=("**/migrations/**",),
+)
 
 
 def is_model_module(module: str) -> bool:
@@ -78,14 +100,17 @@ class CrossingsPolicy:
     model_crossings: frozenset[tuple[str, str]]
 
     @classmethod
-    def from_facts(cls, core: Core) -> CrossingsPolicy:
-        record = core.store.records[ISOLATION_PATH]
+    def from_facts(cls, build: CoreBuild) -> CrossingsPolicy:
+        record = build.store.records[ISOLATION_PATH]
         for row in record.get("assigns", ()):
             if row["s"] != -1 or "MODEL_CROSSINGS" not in row["t"]:
                 continue
             value = row["v"]["args"][0] if "call" in row["v"] else row["v"]
-            elts = value.get("set") or value.get("list") or value.get("tuple")
-            pairs = [cast(tuple[str, str], tuple(const_of(e) for e in elt["tuple"])) for elt in elts]
+            pairs = set()
+            for elt in sequence_items(value) or ():
+                product, name = (str_literal(part) for part in elt["tuple"])
+                if product is not None and name is not None:
+                    pairs.add((product, name))
             return cls(frozenset(pairs))
         raise LookupError(f"MODEL_CROSSINGS not found in {ISOLATION_PATH}")
 
@@ -166,15 +191,11 @@ class LegacyLedger:
             counts[(edge.attr("location"), edge.site.module, f"drives({edge.shape_detail})")] += 1
         return counts
 
-    def lines(self, extra: Counter[tuple[str, str, str]] | None = None) -> list[str]:
-        counts = self.shapes() + self.get_model() + self.drives() + (extra or Counter())
+    def lines(self) -> list[str]:
+        counts = self.shapes() + self.get_model() + self.drives()
         out = set(self.reverse_accessors())
         out.update(f"{target} {module} {kind} {n}" for (target, module, kind), n in counts.items())
         return sorted(out)
-
-
-def backend_rel(module: str) -> str:
-    return "backend/" + "/".join(module.split(".")[3:]) + ".py"
 
 
 def isolated_products(not_isolated_text: str, facade_products: set[str]) -> frozenset[str]:
@@ -194,10 +215,12 @@ class FacadeLedger:
         self.wiring_products = wiring_products
         self.by_module: dict[str, dict[str, list[Edge]]] = defaultdict(lambda: defaultdict(list))
         for edge in graph.by_kind("export", "exposes", "declares"):
-            self.by_module[edge.site.module][edge.kind].append(edge)
+            if edge.producer == FACADE_PRODUCER:
+                self.by_module[edge.site.module][edge.kind].append(edge)
         self.class_edges: dict[str, dict[str, list[Edge]]] = defaultdict(lambda: defaultdict(list))
         for edge in graph.by_kind("inherit", "decorate"):
-            self.class_edges[f"{edge.site.module}.{edge.site.scope}"][edge.kind].append(edge)
+            if edge.producer == FACADE_PRODUCER:
+                self.class_edges[f"{edge.site.module}.{edge.site.scope}"][edge.kind].append(edge)
 
     def is_model(self, qualified: str) -> bool:
         facts = self.graph.symbols.get(qualified, {})
@@ -205,7 +228,7 @@ class FacadeLedger:
 
     def denied(self, edge: Edge, product: str) -> tuple[str, str] | None:
         surface, origin, origin_kind = edge.surface, edge.attr("origin"), edge.attr("origin_kind")
-        if origin_kind == "external" or surface.split(".")[0] not in REPO_PACKAGES:
+        if origin_kind == "external" or not REPO.contains(surface):
             q = origin if origin_kind == "external" else surface
             for prefixes, library in LIBRARIES:
                 if any(q == p or q.startswith(p + ".") for p in prefixes):
@@ -216,7 +239,7 @@ class FacadeLedger:
             return None
         if origin_kind != "class":
             return None
-        owner = facade_product(origin)
+        owner = backend_product(origin)
         if owner is None or not self.is_model(origin):
             return None
         rel = surface.rpartition(".")[0].split(".")[3:]
@@ -235,7 +258,7 @@ class FacadeLedger:
         if edge.site.scope.startswith("_") or edge.attr("defined_here") == "true":
             return False
         rel = edge.attr("rel")
-        if not rel or rel.startswith("backend/facade/") or facade_product(origin) != product:
+        if not rel or rel.startswith("backend/facade/") or backend_product(origin) != product:
             return False
         if backend_rel(origin_module).startswith("backend/facade/") or origin_module.split(".")[3:4] == ["facade"]:
             return False
@@ -259,8 +282,7 @@ class FacadeLedger:
             for edge in edges:
                 if not edge.surface:
                     continue
-                in_repo = edge.surface.split(".")[0] in REPO_PACKAGES
-                if in_repo and facade_product(edge.surface) is None:
+                if REPO.contains(edge.surface) and backend_product(edge.surface) is None:
                     continue
                 denied = self.denied(edge, product)
                 if denied is not None:
@@ -280,7 +302,7 @@ class FacadeLedger:
         return [
             e
             for e in self.by_module[module]["export"]
-            if not e.attr("member_of") and e.attr("rel") and facade_product(e.surface) == product
+            if not e.attr("member_of") and e.attr("rel") and backend_product(e.surface) == product
         ]
 
     @staticmethod
@@ -375,7 +397,7 @@ class FacadeLedger:
     def lines(self) -> list[str]:
         counts: Counter[str] = Counter()
         for module in sorted(self.by_module):
-            product = facade_product(module)
+            product = backend_product(module)
             edges = self.by_module[module]
             any_edge = next(iter(edges["declares"] or edges["export"] or edges["exposes"]), None)
             if product is None or any_edge is None:
@@ -410,25 +432,22 @@ class ParityResult:
 class Parity:
     """Builds the graph with the Django pack and the PostHog producers, then diffs the ledger."""
 
-    def __init__(self, repo_root: Path, core: Core) -> None:
+    def __init__(self, repo_root: Path, build: CoreBuild) -> None:
         self.repo_root = repo_root
-        self.core = core
+        self.build = build
 
-    def graph(self) -> Graph:
-        graph = Graph()
-        DjangoPack(self.core, POSTHOG_DJANGO, self.repo_root).produce(graph)
-        try:
-            graph.edges.extend(DrivesProducer(self.core).produce())
-        except Exception as error:  # recorded like any producer failure
-            graph.failed_producers[DRIVES_PRODUCER] = f"{type(error).__name__}: {error}"
-        facade.produce(self.core, graph)
-        return graph
+    def produce(self, graph: Graph) -> None:
+        """The repo's own `[django]` table drives the Django pack, so parity checks the real config."""
+        section = tomllib.loads((self.repo_root / ROOT_CONFIG).read_text()).get(SECTION, {})
+        DjangoPack.run(self.build, DjangoPackConfig.from_section(section), graph, self.repo_root)
+        POSTHOG_PACK.run(self.build, graph)
 
     def lines(self, graph: Graph) -> list[str]:
-        policy = CrossingsPolicy.from_facts(self.core)
-        facade_products = {facade_product(e.site.module) or "" for e in graph.by_kind("declares", "export")}
+        policy = CrossingsPolicy.from_facts(self.build)
+        declared = graph.by_kind("declares") + graph.by_kind("export")
+        facade_products = {backend_product(e.site.module) for e in declared if e.producer == FACADE_PRODUCER}
         not_isolated = (self.repo_root / NOT_ISOLATED_PATH).read_text()
-        wiring = isolated_products(not_isolated, facade_products - {""})
+        wiring = isolated_products(not_isolated, {product for product in facade_products if product is not None})
         return sorted(set(LegacyLedger(graph, policy).lines()) | set(FacadeLedger(graph, policy, wiring).lines()))
 
     def compare(self, lines: list[str]) -> ParityResult:
@@ -437,11 +456,13 @@ class Parity:
 
 
 def main() -> None:
-    repo_root, facts_path = Path(sys.argv[1]).resolve(), Path(sys.argv[2])
-    store = FactStore()
-    store.load(facts_path)
-    parity = Parity(repo_root, Core(store))
-    graph = parity.graph()
+    """Usage: python -m hoglint.presets_py.posthog.legacy_ledger <repo_root> [<work_dir>]"""
+    repo_root = Path(sys.argv[1]).resolve()
+    work_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(tempfile.mkdtemp(prefix="hoglint-parity-"))
+    analysis = CoreAnalysis(AnalysisOptions(repo=repo_root, config=PARITY_CONFIG, work_dir=work_dir)).run()
+    parity = Parity(repo_root, analysis.build)
+    graph = analysis.graph
+    parity.produce(graph)
     result = parity.compare(parity.lines(graph))
     unresolved_receivers = [e for e in graph.by_kind("signal") if e.resolution == Resolution.UNRESOLVED]
     summary = {
@@ -450,7 +471,7 @@ def main() -> None:
         "equal": len(result.baseline & result.derived),
         "missing": result.missing,
         "extra": result.extra,
-        "failed_producers": graph.failed_producers,
+        "failed_producers": {name: failure.reason for name, failure in graph.failed_producers.items()},
         "edges": dict(sorted(Counter(f"{e.kind}:{e.resolution.value}" for e in graph.edges).items())),
         "signal_receivers_unresolved": len(unresolved_receivers),
         "signal_unresolved_reasons": dict(Counter(e.attr("reason") for e in unresolved_receivers)),

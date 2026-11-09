@@ -1,7 +1,7 @@
 """INSTALLED_APPS, app labels and the module-to-app map, read statically from settings facts.
 
-Never boots Django. An installed app without facts (a dev-only third-party app) is a known gap:
-it keeps the label Django would derive from its entry and is listed in `gaps`.
+Never boots Django. An installed app without facts (a dev-only third-party app) keeps the label
+Django would derive from its entry and reads as not `known`.
 """
 
 from __future__ import annotations
@@ -9,8 +9,11 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass, field
 
+from hoglint.core.build import CoreBuild
+from hoglint.core.records import sequence_items, str_literal
+from hoglint.core.symbols import entity
+from hoglint.model import EntityId
 from hoglint.packs.django.config import DjangoPackConfig
-from hoglint.spike.core import CLASS, NO_CONST, ClassRef, Core, ModuleRef, const_of, is_const
 
 APP_CONFIG = "django.apps.config.AppConfig"
 INSTALLED_APPS = "INSTALLED_APPS"
@@ -34,14 +37,15 @@ class SettingsValues:
 
     def literal(self, value: object) -> list[str] | None:
         """The str entries of a list/tuple literal, a `+` of them, or a known list name."""
-        if isinstance(value, dict) and ("list" in value or "tuple" in value):
+        items = sequence_items(value) if isinstance(value, dict) and "set" not in value else None
+        if items is not None:
             out: list[str] = []
-            for elt in value.get("list", value.get("tuple")):
+            for elt in items:
                 if isinstance(elt, dict) and "star" in elt:
                     out.extend(self.literal(elt["star"]) or [])
                     continue
-                found = const_of(elt)
-                if isinstance(found, str):
+                found = str_literal(elt)
+                if found is not None:
                     out.append(found)
             return out
         if isinstance(value, dict) and value.get("bin") == "+":
@@ -54,8 +58,9 @@ class SettingsValues:
         return None
 
     def assign(self, target: str, value: object) -> None:
-        if isinstance(value, dict) and "s" in value and len(value) == 1:
-            self.strings[target] = value["s"]
+        text = str_literal(value)
+        if text is not None:
+            self.strings[target] = text
             return
         found = self.literal(value)
         if found is not None:
@@ -73,21 +78,21 @@ class SettingsValues:
 class SettingsReader:
     """Replays assigns, `+=` and `X.append(<const>)` of each settings module in source order."""
 
-    def __init__(self, core: Core) -> None:
-        self.core = core
+    def __init__(self, build: CoreBuild) -> None:
+        self.build = build
 
     def modules(self, patterns: tuple[str, ...]) -> list[str]:
-        known = sorted(self.core.index.path_of)
+        known = sorted(self.build.index.path_of)
         out: list[str] = []
         for pattern in patterns:
             matches = [m for m in known if fnmatch.fnmatchcase(m, pattern)] if "*" in pattern else [pattern]
-            out.extend(m for m in matches if m in self.core.index.path_of and m not in out)
+            out.extend(m for m in matches if self.build.index.is_file_module(m) and m not in out)
         return out
 
-    def read(self, patterns: tuple[str, ...]) -> SettingsValues:
+    def read(self, modules: list[str]) -> SettingsValues:
         values = SettingsValues()
-        for module in self.modules(patterns):
-            self.read_record(self.core.index.record(module) or {}, values)
+        for module in modules:
+            self.read_record(self.build.tables.record(module) or {}, values)
         return values
 
     @staticmethod
@@ -105,8 +110,8 @@ class SettingsReader:
             receiver, _, attr = row[4].rpartition(".")
             if attr != "append" or not receiver or "." in receiver or receiver == "?" or len(row[5]) != 1:
                 continue
-            found = const_of(row[5][0])
-            if isinstance(found, str):
+            found = str_literal(row[5][0])
+            if found is not None:
                 events.append((row[2], row[3], "append", receiver, found))
         for _, _, kind, name, value in sorted(events, key=lambda e: (e[0], e[1])):
             if kind == "assign":
@@ -117,56 +122,38 @@ class SettingsReader:
                 values.append(name, str(value))
 
 
-def class_constants(record: dict, idx: int) -> dict[str, object]:
-    """`name = <Constant>` and `name: T = <Constant>` directly in a class body."""
-    flags = record["defs"][idx].get("f", 0) | CLASS
-    out: dict[str, object] = {}
-    for row in record.get("assigns", ()):
-        if row["s"] != idx or row.get("f", 0) != flags or row["op"] not in ("=", ":") or "v" not in row:
-            continue
-        if not is_const(row["v"]):
-            continue
-        value = const_of(row["v"])
-        if value is NO_CONST:
-            continue
-        for target in row["t"]:
-            if isinstance(target, str) and "." not in target:
-                out[target] = value
-    return out
-
-
 class AppRegistry:
-    def __init__(self, core: Core, config: DjangoPackConfig) -> None:
-        self.core = core
-        self.settings = SettingsReader(core).read(config.settings_modules)
+    def __init__(self, build: CoreBuild, config: DjangoPackConfig) -> None:
+        self.build = build
+        self.settings_modules = SettingsReader(build).modules(config.settings_modules)
+        self.settings = SettingsReader(build).read(self.settings_modules)
         self.apps: list[InstalledApp] = [self.app_for_entry(e) for e in self.settings.lists.get(INSTALLED_APPS, [])]
-        self.gaps = [app.entry for app in self.apps if not app.known]
         self.by_label = {app.label: app for app in self.apps}
         self.by_name_length = sorted(self.apps, key=lambda a: -len(a.name))
+        self.module_labels: dict[str, str | None] = {}
 
     def setting(self, name: str) -> str | None:
         return self.settings.strings.get(name)
 
-    def config_attrs(self, ref: ClassRef) -> dict[str, object]:
+    def config_attrs(self, ref: EntityId) -> dict[str, object]:
         attrs: dict[str, object] = {}
-        for cls in reversed(self.core.classes.mro(ref)):
-            record = self.core.index.record(cls.module)
-            if record is None:
-                continue
-            attrs.update(class_constants(record, self.core.classes.def_index(cls)))
+        for cls in reversed(self.build.classes.mro(ref)):
+            found = self.build.classes.located(cls)
+            if found is not None:
+                attrs.update(self.build.bodies(found[0]).constants(found[1]))
         return attrs
 
-    def is_app_config(self, ref: ClassRef) -> bool:
-        return ref.id != APP_CONFIG and self.core.classes.is_subclass(ref, APP_CONFIG)
+    def is_app_config(self, ref: EntityId) -> bool:
+        return str(ref) != APP_CONFIG and self.build.classes.is_subclass(ref, APP_CONFIG)
 
-    def default_config(self, entry: str) -> ClassRef | None:
+    def default_config(self, entry: str) -> EntityId | None:
         """Django's choice of AppConfig in `<entry>.apps`: the only one, else the only default=True."""
-        table = self.core.tables.get(f"{entry}.apps")
+        table = self.build.tables.get(f"{entry}.apps")
         if table is None:
             return None
         candidates = []
-        for name in table.classes:
-            ref = ClassRef(table.name, name)
+        for name in table.classes():
+            ref = entity(table.name, name)
             if self.is_app_config(ref) and self.config_attrs(ref).get("default") is not False:
                 candidates.append(ref)
         if len(candidates) == 1:
@@ -175,19 +162,19 @@ class AppRegistry:
         return defaults[0] if len(defaults) == 1 else None
 
     def app_for_entry(self, entry: str) -> InstalledApp:
-        found = self.core.resolver.resolve_dotted(entry)
-        config: ClassRef | None = None
-        if isinstance(found, ClassRef) and self.is_app_config(found):
-            config = found
-        elif isinstance(found, ModuleRef):
+        hit, rest = self.build.resolver.resolve_dotted(entry)
+        found = hit if hit is not None and not rest else None
+        config: EntityId | None = None
+        if found is not None and found.kind == "class" and self.is_app_config(found.origin):
+            config = found.origin
+        elif found is not None and found.kind == "module":
             config = self.default_config(entry)
-        known = found is not None
         if config is None:
-            return InstalledApp(entry, entry, entry.rpartition(".")[2], None, known)
+            return InstalledApp(entry, entry, entry.rpartition(".")[2], None, found is not None)
         attrs = self.config_attrs(config)
         name = str(attrs.get("name", entry))
         label = str(attrs.get("label") or name.rpartition(".")[2])
-        return InstalledApp(entry, name, label, config.id, True)
+        return InstalledApp(entry, name, label, str(config), True)
 
     def app_for_module(self, module: str) -> InstalledApp | None:
         for app in self.by_name_length:
@@ -196,5 +183,7 @@ class AppRegistry:
         return None
 
     def label_for_module(self, module: str) -> str | None:
-        app = self.app_for_module(module)
-        return app.label if app is not None else None
+        if module not in self.module_labels:
+            app = self.app_for_module(module)
+            self.module_labels[module] = app.label if app is not None else None
+        return self.module_labels[module]

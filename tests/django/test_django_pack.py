@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from django_facts import FactRepo, assign, class_def, func_def, import_from
+from core.support import (
+    assign_row as assign,
+    class_def,
+    func_def,
+    import_row as import_from,
+)
+from django_facts import FactRepo
+from hoglint.core.symbols import FUNC
 from hoglint.model import Resolution
-from hoglint.spike.core import FUNC
 
 RECEIVERS = {
     "shop/receivers.py": {
@@ -39,7 +45,7 @@ HOOKS = {
         ],
         "callees": [
             [0, -1, "register_refund_hook", 1, 3, 4],
-            [0, -1, "self.registry.register_thing", 1, 4, 4],
+            [0, -1, "self.registry.register_refund_hook", 1, 4, 4],
             [0, -1, "register_payload", 1, 5, 4],
             [-1, 1, "register_refund_hook", 1, 6, 1],
         ],
@@ -83,8 +89,8 @@ def test_signal_edges_resolve_class_and_label_senders_and_keep_the_rest_unresolv
     assert {e.attr("signal") for e in edges.values()} == {"django.db.models.signals.post_save"}
 
 
-def test_installs_edges_from_calls_and_decorators_through_function_local_imports_and_no_class_hooks() -> None:
-    graph = FactRepo(HOOKS).graph(hooks=("**.register_*",))
+def test_installs_edges_see_imports_only_where_they_are_bound_and_skip_class_hooks() -> None:
+    graph = FactRepo(HOOKS).graph(hooks=("billing.hooks.register_refund_hook", "billing.hooks.register_payload"))
 
     edges = sorted(
         (e.site.scope, e.attr("form"), str(e.target), e.resolution, e.attr("callback"))
@@ -92,7 +98,7 @@ def test_installs_edges_from_calls_and_decorators_through_function_local_imports
     )
 
     assert edges == [
-        ("handler", "decorator", "billing.hooks.register_refund_hook", Resolution.RESOLVED, "shop.wiring.handler"),
+        ("handler", "decorator", "None", Resolution.UNRESOLVED, "shop.wiring.handler"),
         ("wire", "call", "None", Resolution.UNRESOLVED, ""),
         ("wire", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
     ]

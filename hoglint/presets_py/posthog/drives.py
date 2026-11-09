@@ -2,6 +2,8 @@
 
 Port of the spike drives channel. The deriver logic is unchanged; the output is hoglint edges,
 one per drive, with the wiring location, the trigger, and how the test reaches the dispatcher.
+Every scanned file gives its imports, top-level names and function bodies; only test files give
+the mentions, scopes and name uses the deriver reads to find a drive.
 """
 
 from __future__ import annotations
@@ -10,15 +12,17 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+from hoglint.core.build import CoreBuild
+from hoglint.core.producers import chain_tokens
+from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
+from hoglint.core.sites import FileScope
+from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
-from hoglint.packs.django.sites import PathKinds
-from hoglint.spike.core import CLASS, SITE_MARKER, Core, absolute_import, is_const, module_of_path, qualname
+from hoglint.presets_py.posthog.layout import location_module, product_of_path
 
-SCANNED_ROOTS = ("posthog/", "ee/", "products/", "common/")
 QUERY_DISPATCHER = "posthog/hogql_queries/query_runner.py"
 NODE_KIND_ENUM = "posthog/schema_enums.py"
 QUERY_WIRING_LOCATION = "backend/hogql_queries/"
-COMPUTED_WIRING_LOCATIONS = ("backend/hogql_queries/",)
 DISPATCH_CALLS = frozenset(
     {
         "process_query_dict",
@@ -31,12 +35,12 @@ DISPATCH_CALLS = frozenset(
 )
 TEST_CLIENT_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
 PATCH_CALLS = frozenset({"patch", "object"})
-QUERY_DICT_KEYS = frozenset({"query", "source"})
 MAX_CALL_DEPTH = 8
+DRIVES_PRODUCER = "posthog.drives@1"
+MODULE_SCOPE = "<module>"
 
 CAMEL = re.compile(r"^[A-Z]\w*$")
 UPPER = re.compile(r"^[A-Z][A-Z0-9_]*$")
-TRAILER = re.compile(r"\.\w+|\(\)|\[\]")
 
 
 @dataclass(frozen=True)
@@ -46,17 +50,17 @@ class ImportEdge:
     bound: str
 
 
-@dataclass(frozen=False)
+@dataclass(frozen=True)
 class Body:
     fid: str
     name: str
     calls: frozenset[str]
     client: bool
-    patches: frozenset[str]
-    const_params: frozenset[str]
+    patches: frozenset[str] = frozenset()
+    const_params: frozenset[str] = frozenset()
 
 
-@dataclass(frozen=False)
+@dataclass(frozen=True)
 class ScopeFacts:
     calls: frozenset[str]
     client: bool
@@ -86,91 +90,66 @@ class Pending:
     cls: str | None
 
 
-@dataclass(frozen=False)
+@dataclass(frozen=True)
+class TestFacts:
+    """What only a test file needs: where kinds are named, and how its scopes reach a dispatcher."""
+
+    scopes: dict[str, ScopeFacts]
+    mentions: list[Mention]
+    pending: list[Pending]
+    name_uses: Counter[str]
+    attr_uses: Counter[tuple[str, str]]
+
+
+@dataclass(frozen=True)
 class FileFacts:
     rel: str
     dotted: str
-    is_test: bool
     imports: list[ImportEdge]
     module_aliases: list[tuple[str, str]]
     top_names: list[str]
     lazy_map: dict[str, str]
-    lazy_prefixes: list[str]
     bodies: dict[str, Body]
     top_functions: dict[str, list[str]]
     class_methods: dict[str, list[str]]
     top_classes: dict[str, str]
-    scopes: dict[str, ScopeFacts]
-    mentions: list[Mention]
-    pending: list[Pending]
-    name_uses: Counter[str] = field(default_factory=Counter)
-    attr_uses: Counter[tuple[str, str]] = field(default_factory=Counter)
+    test: TestFacts | None = None
     dispatch_branches: list[tuple[list[str], list[str], list[str]]] = field(default_factory=list)
     enum_members: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
-def callee_name(callee: str) -> str | None:
-    """The spike's callee_name() from the L1 callee text: Name id or Attribute attr."""
-    if callee == "?":
-        return None
-    return callee.rsplit(".", 1)[-1]
+class FactReader:
+    """One file's records in, one FileFacts out (the spike's L1 view, rebuilt from fact lists)."""
 
-
-def is_client_call(callee: str) -> bool:
-    if callee.startswith("?") or "." not in callee:
-        return False
-    receiver, _, method = callee.rpartition(".")
-    return method in TEST_CLIENT_METHODS and receiver.endswith("client")
-
-
-def str_of(value: object) -> str | None:
-    if isinstance(value, dict) and "s" in value and len(value) == 1:
-        return value["s"]
-    return None
-
-
-def first_step(up: str) -> str:
-    return up.split(" ", 1)[0] if up else ""
-
-
-class FactAdapter:
-    """One record in, one FileFacts out (the spike's L1 view, rebuilt from fact lists)."""
-
-    def __init__(self, record: dict) -> None:
-        self.record = record
-        self.rel = record["path"]
-        self.dotted, self.is_package = module_of_path(self.rel)
-        self.defs: list[dict] = record.get("defs", [])
+    def __init__(self, scope: FileScope, bodies: RecordBodies, lazy: dict[str, str]) -> None:
+        self.scope = scope
+        self.record = scope.record
+        self.rel = scope.path
+        self.defs: list[dict] = scope.defs
+        self.bodies = bodies
+        self.lazy = lazy
+        self.is_test = Context.TEST in scope.base_contexts
         self.ancestry_cache: dict[int, list[int]] = {}
-        self.children: dict[int, list[int]] = defaultdict(list)
-        for i, d in enumerate(self.defs):
-            self.children[d["s"]].append(i)
+        self.quals = scope.qualnames
+        self.fids = {i: f"{self.quals[i]}@{d['l']}" for i, d in enumerate(self.defs) if d["k"] != "class"}
 
     def ancestry(self, idx: int) -> list[int]:
         """idx and every enclosing def, without -1."""
         cached = self.ancestry_cache.get(idx)
-        if cached is not None:
-            return cached
-        out = []
-        cur = idx
-        while cur != -1:
-            out.append(cur)
-            cur = self.defs[cur]["s"]
-        self.ancestry_cache[idx] = out
-        return out
+        if cached is None:
+            cached = [scope for scope in self.scope.ancestry(idx) if scope != -1]
+            self.ancestry_cache[idx] = cached
+        return cached
 
     @staticmethod
     def site(s: int, h: int) -> int:
         """The innermost def whose ast subtree holds the site (a header belongs to its def)."""
         return h if h != -1 else s
 
-    def is_function(self, idx: int) -> bool:
-        return self.defs[idx]["k"] != "class"
-
     def enclosing(self, s: int, h: int) -> tuple[str | None, str | None]:
         fid = cls = None
         for idx in self.ancestry(self.site(s, h)):
-            if self.is_function(idx):
+            if self.defs[idx]["k"] != "class":
                 if fid is None:
                     fid = self.fids[idx]
             elif cls is None:
@@ -179,50 +158,37 @@ class FactAdapter:
                 break
         return fid, cls
 
-    def is_direct_child(self, idx: int, parent: int) -> bool:
-        d = self.defs[idx]
-        if d["s"] != parent:
-            return False
-        if parent == -1:
-            return d.get("f", 0) == 0
-        return d.get("f", 0) == self.defs[parent].get("f", 0) | CLASS
-
-    def run(self) -> FileFacts:
-        record = self.record
-        defs = self.defs
-        self.quals = [qualname(defs, i) for i in range(len(defs))]
-        self.fids = {i: f"{self.quals[i]}@{d['l']}" for i, d in enumerate(defs) if d["k"] != "class"}
-
+    def read_imports(self) -> tuple[list[ImportEdge], list[tuple[str, str]], set[str]]:
         imports: list[ImportEdge] = []
         aliases: list[tuple[str, str]] = []
         bound_names: set[str] = set()
         # The spike's stack walk visits the leaves right to left: reverse source order.
-        for row in reversed(record.get("imports", [])):
+        for row in reversed(self.record.get("imports", [])):
             _, _, _, _, mod, level, name, asname = row
             if name is None:
                 aliases.append((asname or mod, mod))
                 bound_names.add(asname or mod)
                 continue
-            module = absolute_import(self.dotted, self.is_package, mod, level)
+            module = absolute_import(self.scope.module, self.scope.is_package, mod, level)
             if module is None:
                 continue
             bound = asname or name
             imports.append(ImportEdge(module, name, bound))
             aliases.append((bound, f"{module}.{name}"))
             bound_names.add(bound)
+        return imports, aliases, bound_names
 
-        # Bodies and scopes from per-site rows.
+    def read_calls(self) -> tuple[dict[int, set[str]], set[int], set[str], bool]:
+        """Callee names per def (spread up its ancestry), defs with a test-client call, and the same for the module."""
         calls_in: dict[int, set[str]] = defaultdict(set)
         client_in: set[int] = set()
-        patches_in: dict[int, set[str]] = defaultdict(set)
         module_calls: set[str] = set()
         module_client = False
-        # Group by site first, then spread each site's names up its def ancestry once.
         site_calls: dict[int, set[str]] = defaultdict(set)
         site_client: set[int] = set()
-        for s, h, callee, _count, _l, _c in record.get("callees", []):
+        for s, h, callee, _count, _l, _c in self.record.get("callees", []):
             site = self.site(s, h)
-            name = callee_name(callee)
+            name = last_name(callee)
             if name:
                 module_calls.add(name)
                 site_calls[site].add(name)
@@ -230,102 +196,77 @@ class FactAdapter:
                 module_client = True
                 site_client.add(site)
         for site in site_calls.keys() | site_client:
+            if site == -1:
+                continue
             for idx in self.ancestry(site):
                 calls_in[idx].update(site_calls.get(site, ()))
                 if site in site_client:
                     client_in.add(idx)
+        return calls_in, client_in, module_calls, module_client
+
+    def read_patches(self) -> tuple[dict[int, set[str]], list[tuple[int, str]]]:
+        patches_in: dict[int, set[str]] = defaultdict(set)
         patch_rows: list[tuple[int, str]] = []
-        for s, h, _l, _c, callee, args, _kws in record.get("calls", []):
-            if callee_name(callee) not in PATCH_CALLS:
+        for s, h, _l, _c, callee, args, _kws in self.record.get("calls", []):
+            if last_name(callee) not in PATCH_CALLS:
                 continue
             site = self.site(s, h)
             for arg in args:
-                value = str_of(arg)
+                value = str_literal(arg)
                 if value is not None:
                     leaf = value.rsplit(".", 1)[-1]
                     patch_rows.append((site, leaf))
-                    for idx in self.ancestry(site):
+                    for idx in self.ancestry(site) if site != -1 else []:
                         patches_in[idx].add(leaf)
+        return patches_in, patch_rows
 
-        bodies: dict[str, Body] = {}
-        for idx, fid in self.fids.items():
-            d = defs[idx]
-            const_params = frozenset(p[0] for p in d.get("params", []) if len(p) > 3 and is_const(p[3]))
-            bodies[fid] = Body(
-                fid, d["n"], frozenset(calls_in[idx]), idx in client_in, frozenset(patches_in[idx]), const_params
-            )
-
+    def read_top_names(self) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]], dict[str, str]]:
         top_functions: dict[str, list[str]] = defaultdict(list)
         class_methods: dict[str, list[str]] = defaultdict(list)
         top_classes: dict[str, str] = {}
         top_names: list[str] = []
-        for idx in self.children[-1]:
-            d = defs[idx]
-            if not self.is_direct_child(idx, -1):
-                continue
+        for idx in self.bodies.children(-1):
+            d = self.defs[idx]
+            top_names.append(d["n"])
             if d["k"] != "class":
                 top_functions[d["n"]].append(self.fids[idx])
-                top_names.append(d["n"])
-            else:
-                top_classes[d["n"]] = d["n"]
-                top_names.append(d["n"])
-                for child in self.children[idx]:
-                    cd = defs[child]
-                    if cd["k"] != "class" and self.is_direct_child(child, idx):
-                        class_methods[cd["n"]].append(self.fids[child])
-        for row in record.get("assigns", []):
-            if row["s"] != -1 or row.get("f", 0) or row["op"] not in ("=", ":"):
                 continue
-            top_names.extend(t for t in row["t"] if isinstance(t, str) and "." not in t)
+            top_classes[d["n"]] = d["n"]
+            for child in self.bodies.children(idx):
+                if self.defs[child]["k"] != "class":
+                    class_methods[self.defs[child]["n"]].append(self.fids[child])
+        for row in self.bodies.assigns(-1):
+            if row["op"] in ("=", ":"):
+                top_names.extend(t for t in row["t"] if isinstance(t, str) and "." not in t)
+        names = [n for n in top_names if not n.startswith("_")]
+        return names, dict(top_functions), dict(class_methods), top_classes
 
-        scopes = {"<module>": self.scope_facts(-1, module_calls, module_client, patch_rows)}
-        for idx, d in enumerate(defs):
+    def read_scopes(
+        self, calls_in: dict[int, set[str]], client_in: set[int], module_calls: set[str], module_client: bool
+    ) -> dict[str, ScopeFacts]:
+        _, patch_rows = self.read_patches()
+        scopes = {MODULE_SCOPE: self.scope_facts(-1, frozenset(module_calls), module_client, patch_rows)}
+        for idx, d in enumerate(self.defs):
             if d["k"] == "class":
                 bases = [b for b in d.get("bases", []) if isinstance(b, str) and "." not in b]
                 scopes[self.quals[idx]] = self.scope_facts(
                     idx, frozenset(calls_in[idx]), idx in client_in, patch_rows, bases
                 )
-
-        mentions, pending, name_uses, attr_uses = self.mentions(bound_names)
-        facts = FileFacts(
-            rel=self.rel,
-            dotted=self.dotted,
-            is_test=PathKinds.is_test(self.rel),
-            imports=imports,
-            module_aliases=aliases,
-            top_names=[n for n in top_names if not n.startswith("_")],
-            lazy_map={},
-            lazy_prefixes=[],
-            bodies=bodies,
-            top_functions=dict(top_functions),
-            class_methods=dict(class_methods),
-            top_classes=top_classes,
-            scopes=scopes,
-            mentions=mentions,
-            pending=pending,
-            name_uses=name_uses,
-            attr_uses=attr_uses,
-        )
-        self.lazy(facts)
-        if self.rel == QUERY_DISPATCHER:
-            facts.dispatch_branches = self.dispatch_branches()
-        if self.rel == NODE_KIND_ENUM:
-            facts.enum_members = self.enum_members()
-        return facts
+        return scopes
 
     def scope_facts(
         self,
         idx: int,
-        calls: frozenset[str] | set[str],
+        calls: frozenset[str],
         client: bool,
         patch_rows: list[tuple[int, str]],
         bases: list[str] | None = None,
     ) -> ScopeFacts:
         methods: dict[str, list[str]] = defaultdict(list)
         test_children: set[int] = set()
-        for child in self.children[idx]:
+        for child in self.bodies.children(idx):
             d = self.defs[child]
-            if d["k"] != "class" and self.is_direct_child(child, idx):
+            if d["k"] != "class":
                 methods[d["n"]].append(self.fids[child])
                 if d["n"].startswith("test"):
                     test_children.add(child)
@@ -339,13 +280,26 @@ class FactAdapter:
             rest.add(leaf)
         return ScopeFacts(frozenset(calls), client, frozenset(rest), dict(methods), bases or [])
 
-    def mentions(self, bound: set[str]) -> tuple[list[Mention], list[Pending], Counter[str], Counter[tuple[str, str]]]:
-        record = self.record
+    def read_bodies(self, calls_in: dict[int, set[str]], client_in: set[int]) -> dict[str, Body]:
+        bodies: dict[str, Body] = {}
+        patches_in: dict[int, set[str]] = self.read_patches()[0] if self.is_test else {}
+        for idx, fid in self.fids.items():
+            calls, client = frozenset(calls_in[idx]), idx in client_in
+            if not self.is_test:
+                bodies[fid] = Body(fid, self.defs[idx]["n"], calls, client)
+                continue
+            params = self.defs[idx].get("params", [])
+            const_params = frozenset(p[0] for p in params if len(p) > 3 and is_const(p[3]))
+            patches = frozenset(patches_in.get(idx, ()))
+            bodies[fid] = Body(fid, self.defs[idx]["n"], calls, client, patches, const_params)
+        return bodies
+
+    def read_test(self, bound: set[str], scopes: dict[str, ScopeFacts]) -> TestFacts:
         mentions: list[Mention] = []
         pending: list[Pending] = []
         name_uses: Counter[str] = Counter()
         attr_uses: Counter[tuple[str, str]] = Counter()
-
+        record = self.record
         for s, h, value, count, line, _c in record.get("names", []):
             if CAMEL.match(value):
                 fid, cls = self.enclosing(s, h)
@@ -354,110 +308,78 @@ class FactAdapter:
             fid, cls = self.enclosing(s, h)
             mentions.append(Mention("tag", name, None, fid, cls, line))
         for s, h, callee, count, line, _c in record.get("callees", []):
-            name = callee_name(callee)
+            name = last_name(callee)
             if name and CAMEL.match(name):
                 fid, cls = self.enclosing(s, h)
                 mentions.extend([Mention("call", name, None, fid, cls, line)] * count)
-
         # Name and attribute uses of import-bound roots: refs (tracked) and uses (the rest).
         for row in record.get("refs", []):
             if len(row) > 7:
                 continue  # local-derived rows: the root is not import-bound
             s, h, line, _c, root, chain = row[:6]
-            self.root_use(root, TRAILER.findall(chain), 1, s, h, line, bound, mentions, name_uses, attr_uses)
+            uses = RootUse(root, chain_tokens(chain), 1, s, h, line)
+            self.root_use(uses, bound, mentions, name_uses, attr_uses)
         for s, h, root, attrs, count, line, _c in record.get("uses", []):
-            self.root_use(root, TRAILER.findall(attrs), count, s, h, line, bound, mentions, name_uses, attr_uses)
-
+            self.root_use(RootUse(root, chain_tokens(attrs), count, s, h, line), bound, mentions, name_uses, attr_uses)
         for s, h, _line, _c, _key, value, chain, up in record.get("watched", []):
-            if chain:
-                continue
-            step = first_step(up)
-            callee = None
-            if step.startswith("arg:"):
-                callee = callee_name(step.split(":", 2)[2])
-            under = step in ("dict:val:query", "dict:val:source")
-            if callee is None and not under:
-                continue
-            if is_const(value):
-                continue
-            fid, cls = self.enclosing(s, h)
-            if isinstance(value, str) and "." not in value:
-                pending.append(Pending(callee, under, "name", value, None, fid, cls))
-            elif isinstance(value, str):
-                parts = value.split(".")
-                if parts[-1] == "value":
-                    parts = parts[:-1]
-                if len(parts) >= 2:
-                    pending.append(Pending(callee, under, "attr", parts[-1], parts[-2], fid, cls))
-                else:
-                    pending.append(Pending(callee, under, "other", None, None, fid, cls))
-            elif value == {"o": "Attribute"}:
-                # Attribute on a non-chain: the attr name is not in the SV form; base is None either way.
-                pending.append(Pending(callee, under, "attr", None, None, fid, cls))
-            else:
-                pending.append(Pending(callee, under, "other", None, None, fid, cls))
-        return mentions, pending, name_uses, attr_uses
+            found = self.pending(s, h, value, chain, up)
+            if found is not None:
+                pending.append(found)
+        return TestFacts(scopes, mentions, pending, name_uses, attr_uses)
+
+    def pending(self, s: int, h: int, value: object, chain: str, up: str) -> Pending | None:
+        """A `kind` dict entry passed to a call or under a query key, whose value is not a constant."""
+        if chain:
+            return None
+        step = up.split(" ", 1)[0] if up else ""
+        callee = last_name(step.split(":", 2)[2]) if step.startswith("arg:") else None
+        under = step in ("dict:val:query", "dict:val:source")
+        if (callee is None and not under) or is_const(value):
+            return None
+        fid, cls = self.enclosing(s, h)
+        if isinstance(value, str) and "." not in value:
+            return Pending(callee, under, "name", value, None, fid, cls)
+        if isinstance(value, str):
+            parts = value.split(".")
+            if parts[-1] == "value":
+                parts = parts[:-1]
+            if len(parts) >= 2:
+                return Pending(callee, under, "attr", parts[-1], parts[-2], fid, cls)
+            return Pending(callee, under, "other", None, None, fid, cls)
+        if value == {"o": "Attribute"}:
+            # Attribute on a non-chain: the attr name is not in the SV form; base is None either way.
+            return Pending(callee, under, "attr", None, None, fid, cls)
+        return Pending(callee, under, "other", None, None, fid, cls)
 
     def root_use(
         self,
-        root: str,
-        tokens: list[str],
-        count: int,
-        s: int,
-        h: int,
-        line: int,
+        use: RootUse,
         bound: set[str],
         mentions: list[Mention],
         name_uses: Counter[str],
         attr_uses: Counter[tuple[str, str]],
     ) -> None:
-        if root in bound:
-            name_uses[root] += count
+        if use.root in bound:
+            name_uses[use.root] += use.count
         fid = cls = None
         located = False
-        base: str | None = root
-        dotted: str | None = root
-        for token in tokens:
+        base: str | None = use.root
+        dotted: str | None = use.root
+        for token in use.tokens:
             if token[0] != ".":
                 base = None
                 dotted = None
                 continue
             attr = token[1:]
-            if dotted is not None and root in bound:
-                attr_uses[(dotted, attr)] += count
+            if dotted is not None and use.root in bound:
+                attr_uses[(dotted, attr)] += use.count
             if UPPER.match(attr):
                 if not located:
-                    fid, cls = self.enclosing(s, h)
+                    fid, cls = self.enclosing(use.s, use.h)
                     located = True
-                mentions.extend([Mention("attr", attr, base, fid, cls, line)] * count)
+                mentions.extend([Mention("attr", attr, base, fid, cls, use.line)] * use.count)
             base = attr
             dotted = f"{dotted}.{attr}" if dotted is not None else None
-
-    def lazy(self, facts: FileFacts) -> None:
-        has_getattr = any(
-            d["k"] != "class" and d["n"] == "__getattr__" and self.is_direct_child(i, -1)
-            for i, d in enumerate(self.defs)
-        )
-        top_assigns = [
-            r for r in self.record.get("assigns", []) if r["s"] == -1 and not r.get("f", 0) and r["op"] == "="
-        ]
-        facts.lazy_prefixes = [
-            str_of(r.get("v")) or "" for r in top_assigns if (str_of(r.get("v")) or "").endswith(".")
-        ]
-        if not has_getattr:
-            return
-        for r in top_assigns:
-            value = r.get("v")
-            if not isinstance(value, dict) or "dict" not in value or not value["dict"]:
-                continue
-            entries = {}
-            for k, v in value["dict"]:
-                ks, vs = str_of(k), str_of(v)
-                if ks is None or vs is None:
-                    break
-                entries[ks] = vs
-            else:
-                facts.lazy_map.update(entries)
 
     def dispatch_branches(self) -> list[tuple[list[str], list[str], list[str]]]:
         out = []
@@ -469,8 +391,9 @@ class FactAdapter:
             members = target["tuple"] if isinstance(target, dict) and "tuple" in target else [target]
             literals, enum_members = [], []
             for m in members:
-                if str_of(m) is not None:
-                    literals.append(str_of(m))
+                text = str_literal(m)
+                if text is not None:
+                    literals.append(text)
                 elif isinstance(m, str) and m.count(".") == 1 and m.startswith("NodeKind."):
                     enum_members.append(m.split(".", 1)[1])
             products = sorted(
@@ -485,19 +408,59 @@ class FactAdapter:
 
     def enum_members(self) -> dict[str, dict[str, str]]:
         out = {}
-        assigns = self.record.get("assigns", [])
-        for idx, d in enumerate(self.defs):
-            if d["k"] != "class" or not self.is_direct_child(idx, -1) or not d["n"].endswith("NodeKind"):
+        for idx in self.bodies.children(-1):
+            d = self.defs[idx]
+            if d["k"] != "class" or not d["n"].endswith("NodeKind"):
                 continue
             members = {}
-            for r in assigns:
-                if r["s"] != idx or r["op"] != "=" or r.get("f", 0) != (d.get("f", 0) | CLASS) or len(r["t"]) != 1:
+            for r in self.bodies.assigns(idx):
+                if r["op"] != "=" or len(r["t"]) != 1:
                     continue
-                target, value = r["t"][0], str_of(r.get("v"))
+                target, value = r["t"][0], str_literal(r.get("v"))
                 if isinstance(target, str) and "." not in target and value is not None:
                     members[target] = value
             out[d["n"]] = members
         return out
+
+    def read(self) -> FileFacts:
+        imports, aliases, bound = self.read_imports()
+        calls_in, client_in, module_calls, module_client = self.read_calls()
+        top_names, top_functions, class_methods, top_classes = self.read_top_names()
+        test = None
+        if self.is_test:
+            test = self.read_test(bound, self.read_scopes(calls_in, client_in, module_calls, module_client))
+        return FileFacts(
+            rel=self.rel,
+            dotted=self.scope.module,
+            imports=imports,
+            module_aliases=aliases,
+            top_names=top_names,
+            lazy_map=self.lazy,
+            bodies=self.read_bodies(calls_in, client_in),
+            top_functions=top_functions,
+            class_methods=class_methods,
+            top_classes=top_classes,
+            test=test,
+            dispatch_branches=self.dispatch_branches() if self.rel == QUERY_DISPATCHER else [],
+            enum_members=self.enum_members() if self.rel == NODE_KIND_ENUM else {},
+        )
+
+
+@dataclass(frozen=True)
+class RootUse:
+    root: str
+    tokens: list[str]
+    count: int
+    s: int
+    h: int
+    line: int
+
+
+def is_client_call(callee: str) -> bool:
+    if callee.startswith("?") or "." not in callee:
+        return False
+    receiver, _, method = callee.rpartition(".")
+    return method in TEST_CLIENT_METHODS and receiver.endswith("client")
 
 
 # --- call view (spike, unchanged) --------------------------------------------------------------
@@ -515,8 +478,19 @@ class CallView:
     def __init__(self, facts: dict[str, FileFacts]) -> None:
         self.facts = facts
         self.memo: dict[tuple[str, str, frozenset[str], bool], tuple[bool, list[str], Reads]] = {}
+        self.imports_by_bound: dict[str, dict[str, list[ImportEdge]]] = {}
 
-    def body_executes(self, body: Body, dispatchers: frozenset[str]) -> bool:
+    def imports_named(self, ff: FileFacts, name: str) -> list[ImportEdge]:
+        table = self.imports_by_bound.get(ff.dotted)
+        if table is None:
+            table = defaultdict(list)
+            for edge in ff.imports:
+                table[edge.bound].append(edge)
+            self.imports_by_bound[ff.dotted] = table
+        return table.get(name, [])
+
+    @staticmethod
+    def body_executes(body: Body, dispatchers: frozenset[str]) -> bool:
         return body.client or bool(body.calls & dispatchers)
 
     def targets(self, module: str, name: str, local: bool, reads: Reads) -> list[tuple[str, Body]]:
@@ -530,9 +504,7 @@ class CallView:
             for fid in ff.top_functions.get(name, []) + ff.class_methods.get(name, []):
                 found.append((module, ff.bodies[fid]))
                 reads.symbols.add(f"{module}:{fid}")
-        for edge in ff.imports:
-            if edge.bound != name:
-                continue
+        for edge in self.imports_named(ff, name):
             target = self.facts.get(edge.module)
             if target is None:
                 continue
@@ -571,22 +543,18 @@ class CallView:
         return False, [], reads, cut
 
 
-@dataclass(frozen=False)
+@dataclass(frozen=True)
 class DriveEdge:
     label: str
     test_module: str
     trigger: str
     detail: str
-    site: str
-    line: int
-    execution: str
-    chain: list[str]
-    patched: bool
     reads: Reads
-
-    @property
-    def counted(self) -> bool:
-        return self.execution != "none"
+    site: str = MODULE_SCOPE
+    line: int = 0
+    execution: str = "n/a"
+    chain: tuple[str, ...] = ()
+    patched: bool = False
 
 
 class Deriver:
@@ -595,6 +563,7 @@ class Deriver:
         self.by_rel = {f.rel: f for f in facts.values()}
         self.view = CallView(facts)
         self.registry_files = {QUERY_DISPATCHER, NODE_KIND_ENUM}
+        self.via_cache: dict[tuple[str, str], frozenset[str]] = {}
 
     def read_registry(self) -> None:
         enum_ff = self.by_rel[NODE_KIND_ENUM]
@@ -610,59 +579,65 @@ class Deriver:
         self.kinds = {k: frozenset(v) for k, v in kinds.items() if v}
         self.members = {m: k for m, k in node_kinds.items() if k in self.kinds}
         self.enums = frozenset(enum_ff.enum_members) | {"NodeKind"}
-        self.locations = sorted(
+        location = QUERY_WIRING_LOCATION.rstrip("/")
+        self.query_products = sorted(
             {
-                (p.split("/")[1], loc)
-                for loc in COMPUTED_WIRING_LOCATIONS
-                for p in [f.rel for f in self.facts.values()]
-                if p.startswith("products/") and p.count("/") >= 2 and p.split("/", 2)[2].startswith(loc.rstrip("/"))
+                rel.split("/")[1]
+                for rel in self.by_rel
+                if rel.startswith("products/") and rel.count("/") >= 2 and rel.split("/", 2)[2].startswith(location)
             }
         )
-        self.query_products = {p for p, loc in self.locations if loc == QUERY_WIRING_LOCATION}
+        self.labels = {product: f"{product}:{QUERY_WIRING_LOCATION}" for product in self.query_products}
+        self.prefixes = [
+            (location_module(product, QUERY_WIRING_LOCATION) + ".", label, product)
+            for product, label in self.labels.items()
+        ]
 
     def module_exists(self, dotted: str) -> bool:
         return dotted in self.facts
 
-    def grow_origins(self) -> None:
+    def seeds(self) -> dict[tuple[str, str], str]:
+        """Top-level names of each product's wiring location, and facade lazy names that load them."""
         seeds: dict[tuple[str, str], str] = {}
-        for product, loc in self.locations:
-            label = f"{product}:{loc}"
-            prefix = f"products/{product}/{loc}"
+        for product, label in self.labels.items():
+            prefix = f"products/{product}/{QUERY_WIRING_LOCATION}"
+            root = f"products/{product}/{QUERY_WIRING_LOCATION.rstrip('/')}"
+            facade = f"products/{product}/backend/facade/"
             for ff in self.facts.values():
                 if ff.rel.startswith(prefix):
                     for name in ff.top_names:
                         seeds[(ff.dotted, name)] = label
-            root = f"products/{product}/{loc.rstrip('/')}"
-            facade = f"products/{product}/backend/facade/"
-            for ff in self.facts.values():
-                if not ff.rel.startswith(facade) or PathKinds.is_test(ff.rel[len(facade) :]):
+                if not ff.rel.startswith(facade) or ff.test is not None:
                     continue
-                for name, value in ff.lazy_map.items():
-                    for cand in [value, *(p + value for p in ff.lazy_prefixes), f"products.{product}.backend.{value}"]:
-                        if self.module_exists(cand):
-                            src = self.facts[cand].rel
-                            if src.startswith(root + "/") or src == root + ".py":
-                                seeds[(ff.dotted, name)] = label
-                            break
+                for name, module in ff.lazy_map.items():
+                    src = self.facts[module].rel if module in self.facts else ""
+                    if src.startswith(root + "/") or src == root + ".py":
+                        seeds[(ff.dotted, name)] = label
+        return seeds
+
+    def grow_origins(self) -> None:
+        """Every (module, name) that re-exports a seed, through imports, with the hop it came from."""
+        importers: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+        for ff in self.facts.values():
+            for e in ff.imports:
+                importers[(e.module, e.exported)].append((ff.dotted, e.bound))
+        seeds = self.seeds()
         self.origins: dict[tuple[str, str], str] = dict(seeds)
         self.parent: dict[tuple[str, str], tuple[str, str] | None] = dict.fromkeys(seeds)
-        while True:
-            grew = False
-            for ff in self.facts.values():
-                for e in ff.imports:
-                    label = self.origins.get((e.module, e.exported))
-                    if label is None:
-                        continue
-                    local = (ff.dotted, e.bound)
-                    if self.origins.get(local) != label:
-                        self.origins[local] = label
-                        self.parent[local] = (e.module, e.exported)
-                        grew = True
-            if not grew:
-                break
+        work = list(seeds)
+        while work:
+            export = work.pop()
+            label = self.origins[export]
+            for local in importers.get(export, ()):
+                if self.origins.get(local) != label:
+                    self.origins[local] = label
+                    self.parent[local] = export
+                    work.append(local)
         self.origin_modules = {m for m, _ in self.origins}
 
-    def via_files(self, export: tuple[str, str]) -> set[str]:
+    def via_files(self, export: tuple[str, str]) -> frozenset[str]:
+        if export in self.via_cache:
+            return self.via_cache[export]
         files = set()
         cur: tuple[str, str] | None = export
         seen = set()
@@ -671,12 +646,8 @@ class Deriver:
             if cur[0] in self.facts:
                 files.add(self.facts[cur[0]].rel)
             cur = self.parent.get(cur)
-        return files
-
-    @staticmethod
-    def owner(rel: str) -> str | None:
-        parts = rel.split("/")
-        return parts[1] if parts[0] == "products" and len(parts) > 2 else None
+        self.via_cache[export] = frozenset(files)
+        return self.via_cache[export]
 
     def kind_of(self, m: Mention, constructors: dict[str, str], enum_bases: frozenset[str]) -> str | None:
         if m.shape in ("const", "tag"):
@@ -689,67 +660,49 @@ class Deriver:
             return constructors.get(m.value)
         return None
 
-    def derive_file(self, ff: FileFacts) -> list[DriveEdge]:
+    def derive_file(self, ff: FileFacts, test: TestFacts) -> list[DriveEdge]:
         edges: list[DriveEdge] = []
-        owner = self.owner(ff.rel)
+        owner = product_of_path(ff.rel)
         base_reads = {ff.rel}
-        prefixes = [
-            (f"products.{p}." + loc.rstrip("/").replace("/", ".") + ".", f"{p}:{loc}", p) for p, loc in self.locations
-        ]
         for _alias, module in ff.module_aliases:
-            for prefix, label, product in prefixes:
+            for prefix, label, product in self.prefixes:
                 if module.startswith(prefix) and self.module_exists(module) and owner != product:
-                    edges.append(
-                        DriveEdge(
-                            label,
-                            ff.dotted,
-                            "module-import",
-                            module.rsplit(".", 1)[-1],
-                            "<module>",
-                            0,
-                            "n/a",
-                            [],
-                            False,
-                            Reads(base_reads | {self.facts[module].rel}, {f"{module}:<exists>"}),
-                        )
-                    )
+                    reads = Reads(base_reads | {self.facts[module].rel}, {f"{module}:<exists>"})
+                    edges.append(DriveEdge(label, ff.dotted, "module-import", module.rsplit(".", 1)[-1], reads))
         bound: dict[str, tuple[str, tuple[str, str]]] = {}
         for e in ff.imports:
             label = self.origins.get((e.module, e.exported))
             if label is not None:
                 bound[e.bound] = (label, (e.module, e.exported))
         for name, (label, export) in bound.items():
-            if owner == label.split(":")[0] or not ff.name_uses.get(name):
+            if owner == label.split(":")[0] or not test.name_uses.get(name):
                 continue
             reads = Reads(base_reads | self.via_files(export), {f"{export[0]}:{export[1]}"})
-            for _ in range(ff.name_uses[name]):
-                edges.append(DriveEdge(label, ff.dotted, "name", name, "<module>", 0, "n/a", [], False, reads))
+            edges.extend(DriveEdge(label, ff.dotted, "name", name, reads) for _ in range(test.name_uses[name]))
         aliases = {a: m for a, m in ff.module_aliases if m in self.origin_modules}
-        for (base, attr), n in ff.attr_uses.items():
+        for (base, attr), n in test.attr_uses.items():
             module = aliases.get(base)
             label = self.origins.get((module, attr)) if module else None
-            if label is None or ":" not in label or owner == label.split(":")[0]:
+            if module is None or label is None or ":" not in label or owner == label.split(":")[0]:
                 continue
             reads = Reads(base_reads | self.via_files((module, attr)), {f"{module}:{attr}"})
-            for _ in range(n):
-                edges.append(DriveEdge(label, ff.dotted, "name", attr, "<module>", 0, "n/a", [], False, reads))
-        edges += self.kind_edges(ff, owner)
-        return edges
+            edges.extend(DriveEdge(label, ff.dotted, "name", attr, reads) for _ in range(n))
+        return edges + self.kind_edges(ff, test, owner)
 
     def executions(
-        self, ff: FileFacts, dispatchers: frozenset[str], fid: str | None, cls: str | None
+        self, ff: FileFacts, test: TestFacts, dispatchers: frozenset[str], fid: str | None, cls: str | None
     ) -> tuple[str, list[str], bool, Reads]:
         reads = Reads({ff.rel}, set())
         body = ff.bodies.get(fid) if fid else None
-        scope_key = cls if cls is not None else "<module>"
-        scope = ff.scopes[scope_key]
+        scope_key = cls if cls is not None else MODULE_SCOPE
+        scope = test.scopes[scope_key]
         if body is None or not body.name.startswith("test"):
             reads.symbols.add(f"{ff.dotted}:{scope_key}")
             ok = scope.client or bool(scope.calls & dispatchers)
             return ("direct" if ok else "none"), [], False, reads
         helpers: dict[str, list[str]] = {n: [fids[-1]] for n, fids in ff.top_functions.items()}
         if cls is not None:
-            for n, fids in self.class_helpers(ff, cls).items():
+            for n, fids in self.class_helpers(ff, test, cls).items():
                 helpers.setdefault(n, []).extend(fids)
         seen: set[str] = set()
         pending: list[tuple[str, list[str]]] = [(body.fid, [])]
@@ -778,59 +731,58 @@ class Deriver:
                 return "via-helper", chain, cut, reads
         return "none", [], cut, reads
 
-    def class_helpers(self, ff: FileFacts, cls: str) -> dict[str, list[str]]:
+    @staticmethod
+    def class_helpers(ff: FileFacts, test: TestFacts, cls: str) -> dict[str, list[str]]:
         helpers: dict[str, list[str]] = {}
         pending = [cls]
         seen = set()
         while pending:
             cur = pending.pop()
-            if cur in seen or cur not in ff.scopes:
+            if cur in seen or cur not in test.scopes:
                 continue
             seen.add(cur)
-            for n, fids in ff.scopes[cur].methods.items():
+            for n, fids in test.scopes[cur].methods.items():
                 helpers.setdefault(n, []).extend(fids)
-            pending.extend(ff.top_classes[b] for b in ff.scopes[cur].bases if b in ff.top_classes)
+            pending.extend(ff.top_classes[b] for b in test.scopes[cur].bases if b in ff.top_classes)
         return helpers
 
-    def kind_edges(self, ff: FileFacts, owner: str | None) -> list[DriveEdge]:
-        if not ff.is_test:
-            return []
+    def kind_edges(self, ff: FileFacts, test: TestFacts, owner: str | None) -> list[DriveEdge]:
         constructors = {e.bound: e.exported for e in ff.imports if e.exported in self.kinds}
         enum_bases = frozenset({e.bound for e in ff.imports if e.exported in self.enums}) | self.enums
         dispatchers = frozenset({e.bound for e in ff.imports if e.exported in DISPATCH_CALLS}) | DISPATCH_CALLS
         edges: list[DriveEdge] = []
         cache: dict[tuple[str | None, str | None], tuple[str, list[str], bool, Reads]] = {}
         resolved_fids: set[str | None] = set()
-        for m in ff.mentions:
+        for m in test.mentions:
             kind = self.kind_of(m, constructors, enum_bases)
             if kind is None:
                 continue
             resolved_fids.add(m.fid)
             key = (m.fid, m.cls)
             if key not in cache:
-                cache[key] = self.executions(ff, dispatchers, m.fid, m.cls)
+                cache[key] = self.executions(ff, test, dispatchers, m.fid, m.cls)
             execution, chain, patched, reads = cache[key]
             reads = Reads(reads.files | self.registry_files, reads.symbols | {"<registry>"})
             for product in sorted(self.kinds[kind]):
-                if product not in self.query_products or owner == product:
+                if product not in self.labels or owner == product:
                     continue
                 edges.append(
                     DriveEdge(
-                        f"{product}:{QUERY_WIRING_LOCATION}",
+                        self.labels[product],
                         ff.dotted,
                         "query-kind",
                         kind,
-                        m.fid or (m.cls or "<module>"),
-                        m.line,
-                        execution,
-                        chain,
-                        patched,
                         reads,
+                        site=m.fid or (m.cls or MODULE_SCOPE),
+                        line=m.line,
+                        execution=execution,
+                        chain=tuple(chain),
+                        patched=patched,
                     )
                 )
         unresolved = 0
         ureads = Reads({ff.rel} | self.registry_files, {"<registry>"})
-        for p in ff.pending:
+        for p in test.pending:
             if p.dispatch_callee is not None and p.dispatch_callee not in dispatchers and not p.under_query_key:
                 continue
             body = ff.bodies.get(p.fid) if p.fid else None
@@ -840,70 +792,46 @@ class Deriver:
                 continue
             if p.fid in resolved_fids:
                 continue
-            execution, _, _, reads = self.executions(ff, dispatchers, p.fid, p.cls)
+            execution, _, _, reads = self.executions(ff, test, dispatchers, p.fid, p.cls)
             ureads.add(reads)
             unresolved += execution != "none"
-        if unresolved:
-            for product in sorted(self.query_products):
-                if owner != product:
-                    for _ in range(unresolved):
-                        edges.append(
-                            DriveEdge(
-                                f"{product}:{QUERY_WIRING_LOCATION}",
-                                ff.dotted,
-                                "unresolved-kind",
-                                "unresolved-kind",
-                                "<module>",
-                                0,
-                                "direct",
-                                [],
-                                False,
-                                ureads,
-                            )
-                        )
+        for product in self.query_products if unresolved else ():
+            if owner != product:
+                drive = DriveEdge(
+                    self.labels[product], ff.dotted, "unresolved-kind", "unresolved-kind", ureads, execution="direct"
+                )
+                edges.extend([drive] * unresolved)
         return edges
-
-
-DRIVES_PRODUCER = "posthog.drives@1"
-TEST_CONTEXT = frozenset({Context.TEST})
-
-
-def scanned(path: str) -> bool:
-    return SITE_MARKER not in path and path.startswith(SCANNED_ROOTS)
-
-
-def build_facts(core: Core) -> dict[str, FileFacts]:
-    facts: dict[str, FileFacts] = {}
-    for path in sorted(core.store.records):
-        record = core.store.records[path]
-        if not scanned(path) or record.get("status") != "ok":
-            continue
-        ff = FactAdapter(record).run()
-        facts[ff.dotted] = ff
-    return facts
 
 
 class DrivesProducer:
     """Runs the deriver over every test file and turns each drive into an edge."""
 
-    def __init__(self, core: Core) -> None:
-        self.core = core
+    def __init__(self, build: CoreBuild) -> None:
+        self.build = build
+
+    def facts(self) -> dict[str, FileFacts]:
+        facts: dict[str, FileFacts] = {}
+        for scope in self.build.files:
+            if scope.record.get("status") != "ok" or not self.build.first_party.contains(scope.module):
+                continue
+            table = self.build.tables.get(scope.module) if scope.path.startswith("products/") else None
+            lazy = table.lazy if table is not None and self.build.index.path_of.get(scope.module) == scope.path else {}
+            reader = FactReader(scope, self.build.bodies(scope.record), lazy)
+            facts[scope.module] = reader.read()
+        return facts
 
     @staticmethod
-    def location_module(label: str) -> str:
-        product, _, location = label.partition(":")
-        return ".".join(["products", product, *location.rstrip("/").split("/")])
-
-    def edge(self, drive: DriveEdge, path: str) -> Edge:
+    def edge(drive: DriveEdge, path: str) -> Edge:
         unresolved = drive.trigger == "unresolved-kind"
-        scope = drive.site.split("@", 1)[0]
+        product, _, location = drive.label.partition(":")
         return Edge(
             kind="drives",
-            site=Site(path, drive.test_module, scope, drive.line),
+            site=Site(path, drive.test_module, drive.site.split("@", 1)[0], drive.line),
             surface=drive.detail,
-            targets=(EntityId(LANGUAGE_PYTHON, self.location_module(drive.label)),),
+            targets=(EntityId(LANGUAGE_PYTHON, location_module(product, location)),),
             resolution=Resolution.CANDIDATES if unresolved else Resolution.RESOLVED,
-            contexts=TEST_CONTEXT,
+            contexts=frozenset({Context.TEST}),
             producer=DRIVES_PRODUCER,
             shape=drive.trigger,
             shape_detail="unresolved-kind" if unresolved else drive.detail,
@@ -916,12 +844,12 @@ class DrivesProducer:
         )
 
     def produce(self) -> list[Edge]:
-        facts = build_facts(self.core)
+        facts = self.facts()
         deriver = Deriver(facts)
         deriver.read_registry()
         deriver.grow_origins()
         out: list[Edge] = []
         for ff in facts.values():
-            if ff.is_test:
-                out.extend(self.edge(drive, ff.rel) for drive in deriver.derive_file(ff))
+            if ff.test is not None:
+                out.extend(self.edge(drive, ff.rel) for drive in deriver.derive_file(ff, ff.test))
         return out

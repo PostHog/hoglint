@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
+from hoglint.core.harness import each_item, failure_edge
+from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.models import ModelEntry, ModelRegistry, Relation, RelationBuilder
-from hoglint.packs.django.sites import failure_edge
 
-RELATION_PRODUCER = "django.relations@1"
-ACCESSOR_PRODUCER = "django.reverse-accessors@1"
-LABEL_PRODUCER = "django.model-labels@1"
+RELATIONS_PRODUCER = "django.relations@1"
 PROD = frozenset({Context.PROD})
-
-
-def flag(value: bool) -> str:
-    return "true" if value else "false"
 
 
 class ModelFacts:
@@ -27,13 +21,13 @@ class ModelFacts:
     def symbols(self, databases: dict[str, frozenset[str]]) -> dict[str, dict[str, str]]:
         out: dict[str, dict[str, str]] = {}
         for ref, entry in self.registry.models.items():
-            out[ref.id] = {
+            out[str(ref)] = {
                 "kind": "model",
                 "app_label": entry.app_label,
                 "label": entry.label,
                 "abstract": flag(entry.abstract),
                 "proxy": flag(entry.proxy),
-                "concrete": entry.concrete.id,
+                "concrete": str(entry.concrete),
                 "path": entry.path,
             }
         for app in self.apps.apps:
@@ -62,9 +56,7 @@ class RelationEdges:
             return (), Resolution.UNRESOLVED
         name = relation.concrete_target.rpartition(".")[2]
         entity = EntityId(LANGUAGE_PYTHON, relation.target_module, name)
-        if self.registry.is_first_party(relation.target_module):
-            return (entity,), Resolution.RESOLVED
-        return (entity,), Resolution.EXTERNAL
+        return (entity,), self.registry.build.first_party.resolution(relation.target_module)
 
     @staticmethod
     def site(relation: Relation) -> Site:
@@ -81,7 +73,7 @@ class RelationEdges:
             targets=targets,
             resolution=resolution,
             contexts=PROD,
-            producer=RELATION_PRODUCER,
+            producer=RELATIONS_PRODUCER,
             shape=relation.kind,
             attrs=relation.attrs(),
         )
@@ -101,7 +93,7 @@ class RelationEdges:
             targets=targets,
             resolution=resolution,
             contexts=PROD,
-            producer=ACCESSOR_PRODUCER,
+            producer=RELATIONS_PRODUCER,
             shape=relation.kind,
             shape_detail=accessor,
             attrs=(
@@ -121,9 +113,8 @@ class RelationEdges:
                 targets: tuple[EntityId, ...] = ()
                 resolution = Resolution.UNRESOLVED
             else:
-                targets = (EntityId(LANGUAGE_PYTHON, ref.target.module, ref.target.name),)
-                first_party = self.registry.is_first_party(ref.target.module)
-                resolution = Resolution.RESOLVED if first_party else Resolution.EXTERNAL
+                targets = (ref.target,)
+                resolution = self.registry.build.first_party.resolution(ref.target.module)
             site = Site(self.module_path.get(ref.module, ""), ref.module, ref.owner, ref.line)
             out.append(
                 Edge(
@@ -133,7 +124,7 @@ class RelationEdges:
                     targets=targets,
                     resolution=resolution,
                     contexts=PROD,
-                    producer=LABEL_PRODUCER,
+                    producer=RELATIONS_PRODUCER,
                     shape="fk-target",
                     attrs=(("field", ref.field),),
                 )
@@ -149,13 +140,11 @@ class RelationEdges:
                 out.append(accessor)
         return out
 
+    @staticmethod
+    def failure(entry: ModelEntry, error: Exception) -> Edge:
+        site = Site(entry.path, entry.ref.module, entry.ref.symbol, entry.line)
+        return failure_edge("relation", RELATIONS_PRODUCER, site, PROD, error)
+
     def produce(self) -> list[Edge]:
-        out: list[Edge] = []
-        for entry in self.builder.concrete_entries():
-            try:
-                out.extend(self.model_edges(entry))
-            except Exception as error:  # one unreadable model is unknown, the other models still count
-                site = Site(entry.path, entry.ref.module, entry.ref.name, entry.line)
-                out.append(failure_edge("relation", RELATION_PRODUCER, site, error))
-        out.extend(self.label_edges())
-        return out
+        out = each_item(self.builder.concrete_entries(), self.model_edges, self.failure)
+        return out + self.label_edges()

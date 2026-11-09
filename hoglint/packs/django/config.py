@@ -1,9 +1,34 @@
-"""Settings of the Django pack. A repo preset fills them; the pack names no repo."""
+"""Settings of the Django pack, read from a repo's `[django]` table. The pack names no repo."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+SECTION = "django"
+ALLOWED_KEYS = frozenset(
+    {
+        "settings",
+        "db_routing",
+        "db_alias_template",
+        "oracles",
+        "settings_proxies",
+        "setting_name_helpers",
+        "hooks",
+        "receiver_decorators",
+        "signal_bases",
+    }
+)
+DEFAULT_RECEIVER_DECORATORS = ("django.dispatch.dispatcher.receiver",)
+DEFAULT_SIGNAL_BASES = ("django.dispatch.dispatcher.Signal",)
+
+
+def as_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    return (value,) if isinstance(value, str) else tuple(value)
 
 
 @dataclass(frozen=True)
@@ -30,16 +55,34 @@ class DjangoPackConfig:
     `settings_modules` are dotted modules or fnmatch globs (`proj.settings.*`), read in order.
     `settings_proxies` map `<name>.X` to the setting `<prefix>X`; `setting_name_helpers` map a
     call `<name>("A", "B")` to the setting `<prefix>A_B` (both only in migration keys and FK targets).
-    `hooks` are qualified function names or fnmatch globs (`**.register_*`); a call or decorator
-    that resolves to one becomes an `installs` edge. `receiver_decorators` are functions that
-    register their decorated function as a signal receiver, like Django's own `receiver`.
+    `hooks` are qualified names of functions that install a callback; a call or decorator that
+    resolves to one becomes an `installs` edge. `receiver_decorators` are functions that register
+    their decorated function as a signal receiver, like Django's own `receiver`.
     """
 
-    first_party: tuple[str, ...]
-    settings_modules: tuple[str, ...]
+    settings_modules: tuple[str, ...] = ()
     routing: DatabaseRouting | None = None
     settings_proxies: tuple[SettingsProxy, ...] = ()
     setting_name_helpers: tuple[SettingsProxy, ...] = ()
     hooks: tuple[str, ...] = ()
-    receiver_decorators: tuple[str, ...] = ("django.dispatch.dispatcher.receiver",)
-    signal_bases: tuple[str, ...] = ("django.dispatch.dispatcher.Signal",)
+    receiver_decorators: tuple[str, ...] = DEFAULT_RECEIVER_DECORATORS
+    signal_bases: tuple[str, ...] = DEFAULT_SIGNAL_BASES
+
+    @classmethod
+    def from_section(cls, section: Mapping[str, Any]) -> DjangoPackConfig:
+        """The `[django]` table; `settings` may also be a table with `module` and `variants`."""
+        settings = section.get("settings", ())
+        if isinstance(settings, Mapping):
+            settings = [settings.get("module", ""), *settings.get("variants", {}).values()]
+        routing = None
+        if section.get("db_routing"):
+            routing = DatabaseRouting(Path(section["db_routing"]), section.get("db_alias_template", "{database}"))
+        return cls(
+            settings_modules=as_tuple(settings),
+            routing=routing,
+            settings_proxies=tuple(SettingsProxy(k, v) for k, v in section.get("settings_proxies", {}).items()),
+            setting_name_helpers=tuple(SettingsProxy(k, v) for k, v in section.get("setting_name_helpers", {}).items()),
+            hooks=as_tuple(section.get("hooks")),
+            receiver_decorators=as_tuple(section.get("receiver_decorators")) or DEFAULT_RECEIVER_DECORATORS,
+            signal_bases=as_tuple(section.get("signal_bases")) or DEFAULT_SIGNAL_BASES,
+        )

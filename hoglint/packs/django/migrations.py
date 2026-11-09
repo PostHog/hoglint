@@ -6,26 +6,22 @@ The routing file is the only non-fact input (database aliases per app label).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 import yaml
 
+from hoglint.core.build import CoreBuild
+from hoglint.core.harness import PRODUCER_ERROR, failure_text
+from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
-from hoglint.packs.django.sites import PRODUCER_ERROR
-from hoglint.spike.core import CLASS, NO_CONST, SITE_MARKER, Core, const_of, is_const
 
 Key = tuple[str, str]
 FIRST = "__first__"
 LATEST = "__latest__"
-
-
-def value_text(value: object) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
 @dataclass(frozen=False)
@@ -42,17 +38,6 @@ class MigrationDecl:
     unresolved: list[str] = field(default_factory=list)
 
 
-def top_classes(record: dict) -> list[tuple[int, dict]]:
-    return [
-        (i, d) for i, d in enumerate(record.get("defs", ())) if d["s"] == -1 and d["k"] == "class" and not d.get("f")
-    ]
-
-
-def class_body_assigns(record: dict, idx: int) -> list[dict]:
-    flags = record["defs"][idx].get("f", 0) | CLASS
-    return [row for row in record.get("assigns", ()) if row["s"] == idx and row.get("f", 0) == flags]
-
-
 class MigrationParser:
     """One migration record into a MigrationDecl."""
 
@@ -61,20 +46,21 @@ class MigrationParser:
         self.proxies = {p.name: p.prefix for p in config.settings_proxies}
         self.helpers = {p.name: p.prefix for p in config.setting_name_helpers}
 
-    def parse(self, app_label: str, path: str, module: str, record: dict) -> MigrationDecl:
+    def parse(self, app_label: str, path: str, module: str, bodies: RecordBodies) -> MigrationDecl:
         decl = MigrationDecl(app_label, PurePosixPath(path).stem, path, module)
         constants = {}
-        for row in record.get("assigns", ()):
-            if row["s"] == -1 and not row.get("f") and row["op"] == "=" and len(row["t"]) == 1:
+        for row in bodies.assigns(-1):
+            if row["op"] == "=" and len(row["t"]) == 1:
                 target = row["t"][0]
                 if isinstance(target, str) and "." not in target:
                     constants[target] = row.get("v")
-        cls = next(((i, d) for i, d in top_classes(record) if d["n"] == "Migration"), None)
+        defs = bodies.defs
+        cls = next((i for i in bodies.children(-1) if defs[i]["k"] == "class" and defs[i]["n"] == "Migration"), None)
         if cls is None:
             decl.unresolved.append("no Migration class")
             return decl
-        decl.line = cls[1]["l"]
-        for row in class_body_assigns(record, cls[0]):
+        decl.line = defs[cls]["l"]
+        for row in bodies.assigns(cls):
             if row["op"] not in ("=", ":"):
                 continue
             target = row["t"][0]
@@ -109,12 +95,9 @@ class MigrationParser:
         if not isinstance(elt, dict):
             return None
         items = elt.get("tuple", elt.get("list"))
-        if (
-            items is not None
-            and len(items) == 2
-            and all(isinstance(e, dict) and "s" in e and len(e) == 1 for e in items)
-        ):
-            return (items[0]["s"], items[1]["s"])
+        texts = [str_literal(e) for e in items] if items is not None else []
+        if len(texts) == 2 and texts[0] is not None and texts[1] is not None:
+            return (texts[0], texts[1])
         callee = elt.get("call")
         if isinstance(callee, str) and callee.endswith("swappable_dependency") and elt.get("args"):
             value = self.setting(elt["args"][0], constants)
@@ -275,30 +258,27 @@ class MigrationGraph:
 
 
 class MigrationReader:
-    def __init__(self, core: Core, apps: AppRegistry, config: DjangoPackConfig) -> None:
-        self.core = core
+    def __init__(self, build: CoreBuild, apps: AppRegistry, config: DjangoPackConfig) -> None:
+        self.build = build
         self.apps = apps
         self.parser = MigrationParser(apps, config)
+        self.by_directory: dict[str, list[str]] = {}
+        for path in sorted(build.store.records):
+            directory, _, name = path.rpartition("/")
+            if name.endswith(".py") and name[0] not in "_~":
+                self.by_directory.setdefault(directory, []).append(path)
 
     def files(self, package_module: str) -> list[str]:
         """`<package>/*.py` whose stem does not start with _ or ~ (iterdir of the package)."""
-        directory = self.core.index.path_of[package_module].rsplit("/", 1)[0] + "/"
-        out = []
-        for path in self.core.store.records:
-            if not path.startswith(directory) or "/" in path[len(directory) :]:
-                continue
-            stem = path[len(directory) :]
-            if stem.endswith(".py") and stem[0] not in "_~":
-                out.append(path)
-        return sorted(out)
+        return self.by_directory.get(self.build.index.path_of[package_module].rpartition("/")[0], [])
 
     def parse(self, app_label: str, path: str) -> MigrationDecl:
         """A migration that cannot be read keeps its node, with its parents unknown."""
-        module = self.core.index.module_of[path]
+        module = self.build.index.module_of[path]
         try:
-            return self.parser.parse(app_label, path, module, self.core.store.records[path])
-        except Exception as error:  # one unreadable migration is unknown, the others still count
-            reason = f"{PRODUCER_ERROR}: {type(error).__name__}: {error}"
+            return self.parser.parse(app_label, path, module, self.build.bodies(self.build.store.records[path]))
+        except Exception as error:  # noqa: BLE001 - one unreadable migration is unknown, the others still count
+            reason = f"{PRODUCER_ERROR}: {failure_text(error)}"
             return MigrationDecl(app_label, PurePosixPath(path).stem, path, module, unresolved=[reason])
 
     def read(self, projection: AliasProjection) -> MigrationGraph:
@@ -307,7 +287,7 @@ class MigrationReader:
         unmigrated: set[str] = set()
         for app in self.apps.apps:
             module = f"{app.name}.migrations"
-            if not (self.core.index.is_file_module(module) and self.core.index.is_package(module)):
+            if not (self.build.index.is_file_module(module) and self.build.index.is_package(module)):
                 unmigrated.add(app.label)
                 continue
             migrated.add(app.label)
@@ -326,8 +306,9 @@ MIGRATION_CONTEXT = frozenset({Context.MIGRATION})
 class MigrationEdges:
     """One `migration-parent` edge per resolved parent, and one unresolved edge per unread key."""
 
-    def __init__(self, migrations: MigrationGraph) -> None:
+    def __init__(self, migrations: MigrationGraph, external: dict[str, str]) -> None:
         self.migrations = migrations
+        self.external = external
 
     def aliases_text(self, app: str) -> str:
         return ",".join(sorted(self.migrations.aliases.get(app, frozenset())))
@@ -342,7 +323,7 @@ class MigrationEdges:
             resolution = Resolution.UNRESOLVED
         else:
             targets = (EntityId(LANGUAGE_PYTHON, found.module),)
-            resolution = Resolution.EXTERNAL if SITE_MARKER in found.path else Resolution.RESOLVED
+            resolution = Resolution.EXTERNAL if found.path in self.external else Resolution.RESOLVED
         how = self.migrations.graph.how.get(((child.app_label, child.name), parent), "dependency")
         return Edge(
             kind="migration-parent",
@@ -381,7 +362,7 @@ class MigrationEdges:
             if decl is not None:
                 out.append(self.parent_edge(decl, parent))
         for decl in self.migrations.decls.values():
-            if SITE_MARKER in decl.path:
+            if decl.path in self.external:
                 continue
             out.extend(self.unresolved_edge(decl, text) for text in decl.unresolved)
         for origin, key in graph.unresolved_keys:

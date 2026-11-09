@@ -1,7 +1,7 @@
 """Facade facts for the facade rules: exports, signature slots, declarations and wiring bases.
 
-Port of the fact-gathering half of the spike facade channel. For each module in a product's
-facade zone (`products/<name>/backend/facade/`) it emits:
+Port of the fact-gathering half of the spike facade channel, on the core resolver. For each
+module in a product's facade zone (`products/<name>/backend/facade/`) it emits:
 
 - `export` edges: names the module hands out, through re-exports, with members of exported
   collections as their own `export` edges;
@@ -17,212 +17,25 @@ from __future__ import annotations
 
 import builtins
 from collections import Counter
-from dataclasses import dataclass, field
-from typing import cast
+from dataclasses import dataclass
+from functools import cached_property
 
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
-from hoglint.packs.django.relations import flag
-from hoglint.presets_py.posthog.config import REPO_PACKAGES
-from hoglint.spike.core import TYPE_ONLY, Core, const_of
+from hoglint.core.build import CoreBuild
+from hoglint.core.records import RecordBodies, chain_last, sequence_items, str_literal
+from hoglint.core.sites import binding_surface
+from hoglint.core.symbols import TYPE_ONLY, ModuleTable, absolute_import
+from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
+from hoglint.presets_py.posthog.layout import backend_product, backend_rel
 
 FACADE_PRODUCER = "posthog.facade-facts@1"
 DATACLASS_DECORATORS = frozenset({"dataclass", "frozen"})
 SPECIAL_FORMS = frozenset({"Literal", "Annotated"})
+TYPING_MODULES = frozenset({"typing", "typing_extensions"})
 MUTATORS = ("append", "extend", "insert", "add", "update")
-CLASS_BODY = 8  # context flag of a statement directly in a top-level class body
 PROD = frozenset({Context.PROD})
-
-
-def last_segment(value: object) -> str | None:
-    """Name id or attribute name of a V / SV node (decorator_bare without the call)."""
-    if isinstance(value, str):
-        return value.rpartition(".")[2]
-    if isinstance(value, dict) and "a" in value:
-        return value["a"]
-    return None
-
-
-def decorator_bare(value: object) -> str | None:
-    if isinstance(value, dict) and "call" in value:
-        return last_segment(value["call"])
-    return last_segment(value)
-
-
-@dataclass(frozen=False)
-class Binding:
-    kind: str  # import | class | func | assign | var
-    target: str = ""
-    node: object = None  # V value for assign/var, def index for class/func
-
-
-@dataclass(frozen=False)
-class ModuleFacts:
-    module: str
-    is_package: bool
-    record: dict
-    bindings: dict[str, Binding] = field(default_factory=dict)
-    runtime_imports: list[tuple[str, str, str | None]] = field(default_factory=list)  # (bound, target, asname)
-    dunder_all: set[str] | None = None
-    lazy: dict[str, str] = field(default_factory=dict)
-    lazy_prefixes: list[str] = field(default_factory=list)
-    has_functions: bool = False
-    special_forms: dict[str, str] = field(default_factory=dict)
-    top_defs: list[int] = field(default_factory=list)  # top-level def/class indexes in order
-
-    @property
-    def defs(self) -> list[dict]:
-        return self.record.get("defs", [])
-
-
-class ModuleIndex:
-    """Dotted module -> ModuleFacts for the repository packages, from L1 records."""
-
-    def __init__(self, core: Core) -> None:
-        self.core = core
-        self._facts: dict[str, ModuleFacts | None] = {}
-
-    def locate(self, module: str) -> bool | None:
-        """is_package for a repo module, None when it does not exist."""
-        if module.split(".", 1)[0] not in REPO_PACKAGES:
-            return None
-        index = self.core.index
-        if index.is_file_module(module):
-            return index.package[module]
-        if module in index.dirs:
-            return True  # namespace package
-        return None
-
-    def is_module(self, module: str) -> bool:
-        return self.locate(module) is not None
-
-    def facts(self, module: str) -> ModuleFacts | None:
-        if module in self._facts:
-            return self._facts[module]
-        is_package = self.locate(module)
-        result = None
-        if is_package is not None:
-            record = self.core.index.record(module) if self.core.index.is_file_module(module) else {"status": "ok"}
-            if record is not None and record.get("status") == "ok":
-                result = build_facts(module, is_package, record)
-        self._facts[module] = result
-        return result
-
-
-def build_facts(module: str, is_package: bool, record: dict) -> ModuleFacts:
-    facts = ModuleFacts(module, is_package, record)
-    package = module if is_package else module.rpartition(".")[0]
-    events: list[tuple[int, int, str, object]] = []
-    for row in record.get("imports", ()):
-        if row[0] == -1 and row[3] in (0, TYPE_ONLY):
-            events.append((row[1], row[2], "import", row))
-    for i, d in enumerate(record.get("defs", ())):
-        if d["s"] == -1 and not d.get("f"):
-            events.append((d["l"], d["c"], "def", i))
-    for row in record.get("assigns", ()):
-        if row["s"] == -1 and not row.get("f"):
-            events.append((row["l"], row["c"], "assign", row))
-    events.sort(key=lambda e: (e[0], e[1]))
-    defs = record.get("defs", [])
-    for _, _, kind, payload in events:
-        if kind == "import":
-            add_import(facts, package, payload)
-        elif kind == "def":
-            d = defs[payload]
-            facts.top_defs.append(payload)
-            if d["k"] == "class":
-                facts.bindings[d["n"]] = Binding("class", node=payload)
-            else:
-                facts.bindings[d["n"]] = Binding("func", node=payload)
-                facts.has_functions = True
-        else:
-            add_assign(facts, payload)
-    getattr_binding = facts.bindings.get("__getattr__")
-    if getattr_binding is not None and getattr_binding.kind == "func":
-        for row in record.get("assigns", ()):
-            if row["s"] != -1 or row.get("f") or row["op"] != "=":
-                continue
-            value = row.get("v")
-            if not isinstance(value, dict) or not value.get("dict"):
-                continue
-            pairs = value["dict"]
-            consts = [(const_of(k) if k is not None else None, const_of(v)) for k, v in pairs]
-            if all(isinstance(k, str) and isinstance(v, str) for k, v in consts):
-                facts.lazy.update(dict(consts))
-    return facts
-
-
-def add_import(facts: ModuleFacts, package: str, row: list) -> None:
-    _, _, _, flags, mod, level, name, asname = row
-    type_only = flags == TYPE_ONLY
-    if name is None:
-        if asname:
-            facts.bindings[asname] = Binding("import", mod)
-        else:
-            head = mod.split(".", 1)[0]
-            facts.bindings[head] = Binding("import", head)
-        return
-    if level:
-        parts = package.split(".")
-        if level - 1 >= len(parts):
-            return
-        source = ".".join(parts[: len(parts) - (level - 1)])
-        if mod:
-            source = f"{source}.{mod}"
-    else:
-        source = mod or ""
-    if name == "*":
-        return
-    bound = asname or name
-    target = f"{source}.{name}"
-    facts.bindings[bound] = Binding("import", target)
-    if source in ("typing", "typing_extensions") and name in SPECIAL_FORMS:
-        facts.special_forms[bound] = name
-    if not type_only:
-        facts.runtime_imports.append((bound, target, asname))
-
-
-def add_assign(facts: ModuleFacts, row: dict) -> None:
-    op = row["op"]
-    value = row.get("v")
-    if op == "=":
-        for target in row["t"]:
-            if isinstance(target, str) and "." not in target:
-                facts.bindings[target] = Binding("assign", node=value)
-                if target == "__all__" and isinstance(value, dict) and ("list" in value or "tuple" in value):
-                    elts = value.get("list", value.get("tuple"))
-                    facts.dunder_all = {cast(str, const_of(e)) for e in elts if isinstance(const_of(e), str)}
-        literal = const_of(value)
-        if isinstance(literal, str) and literal.endswith("."):
-            facts.lazy_prefixes.append(literal)
-    elif op == ":":
-        target = row["t"][0]
-        if not (isinstance(target, str) and "." not in target) or "v" not in row:
-            return
-        ann = row.get("ann")
-        is_alias = isinstance(ann, str) and (ann == "TypeAlias" or ann.endswith(".TypeAlias"))
-        if isinstance(ann, dict) and ann.get("a") == "TypeAlias":
-            is_alias = True
-        facts.bindings[target] = Binding("assign" if is_alias else "var", node=value)
-    elif op == "type":
-        target = row["t"][0]
-        if isinstance(target, str) and "." not in target:
-            facts.bindings[target] = Binding("assign", node=value)
-
-
-# ---------------------------------------------------------------- resolution
-@dataclass(frozen=True)
-class Origin:
-    kind: str  # class | func | module | assign | external | unresolved | var | nested
-    qualified: str
-    via: tuple[str, ...] = ()
-
-
-def facade_product(module: str) -> str | None:
-    """The product of a module under `products/<name>/backend/`."""
-    parts = module.split(".")
-    if len(parts) >= 3 and parts[0] == "products" and parts[2] == "backend":
-        return parts[1]
-    return None
+IMPORT_BINDINGS = frozenset({"module", "from"})
+VALUE_BINDINGS = frozenset({"alias", "variable"})
+HIT_KINDS = {"class": "class", "def": "func", "module": "module", "variable": "assign", "member": "nested"}
 
 
 def is_name(value: object) -> bool:
@@ -233,161 +46,14 @@ def is_name_or_attr(value: object) -> bool:
     return isinstance(value, str) or (isinstance(value, dict) and "a" in value)
 
 
-def qualify_name(name: str, facts: ModuleFacts) -> str | None:
-    b = facts.bindings.get(name)
-    if b is None:
-        return f"builtins.{name}" if hasattr(builtins, name) else None
-    if b.kind == "import":
-        return b.target
-    return f"{facts.module}.{name}"
-
-
-def qualify_expr(value: object, facts: ModuleFacts) -> str | None:
-    """The qualified name a V value names, in the namespace of one module."""
-    if isinstance(value, str):
-        head, _, rest = value.partition(".")
-        q = qualify_name(head, facts)
-        if q is None:
-            return None
-        return f"{q}.{rest}" if rest else q
-    if not isinstance(value, dict):
-        return None
-    if "call" in value:
-        return qualify_expr(value["call"], facts)
-    if "sub" in value:
-        return qualify_expr(value["sub"], facts)
-    if "a" in value:
-        head = qualify_expr(value["v"], facts)
-        return f"{head}.{value['a']}" if head else None
-    return None
-
-
-class Resolver:
-    def __init__(self, index: ModuleIndex) -> None:
-        self.index = index
-        self._cache: dict[str, Origin] = {}
-
-    def split(self, qualified: str) -> tuple[str, str] | None:
-        parts = qualified.split(".")
-        for i in range(len(parts), 0, -1):
-            module = ".".join(parts[:i])
-            if self.index.is_module(module):
-                return module, ".".join(parts[i:])
-        return None
-
-    def resolve(self, qualified: str, seen: frozenset[str] = frozenset()) -> Origin:
-        if qualified in self._cache:
-            return self._cache[qualified]
-        result = self._resolve(qualified, seen)
-        self._cache[qualified] = result
-        return result
-
-    def _resolve(self, qualified: str, seen: frozenset[str]) -> Origin:
-        if qualified in seen:
-            return Origin("unresolved", qualified)
-        if qualified.split(".", 1)[0] not in REPO_PACKAGES:
-            return Origin("external", qualified)
-        split = self.split(qualified)
-        if split is None:
-            return Origin("unresolved", qualified)
-        module, rest = split
-        if not rest:
-            return Origin("module", module)
-        facts = self.index.facts(module)
-        if facts is None:
-            return Origin("unresolved", qualified)
-        head, _, tail = rest.partition(".")
-        binding = facts.bindings.get(head)
-        if binding is None and head in facts.lazy:
-            target = self.lazy_target(facts, head)
-            if target is not None:
-                o = self.resolve(f"{target}.{head}" + (f".{tail}" if tail else ""), seen | {qualified})
-                return Origin(o.kind, o.qualified, (qualified, *o.via))
-        if binding is None:
-            return Origin("unresolved", qualified)
-        if binding.kind == "import":
-            o = self.resolve(binding.target + (f".{tail}" if tail else ""), seen | {qualified})
-            return Origin(o.kind, o.qualified, (qualified, *o.via))
-        if binding.kind == "assign" and is_name_or_attr(binding.node) and not tail:
-            target = qualify_expr(binding.node, facts)
-            if target:
-                o = self.resolve(target, seen | {qualified})
-                return Origin(o.kind, o.qualified, (qualified, *o.via))
-        if tail:
-            return Origin("nested", f"{module}.{head}.{tail}")
-        return Origin(binding.kind, f"{module}.{head}")
-
-    def lazy_target(self, facts: ModuleFacts, name: str) -> str | None:
-        dotted = facts.lazy[name]
-        parts = facts.module.split(".")
-        backend_relative = [".".join(parts[:3]) + "." + dotted] if parts[0] == "products" and len(parts) > 3 else []
-        for candidate in (dotted, *(p + dotted for p in facts.lazy_prefixes), *backend_relative):
-            if self.index.is_module(candidate):
-                return candidate
-        return None
-
-
-# ---------------------------------------------------------------- annotations
-def annotation_names(value: object, facts: ModuleFacts, expanding: frozenset[str] = frozenset()) -> list[str]:
-    """Every qualified name a typed V value names, aliases expanded in the defining module."""
-    if value is None or isinstance(value, (bool, int)):
-        return []
-    if isinstance(value, str):
-        if "." not in value:
-            b = facts.bindings.get(value)
-            if b is not None and b.kind == "assign" and value not in expanding and is_alias_shape(b.node):
-                return annotation_names(b.node, facts, expanding | {value})
-        q = qualify_expr(value, facts)
-        return [q] if q else []
-    if not isinstance(value, dict):
-        return []
-    if "s" in value:
-        parsed = value.get("sa")
-        return annotation_names(parsed, facts, expanding) if parsed is not None else []
-    if "a" in value:
-        q = qualify_expr(value, facts)
-        return [q] if q else []
-    if "sub" in value:
-        head_value = value["sub"]
-        form = None
-        if is_name(head_value):
-            form = facts.special_forms.get(head_value) or (head_value if head_value in SPECIAL_FORMS else None)
-        elif last_segment(head_value) in SPECIAL_FORMS:
-            form = last_segment(head_value)
-        head = annotation_names(head_value, facts, expanding)
-        if form == "Literal":
-            return head
-        index = value["i"]
-        if form == "Annotated":
-            first = index["tuple"][0] if isinstance(index, dict) and index.get("tuple") else index
-            return head + annotation_names(first, facts, expanding)
-        return head + annotation_names(index, facts, expanding)
-    if "bin" in value:
-        return annotation_names(value["l"], facts, expanding) + annotation_names(value["r"], facts, expanding)
-    if "tuple" in value or "list" in value:
-        return [n for e in value.get("tuple", value.get("list")) for n in annotation_names(e, facts, expanding)]
-    return []
-
-
 def is_alias_shape(value: object) -> bool:
     """Name, Attribute, Subscript or BinOp node."""
     return isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value))
 
 
-def direct_children(facts: ModuleFacts, idx: int) -> list[int]:
-    """Defs directly in the body of def `idx` (not under an if/try/with inside it)."""
-    body_flags = facts.defs[idx].get("f", 0) | CLASS_BODY
-    return [i for i, d in enumerate(facts.defs) if d["s"] == idx and d.get("f", 0) == body_flags]
-
-
-def direct_assigns(facts: ModuleFacts, idx: int) -> list[dict]:
-    body_flags = facts.defs[idx].get("f", 0) | CLASS_BODY
-    return [a for a in facts.record.get("assigns", ()) if a["s"] == idx and a.get("f", 0) == body_flags]
-
-
 def has_wiring_decorator(d: dict) -> bool:
     for dec in d.get("dec", ()):
-        if decorator_bare(dec) == "shared_task":
+        if chain_last(dec) == "shared_task":
             return True
         target = dec["call"] if isinstance(dec, dict) and "call" in dec else dec
         if isinstance(target, str) and target.count(".") == 1 and target.endswith(".defn"):
@@ -395,16 +61,146 @@ def has_wiring_decorator(d: dict) -> bool:
     return False
 
 
-def mutated(facts: ModuleFacts, name: str) -> bool:
-    """Module-level `name.append(...)`-style calls or `name += ...` (callees over-approximate statements)."""
-    wanted = {f"{name}.{m}" for m in MUTATORS}
-    for row in facts.record.get("callees", ()):
-        if row[0] == -1 and row[1] == -1 and row[2] in wanted:
-            return True
-    for row in facts.record.get("assigns", ()):
-        if row["s"] == -1 and not row.get("f") and row["op"] not in ("=", ":", "type") and row["t"] == [name]:
-            return True
-    return False
+@dataclass(frozen=True)
+class Origin:
+    kind: str  # class | func | module | assign | external | unresolved | nested
+    qualified: str
+    via: tuple[str, ...] = ()
+
+
+class ModuleView:
+    """One module as the facade rules read it: its core symbol table plus its top-level statements."""
+
+    def __init__(self, module: str, table: ModuleTable, record: dict, bodies: RecordBodies) -> None:
+        self.module = module
+        self.table = table
+        self.record = record
+        self.bodies = bodies
+        self.defs: list[dict] = record.get("defs", [])
+
+    @cached_property
+    def top_defs(self) -> list[int]:
+        return self.bodies.children(-1)
+
+    @cached_property
+    def has_functions(self) -> bool:
+        return any(self.defs[i]["k"] != "class" for i in self.top_defs)
+
+    @cached_property
+    def top_imports(self) -> list[tuple[str, str, str | None, bool]]:
+        """(bound, imported dotted name, asname, type-only) of module-level `from` imports, in order."""
+        out = []
+        for _, _, _, flags, mod, level, name, asname in self.record.get("imports", ()):
+            if name is None or name == "*" or flags not in (0, TYPE_ONLY):
+                continue
+            source = absolute_import(self.module, self.table.is_package, mod, level)
+            if source is not None:
+                out.append((asname or name, f"{source}.{name}", asname, flags == TYPE_ONLY))
+        return out
+
+    @cached_property
+    def special_forms(self) -> dict[str, str]:
+        return {
+            bound: target.rpartition(".")[2]
+            for bound, target, _, _ in self.top_imports
+            if target.rpartition(".")[0] in TYPING_MODULES and target.rpartition(".")[2] in SPECIAL_FORMS
+        }
+
+    @cached_property
+    def dunder_all(self) -> set[str] | None:
+        found = None
+        for row in self.bodies.assigns(-1):
+            if row["op"] == "=" and "__all__" in row["t"]:
+                items = sequence_items(row.get("v"))
+                if items is not None and "set" not in row["v"]:
+                    found = {text for text in (str_literal(e) for e in items) if text is not None}
+        return found
+
+    def binding(self, name: str) -> tuple | None:
+        return self.table.names.get(name)
+
+    def value(self, name: str) -> object:
+        return self.table.values.get(name)
+
+    def qualify_name(self, name: str) -> str | None:
+        binding = self.binding(name)
+        if binding is None:
+            return f"builtins.{name}" if hasattr(builtins, name) else None
+        if binding[0] in IMPORT_BINDINGS:
+            return binding_surface(binding)
+        return f"{self.module}.{name}"
+
+    def qualify(self, value: object) -> str | None:
+        """The qualified name a V value names, in this module's namespace."""
+        if isinstance(value, str):
+            head, _, rest = value.partition(".")
+            q = self.qualify_name(head)
+            if q is None:
+                return None
+            return f"{q}.{rest}" if rest else q
+        if not isinstance(value, dict):
+            return None
+        for key in ("call", "sub"):
+            if key in value:
+                return self.qualify(value[key])
+        if "a" in value:
+            head = self.qualify(value["v"])
+            return f"{head}.{value['a']}" if head else None
+        return None
+
+    def mutated(self, name: str) -> bool:
+        """Module-level `name.append(...)`-style calls or `name += ...` (callees over-approximate statements)."""
+        wanted = {f"{name}.{m}" for m in MUTATORS}
+        for row in self.record.get("callees", ()):
+            if row[0] == -1 and row[1] == -1 and row[2] in wanted:
+                return True
+        for row in self.bodies.assigns(-1):
+            if row["op"] not in ("=", ":", "type") and row["t"] == [name]:
+                return True
+        return False
+
+    def annotation_names(self, value: object, expanding: frozenset[str] = frozenset()) -> list[str]:
+        """Every qualified name a typed V value names, aliases expanded in this module."""
+        if value is None or isinstance(value, (bool, int)):
+            return []
+        if isinstance(value, str):
+            if "." not in value and value not in expanding:
+                binding, node = self.binding(value), self.value(value)
+                if binding is not None and binding[0] in VALUE_BINDINGS and is_alias_shape(node):
+                    return self.annotation_names(node, expanding | {value})
+            q = self.qualify(value)
+            return [q] if q else []
+        if not isinstance(value, dict):
+            return []
+        if "s" in value:
+            parsed = value.get("sa")
+            return self.annotation_names(parsed, expanding) if parsed is not None else []
+        if "a" in value:
+            q = self.qualify(value)
+            return [q] if q else []
+        if "sub" in value:
+            return self.subscript_names(value, expanding)
+        if "bin" in value:
+            return self.annotation_names(value["l"], expanding) + self.annotation_names(value["r"], expanding)
+        if "tuple" in value or "list" in value:
+            return [n for e in value.get("tuple", value.get("list")) for n in self.annotation_names(e, expanding)]
+        return []
+
+    def subscript_names(self, value: dict, expanding: frozenset[str]) -> list[str]:
+        head_value = value["sub"]
+        form = None
+        if is_name(head_value):
+            form = self.special_forms.get(head_value) or (head_value if head_value in SPECIAL_FORMS else None)
+        elif chain_last(head_value) in SPECIAL_FORMS:
+            form = chain_last(head_value)
+        head = self.annotation_names(head_value, expanding)
+        if form == "Literal":
+            return head
+        index = value["i"]
+        if form == "Annotated":
+            first = index["tuple"][0] if isinstance(index, dict) and index.get("tuple") else index
+            return head + self.annotation_names(first, expanding)
+        return head + self.annotation_names(index, expanding)
 
 
 @dataclass(frozen=True)
@@ -416,46 +212,79 @@ class Handed:
 
 
 class FacadeFacts:
-    def __init__(self, core: Core) -> None:
-        self.core = core
-        self.index = ModuleIndex(core)
-        self.resolver = Resolver(self.index)
+    def __init__(self, build: CoreBuild) -> None:
+        self.build = build
+        self.index = build.index
         self.edges: list[Edge] = []
         self.classes_done: set[str] = set()
         self.signatures: Counter[tuple[str, str]] = Counter()
+        self.views: dict[str, ModuleView | None] = {}
+        self.origins: dict[str, Origin] = {}
 
-    @staticmethod
-    def backend_rel(module: str, is_package: bool) -> str:
-        parts = module.split(".")[3:]
-        if not parts:
-            return "backend/"
-        return "backend/" + "/".join(parts) + ("/" if is_package else ".py")
+    def view(self, module: str) -> ModuleView | None:
+        if module not in self.views:
+            self.views[module] = self.read_view(module)
+        return self.views[module]
+
+    def read_view(self, module: str) -> ModuleView | None:
+        if not self.build.first_party.contains(module):
+            return None
+        table = self.build.tables.get(module)
+        record = self.build.tables.record(module) if table is not None else None
+        if table is None or record is None or record.get("status") != "ok":
+            return None
+        return ModuleView(module, table, record, self.build.bodies(record))
+
+    def is_module(self, module: str) -> bool:
+        return self.build.first_party.contains(module) and self.index.exists(module)
+
+    def resolve(self, qualified: str) -> Origin:
+        if qualified not in self.origins:
+            self.origins[qualified] = self.read_origin(qualified)
+        return self.origins[qualified]
+
+    def read_origin(self, qualified: str) -> Origin:
+        """Where a qualified name leads, stopping at the first name outside the repo."""
+        if not self.build.first_party.contains(qualified):
+            return Origin("external", qualified)
+        hit, rest = self.build.resolver.resolve_dotted(qualified)
+        if hit is None:
+            return Origin("unresolved", qualified)
+        chain = [str(step) for step in hit.chain]
+        outside = next((step for step in chain if not self.build.first_party.contains(step)), None)
+        if outside is not None:
+            return Origin("external", outside, tuple(chain[: chain.index(outside)]))
+        via = tuple(chain[:-1])
+        if rest:
+            if hit.kind != "class":
+                return Origin("unresolved", qualified)
+            return Origin("nested", ".".join([chain[-1], *rest]), via)
+        kind = HIT_KINDS.get(hit.kind)
+        return Origin(kind, chain[-1], via) if kind is not None else Origin("unresolved", qualified)
 
     def surface_rel(self, module: str) -> str | None:
-        is_package = self.index.locate(module)
-        if is_package is None or facade_product(module) is None:
+        if not self.is_module(module) or backend_product(module) is None:
             return None
-        return self.backend_rel(module, is_package)
+        return backend_rel(module, self.index.is_package(module))
 
-    def facade_files(self) -> dict[str, list[str]]:
-        """product -> facade-relative keys, like rglob over products/<p>/backend/facade."""
-        out: dict[str, list[str]] = {}
-        for path in self.core.repo_paths():
-            parts = path.split("/")
+    def facade_files(self) -> list[str]:
+        """Facade modules in path order, like rglob over products/<p>/backend/facade."""
+        out = []
+        for scope in self.build.files:
+            parts = scope.path.split("/")
             if len(parts) < 5 or parts[0] != "products" or parts[2] != "backend" or parts[3] != "facade":
                 continue
             name = parts[-1]
-            if not name.endswith(".py") or name.startswith("test_") or name.endswith("_test.py"):
-                continue
-            out.setdefault(parts[1], []).append("/".join(parts[4:]))
-        return {p: sorted(keys) for p, keys in out.items()}
+            if name.endswith(".py") and not name.startswith("test_") and not name.endswith("_test.py"):
+                out.append(scope.module)
+        return out
 
     def entity(self, qualified: str) -> EntityId:
-        split = self.resolver.split(qualified)
-        if split is None:
+        module = self.index.longest_module(qualified) if self.is_module(qualified.partition(".")[0]) else None
+        if module is None:
             module, _, name = qualified.rpartition(".")
             return EntityId(LANGUAGE_PYTHON, module, name)
-        return EntityId(LANGUAGE_PYTHON, split[0], split[1])
+        return EntityId(LANGUAGE_PYTHON, module, qualified[len(module) + 1 :])
 
     def target(self, origin: Origin) -> tuple[tuple[EntityId, ...], Resolution]:
         if origin.kind == "unresolved":
@@ -468,7 +297,7 @@ class FacadeFacts:
         return tuple(self.entity(hop) for hop in origin.via if hop not in (surface, origin.qualified))
 
     def site(self, dotted: str, scope: str, line: int = 0) -> Site:
-        return Site(self.core.index.path_of.get(dotted, ""), dotted, scope, line)
+        return Site(self.index.path_of.get(dotted, ""), dotted, scope, line)
 
     def add(self, kind: str, site: Site, surface: str, origin: Origin, attrs: list[tuple[str, str]]) -> None:
         targets, resolution = self.target(origin)
@@ -489,11 +318,13 @@ class FacadeFacts:
 
     # exports -----------------------------------------------------------------------------
 
-    def handed_out(self, facts: ModuleFacts) -> list[Handed]:
-        pure = not facts.has_functions
-        allowed = None if pure else facts.dunder_all
+    def handed_out(self, view: ModuleView) -> list[Handed]:
+        pure = not view.has_functions
+        allowed = None if pure else view.dunder_all
         out = []
-        for bound, target, asname in facts.runtime_imports:
+        for bound, target, asname, type_only in view.top_imports:
+            if type_only:
+                continue
             original = target.rpartition(".")[2]
             if pure:
                 mode = "module"
@@ -504,71 +335,68 @@ class FacadeFacts:
             else:
                 continue
             module = target.rpartition(".")[0]
-            rel = self.surface_rel(target) if self.index.is_module(target) else self.surface_rel(module)
+            rel = self.surface_rel(target) if self.is_module(target) else self.surface_rel(module)
             out.append(Handed(bound, target, rel or "", mode))
-        for name in facts.lazy:
-            found = self.resolver.lazy_target(facts, name)
-            if found is not None:
-                out.append(Handed(name, f"{found}.{name}", self.surface_rel(found) or "", "lazy"))
+        for name, module in view.table.lazy.items():
+            out.append(Handed(name, f"{module}.{name}", self.surface_rel(module) or "", "lazy"))
         return out
 
     def collection_members(self, qualified: str, seen: frozenset[str] = frozenset()) -> list[str] | None:
         if qualified in seen:
             return []
-        split = self.resolver.split(qualified)
-        if split is None or not split[1]:
+        module = self.index.longest_module(qualified)
+        if module is None or module == qualified:
             return []
-        module, name = split
-        facts = self.index.facts(module)
-        if facts is None:
+        name = qualified[len(module) + 1 :]
+        view = self.view(module)
+        binding = view.binding(name) if view is not None else None
+        if view is None or binding is None:
             return []
-        b = facts.bindings.get(name)
-        if b is None:
+        if binding[0] in IMPORT_BINDINGS:
+            return self.collection_members(binding_surface(binding), seen | {qualified})
+        if binding[0] not in VALUE_BINDINGS:
             return []
-        if b.kind == "import":
-            return self.collection_members(b.target, seen | {qualified})
-        if b.kind not in ("assign", "var"):
-            return []
-        if mutated(facts, name):
+        if view.mutated(name):
             return None
-        return self.expr_members(b.node, facts, seen | {qualified})
+        return self.expr_members(view.value(name), view, seen | {qualified})
 
-    def expr_members(self, value: object, facts: ModuleFacts, seen: frozenset[str]) -> list[str] | None:
-        if isinstance(value, dict) and ("list" in value or "tuple" in value or "set" in value):
+    def expr_members(self, value: object, view: ModuleView, seen: frozenset[str]) -> list[str] | None:
+        items = sequence_items(value)
+        if items is not None:
             out: list[str] = []
-            for e in value.get("list", value.get("tuple", value.get("set"))):
+            for e in items:
                 if isinstance(e, dict) and "star" in e:
-                    sub = self.expr_members(e["star"], facts, seen)
+                    sub = self.expr_members(e["star"], view, seen)
                     if sub is None:
                         return None
                     out += sub
                 else:
-                    q = qualify_expr(e, facts)
+                    q = view.qualify(e)
                     if q:
                         out.append(q)
             return out
         if isinstance(value, dict) and value.get("bin") == "+":
-            left = self.expr_members(value["l"], facts, seen)
-            right = self.expr_members(value["r"], facts, seen)
+            left = self.expr_members(value["l"], view, seen)
+            right = self.expr_members(value["r"], view, seen)
             return None if left is None or right is None else left + right
         if is_name_or_attr(value):
-            q = qualify_expr(value, facts)
+            q = view.qualify(value)
             return self.collection_members(q, seen) if q else []
         return []
 
-    def exports(self, facts: ModuleFacts, dotted: str, handed: list[Handed]) -> None:
+    def exports(self, dotted: str, handed: list[Handed]) -> None:
         for item in handed:
-            origin = self.resolver.resolve(item.target)
+            origin = self.resolve(item.target)
             attrs = [("bound", item.bound), ("rel", item.rel), ("mode", item.mode)]
             members: list[str] | None = []
-            if origin.kind in ("assign", "var"):
+            if origin.kind == "assign":
                 members = self.collection_members(item.target)
                 attrs.append(("members", "unknown" if members is None else str(len(members))))
             self.add("export", self.site(dotted, item.bound), item.target, origin, attrs)
             if origin.kind == "class":
                 self.class_facts(origin.qualified)
             for member in members or []:
-                member_origin = self.resolver.resolve(member)
+                member_origin = self.resolve(member)
                 member_attrs = [("bound", member.rpartition(".")[2]), ("rel", item.rel), ("member_of", item.bound)]
                 self.add("export", self.site(dotted, item.bound), member, member_origin, member_attrs)
                 if member_origin.kind == "class":
@@ -577,13 +405,11 @@ class FacadeFacts:
     # signatures --------------------------------------------------------------------------
 
     def slot(
-        self, annotation: object, facts: ModuleFacts, dotted: str, symbol: str, slot: str, extra: list[tuple[str, str]]
+        self, annotation: object, view: ModuleView, dotted: str, symbol: str, slot: str, extra: list[tuple[str, str]]
     ) -> None:
-        names = annotation_names(annotation, facts)
+        names = view.annotation_names(annotation)
         whole_any = (
-            len(names) == 1
-            and names[0].rpartition(".")[2] == "Any"
-            and names[0].startswith(("typing.", "typing_extensions."))
+            len(names) == 1 and names[0].rpartition(".")[2] == "Any" and names[0].rpartition(".")[0] in TYPING_MODULES
         )
         attrs = [*extra, ("slot", slot), ("whole_any", flag(whole_any))]
         site = self.site(dotted, symbol)
@@ -591,66 +417,63 @@ class FacadeFacts:
             self.add("exposes", site, "", Origin("unresolved", ""), [*attrs, ("annotation", "missing")])
             return
         for surface in names:
-            in_repo = surface.split(".")[0] in REPO_PACKAGES
-            origin = self.resolver.resolve(surface) if in_repo else Origin("external", surface)
-            self.add("exposes", site, surface, origin, attrs)
+            self.add("exposes", site, surface, self.resolve(surface), attrs)
 
     def signature(
-        self, d: dict, facts: ModuleFacts, dotted: str, symbol: str, extra: list[tuple[str, str]] | None = None
+        self, d: dict, view: ModuleView, dotted: str, symbol: str, extra: list[tuple[str, str]] | None = None
     ) -> None:
         ordinal = self.signatures[(dotted, symbol)]
         self.signatures[(dotted, symbol)] += 1
         base = [*(extra or []), ("signature", str(ordinal))]
-        # The facts write `-> None` and a missing return annotation both as null, so neither is "untyped".
+        # The facts write `-> None` as "None" and leave a missing return annotation out.
         if d.get("ret") is not None:
-            self.slot(d["ret"], facts, dotted, symbol, "return", base)
+            self.slot(d["ret"], view, dotted, symbol, "return", base)
         for param in d.get("params", ()):
             if param[0] in ("self", "cls"):
                 continue
             annotation = param[2] if len(param) > 2 else None
-            self.slot(annotation, facts, dotted, symbol, f"param:{param[0]}", base)
+            self.slot(annotation, view, dotted, symbol, f"param:{param[0]}", base)
 
-    def signatures_of(self, facts: ModuleFacts, dotted: str) -> None:
-        for idx in facts.top_defs:
-            d = facts.defs[idx]
+    def signatures_of(self, view: ModuleView, dotted: str) -> None:
+        for idx in view.top_defs:
+            d = view.defs[idx]
             if d["n"].startswith("_"):
                 continue
             if d["k"] != "class":
-                self.signature(d, facts, dotted, d["n"])
+                self.signature(d, view, dotted, d["n"])
                 continue
-            for child in direct_children(facts, idx):
-                c = facts.defs[child]
+            for child in view.bodies.children(idx):
+                c = view.defs[child]
                 if c["k"] != "class" and (not c["n"].startswith("_") or c["n"] == "__init__"):
-                    self.signature(c, facts, dotted, f"{d['n']}.{c['n']}")
-            if not any(decorator_bare(dec) in DATACLASS_DECORATORS for dec in d.get("dec", ())):
-                continue
-            symbol = f"{d['n']}.__init__"
-            ordinal = self.signatures[(dotted, symbol)]
-            self.signatures[(dotted, symbol)] += 1
-            for row in direct_assigns(facts, idx):
-                target = row["t"][0]
-                if row["op"] != ":" or not is_name(target):
-                    continue
-                ann = row.get("ann")
-                if ann is None:
-                    continue  # `x: None`: an annotated row always has an annotation
-                if isinstance(ann, dict) and "sub" in ann and decorator_bare(ann["sub"]) == "ClassVar":
-                    continue
-                attrs = [("signature", f"field-{ordinal}")]
-                self.slot(ann, facts, dotted, symbol, f"param:{target}", attrs)
+                    self.signature(c, view, dotted, f"{d['n']}.{c['n']}")
+            if any(chain_last(dec) in DATACLASS_DECORATORS for dec in d.get("dec", ())):
+                self.dataclass_fields(view, dotted, idx)
 
-    def reexported_signatures(self, facts: ModuleFacts, dotted: str, handed: list[Handed]) -> None:
-        defined = {facts.defs[i]["n"] for i in facts.top_defs}
+    def dataclass_fields(self, view: ModuleView, dotted: str, idx: int) -> None:
+        symbol = f"{view.defs[idx]['n']}.__init__"
+        ordinal = self.signatures[(dotted, symbol)]
+        self.signatures[(dotted, symbol)] += 1
+        for row in view.bodies.assigns(idx):
+            target = row["t"][0]
+            if row["op"] != ":" or not is_name(target):
+                continue
+            ann = row.get("ann")
+            if ann is None:
+                continue  # `x: None`: an annotated row always has an annotation
+            if isinstance(ann, dict) and "sub" in ann and chain_last(ann["sub"]) == "ClassVar":
+                continue
+            self.slot(ann, view, dotted, symbol, f"param:{target}", [("signature", f"field-{ordinal}")])
+
+    def reexported_signatures(self, view: ModuleView, dotted: str, handed: list[Handed]) -> None:
+        defined = {view.defs[i]["n"] for i in view.top_defs}
         for item in sorted(set(handed), key=lambda h: (h.bound, h.target, h.rel, h.mode)):
-            origin = self.resolver.resolve(item.target)
+            origin = self.resolve(item.target)
             if origin.kind != "func":
                 continue
             origin_module, _, name = origin.qualified.rpartition(".")
-            src = self.index.facts(origin_module)
-            if src is None:
-                continue
-            binding = src.bindings.get(name)
-            if binding is None or binding.kind != "func":
+            src = self.view(origin_module)
+            binding = src.binding(name) if src is not None else None
+            if src is None or binding is None or binding[0] != "def" or binding[2]:
                 continue
             extra = [
                 ("reexport", origin.qualified),
@@ -658,13 +481,13 @@ class FacadeFacts:
                 ("hops", str(len(origin.via))),
                 ("defined_here", flag(item.bound in defined)),
             ]
-            self.signature(src.defs[cast(int, binding.node)], src, dotted, item.bound, extra)
+            self.signature(src.defs[binding[1]], src, dotted, item.bound, extra)
 
     # declarations and classes ------------------------------------------------------------
 
-    def declares(self, facts: ModuleFacts, dotted: str) -> None:
-        for idx in facts.top_defs:
-            d = facts.defs[idx]
+    def declares(self, view: ModuleView, dotted: str) -> None:
+        for idx in view.top_defs:
+            d = view.defs[idx]
             attrs = [
                 ("def_kind", d["k"]),
                 ("stub", flag(bool(d.get("stub")))),
@@ -679,43 +502,31 @@ class FacadeFacts:
             return
         self.classes_done.add(qualified)
         module, _, name = qualified.rpartition(".")
-        facts = self.index.facts(module)
-        binding = facts.bindings.get(name) if facts is not None else None
-        if facts is None or binding is None or binding.kind != "class":
+        view = self.view(module)
+        binding = view.binding(name) if view is not None else None
+        if view is None or binding is None or binding[0] != "class" or binding[2]:
             return
-        d = facts.defs[cast(int, binding.node)]
+        d = view.defs[binding[1]]
         site = self.site(module, name, d["l"])
         for dec in d.get("dec", ()):
-            q = qualify_expr(dec, facts)
-            origin = self.resolver.resolve(q) if q else Origin("unresolved", "")
+            q = view.qualify(dec)
+            origin = self.resolve(q) if q else Origin("unresolved", "")
             self.add("decorate", site, q or "", origin, [])
         for position, base in enumerate(d.get("bases", ())):
-            q = qualify_expr(base, facts)
-            origin = self.resolver.resolve(q) if q else Origin("unresolved", "")
+            q = view.qualify(base)
+            origin = self.resolve(q) if q else Origin("unresolved", "")
             self.add("inherit", site, q or "", origin, [("position", str(position))])
             if origin.kind == "class":
                 self.class_facts(origin.qualified)
 
     def produce(self) -> list[Edge]:
-        for product, keys in sorted(self.facade_files().items()):
-            for key in keys:
-                parts = ["products", product, "backend", "facade", *key.removesuffix(".py").split("/")]
-                if parts[-1] == "__init__":
-                    parts.pop()
-                dotted = ".".join(parts)
-                facts = self.index.facts(dotted)
-                if facts is None:
-                    continue
-                handed = self.handed_out(facts)
-                self.declares(facts, dotted)
-                self.signatures_of(facts, dotted)
-                self.exports(facts, dotted, handed)
-                self.reexported_signatures(facts, dotted, handed)
+        for dotted in self.facade_files():
+            view = self.view(dotted)
+            if view is None:
+                continue
+            handed = self.handed_out(view)
+            self.declares(view, dotted)
+            self.signatures_of(view, dotted)
+            self.exports(dotted, handed)
+            self.reexported_signatures(view, dotted, handed)
         return self.edges
-
-
-def produce(core: Core, graph: Graph) -> None:
-    try:
-        graph.edges.extend(FacadeFacts(core).produce())
-    except Exception as error:  # a broken producer makes the facade rules incomplete
-        graph.failed_producers[FACADE_PRODUCER] = f"{type(error).__name__}: {error}"

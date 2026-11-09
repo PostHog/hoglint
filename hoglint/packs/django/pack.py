@@ -2,110 +2,156 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
+from hoglint.core.analysis import AnalysisResult
+from hoglint.core.build import CoreBuild
+from hoglint.core.harness import ProducerPlan, ProducerStep
+from hoglint.facts import FactNeeds
 from hoglint.model import Edge, Graph
-from hoglint.packs.django.apps import AppRegistry, SettingsReader
-from hoglint.packs.django.config import DjangoPackConfig
-from hoglint.packs.django.installs import InstallsProducer
-from hoglint.packs.django.loaders import AppLoads
-from hoglint.packs.django.migrations import AliasProjection, MigrationEdges, MigrationReader
+from hoglint.packs.django.apps import AppRegistry
+from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
+from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsProducer
+from hoglint.packs.django.loaders import LOADS_PRODUCER, AppLoads
+from hoglint.packs.django.migrations import (
+    MIGRATION_PRODUCER,
+    AliasProjection,
+    MigrationEdges,
+    MigrationGraph,
+    MigrationReader,
+)
 from hoglint.packs.django.models import ModelRegistry, RelationBuilder
-from hoglint.packs.django.relations import ModelFacts, RelationEdges
-from hoglint.packs.django.signals import SignalProducer
-from hoglint.packs.django.sites import first_party_records
-from hoglint.packs.django.symbols import SymbolResolver
-from hoglint.packs.django.uses import GetModelProducer, UseProducer
-from hoglint.spike.core import Core
+from hoglint.packs.django.relations import RELATIONS_PRODUCER, ModelFacts, RelationEdges
+from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalProducer
+from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelProducer, UseProducer
+from hoglint.plugins import ProducerFailure
 
-MODELS_PRODUCER = "django.models"
-DEPENDENT_PRODUCERS = (
-    "django.migrations",
-    "django.relations",
-    "django.uses",
-    "django.model-labels",
-    "django.signals",
-    "django.installs",
-    "django.loaders",
+APPS_PRODUCER = "django.apps@1"
+MODELS_PRODUCER = "django.models@1"
+SYMBOLS_PRODUCER = "django.symbols@1"
+MODEL_KINDS = frozenset({"relation", "reverse-accessor", "model-label", "reference", "signal"})
+EDGE_KINDS = frozenset({*MODEL_KINDS, "migration-parent", "installs", "loads"})
+FACT_NEEDS = FactNeeds(
+    kinds=frozenset({"imports", "defs", "assigns", "refs", "derived", "uses", "calls", "callees"}),
+    watch_callees=frozenset({"get_model", "setdefault", "append", "connect"}),
 )
 
 
-class DjangoProducers:
-    """The producers that need the app registry and the model index."""
+class NoModels(LookupError):
+    """No first-party model found: the registry read nothing, which is never a clean answer."""
 
-    def __init__(self, core: Core, config: DjangoPackConfig, repo_root: Path) -> None:
-        self.core = core
+
+class DjangoRun:
+    """One run of the pack's producers. Each step stores what later steps read."""
+
+    def __init__(self, build: CoreBuild, config: DjangoPackConfig, repo_root: Path, graph: Graph) -> None:
+        self.build = build
         self.config = config
         self.repo_root = repo_root
-        self.symbols = SymbolResolver(core)
-        self.apps = AppRegistry(core, config)
-        self.registry = ModelRegistry(core, self.apps, config)
-        self.registry.discover()
-        self.files = first_party_records(core, config.first_party)
-        self.databases: dict[str, frozenset[str]] = {}
-
-    def migrations(self) -> list[Edge]:
-        projection = AliasProjection(self.repo_root, self.config.routing)
-        migrations = MigrationReader(self.core, self.apps, self.config).read(projection)
-        self.databases = migrations.aliases
-        return MigrationEdges(migrations).produce()
-
-    def relations(self) -> list[Edge]:
-        builder = RelationBuilder(self.registry)
-        return RelationEdges(self.registry, builder, self.core.index.path_of).produce()
-
-    def references(self) -> list[Edge]:
-        return UseProducer(self.core, self.symbols, self.registry).produce(self.files)
-
-    def model_labels(self) -> list[Edge]:
-        return GetModelProducer(self.core, self.registry).produce(self.files)
-
-    def signals(self) -> list[Edge]:
-        return SignalProducer(self.core, self.symbols, self.registry, self.config).produce(self.files)
-
-    def installs(self) -> list[Edge]:
-        return InstallsProducer(self.symbols, self.config.hooks, self.config.first_party).produce(self.files)
-
-    def loads(self) -> list[Edge]:
-        settings = SettingsReader(self.core).modules(self.config.settings_modules)
-        return AppLoads(self.core, self.apps, settings, self.config.first_party).produce()
-
-    def in_order(self) -> list[tuple[str, Callable[[], list[Edge]]]]:
-        return [
-            ("django.migrations", self.migrations),
-            ("django.relations", self.relations),
-            ("django.uses", self.references),
-            ("django.model-labels", self.model_labels),
-            ("django.signals", self.signals),
-            ("django.installs", self.installs),
-            ("django.loaders", self.loads),
+        self.graph = graph
+        self.files = [
+            scope
+            for scope in build.files
+            if scope.record.get("status") == "ok" and build.first_party.contains(scope.module)
         ]
+        self.apps: AppRegistry | None = None
+        self.registry: ModelRegistry | None = None
+        self.migrations: MigrationGraph | None = None
+
+    def read_apps(self) -> list[Edge]:
+        self.apps = AppRegistry(self.build, self.config)
+        return []
+
+    def read_models(self) -> list[Edge]:
+        assert self.apps is not None
+        self.registry = ModelRegistry(self.build, self.apps)
+        self.registry.discover()
+        if not self.registry.models:
+            raise NoModels("no first-party model found")
+        failures = self.registry.failures
+        if failures:
+            reason = f"{len(failures)} classes unread, first {failures[0]}"
+            self.graph.failed_producers[MODELS_PRODUCER] = ProducerFailure(reason, MODEL_KINDS)
+        return []
+
+    def migration_edges(self) -> list[Edge]:
+        assert self.apps is not None
+        projection = AliasProjection(self.repo_root, self.config.routing)
+        self.migrations = MigrationReader(self.build, self.apps, self.config).read(projection)
+        return MigrationEdges(self.migrations, self.build.external).produce()
+
+    def relation_edges(self) -> list[Edge]:
+        assert self.registry is not None
+        builder = RelationBuilder(self.registry, self.config)
+        return RelationEdges(self.registry, builder, self.build.index.path_of).produce()
+
+    def use_edges(self) -> list[Edge]:
+        assert self.registry is not None
+        return UseProducer(self.build, self.registry).produce(self.files, self.graph.by_kind("reference"))
+
+    def get_model_edges(self) -> list[Edge]:
+        assert self.registry is not None
+        return GetModelProducer(self.build, self.registry).produce(self.files)
+
+    def signal_edges(self) -> list[Edge]:
+        assert self.registry is not None
+        return SignalProducer(self.build, self.registry, self.config).produce(self.files)
+
+    def installs_edges(self) -> list[Edge]:
+        return InstallsProducer(self.build, self.config.hooks).produce(self.files)
+
+    def load_edges(self) -> list[Edge]:
+        assert self.apps is not None
+        return AppLoads(self.build, self.apps).produce()
+
+    def symbols(self) -> list[Edge]:
+        assert self.registry is not None and self.apps is not None
+        databases = self.migrations.aliases if self.migrations is not None else {}
+        self.graph.symbols.update(ModelFacts(self.registry, self.apps).symbols(databases))
+        return []
+
+    def plan(self) -> ProducerPlan:
+        return ProducerPlan(
+            [
+                ProducerStep(APPS_PRODUCER, EDGE_KINDS, self.read_apps),
+                ProducerStep(MODELS_PRODUCER, MODEL_KINDS, self.read_models, (APPS_PRODUCER,)),
+                ProducerStep(
+                    MIGRATION_PRODUCER, frozenset({"migration-parent"}), self.migration_edges, (APPS_PRODUCER,)
+                ),
+                ProducerStep(
+                    RELATIONS_PRODUCER,
+                    frozenset({"relation", "reverse-accessor", "model-label"}),
+                    self.relation_edges,
+                    (MODELS_PRODUCER,),
+                ),
+                ProducerStep(USES_PRODUCER, frozenset({"reference"}), self.use_edges, (MODELS_PRODUCER,)),
+                ProducerStep(GET_MODEL_PRODUCER, frozenset({"model-label"}), self.get_model_edges, (MODELS_PRODUCER,)),
+                ProducerStep(SIGNALS_PRODUCER, frozenset({"signal"}), self.signal_edges, (MODELS_PRODUCER,)),
+                ProducerStep(INSTALLS_PRODUCER, frozenset({"installs"}), self.installs_edges),
+                ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
+                ProducerStep(SYMBOLS_PRODUCER, frozenset(), self.symbols, (MODELS_PRODUCER,)),
+            ]
+        )
 
 
 class DjangoPack:
-    """Runs the producers in dependency order. A producer that raises is recorded, never fatal."""
+    """The `[django]` section's pack. Core reference edges must be in the graph first."""
 
-    def __init__(self, core: Core, config: DjangoPackConfig, repo_root: Path) -> None:
-        self.core = core
-        self.config = config
-        self.repo_root = repo_root
+    name = SECTION
+    allowed_keys = ALLOWED_KEYS
+    edge_kinds = EDGE_KINDS
 
-    def produce(self, graph: Graph) -> DjangoProducers | None:
-        try:
-            producers = DjangoProducers(self.core, self.config, self.repo_root)
-        except Exception as error:  # a broken producer makes its rules incomplete, it does not stop the run
-            graph.failed_producers[MODELS_PRODUCER] = f"{type(error).__name__}: {error}"
-            for name in DEPENDENT_PRODUCERS:
-                graph.failed_producers[name] = f"{MODELS_PRODUCER} failed"
-            return None
-        failures = producers.registry.failures
-        if failures:
-            graph.failed_producers[MODELS_PRODUCER] = f"{len(failures)} classes unread, first {failures[0]}"
-        for name, producer in producers.in_order():
-            try:
-                graph.edges.extend(producer())
-            except Exception as error:
-                graph.failed_producers[name] = f"{type(error).__name__}: {error}"
-        graph.symbols.update(ModelFacts(producers.registry, producers.apps).symbols(producers.databases))
-        return producers
+    def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
+        return FACT_NEEDS
+
+    def produce(self, section: Mapping[str, Any], core: AnalysisResult, graph: Graph, root: Path) -> None:
+        self.run(core.build, DjangoPackConfig.from_section(section), graph, root)
+
+    @staticmethod
+    def run(build: CoreBuild, config: DjangoPackConfig, graph: Graph, root: Path) -> None:
+        DjangoRun(build, config, root, graph).plan().run(graph)
+
+
+DJANGO_PACK = DjangoPack()
