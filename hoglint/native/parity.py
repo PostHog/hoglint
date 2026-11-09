@@ -9,7 +9,8 @@ Usage:
   python -m hoglint.native.parity [--repo <root>] [--work <dir>]
       run both engines and compare
   python -m hoglint.native.parity --determinism N [--repo <root>] [--work <dir>]
-      run the native engine N times with other hash seeds and thread counts, compare to the first
+      run the native engine N times, each with its own hash seed, thread count and empty fact
+      cache (so extraction runs at that thread count too), and compare each to the first
   python -m hoglint.native.parity dump --engine native|python --out <dir> [--repo <root>]
 """
 
@@ -34,7 +35,7 @@ from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import Finding, Graph
 from hoglint.native.normal import FIELDS, Row, edge_row
-from hoglint.native.source import ENGINES, graph_source
+from hoglint.native.source import ENGINES, batch_mode, graph_source
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
@@ -190,6 +191,7 @@ class Dump:
         return now
 
     def check(self) -> tuple[Graph, RunResult]:
+        batch_mode(self.engine)
         started = time.perf_counter()
         config = load_config(self.repo, self.repo / CONFIG_FILE)
         graph = graph_source(self.engine, self.work).build(self.repo, config)
@@ -250,6 +252,18 @@ def dump_in_process(repo: Path, engine: str, out: Path, env: dict[str, str] | No
     subprocess.run([*command, "--repo", str(repo)], check=True, env={**os.environ, **(env or {})})
 
 
+def determinism_env(work: Path, run: int) -> dict[str, str]:
+    """Run `run` of the determinism check: its own hash seed, thread count (extraction and link)
+    and an empty fact cache, so every run extracts every file at its own thread count."""
+    threads = (1, 2, 4, 8, 0)[run % 5]
+    return {
+        "PYTHONHASHSEED": str(run * 7919),
+        "HOGLINT_THREADS": str(threads),
+        "RAYON_NUM_THREADS": str(threads or 16),
+        "XDG_CACHE_HOME": str(work / f"cache-{run}"),
+    }
+
+
 def report(title: str, diffs: list[RowDiff], left: Path, right: Path) -> bool:
     sys.stdout.write(f"{title}\n")
     sys.stdout.write("\n".join(diff.render() for diff in diffs) + "\n")
@@ -276,10 +290,10 @@ def main() -> None:
     ok = True
     if args.determinism:
         first = work / "native-0"
-        dump_in_process(repo, "native", first, {"PYTHONHASHSEED": "0", "RAYON_NUM_THREADS": "1"})
+        dump_in_process(repo, "native", first, determinism_env(work, 0))
         for run in range(1, args.determinism):
             other = work / f"native-{run}"
-            env = {"PYTHONHASHSEED": str(run * 7919), "RAYON_NUM_THREADS": str(2 * run)}
+            env = determinism_env(work, run)
             dump_in_process(repo, "native", other, env)
             ok = report(f"native run 0 vs run {run} ({env})", compare_dumps(first, other), first, other) and ok
     else:

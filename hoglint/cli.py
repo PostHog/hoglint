@@ -50,7 +50,7 @@ from hoglint.ledger.records import FindingRecord, Portable
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, obligation_of, obligations_of
 from hoglint.ledger.store import ExtractorStore, SummaryStore
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
-from hoglint.native.source import ENGINES, graph_source
+from hoglint.native.source import ENGINES, batch_mode, graph_source
 from hoglint.rules.base import EdgeRule, IncompleteItem, RuleContext
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
@@ -987,6 +987,7 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     repo = args.repo.resolve()
+    batch_mode(args.engine)
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
         commands = Commands(repo, Path(work), args.engine)
         try:

@@ -8,6 +8,7 @@ its part of it the first time a pack reads it.
 
 from __future__ import annotations
 
+from array import array
 from collections.abc import Iterator, Mapping
 from functools import cached_property
 from typing import Any
@@ -28,34 +29,41 @@ Hits = tuple[str, list[tuple[str, str]]]
 ABSENT = object()
 
 
+ABSENT_RANGE = 0xFFFFFFFF
+
+
 class KindTexts:
-    """The JSON text of fact kinds, fetched for every file in one call the first time any file
-    asks for that kind. A text is dropped once its record decodes it."""
+    """The records' JSON text, read in place: one buffer over the link's memory, and per fact
+    kind where each record's list sits in it, fetched for every file at once on first use."""
 
     def __init__(self, link: Any) -> None:
+        self.text = memoryview(link.text())
         self.link = link
-        self.kinds: dict[str, list[bytes | None]] = {}
+        self.ranges: dict[str, array[int]] = {}
 
-    def take(self, file: int, key: str) -> bytes | None:
-        texts = self.kinds.get(key)
-        if texts is None:
-            texts = self.kinds[key] = self.link.raw_kind(key)
-        text = texts[file]
-        texts[file] = None
-        return text
+    def take(self, file: int, key: str) -> memoryview | None:
+        ranges = self.ranges.get(key)
+        if ranges is None:
+            ranges = self.ranges[key] = array("I", self.link.kind_ranges(key))
+        start = ranges[2 * file]
+        if start == ABSENT_RANGE:
+            return None
+        return self.text[start : ranges[2 * file + 1]]
 
 
 class NativeRecord(dict[str, Any]):
     """One file's record. A key decodes from the extractor's JSON text on first read and is
-    kept; a key the record lacks is kept as ABSENT, so each one crosses at most once."""
+    kept; a key the record lacks is kept as ABSENT, so each one crosses at most once. `path` is
+    the snapshot's: a cached record holds an empty one."""
 
     __slots__ = ("file", "link", "texts")
 
-    def __init__(self, link: Any, texts: KindTexts, file: int) -> None:
+    def __init__(self, link: Any, texts: KindTexts, file: int, path: str) -> None:
         super().__init__()
         self.link = link
         self.texts = texts
         self.file = file
+        dict.__setitem__(self, "path", path)
 
     def load(self, key: str) -> Any:
         text = self.texts.take(self.file, key)
@@ -90,7 +98,9 @@ class NativeStore:
 
     def __init__(self, link: Any, paths: list[str]) -> None:
         texts = KindTexts(link)
-        self.records: dict[str, NativeRecord] = {path: NativeRecord(link, texts, i) for i, path in enumerate(paths)}
+        self.records: dict[str, NativeRecord] = {
+            path: NativeRecord(link, texts, i, path) for i, path in enumerate(paths)
+        }
 
 
 def module_values(record: Mapping[str, Any]) -> dict[str, object]:
@@ -105,6 +115,45 @@ def module_values(record: Mapping[str, Any]) -> dict[str, object]:
             if isinstance(target, str) and "." not in target:
                 values[target] = row["v"]
     return values
+
+
+class ModuleValues(dict[str, object]):
+    """A module table's `values`, decoded from the record's assigns when a pack first reads them:
+    most tables packs ask for are read for their names only."""
+
+    def __init__(self, record: Mapping[str, Any] | None) -> None:
+        super().__init__()
+        self.record = record
+
+    def load(self) -> None:
+        if self.record is not None:
+            record, self.record = self.record, None
+            if record.get("status") == "ok":
+                self.update(module_values(record))
+
+    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+        self.load()
+        return super().get(key, default)
+
+    def __getitem__(self, key: str) -> object:
+        self.load()
+        return super().__getitem__(key)
+
+    def __contains__(self, key: object) -> bool:
+        self.load()
+        return super().__contains__(key)
+
+    def __iter__(self) -> Iterator[str]:
+        self.load()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self.load()
+        return super().__len__()
+
+    def items(self) -> Any:
+        self.load()
+        return super().items()
 
 
 class NativeTables(Tables):
@@ -124,9 +173,7 @@ class NativeTables(Tables):
         table.names = dict(names)
         table.star_imports = stars
         table.lazy = dict(lazy)
-        record = self.record(module)
-        if record is not None and record.get("status") == "ok":
-            table.values = module_values(record)
+        table.values = ModuleValues(self.record(module))
         return table
 
 

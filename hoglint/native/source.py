@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import tempfile
 from pathlib import Path
 
@@ -36,6 +37,14 @@ class NativeGraphSource(GraphSource):
                 reason = f"{type(error).__name__}: {error}"
                 graph.failed_producers[pack.name] = ProducerFailure(reason, frozenset(pack.edge_kinds))
         return graph
+
+
+def batch_mode(engine: str) -> None:
+    """A native run is one batch: it builds millions of short-lived objects (decoded facts, edges)
+    and frees them at exit. The cyclic collector would rescan them over and over, about 40% of a
+    native run, so it stays off; nothing the run keeps forms reference cycles worth collecting."""
+    if engine == "native":
+        gc.disable()
 
 
 def graph_source(engine: str, work_dir: Path) -> GraphSource:

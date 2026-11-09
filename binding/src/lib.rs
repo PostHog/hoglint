@@ -8,7 +8,7 @@
 mod blobs;
 
 use blobs::{Blob, BlobRequest, configs, load};
-use hoglint_facts::link::facts::{V, decode_lines};
+use hoglint_facts::link::facts::{FactSet, V, decode_lines};
 use hoglint_facts::link::groups::Role;
 use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
@@ -17,7 +17,10 @@ use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::Lookup;
 use hoglint_facts::link::{Link as CoreLink, LinkConfig};
 use pyo3::exceptions::{PyKeyError, PyValueError};
+use pyo3::ffi;
 use pyo3::prelude::*;
+use std::ffi::{c_int, c_void};
+use std::sync::Arc;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use rustc_hash::FxHashMap;
 
@@ -130,6 +133,28 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
     Ok(V::Other)
 }
 
+/// The JSON text of every record, as one read-only buffer: `memoryview(link.text())` reads it with
+/// no copy. `Link.kind_ranges` says where each record's fact lists sit in it.
+#[pyclass(module = "hoglint_native", frozen)]
+struct FactText {
+    facts: Arc<FactSet>,
+}
+
+#[pymethods]
+impl FactText {
+    unsafe fn __getbuffer__(slf: Bound<'_, Self>, view: *mut ffi::Py_buffer, flags: c_int) -> PyResult<()> {
+        let text = &slf.get().facts.text;
+        let buf = text.as_ptr() as *mut c_void;
+        let filled = unsafe { ffi::PyBuffer_FillInfo(view, slf.as_ptr(), buf, text.len() as ffi::Py_ssize_t, 1, flags) };
+        if filled == -1 {
+            return Err(PyErr::fetch(slf.py()));
+        }
+        Ok(())
+    }
+
+    unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
+}
+
 /// One linked snapshot: facts, module index, resolver state and the core edges.
 #[pyclass(module = "hoglint_native", unsendable)]
 struct Link {
@@ -240,6 +265,25 @@ impl Link {
             return Err(PyKeyError::new_err(file));
         }
         Ok(self.raw_value(file, key).map(|raw| PyBytes::new(py, &raw)))
+    }
+
+    /// The JSON text of every record, for zero-copy reads.
+    fn text(&self) -> FactText {
+        FactText { facts: self.inner.core.facts.clone() }
+    }
+
+    /// Where one top-level key of every record sits in `text()`: (start, end) u32 pairs in fact
+    /// order, u32::MAX for a record without the key.
+    fn kind_ranges<'py>(&self, py: Python<'py>, key: &str) -> Bound<'py, PyBytes> {
+        let facts = &self.inner.core.facts;
+        let mut out = Vec::with_capacity(facts.files.len() * 2);
+        for file in &facts.files {
+            match file.keys.iter().find(|(name, _)| &**name == key) {
+                Some((_, range)) => out.extend_from_slice(&[range.start as u32, range.end as u32]),
+                None => out.extend_from_slice(&[u32::MAX, u32::MAX]),
+            }
+        }
+        ids_bytes(py, &out)
     }
 
     /// One top-level key of every record, in fact order: its JSON text, or None where the
@@ -810,6 +854,7 @@ fn link_blobs(
 #[pymodule]
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
+    module.add_class::<FactText>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
     module.add_function(wrap_pyfunction!(link_blobs, module)?)?;
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;
