@@ -21,6 +21,7 @@ ALLOWED_KEYS = frozenset(
         "hooks",
         "receiver_decorators",
         "signal_bases",
+        "scan_roots",
     }
 )
 DEFAULT_RECEIVER_DECORATORS = ("django.dispatch.dispatcher.receiver",)
@@ -53,7 +54,10 @@ class DjangoPackConfig:
     call `<name>("A", "B")` to the setting `<prefix>A_B` (both only in migration keys and FK targets).
     `hooks` are qualified names of functions that install a callback; a call or decorator that
     resolves to one becomes an `installs` edge. `receiver_decorators` are functions that register
-    their decorated function as a signal receiver, like Django's own `receiver`.
+    their decorated function as a signal receiver, like Django's own `receiver`. `scan_roots` are
+    the module prefixes whose files the pack reads for models, uses, signals and installs; empty
+    means the top-level packages of the first-party INSTALLED_APPS, so first-party tooling that
+    is no Django code stays out.
     """
 
     settings_modules: tuple[str, ...] = ()
@@ -63,6 +67,7 @@ class DjangoPackConfig:
     hooks: tuple[str, ...] = ()
     receiver_decorators: tuple[str, ...] = DEFAULT_RECEIVER_DECORATORS
     signal_bases: tuple[str, ...] = DEFAULT_SIGNAL_BASES
+    scan_roots: tuple[str, ...] = ()
 
     @classmethod
     def from_section(cls, section: Mapping[str, Any]) -> DjangoPackConfig:
@@ -81,4 +86,5 @@ class DjangoPackConfig:
             hooks=as_tuple(section.get("hooks")),
             receiver_decorators=as_tuple(section.get("receiver_decorators")) or DEFAULT_RECEIVER_DECORATORS,
             signal_bases=as_tuple(section.get("signal_bases")) or DEFAULT_SIGNAL_BASES,
+            scan_roots=as_tuple(section.get("scan_roots")),
         )

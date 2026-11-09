@@ -9,6 +9,7 @@ from typing import Any
 from hoglint.core.analysis import AnalysisResult
 from hoglint.core.build import CoreBuild
 from hoglint.core.harness import ProducerPlan, ProducerStep
+from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.model import Edge, Graph
 from hoglint.packs.django.apps import AppRegistry
@@ -51,23 +52,34 @@ class DjangoRun:
         self.config = config
         self.repo_root = repo_root
         self.graph = graph
-        self.files = [
-            scope
-            for scope in build.files
-            if scope.record.get("status") == "ok" and build.first_party.contains(scope.module)
-        ]
+        self.files: list[FileScope] = []
         self.apps: AppRegistry | None = None
         self.registry: ModelRegistry | None = None
         self.migrations: MigrationGraph | None = None
 
+    def scan_roots(self, apps: AppRegistry) -> tuple[str, ...]:
+        """The configured roots, else the top-level packages of the first-party installed apps."""
+        if self.config.scan_roots:
+            return self.config.scan_roots
+        first_party = self.build.first_party
+        return tuple(sorted({app.name.partition(".")[0] for app in apps.apps if first_party.contains(app.name)}))
+
     def read_apps(self) -> list[Edge]:
         self.apps = AppRegistry(self.build, self.config)
+        roots = self.scan_roots(self.apps)
+        self.files = [
+            scope
+            for scope in self.build.files
+            if scope.record.get("status") == "ok"
+            and self.build.first_party.contains(scope.module)
+            and any(scope.module == root or scope.module.startswith(root + ".") for root in roots)
+        ]
         return []
 
     def read_models(self) -> list[Edge]:
         assert self.apps is not None
         self.registry = ModelRegistry(self.build, self.apps)
-        self.registry.discover()
+        self.registry.discover(self.files)
         if not self.registry.models:
             raise NoModels("no first-party model found")
         failures = self.registry.failures
@@ -130,7 +142,7 @@ class DjangoRun:
                 ProducerStep(USES_PRODUCER, frozenset({"reference"}), self.use_edges, (MODELS_PRODUCER,)),
                 ProducerStep(GET_MODEL_PRODUCER, frozenset({"model-label"}), self.get_model_edges, (MODELS_PRODUCER,)),
                 ProducerStep(SIGNALS_PRODUCER, frozenset({"signal"}), self.signal_edges, (MODELS_PRODUCER,)),
-                ProducerStep(INSTALLS_PRODUCER, frozenset({"installs"}), self.installs_edges),
+                ProducerStep(INSTALLS_PRODUCER, frozenset({"installs"}), self.installs_edges, (APPS_PRODUCER,)),
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
                 ProducerStep(SYMBOLS_PRODUCER, MODEL_KINDS, self.symbols, (MODELS_PRODUCER, MIGRATION_PRODUCER)),
             ]

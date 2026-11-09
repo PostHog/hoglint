@@ -6,11 +6,13 @@ Owners are never decided here: edges carry modules, and labels decide packages l
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
+from hoglint.core.sites import FileScope
 from hoglint.core.symbols import entity
 from hoglint.model import Context, EntityId
 from hoglint.packs.django.apps import AppRegistry
@@ -269,12 +271,10 @@ class ModelRegistry:
         self.by_label: dict[str, EntityId] = {}
         self.failures: list[str] = []
 
-    def discover(self) -> None:
-        """Models in first-party prod files: classes whose MRO reaches Django's Model."""
+    def discover(self, files: Iterable[FileScope]) -> None:
+        """Models in the given prod files: classes whose MRO reaches Django's Model."""
         index = self.build.index
-        for scope in self.build.files:
-            if scope.record.get("status") != "ok" or not self.build.first_party.contains(scope.module):
-                continue
+        for scope in files:
             if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
                 continue
             if index.path_of.get(scope.module) != scope.path:

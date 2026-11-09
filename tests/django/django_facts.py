@@ -75,9 +75,13 @@ class FactRepo(Repo):
     def __init__(self, *groups: dict[str, dict]) -> None:
         super().__init__(DJANGO, APPS, *groups)
 
-    def graph(self, hooks: tuple[str, ...] = (), routing: DatabaseRouting | None = None) -> Graph:
+    def graph(
+        self, hooks: tuple[str, ...] = (), routing: DatabaseRouting | None = None, scan_roots: tuple[str, ...] = ()
+    ) -> Graph:
         build = self.build(CoreConfig(first_party=FIRST_PARTY))
         graph = build.graph()
-        config = DjangoPackConfig(settings_modules=("proj.settings",), routing=routing, hooks=hooks)
+        config = DjangoPackConfig(
+            settings_modules=("proj.settings",), routing=routing, hooks=hooks, scan_roots=scan_roots
+        )
         DjangoPack.run(build, config, graph, Path("."))
         return graph

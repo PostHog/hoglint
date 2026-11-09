@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from core.support import (
     assign_row as assign,
     class_def,
@@ -106,6 +108,16 @@ def test_installs_edges_see_imports_only_where_they_are_bound_and_skip_class_hoo
         ("wire", "call", "None", Resolution.UNRESOLVED, ""),
         ("wire", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
     ]
+
+
+@pytest.mark.parametrize("scan_roots, installs", [((), 0), (("proj",), 3)])
+def test_first_party_code_outside_the_installed_apps_is_read_only_when_configured(
+    scan_roots: tuple[str, ...], installs: int
+) -> None:
+    tooling = {"billing/hooks.py": HOOKS["billing/hooks.py"], "proj/wiring.py": HOOKS["shop/wiring.py"]}
+    graph = FactRepo(tooling).graph(hooks=("billing.hooks.register_refund_hook",), scan_roots=scan_roots)
+
+    assert len([e for e in graph.by_kind("installs") if e.site.module == "proj.wiring"]) == installs
 
 
 RECEIVER_LISTS = {
