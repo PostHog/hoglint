@@ -7,9 +7,24 @@ from collections.abc import Iterator
 from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.globs import fill, glob_match
+from hoglint.model import Edge
 from hoglint.plugins import REGISTRY
-from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, RuleContext, RuleRun, project
-from hoglint.selectors import Ref, Resolver, State, Truth, Value, render_value
+from hoglint.rules.base import (
+    EdgeEnv,
+    EdgeRule,
+    IncompleteItem,
+    RuleContext,
+    RuleRun,
+    StagedSelection,
+    conjuncts,
+    contexts_of,
+    joined,
+    project,
+)
+from hoglint.selectors import Node, Ref, Resolver, Selector, State, Truth, Value, all_of, evaluate, refs, render_value
+
+# The edge fields that every edge of one kind with one set of contexts shares.
+KIND_AND_CONTEXT = frozenset({("edge", "kind"), ("edge", "context")})
 
 
 class EntityRule:
@@ -234,13 +249,39 @@ class CoveragePrimitive(EntityRule):
                 if value.state is State.KNOWN:
                     out.setdefault(render_value(value), (f"rules.{rule_id}.{column}", None))
 
+    @staticmethod
+    def reads_kind_and_context(node: Node) -> bool:
+        return all(ref.path in KIND_AND_CONTEXT for ref in refs(node))
+
+    def kind_and_context_truth(self, part: Node, edge: Edge, truths: dict[tuple[str, frozenset[str]], Truth]) -> Truth:
+        """`part`, which reads only the edge's kind and contexts, judged once per kind and contexts."""
+        key = (edge.kind, contexts_of(edge))
+        found = truths.get(key)
+        if found is None:
+            src = self.ctx.src_endpoint(edge.site)
+            found = truths[key] = evaluate(part, EdgeEnv(self.ctx, edge, src, src).resolve)
+        return found
+
     def from_edges(self, cover: CoverSpec, out: dict[str, tuple[str, str | None]]) -> None:
-        kinds = cover.selector.restricts(("edge", "kind")) if cover.selector is not None else None
+        """The paths the cover's edges name. The conjuncts of its selector that read only the edge's
+        kind and contexts drop an edge before its endpoints are read; the rest are staged the way
+        an edge rule's selection is, so endpoint labels are judged once per endpoint or module."""
+        selector = cover.selector
+        kinds = selector.restricts(("edge", "kind")) if selector is not None else None
+        parts = conjuncts((selector,))
+        by_edge = joined([part for part in parts if self.reads_kind_and_context(part)])
+        rest = joined([part for part in parts if not self.reads_kind_and_context(part)])
+        staged = StagedSelection(
+            self.ctx, (Selector(selector.source, rest),) if selector is not None and rest is not None else ()
+        )
+        truths: dict[tuple[str, frozenset[str]], Truth] = {}
         for edge in self.ctx.edges_of(tuple(sorted(kinds or ()))):
+            edge_truth = self.kind_and_context_truth(by_edge, edge, truths) if by_edge is not None else Truth.TRUE
+            if edge_truth is Truth.FALSE:
+                continue
             src = self.ctx.src_endpoint(edge.site)
             for dst in self.ctx.dst_endpoints(edge, "origin"):
-                env = EdgeEnv(self.ctx, edge, src, dst)
-                truth = cover.selector.evaluate(env.resolve) if cover.selector is not None else Truth.TRUE
+                truth = all_of([edge_truth, staged.truth(EdgeEnv(self.ctx, edge, src, dst))])
                 if truth is Truth.FALSE:
                     continue
                 endpoint = src if cover.endpoint == "src" else dst

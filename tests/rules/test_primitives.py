@@ -620,6 +620,38 @@ def test_coverage_reads_turbo_inputs_and_layout_selects_entities(tmp_path: Path)
     assert identities(result, "at-home") == []
 
 
+COVER_EDGES = """
+[rules.wiring-watched]
+primitive = "coverage"
+covers = ["edge.kind == 'dotted-path' and edge.context == 'test' and src.package != dst.package: dst"]
+inputs = { adapter = "turbo", task = "contract-check" }
+identity = "entity"
+growth_key = ["subject"]
+"""
+
+
+def test_coverage_selects_each_edge_by_its_own_contexts(tmp_path: Path) -> None:
+    turbo_package(tmp_path, "products/billing", {"tasks": {"contract-check": {"inputs": ["facade/**"]}}})
+    graph = (
+        base_graph()
+        .edge("dotted-path", "core.api", "products.billing.models")
+        .edge("dotted-path", "core.api", "products.billing.logic", contexts=(Context.TEST,))
+        .edge("dotted-path", "core.views", None, "products.billing.gone", resolution=Resolution.UNRESOLVED)
+        .edge(
+            "dotted-path",
+            "core.views",
+            None,
+            "products.billing.lost",
+            resolution=Resolution.UNRESOLVED,
+            contexts=(Context.TEST,),
+        )
+        .graph
+    )
+    result = run(tmp_path, COVER_EDGES, graph)
+    assert identities(result, "wiring-watched") == [("products/billing/logic.py",)]
+    assert [item.key for item in result.runs["wiring-watched"].incomplete] == ["core.views|products.billing.lost"]
+
+
 LEVEL = (
     USE_SHAPE
     + LAYOUT_AND_COVERAGE
