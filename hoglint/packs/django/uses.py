@@ -18,7 +18,7 @@ from hoglint.core.sites import FileScope
 from hoglint.model import Edge, Resolution
 from hoglint.packs.django.models import ModelRegistry
 from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition
-from hoglint.plugins import AttributeUse, PackReader, Refinement
+from hoglint.plugins import AttributeUse, PackReader, Refinements
 
 USES_PRODUCER = "django.uses@1"
 GET_MODEL_PRODUCER = "django.get-model@1"
@@ -103,20 +103,23 @@ class UseProducer:
     def produce(self, files: list[FileScope]) -> list[Output]:
         uses = self.by_file()
         aggregates = {scope.path: found for scope, found in self.reader.uses_to(files, self.registry.models)}
+        refined = Refinements()
 
         def output_for(scope: FileScope) -> list[Output]:
-            found = aggregates.get(scope.path, [])
-            return [*self.shaped(scope, uses.get(scope.path, [])), *self.aggregate_edges(scope, found)]
+            self.shaped(scope, uses.get(scope.path, []), refined)
+            return list(self.aggregate_edges(scope, aggregates.get(scope.path, [])))
 
-        return each_item(files, output_for, self.failure)
+        return [*each_item(files, output_for, self.failure), refined]
 
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("reference", USES_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
-    def shaped(self, scope: FileScope, uses: list[Use]) -> list[Refinement]:
+    def shaped(self, scope: FileScope, uses: list[Use], out: Refinements) -> None:
+        """Adds one row per use to `out`, once every shape of the file is known: a file that
+        fails adds nothing."""
         if not uses:
-            return []
+            return
         sources = LocalSources()
         positions: list[UsePosition] = []
         shapes: list[Shape] = []
@@ -130,7 +133,7 @@ class UseProducer:
             positions.append(position)
             shapes.append(shape)
         later: dict[int, list[UsePosition]] = defaultdict(list)
-        derived = sorted(scope.record.get("derived", ()), key=lambda r: (r[2], r[3])) if locals_ else []
+        derived = sorted(self.reader.rows(scope, "derived"), key=lambda r: (r[2], r[3])) if locals_ else []
         for at_scope, _, line, column, _, root, chain, up, origin in derived:
             if root not in locals_:
                 continue
@@ -147,12 +150,10 @@ class UseProducer:
             refined = self.shapes.refine(positions[index], flows)
             if refined is not None and refined != shapes[index]:
                 flow_shapes[index] = refined.text()
-        out: list[Refinement] = []
         for index, use in enumerate(uses):
             flow = (("flow_shape", flow_shapes[index]),) if index in flow_shapes else ()
             shape = shapes[index]
-            out.append(Refinement(use.handle, shape.kind, shape.detail, flow))
-        return out
+            out.add(use.handle, shape.kind, shape.detail, flow)
 
     @staticmethod
     def aggregate_edges(scope: FileScope, found: list[AttributeUse]) -> list[Edge]:

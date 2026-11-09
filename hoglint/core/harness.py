@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from hoglint.model import Context, Edge, Graph, Resolution, Site, refined_edge
-from hoglint.plugins import PackSink, ProducerFailure, RefinedFields, Refinement
+from hoglint.plugins import PackSink, ProducerFailure, RefinedFields, Refinement, Refinements
 
-Output = Edge | Refinement
+Output = Edge | Refinement | Refinements
 
 PRODUCER_ERROR = "producer-error"
 
@@ -89,7 +89,7 @@ class ProducerPlan:
                 sink.fail(step.name, ProducerFailure(failure_text(error), step.kinds))
                 continue
             edges = [item for item in output if isinstance(item, Edge)]
-            refinements = [item for item in output if isinstance(item, Refinement)]
+            refinements = Refinements.of(output)
             if edges:
                 sink.add_edges(step.name, edges)
             if refinements:
@@ -110,7 +110,7 @@ class GraphSink:
     def own_attrs(self, handle: int) -> dict[str, str]:
         return dict(self.graph.edges[handle].attrs)
 
-    def refine(self, producer: str, kinds: frozenset[str], refinements: Sequence[Refinement]) -> None:
+    def refine(self, producer: str, kinds: frozenset[str], refinements: Refinements) -> None:
         conflicts = self.refined.conflicts(producer, refinements, self.own_attrs)
         if conflicts:
             more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
@@ -118,7 +118,8 @@ class GraphSink:
             return
         self.refined.record(producer, refinements)
         edges = self.graph.edges
-        for refinement in refinements:
+        for at in range(len(refinements)):
+            refinement = refinements.row(at)
             edges[refinement.handle] = refined_edge(edges[refinement.handle], refinement)
         self.graph.kind_index = {}
         self.graph.indexed = 0

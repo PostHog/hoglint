@@ -169,6 +169,11 @@ class PackQueries:
         found = sorted(entry for name in set(names) for entry in self.imports_by_name.get(name, ()))
         return [(scope, row) for _, _, scope, row in found]
 
+    def rows(self, scope: FileScope, kind: str) -> list[Any]:
+        """One file's rows of `kind`, for a pack that reads the kind of a file once: the native
+        engine decodes them for this read and keeps nothing."""
+        return scope.record.get(kind, [])
+
     def imported_modules(self, scope: FileScope) -> list[str]:
         """The module each import of a file names, in row order: `import a.b` names a.b, `from a
         import b` names a.b. A relative import that climbs out of the repo names nothing."""
@@ -274,6 +279,13 @@ class NativePackQueries(PackQueries):
     def imported_modules(self, scope: FileScope) -> list[str]:
         record: Any = scope.record
         return self.link.imported_modules(record.file)
+
+    def rows(self, scope: FileScope, kind: str) -> list[Any]:
+        record: Any = scope.record
+        if dict.__contains__(record, kind):
+            return record.get(kind, [])
+        text = self.link.raw(record.file, kind)
+        return orjson.loads(text) if text is not None else []
 
     def subclasses(self, qualified: str) -> list[EntityId]:
         graph: Any = self.graph

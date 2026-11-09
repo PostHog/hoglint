@@ -77,6 +77,9 @@ class BuildReader:
     def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
         return self.queries.importing(names)
 
+    def rows(self, scope: FileScope, kind: str) -> list[Any]:
+        return self.queries.rows(scope, kind)
+
     def imported_modules(self, scope: FileScope) -> list[str]:
         return self.queries.imported_modules(scope)
 

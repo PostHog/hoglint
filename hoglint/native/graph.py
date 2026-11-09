@@ -17,7 +17,7 @@ from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
-from hoglint.plugins import ProducerFailure, RefinedFields, Refinement
+from hoglint.plugins import ProducerFailure, RefinedFields, Refinements
 
 # Bit order of the link's context bits (src/link/scope.rs `ctx`).
 CONTEXT_BITS = (
@@ -233,7 +233,7 @@ class NativeSink:
     def own_attrs(self, handle: int) -> dict[str, str]:
         return dict(self.graph.edges[handle].attrs)
 
-    def refine(self, producer: str, kinds: frozenset[str], refinements: Sequence[Refinement]) -> None:
+    def refine(self, producer: str, kinds: frozenset[str], refinements: Refinements) -> None:
         conflicts = self.refined.conflicts(producer, refinements, self.own_attrs)
         if conflicts:
             more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
@@ -241,10 +241,10 @@ class NativeSink:
             return
         self.refined.record(producer, refinements)
         self.graph.link.refine(
-            array("I", (refinement.handle for refinement in refinements)).tobytes(),
-            [refinement.shape for refinement in refinements],
-            [refinement.shape_detail for refinement in refinements],
-            [list(refinement.attrs) for refinement in refinements],
+            array("I", refinements.handles).tobytes(),
+            refinements.shapes,
+            refinements.details,
+            refinements.attrs,
         )
 
     def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:

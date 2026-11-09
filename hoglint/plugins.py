@@ -110,6 +110,8 @@ class PackReader(Protocol):
 
     def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]: ...
 
+    def rows(self, scope: FileScope, kind: str) -> list[Any]: ...
+
     def imported_modules(self, scope: FileScope) -> list[str]: ...
 
     def subclasses(self, qualified: str) -> list[EntityId]: ...
@@ -120,7 +122,7 @@ class PackSink(Protocol):
 
     def add_edges(self, producer: str, edges: Sequence[Edge]) -> None: ...
 
-    def refine(self, producer: str, kinds: frozenset[str], refinements: Sequence[Refinement]) -> None:
+    def refine(self, producer: str, kinds: frozenset[str], refinements: Refinements) -> None:
         """Applies the batch, or none of it when it sets a field another producer set apart:
         then `producer` fails for `kinds`."""
         ...
@@ -138,42 +140,84 @@ def fields_of(refinement: Refinement) -> list[tuple[str, str]]:
     return out
 
 
-def first_set(before: Refinement, after: Refinement) -> Refinement:
-    """Two refinements of one edge by one producer as one: the first value set of each field wins."""
-    attrs = dict(after.attrs)
-    attrs.update(before.attrs)
-    return Refinement(
-        before.handle,
-        before.shape if before.shape is not None else after.shape,
-        before.shape_detail if before.shape_detail is not None else after.shape_detail,
-        tuple(attrs.items()),
-    )
+@dataclass(frozen=False, slots=True)
+class Refinements:
+    """Refinements as columns, one row per refined edge, in the order they apply: what a sink
+    takes, so a producer that refines many edges makes no object per edge."""
+
+    handles: list[int] = field(default_factory=list)
+    shapes: list[str | None] = field(default_factory=list)
+    details: list[str | None] = field(default_factory=list)
+    attrs: list[tuple[tuple[str, str], ...]] = field(default_factory=list)
+
+    def add(
+        self, handle: int, shape: str | None = None, detail: str | None = None, attrs: tuple[tuple[str, str], ...] = ()
+    ) -> None:
+        self.handles.append(handle)
+        self.shapes.append(shape)
+        self.details.append(detail)
+        self.attrs.append(attrs)
+
+    def extend(self, other: Refinements) -> None:
+        self.handles.extend(other.handles)
+        self.shapes.extend(other.shapes)
+        self.details.extend(other.details)
+        self.attrs.extend(other.attrs)
+
+    def __len__(self) -> int:
+        return len(self.handles)
+
+    def row(self, at: int) -> Refinement:
+        return Refinement(self.handles[at], self.shapes[at], self.details[at], self.attrs[at])
+
+    @staticmethod
+    def of(items: Iterable[Any]) -> Refinements:
+        """The `Refinement`s and `Refinements` among `items`, in order, as one batch."""
+        out = Refinements()
+        for item in items:
+            if isinstance(item, Refinement):
+                out.add(item.handle, item.shape, item.shape_detail, item.attrs)
+            elif isinstance(item, Refinements):
+                out.extend(item)
+        return out
 
 
 @dataclass(frozen=False, slots=True)
 class RefinedFields:
     """What each producer set on each edge it refined, so a sink finds two producers that set
-    one field apart. A field's owner is the first producer that set it."""
+    one field apart. A field's owner is the first producer that set it, and a producer's first
+    value of a field is the one that counts."""
 
-    made: dict[str, dict[int, Refinement]] = field(default_factory=dict)
+    made: dict[str, Refinements] = field(default_factory=dict)
+    rows: dict[str, dict[int, list[int]]] = field(default_factory=dict)
+
+    def rows_of(self, producer: str) -> dict[int, list[int]]:
+        """handle -> the rows of `producer`'s refinements, made when another producer refines."""
+        found = self.rows.get(producer)
+        if found is None:
+            found = self.rows[producer] = {}
+            for at, handle in enumerate(self.made[producer].handles):
+                found.setdefault(handle, []).append(at)
+        return found
 
     def owner(self, handle: int, name: str) -> tuple[str, str] | None:
         """(producer, value) of the first producer that set field `name` of edge `handle`."""
         for producer, refined in self.made.items():
-            found = refined.get(handle)
-            if found is None:
-                continue
-            for field_name, value in fields_of(found):
-                if field_name == name:
-                    return producer, value
+            for at in self.rows_of(producer).get(handle, ()):
+                for field_name, value in fields_of(refined.row(at)):
+                    if field_name == name:
+                        return producer, value
         return None
 
-    def conflicts(self, producer: str, refinements: Sequence[Refinement], own_attrs: Any) -> list[str]:
+    def conflicts(self, producer: str, refinements: Refinements, own_attrs: Any) -> list[str]:
         """The fields of `refinements` another producer set to another value, or an edge's own
         attr a refinement would change; `own_attrs(handle)` gives an edge's own attrs, asked only
         for a refinement that sets attrs."""
         out = []
-        for refinement in refinements:
+        for at in range(len(refinements)):
+            if not self.made and not refinements.attrs[at]:
+                continue
+            refinement = refinements.row(at)
             mine: dict[str, str] | None = None
             for name, value in fields_of(refinement):
                 found = self.owner(refinement.handle, name) if self.made else None
@@ -187,11 +231,9 @@ class RefinedFields:
                     out.append(f"{name} of edge {refinement.handle} (the edge has {mine[name[5:]]!r})")
         return out
 
-    def record(self, producer: str, refinements: Sequence[Refinement]) -> None:
-        refined = self.made.setdefault(producer, {})
-        for refinement in refinements:
-            before = refined.get(refinement.handle)
-            refined[refinement.handle] = refinement if before is None else first_set(before, refinement)
+    def record(self, producer: str, refinements: Refinements) -> None:
+        self.made.setdefault(producer, Refinements()).extend(refinements)
+        self.rows.pop(producer, None)
 
 
 class Pack(Protocol):

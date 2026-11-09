@@ -430,6 +430,7 @@ impl Link {
                 .clone()
                 .into_any()
         };
+        let mut paths: FxHashMap<u32, Bound<'py, PyString>> = FxHashMap::default();
         let mut out = Vec::with_capacity(names.len());
         for name in &names {
             let attr = name.strip_prefix("attr:").map(|key| it.get(key));
@@ -442,7 +443,11 @@ impl Link {
                             key.and_then(|key| edges.attrs_with(id).find(|(k, _)| *k == key));
                         text(found.map_or(EMPTY, |&(_, v)| v))
                     }
-                    ("path", _) => PyString::new(py, link.path_of_edge(id)).into_any(),
+                    ("path", _) => paths
+                        .entry(link.file_key(id))
+                        .or_insert_with(|| PyString::new(py, link.path_of_edge(id)))
+                        .clone()
+                        .into_any(),
                     ("module", _) => text(link.site_of(id).0),
                     ("scope", _) => text(link.site_of(id).1),
                     ("line", _) => link.line_col(id).0.into_pyobject(py)?.into_any(),
