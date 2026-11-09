@@ -7,6 +7,7 @@ use serde_json::Value as J;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::{Mutex, OnceLock};
 
 /// A value tree (schema.md section 4), reduced to the forms resolution reads.
 #[derive(Debug, Clone)]
@@ -177,21 +178,52 @@ impl FileFacts {
 }
 
 /// Every record of one snapshot and the text they came from.
+/// Makes the JSON text of a fact set when something first reads it.
+pub type TextSource = Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send>;
+
+/// The facts of a snapshot. Records keep ranges into the JSON text of every record, one per
+/// line in fact order. The link itself never reads that text, so a loader can defer it.
 pub struct FactSet {
-    pub text: Vec<u8>,
+    text: OnceLock<Result<Vec<u8>, String>>,
+    source: Mutex<Option<TextSource>>,
     pub files: Vec<FileFacts>,
 }
 
 impl FactSet {
-    /// The JSON text of one top-level key of a record, as the extractor wrote it.
-    pub fn raw(&self, file: usize, key: &str) -> Option<&[u8]> {
-        let facts = &self.files[file];
-        let (_, range) = facts.keys.iter().find(|(name, _)| &**name == key)?;
-        Some(&self.text[range.clone()])
+    pub fn new(text: Vec<u8>, files: Vec<FileFacts>) -> FactSet {
+        FactSet {
+            text: OnceLock::from(Ok(text)),
+            source: Mutex::new(None),
+            files,
+        }
     }
 
-    pub fn line(&self, file: usize) -> &[u8] {
-        &self.text[self.files[file].line.clone()]
+    /// A fact set whose text `source` makes on first read.
+    pub fn deferred(files: Vec<FileFacts>, source: TextSource) -> FactSet {
+        FactSet {
+            text: OnceLock::new(),
+            source: Mutex::new(Some(source)),
+            files,
+        }
+    }
+
+    pub fn text(&self) -> Result<&[u8], String> {
+        self.text
+            .get_or_init(|| match self.source.lock().map(|mut s| s.take()) {
+                Ok(Some(source)) => source(),
+                _ => Err("the fact text has no source".to_string()),
+            })
+            .as_deref()
+            .map_err(Clone::clone)
+    }
+
+    /// The JSON text of one top-level key of a record, as the extractor wrote it.
+    pub fn raw(&self, file: usize, key: &str) -> Result<Option<&[u8]>, String> {
+        let facts = &self.files[file];
+        let Some((_, range)) = facts.keys.iter().find(|(name, _)| &**name == key) else {
+            return Ok(None);
+        };
+        Ok(Some(&self.text()?[range.clone()]))
     }
 }
 
@@ -518,15 +550,16 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
     }
 }
 
-/// One record from `text[range]`, named `path` (a cache entry holds an empty path).
+/// One record from its JSON text `json`, which starts at `start` in the fact set's text, named
+/// `path` (a cache entry holds an empty path).
 pub fn decode_record(
     it: &mut Interner,
-    text: &[u8],
-    range: Range<usize>,
+    json: &[u8],
+    start: usize,
     path: &str,
 ) -> Result<FileFacts, DecodeError> {
-    let parsed = parse_line(&text[range.clone()], range.start)?;
-    let mut facts = convert(it, parsed, range);
+    let parsed = parse_line(json, start)?;
+    let mut facts = convert(it, parsed, start..start + json.len());
     facts.path = path.into();
     Ok(facts)
 }
@@ -559,5 +592,5 @@ pub fn decode_lines(it: &mut Interner, text: Vec<u8>) -> Result<FactSet, DecodeE
             files.push(convert(it, parsed?, range.clone()));
         }
     }
-    Ok(FactSet { text, files })
+    Ok(FactSet::new(text, files))
 }

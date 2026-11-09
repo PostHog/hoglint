@@ -1,7 +1,7 @@
 """Snapshot to native Graph: list the snapshot's blobs, read or extract their facts, link in Rust.
 
-The facts of a blob are cached under (facts id, blob oid), so a warm run reads one cache file
-per source and no source at all. Discovery, fact needs and the extractor options are the
+The facts of a blob are cached under (facts id, blob oid) in the fact database, so a warm run
+reads one database and no source at all. Discovery, fact needs and the extractor options are the
 Python engine's, so both engines read the same facts. Packs read them through `NativeBuild`.
 """
 
@@ -19,6 +19,7 @@ from hoglint.facts import site_packages_files
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
 from hoglint.native.config import link_config
+from hoglint.native.factdb import FactDatabase
 from hoglint.native.graph import NativeGraph
 from hoglint.native.snapshot import BlobSnapshot
 from hoglint.plugins import REGISTRY, ProducerFailure
@@ -47,6 +48,14 @@ class NativeAnalysis(CoreAnalysis):
         if override:
             return int(override)
         return 1 if self.options.staged else 0
+
+    def fact_database(self, facts_id: str) -> FactDatabase | None:
+        """The fact database of this build, pruned on the first run of the day; None without a cache."""
+        if self.options.cache_dir is None:
+            return None
+        database = FactDatabase(self.options.cache_dir, facts_id)
+        database.prune_daily()
+        return database
 
     def blob_snapshot(self) -> BlobSnapshot:
         if self.options.tree:
@@ -88,14 +97,14 @@ class NativeAnalysis(CoreAnalysis):
         started = time.perf_counter()
         native = bridge.load()
         blobs = [(path, *snapshot.blobs[path]) for path in inventory.files]
-        cache = str(self.options.cache_dir) if self.options.cache_dir is not None else None
+        database = self.fact_database(native.FACTS_ID)
         link, (hits, extracted) = native.link_blobs(
             str(self.options.repo),
             blobs,
             [(path, path) for path in external],
             self.extract_options(inventory),
             json.dumps(link_config(config, inventory.analyzed, external)),
-            cache,
+            str(database.path) if database is not None else None,
             self.threads(),
         )
         timings["link"] = time.perf_counter() - started

@@ -77,6 +77,6 @@ def link_blobs(
     external: list[tuple[str, str]],
     extract: str,
     config: str,
-    cache: str | None = None,
+    db: str | None = None,
     threads: int = 0,
 ) -> tuple[Link, tuple[int, int]]: ...

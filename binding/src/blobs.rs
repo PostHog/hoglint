@@ -1,15 +1,17 @@
 //! The facts of a snapshot given as blob ids: the shell around `hoglint_facts::extract` and the
-//! link's cache entries.
+//! fact database.
 //!
-//! An entry is cached under (facts id, blob oid) and holds the record's JSON text, which packs
-//! read, and the link's facts in binary (`link::store`), so a hit reads one file and parses no
-//! JSON. A miss reads the blob with one `git cat-file --batch` for the whole snapshot (or the
-//! working tree file, for a file git has no blob of yet), extracts it, and stores the entry.
-//! Site-packages files are not in git; they are read and keyed by content hash.
+//! An entry is stored under (extract config id, blob oid) in the database of the facts id
+//! (`factdb`): the link's facts in binary (`link::store`), so a hit parses no JSON, and the
+//! record's JSON text, which packs read and which is read only when they do. A miss reads the blob with one `git cat-file --batch`
+//! for the whole snapshot (or the working tree file, for a file git has no blob of yet), extracts
+//! it, and stores the entry. Site-packages files are not in git; they are read and keyed by
+//! content hash.
 
+use crate::factdb::{FactDb, NewEntry, Row};
 use hoglint_facts::link::facts::{FactSet, FileFacts, decode_record};
-use hoglint_facts::link::intern::Interner;
-use hoglint_facts::link::store::{decode_entry, encode_entry, entry_json};
+use hoglint_facts::link::intern::{Interner, Sid};
+use hoglint_facts::link::store::{decode_body, encode_facts, facts_strings};
 use hoglint_facts::{
     ExtractConfig, Facts, FileRecord, Kinds, Status, extract, record_line, sha256_hex,
 };
@@ -17,7 +19,6 @@ use rayon::prelude::*;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One source file of a snapshot: its path, blob oid, and whether its bytes come from the
 /// working tree (dirty or untracked) rather than from git's object store.
@@ -34,14 +35,16 @@ pub struct BlobRequest {
     pub external: Vec<(String, PathBuf)>,
     pub full: ExtractConfig,
     pub lite: ExtractConfig,
-    pub cache: Option<PathBuf>,
+    /// The fact database file; None runs without a cache.
+    pub db: Option<PathBuf>,
 }
 
-/// Counts of what one run read.
+/// Counts of what one run read, and seconds per loading stage.
 #[derive(Default, Debug)]
 pub struct BlobStats {
     pub hits: usize,
     pub extracted: usize,
+    pub stages: Vec<(&'static str, f64)>,
 }
 
 pub fn configs(
@@ -56,51 +59,24 @@ pub fn configs(
     Ok((full, lite))
 }
 
-struct Store {
-    dir: Option<PathBuf>,
-    cfg: String,
-    tmp_counter: AtomicU64,
+/// An extract config and its id, which keys its entries.
+struct Profile<'c> {
+    config: &'c ExtractConfig,
+    id: String,
 }
 
-impl Store {
-    fn new(config: &ExtractConfig, cache: Option<&Path>) -> Result<Store, String> {
-        let dir = cache.map(|base| base.join(config.cache_namespace()));
-        if let Some(dir) = &dir {
-            std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-        }
-        Ok(Store {
-            dir,
-            cfg: config.config_id(),
-            tmp_counter: AtomicU64::new(0),
-        })
-    }
-
-    /// A current-format entry, else None.
-    fn get(&self, key: &str) -> Option<Vec<u8>> {
-        let entry = std::fs::read(self.dir.as_ref()?.join(format!("{key}.hlf"))).ok()?;
-        entry_json(&entry).is_some().then_some(entry)
-    }
-
-    /// Files with equal content race for one entry, so each writer renames its own temp file.
-    /// A failed write only costs a later re-extraction.
-    fn put(&self, key: &str, entry: &[u8]) {
-        let Some(dir) = &self.dir else {
-            return;
-        };
-        let n = self.tmp_counter.fetch_add(1, Ordering::Relaxed);
-        let tmp = dir.join(format!("{key}.tmp{}-{n}", std::process::id()));
-        if std::fs::write(&tmp, entry)
-            .and_then(|()| std::fs::rename(&tmp, dir.join(format!("{key}.hlf"))))
-            .is_err()
-        {
-            let _ = std::fs::remove_file(&tmp);
+impl<'c> Profile<'c> {
+    fn new(config: &'c ExtractConfig) -> Profile<'c> {
+        Profile {
+            config,
+            id: config.config_id(),
         }
     }
 
     /// The record JSON (with an empty path) of one file's bytes; None bytes is a read error.
-    fn record(&self, raw: Option<&[u8]>, config: &ExtractConfig) -> Result<String, String> {
+    fn record(&self, raw: Option<&[u8]>) -> Result<String, String> {
         let record = match raw {
-            Some(raw) => extract(raw, sha256_hex(raw), config),
+            Some(raw) => extract(raw, sha256_hex(raw), self.config),
             None => FileRecord {
                 sha256: String::new(),
                 bytes: 0,
@@ -108,7 +84,7 @@ impl Store {
                 facts: Facts::default(),
             },
         };
-        record_line(&record, &self.cfg, "").map_err(|e| format!("encode a record: {e}"))
+        record_line(&record, &self.id, "").map_err(|e| format!("encode a record: {e}"))
     }
 }
 
@@ -163,152 +139,282 @@ fn cat_blobs(repo: &Path, oids: &[&str]) -> Result<Vec<Option<Vec<u8>>>, String>
     Ok(out)
 }
 
-/// One file of the fact set: a cached entry, or a fresh record to decode and store.
-enum Found {
-    Entry(Vec<u8>),
-    Fresh {
-        json: String,
-        key: Option<String>,
-        lite: bool,
-    },
+/// One file of the fact set, in fact order: blobs, then third-party files.
+struct Slot<'r> {
+    path: &'r str,
+    /// The entry key: the blob oid, or a third-party file's content hash. None for a file that
+    /// could not be read, whose read-error record is never stored.
+    key: Option<String>,
+    lite: bool,
+    found: Option<Row>,
+    /// The record JSON of a file that was not stored.
+    fresh: Option<String>,
 }
 
-fn blob_entries(
-    request: &BlobRequest,
-    full: &Store,
-    stats: &mut BlobStats,
-) -> Result<Vec<Found>, String> {
-    let mut found: Vec<Option<Found>> = request
-        .blobs
+/// The slots of a request, and the bytes of its third-party files: their key is their content.
+fn slots(request: &BlobRequest) -> (Vec<Slot<'_>>, Vec<Option<Vec<u8>>>) {
+    let external: Vec<Option<Vec<u8>>> = request
+        .external
         .par_iter()
-        .map(|blob| full.get(&blob.oid).map(Found::Entry))
+        .map(|(_, file)| std::fs::read(file).ok())
         .collect();
-    let missing: Vec<usize> = (0..found.len()).filter(|&i| found[i].is_none()).collect();
-    stats.hits = found.len() - missing.len();
-    stats.extracted = missing.len();
+    let hashes: Vec<Option<String>> = external
+        .par_iter()
+        .map(|raw| raw.as_deref().map(sha256_hex))
+        .collect();
+    let blobs = request.blobs.iter().map(|blob| Slot {
+        path: &blob.path,
+        key: Some(blob.oid.clone()),
+        lite: false,
+        found: None,
+        fresh: None,
+    });
+    let third_party = request
+        .external
+        .iter()
+        .zip(hashes)
+        .map(|((path, _), key)| Slot {
+            path,
+            key,
+            lite: true,
+            found: None,
+            fresh: None,
+        });
+    (blobs.chain(third_party).collect(), external)
+}
+
+/// Extracts every slot the database did not have; returns how many.
+fn extract_missing(
+    request: &BlobRequest,
+    profiles: (&Profile, &Profile),
+    slots: &mut [Slot],
+    mut external: Vec<Option<Vec<u8>>>,
+) -> Result<usize, String> {
+    let blobs = request.blobs.len();
+    let missing: Vec<usize> = (0..slots.len())
+        .filter(|&i| slots[i].found.is_none())
+        .collect();
     let from_git: Vec<usize> = missing
         .iter()
         .copied()
-        .filter(|&i| !request.blobs[i].from_disk)
+        .filter(|&i| i < blobs && !request.blobs[i].from_disk)
         .collect();
     let oids: Vec<&str> = from_git
         .iter()
         .map(|&i| request.blobs[i].oid.as_str())
         .collect();
-    let mut contents: Vec<(usize, Option<Vec<u8>>)> = from_git
-        .iter()
-        .copied()
+    let mut raws: Vec<(usize, Option<Vec<u8>>)> = from_git
+        .into_iter()
         .zip(cat_blobs(&request.repo, &oids)?)
         .collect();
-    contents.extend(
-        missing
-            .iter()
-            .filter(|&&i| request.blobs[i].from_disk)
-            .map(|&i| {
-                (
-                    i,
-                    std::fs::read(request.repo.join(&request.blobs[i].path)).ok(),
-                )
-            }),
-    );
-    let made: Vec<(usize, Result<Found, String>)> = contents
-        .par_iter()
+    for &i in &missing {
+        if i >= blobs {
+            raws.push((i, external[i - blobs].take()));
+        } else if request.blobs[i].from_disk {
+            raws.push((
+                i,
+                std::fs::read(request.repo.join(&request.blobs[i].path)).ok(),
+            ));
+        }
+    }
+    let made: Vec<(usize, Result<String, String>, bool)> = raws
+        .into_par_iter()
         .map(|(i, raw)| {
-            let key = raw.as_ref().map(|_| request.blobs[*i].oid.clone());
-            (
-                *i,
-                full.record(raw.as_deref(), &request.full)
-                    .map(|json| Found::Fresh {
-                        json,
-                        key,
-                        lite: false,
-                    }),
-            )
+            let profile = if i < blobs { profiles.0 } else { profiles.1 };
+            (i, profile.record(raw.as_deref()), raw.is_some())
         })
         .collect();
-    for (i, item) in made {
-        found[i] = Some(item?);
+    for (i, json, readable) in made {
+        slots[i].fresh = Some(json?);
+        if !readable {
+            slots[i].key = None;
+        }
     }
-    Ok(found
-        .into_iter()
-        .map(|item| item.expect("every blob is found"))
-        .collect())
+    Ok(missing.len())
 }
 
-fn external_entries(request: &BlobRequest, lite: &Store) -> Result<Vec<Found>, String> {
-    request
-        .external
-        .par_iter()
-        .map(|(_, file)| {
-            let Ok(raw) = std::fs::read(file) else {
-                return Ok(Found::Fresh {
-                    json: lite.record(None, &request.lite)?,
-                    key: None,
-                    lite: true,
-                });
-            };
-            let key = sha256_hex(&raw);
-            if let Some(entry) = lite.get(&key) {
-                return Ok(Found::Entry(entry));
-            }
-            let json = lite.record(Some(&raw), &request.lite)?;
-            Ok(Found::Fresh {
-                json,
-                key: Some(key),
-                lite: true,
-            })
+/// A stored entry's body, decoded in parallel once every entry's strings are interned.
+struct Pending {
+    file: usize,
+    map: Vec<Sid>,
+    body: Vec<u8>,
+    start: usize,
+    json_len: usize,
+}
+
+/// Where one record's JSON text comes from when something first reads the fact text.
+enum Json {
+    Stored(Row),
+    Fresh(String),
+}
+
+/// The fact text: every record's JSON in fact order, one per line. Stored records are read in
+/// one transaction of a new connection, since the text is read after the load returns.
+fn read_text(db: Option<&Path>, records: Vec<Json>, len: usize) -> Result<Vec<u8>, String> {
+    let db = db.map(FactDb::open).transpose()?;
+    if let Some(db) = &db {
+        db.begin_read()?;
+    }
+    let mut text = Vec::with_capacity(len);
+    for record in records {
+        match (record, &db) {
+            (Json::Fresh(json), _) => text.extend_from_slice(json.as_bytes()),
+            (Json::Stored(row), Some(db)) => db.read_json(row, |json| {
+                if json.len() != row.json_len {
+                    return Err("fact database: a record has another length than its key says");
+                }
+                text.extend_from_slice(json);
+                Ok(())
+            })??,
+            (Json::Stored(_), None) => return Err("a stored record without a database".into()),
+        }
+        text.push(b'\n');
+    }
+    if let Some(db) = &db {
+        db.end_read()?;
+    }
+    Ok(text)
+}
+
+/// Turns (stage, seconds since start) marks into (stage, seconds the stage took).
+fn cumulative_to_spans(marks: Vec<(&'static str, f64)>) -> Vec<(&'static str, f64)> {
+    let mut last = 0.0;
+    marks
+        .into_iter()
+        .map(|(name, at)| {
+            let span = at - last;
+            last = at;
+            (name, span)
         })
         .collect()
 }
 
-/// The fact set of a snapshot: its blobs, then its third-party files. Interning runs in file
-/// order, so string ids do not depend on threads. New entries are stored on the way out.
+/// The fact set of a snapshot: its blobs, then its third-party files. Interning runs in fact
+/// order, so string ids do not depend on threads. New entries are stored on the way out. The
+/// JSON text is read only when something asks for it (`FactSet::text`).
 pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobStats), String> {
-    let full = Store::new(&request.full, request.cache.as_deref())?;
-    let lite = Store::new(&request.lite, request.cache.as_deref())?;
-    let mut stats = BlobStats::default();
-    let mut found = blob_entries(request, &full, &mut stats)?;
-    found.extend(external_entries(request, &lite)?);
-    let paths = request
-        .blobs
-        .iter()
-        .map(|b| b.path.as_str())
-        .chain(request.external.iter().map(|(p, _)| p.as_str()));
-    let mut text: Vec<u8> = Vec::new();
-    let mut files: Vec<FileFacts> = Vec::with_capacity(found.len());
-    let mut fresh: Vec<usize> = Vec::new();
-    for (i, (item, path)) in found.iter().zip(paths).enumerate() {
-        let start = text.len();
-        match item {
-            Found::Entry(entry) => {
-                text.extend_from_slice(entry_json(entry).expect("checked when read"));
-                files.push(decode_entry(it, entry, start, path)?);
-            }
-            Found::Fresh { json, .. } => {
-                text.extend_from_slice(json.as_bytes());
-                files.push(
-                    decode_record(it, &text, start..text.len(), path).map_err(|e| e.to_string())?,
-                );
-                fresh.push(i);
+    let clock = std::time::Instant::now();
+    let mut marks: Vec<(&'static str, f64)> = Vec::new();
+    let mut mark = |name: &'static str| marks.push((name, clock.elapsed().as_secs_f64()));
+    let full = Profile::new(&request.full);
+    let lite = Profile::new(&request.lite);
+    let db = request.db.as_deref().map(FactDb::open).transpose()?;
+    let (mut slots, external) = slots(request);
+    if let Some(db) = &db {
+        db.begin_read()?;
+        for slot in slots.iter_mut() {
+            let profile = if slot.lite { &lite } else { &full };
+            if let Some(key) = &slot.key {
+                slot.found = db.find(&profile.id, key)?;
             }
         }
-        text.push(b'\n');
     }
-    let shared: &Interner = it;
-    fresh.par_iter().for_each(|&i| {
-        if let Found::Fresh {
-            json,
-            key: Some(key),
-            lite: is_lite,
-        } = &found[i]
-        {
-            let entry = encode_entry(shared, json.as_bytes(), &files[i], files[i].line.start);
-            if *is_lite {
-                lite.put(key, &entry)
-            } else {
-                full.put(key, &entry)
+    mark("facts.find");
+    let extracted = extract_missing(request, (&full, &lite), &mut slots, external)?;
+    mark("facts.extract");
+    let mut start = 0;
+    let mut files: Vec<Option<FileFacts>> = Vec::with_capacity(slots.len());
+    let mut pending: Vec<Pending> = Vec::new();
+    for (file, slot) in slots.iter().enumerate() {
+        match (&slot.fresh, slot.found, &db) {
+            (Some(json), _, _) => {
+                let facts = decode_record(it, json.as_bytes(), start, slot.path)
+                    .map_err(|e| e.to_string())?;
+                files.push(Some(facts));
+                start += json.len();
             }
+            (None, Some(row), Some(db)) => {
+                let (map, body) = db.read_facts(row, |blob| -> Result<_, String> {
+                    let (map, at) = facts_strings(it, blob)?;
+                    Ok((map, blob[at..].to_vec()))
+                })??;
+                pending.push(Pending {
+                    file,
+                    map,
+                    body,
+                    start,
+                    json_len: row.json_len,
+                });
+                files.push(None);
+                start += row.json_len;
+            }
+            _ => return Err(format!("no facts for {}", slot.path)),
         }
-    });
-    Ok((FactSet { text, files }, stats))
+        start += 1;
+    }
+    if let Some(db) = &db {
+        db.end_read()?;
+    }
+    mark("facts.read");
+    let decoded: Vec<(usize, Result<FileFacts, String>)> = pending
+        .into_par_iter()
+        .map(|p| {
+            let path = slots[p.file].path;
+            let facts = decode_body(&p.map, &p.body, p.start, p.json_len, path);
+            (p.file, facts)
+        })
+        .collect();
+    for (file, facts) in decoded {
+        files[file] = Some(facts?);
+    }
+    let files: Vec<FileFacts> = files
+        .into_iter()
+        .map(|f| f.expect("every file has facts"))
+        .collect();
+    mark("facts.decode");
+    if let Some(db) = &db {
+        save(db, it, &slots, &files, (&full, &lite));
+    }
+    mark("facts.save");
+    let records: Vec<Json> = slots
+        .iter_mut()
+        .map(|slot| match (slot.fresh.take(), slot.found) {
+            (Some(json), _) => Json::Fresh(json),
+            (None, Some(row)) => Json::Stored(row),
+            (None, None) => Json::Fresh(String::new()),
+        })
+        .collect();
+    let path = request.db.clone();
+    let text = Box::new(move || read_text(path.as_deref(), records, start));
+    let stats = BlobStats {
+        hits: slots.len() - extracted,
+        extracted,
+        stages: cumulative_to_spans(marks),
+    };
+    Ok((FactSet::deferred(files, text), stats))
+}
+
+/// Stores the new entries and marks the read ones as used today. A failed write only costs a
+/// later re-extraction or an early prune, so it never fails the run.
+fn save(
+    db: &FactDb,
+    it: &Interner,
+    slots: &[Slot],
+    files: &[FileFacts],
+    profiles: (&Profile, &Profile),
+) {
+    let profile_id = |slot: &Slot| -> &str {
+        if slot.lite {
+            &profiles.1.id
+        } else {
+            &profiles.0.id
+        }
+    };
+    let entries: Vec<NewEntry> = slots
+        .par_iter()
+        .zip(files.par_iter())
+        .filter_map(|(slot, facts)| {
+            let json = slot.fresh.as_ref()?;
+            let key = slot.key.as_deref()?;
+            let body = encode_facts(it, facts, facts.line.start);
+            Some((profile_id(slot), key, body, json.as_bytes()))
+        })
+        .collect();
+    let _ = db.store(&entries);
+    let stale: Vec<(&str, &str)> = slots
+        .iter()
+        .filter(|slot| slot.found.is_some_and(|row| row.used < db.today))
+        .filter_map(|slot| Some((profile_id(slot), slot.key.as_deref()?)))
+        .collect();
+    let _ = db.touch(&stale);
 }

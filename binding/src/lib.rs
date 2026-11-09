@@ -12,6 +12,7 @@
 //! - `resolver`: name resolution and class ancestry, for packs.
 
 mod blobs;
+mod factdb;
 mod link;
 mod queries;
 mod resolver;

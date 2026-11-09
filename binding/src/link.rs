@@ -31,7 +31,7 @@ impl FactText {
         view: *mut ffi::Py_buffer,
         flags: c_int,
     ) -> PyResult<()> {
-        let text = &slf.get().facts.text;
+        let text = slf.get().facts.text().map_err(PyValueError::new_err)?;
         let buf = text.as_ptr() as *mut c_void;
         let filled = unsafe {
             ffi::PyBuffer_FillInfo(
@@ -60,12 +60,13 @@ pub(crate) struct Link {
 }
 
 impl Link {
-    pub(crate) fn raw_value(&self, file: usize, key: &str) -> Option<Vec<u8>> {
+    pub(crate) fn raw_value(&self, file: usize, key: &str) -> PyResult<Option<Vec<u8>>> {
         let facts = &self.inner.core.facts;
         if key == "path" {
-            return serde_json::to_vec(&*facts.files[file].path).ok();
+            return Ok(serde_json::to_vec(&*facts.files[file].path).ok());
         }
-        facts.raw(file, key).map(<[u8]>::to_vec)
+        let raw = facts.raw(file, key).map_err(PyValueError::new_err)?;
+        Ok(raw.map(<[u8]>::to_vec))
     }
 
     pub(crate) fn pair(&self, e: Ent) -> Pair {
@@ -161,14 +162,16 @@ impl Link {
         if file >= self.inner.core.facts.files.len() {
             return Err(PyKeyError::new_err(file));
         }
-        Ok(self.raw_value(file, key).map(|raw| PyBytes::new(py, &raw)))
+        Ok(self.raw_value(file, key)?.map(|raw| PyBytes::new(py, &raw)))
     }
 
-    /// The JSON text of every record, for zero-copy reads.
-    fn text(&self) -> FactText {
-        FactText {
-            facts: self.inner.core.facts.clone(),
-        }
+    /// The JSON text of every record, for zero-copy reads. The first call reads it from the
+    /// fact database.
+    fn text(&self, py: Python<'_>) -> PyResult<FactText> {
+        let facts = self.inner.core.facts.clone();
+        py.detach(|| facts.text().map(|_| ()))
+            .map_err(PyValueError::new_err)?;
+        Ok(FactText { facts })
     }
 
     /// Where one top-level key of every record sits in `text()`: (start, end) u32 pairs in fact
@@ -187,10 +190,14 @@ impl Link {
 
     /// One top-level key of every record, in fact order: its JSON text, or None where the
     /// record has no such key. Packs read a fact kind for a file set in one call.
-    fn raw_kind<'py>(&self, py: Python<'py>, key: &str) -> Vec<Option<Bound<'py, PyBytes>>> {
+    fn raw_kind<'py>(
+        &self,
+        py: Python<'py>,
+        key: &str,
+    ) -> PyResult<Vec<Option<Bound<'py, PyBytes>>>> {
         let count = self.inner.core.facts.files.len();
         (0..count)
-            .map(|file| self.raw_value(file, key).map(|raw| PyBytes::new(py, &raw)))
+            .map(|file| Ok(self.raw_value(file, key)?.map(|raw| PyBytes::new(py, &raw))))
             .collect()
     }
 
@@ -408,12 +415,12 @@ fn strings(spec: &serde_json::Value, key: &str) -> Vec<String> {
 }
 
 /// Links a snapshot given as blobs: (path, blob oid, read from the working tree) in discovery
-/// order, then third-party files as (record path, file). Facts come from the cache under (facts
-/// id, oid) or are extracted in process. `extract` is the extractor's options as JSON: first_party,
+/// order, then third-party files as (record path, file). Facts come from the fact database `db`
+/// (a SQLite file, one per facts id) or are extracted in process. `extract` is the extractor's options as JSON: first_party,
 /// kinds, watch_callees, watch_prefixes, watch_keys, lite_kinds. Returns the link and (cache
 /// hits, files extracted).
 #[pyfunction]
-#[pyo3(signature = (repo, blobs, external, extract, config, cache=None, threads=0))]
+#[pyo3(signature = (repo, blobs, external, extract, config, db=None, threads=0))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn link_blobs(
     py: Python<'_>,
@@ -422,7 +429,7 @@ pub(crate) fn link_blobs(
     external: Vec<(String, String)>,
     extract: &str,
     config: &str,
-    cache: Option<String>,
+    db: Option<String>,
     threads: usize,
 ) -> PyResult<(Link, (usize, usize))> {
     let config: LinkConfig = LinkConfig::from_json(config)
@@ -457,7 +464,7 @@ pub(crate) fn link_blobs(
             .collect(),
         full,
         lite,
-        cache: cache.map(Into::into),
+        db: db.map(Into::into),
     };
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
@@ -472,6 +479,9 @@ pub(crate) fn link_blobs(
                 let read = started.elapsed().as_secs_f64();
                 let mut link = CoreLink::build(&config, it, facts)?;
                 link.timings.stages.insert(0, ("facts", read));
+                for (at, stage) in stats.stages.iter().enumerate() {
+                    link.timings.stages.insert(at + 1, *stage);
+                }
                 Ok((link, (stats.hits, stats.extracted)))
             })
         })

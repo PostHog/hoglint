@@ -1,10 +1,10 @@
-//! A fact cache entry for the native engine: the record's JSON text, which packs read, followed by
-//! the link's own facts in a compact binary form, so a warm run never parses JSON in Rust.
+//! The binary facts of one cached record: what the link reads, so a warm run never parses JSON
+//! in Rust. The record's JSON text, which packs read, is stored beside it, not in it.
 //!
-//! Layout: MAGIC, u32 JSON length, the JSON, then the binary part with a per-entry string table.
-//! The [facts] id that names the cache directory covers this file, `facts.rs` and `intern.rs`, so
-//! a change to the binary part never meets an entry written by older code.
-//! An entry without MAGIC is a miss: the blob is extracted again and the entry rewritten.
+//! Layout: MAGIC, the string table (u32 count, then u32 length and bytes per string), then the
+//! body, whose strings are indexes into that table.
+//! The [facts] id that names the fact database covers this file, `facts.rs` and `intern.rs`, so
+//! a change to the layout never meets facts written by older code.
 
 use super::facts::{
     Argument, Assign, CallRow, Def, DefKind, FileFacts, Import, Op, Param, RefRow, StrRow, V,
@@ -12,8 +12,8 @@ use super::facts::{
 use super::intern::{Interner, Sid};
 use rustc_hash::FxHashMap;
 
-/// Marks a complete entry.
-pub const MAGIC: &[u8; 8] = b"HLFACTS1";
+/// Marks binary facts of this layout.
+pub const MAGIC: &[u8; 8] = b"HLFACTS2";
 
 struct Enc<'i> {
     it: &'i Interner,
@@ -243,9 +243,8 @@ impl Enc<'_> {
     }
 }
 
-/// A cache entry: MAGIC, the JSON text `json` (whose ranges start at `line_start` in the fact
-/// set), and the binary form of `facts`.
-pub fn encode_entry(it: &Interner, json: &[u8], facts: &FileFacts, line_start: usize) -> Vec<u8> {
+/// The binary facts of a record whose JSON text starts at `line_start` in the fact set.
+pub fn encode_facts(it: &Interner, facts: &FileFacts, line_start: usize) -> Vec<u8> {
     let mut enc = Enc {
         it,
         local: FxHashMap::default(),
@@ -253,11 +252,8 @@ pub fn encode_entry(it: &Interner, json: &[u8], facts: &FileFacts, line_start: u
         body: Vec::new(),
     };
     enc.file(facts, line_start);
-    let mut out =
-        Vec::with_capacity(MAGIC.len() + 4 + json.len() + enc.body.len() + enc.strings.len() * 16);
+    let mut out = Vec::with_capacity(MAGIC.len() + 4 + enc.body.len() + enc.strings.len() * 16);
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
-    out.extend_from_slice(json);
     out.extend_from_slice(&(enc.strings.len() as u32).to_le_bytes());
     for &s in &enc.strings {
         let text = enc.it.s(s);
@@ -268,20 +264,13 @@ pub fn encode_entry(it: &Interner, json: &[u8], facts: &FileFacts, line_start: u
     out
 }
 
-/// The JSON text of an entry, when the entry is in the current format.
-pub fn entry_json(entry: &[u8]) -> Option<&[u8]> {
-    let rest = entry.strip_prefix(MAGIC.as_slice())?;
-    let len = u32::from_le_bytes(rest.get(..4)?.try_into().ok()?) as usize;
-    rest.get(4..4 + len)
-}
-
-struct Dec<'b> {
+struct Dec<'b, 'm> {
     b: &'b [u8],
     p: usize,
-    map: Vec<Sid>,
+    map: &'m [Sid],
 }
 
-impl<'b> Dec<'b> {
+impl<'b> Dec<'b, '_> {
     fn bytes(&mut self, n: usize) -> Result<&'b [u8], String> {
         let out = self
             .b
@@ -385,27 +374,37 @@ impl<'b> Dec<'b> {
     }
 }
 
-/// The facts of a current-format entry. `line_start` is where its JSON text starts in the fact
-/// set; `path` is the snapshot's path for the blob.
-pub fn decode_entry(
-    it: &mut Interner,
-    entry: &[u8],
-    line_start: usize,
-    path: &str,
-) -> Result<FileFacts, String> {
-    let json = entry_json(entry).ok_or("not a current cache entry")?;
+/// The strings binary facts name, interned in their order, and where their body starts.
+/// Interning is the only step that needs the shared interner, so a loader runs it in fact order
+/// and decodes the bodies in parallel.
+pub fn facts_strings(it: &mut Interner, blob: &[u8]) -> Result<(Vec<Sid>, usize), String> {
+    if !blob.starts_with(MAGIC) {
+        return Err("not binary facts of this layout".to_string());
+    }
     let mut d = Dec {
-        b: entry,
-        p: MAGIC.len() + 4 + json.len(),
-        map: Vec::new(),
+        b: blob,
+        p: MAGIC.len(),
+        map: &[],
     };
     let n = d.u32()? as usize;
     let mut map = Vec::with_capacity(n);
     for _ in 0..n {
-        let text = d.str()?;
-        map.push(it.intern(text));
+        map.push(it.intern(d.str()?));
     }
-    d.map = map;
+    Ok((map, d.p))
+}
+
+/// The facts of a body. `map` holds the interned strings of its table; `line_start` is where
+/// its JSON text (`json_len` bytes) starts in the fact set; `path` is the snapshot's path for
+/// the blob.
+pub fn decode_body(
+    map: &[Sid],
+    body: &[u8],
+    line_start: usize,
+    json_len: usize,
+    path: &str,
+) -> Result<FileFacts, String> {
+    let mut d = Dec { b: body, p: 0, map };
     let nkeys = d.u32()? as usize;
     let mut keys = Vec::with_capacity(nkeys);
     for _ in 0..nkeys {
@@ -568,7 +567,7 @@ pub fn decode_entry(
         refs,
         strs,
         calls,
-        line: line_start..line_start + json.len(),
+        line: line_start..line_start + json_len,
         keys,
     })
 }
