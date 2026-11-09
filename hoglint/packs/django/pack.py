@@ -116,7 +116,7 @@ class DjangoRun:
     def plan(self) -> ProducerPlan:
         return ProducerPlan(
             [
-                ProducerStep(APPS_PRODUCER, EDGE_KINDS, self.read_apps),
+                ProducerStep(APPS_PRODUCER, frozenset(), self.read_apps),
                 ProducerStep(MODELS_PRODUCER, MODEL_KINDS, self.read_models, (APPS_PRODUCER,)),
                 ProducerStep(
                     MIGRATION_PRODUCER, frozenset({"migration-parent"}), self.migration_edges, (APPS_PRODUCER,)

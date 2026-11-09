@@ -15,7 +15,9 @@ from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
 from hoglint.presets_py.posthog.facade import FACADE_PRODUCER, FacadeFacts
 
 SECTION = "posthog"
-FACADE_KINDS = frozenset({"export", "exposes", "declares", "inherit", "decorate"})
+# Only the facade makes `export` edges, and its `exposes` add the slots of re-exported functions.
+# Its inherit, decorate and declares edges copy core's, so a facade failure leaves them complete.
+FACADE_KINDS = frozenset({"export", "exposes"})
 EDGE_KINDS = frozenset({"drives", *FACADE_KINDS})
 FACT_NEEDS = FactNeeds(
     kinds=frozenset(

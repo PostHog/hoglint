@@ -51,7 +51,12 @@ def each_item(
 @dataclass(frozen=True, slots=True)
 class ProducerStep:
     """One producer: its id (also the `producer` of its edges), the edge kinds it makes, the
-    steps it needs, and the call that makes its edges."""
+    steps it needs, and the call that makes its edges.
+
+    `kinds` names only the kinds of edges no other producer makes, because a failure leaves every
+    rule that reads them incomplete. A kind whose edges here only copy another producer's (same
+    kind, site and target) stays out: the original edges are still in the graph. A rule that
+    reads the extra attrs of such copies names the producer in `requires`."""
 
     name: str
     kinds: frozenset[str]

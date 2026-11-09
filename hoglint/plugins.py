@@ -29,7 +29,7 @@ class Pack(Protocol):
 
     name: str  # the config section it owns, e.g. "django"
     allowed_keys: frozenset[str]
-    edge_kinds: frozenset[str]  # every kind it may emit; a failure marks these incomplete
+    edge_kinds: frozenset[str]  # kinds of the edges only it makes (see ProducerStep); a failure marks these incomplete
 
     def produce(self, section: Mapping[str, Any], core: Any, graph: Graph, root: Path) -> None: ...
 
