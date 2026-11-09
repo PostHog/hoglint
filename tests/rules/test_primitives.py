@@ -512,6 +512,19 @@ def test_export_shape_is_checked_through_fields(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize("contexts, reported", [("", False), ("contexts = { exclude = [] }\n", True)])
+def test_export_skips_test_imports_by_default_and_an_empty_exclude_keeps_them(
+    tmp_path: Path, contexts: str, reported: bool
+) -> None:
+    graph = (
+        base_graph()
+        .edge("import", "products.billing.facade.api", "products.billing.models.Invoice", contexts=(Context.TEST,))
+        .graph
+    )
+    result = run(tmp_path, EXPORT + contexts, graph)
+    assert bool(identities(result, "export-shape")) is reported
+
+
 LAYOUT_AND_COVERAGE = """
 [rules.drives]
 primitive = "edge"

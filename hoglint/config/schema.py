@@ -626,22 +626,22 @@ class SchemaBuilder:
                 self.fail(key, f"identity column {column!r} names nothing this rule can read")
         return name, columns
 
-    def read_contexts(self, key: str, raw: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def read_contexts(self, key: str, raw: Any) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
+        """`include` and `exclude`; an `exclude` the table does not set is None, apart from an empty list."""
         if raw is None:
-            return (), ()
+            return (), None
         if not isinstance(raw, dict):
             self.fail(key, "contexts must be `{ include = [...], exclude = [...] }`")
-            return (), ()
+            return (), None
         self.check_keys(key, raw, frozenset({"include", "exclude"}))
-        known = CONTEXTS
         out = []
         for part in ("include", "exclude"):
             values = as_tuple(raw.get(part))
             for value in values:
-                if value not in known:
-                    self.fail(key, f"unknown context {value!r}{suggest(value, known)}")
+                if value not in CONTEXTS:
+                    self.fail(key, f"unknown context {value!r}{suggest(value, CONTEXTS)}")
             out.append(values)
-        return out[0], out[1]
+        return out[0], out[1] if "exclude" in raw else None
 
     def read_covers(self, key: str, raw: Any, rule_ids: set[str]) -> tuple[CoverSpec, ...]:
         out: list[CoverSpec] = []

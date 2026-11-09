@@ -39,7 +39,7 @@ class ExportPrimitive:
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
         self.include = frozenset(spec.contexts_include)
-        self.exclude = frozenset(spec.contexts_exclude or DEFAULT_EXCLUDED)
+        self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
 
     def selected_exports(self) -> list[ExportSpec]:
         names = self.spec.exports or tuple(self.ctx.config.exports)

@@ -499,7 +499,7 @@ class EdgeRule:
         self.run = RuleRun(spec)
         self.kind_set = frozenset(self.kinds())
         self.include = frozenset(spec.contexts_include)
-        self.exclude = frozenset(spec.contexts_exclude)
+        self.exclude = frozenset(spec.contexts_exclude or ())
         self.staged = StagedSelection(ctx, self.selectors())
 
     def kinds(self) -> tuple[str, ...]:

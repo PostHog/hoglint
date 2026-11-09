@@ -166,7 +166,7 @@ class RuleSpec:
     doc: str = ""
     kinds: tuple[str, ...] = ()
     contexts_include: tuple[str, ...] = ()
-    contexts_exclude: tuple[str, ...] = ()
+    contexts_exclude: tuple[str, ...] | None = None  # None: unset, so the primitive's default applies
     view: str = ""
     endpoint: str = "origin"
     from_: Selector | None = None
