@@ -64,3 +64,12 @@ class Link:
     def chain_lookup(self, scope: int, chain: str, at: int, line: int) -> tuple[LookupResult, list[str]]: ...
 
 def link_jsonl(path: str, config: str, threads: int = 0) -> Link: ...
+def link_blobs(
+    repo: str,
+    blobs: list[tuple[str, str, bool]],
+    external: list[tuple[str, str]],
+    extract: str,
+    config: str,
+    cache: str | None = None,
+    threads: int = 0,
+) -> tuple[Link, tuple[int, int]]: ...

@@ -1,7 +1,8 @@
-"""Snapshot to native Graph: discover files, extract facts (cached by content), link in Rust.
+"""Snapshot to native Graph: list the snapshot's blobs, read or extract their facts, link in Rust.
 
-The same discovery, extractor run and fact cache as CoreAnalysis; the facts go to the link
-instead of into Python dicts, and packs read them through `NativeBuild`.
+The facts of a blob are cached under (facts id, blob oid), so a warm run reads one cache file
+per source and no source at all. Discovery, fact needs and the extractor options are the
+Python engine's, so both engines read the same facts. Packs read them through `NativeBuild`.
 """
 
 from __future__ import annotations
@@ -10,15 +11,21 @@ import os
 import json
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from hoglint.core.analysis import CoreAnalysis
 from hoglint.core.discovery import Discovery, Inventory
-from hoglint.facts import ExtractRequest, site_packages_files
+from hoglint.core.producers import PRODUCERS
+from hoglint.facts import site_packages_files
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
 from hoglint.native.config import link_config
 from hoglint.native.graph import NativeGraph
+from hoglint.native.snapshot import BlobSnapshot
+from hoglint.plugins import REGISTRY, ProducerFailure
+
+SNAPSHOT_PRODUCER = "snapshot"
+# What the extractor's `--lite-kinds` defaults to: what module tables and class ancestry read.
+LITE_KINDS = ("imports", "defs", "assigns")
 
 
 @dataclass(frozen=False)
@@ -34,49 +41,73 @@ class NativeAnalysisResult:
 
 class NativeAnalysis(CoreAnalysis):
     def threads(self) -> int:
-        """Worker threads for the link: HOGLINT_THREADS, else one for a staged run (pre-commit,
-        where ten worktrees may run at once), else every core (0)."""
+        """Worker threads for extraction and the link: HOGLINT_THREADS, else one for a staged run
+        (pre-commit, where ten worktrees may run at once), else every core (0)."""
         override = os.environ.get("HOGLINT_THREADS")
         if override:
             return int(override)
         return 1 if self.options.staged else 0
 
-    def extract_jsonl(self, inventory: Inventory, external: dict[str, str]) -> Path:
-        request = ExtractRequest(
-            root=inventory.root,
-            files=(*inventory.files, *external),
-            first_party=self.first_party(inventory),
-            out_path=self.options.work_dir / "facts.jsonl",
-            cache_dir=self.options.cache_dir,
-            needs=self.needs(),
-            lite=tuple(external),
+    def blob_snapshot(self) -> BlobSnapshot:
+        if self.options.tree:
+            return BlobSnapshot.tree(self.options.repo, self.options.tree)
+        if self.options.staged:
+            return BlobSnapshot.index(self.options.repo)
+        return BlobSnapshot.worktree(self.options.repo)
+
+    def extract_options(self, inventory: Inventory) -> str:
+        needs = self.needs()
+        return json.dumps(
+            {
+                "first_party": list(self.first_party(inventory)),
+                "kinds": sorted(needs.kinds),
+                "watch_callees": sorted(needs.watch_callees),
+                "watch_prefixes": sorted(needs.watch_prefixes),
+                "watch_keys": sorted(needs.watch_keys),
+                "lite_kinds": list(LITE_KINDS),
+            }
         )
-        return self.extractor.extract(request)
+
+    @staticmethod
+    def conflict_failure(conflicts: list[str]) -> ProducerFailure:
+        """Conflict entries in the index: the code under check is not decided, so every rule that
+        reads edges is incomplete."""
+        kinds = {kind for producer in PRODUCERS for kind in producer().edge_kinds}
+        kinds |= {kind for pack in REGISTRY.packs.values() for kind in pack.edge_kinds}
+        more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
+        return ProducerFailure(f"the index holds merge conflicts: {conflicts[0]}{more}", frozenset(kinds))
 
     def run(self) -> NativeAnalysisResult:  # type: ignore[override]
         timings: dict[str, float] = {}
-        snapshot = self.snapshot()
         config = self.options.config
+        started = time.perf_counter()
+        snapshot = self.blob_snapshot()
         external = site_packages_files(config.external_packages)
-        try:
-            started = time.perf_counter()
-            inventory = Discovery(config).run(snapshot)
-            timings["discover"] = time.perf_counter() - started
-            started = time.perf_counter()
-            facts = self.extract_jsonl(inventory, external)
-            timings["extract"] = time.perf_counter() - started
-        finally:
-            snapshot.close()
+        inventory = Discovery(config).run(snapshot)  # type: ignore[arg-type]
+        timings["snapshot"] = time.perf_counter() - started
         started = time.perf_counter()
         native = bridge.load()
-        config_json = json.dumps(link_config(config, inventory.analyzed, external))
-        link = native.link_jsonl(str(facts), config_json, self.threads())
+        blobs = [(path, *snapshot.blobs[path]) for path in inventory.files]
+        cache = str(self.options.cache_dir) if self.options.cache_dir is not None else None
+        link, (hits, extracted) = native.link_blobs(
+            str(self.options.repo),
+            blobs,
+            [(path, path) for path in external],
+            self.extract_options(inventory),
+            json.dumps(link_config(config, inventory.analyzed, external)),
+            cache,
+            self.threads(),
+        )
         timings["link"] = time.perf_counter() - started
         timings.update({f"link.{name}": seconds for name, seconds in link.timings()})
+        timings["facts.cached"] = hits
+        timings["facts.extracted"] = extracted
         started = time.perf_counter()
         symbols = {name: {"kind": kind, "path": path} for name, kind, path in link.symbols()}
         graph = NativeGraph(link, {}, symbols)
         build = NativeBuild(config, link, external, graph.core.maker)
         graph.modules = build.index.repo_modules()
+        if snapshot.conflicts:
+            graph.failed_producers[SNAPSHOT_PRODUCER] = self.conflict_failure(snapshot.conflicts)
         timings["graph"] = time.perf_counter() - started
         return NativeAnalysisResult(inventory, build.store, build, graph, timings)

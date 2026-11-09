@@ -518,6 +518,19 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
     }
 }
 
+/// One record from `text[range]`, named `path` (a cache entry holds an empty path).
+pub fn decode_record(
+    it: &mut Interner,
+    text: &[u8],
+    range: Range<usize>,
+    path: &str,
+) -> Result<FileFacts, DecodeError> {
+    let parsed = parse_line(&text[range.clone()], range.start)?;
+    let mut facts = convert(it, parsed, range);
+    facts.path = path.into();
+    Ok(facts)
+}
+
 /// Lines per parallel batch: bounds the memory of parsed JSON trees held at once.
 const BATCH: usize = 2048;
 

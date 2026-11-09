@@ -5,6 +5,9 @@
 //! A `Link` is an opaque handle on one linked snapshot. Bulk results cross as `bytes` of
 //! little-endian u32 edge ids; Python builds Edge objects only for the ids it asks for.
 
+mod blobs;
+
+use blobs::{Blob, BlobRequest, configs, load};
 use hoglint_facts::link::facts::{V, decode_lines};
 use hoglint_facts::link::groups::Role;
 use hoglint_facts::link::index::kind_code;
@@ -135,6 +138,14 @@ struct Link {
 }
 
 impl Link {
+    fn raw_value(&self, file: usize, key: &str) -> Option<Vec<u8>> {
+        let facts = &self.inner.core.facts;
+        if key == "path" {
+            return serde_json::to_vec(&*facts.files[file].path).ok();
+        }
+        facts.raw(file, key).map(<[u8]>::to_vec)
+    }
+
     fn pair(&self, e: Ent) -> Pair {
         let it = &self.inner.core.it;
         (it.s(e.m).to_string(), it.s(e.s).to_string())
@@ -217,7 +228,8 @@ impl Link {
         self.file_of.get(path).copied()
     }
 
-    /// The JSON text of one top-level key of a record, as the extractor wrote it.
+    /// The JSON text of one top-level key of a record, as the extractor wrote it. `path` is the
+    /// snapshot's path of the file: a cached record holds an empty one.
     fn raw<'py>(
         &self,
         py: Python<'py>,
@@ -227,20 +239,15 @@ impl Link {
         if file >= self.inner.core.facts.files.len() {
             return Err(PyKeyError::new_err(file));
         }
-        Ok(self
-            .inner
-            .core
-            .facts
-            .raw(file, key)
-            .map(|raw| PyBytes::new(py, raw)))
+        Ok(self.raw_value(file, key).map(|raw| PyBytes::new(py, &raw)))
     }
 
     /// One top-level key of every record, in fact order: its JSON text, or None where the
     /// record has no such key. Packs read a fact kind for a file set in one call.
     fn raw_kind<'py>(&self, py: Python<'py>, key: &str) -> Vec<Option<Bound<'py, PyBytes>>> {
-        let facts = &self.inner.core.facts;
-        (0..facts.files.len())
-            .map(|file| facts.raw(file, key).map(|raw| PyBytes::new(py, raw)))
+        let count = self.inner.core.facts.files.len();
+        (0..count)
+            .map(|file| self.raw_value(file, key).map(|raw| PyBytes::new(py, &raw)))
             .collect()
     }
 
@@ -711,10 +718,100 @@ fn link_jsonl(py: Python<'_>, path: &str, config: &str, threads: usize) -> PyRes
     Ok(Link { inner, file_of })
 }
 
+fn strings(spec: &serde_json::Value, key: &str) -> Vec<String> {
+    spec[key]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// Links a snapshot given as blobs: (path, blob oid, read from the working tree) in discovery
+/// order, then third-party files as (record path, file). Facts come from the cache under (facts
+/// id, oid) or are extracted in process. `extract` is the extractor's options as JSON: first_party,
+/// kinds, watch_callees, watch_prefixes, watch_keys, lite_kinds. Returns the link and (cache
+/// hits, files extracted).
+#[pyfunction]
+#[pyo3(signature = (repo, blobs, external, extract, config, cache=None, threads=0))]
+#[allow(clippy::too_many_arguments)]
+fn link_blobs(
+    py: Python<'_>,
+    repo: &str,
+    blobs: Vec<(String, String, bool)>,
+    external: Vec<(String, String)>,
+    extract: &str,
+    config: &str,
+    cache: Option<String>,
+    threads: usize,
+) -> PyResult<(Link, (usize, usize))> {
+    let config: LinkConfig = LinkConfig::from_json(config)
+        .map_err(|e| PyValueError::new_err(format!("link config: {e}")))?;
+    let spec: serde_json::Value = serde_json::from_str(extract)
+        .map_err(|e| PyValueError::new_err(format!("extract options: {e}")))?;
+    let watch = (
+        strings(&spec, "watch_callees"),
+        strings(&spec, "watch_prefixes"),
+        strings(&spec, "watch_keys"),
+    );
+    let (full, lite) = configs(
+        strings(&spec, "first_party"),
+        &strings(&spec, "kinds"),
+        watch,
+        &strings(&spec, "lite_kinds"),
+    )
+    .map_err(PyValueError::new_err)?;
+    let request = BlobRequest {
+        repo: repo.into(),
+        blobs: blobs
+            .into_iter()
+            .map(|(path, oid, from_disk)| Blob {
+                path,
+                oid,
+                from_disk,
+            })
+            .collect(),
+        external: external
+            .into_iter()
+            .map(|(path, file)| (path, file.into()))
+            .collect(),
+        full,
+        lite,
+        cache: cache.map(Into::into),
+    };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| PyValueError::new_err(format!("threads: {e}")))?;
+    let (inner, stats) = py
+        .detach(move || {
+            pool.install(|| -> Result<(CoreLink, (usize, usize)), String> {
+                let started = std::time::Instant::now();
+                let mut it = Interner::new();
+                let (facts, stats) = load(&request, &mut it)?;
+                let read = started.elapsed().as_secs_f64();
+                let mut link = CoreLink::build(&config, it, facts)?;
+                link.timings.stages.insert(0, ("facts", read));
+                Ok((link, (stats.hits, stats.extracted)))
+            })
+        })
+        .map_err(PyValueError::new_err)?;
+    let file_of = inner
+        .core
+        .facts
+        .files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.path.to_string(), i as u32))
+        .collect();
+    Ok((Link { inner, file_of }, stats))
+}
+
 #[pymodule]
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
+    module.add_function(wrap_pyfunction!(link_blobs, module)?)?;
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;
     module.add("NATIVE_ID", hoglint_facts::NATIVE_ID)?;
     module.add("PROTOCOL", PROTOCOL)?;

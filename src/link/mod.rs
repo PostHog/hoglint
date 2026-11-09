@@ -13,6 +13,7 @@ pub mod paths;
 pub mod produce;
 pub mod resolve;
 pub mod scope;
+pub mod store;
 
 use facts::FactSet;
 use index::EdgeIndex;

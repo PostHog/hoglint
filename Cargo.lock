@@ -286,6 +286,7 @@ dependencies = [
  "pyo3-build-config",
  "rayon",
  "rustc-hash",
+ "serde_json",
 ]
 
 [[package]]
