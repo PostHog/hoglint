@@ -67,6 +67,11 @@ def git(repo: Path, *args: str) -> str:
 # ── snapshots ─────────────────────────────────────────────────────
 
 
+# Policy files hoglint reads from a snapshot: the config and its presets, ledger, exceptions and
+# data files (classification, routing). Each data file the policy names is added by path.
+POLICY_PATTERNS = ("*.toml", "*.ledger", "*.yaml", "*.yml")
+
+
 class Snapshots:
     """Materializes git snapshots (the index, a commit) into scratch directories, and names their trees."""
 
@@ -75,9 +80,27 @@ class Snapshots:
         self.work_dir = work_dir
         self.worktrees: list[Path] = []
 
+    def checkout_paths(self, target: Path, paths: list[str]) -> None:
+        listed = "".join(f"{path}\0" for path in paths if path)
+        if listed:
+            subprocess.run(
+                ["git", "-C", str(self.repo), "checkout-index", "-z", "--stdin", f"--prefix={target}/"],
+                input=listed.encode(),
+                capture_output=True,
+                check=True,
+            )
+
     def index(self) -> Path:
+        """The index's policy (config, presets, ledger, exceptions, the data files the policy
+        names), written out alone: the code is read from the index by blob id, so the 70k-file
+        checkout of the whole index is not needed."""
         target = Path(tempfile.mkdtemp(prefix="index-", dir=self.work_dir))
-        git(self.repo, "checkout-index", "--all", f"--prefix={target}/")
+        self.checkout_paths(target, git(self.repo, "ls-files", "-z", "--", *POLICY_PATTERNS).split("\0"))
+        if (target / CONFIG_FILE).is_file():
+            config = load_config(target, target / CONFIG_FILE)
+            named = [path for path in PolicyFiles(config).paths() if not (target / path).exists()]
+            if named:
+                self.checkout_paths(target, git(self.repo, "ls-files", "-z", "--", *named).split("\0"))
         return target
 
     def commit(self, ref: str) -> Path:
