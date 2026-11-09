@@ -15,7 +15,7 @@ from typing import Any
 from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec, RegistrySpec
 from hoglint.config.schema import canonical
 from hoglint.globs import fill, glob_match
-from hoglint.index import GraphIndex, Memo
+from hoglint.index import GraphIndex, Memo, index_of
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Provided
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, any_of, refs
@@ -132,7 +132,7 @@ class Labeler:
         self.config = config
         self.path_candidate_table = (candidates or CandidateCache()).table(config)
         self.graph = graph
-        self.index = index or GraphIndex(graph)
+        self.index = index or index_of(graph)
         self.facts = self.index.facts
         self.path_to_module = self.index.path_to_module
         self.module_of_symbol = self.index.module_of_symbol

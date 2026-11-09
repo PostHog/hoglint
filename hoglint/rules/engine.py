@@ -19,7 +19,7 @@ from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
 from hoglint.ledger.file import LedgerFile, LineKey, level_line
 from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph, IncompleteCause, Outcome, RuleResult
-from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, rule_kinds
+from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_class, rule_kinds
 from hoglint.rules.edges import EdgePrimitive, EntrypointPrimitive, SignaturePrimitive, UseShapePrimitive
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityInventory, LayoutPrimitive
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile, apply_exceptions
@@ -169,7 +169,7 @@ class Engine:
     def run_rules(self) -> dict[str, RuleRun]:
         self.labeler.find_conflicts()
         self.raise_conflicts()
-        ctx = RuleContext(self.config, self.graph, self.labeler, self.repo_root)
+        ctx = context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
         for spec in ordered:

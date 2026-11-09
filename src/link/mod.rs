@@ -6,6 +6,7 @@
 //! fact cache keyed on it stay valid when only the link changes.
 
 pub mod facts;
+pub mod groups;
 pub mod index;
 pub mod intern;
 pub mod paths;
@@ -304,6 +305,17 @@ impl Link {
                 surface,
                 names,
             ));
+        }
+        out
+    }
+
+    /// Core edge kinds in the order their first edge appears.
+    pub fn kind_order(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        for row in &self.edges.rows {
+            if !out.contains(&row.kind) {
+                out.push(row.kind);
+            }
         }
         out
     }

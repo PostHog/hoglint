@@ -2,7 +2,7 @@
 //! thread pool, keeps the content-hash cache and writes records.
 //!
 //! Usage:
-//!   hoglint-facts --build-id
+//!   hoglint-facts --facts-id | --native-id | --build-id
 //!   hoglint-facts <repo_root> <file_list|-> [--jobs N] [--first-party a,b]
 //!      [--watch-callees a,b] [--watch-prefixes a,b] [--watch-keys a,b]
 //!      [--kinds k,k] [--lite-list PATH] [--lite-kinds k,k]
@@ -19,13 +19,15 @@
 //! Modes: `stream` writes JSON lines to --out (default stdout); `cache` keeps one record per
 //! source sha256 under --cache and only parses files whose content has no entry yet (records
 //! still stream to --out). The cache directory name holds the schema version, the extractor id
-//! (FACTS_ID) and the record `cfg`. `--build-id` prints the engine id (see build.rs).
+//! (FACTS_ID) and the record `cfg`. `--facts-id`, `--native-id` and `--build-id` print the ids of
+//! the `[facts]`, `[native]` and `[engine]` sources (see build.rs).
 //!
 //! A file that cannot be read gets a `read_error` record and the run goes on. Bad arguments and
 //! an unwritable output exit non-zero.
 
 use hoglint_facts::{
-    BUILD_ID, ExtractConfig, Facts, FileRecord, Kinds, Status, extract, record_line, sha256_hex,
+    ENGINE_ID, ExtractConfig, FACTS_ID, Facts, FileRecord, Kinds, NATIVE_ID, Status, extract,
+    record_line, sha256_hex,
 };
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -442,8 +444,16 @@ fn run_extract(opts: &Options) -> Result<(), ShellError> {
 }
 
 fn run(argv: Vec<String>) -> Result<(), ShellError> {
+    if argv.first().map(String::as_str) == Some("--facts-id") {
+        println!("{FACTS_ID}");
+        return Ok(());
+    }
     if argv.first().map(String::as_str) == Some("--build-id") {
-        println!("{BUILD_ID}");
+        println!("{ENGINE_ID}");
+        return Ok(());
+    }
+    if argv.first().map(String::as_str) == Some("--native-id") {
+        println!("{NATIVE_ID}");
         return Ok(());
     }
     run_extract(&Options::parse(argv)?)

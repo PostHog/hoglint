@@ -4,10 +4,12 @@ use sha2::{Digest, Sha256};
 
 pub const SCHEMA_VERSION: i64 = 3;
 
-/// The engine id: a hash of every file engine-sources.txt lists, from build.rs.
-pub const BUILD_ID: &str = env!("HOGLINT_BUILD_ID");
-/// The extractor id: what the fact cache keys on (see build.rs).
+/// The id of the `[facts]` sources (the extractor), from build.rs. The fact cache keys on it.
 pub const FACTS_ID: &str = env!("HOGLINT_FACTS_ID");
+/// The id of the `[native]` sources (extractor, link, binding), from build.rs.
+pub const NATIVE_ID: &str = env!("HOGLINT_NATIVE_ID");
+/// The id of the `[engine]` sources (everything, Python included), from build.rs.
+pub const ENGINE_ID: &str = env!("HOGLINT_ENGINE_ID");
 
 /// One fact list of a record (schema.md section 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

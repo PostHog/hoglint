@@ -26,7 +26,7 @@ from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.schema import as_tuple
 from hoglint.facts import Extractor
-from hoglint.index import GraphIndex
+from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.envelope import (
     ENGINE,
@@ -50,6 +50,7 @@ from hoglint.ledger.records import FindingRecord, Portable
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, obligation_of, obligations_of
 from hoglint.ledger.store import ExtractorStore, SummaryStore
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
+from hoglint.native.source import ENGINES, graph_source
 from hoglint.rules.base import EdgeRule, IncompleteItem, RuleContext
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
@@ -183,7 +184,7 @@ class Runner:
     def index_of(self, graph: Graph) -> GraphIndex:
         held = self.indexes.get(id(graph))
         if held is None or held[0] is not graph:
-            held = self.indexes[id(graph)] = (graph, GraphIndex(graph))
+            held = self.indexes[id(graph)] = (graph, index_of(graph))
         return held[1]
 
     def evaluate(self, config: Config, code_root: Path, policy_root: Path) -> tuple[Graph, RunResult]:
@@ -570,7 +571,7 @@ class Baselines:
             ledger = LedgerFile.parse(git(self.repo, "show", f"{envelope.tree}:{ledger_path}"))
         except subprocess.CalledProcessError:
             ledger = LedgerFile()
-        runner = Runner(GraphSource(Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))))
+        runner = Runner(graph_source(self.engine.name, Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))))
         run = runner.run(policy_root, self.repo, tree=envelope.tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
@@ -605,13 +606,13 @@ class ReadTimeOwners:
 
 
 class Commands:
-    def __init__(self, repo: Path, work_dir: Path) -> None:
+    def __init__(self, repo: Path, work_dir: Path, engine: str = ENGINE_PYTHON) -> None:
         self.repo = repo
         self.work_dir = work_dir
-        self.source = GraphSource(work_dir)
+        self.source: GraphSource = graph_source(engine, work_dir)
         self.runner = Runner(self.source)
         self.snapshots = Snapshots(repo, work_dir)
-        self.engine = LocalEngine()
+        self.engine = LocalEngine(engine)
         self.summaries = SummaryStore()
         self.trees = TreeSummaries(self.snapshots, self.summaries)
         self.baselines = Baselines(self.snapshots, self.engine, self.summaries, self.trees)
@@ -924,6 +925,7 @@ def parser() -> argparse.ArgumentParser:
         prog="hoglint", description="Boundary linter: facts, edges, rules and a generated ledger."
     )
     main.add_argument("--repo", type=Path, default=Path.cwd(), help="repo root that holds hoglint.toml")
+    main.add_argument("--engine", choices=ENGINES, default=ENGINE_PYTHON, help="python, or the Rust link (native)")
     sub = main.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="run every rule; exit 0 clean, 1 violations, 2 blocking incomplete")
     check.add_argument("--index", action="store_true", help="check the staged snapshot (git index), config included")
@@ -963,7 +965,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     repo = args.repo.resolve()
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
-        commands = Commands(repo, Path(work))
+        commands = Commands(repo, Path(work), args.engine)
         try:
             return args.handler(commands, args)
         except ConfigError as error:

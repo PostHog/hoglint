@@ -16,7 +16,7 @@ from functools import cache
 from pathlib import Path
 
 from hoglint.config.model import Config, RuleSpec
-from hoglint.index import MODULE_SCOPE, EdgeGroup
+from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex
 from hoglint.labels import BUILTIN_ENTITY_NAMES, Labeler
 from hoglint.model import Context, Edge, EntityId, Finding, Graph, IncompleteCause, Remedy, Resolution, Site
 from hoglint.selectors import (
@@ -118,6 +118,15 @@ class RuleContext:
         """(source module, its edges) kind by kind in the order named; every kind when none is named."""
         for kind in self.kinds_or_all(kinds):
             yield from self.groups.get(kind, {}).items()
+
+    def rule_groups(self, rule: EdgeRule) -> Iterator[tuple[str, EdgeGroup]]:
+        """The (source module, edges) a rule judges. An index that groups edges by label class
+        may leave out edges that cannot make a finding or an incomplete for this rule."""
+        return self.module_groups(rule.kinds())
+
+    def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
+        """Modules with an edge of the given kinds, sorted."""
+        return sorted({module for module, _ in self.module_groups(kinds)})
 
     def groups_of(self, kinds: tuple[str, ...], module: str) -> list[EdgeGroup]:
         out = []
@@ -224,6 +233,11 @@ class RuleContext:
         if value.state is State.KNOWN and isinstance(value.data, frozenset):
             return tuple(sorted(value.data))
         return ()
+
+
+def context_class(index: GraphIndex) -> type[RuleContext]:
+    """The rule context for an index: an index over edges kept outside Python brings its own."""
+    return getattr(index, "context_class", RuleContext)
 
 
 def rule_kinds(spec: RuleSpec, views: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
@@ -542,8 +556,26 @@ class EdgeRule:
                 yield self.env(edge, src, dst)
 
     def envs(self) -> Iterator[EdgeEnv]:
-        for module, group in self.ctx.module_groups(self.kinds()):
+        for module, group in self.ctx.rule_groups(self):
             yield from self.group_envs(module, group)
+
+    def read_refs(self) -> list[Ref]:
+        """Every field `judge` reads besides the edge's identity: what grouped evaluation keys on."""
+        out: list[Ref] = []
+        spec = self.spec
+        for selector in (spec.from_, spec.select, spec.deny, spec.allow, spec.require, spec.unless):
+            if selector is not None:
+                out.extend(selector.refs())
+        return out
+
+    def droppable(self, env: EdgeEnv) -> bool:
+        """True when `judge` makes no finding and no incomplete for this environment."""
+        selected = self.selection(env)
+        if selected is Truth.FALSE:
+            return True
+        if env.dst.unresolved or selected is Truth.UNKNOWN:
+            return False
+        return self.violation(env) is Truth.FALSE or self.excused(env)
 
     def selection(self, env: EdgeEnv) -> Truth:
         return self.staged.truth(env)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from hoglint.config.model import RuleSpec
 from hoglint.model import Edge, Remedy
 from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext
-from hoglint.selectors import Selector, Truth
+from hoglint.selectors import Ref, Selector, Truth
 
 EXPORTED = Selector.parse("dst.exported")
 
@@ -25,6 +25,9 @@ class EntrypointPrimitive(EdgeRule):
         if self.default_allow:
             return EXPORTED.evaluate(env.resolve).negate()
         return super().violation(env)
+
+    def read_refs(self) -> list[Ref]:
+        return super().read_refs() + (EXPORTED.refs() if self.default_allow else [])
 
     def remedies(self) -> tuple[Remedy, ...]:
         return super().remedies() or (Remedy("needs-public-api"),)
@@ -51,6 +54,9 @@ class UseShapePrimitive(EdgeRule):
             return EdgeEnv(self.ctx, edge, src, dst)
         shape, _, detail = refined.partition("(")
         return EdgeEnv(self.ctx, edge, src, dst, shape, detail.removesuffix(")"))
+
+    def read_refs(self) -> list[Ref]:
+        return [*super().read_refs(), *(Ref(("edge", name)) for name in ("shape", "shape_detail", "use", "flow_shape"))]
 
     def shape_names(self, env: EdgeEnv) -> set[str]:
         shape = env.shape or env.edge.use or "other"
@@ -84,6 +90,16 @@ class SignaturePrimitive(EdgeRule):
 
     def sees(self, edge: Edge) -> bool:
         return super().sees(edge) and not is_private(edge.attr("callable"))
+
+    def read_refs(self) -> list[Ref]:
+        return [*super().read_refs(), Ref(("edge", "annotation")), Ref(("dst", "symbol"))]
+
+    def droppable(self, env: EdgeEnv) -> bool:
+        if self.selection(env) is Truth.FALSE:
+            return True
+        if not env.dst.unresolved and self.unknown_type(env):
+            return False
+        return super().droppable(env)
 
     def unknown_type(self, env: EdgeEnv) -> bool:
         if env.edge.attr("annotation") == "missing":

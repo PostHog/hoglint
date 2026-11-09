@@ -4,7 +4,7 @@ so compare's runs under two policies over one snapshot index it once."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Generic, TypeVar
@@ -61,18 +61,27 @@ class SymbolFacts:
         self.base_map: dict[str, list[str]] = {}
         self.decorator_map: dict[str, list[str]] = {}
         self.frozen: set[str] = set()
+        self.add_edges(inherits, decorates)
+        self.ancestors = Memo(self.walk_ancestors)
+        self.any_decl = Memo(self.find_decl)
+
+    def add_base(self, owner: str, names: list[str]) -> None:
+        self.base_map.setdefault(owner, []).extend(names)
+
+    def add_decorator(self, owner: str, surface: str, names: list[str]) -> None:
+        self.decorator_map.setdefault(owner, []).extend([surface, *names])
+
+    def add_edges(self, inherits: list[Edge], decorates: list[Edge]) -> None:
         for edge in inherits:
             if edge.attr("class"):
-                self.base_map.setdefault(f"{edge.site.module}.{edge.attr('class')}", []).extend(self.names(edge))
+                self.add_base(f"{edge.site.module}.{edge.attr('class')}", self.names(edge))
         for edge in decorates:
             if not edge.attr("decorated"):
                 continue
             owner = f"{edge.site.module}.{edge.attr('decorated')}"
-            self.decorator_map.setdefault(owner, []).extend([edge.surface, *self.names(edge)])
+            self.add_decorator(owner, edge.surface, self.names(edge))
             if edge.attr("frozen") == "1":
                 self.frozen.add(owner)
-        self.ancestors = Memo(self.walk_ancestors)
-        self.any_decl = Memo(self.find_decl)
 
     @staticmethod
     def names(edge: Edge) -> list[str]:
@@ -126,25 +135,33 @@ class SymbolFacts:
         return frozenset(seen), complete
 
 
+def index_of(graph: Graph) -> GraphIndex:
+    """The index of a graph. A graph that keeps its edges outside Python makes its own."""
+    make = getattr(graph, "make_index", None)
+    return make() if make is not None else GraphIndex(graph)
+
+
 class GraphIndex:
     def __init__(self, graph: Graph) -> None:
         self.graph = graph
-        self.by_kind: dict[str, list[Edge]] = {}
-        self.groups: dict[str, dict[str, EdgeGroup]] = {}
+        by_kind: dict[str, list[Edge]] = {}
+        groups: dict[str, dict[str, EdgeGroup]] = {}
         self.endpoint_attr_edges: set[int] = set()
         for edge in graph.edges:
             site = edge.site
-            self.by_kind.setdefault(edge.kind, []).append(edge)
-            group = self.groups.setdefault(edge.kind, {}).get(site.module)
+            by_kind.setdefault(edge.kind, []).append(edge)
+            group = groups.setdefault(edge.kind, {}).get(site.module)
             if group is None:
-                group = self.groups[edge.kind][site.module] = EdgeGroup()
+                group = groups[edge.kind][site.module] = EdgeGroup()
             group.edges.append(edge)
             attrs = bool(edge.attrs) and has_endpoint_attrs(edge)
             if attrs:
                 self.endpoint_attr_edges.add(id(edge))
             if attrs or (site.path and site.path != graph.modules.get(site.module)):
                 group.irregular.append(edge)
-        self.facts = SymbolFacts(graph, self.by_kind.get("inherit", []), self.by_kind.get("decorate", []))
+        self.by_kind: Mapping[str, list[Edge]] = by_kind
+        self.groups: Mapping[str, Mapping[str, EdgeGroup]] = groups
+        self.facts = SymbolFacts(graph, by_kind.get("inherit", []), by_kind.get("decorate", []))
         self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_of_symbol = Memo(self.find_module)
 

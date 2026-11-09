@@ -30,7 +30,7 @@ export PATH="$(dirname "$cargo_bin"):$PATH"
 
 "$cargo_bin" build --release --locked "$@" >&2
 binary="$CARGO_TARGET_DIR/release/hoglint-facts"
-echo "built $("$binary" --build-id) with rust $toolchain" >&2
+echo "built native id $("$binary" --native-id) with rust $toolchain" >&2
 
 maturin_version="1.16.0"
 if command -v maturin >/dev/null 2>&1; then

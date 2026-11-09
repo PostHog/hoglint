@@ -2,7 +2,9 @@
 
 `tools/hoglint/bin/build` unpacks the module it builds into `<target>/python/`, next to the
 `hoglint-facts` binary; a module found there wins, as the binary does. Otherwise an installed
-wheel is imported, so a developer needs no Rust toolchain at run time.
+wheel is imported, so a developer needs no Rust toolchain at run time. In a checkout, the module
+must report the `[native]` id of the checkout's own Rust sources, or the run stops: a stale
+module would link with old semantics.
 """
 
 from __future__ import annotations
@@ -15,8 +17,10 @@ from pathlib import Path
 from types import ModuleType
 
 from hoglint.facts import DEFAULT_TARGET_DIR
+from hoglint.ledger.envelope import NATIVE, EngineError, EngineSources
 
 MODULE = "hoglint_native"
+CRATE = Path(__file__).resolve().parents[2]
 
 
 def built_module_dir() -> Path:
@@ -27,7 +31,7 @@ def built_module_dir() -> Path:
     return target_dir / "python"
 
 
-def load() -> ModuleType:
+def import_module() -> ModuleType:
     loaded = sys.modules.get(MODULE)
     if loaded is not None:
         return loaded
@@ -40,4 +44,23 @@ def load() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[MODULE] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def check_sources(module: ModuleType) -> None:
+    """In a checkout, the module's `[native]` id must be the one its sources make."""
+    sources = EngineSources.read(CRATE)
+    if sources is None:
+        return
+    expected = sources.digest(NATIVE)
+    if module.NATIVE_ID != expected:
+        raise EngineError(
+            f"{MODULE} was built from other Rust sources (native id {module.NATIVE_ID}, the checkout "
+            f"has {expected}): rebuild it with tools/hoglint/bin/build"
+        )
+
+
+def load() -> ModuleType:
+    module = import_module()
+    check_sources(module)
     return module

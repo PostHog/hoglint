@@ -6,6 +6,7 @@ instead of into Python dicts, and packs read them through `NativeBuild`.
 
 from __future__ import annotations
 
+import os
 import json
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,14 @@ class NativeAnalysisResult:
 
 
 class NativeAnalysis(CoreAnalysis):
+    def threads(self) -> int:
+        """Worker threads for the link: HOGLINT_THREADS, else one for a staged run (pre-commit,
+        where ten worktrees may run at once), else every core (0)."""
+        override = os.environ.get("HOGLINT_THREADS")
+        if override:
+            return int(override)
+        return 1 if self.options.staged else 0
+
     def extract_jsonl(self, inventory: Inventory, external: dict[str, str]) -> Path:
         request = ExtractRequest(
             root=inventory.root,
@@ -60,7 +69,8 @@ class NativeAnalysis(CoreAnalysis):
             snapshot.close()
         started = time.perf_counter()
         native = bridge.load()
-        link = native.link_jsonl(str(facts), json.dumps(link_config(config, inventory.analyzed, external)))
+        config_json = json.dumps(link_config(config, inventory.analyzed, external))
+        link = native.link_jsonl(str(facts), config_json, self.threads())
         timings["link"] = time.perf_counter() - started
         timings.update({f"link.{name}": seconds for name, seconds in link.timings()})
         started = time.perf_counter()

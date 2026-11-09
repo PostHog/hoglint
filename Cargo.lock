@@ -284,6 +284,7 @@ dependencies = [
  "hoglint-facts",
  "pyo3",
  "pyo3-build-config",
+ "rayon",
  "rustc-hash",
 ]
 

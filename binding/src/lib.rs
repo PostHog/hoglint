@@ -6,6 +6,7 @@
 //! little-endian u32 edge ids; Python builds Edge objects only for the ids it asks for.
 
 use hoglint_facts::link::facts::{V, decode_lines};
+use hoglint_facts::link::groups::Role;
 use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
 use hoglint_facts::link::produce::KIND_NAMES;
@@ -396,6 +397,98 @@ impl Link {
         )
     }
 
+    /// Core edge kinds in the order their first edge appears.
+    fn kind_order(&self) -> Vec<&'static str> {
+        self.inner
+            .kind_order()
+            .into_iter()
+            .map(|kind| KIND_NAMES[kind as usize])
+            .collect()
+    }
+
+    /// Edges a rule sees: kind in `kinds` (every kind when empty), resolution not
+    /// not-applicable, context bits meeting `include` (any) and avoiding `exclude`.
+    fn candidates<'py>(
+        &mut self,
+        py: Python<'py>,
+        kinds: Vec<String>,
+        include: u8,
+        exclude: u8,
+    ) -> Bound<'py, PyBytes> {
+        let codes: Vec<u8> = kinds.iter().filter_map(|kind| kind_code(kind)).collect();
+        if codes.is_empty() && !kinds.is_empty() {
+            return ids_bytes(py, &[]);
+        }
+        ids_bytes(py, &self.inner.candidates(&codes, include, exclude))
+    }
+
+    /// Src and dst keys of `ids`: (src key of each id, src representative ids, dst key of each
+    /// id, dst representative ids). `role` is "origin" or "surface".
+    #[allow(clippy::type_complexity)]
+    fn endpoint_keys<'py>(
+        &mut self,
+        py: Python<'py>,
+        ids: &[u8],
+        role: &str,
+        src_scope: bool,
+        dst_entity: bool,
+    ) -> PyResult<(
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+    )> {
+        let ids = ids_from(ids)?;
+        let role = match role {
+            "origin" => Role::Origin,
+            "surface" => Role::Surface,
+            other => return Err(PyValueError::new_err(format!("no keys for role {other}"))),
+        };
+        let (src, dst) = self.inner.endpoint_keys(&ids, role, src_scope, dst_entity);
+        Ok((
+            ids_bytes(py, &src.key_of),
+            ids_bytes(py, &src.reps),
+            ids_bytes(py, &dst.key_of),
+            ids_bytes(py, &dst.reps),
+        ))
+    }
+
+    /// Edge keys of `ids` over the named edge fields: (key of each id, representative ids).
+    fn edge_keys<'py>(
+        &mut self,
+        py: Python<'py>,
+        ids: &[u8],
+        fields: Vec<String>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        let ids = ids_from(ids)?;
+        let keyed = self.inner.edge_keys(&ids, &fields);
+        Ok((ids_bytes(py, &keyed.key_of), ids_bytes(py, &keyed.reps)))
+    }
+
+    /// Groups `ids` by layers of (key of each id, class of each key): (group of each id,
+    /// representative ids).
+    #[staticmethod]
+    fn group<'py>(
+        py: Python<'py>,
+        ids: &[u8],
+        layers: Vec<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        let ids = ids_from(ids)?;
+        let layers: Vec<(Vec<u32>, Vec<u32>)> = layers
+            .iter()
+            .map(|(k, c)| Ok((ids_from(k.as_bytes())?, ids_from(c.as_bytes())?)))
+            .collect::<PyResult<_>>()?;
+        if let Some((key_of, _)) = layers.iter().find(|(key_of, _)| key_of.len() != ids.len()) {
+            return Err(PyValueError::new_err(format!(
+                "a layer has {} keys for {} ids",
+                key_of.len(),
+                ids.len()
+            )));
+        }
+        let keyed = CoreLink::group(&ids, &layers);
+        Ok((ids_bytes(py, &keyed.key_of), ids_bytes(py, &keyed.reps)))
+    }
+
     /// The core's inherit (`owner_attr` "class") or decorate ("decorated") facts for SymbolFacts:
     /// [(owner symbol, surface, names)] in graph order.
     fn class_facts(&self, kind: &str, owner_attr: &str) -> Vec<(String, String, Vec<String>)> {
@@ -586,17 +679,25 @@ impl Link {
 }
 
 /// Links facts from a JSONL file (one record per line) under a link config (JSON text).
+/// `threads` caps the worker threads; 0 uses every core.
 #[pyfunction]
-fn link_jsonl(py: Python<'_>, path: &str, config: &str) -> PyResult<Link> {
+#[pyo3(signature = (path, config, threads=0))]
+fn link_jsonl(py: Python<'_>, path: &str, config: &str, threads: usize) -> PyResult<Link> {
     let config: LinkConfig = LinkConfig::from_json(config)
         .map_err(|e| PyValueError::new_err(format!("link config: {e}")))?;
     let path = path.to_string();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| PyValueError::new_err(format!("threads: {e}")))?;
     let inner = py
-        .detach(move || -> Result<CoreLink, String> {
-            let text = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
-            let mut it = Interner::new();
-            let facts = decode_lines(&mut it, text).map_err(|e| e.to_string())?;
-            CoreLink::build(&config, it, facts)
+        .detach(move || {
+            pool.install(|| -> Result<CoreLink, String> {
+                let text = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+                let mut it = Interner::new();
+                let facts = decode_lines(&mut it, text).map_err(|e| e.to_string())?;
+                CoreLink::build(&config, it, facts)
+            })
         })
         .map_err(PyValueError::new_err)?;
     let file_of = inner
@@ -614,8 +715,8 @@ fn link_jsonl(py: Python<'_>, path: &str, config: &str) -> PyResult<Link> {
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
-    module.add("BUILD_ID", hoglint_facts::BUILD_ID)?;
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;
+    module.add("NATIVE_ID", hoglint_facts::NATIVE_ID)?;
     module.add("PROTOCOL", PROTOCOL)?;
     Ok(())
 }

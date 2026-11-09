@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 hoglint-facts = { path = ".." }
 pyo3 = { version = "=0.28.3", features = ["extension-module", "abi3-py312"] }
+rayon = "1"
 rustc-hash = "2"
 
 [build-dependencies]

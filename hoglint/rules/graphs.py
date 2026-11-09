@@ -44,7 +44,7 @@ class ReachPrimitive(EdgeRule):
 
     def sources(self) -> list[str]:
         out = []
-        for module in sorted({module for module, _ in self.ctx.module_groups(self.kinds())}):
+        for module in self.ctx.source_modules(self.kinds()):
             truth = Truth.TRUE
             if self.spec.from_ is not None:
                 truth = self.spec.from_.evaluate(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
@@ -113,6 +113,19 @@ class CyclePrimitive(EdgeRule):
         super().__init__(ctx, spec)
         self.group_field = ctx.config.roles.group if spec.view == "packages" else "module"
         self.group_cache: dict[tuple[str, Endpoint], str | None] = {}
+
+    def read_refs(self) -> list[Ref]:
+        return [*super().read_refs(), Ref(("src", self.group_field)), Ref(("dst", self.group_field))]
+
+    def droppable(self, env: EdgeEnv) -> bool:
+        """True when `evaluate` neither pairs this environment nor reports it."""
+        selected = self.selection(env)
+        if selected is Truth.FALSE:
+            return True
+        if env.dst.unresolved or selected is Truth.UNKNOWN:
+            return False
+        src, dst = self.group(env, "src"), self.group(env, "dst")
+        return src is None or dst is None or src == dst
 
     def group(self, env: EdgeEnv, root: str) -> str | None:
         """The endpoint's group; cached per endpoint unless the edge's own attributes override labels."""

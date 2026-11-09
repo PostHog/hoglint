@@ -12,6 +12,7 @@ from array import array
 from collections.abc import Collection, Iterable, Iterator, Sequence
 from typing import Any, SupportsIndex, cast, overload
 
+from hoglint.index import GraphIndex
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
 
 # Bit order of the link's context bits (src/link/scope.rs `ctx`).
@@ -148,6 +149,11 @@ class NativeGraph(Graph):
         super().__init__(edges=EdgeList(self.core), modules=modules, symbols=symbols)  # type: ignore[arg-type]
         self.extra_index: dict[str, list[Edge]] = {}
         self.extra_indexed = 0
+
+    def make_index(self) -> GraphIndex:
+        from hoglint.native.rules import NativeGraphIndex  # noqa: PLC0415 - rules imports this module
+
+        return NativeGraphIndex(self)
 
     @property
     def link(self) -> Any:
