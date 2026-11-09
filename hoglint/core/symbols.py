@@ -387,6 +387,7 @@ class ClassIndex:
         self.tables = resolver.tables
         self.mro_cache: dict[EntityId, list[EntityId]] = {}
         self.bases_cache: dict[EntityId, list[EntityId]] = {}
+        self.ancestor_cache: dict[EntityId, frozenset[str]] = {}
 
     def located(self, ref: EntityId) -> tuple[dict, int] | None:
         """The record that defines a class and the class's def index in it."""
@@ -404,7 +405,11 @@ class ClassIndex:
         return found[0]["defs"][found[1]] if found is not None else None
 
     def is_subclass(self, ref: EntityId, qualified: str) -> bool:
-        return any(str(cls) == qualified for cls in self.mro(ref))
+        ancestors = self.ancestor_cache.get(ref)
+        if ancestors is None:
+            ancestors = frozenset(str(cls) for cls in self.mro(ref))
+            self.ancestor_cache[ref] = ancestors
+        return qualified in ancestors
 
     def bases(self, ref: EntityId) -> list[EntityId]:
         if ref in self.bases_cache:
@@ -423,6 +428,11 @@ class ClassIndex:
             return self.mro_cache[ref]
         self.mro_cache[ref] = [ref]
         bases = self.bases(ref)
+        if len(bases) <= 1:
+            # C3 over one base is that base's MRO; skip the merge, the common case by far.
+            result = [ref, *(self.mro(bases[0]) if bases else ())]
+            self.mro_cache[ref] = result
+            return result
         sequences = [list(self.mro(b)) for b in bases] + [list(bases)]
         result = [ref]
         while True:

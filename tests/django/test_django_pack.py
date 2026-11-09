@@ -211,3 +211,14 @@ def test_a_reassigned_local_hands_each_later_use_to_the_assignment_before_it() -
     flow = {e.surface: e.attr("flow_shape") for e in graph.by_kind("reference") if e.site.module == "shop.views"}
 
     assert flow == {"shop.models.Order": "write(update)", "billing.models.Invoice": ""}
+
+
+def test_finding_no_model_fails_the_model_producers_instead_of_reading_clean() -> None:
+    no_models = {"shop/models.py": {"defs": [class_def("Order", [], 2)]}, "billing/models.py": {}}
+    graph = FactRepo(no_models).graph()
+
+    failed = {name: failure.reason for name, failure in graph.failed_producers.items()}
+
+    assert failed["django.models@1"] == "NoModels: no first-party model found"
+    assert failed["django.relations@1"] == "django.models@1 failed"
+    assert "django.migrations@1" not in failed

@@ -111,6 +111,8 @@ class UseProducer:
         """`import a.b` then `a.b.Model`: L1 only counts these, so the shape stays unknown."""
         out: list[Edge] = []
         for at_scope, _, root, attrs, count, line, column in scope.record.get("uses", ()):
+            if not attrs:
+                continue
             names = leading_attrs(chain_tokens(attrs))
             found, rest = self.build.context.chain_lookup(scope, ".".join([root, *names]), at_scope, line)
             hit = found.hit

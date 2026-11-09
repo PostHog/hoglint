@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from functools import cached_property
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.producers import chain_tokens
@@ -109,13 +110,18 @@ class FileFacts:
     module_aliases: list[tuple[str, str]]
     top_names: list[str]
     lazy_map: dict[str, str]
-    bodies: dict[str, Body]
+    reader: FactReader = field(repr=False, compare=False)
     top_functions: dict[str, list[str]]
     class_methods: dict[str, list[str]]
     top_classes: dict[str, str]
     test: TestFacts | None = None
     dispatch_branches: list[tuple[list[str], list[str], list[str]]] = field(default_factory=list)
     enum_members: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    @cached_property
+    def bodies(self) -> dict[str, Body]:
+        """Function bodies by fid. Built on first use: the call view reaches few non-test files."""
+        return self.reader.read_bodies()
 
 
 class FactReader:
@@ -178,7 +184,8 @@ class FactReader:
             bound_names.add(bound)
         return imports, aliases, bound_names
 
-    def read_calls(self) -> tuple[dict[int, set[str]], set[int], set[str], bool]:
+    @cached_property
+    def calls(self) -> tuple[dict[int, set[str]], set[int], set[str], bool]:
         """Callee names per def (spread up its ancestry), defs with a test-client call, and the same for the module."""
         calls_in: dict[int, set[str]] = defaultdict(set)
         client_in: set[int] = set()
@@ -280,7 +287,8 @@ class FactReader:
             rest.add(leaf)
         return ScopeFacts(frozenset(calls), client, frozenset(rest), dict(methods), bases or [])
 
-    def read_bodies(self, calls_in: dict[int, set[str]], client_in: set[int]) -> dict[str, Body]:
+    def read_bodies(self) -> dict[str, Body]:
+        calls_in, client_in, _, _ = self.calls
         bodies: dict[str, Body] = {}
         patches_in: dict[int, set[str]] = self.read_patches()[0] if self.is_test else {}
         for idx, fid in self.fids.items():
@@ -421,11 +429,10 @@ class FactReader:
 
     def read(self) -> FileFacts:
         imports, aliases, bound = self.read_imports()
-        calls_in, client_in, module_calls, module_client = self.read_calls()
         top_names, top_functions, class_methods, top_classes = self.read_top_names()
         test = None
         if self.is_test:
-            test = self.read_test(bound, self.read_scopes(calls_in, client_in, module_calls, module_client))
+            test = self.read_test(bound, self.read_scopes(*self.calls))
         return FileFacts(
             rel=self.rel,
             dotted=self.scope.module,
@@ -433,7 +440,7 @@ class FactReader:
             module_aliases=aliases,
             top_names=top_names,
             lazy_map=self.lazy,
-            bodies=self.read_bodies(calls_in, client_in),
+            reader=self,
             top_functions=top_functions,
             class_methods=class_methods,
             top_classes=top_classes,
