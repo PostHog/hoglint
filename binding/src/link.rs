@@ -52,11 +52,16 @@ impl FactText {
     unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
 }
 
+/// A linked snapshot, (cache hits, files extracted) and each record's fact cache key.
+type Loaded = (CoreLink, (usize, usize), Vec<Option<String>>);
+
 /// One linked snapshot: facts, module index, resolver state and the core edges.
 #[pyclass(module = "hoglint_native", unsendable)]
 pub(crate) struct Link {
     pub(crate) inner: CoreLink,
     pub(crate) file_of: FxHashMap<String, u32>,
+    /// The fact cache key of each record (`BlobStats::keys`); None for JSONL input.
+    pub(crate) keys: Vec<Option<String>>,
 }
 
 impl Link {
@@ -394,7 +399,7 @@ pub(crate) fn link_jsonl(
             })
         })
         .map_err(PyValueError::new_err)?;
-    let file_of = inner
+    let file_of: FxHashMap<String, u32> = inner
         .core
         .facts
         .files
@@ -402,7 +407,12 @@ pub(crate) fn link_jsonl(
         .enumerate()
         .map(|(i, f)| (f.path.to_string(), i as u32))
         .collect();
-    Ok(Link { inner, file_of })
+    let keys = vec![None; file_of.len()];
+    Ok(Link {
+        inner,
+        file_of,
+        keys,
+    })
 }
 
 fn strings(spec: &serde_json::Value, key: &str) -> Vec<String> {
@@ -470,9 +480,9 @@ pub(crate) fn link_blobs(
         .num_threads(threads)
         .build()
         .map_err(|e| PyValueError::new_err(format!("threads: {e}")))?;
-    let (inner, stats) = py
+    let (inner, stats, keys) = py
         .detach(move || {
-            pool.install(|| -> Result<(CoreLink, (usize, usize)), String> {
+            pool.install(|| -> Result<Loaded, String> {
                 let started = std::time::Instant::now();
                 let mut it = Interner::new();
                 let (facts, stats) = load(&request, &mut it)?;
@@ -482,7 +492,7 @@ pub(crate) fn link_blobs(
                 for (at, stage) in stats.stages.iter().enumerate() {
                     link.timings.stages.insert(at + 1, *stage);
                 }
-                Ok((link, (stats.hits, stats.extracted)))
+                Ok((link, (stats.hits, stats.extracted), stats.keys))
             })
         })
         .map_err(PyValueError::new_err)?;
@@ -494,5 +504,12 @@ pub(crate) fn link_blobs(
         .enumerate()
         .map(|(i, f)| (f.path.to_string(), i as u32))
         .collect();
-    Ok((Link { inner, file_of }, stats))
+    Ok((
+        Link {
+            inner,
+            file_of,
+            keys,
+        },
+        stats,
+    ))
 }

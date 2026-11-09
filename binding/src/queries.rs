@@ -14,6 +14,10 @@ use rustc_hash::FxHashSet;
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 
+/// Where an `imports` row holds the imported name: [scope, line, column, flags, module, level,
+/// name, asname].
+const IMPORTED_NAME: usize = 6;
+
 /// Where a call kind's rows hold the callee (`CALLEE_FIELD` in hoglint/native/queries.py).
 fn callee_position(kind: &str) -> PyResult<usize> {
     match kind {
@@ -98,17 +102,20 @@ impl Link {
                 .spelled(&mut link.core.it, &link.edges.rows, code, &names),
         )
     }
+}
 
-    /// Rows of a call kind (`calls`, `callees`) in the analyzed files whose callee's last dotted
-    /// name is one of `names`, resolved or not: (file id, the row's JSON text) in fact order.
-    /// A file whose rows cannot hold one of the names is never parsed.
-    fn rows_named<'py>(
+impl Link {
+    /// The rows of `kind` in the analyzed files whose field at `position` is a string that
+    /// `wanted` accepts: (file id, the row's JSON text) in fact order. A file whose rows of the
+    /// kind hold none of `names` as text is never parsed.
+    fn matching_rows<'py>(
         &self,
         py: Python<'py>,
         kind: &str,
-        names: Vec<String>,
+        position: usize,
+        names: &[String],
+        wanted: impl Fn(&str) -> bool,
     ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
-        let position = callee_position(kind)?;
         let mut out = Vec::new();
         if names.is_empty() {
             return Ok(out);
@@ -119,7 +126,6 @@ impl Link {
             .collect::<Vec<_>>()
             .join("|");
         let mention = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let wanted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
         let facts = &self.inner.core.facts;
         let text = facts.text().map_err(PyValueError::new_err)?;
         let fail = |e: serde_json::Error| PyValueError::new_err(format!("{kind} rows: {e}"));
@@ -137,19 +143,56 @@ impl Link {
             let rows: Vec<&RawValue> = serde_json::from_slice(slice).map_err(fail)?;
             for row in rows {
                 let fields: Vec<&RawValue> = serde_json::from_str(row.get()).map_err(fail)?;
-                let Some(callee) = fields.get(position) else {
+                let Some(field) = fields.get(position) else {
                     continue;
                 };
-                let Ok(callee) = serde_json::from_str::<Cow<str>>(callee.get()) else {
+                let Ok(field) = serde_json::from_str::<Cow<str>>(field.get()) else {
                     continue;
                 };
-                let last = callee.rsplit('.').next().unwrap_or("");
-                if wanted.contains(last) {
+                if wanted(&field) {
                     out.push((file as u32, PyBytes::new(py, row.get().as_bytes())));
                 }
             }
         }
         Ok(out)
+    }
+}
+
+#[pymethods]
+impl Link {
+    /// Rows of a call kind (`calls`, `callees`) in the analyzed files whose callee's last dotted
+    /// name is one of `names`, resolved or not: (file id, the row's JSON text) in fact order.
+    fn rows_named<'py>(
+        &self,
+        py: Python<'py>,
+        kind: &str,
+        names: Vec<String>,
+    ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
+        let position = callee_position(kind)?;
+        let wanted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
+        self.matching_rows(py, kind, position, &names, |callee| {
+            wanted.contains(callee.rsplit('.').next().unwrap_or(""))
+        })
+    }
+
+    /// `imports` rows in the analyzed files that import one of `names` by name (`from x import
+    /// name`): (file id, the row's JSON text) in fact order.
+    fn import_rows_named<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+    ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
+        let wanted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
+        self.matching_rows(py, "imports", IMPORTED_NAME, &names, |name| {
+            wanted.contains(name)
+        })
+    }
+
+    /// The fact cache key of each record in fact order: the blob oid of a repo file, the content
+    /// hash of a third-party file, None for a file that could not be read or a JSONL input. What
+    /// a pack keys a per-file cache on.
+    fn blob_keys(&self) -> Vec<Option<String>> {
+        self.keys.clone()
     }
 
     /// Classes the analyzed modules' own source defines at module level whose MRO holds

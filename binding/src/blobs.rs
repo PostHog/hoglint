@@ -45,6 +45,9 @@ pub struct BlobStats {
     pub hits: usize,
     pub extracted: usize,
     pub stages: Vec<(&'static str, f64)>,
+    /// The cache key of each record in fact order: blob oid, or content hash for a third-party
+    /// file; None for a file that could not be read.
+    pub keys: Vec<Option<String>>,
 }
 
 pub fn configs(
@@ -380,6 +383,7 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         hits: slots.len() - extracted,
         extracted,
         stages: cumulative_to_spans(marks),
+        keys: slots.iter().map(|slot| slot.key.clone()).collect(),
     };
     Ok((FactSet::deferred(files, text), stats))
 }

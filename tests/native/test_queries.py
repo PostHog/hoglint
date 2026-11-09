@@ -51,3 +51,7 @@ def test_pack_queries_answer_from_the_link(tmp_path: Path) -> None:
     ]
     rows = [(link.paths()[file], orjson.loads(row)[5]) for file, row in link.rows_named("calls", ["connect"])]
     assert rows == [("app/wiring.py", "signals.saved.connect")]
+    imports = [(link.paths()[file], orjson.loads(row)[6]) for file, row in link.import_rows_named(["Base", "signals"])]
+    assert imports == [("app/models.py", "Base"), ("app/wiring.py", "signals")]
+    oids = dict(zip(link.paths(), link.blob_keys()))
+    assert oids == {path: oid for path, (oid, _) in BlobSnapshot.index(tmp_path / "repo").blobs.items()}

@@ -52,6 +52,12 @@ class Link:
     def rows_named(self, kind: str, names: list[str]) -> list[tuple[int, bytes]]:
         """Rows of `calls` or `callees` in the analyzed files whose callee's last dotted name is
         one of `names`, as (file id, row JSON) in fact order: what `PackQueries.calls_named` reads."""
+    def import_rows_named(self, names: list[str]) -> list[tuple[int, bytes]]:
+        """`imports` rows in the analyzed files that import one of `names` by name, as
+        (file id, row JSON) in fact order."""
+    def blob_keys(self) -> list[str | None]:
+        """The fact cache key of each record in fact order: blob oid, or the content hash of a
+        third-party file; None for an unreadable file or a JSONL input."""
     def subclasses(self, qualified: str) -> list[Pair]:
         """Module-level classes of the analyzed modules whose MRO holds `qualified`, the class
         itself included, in scope and table order: `is_subclass` asked of every class at once."""
