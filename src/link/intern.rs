@@ -1,14 +1,23 @@
-//! One string table for a link. Ids are dense u32s; id 0 is the empty string.
+//! One string table for a link. Ids are dense u32s; id 0 is the empty string. The text of
+//! every string sits in one buffer, so a string costs its bytes and two ids, not an allocation.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub type Sid = u32;
 pub const EMPTY: Sid = 0;
+/// The end of a chain of strings with one hash.
+const NO_SID: Sid = Sid::MAX;
 
 pub struct Interner {
-    map: FxHashMap<Arc<str>, Sid>,
-    strs: Vec<Arc<str>>,
+    /// Every string's text, back to back, in id order.
+    text: String,
+    /// Where each string ends in `text`; it starts where the string before it ends.
+    ends: Vec<u32>,
+    /// The newest string with each text hash; `older` chains the others with the same hash.
+    newest: FxHashMap<u64, Sid>,
+    older: Vec<Sid>,
     joins: FxHashMap<(Sid, Sid), Sid>,
     segs: FxHashMap<Sid, Arc<[Sid]>>,
 }
@@ -19,11 +28,19 @@ impl Default for Interner {
     }
 }
 
+fn hash_of(text: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl Interner {
     pub fn new() -> Self {
         let mut interner = Interner {
-            map: FxHashMap::default(),
-            strs: Vec::new(),
+            text: String::new(),
+            ends: Vec::new(),
+            newest: FxHashMap::default(),
+            older: Vec::new(),
             joins: FxHashMap::default(),
             segs: FxHashMap::default(),
         };
@@ -31,31 +48,66 @@ impl Interner {
         interner
     }
 
+    /// The id of `text` among the strings with hash `hash`.
+    fn find(&self, hash: u64, text: &str) -> Option<Sid> {
+        let mut at = self.newest.get(&hash).copied().unwrap_or(NO_SID);
+        while at != NO_SID {
+            if self.s(at) == text {
+                return Some(at);
+            }
+            at = self.older[at as usize];
+        }
+        None
+    }
+
     pub fn intern(&mut self, text: &str) -> Sid {
-        if let Some(&id) = self.map.get(text) {
+        let hash = hash_of(text);
+        if let Some(id) = self.find(hash, text) {
             return id;
         }
-        let id = self.strs.len() as Sid;
-        let shared: Arc<str> = Arc::from(text);
-        self.strs.push(shared.clone());
-        self.map.insert(shared, id);
+        let id = self.ends.len() as Sid;
+        self.text.push_str(text);
+        self.ends.push(self.text.len() as u32);
+        self.older
+            .push(self.newest.insert(hash, id).unwrap_or(NO_SID));
         id
     }
 
     pub fn get(&self, text: &str) -> Option<Sid> {
-        self.map.get(text).copied()
+        self.find(hash_of(text), text)
     }
 
     pub fn s(&self, id: Sid) -> &str {
-        &self.strs[id as usize]
+        let at = id as usize;
+        let start = if at == 0 {
+            0
+        } else {
+            self.ends[at - 1] as usize
+        };
+        &self.text[start..self.ends[at] as usize]
+    }
+
+    /// Estimated heap bytes: the text, the ids, the hash chains and the join and split caches.
+    pub fn heap(&self) -> usize {
+        let table =
+            |entries: usize, entry: usize| (entries * 8 / 7).next_power_of_two() * (entry + 1);
+        let mut out = self.text.capacity() + 4 * (self.ends.capacity() + self.older.capacity());
+        out += table(self.newest.capacity(), 12);
+        out += table(self.joins.capacity(), 12);
+        out += table(self.segs.capacity(), 20);
+        out + self
+            .segs
+            .values()
+            .map(|parts| 16 + 4 * parts.len())
+            .sum::<usize>()
     }
 
     pub fn len(&self) -> usize {
-        self.strs.len()
+        self.ends.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.strs.len() <= 1
+        self.ends.len() <= 1
     }
 
     /// `a + "." + b`, as Python's `".".join([a, b])`: an empty `a` still gets its dot.

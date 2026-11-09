@@ -257,13 +257,9 @@ impl<V> OrderedMap<V> {
 
 impl Core {
     /// Estimated heap bytes of the interner, the module index, the tables and the resolver
-    /// caches (`Link::heap`). The interner's join and split caches are not counted.
+    /// caches (`Link::heap`).
     pub fn heap(&self) -> Vec<(&'static str, usize)> {
-        let it = &self.it;
-        let strings: usize = (0..it.len() as Sid)
-            .map(|id| it.s(id).len().next_multiple_of(8) + 16)
-            .sum();
-        let interner = strings + it.len() * (16 + 32);
+        let interner = self.it.heap();
         let index = &self.index;
         let mut module_index = heap::map(&index.path_of) + heap::vec(&index.modules);
         module_index += heap::vec(&index.module_of_file) + heap::map(&index.package);
