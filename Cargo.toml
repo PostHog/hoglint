@@ -1,0 +1,21 @@
+[package]
+name = "hoglint-facts"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "hoglint-facts"
+path = "src/main.rs"
+
+[dependencies]
+ruff_python_parser = "=0.0.20"
+ruff_python_ast = "=0.0.20"
+ruff_text_size = "=0.0.20"
+rayon = "1"
+sha2 = "=0.10.9"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
