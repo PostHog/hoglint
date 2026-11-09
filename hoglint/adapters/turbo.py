@@ -10,6 +10,11 @@
   glob relative to the repo root; a leading `!` excludes from that package's inputs.
 
 A path is watched when some package that runs the task includes it and does not exclude it.
+
+Coverage asks a different question: does a change to the path reach the task? A path in a package
+that has no script for the task, or outside every package, is covered: CI runs the full suite for
+any change there. A path is not covered only when its package runs the task and its inputs leave
+the path out.
 """
 
 from __future__ import annotations
@@ -18,10 +23,14 @@ import re
 import json
 import posixpath
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
+
+from hoglint.globs import Braces, compile_glob
+from hoglint.plugins import REGISTRY
 
 DEFAULT_MARKER = "$TURBO_DEFAULT$"
 EXTENDS_MARKER = "$TURBO_EXTENDS$"
@@ -64,40 +73,6 @@ def strip_jsonc(text: str) -> str:
     return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
 
 
-@cache
-def glob_regex(pattern: str) -> re.Pattern[str]:
-    """Turbo glob syntax: `**` spans directories, `*` and `?` stay in one segment, `{a,b}` picks one."""
-    out: list[str] = []
-    index = 0
-    depth = 0
-    while index < len(pattern):
-        char = pattern[index]
-        if pattern.startswith("**/", index):
-            out.append("(?:.*/)?")
-            index += 3
-            continue
-        if pattern.startswith("**", index):
-            out.append(".*")
-            index += 2
-            continue
-        if char == "*":
-            out.append("[^/]*")
-        elif char == "?":
-            out.append("[^/]")
-        elif char == "{":
-            out.append("(?:")
-            depth += 1
-        elif char == "}" and depth:
-            out.append(")")
-            depth -= 1
-        elif char == "," and depth:
-            out.append("|")
-        else:
-            out.append(re.escape(char))
-        index += 1
-    return re.compile("".join(out) + r"\Z")
-
-
 @dataclass(frozen=True, slots=True)
 class PackageTask:
     """One package that runs the task, with its inputs made relative to the repo root."""
@@ -125,7 +100,9 @@ class TurboInputs:
         self.task = task
         self.root_config = self.read_config(repo_root / "turbo.json")
         self.tracked_cache: dict[str, frozenset[str] | None] = {}
+        self.directories = self.package_dirs()
         self.tasks = self.package_tasks()
+        self.task_by_directory = {task.directory: task for task in self.tasks}
 
     def read_config(self, path: Path) -> dict[str, Any]:
         return read_json(path) if path.is_file() else {}
@@ -198,7 +175,7 @@ class TurboInputs:
 
     def package_tasks(self) -> list[PackageTask]:
         out: list[PackageTask] = []
-        for directory in self.package_dirs():
+        for directory in self.directories:
             task = self.package_task(directory, read_json(self.repo_root / directory / "package.json"))
             if task is not None:
                 out.append(task)
@@ -224,24 +201,47 @@ class TurboInputs:
         return path in files
 
     def watches(self, task: PackageTask, path: str) -> bool:
-        if any(glob_regex(glob).match(path) for glob in task.excludes):
+        if any(compile_glob(glob, Braces.ALTERNATION).match(path) for glob in task.excludes):
             return False
-        if any(glob_regex(glob).match(path) for glob in task.includes):
+        if any(compile_glob(glob, Braces.ALTERNATION).match(path) for glob in task.includes):
             return True
         inside = not task.directory or path.startswith(task.directory + "/")
         return task.default and inside and self.tracked(task.directory, path)
 
-    def owner(self, path: str) -> PackageTask | None:
-        """The package that runs the task and holds the path, innermost first."""
-        holders = [task for task in self.tasks if not task.directory or path.startswith(task.directory + "/")]
-        return max(holders, key=lambda task: len(task.directory), default=None)
+    def holder(self, path: str) -> str:
+        """The innermost workspace package directory that holds the path; "" for the repo root."""
+        holders = [directory for directory in self.directories if path.startswith(directory + "/")]
+        return max(holders, key=len, default="")
 
     def covered(self, path: str) -> tuple[bool, str]:
-        """(watched, the turbo.json that decided for the package holding the path)."""
+        """(covered, why): the turbo.json that decided, or why a change there runs everything anyway."""
         for task in self.tasks:
             if self.watches(task, path):
                 return True, task.decided_by
-        owner = self.owner(path)
-        if owner is None:
-            return False, f"no package that runs {self.task}"
-        return False, owner.decided_by
+        holder = self.holder(path)
+        task = self.task_by_directory.get(holder)
+        if task is None:
+            where = f"{holder}/package.json" if holder else "the repo root"
+            return True, f"{where} runs no {self.task}, so any change there runs the full suite"
+        return False, task.decided_by
+
+
+@cache
+def turbo_inputs(repo_root: Path, task: str) -> TurboInputs:
+    return TurboInputs(repo_root, task)
+
+
+class TurboAdapter:
+    """`inputs = { adapter = "turbo", task = "..." }`: the task's inputs, read from turbo.json."""
+
+    name = "turbo"
+    allowed_options = frozenset({"task"})
+
+    def open(self, options: Mapping[str, Any], root: Path) -> TurboInputs:
+        return turbo_inputs(root.resolve(), str(options.get("task", "")))
+
+    def covered(self, handle: TurboInputs, path: str) -> tuple[bool, str]:
+        return handle.covered(path)
+
+
+REGISTRY.add_coverage_adapter(TurboAdapter())

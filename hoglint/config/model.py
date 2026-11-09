@@ -132,11 +132,14 @@ class RegistrySpec:
 
 @dataclass(frozen=True, slots=True)
 class ProviderSpec:
+    """`bindings` pairs each provider output with the field it fills."""
+
     name: str
     use: str
     sets: tuple[str, ...]
     options: tuple[tuple[str, Any], ...] = ()
     source: str = ""
+    bindings: tuple[tuple[str, str], ...] = ()
 
     def option(self, key: str, default: Any = None) -> Any:
         for name, value in self.options:

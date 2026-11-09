@@ -8,59 +8,18 @@ its domain with no value is unknown; outside its domain it is a known `none`.
 from __future__ import annotations
 
 import re
-import json
-import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from functools import cache
 from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec
+from hoglint.globs import glob_match
 from hoglint.model import Edge, Graph, Resolution
+from hoglint.plugins import REGISTRY, Provided
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, State, Truth, Value, any_of
 
 CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-@cache
-def compile_glob(pattern: str) -> re.Pattern[str]:
-    """`**` spans directories, `*` and `?` stay in one segment, `{name}` captures one segment."""
-    out: list[str] = []
-    seen: set[str] = set()
-    index = 0
-    while index < len(pattern):
-        char = pattern[index]
-        if pattern.startswith("**/", index):
-            out.append("(?:.*/)?")
-            index += 3
-            continue
-        if pattern.startswith("**", index):
-            out.append(".*")
-            index += 2
-            continue
-        if char == "*":
-            out.append("[^/]*")
-        elif char == "?":
-            out.append("[^/]")
-        elif char == "{":
-            end = pattern.index("}", index)
-            name = pattern[index + 1 : end]
-            out.append(f"(?P={name})" if name in seen else f"(?P<{name}>[^/]+)")
-            seen.add(name)
-            index = end + 1
-            continue
-        else:
-            out.append(re.escape(char))
-        index += 1
-    return re.compile("".join(out) + r"\Z")
-
-
-def glob_match(pattern: str, path: str) -> dict[str, str] | None:
-    match = compile_glob(pattern).match(path)
-    if match is None:
-        return None
-    return {key: value for key, value in match.groupdict().items() if value is not None}
 
 
 def fill(template: Any, captures: dict[str, str]) -> Any:
@@ -180,84 +139,6 @@ class SymbolFacts:
 # ── Providers ─────────────────────────────────────────────────────
 
 
-def codeowners_segment(segment: str) -> str:
-    out: list[str] = []
-    for char in segment:
-        if char == "*":
-            out.append("[^/]*")
-        elif char == "?":
-            out.append("[^/]")
-        else:
-            out.append(re.escape(char))
-    return "".join(out)
-
-
-@cache
-def codeowners_regex(pattern: str) -> re.Pattern[str]:
-    """GitHub CODEOWNERS matching, which follows gitignore with one documented exception.
-
-    A pattern with a slash at the start or in the middle is anchored at the repo root; otherwise
-    it matches at any depth. A trailing slash matches only a directory's contents. A pattern that
-    names a directory also owns everything below it, but a last segment of `*` matches only the
-    files directly inside (`docs/*` owns `docs/a.md`, not `docs/sub/b.md`). `**` spans directories.
-    """
-    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
-    directory = pattern.endswith("/")
-    segments = pattern.strip("/").split("/")
-    out = "" if anchored else "(?:.*/)?"
-    for index, segment in enumerate(segments):
-        last = index == len(segments) - 1
-        if segment == "**":
-            out += ".*" if last else "(?:.*/)?"
-            continue
-        out += codeowners_segment(segment) + ("" if last else "/")
-    if directory:
-        out += "/.*"
-    elif segments[-1] not in ("*", "**") or len(segments) == 1:
-        out += "(?:/.*)?"
-    return re.compile(out + r"\Z")
-
-
-class CodeownersFile:
-    """GitHub CODEOWNERS: the last matching line wins."""
-
-    def __init__(self, text: str) -> None:
-        self.rules: list[tuple[str, frozenset[str]]] = []
-        for line in text.splitlines():
-            line = line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            pattern, *owners = line.split()
-            self.rules.append((pattern, frozenset(owners)))
-
-    def owners(self, path: str) -> frozenset[str] | None:
-        found: frozenset[str] | None = None
-        for pattern, owners in self.rules:
-            if codeowners_regex(pattern).match(path):
-                found = owners
-        return found
-
-
-class ProvenanceFile:
-    """Generated-code provenance: `[[generated]] producer, inputs, outputs` (TOML or JSON)."""
-
-    def __init__(self, entries: list[dict[str, Any]]) -> None:
-        self.entries = entries
-
-    @staticmethod
-    def read(path: Path) -> ProvenanceFile:
-        text = path.read_text()
-        data = json.loads(text) if path.suffix == ".json" else tomllib.loads(text)
-        return ProvenanceFile(list(data.get("generated", [])))
-
-    def producers(self, path: str) -> frozenset[str]:
-        out = set()
-        for entry in self.entries:
-            if any(glob_match(pattern, path) is not None for pattern in entry.get("outputs", [])):
-                out.add(str(entry.get("producer", "")))
-        return frozenset(out)
-
-
 class ProviderRunner:
     """Fills provider-owned fields per path. A provider that fails is reported, never silent."""
 
@@ -281,13 +162,7 @@ class ProviderRunner:
     def open(self, spec: ProviderSpec) -> Any:
         if self.repo_root is None:
             raise FileNotFoundError("no repo root to read provider files from")
-        if spec.use == "owners-yaml":
-            from owners_yaml import OwnersResolver  # noqa: PLC0415 — optional dependency, only for this provider
-
-            return OwnersResolver(self.repo_root)
-        if spec.use == "codeowners":
-            return CodeownersFile((self.repo_root / spec.option("file", ".github/CODEOWNERS")).read_text())
-        return ProvenanceFile.read(self.repo_root / spec.option("file", "hoglint.provenance.toml"))
+        return REGISTRY.providers[spec.use].open(dict(spec.options), self.repo_root)
 
     def values(self, path: str) -> dict[str, Candidate]:
         out: dict[str, Candidate] = {}
@@ -296,25 +171,15 @@ class ProviderRunner:
             if handle is None:
                 continue
             source = f"provider {spec.name} ({spec.use})"
-            if spec.use == "owners-yaml":
-                resolution = handle.resolve(path)
-                if resolution.owners:
-                    out.update(
-                        {
-                            name: Candidate(frozenset(resolution.owners), f"{source}: {resolution.source}", False)
-                            for name in spec.sets
-                        }
-                    )
-            elif spec.use == "codeowners":
-                owners = handle.owners(path)
-                if owners:
-                    out.update({name: Candidate(owners, source, False) for name in spec.sets})
-            else:
-                producers = handle.producers(path)
-                if "generated" in spec.sets:
-                    out["generated"] = Candidate(bool(producers), source, False)
-                if "producer" in spec.sets and producers:
-                    out["producer"] = Candidate(producers, source, False)
+            produced = REGISTRY.providers[spec.use].values(handle, path)
+            for output, name in spec.bindings:
+                if output not in produced:
+                    continue
+                value = produced[output]
+                detail = ""
+                if isinstance(value, Provided):
+                    value, detail = value.value, value.detail
+                out[name] = Candidate(value, f"{source}: {detail}" if detail else source, False)
         return out
 
     def failed_fields(self) -> set[str]:

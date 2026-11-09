@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from hoglint.adapters.codeowners import CodeownersFile
 from hoglint.config import ConfigError
-from hoglint.labels import CodeownersFile, Labeler, render
+from hoglint.labels import Labeler, render
 from hoglint.model import Resolution
 from hoglint.rules.engine import Engine
 

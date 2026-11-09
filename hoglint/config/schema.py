@@ -11,6 +11,7 @@ import json
 import hashlib
 from typing import Any
 
+from hoglint import adapters  # noqa: F401 - registers the builtin coverage adapters and providers
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
 from hoglint.config.model import (
     Assignment,
@@ -33,6 +34,7 @@ from hoglint.config.model import (
     ZoneTable,
 )
 from hoglint.model import Context, Resolution
+from hoglint.plugins import REGISTRY
 from hoglint.selectors import Catalog, FieldInfo, FieldType, Selector, SelectorError, suggest
 
 CORE_EDGE_KINDS = (
@@ -118,11 +120,6 @@ KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expec
 SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "doc"})
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
-PROVIDER_OPTIONS: dict[str, frozenset[str]] = {
-    "owners-yaml": frozenset({"files"}),
-    "codeowners": frozenset({"file"}),
-    "provenance": frozenset({"file", "sources"}),
-}
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "unknown"})
 LEDGER_KEYS = frozenset({"file", "exceptions", "equality", "growth", "report"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
@@ -523,17 +520,39 @@ class SchemaBuilder:
         for name, table in self.raw.get("providers", {}).items():
             key = f"providers.{name}"
             use = table.get("use")
-            if use not in PROVIDER_OPTIONS:
-                self.fail(key, f"unknown provider {use!r}; one of {', '.join(PROVIDER_OPTIONS)}")
+            provider = REGISTRY.providers.get(str(use))
+            if provider is None:
+                known = sorted(REGISTRY.providers)
+                self.fail(key, f"unknown provider {use!r}; one of {', '.join(known)}{suggest(str(use), known)}")
                 continue
-            self.check_keys(key, table, PROVIDER_OPTIONS[use] | {"use", "sets", "doc"})
-            sets = as_tuple(table.get("sets"))
-            for field_name in sets:
+            self.check_keys(key, table, provider.allowed_options | {"use", "sets", "doc"})
+            bindings = self.read_bindings(key, table.get("sets"), tuple(getattr(provider, "outputs", ())))
+            for _, field_name in bindings:
                 if field_name not in self.fields:
                     self.fail(key, f"sets undeclared field {field_name!r}{suggest(field_name, self.fields)}")
             options = tuple((k, v) for k, v in table.items() if k not in ("use", "sets", "doc"))
-            out[name] = ProviderSpec(name, str(use), sets, options, self.source(key))
+            sets = tuple(field_name for _, field_name in bindings)
+            out[name] = ProviderSpec(name, str(use), sets, options, self.source(key), bindings)
         return out
+
+    def read_bindings(self, key: str, raw: Any, outputs: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+        """(output, field) pairs. A list names fields: a single-output provider fills each, otherwise
+        each field takes the output of its own name. A table maps outputs to fields."""
+        if isinstance(raw, dict):
+            for output in raw:
+                if outputs and output not in outputs:
+                    self.fail(key, f"the provider has no output {output!r}; it has {', '.join(outputs)}")
+            return tuple((str(output), str(field_name)) for output, field_name in raw.items())
+        fields = as_tuple(raw)
+        if len(outputs) == 1:
+            return tuple((outputs[0], field_name) for field_name in fields)
+        for field_name in fields:
+            if outputs and field_name not in outputs:
+                self.fail(
+                    key,
+                    f'the provider has no output {field_name!r}; map one with `sets = {{ output = "{field_name}" }}`',
+                )
+        return tuple((field_name, field_name) for field_name in fields)
 
     def read_assigns(self) -> tuple[Assignment, ...]:
         out: list[Assignment] = []
@@ -659,6 +678,18 @@ class SchemaBuilder:
             out.append(CoverSpec(text, selector=selector, endpoint=endpoint))
         return tuple(out)
 
+    def read_inputs(self, key: str, inputs: Any) -> dict[str, Any]:
+        if not isinstance(inputs, dict):
+            self.fail(key, "inputs must be a table with an `adapter`")
+            return {}
+        adapter = REGISTRY.coverage_adapters.get(str(inputs.get("adapter")))
+        if adapter is None:
+            known = sorted(REGISTRY.coverage_adapters)
+            self.fail(key, f"unknown coverage adapter {inputs.get('adapter')!r}; one of {', '.join(known)}")
+            return inputs
+        self.check_keys(key, inputs, adapter.allowed_options | {"adapter"})
+        return inputs
+
     def read_rules(self, registries: dict[str, RegistrySpec], exports: dict[str, ExportSpec]) -> dict[str, RuleSpec]:
         out: dict[str, RuleSpec] = {}
         rule_ids = set(self.raw.get("rules", {}))
@@ -725,11 +756,8 @@ class SchemaBuilder:
             if option in table:
                 producer_options.append((option, self.check_enum(f"{key}.{option}", table[option], allowed)))
         inputs = table.get("inputs", {})
-        if primitive == "coverage" and not isinstance(inputs, dict):
-            self.fail(key, "inputs must be a table with an `adapter`")
-            inputs = {}
-        if primitive == "coverage" and inputs.get("adapter") not in ("turbo", "globs"):
-            self.fail(key, f"unknown coverage adapter {inputs.get('adapter')!r}; one of turbo, globs")
+        if primitive == "coverage":
+            inputs = self.read_inputs(f"{key}.inputs", inputs)
         if primitive == "inventory" and not (table.get("classify") or table.get("exactly_one")):
             self.fail(key, "an inventory needs `classify` (edges) or `exactly_one` (entities)")
         require_text = table.get("require", "")

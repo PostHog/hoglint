@@ -7,7 +7,8 @@ in the config name the modules to import.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import importlib
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -33,8 +34,21 @@ class Pack(Protocol):
     def produce(self, section: Mapping[str, Any], core: Any, graph: Graph, root: Path) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class Provided:
+    """A provider value with the detail `hoglint explain` shows next to it (which file line set it)."""
+
+    value: Any
+    detail: str = ""
+
+
 class Provider(Protocol):
-    """Fills label fields from files outside the code (owners files, CODEOWNERS, provenance)."""
+    """Fills label fields from files outside the code (owners files, CODEOWNERS, provenance).
+
+    `values` maps output names to values (plain, or wrapped in `Provided`). A provider may declare
+    `outputs: tuple[str, ...]`; one with a single output fills every field its `sets` lists, and
+    otherwise each output fills the field of the same name unless `sets` renames it.
+    """
 
     use: str  # the `use = "..."` name in a [[provider]] or [providers.*] entry
     allowed_options: frozenset[str]
@@ -80,3 +94,17 @@ class Registry:
 
 
 REGISTRY = Registry()
+
+
+PACK_MODULE_PREFIX = "hoglint.packs."
+
+
+def import_plugins(modules: Iterable[str]) -> list[str]:
+    """Imports each module so it registers its plugins. One problem per module that fails."""
+    problems: list[str] = []
+    for module in dict.fromkeys(modules):
+        try:
+            importlib.import_module(module)
+        except Exception as error:  # noqa: BLE001 - a broken plugin is a config error, reported with the rest
+            problems.append(f"plugin module {module!r} does not import: {type(error).__name__}: {error}")
+    return problems

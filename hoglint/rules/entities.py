@@ -7,10 +7,11 @@ import tomllib
 from collections.abc import Iterator
 
 from hoglint.config.model import CoverSpec, RuleSpec
-from hoglint.labels import fill, glob_match
+from hoglint.globs import glob_match
+from hoglint.labels import fill
 from hoglint.model import Edge, Finding
+from hoglint.plugins import REGISTRY
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, RuleContext, RuleRun, project, render_value
-from hoglint.rules.turbo import TurboError, TurboInputs
 from hoglint.selectors import Ref, Resolver, State, Truth, Value
 
 
@@ -238,7 +239,7 @@ class InventoryPrimitive(EntityRule):
 
 
 class CoveragePrimitive(EntityRule):
-    """Does an outside input list (turbo task inputs) cover every path the rule names?"""
+    """Does an outside input list (a coverage adapter, such as turbo task inputs) cover every path the rule names?"""
 
     def required(self) -> dict[str, tuple[str, str | None]]:
         """path -> (why, module) for every path that must be covered."""
@@ -290,32 +291,23 @@ class CoveragePrimitive(EntityRule):
 
     def evaluate(self) -> RuleRun:
         repo = self.ctx.repo_root
-        adapter = self.spec.input("adapter")
-        if adapter == "turbo" and repo is None:
-            self.incomplete("inputs", None, "no repo root to read turbo.json from")
+        name = str(self.spec.input("adapter"))
+        adapter = REGISTRY.coverage_adapters[name]
+        if repo is None:
+            self.incomplete("inputs", None, f"no repo root to read the {name} inputs from")
             return self.run
-        turbo = None
-        if adapter == "turbo" and repo is not None:
-            try:
-                turbo = TurboInputs(repo, str(self.spec.input("task", "")))
-            except TurboError as error:
-                self.incomplete("inputs", None, f"cannot read the turbo config: {error}")
-                return self.run
-        globs = tuple(self.spec.input("paths", ()))
+        options = {key: value for key, value in self.spec.inputs if key != "adapter"}
+        try:
+            handle = adapter.open(options, repo)
+        except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
+            self.incomplete("inputs", None, f"cannot read the {name} inputs: {error}")
+            return self.run
         for location, (why, module) in sorted(self.required().items()):
             for path in self.expand(location):
-                if turbo is not None:
-                    covered, decided = turbo.covered(path)
-                else:
-                    covered, decided = any(glob_match(g, path) is not None for g in globs), "inputs.paths"
+                covered, decided = adapter.covered(handle, path)
                 if covered:
                     continue
                 owner_module = module or self.ctx.labeler.path_to_module.get(path)
                 resolve = self.resolver(owner_module, None, path)
-                self.emit(
-                    path,
-                    owner_module,
-                    f"{path} is needed by {why} but {decided or 'the inputs'} does not watch it",
-                    resolve,
-                )
+                self.emit(path, owner_module, f"{path} is needed by {why} but {decided} does not watch it", resolve)
         return self.run

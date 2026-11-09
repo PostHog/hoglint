@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.rules.turbo import TurboInputs
+from hoglint.adapters.turbo import TurboInputs
 
 ROOT_TURBO = {"tasks": {"check": {"inputs": ["backend/**/*.py", "!backend/**/__pycache__/**"]}}}
 PACKAGES: dict[str, tuple[bool, dict[str, object] | None]] = {
@@ -65,23 +65,26 @@ def turbo(tmp_path_factory: pytest.TempPathFactory) -> TurboInputs:
 
 
 @pytest.mark.parametrize(
-    "path, watched",
+    "path, watched, covered",
     [
-        ("products/plain/backend/a.py", True),
-        ("products/plain/backend/__pycache__/a.py", False),
-        ("products/plain/other.py", False),
-        ("products/default/anything.txt", True),
-        ("products/default/secret/key.py", False),
-        ("products/default/untracked.py", False),
-        ("products/extends/backend/a.py", True),
-        ("products/extends/extra/b.txt", True),
-        ("products/noscript/backend/a.py", False),
-        ("shared/x.py", True),
-        ("up/y.py", True),
-        ("products/narrow/facade/api.py", True),
-        ("products/narrow/sub/logic.py", False),
-        ("posthog/models.py", False),
+        ("products/plain/backend/a.py", True, True),
+        ("products/plain/backend/__pycache__/a.py", False, False),
+        ("products/plain/other.py", False, False),
+        ("products/default/anything.txt", True, True),
+        ("products/default/secret/key.py", False, False),
+        ("products/default/untracked.py", False, False),
+        ("products/extends/backend/a.py", True, True),
+        ("products/extends/extra/b.txt", True, True),
+        # No check script: CI runs the full suite for any change there.
+        ("products/noscript/backend/a.py", False, True),
+        ("shared/x.py", True, True),
+        ("up/y.py", True, True),
+        ("products/narrow/facade/api.py", True, True),
+        ("products/narrow/sub/logic.py", False, False),
+        # Outside every package, and the root runs no check.
+        ("posthog/models.py", False, True),
     ],
 )
-def test_turbo_inputs_follow_turbo_semantics(turbo: TurboInputs, path: str, watched: bool) -> None:
-    assert turbo.covered(path)[0] is watched
+def test_turbo_inputs_follow_turbo_semantics(turbo: TurboInputs, path: str, watched: bool, covered: bool) -> None:
+    assert any(turbo.watches(task, path) for task in turbo.tasks) is watched
+    assert turbo.covered(path)[0] is covered
