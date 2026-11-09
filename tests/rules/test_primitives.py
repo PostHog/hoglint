@@ -424,15 +424,25 @@ growth_key = ["edge.callable"]
 
 
 def test_signature_denies_models_and_reads_any_as_unknown(tmp_path: Path) -> None:
-    def expose(builder: GraphBuilder, target: str, slot: str, resolution: Resolution = Resolution.RESOLVED) -> None:
+    def expose(
+        builder: GraphBuilder,
+        target: str,
+        slot: str,
+        resolution: Resolution = Resolution.RESOLVED,
+        producer: str = "test@1",
+    ) -> None:
         attrs = (("callable", "charge"), ("slot", slot))
-        builder.edge("exposes", "products.billing.facade.api", target, resolution=resolution, attrs=attrs)
+        builder.edge(
+            "exposes", "products.billing.facade.api", target, resolution=resolution, attrs=attrs, producer=producer
+        )
 
     builder = base_graph()
     expose(builder, "products.billing.models.Invoice", "return")
+    expose(builder, "products.billing.models.Invoice", "return", producer="core-exposes@1")
     expose(builder, "typing.Any", "param:payload", Resolution.EXTERNAL)
     expose(builder, "builtins.int", "param:amount", Resolution.EXTERNAL)
     result = run(tmp_path, SIGNATURE, builder.graph)
+    assert len(result.runs["facade-signature"].findings) == 2
     found = {f.identity: f.unknown for f in result.runs["facade-signature"].findings}
     assert found == {
         ("charge", "return", "products.billing.models.Invoice"): False,
