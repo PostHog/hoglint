@@ -81,6 +81,7 @@ pub struct Link {
     pub settings: Producing,
     pub edges: EdgeStore,
     pub index: EdgeIndex,
+    pub endpoints: groups::EndpointTables,
     pub symbols: Symbols,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
@@ -173,6 +174,7 @@ impl Link {
             settings,
             edges,
             index: EdgeIndex::default(),
+            endpoints: groups::EndpointTables::default(),
             symbols,
             first_party,
             timings,

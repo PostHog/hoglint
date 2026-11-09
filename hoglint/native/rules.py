@@ -13,9 +13,10 @@ false for a group makes the selection false for every edge in it.
 
 from __future__ import annotations
 
+import dataclasses
 from array import array
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -23,10 +24,20 @@ from typing import Any
 from hoglint.config.model import Config
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
-from hoglint.model import Edge, Graph
-from hoglint.native.graph import CONTEXT_BITS, NativeGraph
-from hoglint.rules.base import EDGE_DEPENDENT_FIELDS, EdgeEnv, EdgeRule, RuleContext, conjuncts, joined, read_endpoint
-from hoglint.selectors import Node, Ref, Truth, evaluate, refs
+from hoglint.model import Edge, Finding, FindingDetail, Graph
+from hoglint.native.graph import CONTEXT_BITS, RESOLUTIONS, NativeGraph
+from hoglint.rules.base import (
+    EDGE_DEPENDENT_FIELDS,
+    EdgeEnv,
+    EdgeRule,
+    Endpoint,
+    RuleContext,
+    column_ref,
+    conjuncts,
+    joined,
+    read_endpoint,
+)
+from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
 
 GROUPED_ROLES = ("origin", "surface")
 
@@ -147,6 +158,101 @@ class Reads:
         return out
 
 
+NO_CLASS = 0xFFFFFFFF
+
+
+class Rejudged:
+    """The detail of a finding grouped evaluation copied from its group's template: the rule
+    judges the edge again when something reads the message, site, witnesses or remedies."""
+
+    __slots__ = ("edge", "made", "rule")
+
+    def __init__(self, rule: EdgeRule, edge: Edge) -> None:
+        self.rule = rule
+        self.edge = edge
+        self.made: FindingDetail | None = None
+
+    def get(self) -> FindingDetail:
+        if self.made is None:
+            run = self.rule.recorded(self.rule.edge_envs(self.edge))
+            if len(run.findings) != 1 or run.incomplete:
+                raise RuntimeError(f"rule {self.rule.spec.id} no longer makes one finding for {self.edge}")
+            self.made = run.findings[0].detail.get()
+        return self.made
+
+
+@dataclass(frozen=False, slots=True)
+class Classes:
+    """The label class of the keys of one endpoint table that rules met, for one list of fields:
+    `rows` holds each class's values, `class_of` each key's class (NO_CLASS until a rule meets
+    the key)."""
+
+    class_of: array[int] = field(default_factory=lambda: array("I"))
+    rows: list[tuple[Any, ...]] = field(default_factory=list)
+    index: dict[tuple[Any, ...], int] = field(default_factory=dict)
+
+    def fill(self, keys: array[int], endpoints: list[Endpoint], row: Callable[[Endpoint], tuple[Any, ...]]) -> None:
+        if len(self.class_of) < len(endpoints):
+            self.class_of.extend(array("I", [NO_CLASS]) * (len(endpoints) - len(self.class_of)))
+        class_of = self.class_of
+        for key in keys:
+            if class_of[key] != NO_CLASS:
+                continue
+            values = row(endpoints[key])
+            found = self.index.get(values)
+            if found is None:
+                found = self.index[values] = len(self.rows)
+                self.rows.append(values)
+            class_of[key] = found
+
+
+class EndpointClasses:
+    """Label classes of rule endpoints, shared by every rule of a run.
+
+    The link gives each endpoint a stable key per table (`Link.stable_keys`): a source module or
+    scope, a destination module or entity. Each key becomes an Endpoint once, and gets its class
+    once per field list. Core edges carry no endpoint attributes, so a class depends on the
+    endpoint alone. A rule then judges classes, never keys or edges.
+    """
+
+    def __init__(self, ctx: NativeRuleContext) -> None:
+        self.ctx = ctx
+        self.link = ctx.native.native.link
+        self.core = ctx.native.native.core
+        self.endpoints: dict[str, list[Endpoint]] = {}
+        self.classes: dict[tuple[Any, ...], Classes] = {}
+
+    def keys(self, ids: array[int], which: str) -> tuple[bytes, array[int]]:
+        """The stable key of each id in table `which`, and the distinct keys among them."""
+        key_of, known, added, distinct = self.link.stable_keys(ids.tobytes(), which)
+        endpoints = self.endpoints.setdefault(which, [])
+        if len(endpoints) != known:
+            raise RuntimeError(f"endpoint table {which} has {len(endpoints)} keys, the link {known}")
+        endpoints.extend(self.make_endpoints(which, added))
+        return key_of, array("I", distinct)
+
+    def make_endpoints(self, which: str, reps: bytes) -> list[Endpoint]:
+        if which.startswith("src"):
+            return [self.ctx.src_endpoint_at(module, scope, path) for module, scope, path in self.link.src_sites(reps)]
+        role = which.removeprefix("dst-").removesuffix("-entity")
+        out = []
+        for resolution, surface, module, symbol in self.link.dst_parts(reps):
+            targets = (self.core.maker.entity(module, symbol),) if module is not None else ()
+            out.append(self.ctx.dst_endpoints_of(role, RESOLUTIONS[resolution], surface, targets)[0])
+        return out
+
+    def of(
+        self, which: str, keys: array[int], fields: tuple[Any, ...], row: Callable[[Endpoint], tuple[Any, ...]]
+    ) -> Classes:
+        """Classes of table `which` for `fields`, with every key in `keys` filled; `row` makes an
+        endpoint's values."""
+        classes = self.classes.get((which, fields))
+        if classes is None:
+            classes = self.classes[(which, fields)] = Classes()
+        classes.fill(keys, self.endpoints.get(which, []), row)
+        return classes
+
+
 class Grouper:
     """Drops the groups of one rule's core edges that cannot make output; see the module doc."""
 
@@ -156,8 +262,10 @@ class Grouper:
         self.labeler = ctx.labeler
         self.link = ctx.native.native.link
         self.core = ctx.native.native.core
+        self.tables = ctx.endpoint_classes
         self.role = rule.spec.endpoint
         self.exports = list(ctx.config.exports.values())
+        self.templates: dict[int, Finding] = {}
 
     def env(self, edge: Edge) -> EdgeEnv:
         dst = self.ctx.dst_endpoints(edge, self.role)[0]
@@ -171,32 +279,61 @@ class Grouper:
             return True
         return reads.exported and any(spec.subclass_of for spec in self.exports)
 
-    def keep(self, ids: array[int], group_of: array[int], keep: list[bool]) -> array[int]:
-        return array("I", (i for i, group in zip(ids, group_of) if keep[group]))
+    def src_table(self, reads: Reads) -> str:
+        return "src" if self.module_level("src", reads.src) else "src-scope"
+
+    def dst_table(self, reads: Reads) -> str:
+        return f"dst-{self.role}-entity" if self.dst_entity(reads) else f"dst-{self.role}"
+
+    def keep(self, ids: array[int], key_of: bytes, keep: list[bool]) -> array[int]:
+        kept, _ = type(self.link).keep_keys(ids.tobytes(), key_of, bytes(keep))
+        return array("I", kept)
+
+    def keep_classes(self, ids: array[int], key_of: bytes, classes: Classes, keep: list[bool]) -> array[int]:
+        kept = type(self.link).keep_classes(ids.tobytes(), key_of, classes.class_of.tobytes(), bytes(keep))
+        return array("I", kept)
+
+    def values(self, root: str, names: tuple[str, ...]) -> Callable[[Endpoint], tuple[Any, ...]]:
+        return lambda endpoint: tuple(read_endpoint(self.ctx, endpoint, name, None, root) for name in names)
+
+    @staticmethod
+    def class_keep(node: Node, root: str, names: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[bool]:
+        """Whether `node`, which reads only `root`'s fields `names`, is not false for each class."""
+        out = []
+        for row in rows:
+            values = dict(zip(names, row))
+
+            def resolve(ref: Ref, values: dict[str, Any] = values) -> Value:
+                if len(ref.path) != 2 or ref.path[0] != root:
+                    return UNKNOWN
+                return values[ref.path[1]]
+
+            out.append(evaluate(node, resolve) is not Truth.FALSE)
+        return out
 
     def stage(self, ids: array[int], node: Node, reads: Reads) -> array[int]:
-        """Drops the edges whose group makes `node` false."""
+        """Drops the edges whose group makes `node` false. An endpoint's part is judged once per
+        label class: the values of the fields it reads."""
         roots = reads.roots()
-        if roots == {"edge"}:
-            key_of, reps = self.link.edge_keys(ids.tobytes(), sorted(reads.edge))
-        elif roots == {"src"}:
-            key_of, reps, _, _ = self.link.endpoint_keys(
-                ids.tobytes(), self.role, not self.module_level("src", reads.src), False
+        if roots == {"edge"} or reads.exported:
+            if roots == {"edge"}:
+                key_of, reps = self.link.edge_keys(ids.tobytes(), sorted(reads.edge))
+            else:
+                _, _, key_of, reps = self.link.endpoint_keys(ids.tobytes(), self.role, False, self.dst_entity(reads))
+            rep_edges = self.core.get(array("I", reps))
+            return self.keep(
+                ids, key_of, [evaluate(node, self.env(edge).resolve) is not Truth.FALSE for edge in rep_edges]
             )
-        else:
-            _, _, key_of, reps = self.link.endpoint_keys(ids.tobytes(), self.role, False, self.dst_entity(reads))
-        rep_edges = self.core.get(array("I", reps))
-        keep = [evaluate(node, self.env(edge).resolve) is not Truth.FALSE for edge in rep_edges]
-        return self.keep(ids, array("I", key_of), keep)
+        root = "src" if roots == {"src"} else "dst"
+        which = self.src_table(reads) if root == "src" else self.dst_table(reads)
+        names = tuple(sorted(reads.src if root == "src" else reads.dst))
+        key_of, keys = self.tables.keys(ids, which)
+        classes = self.tables.of(which, keys, ("values", names), self.values(root, names))
+        return self.keep_classes(ids, key_of, classes, self.class_keep(node, root, names, classes.rows))
 
-    def src_class(self, edge: Edge, names: list[str]) -> tuple[Any, ...]:
-        endpoint = self.ctx.src_endpoint(edge.site)
-        return tuple(read_endpoint(self.ctx, endpoint, name, edge, "src") for name in names)
-
-    def dst_class(self, edge: Edge, names: list[str], exported: bool) -> tuple[Any, ...]:
-        endpoint = self.ctx.dst_endpoints(edge, self.role)[0]
+    def dst_class(self, endpoint: Endpoint, names: tuple[str, ...], exported: bool) -> tuple[Any, ...]:
         values: list[Any] = [endpoint.unresolved]
-        values.extend(read_endpoint(self.ctx, endpoint, name, edge, "dst") for name in names)
+        values.extend(read_endpoint(self.ctx, endpoint, name, None, "dst") for name in names)
         if exported:
             path = self.labeler.path_of(endpoint.module) if endpoint.module else None
             values.append(endpoint.external is not None)
@@ -205,32 +342,48 @@ class Grouper:
                 values.extend(self.labeler.export_member((spec.name, path, endpoint.symbol)) for spec in self.exports)
         return tuple(values)
 
-    @staticmethod
-    def classes(rows: list[tuple[Any, ...]]) -> bytes:
-        seen: dict[tuple[Any, ...], int] = {}
-        return array("I", (seen.setdefault(row, len(seen)) for row in rows)).tobytes()
+    def layers(self, ids: array[int], reads: Reads) -> tuple[bytes, bytes]:
+        """Groups `ids` by the classes of what `reads` names: (group of each id, representatives)."""
+        raw = ids.tobytes()
+        src_which, dst_which = self.src_table(reads), self.dst_table(reads)
+        src_names = tuple(sorted(reads.src))
+        dst_names = tuple(sorted(reads.dst - {"unresolved"}))
+        src_key, src_keys = self.tables.keys(ids, src_which)
+        dst_key, dst_keys = self.tables.keys(ids, dst_which)
+        src_classes = self.tables.of(src_which, src_keys, ("values", src_names), self.values("src", src_names))
+        dst_classes = self.tables.of(
+            dst_which,
+            dst_keys,
+            ("class", reads.exported, dst_names),
+            lambda endpoint: self.dst_class(endpoint, dst_names, reads.exported),
+        )
+        edge_key, edge_reps = self.link.edge_keys(raw, sorted(reads.edge))
+        edge_classes = array("I", range(len(array("I", edge_reps)))).tobytes()
+        layers = [
+            (src_key, src_classes.class_of.tobytes()),
+            (dst_key, dst_classes.class_of.tobytes()),
+            (edge_key, edge_classes),
+        ]
+        return type(self.link).group(raw, layers)
 
     def decide(self, ids: array[int], reads: Reads) -> array[int]:
         """Drops the edges whose group the rule's whole decision drops."""
-        raw = ids.tobytes()
-        src_scope = not self.module_level("src", reads.src)
-        src_key, src_reps, dst_key, dst_reps = self.link.endpoint_keys(
-            raw, self.role, src_scope, self.dst_entity(reads)
-        )
-        edge_key, edge_reps = self.link.edge_keys(raw, sorted(reads.edge))
-        src_names = sorted(reads.src)
-        dst_names = sorted(reads.dst - {"unresolved"})
-        src_rows = [self.src_class(edge, src_names) for edge in self.core.get(array("I", src_reps))]
-        dst_rows = [self.dst_class(edge, dst_names, reads.exported) for edge in self.core.get(array("I", dst_reps))]
-        edge_classes = array("I", range(len(array("I", edge_reps)))).tobytes()
-        layers = [
-            (src_key, self.classes(src_rows)),
-            (dst_key, self.classes(dst_rows)),
-            (edge_key, edge_classes),
-        ]
-        group_of, reps = type(self.link).group(raw, layers)
+        group_of, reps = self.layers(ids, reads)
         keep = [not self.rule.droppable(self.env(edge)) for edge in self.core.get(array("I", reps))]
-        return self.keep(ids, array("I", group_of), keep)
+        return self.keep(ids, group_of, keep)
+
+    def record(self, ids: array[int], reads: Reads) -> None:
+        """Templates for the edges left: `reads` hold the rule's identity too, so the one finding a
+        group's representative makes is every edge's in the group."""
+        group_of, reps = self.layers(ids, reads)
+        templates: list[Finding | None] = []
+        for edge in self.core.get(array("I", reps)):
+            made = self.rule.recorded([self.env(edge)])
+            templates.append(made.findings[0] if len(made.findings) == 1 and not made.incomplete else None)
+        for edge_id, group in zip(ids, array("I", group_of)):
+            template = templates[group]
+            if template is not None:
+                self.templates[edge_id] = template
 
     def survivors(self) -> array[int]:
         rule = self.rule
@@ -240,6 +393,8 @@ class Grouper:
         reads = Reads.of(rule.read_refs(), self.ctx.config)
         if reads is None or self.role not in GROUPED_ROLES or not ids:
             return ids
+        decided = Reads.of([*rule.read_refs(), *(column_ref(column) for column in rule.spec.identity)], self.ctx.config)
+        record = decided is not None and type(rule).evaluate is EdgeRule.evaluate
         parts = conjuncts(rule.selectors())
         for root in ("edge", "src", "dst"):
             mine = [part for part in parts if self.part_roots(part) == {root}]
@@ -248,7 +403,12 @@ class Grouper:
                 part_reads = Reads.of(refs(node), self.ctx.config)
                 if part_reads is not None:
                     ids = self.stage(ids, node, part_reads)
-        return self.decide(ids, reads) if ids else ids
+        if not ids:
+            return ids
+        ids = self.decide(ids, reads)
+        if record and decided is not None and ids:
+            self.record(ids, decided)
+        return ids
 
     def part_roots(self, node: Node) -> set[str]:
         reads = Reads.of(refs(node), self.ctx.config)
@@ -264,6 +424,14 @@ class NativeRuleContext(RuleContext):
         index = labeler.index
         assert isinstance(index, NativeGraphIndex)
         self.native = index
+        self.endpoint_classes = EndpointClasses(self)
+        self.templates: dict[EdgeRule, dict[int, Finding]] = {}
+
+    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
+        template = self.templates.get(rule, {}).get(id(edge))
+        if template is None:
+            return None
+        return dataclasses.replace(template, detail=Rejudged(rule, edge))
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
         return list(dict.fromkeys(kinds)) if kinds else self.native.kind_order()
@@ -272,7 +440,14 @@ class NativeRuleContext(RuleContext):
         return sorted({module for kind in self.kinds_or_all(kinds) for module in self.native.modules_of(kind)})
 
     def rule_groups(self, rule: EdgeRule) -> Iterator[tuple[str, EdgeGroup]]:
-        survivors = self.native.native.core.get(Grouper(self, rule).survivors())
+        grouper = Grouper(self, rule)
+        ids = grouper.survivors()
+        survivors = self.native.native.core.get(ids)
+        self.templates[rule] = {
+            id(edge): grouper.templates[edge_id]
+            for edge_id, edge in zip(ids, survivors)
+            if edge_id in grouper.templates
+        }
         by_place: dict[tuple[str, str], list[Edge]] = {}
         for edge in survivors:
             by_place.setdefault((edge.kind, edge.site.module), []).append(edge)

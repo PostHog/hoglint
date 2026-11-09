@@ -9,10 +9,10 @@ use super::Link;
 use super::intern::{EMPTY, Sid};
 use super::produce::EdgeRow;
 use super::scope::Res;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Which end of an edge a rule judges as `dst`.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     Origin,
     Surface,
@@ -42,6 +42,29 @@ impl Keyed {
         }
         out
     }
+}
+
+/// Which endpoint table a key lives in: the end, and its granularity.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Endpoint {
+    SrcModule,
+    SrcScope,
+    Dst(Role, bool),
+}
+
+/// Stable ids for endpoints: an endpoint keeps its id for the life of the link, so Python works
+/// out an endpoint's label class once for every rule, and rules pass classes by id.
+#[derive(Default)]
+pub struct EndpointTables {
+    tables: FxHashMap<Endpoint, Table>,
+    /// `repo_module_of` per dotted name: surfaces repeat across edges and rules.
+    module_of: FxHashMap<Sid, Option<Sid>>,
+}
+
+#[derive(Default)]
+struct Table {
+    ids: FxHashMap<[u32; 3], u32>,
+    reps: Vec<u32>,
 }
 
 /// The dst endpoint of an edge at module or entity granularity: (module or a marker for an
@@ -84,6 +107,15 @@ impl Link {
     /// The longest dotted prefix of `dotted` that is a repo module with a file: what
     /// `GraphIndex.module_of_symbol` answers over `graph.modules`.
     fn repo_module_of(&mut self, dotted: Sid) -> Option<Sid> {
+        if let Some(&found) = self.endpoints.module_of.get(&dotted) {
+            return found;
+        }
+        let found = self.find_repo_module(dotted);
+        self.endpoints.module_of.insert(dotted, found);
+        found
+    }
+
+    fn find_repo_module(&mut self, dotted: Sid) -> Option<Sid> {
         let parts = self.core.it.segs(dotted);
         for end in (1..=parts.len()).rev() {
             let candidate = self.core.it.from_segs(&parts[..end]);
@@ -151,6 +183,66 @@ impl Link {
             key
         });
         (src, dst)
+    }
+
+    /// The stable key of each id in table `which`, the representative edges of the keys this
+    /// call added (keys `known..`, where `known` is the table size before the call), and the
+    /// distinct keys of `ids` in the order they first appear.
+    pub fn stable_keys(
+        &mut self,
+        ids: &[u32],
+        which: Endpoint,
+    ) -> (Vec<u32>, u32, Vec<u32>, Vec<u32>) {
+        let keys: Vec<[u32; 3]> = ids
+            .iter()
+            .map(|&id| {
+                let row = self.edges.rows[id as usize];
+                match which {
+                    Endpoint::SrcModule => [row.owner, 0, 0],
+                    Endpoint::SrcScope => [row.owner, row.scope as u32, 0],
+                    Endpoint::Dst(role, entity) => {
+                        let (module, external, symbol) = self.dst_key(row, role, entity);
+                        [module, external as u32, symbol]
+                    }
+                }
+            })
+            .collect();
+        let table = self.endpoints.tables.entry(which).or_default();
+        let known = table.reps.len() as u32;
+        let mut key_of = Vec::with_capacity(ids.len());
+        let mut seen = FxHashSet::default();
+        let mut distinct = Vec::new();
+        for (&id, key) in ids.iter().zip(keys) {
+            let next = table.reps.len() as u32;
+            let found = *table.ids.entry(key).or_insert(next);
+            if found == next {
+                table.reps.push(id);
+            }
+            if seen.insert(found) {
+                distinct.push(found);
+            }
+            key_of.push(found);
+        }
+        let added = table.reps[known as usize..].to_vec();
+        (key_of, known, added, distinct)
+    }
+
+    /// The ids whose key's class keeps: `class_of` maps a key to its class, `keep` holds one
+    /// flag per class.
+    pub fn keep_classes(
+        ids: &[u32],
+        key_of: &[u32],
+        class_of: &[u32],
+        keep: &[u8],
+    ) -> Option<Vec<u32>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for (&id, &key) in ids.iter().zip(key_of) {
+            let class = *class_of.get(key as usize)?;
+            if *keep.get(class as usize)? != 0 {
+                out.push(id);
+            }
+        }
+        Some(out)
     }
 
     /// Edge keys over the edge fields a rule reads: `kind`, `context`, `resolution`, `use`,

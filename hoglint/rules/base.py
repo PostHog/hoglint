@@ -10,7 +10,7 @@ Unknown semantics per position:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -18,7 +18,19 @@ from pathlib import Path
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex
 from hoglint.labels import BUILTIN_ENTITY_NAMES, Labeler
-from hoglint.model import Context, Edge, EntityId, Finding, Graph, IncompleteCause, Owners, Remedy, Resolution, Site
+from hoglint.model import (
+    Context,
+    Edge,
+    EntityId,
+    Finding,
+    FindingDetail,
+    Graph,
+    IncompleteCause,
+    Owners,
+    Remedy,
+    Resolution,
+    Site,
+)
 from hoglint.selectors import (
     NONE,
     UNKNOWN,
@@ -136,18 +148,26 @@ class RuleContext:
                 out.append(group)
         return out
 
+    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
+        """The finding grouped evaluation already decided for this edge, or None to judge it."""
+        return None
+
     def ordinal(self, edge: Edge) -> int:
         """The edge's place among edges with the same module, scope, kind and surface."""
         return self.labeler.index.ordinals.get(id(edge), 0)
 
     def src_endpoint(self, site: Site) -> Endpoint:
-        key = (site.module, site.scope, site.path)
+        return self.src_endpoint_at(site.module, site.scope, site.path)
+
+    def src_endpoint_at(self, module: str, site_scope: str, path: str) -> Endpoint:
+        """The `src` endpoint of a site written in `module`, inside `site_scope`, in file `path`."""
+        key = (module, site_scope, path)
         cached = self.src_cache.get(key)
         if cached is not None:
             return cached
-        scope = site.scope if site.scope and site.scope != MODULE_SCOPE else ""
-        symbol = f"{site.module}.{scope}" if scope else None
-        endpoint = Endpoint(site.module, symbol, site.path or self.labeler.path_of(site.module), scope=scope)
+        scope = site_scope if site_scope and site_scope != MODULE_SCOPE else ""
+        symbol = f"{module}.{scope}" if scope else None
+        endpoint = Endpoint(module, symbol, path or self.labeler.path_of(module), scope=scope)
         self.src_cache[key] = endpoint
         return endpoint
 
@@ -172,17 +192,28 @@ class RuleContext:
         return Endpoint(module, symbol, self.labeler.path_of(module))
 
     def dst_endpoints(self, edge: Edge, role: str) -> list[Endpoint]:
+        return self.dst_endpoints_of(role, edge.resolution, edge.surface, edge.targets, edge.via)
+
+    def dst_endpoints_of(
+        self,
+        role: str,
+        resolution: Resolution,
+        surface: str,
+        targets: tuple[EntityId, ...],
+        via: tuple[EntityId, ...] = (),
+    ) -> list[Endpoint]:
+        """The `dst` endpoints of an edge with these fields, as rule `role` reads them."""
         if role == "via":
-            return [self.symbol_endpoint(str(hop), Resolution.RESOLVED) for hop in edge.via]
+            return [self.symbol_endpoint(str(hop), Resolution.RESOLVED) for hop in via]
         if role == "surface":
-            if edge.resolution is Resolution.UNRESOLVED:
-                endpoint = self.symbol_endpoint(edge.surface, Resolution.RESOLVED)
-                return [endpoint if not endpoint.unresolved else Endpoint(None, edge.surface, unresolved=True)]
-            return [self.symbol_endpoint(edge.surface, edge.resolution)]
-        if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
-            return [Endpoint(None, edge.surface, unresolved=True)]
-        external = edge.resolution is Resolution.EXTERNAL
-        return [self.target_endpoint(target, external) for target in edge.targets]
+            if resolution is Resolution.UNRESOLVED:
+                endpoint = self.symbol_endpoint(surface, Resolution.RESOLVED)
+                return [endpoint if not endpoint.unresolved else Endpoint(None, surface, unresolved=True)]
+            return [self.symbol_endpoint(surface, resolution)]
+        if resolution is Resolution.UNRESOLVED or not targets:
+            return [Endpoint(None, surface, unresolved=True)]
+        external = resolution is Resolution.EXTERNAL
+        return [self.target_endpoint(target, external) for target in targets]
 
     def target_endpoint(self, target: EntityId, external: bool) -> Endpoint:
         key = (target, external)
@@ -215,10 +246,9 @@ class RuleContext:
         return Finding(
             rule=spec.id,
             identity=identity,
-            message=message,
-            site=site if site is not None or not witnesses else witnesses[0].site,
-            witnesses=witnesses,
-            remedies=remedies,
+            detail=FindingDetail(
+                message, site if site is not None or not witnesses else witnesses[0].site, witnesses, remedies
+            ),
             owner=Owners(owner, self.owners_of) if owner is not None and self.config.roles.owner else None,
             subjects=subjects,
             ledgerable=ledgerable and spec.ledger,
@@ -540,20 +570,27 @@ class EdgeRule:
         src = self.ctx.src_endpoint(edge.site)
         return [self.env(edge, src, dst) for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint)]
 
+    def group_edges(self, module: str, group: EdgeGroup) -> list[Edge]:
+        """One module's edges, less the regular ones when the module-wide part is false."""
+        return group.irregular if self.staged.module_false(module) else group.edges
+
     def group_envs(self, module: str, group: EdgeGroup) -> Iterator[EdgeEnv]:
         """The environments of one module's edges whose selection is not false. The module-wide and
         endpoint-only parts go first, so most edges are dropped before any per-edge work."""
+        for edge in self.group_edges(module, group):
+            yield from self.edge_envs(edge)
+
+    def edge_envs(self, edge: Edge) -> Iterator[EdgeEnv]:
+        if not self.sees(edge):
+            return
         staged = self.staged
-        for edge in group.irregular if staged.module_false(module) else group.edges:
-            if not self.sees(edge):
+        src = self.ctx.src_endpoint(edge.site)
+        if staged.src_truth(edge, src) is Truth.FALSE:
+            return
+        for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint):
+            if staged.dst_truth(edge, dst) is Truth.FALSE:
                 continue
-            src = self.ctx.src_endpoint(edge.site)
-            if staged.src_truth(edge, src) is Truth.FALSE:
-                continue
-            for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint):
-                if staged.dst_truth(edge, dst) is Truth.FALSE:
-                    continue
-                yield self.env(edge, src, dst)
+            yield self.env(edge, src, dst)
 
     def envs(self) -> Iterator[EdgeEnv]:
         for module, group in self.ctx.rule_groups(self):
@@ -671,9 +708,27 @@ class EdgeRule:
         self.emit(env, describe)
 
     def evaluate(self) -> RuleRun:
-        for env in self.envs():
-            self.judge(env, self.describe(env))
+        for module, group in self.ctx.rule_groups(self):
+            for edge in self.group_edges(module, group):
+                if not self.sees(edge):
+                    continue
+                replica = self.ctx.replica(self, edge)
+                if replica is not None:
+                    self.run.findings.append(replica)
+                    continue
+                for env in self.edge_envs(edge):
+                    self.judge(env, self.describe(env))
         return self.run
+
+    def recorded(self, envs: Iterable[EdgeEnv]) -> RuleRun:
+        """What judging `envs` makes, kept out of this rule's run."""
+        saved, self.run = self.run, RuleRun(self.spec)
+        try:
+            for env in envs:
+                self.judge(env, self.describe(env))
+            return self.run
+        finally:
+            self.run = saved
 
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} -> {env.dst.symbol or env.dst.module} ({env.edge.kind})"

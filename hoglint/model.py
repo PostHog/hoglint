@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from hoglint.plugins import ProducerFailure
@@ -147,18 +147,51 @@ class Owners:
 
 
 @dataclass(frozen=True, slots=True)
-class Finding:
-    rule: str
-    identity: tuple[str, ...]  # the rule's identity projection; no line numbers
+class FindingDetail:
+    """What a finding shows a reader: its message, site, witnesses and remedies."""
+
     message: str
     site: Site | None
     witnesses: tuple[Edge, ...] = ()
     remedies: tuple[Remedy, ...] = ()
+
+    def get(self) -> FindingDetail:
+        return self
+
+
+class Shown(Protocol):
+    """A finding's detail, made when something reads it. Ledger equality needs only a finding's
+    identity, so a run makes the detail of the findings it prints."""
+
+    def get(self) -> FindingDetail: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Finding:
+    rule: str
+    identity: tuple[str, ...]  # the rule's identity projection; no line numbers
+    detail: Shown = field(repr=False)
     owner: Owners | None = field(default=None, compare=False, repr=False)
     status: FindingStatus = FindingStatus.NEW
     subjects: tuple[str, ...] = ()  # modules or entities the finding is about; levels group by them
     ledgerable: bool = True  # False for on_unresolved = "block": the ledger may not accept it
     unknown: bool = False  # exists because something did not resolve; forbids levels even when ledgered
+
+    @property
+    def message(self) -> str:
+        return self.detail.get().message
+
+    @property
+    def site(self) -> Site | None:
+        return self.detail.get().site
+
+    @property
+    def witnesses(self) -> tuple[Edge, ...]:
+        return self.detail.get().witnesses
+
+    @property
+    def remedies(self) -> tuple[Remedy, ...]:
+        return self.detail.get().remedies
 
     @property
     def owners(self) -> tuple[str, ...]:
