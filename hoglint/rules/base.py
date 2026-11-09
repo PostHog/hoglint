@@ -14,6 +14,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex
@@ -147,6 +148,15 @@ class RuleContext:
             if group is not None:
                 out.append(group)
         return out
+
+    def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
+        """A reach rule's hops out of `module` when this context builds them itself, else None."""
+        return None
+
+    def edge_of(self, edge: Edge | int) -> Edge:
+        """The Edge a hop names; this context's hops always hold Edges."""
+        assert isinstance(edge, Edge)
+        return edge
 
     def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
         """The finding grouped evaluation already decided for this edge, or None to judge it."""

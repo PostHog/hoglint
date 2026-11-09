@@ -6,6 +6,7 @@ use hoglint_facts::link::Link as CoreLink;
 use hoglint_facts::link::groups::{Endpoint, Role};
 use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Sid};
+use hoglint_facts::link::scope::Res;
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
@@ -292,5 +293,37 @@ impl Link {
             PyValueError::new_err("a key without a class, or a class without a flag")
         })?;
         Ok(ids_bytes(py, &kept))
+    }
+
+    /// Edges of `kind` from one source module that a rule sees: resolution not not-applicable,
+    /// context bits meeting `include` (any) and avoiding `exclude`, in graph order.
+    fn ids_seen_from<'py>(
+        &mut self,
+        py: Python<'py>,
+        kind: &str,
+        module: &str,
+        include: u8,
+        exclude: u8,
+    ) -> Bound<'py, PyBytes> {
+        let Some(code) = kind_code(kind) else {
+            return ids_bytes(py, &[]);
+        };
+        let module = self.sid(module);
+        let link = &mut self.inner;
+        let ids = link
+            .index
+            .from_module(&link.edges.rows, &link.scopes, code, module)
+            .to_vec();
+        let rows = &link.edges.rows;
+        let seen: Vec<u32> = ids
+            .into_iter()
+            .filter(|&id| {
+                let row = &rows[id as usize];
+                row.res != Res::NotApplicable
+                    && (include == 0 || row.ctx & include != 0)
+                    && row.ctx & exclude == 0
+            })
+            .collect();
+        ids_bytes(py, &seen)
     }
 }

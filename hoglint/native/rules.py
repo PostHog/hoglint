@@ -37,6 +37,7 @@ from hoglint.rules.base import (
     joined,
     read_endpoint,
 )
+from hoglint.rules.graphs import Hop
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
 
 GROUPED_ROLES = ("origin", "surface")
@@ -426,6 +427,36 @@ class NativeRuleContext(RuleContext):
         self.native = index
         self.endpoint_classes = EndpointClasses(self)
         self.templates: dict[EdgeRule, dict[int, Finding]] = {}
+
+    def edge_of(self, edge: Edge | int) -> Edge:
+        return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
+
+    def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
+        """Core hops as edge ids with endpoints from the link, then pack edges as Edges. Only for a
+        rule with no `select`: every edge it sees is followed, so no edge is judged here."""
+        if rule.spec.select is not None or rule.spec.endpoint not in GROUPED_ROLES:
+            return None
+        link = self.native.native.link
+        tables = self.endpoint_classes
+        which = f"dst-{rule.spec.endpoint}-entity"
+        include, exclude = context_bits(rule.include), context_bits(rule.exclude)
+        out: list[Hop] = []
+        for kind in self.kinds_or_all(rule.kinds()):
+            ids = array("I", link.ids_seen_from(kind, module, include, exclude))
+            if ids:
+                key_of, _ = tables.keys(ids, which)
+                endpoints = tables.endpoints[which]
+                surfaces = [surface for _, surface, _, _ in link.dst_parts(ids.tobytes())]
+                for edge_id, key, surface in zip(ids, array("I", key_of), surfaces):
+                    out.append(Hop(edge_id, endpoints[key], Truth.TRUE, surface))
+            extra = self.native.extra_by.get(kind, {}).get(module, [])
+            if extra:
+                group = EdgeGroup(extra, [edge for edge in extra if self.native.is_irregular(edge)])
+                for env in rule.group_envs(module, group):
+                    selected = rule.selection(env)
+                    if selected is not Truth.FALSE:
+                        out.append(Hop(env.edge, env.dst, selected, env.edge.surface))
+        return out
 
     def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
         template = self.templates.get(rule, {}).get(id(edge))

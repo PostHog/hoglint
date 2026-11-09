@@ -3,13 +3,34 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 
 from hoglint.config.model import RuleSpec
 from hoglint.model import Edge
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, IncompleteItem, ModuleEnv, RuleContext, RuleRun, project
-from hoglint.selectors import Ref, Selector, State, Truth, render_value
+from hoglint.rules.base import (
+    EDGE_DEPENDENT_FIELDS,
+    EdgeEnv,
+    EdgeRule,
+    Endpoint,
+    IncompleteItem,
+    ModuleEnv,
+    RuleContext,
+    RuleRun,
+    project,
+    read_endpoint,
+)
+from hoglint.selectors import UNKNOWN, Ref, Selector, State, Truth, Value, render_value
 
-Hop = tuple[Edge, Endpoint, Truth]
+
+@dataclass(frozen=True, slots=True)
+class Hop:
+    """One edge a reach search may follow: an Edge, or a core edge id the context makes into an
+    Edge only when a finding or an incomplete needs it."""
+
+    edge: Edge | int
+    dst: Endpoint
+    selected: Truth
+    surface: str
 
 
 class ReachPrimitive(EdgeRule):
@@ -23,6 +44,13 @@ class ReachPrimitive(EdgeRule):
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
         self.hop_cache: dict[str, list[Hop]] = {}
+        self.verdicts: dict[tuple[Endpoint, Endpoint], tuple[Truth, bool]] = {}
+        judged = [selector for selector in (spec.deny, spec.unless) if selector is not None]
+        self.endpoint_verdicts = all(
+            len(ref.path) == 2 and ref.path[0] in ("src", "dst") and ref.path[1] not in EDGE_DEPENDENT_FIELDS
+            for selector in judged
+            for ref in selector.refs()
+        )
 
     def selectors(self) -> tuple[Selector | None, ...]:
         return (self.spec.select,)
@@ -32,14 +60,20 @@ class ReachPrimitive(EdgeRule):
         cached = self.hop_cache.get(module)
         if cached is not None:
             return cached
+        out = self.ctx.reach_hops(self, module)
+        if out is None:
+            out = self.build_hops(module)
+        out.sort(key=lambda hop: (hop.dst.module or "", hop.dst.symbol or "", hop.surface))
+        self.hop_cache[module] = out
+        return out
+
+    def build_hops(self, module: str) -> list[Hop]:
         out: list[Hop] = []
         for group in self.ctx.groups_of(self.kinds(), module):
             for env in self.group_envs(module, group):
                 selected = self.selection(env)
                 if selected is not Truth.FALSE:
-                    out.append((env.edge, env.dst, selected))
-        out.sort(key=lambda hop: (hop[1].module or "", hop[1].symbol or "", hop[0].surface))
-        self.hop_cache[module] = out
+                    out.append(Hop(env.edge, env.dst, selected, env.edge.surface))
         return out
 
     def sources(self) -> list[str]:
@@ -62,39 +96,60 @@ class ReachPrimitive(EdgeRule):
             self.search(source)
         return self.run
 
+    def hop_env(self, hop: Hop, origin: Endpoint) -> EdgeEnv:
+        return EdgeEnv(self.ctx, self.ctx.edge_of(hop.edge), origin, hop.dst)
+
+    def verdict(self, hop: Hop, origin: Endpoint) -> tuple[Truth, bool]:
+        """(`deny`, `unless` excuses) for one hop seen from `origin`. When neither reads the edge,
+        the answer depends on the two endpoints alone and is kept."""
+        edge = hop.edge
+        if not self.endpoint_verdicts or (isinstance(edge, Edge) and id(edge) in self.ctx.endpoint_attr_edges):
+            return self.judge_hop(self.hop_env(hop, origin))
+        key = (origin, hop.dst)
+        found = self.verdicts.get(key)
+        if found is None:
+            found = self.verdicts[key] = self.judge_hop(EndpointsEnv(self.ctx, origin, hop.dst))
+        return found
+
+    def judge_hop(self, env: EdgeEnv | EndpointsEnv) -> tuple[Truth, bool]:
+        verdict = self.spec.deny.evaluate(env.resolve) if self.spec.deny is not None else Truth.FALSE
+        excused = self.spec.unless is not None and self.spec.unless.evaluate(env.resolve) is Truth.TRUE
+        return verdict, excused
+
     def search(self, source: str) -> None:
         origin = self.ctx.module_endpoint(source)
-        parents: dict[str, tuple[str, Edge] | None] = {source: None}
+        parents: dict[str, tuple[str, Hop] | None] = {source: None}
         queue = deque([source])
         reported: set[str] = set()
         while queue:
             module = queue.popleft()
-            for edge, dst, selected in self.hops(module):
-                env = EdgeEnv(self.ctx, edge, origin, dst)
+            for hop in self.hops(module):
+                dst = hop.dst
                 if dst.unresolved:
-                    self.on_unresolved(env)
+                    self.on_unresolved(self.hop_env(hop, origin))
                     continue
-                if selected is Truth.UNKNOWN:
-                    self.incomplete(env, f"cannot tell whether to follow {edge.kind} {edge.surface!r}")
+                if hop.selected is Truth.UNKNOWN:
+                    env = self.hop_env(hop, origin)
+                    self.incomplete(env, f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
                     continue
-                verdict = self.spec.deny.evaluate(env.resolve) if self.spec.deny is not None else Truth.FALSE
+                verdict, excused = self.verdict(hop, origin)
                 target = dst.symbol or dst.module or ""
-                if verdict is not Truth.FALSE and not self.excused(env) and target not in reported:
+                if verdict is not Truth.FALSE and not excused and target not in reported:
                     reported.add(target)
-                    path = [*self.path_to(parents, module), edge]
-                    self.report(env, path, verdict)
+                    path = [*self.path_to(parents, module), hop]
+                    self.report(self.hop_env(hop, origin), [self.ctx.edge_of(step.edge) for step in path], verdict)
                     continue
                 if dst.external is not None or dst.module is None or dst.module in parents:
                     continue
-                parents[dst.module] = (module, edge)
+                parents[dst.module] = (module, hop)
                 queue.append(dst.module)
 
-    def path_to(self, parents: dict[str, tuple[str, Edge] | None], module: str) -> list[Edge]:
-        path: list[Edge] = []
+    def path_to(self, parents: dict[str, tuple[str, Hop] | None], module: str) -> list[Hop]:
+        path: list[Hop] = []
         step = parents.get(module)
         while step is not None:
-            previous, edge = step
-            path.append(edge)
+            previous, hop = step
+            path.append(hop)
             step = parents.get(previous)
         return list(reversed(path))
 
@@ -104,6 +159,22 @@ class ReachPrimitive(EdgeRule):
         if verdict is Truth.UNKNOWN:
             message += " (cannot tell, a value is unassigned)"
         self.emit(env, message, witnesses=tuple(path), unknown=verdict is Truth.UNKNOWN)
+
+
+class EndpointsEnv:
+    """Resolves `src.*` and `dst.*` of two endpoints with no edge: what reach's `deny` reads
+    when it names no edge field."""
+
+    def __init__(self, ctx: RuleContext, src: Endpoint, dst: Endpoint) -> None:
+        self.ctx = ctx
+        self.src = src
+        self.dst = dst
+
+    def resolve(self, ref: Ref) -> Value:
+        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst"):
+            return UNKNOWN
+        root, name = ref.path
+        return read_endpoint(self.ctx, self.src if root == "src" else self.dst, name, None, root)
 
 
 class CyclePrimitive(EdgeRule):
