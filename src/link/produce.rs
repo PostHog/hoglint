@@ -56,23 +56,87 @@ pub struct Refinement {
     pub attrs: Vec<(Sid, Sid)>,
 }
 
+/// The record of a pack edge that names no record of the snapshot.
+pub const NO_FILE: u32 = u32::MAX;
+
+/// One edge a pack made (D22): it lives in the link next to the core edges, after them, so
+/// every reader of edges reads one table. Its site is whatever the pack wrote.
+#[derive(Clone, Copy)]
+pub struct PackRow {
+    pub kind: Sid,
+    pub producer: Sid,
+    pub path: Sid,
+    /// The record whose path is `path`, or NO_FILE.
+    pub file: u32,
+    pub module: Sid,
+    pub scope: Sid,
+    pub line: u32,
+    pub col: u32,
+    pub surface: Sid,
+    pub targets: (u32, u32),
+    pub res: Res,
+    pub ctx: u8,
+    pub via: (u32, u32),
+    pub use_: Sid,
+    pub shape: Sid,
+    pub shape_detail: Sid,
+    pub attrs: (u32, u32),
+    /// Several targets, or `src.*`/`dst.*` attrs that override its endpoints' labels: no
+    /// group can speak for it.
+    pub irregular: bool,
+}
+
+/// Every edge of a snapshot: core rows (ids 0..rows.len()), then pack rows.
 #[derive(Default)]
 pub struct EdgeStore {
     pub rows: Vec<EdgeRow>,
+    pub pack: Vec<PackRow>,
     pub via: Vec<Ent>,
     pub attrs: Vec<(Sid, Sid)>,
+    /// Targets of pack rows.
+    pub targets: Vec<Ent>,
     /// Refinements by edge id. Python checks that two producers never set one field apart.
     pub refined: FxHashMap<u32, Refinement>,
+    /// The interned name and producer of each core kind code (`KIND_NAMES`).
+    pub kind_names: Vec<Sid>,
+    pub producers: Vec<Sid>,
+}
+
+fn range<T>(items: &[T], at: (u32, u32)) -> &[T] {
+    &items[at.0 as usize..(at.0 + at.1) as usize]
 }
 
 impl EdgeStore {
-    pub fn via_of(&self, row: &EdgeRow) -> &[Ent] {
-        &self.via[row.via.0 as usize..(row.via.0 + row.via.1) as usize]
+    pub fn len(&self) -> usize {
+        self.rows.len() + self.pack.len()
     }
 
-    /// The attrs core gave the edge, without what packs added (`attrs_with`).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The pack row of edge `id`, or None for a core edge.
+    pub fn pack_row(&self, id: u32) -> Option<&PackRow> {
+        (id as usize)
+            .checked_sub(self.rows.len())
+            .map(|at| &self.pack[at])
+    }
+
+    pub fn via_of(&self, row: &EdgeRow) -> &[Ent] {
+        range(&self.via, row.via)
+    }
+
+    /// The attrs core gave a core edge, without what packs added (`attrs_with`).
     pub fn attrs_of(&self, row: &EdgeRow) -> &[(Sid, Sid)] {
-        &self.attrs[row.attrs.0 as usize..(row.attrs.0 + row.attrs.1) as usize]
+        range(&self.attrs, row.attrs)
+    }
+
+    /// The attrs edge `id` was made with.
+    pub fn own_attrs(&self, id: u32) -> &[(Sid, Sid)] {
+        match self.pack_row(id) {
+            Some(pack) => range(&self.attrs, pack.attrs),
+            None => self.attrs_of(&self.rows[id as usize]),
+        }
     }
 
     /// Every attr of edge `id`: its own, then those refinements added.
@@ -81,14 +145,87 @@ impl EdgeStore {
             .refined
             .get(&id)
             .map_or(&[][..], |r| r.attrs.as_slice());
-        self.attrs_of(&self.rows[id as usize]).iter().chain(added)
+        self.own_attrs(id).iter().chain(added)
     }
 
-    /// (shape, shape detail) of edge `id`: EMPTY for an edge no pack refined.
+    /// (shape, shape detail) of edge `id`, refinements included.
     pub fn shape_of(&self, id: u32) -> (Sid, Sid) {
+        let own = self
+            .pack_row(id)
+            .map_or((EMPTY, EMPTY), |pack| (pack.shape, pack.shape_detail));
         self.refined
             .get(&id)
-            .map_or((EMPTY, EMPTY), |r| (r.shape, r.shape_detail))
+            .map_or(own, |r| (r.shape, r.shape_detail))
+    }
+
+    pub fn kind_of(&self, id: u32) -> Sid {
+        match self.pack_row(id) {
+            Some(pack) => pack.kind,
+            None => self.kind_names[self.rows[id as usize].kind as usize],
+        }
+    }
+
+    pub fn producer_of(&self, id: u32) -> Sid {
+        match self.pack_row(id) {
+            Some(pack) => pack.producer,
+            None => self.producers[self.rows[id as usize].kind as usize],
+        }
+    }
+
+    pub fn surface_of(&self, id: u32) -> Sid {
+        self.pack_row(id)
+            .map_or_else(|| self.rows[id as usize].surface, |pack| pack.surface)
+    }
+
+    pub fn res_of(&self, id: u32) -> Res {
+        self.pack_row(id)
+            .map_or_else(|| self.rows[id as usize].res, |pack| pack.res)
+    }
+
+    pub fn ctx_of(&self, id: u32) -> u8 {
+        self.pack_row(id)
+            .map_or_else(|| self.rows[id as usize].ctx, |pack| pack.ctx)
+    }
+
+    /// The context bits a rule filters edge `id` on: an edge with none counts as prod, as
+    /// `contexts_of` reads it in Python. Core edges always have a base context.
+    pub fn seen_ctx(&self, id: u32) -> u8 {
+        match self.ctx_of(id) {
+            0 => super::scope::ctx::PROD,
+            bits => bits,
+        }
+    }
+
+    pub fn use_of(&self, id: u32) -> Sid {
+        self.pack_row(id)
+            .map_or_else(|| self.rows[id as usize].use_, |pack| pack.use_)
+    }
+
+    pub fn via_of_id(&self, id: u32) -> &[Ent] {
+        match self.pack_row(id) {
+            Some(pack) => range(&self.via, pack.via),
+            None => self.via_of(&self.rows[id as usize]),
+        }
+    }
+
+    /// Every target of edge `id`.
+    pub fn targets_of(&self, id: u32) -> &[Ent] {
+        match self.pack_row(id) {
+            Some(pack) => range(&self.targets, pack.targets),
+            None => self.rows[id as usize].target.as_slice(),
+        }
+    }
+
+    /// The target of an edge with exactly one, as `Edge.target` reads it.
+    pub fn target_of(&self, id: u32) -> Option<Ent> {
+        match self.targets_of(id) {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
+    pub fn is_irregular(&self, id: u32) -> bool {
+        self.pack_row(id).is_some_and(|pack| pack.irregular)
     }
 
     /// Sets the fields a refinement names (`shape`, `shape_detail` when Some) and appends its
@@ -100,15 +237,19 @@ impl EdgeStore {
         shape_detail: Option<Sid>,
         attrs: &[(Sid, Sid)],
     ) {
-        let found = self.refined.entry(id).or_default();
+        let own_shape = self.shape_of(id);
+        let own: Vec<(Sid, Sid)> = self.own_attrs(id).to_vec();
+        let found = self.refined.entry(id).or_insert_with(|| Refinement {
+            shape: own_shape.0,
+            shape_detail: own_shape.1,
+            attrs: Vec::new(),
+        });
         if let Some(shape) = shape {
             found.shape = shape;
         }
         if let Some(detail) = shape_detail {
             found.shape_detail = detail;
         }
-        let row = &self.rows[id as usize];
-        let own = &self.attrs[row.attrs.0 as usize..(row.attrs.0 + row.attrs.1) as usize];
         for pair in attrs {
             if !own.contains(pair) && !found.attrs.contains(pair) {
                 found.attrs.push(*pair);

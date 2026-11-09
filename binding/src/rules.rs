@@ -4,7 +4,6 @@ use crate::link::Link;
 use crate::{ids_bytes, ids_from};
 use hoglint_facts::link::Link as CoreLink;
 use hoglint_facts::link::groups::{Endpoint, Role};
-use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Sid};
 use hoglint_facts::link::scope::Res;
 use pyo3::exceptions::{PyKeyError, PyValueError};
@@ -67,11 +66,25 @@ impl Link {
         include: u8,
         exclude: u8,
     ) -> Bound<'py, PyBytes> {
-        let codes: Vec<u8> = kinds.iter().filter_map(|kind| kind_code(kind)).collect();
+        let codes: Vec<Sid> = kinds
+            .iter()
+            .filter_map(|kind| self.inner.kind_sid(kind))
+            .collect();
         if codes.is_empty() && !kinds.is_empty() {
             return ids_bytes(py, &[]);
         }
         ids_bytes(py, &self.inner.candidates(&codes, include, exclude))
+    }
+
+    /// `ids` split into (those a group may speak for, the irregular ones): an edge with several
+    /// targets or with attrs that override its endpoints' labels is judged on its own.
+    fn split_irregular<'py>(
+        &self,
+        py: Python<'py>,
+        ids: &[u8],
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        let (regular, irregular) = self.inner.split_irregular(&ids_from(ids)?);
+        Ok((ids_bytes(py, &regular), ids_bytes(py, &irregular)))
     }
 
     /// Src and dst keys of `ids`: (src key of each id, src representative ids, dst key of each
@@ -192,20 +205,15 @@ impl Link {
         let mut paths: FxHashMap<u32, Bound<'py, PyString>> = FxHashMap::default();
         let mut out = Vec::new();
         for id in ids_from(ids)? {
-            let row = link
-                .edges
-                .rows
-                .get(id as usize)
-                .ok_or_else(|| PyKeyError::new_err(id))?;
-            let scope = &link.scopes[row.owner as usize];
+            if id as usize >= link.edges.len() {
+                return Err(PyKeyError::new_err(id));
+            }
             let path = paths
-                .entry(row.file)
-                .or_insert_with(|| {
-                    PyString::new(py, &link.core.facts.files[row.file as usize].path)
-                })
+                .entry(link.file_key(id))
+                .or_insert_with(|| PyString::new(py, link.path_of_edge(id)))
                 .clone();
-            let scope_name = scope.scope_name(row.scope, link.settings.module_scope);
-            out.push((texts.of(scope.module), texts.of(scope_name), path));
+            let (module, scope) = link.site_of(id);
+            out.push((texts.of(module), texts.of(scope), path));
         }
         Ok(out)
     }
@@ -232,17 +240,21 @@ impl Link {
             made: FxHashMap::default(),
         };
         let mut out = Vec::new();
+        let edges = &link.edges;
         for id in ids_from(ids)? {
-            let row = link
-                .edges
-                .rows
-                .get(id as usize)
-                .ok_or_else(|| PyKeyError::new_err(id))?;
-            let (module, symbol) = match row.target {
+            if id as usize >= edges.len() {
+                return Err(PyKeyError::new_err(id));
+            }
+            let (module, symbol) = match edges.target_of(id) {
                 Some(t) => (Some(texts.of(t.m)), texts.of(t.s)),
                 None => (None, texts.of(EMPTY)),
             };
-            out.push((row.res.name(), texts.of(row.surface), module, symbol));
+            out.push((
+                edges.res_of(id).name(),
+                texts.of(edges.surface_of(id)),
+                module,
+                symbol,
+            ));
         }
         Ok(out)
     }
@@ -305,23 +317,19 @@ impl Link {
         include: u8,
         exclude: u8,
     ) -> Bound<'py, PyBytes> {
-        let Some(code) = kind_code(kind) else {
+        let Some(kind) = self.inner.kind_sid(kind) else {
             return ids_bytes(py, &[]);
         };
         let module = self.sid(module);
-        let link = &mut self.inner;
-        let ids = link
-            .index
-            .from_module(&link.edges.rows, &link.scopes, code, module)
-            .to_vec();
-        let rows = &link.edges.rows;
+        let ids = self.inner.ids_from(kind, module);
+        let edges = &self.inner.edges;
         let seen: Vec<u32> = ids
             .into_iter()
             .filter(|&id| {
-                let row = &rows[id as usize];
-                row.res != Res::NotApplicable
-                    && (include == 0 || row.ctx & include != 0)
-                    && row.ctx & exclude == 0
+                let ctx = edges.seen_ctx(id);
+                edges.res_of(id) != Res::NotApplicable
+                    && (include == 0 || ctx & include != 0)
+                    && ctx & exclude == 0
             })
             .collect();
         ids_bytes(py, &seen)

@@ -187,23 +187,15 @@ class NativePackQueries(PackQueries):
             digest.update(b"\0")
         return digest.hexdigest()
 
-    def core_edges(self, ids: bytes) -> list[Edge]:
+    def edges(self, ids: bytes) -> list[Edge]:
         graph: Any = self.graph
         return graph.core.get(array("I", ids))
 
-    def pack_edges(self, kind: str) -> list[Edge]:
-        graph: Any = self.graph
-        graph.catch_up()
-        return list(graph.extra_index.get(kind, ()))
-
     def edges_spelled(self, kind: str, names: Collection[str]) -> list[Edge]:
-        core = self.core_edges(self.link.ids_spelled(kind, sorted(names)))
-        extra = [edge for edge in self.pack_edges(kind) if edge.surface.rpartition(".")[2] in names]
-        return core + extra
+        return self.edges(self.link.ids_spelled(kind, sorted(names)))
 
     def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch:
-        """The link's core edges by target as columns, with no Edge in between; pack edges of
-        the kind come after them, as in graph order."""
+        """The link's edges by target, core and pack, as columns with no Edge in between."""
         graph: Any = self.graph
         maker = graph.core.maker
         ids = array("I", self.link.ids_to(kind, [(target.module, target.symbol) for target in targets]))
@@ -215,10 +207,4 @@ class NativePackQueries(PackQueries):
             batch.columns["target"] = [
                 maker.entity(module, symbol) if module is not None else None for module, symbol in pairs
             ]
-        wanted = set(targets)
-        extra = [edge for edge in self.pack_edges(kind) if any(target in wanted for target in edge.targets)]
-        more = batch_of(extra, columns)
-        batch.handles.extend(more.handles)
-        for name in columns:
-            batch.columns[name].extend(more.columns[name])
         return batch

@@ -3,8 +3,6 @@
 
 use crate::link::Link;
 use crate::{Pair, ids_bytes, ids_from};
-use hoglint_facts::link::Link as CoreLink;
-use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Sid};
 use hoglint_facts::link::resolve::{Binding, Ent};
 use pyo3::exceptions::{PyKeyError, PyValueError};
@@ -30,13 +28,13 @@ fn callee_position(kind: &str) -> PyResult<usize> {
 
 #[pymethods]
 impl Link {
-    /// Edge ids of one kind, in graph order, as little-endian u32 bytes.
+    /// Edge ids of one kind, core and pack, in graph order, as little-endian u32 bytes.
     fn ids_of_kind<'py>(&mut self, py: Python<'py>, kind: &str) -> Bound<'py, PyBytes> {
-        let Some(code) = kind_code(kind) else {
+        let Some(kind) = self.inner.kind_sid(kind) else {
             return ids_bytes(py, &[]);
         };
         let link = &mut self.inner;
-        ids_bytes(py, link.index.of_kind(&link.edges.rows, code))
+        ids_bytes(py, link.index.of_kind(&link.edges, kind))
     }
 
     /// Edges of `kind` whose resolved origin is one of `targets` ((module, symbol) pairs).
@@ -46,42 +44,31 @@ impl Link {
         kind: &str,
         targets: Vec<Pair>,
     ) -> Bound<'py, PyBytes> {
-        let Some(code) = kind_code(kind) else {
+        let Some(kind) = self.inner.kind_sid(kind) else {
             return ids_bytes(py, &[]);
         };
         let targets: Vec<Ent> = targets.iter().map(|(m, s)| self.ent(m, s)).collect();
         let link = &mut self.inner;
-        ids_bytes(py, &link.index.to_targets(&link.edges.rows, code, &targets))
+        ids_bytes(py, &link.index.to_targets(&link.edges, kind, &targets))
     }
 
     /// Edges of `kind` from one source module.
     fn ids_from<'py>(&mut self, py: Python<'py>, kind: &str, module: &str) -> Bound<'py, PyBytes> {
-        let Some(code) = kind_code(kind) else {
+        let Some(kind) = self.inner.kind_sid(kind) else {
             return ids_bytes(py, &[]);
         };
         let module = self.sid(module);
-        let link = &mut self.inner;
-        ids_bytes(
-            py,
-            link.index
-                .from_module(&link.edges.rows, &link.scopes, code, module),
-        )
+        ids_bytes(py, &self.inner.ids_from(kind, module))
     }
 
     /// Source modules of `kind`, in the order their first edge appears.
     fn source_modules(&mut self, kind: &str) -> Vec<String> {
-        let Some(code) = kind_code(kind) else {
+        let Some(kind) = self.inner.kind_sid(kind) else {
             return Vec::new();
         };
-        let link = &mut self.inner;
-        let modules = link
-            .index
-            .source_modules(&link.edges.rows, &link.scopes, code)
-            .to_vec();
-        modules
-            .iter()
-            .map(|&m| link.core.it.s(m).to_string())
-            .collect()
+        let modules = self.inner.source_modules(kind);
+        let it = &self.inner.core.it;
+        modules.iter().map(|&m| it.s(m).to_string()).collect()
     }
 
     /// Edges of `kind` whose surface's last dotted part is one of `names`, resolved or not.
@@ -91,7 +78,7 @@ impl Link {
         kind: &str,
         names: Vec<String>,
     ) -> Bound<'py, PyBytes> {
-        let Some(code) = kind_code(kind) else {
+        let Some(kind) = self.inner.kind_sid(kind) else {
             return ids_bytes(py, &[]);
         };
         let names: Vec<Sid> = names.iter().map(|name| self.sid(name)).collect();
@@ -100,7 +87,7 @@ impl Link {
             py,
             &link
                 .index
-                .spelled(&mut link.core.it, &link.edges.rows, code, &names),
+                .spelled(&mut link.core.it, &link.edges, kind, &names),
         )
     }
 }
@@ -209,7 +196,7 @@ impl Link {
         let ids = ids_from(ids)?;
         let link = &self.inner;
         let it = &link.core.it;
-        if let Some(&bad) = ids.iter().find(|&&id| id as usize >= link.edges.rows.len()) {
+        if let Some(&bad) = ids.iter().find(|&&id| id as usize >= link.edges.len()) {
             return Err(PyKeyError::new_err(bad));
         }
         let mut strings: FxHashMap<Sid, Bound<'py, PyString>> = FxHashMap::default();
@@ -225,30 +212,27 @@ impl Link {
             let attr = name.strip_prefix("attr:").map(|key| it.get(key));
             let mut values: Vec<Bound<'py, PyAny>> = Vec::with_capacity(ids.len());
             for &id in &ids {
-                let row = &link.edges.rows[id as usize];
-                let scope = &link.scopes[row.owner as usize];
+                let edges = &link.edges;
                 let value = match (name.as_str(), attr) {
                     (_, Some(key)) => {
                         let found =
-                            key.and_then(|key| link.edges.attrs_with(id).find(|(k, _)| *k == key));
+                            key.and_then(|key| edges.attrs_with(id).find(|(k, _)| *k == key));
                         text(found.map_or(EMPTY, |&(_, v)| v))
                     }
-                    ("path", _) => {
-                        PyString::new(py, &link.core.facts.files[row.file as usize].path).into_any()
-                    }
-                    ("module", _) => text(scope.module),
-                    ("scope", _) => text(scope.scope_name(row.scope, link.settings.module_scope)),
-                    ("line", _) => row.line.into_pyobject(py)?.into_any(),
-                    ("column", _) => row.col.into_pyobject(py)?.into_any(),
-                    ("surface", _) => text(row.surface),
-                    ("target_module", _) => match row.target {
+                    ("path", _) => PyString::new(py, link.path_of_edge(id)).into_any(),
+                    ("module", _) => text(link.site_of(id).0),
+                    ("scope", _) => text(link.site_of(id).1),
+                    ("line", _) => link.line_col(id).0.into_pyobject(py)?.into_any(),
+                    ("column", _) => link.line_col(id).1.into_pyobject(py)?.into_any(),
+                    ("surface", _) => text(edges.surface_of(id)),
+                    ("target_module", _) => match edges.target_of(id) {
                         Some(target) => text(target.m),
                         None => py.None().into_bound(py),
                     },
-                    ("target_symbol", _) => text(row.target.map_or(EMPTY, |target| target.s)),
-                    ("producer", _) => {
-                        PyString::new(py, &CoreLink::producer_name(row.kind)).into_any()
+                    ("target_symbol", _) => {
+                        text(edges.target_of(id).map_or(EMPTY, |target| target.s))
                     }
+                    ("producer", _) => text(edges.producer_of(id)),
                     (other, _) => {
                         return Err(PyValueError::new_err(format!("no edge column {other}")));
                     }

@@ -54,7 +54,7 @@ def link(native: Any, snapshot: BlobSnapshot, database: FactDatabase | None) -> 
 
 
 def imports(linked: Any) -> list[str]:
-    return sorted(row[8] for row in linked.edges(linked.ids_of_kind("import")))
+    return sorted(symbol for row in linked.edges(linked.ids_of_kind("import")) for _, symbol in row[7])
 
 
 def test_a_second_run_reads_every_record_from_the_database(tmp_path: Path) -> None:

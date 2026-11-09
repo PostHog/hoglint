@@ -23,11 +23,26 @@ LookupResult = tuple[str, Hit | None, bool]
 """(surface, hit or None, local)."""
 
 EdgeTuple = tuple[
-    str, str, str, str, int, int, str, str | None, str, str, int, tuple[Pair, ...], str, tuple[Pair, ...], str, str
+    str,
+    str,
+    str,
+    str,
+    int,
+    int,
+    str,
+    tuple[Pair, ...],
+    str,
+    int,
+    tuple[Pair, ...],
+    str,
+    tuple[Pair, ...],
+    str,
+    str,
+    str,
 ]
-"""(kind, path, module, scope, line, column, surface, target module or None, target symbol,
-resolution, context bits, via, use, attrs, shape, shape detail), with what refinements set.
-Context bits follow `CONTEXT_BITS` in hoglint.native.graph."""
+"""(kind, path, module, scope, line, column, surface, targets, resolution, context bits, via, use,
+attrs, shape, shape detail, producer), with what refinements set. Context bits follow
+`CONTEXT_BITS` in hoglint.native.graph."""
 
 class FactText:
     """The JSON text of every record as one read-only buffer: read it with memoryview()."""
@@ -38,7 +53,26 @@ class Link:
     def timings(self) -> list[tuple[str, float]]: ...
     def heap(self) -> list[tuple[str, int]]:
         """Estimated heap bytes per part of the link, for memory reports."""
-    def edge_count(self) -> int: ...
+    def edge_count(self) -> int:
+        """Every edge, core and pack: ids 0..edge_count()."""
+    def core_count(self) -> int:
+        """The core edges: ids below it; pack edges come after them."""
+    def add_edges(
+        self,
+        kinds: list[str],
+        producers: list[str],
+        sites: list[tuple[str, str, str, int, int]],
+        surfaces: list[str],
+        targets: list[list[Pair]],
+        resolutions: list[str],
+        contexts: list[int],
+        via: list[list[Pair]],
+        uses: list[str],
+        shapes: list[tuple[str, str]],
+        attrs: list[list[tuple[str, str]]],
+    ) -> int:
+        """Adds pack edges after every edge (one value per edge in each list; a site is (path,
+        module, scope, line, column), a shape (shape, shape detail)). Returns the first new id."""
     def paths(self) -> list[str]: ...
     def scope_files(self) -> list[int]: ...
     def scopes(self) -> list[tuple[int, str, bool, int]]: ...
@@ -74,9 +108,13 @@ class Link:
     def subclasses(self, qualified: str) -> list[Pair]:
         """Module-level classes of the analyzed modules whose MRO holds `qualified`, the class
         itself included, in scope and table order: `is_subclass` asked of every class at once."""
-    def class_facts(self, kind: str, owner_attr: str) -> list[tuple[str, str, list[str], bool]]: ...
+    def class_facts(self, kind: str, owner_attr: str) -> list[tuple[str, str, list[str], bool]]:
+        """(owner, surface, names, frozen) of the inherit or decorate edges, core and pack."""
     def kind_order(self) -> list[str]: ...
     def candidates(self, kinds: list[str], include: int, exclude: int) -> bytes: ...
+    def split_irregular(self, ids: bytes) -> tuple[bytes, bytes]:
+        """(the ids a group may speak for, the irregular ones: several targets, or attrs that
+        override endpoint labels)."""
     def endpoint_keys(
         self, ids: bytes, role: str, src_scope: bool, dst_entity: bool
     ) -> tuple[bytes, bytes, bytes, bytes]: ...

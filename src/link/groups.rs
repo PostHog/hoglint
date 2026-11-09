@@ -8,7 +8,6 @@
 use super::Link;
 use super::heap;
 use super::intern::{EMPTY, Sid};
-use super::produce::EdgeRow;
 use super::scope::Res;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -88,26 +87,27 @@ impl EndpointTables {
 impl Link {
     /// Edges a rule sees: kind in `kinds` (every kind when empty), resolution not
     /// not-applicable, contexts meeting `include` (any bit) and avoiding `exclude`.
-    pub fn candidates(&mut self, kinds: &[u8], include: u8, exclude: u8) -> Vec<u32> {
+    pub fn candidates(&mut self, kinds: &[Sid], include: u8, exclude: u8) -> Vec<u32> {
         let mut out = Vec::new();
         let lists: Vec<Vec<u32>> = if kinds.is_empty() {
-            vec![(0..self.edges.rows.len() as u32).collect()]
+            vec![(0..self.edges.len() as u32).collect()]
         } else {
             kinds
                 .iter()
-                .map(|&kind| self.index.of_kind(&self.edges.rows, kind).to_vec())
+                .map(|&kind| self.index.of_kind(&self.edges, kind).to_vec())
                 .collect()
         };
+        let edges = &self.edges;
         for list in lists {
             for id in list {
-                let row = &self.edges.rows[id as usize];
-                if row.res == Res::NotApplicable {
+                if edges.res_of(id) == Res::NotApplicable {
                     continue;
                 }
-                if include != 0 && row.ctx & include == 0 {
+                let ctx = edges.seen_ctx(id);
+                if include != 0 && ctx & include == 0 {
                     continue;
                 }
-                if row.ctx & exclude != 0 {
+                if ctx & exclude != 0 {
                     continue;
                 }
                 out.push(id);
@@ -115,6 +115,12 @@ impl Link {
         }
         out.sort_unstable();
         out
+    }
+
+    /// `ids` split into those a group may speak for and the irregular ones (several targets,
+    /// or attrs that override endpoint labels), which rules judge one by one.
+    pub fn split_irregular(&self, ids: &[u32]) -> (Vec<u32>, Vec<u32>) {
+        ids.iter().partition(|&&id| !self.edges.is_irregular(id))
     }
 
     /// The longest dotted prefix of `dotted` that is a repo module with a file: what
@@ -141,28 +147,29 @@ impl Link {
         None
     }
 
-    fn dst_key(&mut self, row: EdgeRow, role: Role, entity: bool) -> DstKey {
+    fn dst_key(&mut self, id: u32, role: Role, entity: bool) -> DstKey {
+        let (res, surface) = (self.edges.res_of(id), self.edges.surface_of(id));
         match role {
-            Role::Origin => match row.target {
-                Some(target) if row.res != Res::Unresolved => {
+            Role::Origin => match self.edges.target_of(id) {
+                Some(target) if res != Res::Unresolved => {
                     let symbol = if entity {
                         self.core.ent_sid(target)
                     } else {
                         EMPTY
                     };
-                    (target.m, row.res == Res::External, symbol)
+                    (target.m, res == Res::External, symbol)
                 }
                 _ => (
                     UNRESOLVED_MODULE,
                     false,
-                    if entity { row.surface } else { EMPTY },
+                    if entity { surface } else { EMPTY },
                 ),
             },
             Role::Surface => {
-                let symbol = if entity { row.surface } else { EMPTY };
-                let module = self.repo_module_of(row.surface);
-                if row.res == Res::External {
-                    return (module.unwrap_or(row.surface), true, symbol);
+                let symbol = if entity { surface } else { EMPTY };
+                let module = self.repo_module_of(surface);
+                if res == Res::External {
+                    return (module.unwrap_or(surface), true, symbol);
                 }
                 match module {
                     Some(module) => (module, false, symbol),
@@ -172,7 +179,17 @@ impl Link {
         }
     }
 
-    /// Src keys (the edge's file, or file and scope) and dst keys of `ids`.
+    /// The src key of edge `id`: its module and record, and its scope when `scope` is set.
+    fn src_key(&self, id: u32, scope: bool) -> [u32; 3] {
+        let (module, scope_name) = self.site_of(id);
+        [
+            module,
+            self.file_key(id),
+            if scope { scope_name } else { EMPTY },
+        ]
+    }
+
+    /// Src keys (the edge's module and record, or with its scope too) and dst keys of `ids`.
     pub fn endpoint_keys(
         &mut self,
         ids: &[u32],
@@ -180,14 +197,10 @@ impl Link {
         src_scope: bool,
         dst_entity: bool,
     ) -> (Keyed, Keyed) {
-        let rows = &self.edges.rows;
-        let src = Keyed::of(ids, |id| {
-            let row = &rows[id as usize];
-            (row.owner, if src_scope { row.scope } else { -2 })
-        });
+        let src = Keyed::of(ids, |id| self.src_key(id, src_scope));
         let dst_keys: Vec<DstKey> = ids
             .iter()
-            .map(|&id| self.dst_key(self.edges.rows[id as usize], role, dst_entity))
+            .map(|&id| self.dst_key(id, role, dst_entity))
             .collect();
         let mut at = 0;
         let dst = Keyed::of(ids, |_| {
@@ -208,15 +221,12 @@ impl Link {
     ) -> (Vec<u32>, u32, Vec<u32>, Vec<u32>) {
         let keys: Vec<[u32; 3]> = ids
             .iter()
-            .map(|&id| {
-                let row = self.edges.rows[id as usize];
-                match which {
-                    Endpoint::SrcModule => [row.owner, 0, 0],
-                    Endpoint::SrcScope => [row.owner, row.scope as u32, 0],
-                    Endpoint::Dst(role, entity) => {
-                        let (module, external, symbol) = self.dst_key(row, role, entity);
-                        [module, external as u32, symbol]
-                    }
+            .map(|&id| match which {
+                Endpoint::SrcModule => self.src_key(id, false),
+                Endpoint::SrcScope => self.src_key(id, true),
+                Endpoint::Dst(role, entity) => {
+                    let (module, external, symbol) = self.dst_key(id, role, entity);
+                    [module, external as u32, symbol]
                 }
             })
             .collect();
@@ -258,29 +268,29 @@ impl Link {
         Some(out)
     }
 
-    /// Edge keys over the edge fields a rule reads: `kind`, `context`, `resolution`, `use`,
-    /// `surface`, `shape`, `shape_detail`, `label` (kind, shape and detail; whether the
-    /// destination resolved is in its dst key), or an attr name, refinements included. `producer`
-    /// follows from the kind for core edges.
+    /// Edge keys over the edge fields a rule reads: `kind`, `producer`, `context`,
+    /// `resolution`, `use`, `surface`, `shape`, `shape_detail`, `label` (kind, shape and detail;
+    /// whether the destination resolved is in its dst key), or an attr name, refinements
+    /// included.
     pub fn edge_keys(&mut self, ids: &[u32], fields: &[String]) -> Keyed {
         let attr_keys: Vec<Option<Sid>> =
             fields.iter().map(|name| self.core.it.get(name)).collect();
         let edges = &self.edges;
         Keyed::of(ids, |id| {
-            let row = &edges.rows[id as usize];
             let (shape, detail) = edges.shape_of(id);
             let mut key: Vec<u32> = Vec::with_capacity(fields.len() + 2);
-            key.push(row.kind as u32);
+            key.push(edges.kind_of(id));
             for (name, attr) in fields.iter().zip(&attr_keys) {
                 match name.as_str() {
-                    "kind" | "producer" => key.push(0),
+                    "kind" => key.push(0),
+                    "producer" => key.push(edges.producer_of(id)),
                     "shape" => key.push(shape),
                     "shape_detail" => key.push(detail),
                     "label" => key.extend([shape, detail]),
-                    "context" => key.push(row.ctx as u32),
-                    "resolution" => key.push(row.res as u32),
-                    "use" => key.push(row.use_),
-                    "surface" => key.push(row.surface),
+                    "context" => key.push(edges.ctx_of(id) as u32),
+                    "resolution" => key.push(edges.res_of(id) as u32),
+                    "use" => key.push(edges.use_of(id)),
+                    "surface" => key.push(edges.surface_of(id)),
                     _ => key.push(
                         attr.and_then(|a| edges.attrs_with(id).find(|(k, _)| *k == a))
                             .map_or(EMPTY, |(_, v)| *v),

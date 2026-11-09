@@ -37,6 +37,8 @@ pub enum Res {
     Unresolved,
     External,
     NotApplicable,
+    /// Only pack edges have it: a target among candidates.
+    Candidates,
 }
 
 impl Res {
@@ -46,7 +48,20 @@ impl Res {
             Res::Unresolved => "unresolved",
             Res::External => "external",
             Res::NotApplicable => "not-applicable",
+            Res::Candidates => "candidates",
         }
+    }
+
+    pub fn of_name(name: &str) -> Option<Res> {
+        [
+            Res::Resolved,
+            Res::Unresolved,
+            Res::External,
+            Res::NotApplicable,
+            Res::Candidates,
+        ]
+        .into_iter()
+        .find(|res| res.name() == name)
     }
 }
 

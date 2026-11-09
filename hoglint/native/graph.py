@@ -1,9 +1,9 @@
-"""The graph of the native engine: core edges stay in the Rust link, pack edges are Python.
+"""The graph of the native engine: every edge, core and pack, lives in the Rust link (D22).
 
 `NativeGraph.edges` is the whole graph in graph order: core edges first, then what packs add.
-A core edge becomes an Edge object only when something reads it, and nothing keeps it: each
-read makes a new object. Tables key edges by their handle (`Edge.handle`), the edge's row in
-the graph, never by object identity. Readers that need only some edges ask the link by kind
+An edge becomes an Edge object only when something reads it, and nothing keeps it: each read
+makes a new object. Tables key edges by their handle (`Edge.handle`), the edge's row in the
+link, never by object identity. Readers that need only some edges ask the link by kind
 (`by_kind`) instead of walking every edge.
 
 `NativeGraph.symbols` keeps the core's symbols as columns, with no dict per symbol.
@@ -16,7 +16,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site, refined_edge, set_handle
+from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
 from hoglint.plugins import ProducerFailure, RefinedFields, Refinement
 
 # Bit order of the link's context bits (src/link/scope.rs `ctx`).
@@ -39,16 +39,11 @@ BATCH = 65536
 SYMBOL_KINDS = ("def", "async", "class")
 
 
-def producer_of(kind: str) -> str:
-    return f"core-{kind}@1"
-
-
 class EdgeMaker:
     """Edge objects from the link's edge tuples, sharing equal entity ids."""
 
     def __init__(self) -> None:
         self.entities: dict[tuple[str, str], EntityId] = {}
-        self.producers: dict[str, str] = {}
 
     def entity(self, module: str, symbol: str) -> EntityId:
         key = (module, symbol)
@@ -58,46 +53,52 @@ class EdgeMaker:
         return found
 
     def edge(self, row: tuple[Any, ...], handle: int) -> Edge:
-        kind, path, module, scope, line, column, surface, target_module, target_symbol, res, bits, via, use, attrs = (
-            row[:14]
-        )
-        shape, shape_detail = row[14:]
-        producer = self.producers.get(kind)
-        if producer is None:
-            producer = self.producers[kind] = producer_of(kind)
-        targets = (self.entity(target_module, target_symbol),) if target_module is not None else ()
+        (
+            kind,
+            path,
+            module,
+            scope,
+            line,
+            column,
+            surface,
+            targets,
+            res,
+            bits,
+            via,
+            use,
+            attrs,
+            shape,
+            detail,
+            producer,
+        ) = row
         return Edge(
             kind,
             Site(path, module, scope, line, column),
             surface,
-            targets,
+            tuple(self.entity(m, s) for m, s in targets),
             RESOLUTIONS[res],
             CONTEXT_SETS[bits],
             producer,
             tuple(self.entity(m, s) for m, s in via),
             use,
             shape,
-            shape_detail,
+            detail,
             attrs,
             handle,
         )
 
 
-class CoreEdges:
-    """The link's core edges, made into Edge objects on each read. The handle of a core edge is
-    its row in the link."""
+class LinkEdges:
+    """Every edge of the link, core and pack, made into Edge objects on each read. An edge's
+    handle is its row in the link."""
 
     def __init__(self, link: Any) -> None:
         self.link = link
-        self.count: int = link.edge_count()
         self.maker = EdgeMaker()
-        self.kind_ids: dict[str, array[int]] = {}
 
-    def ids_of_kind(self, kind: str) -> array[int]:
-        found = self.kind_ids.get(kind)
-        if found is None:
-            found = self.kind_ids[kind] = array("I", self.link.ids_of_kind(kind))
-        return found
+    @property
+    def count(self) -> int:
+        return self.link.edge_count()
 
     def get(self, ids: Sequence[int]) -> list[Edge]:
         wanted = ids if isinstance(ids, array) else array("I", ids)
@@ -107,19 +108,15 @@ class CoreEdges:
             out.extend(self.maker.edge(row, i) for i, row in zip(chunk, self.link.edges(chunk.tobytes())))
         return out
 
-    def all(self) -> list[Edge]:
-        return self.get(range(self.count))
-
 
 class EdgeList(Sequence[Edge]):
-    """Core edges, then pack edges: the graph's edges in order."""
+    """The graph's edges in order: core edges, then pack edges, all in the link."""
 
-    def __init__(self, core: CoreEdges) -> None:
-        self.core = core
-        self.extra: list[Edge] = []
+    def __init__(self, edges: LinkEdges) -> None:
+        self.link_edges = edges
 
     def __len__(self) -> int:
-        return self.core.count + len(self.extra)
+        return self.link_edges.count
 
     @overload
     def __getitem__(self, index: SupportsIndex) -> Edge: ...
@@ -129,29 +126,39 @@ class EdgeList(Sequence[Edge]):
 
     def __getitem__(self, index: SupportsIndex | slice) -> Edge | list[Edge]:
         if isinstance(index, slice):
-            positions = range(*index.indices(len(self)))
-            core = [i for i in positions if i < self.core.count]
-            return self.core.get(core) + [self.extra[i - self.core.count] for i in positions if i >= self.core.count]
+            return self.link_edges.get(range(*index.indices(len(self))))
         at = index.__index__()
         if at < 0:
             at += len(self)
-        if at < self.core.count:
-            return self.core.get((at,))[0]
-        return self.extra[at - self.core.count]
+        if not 0 <= at < len(self):
+            raise IndexError(index)
+        return self.link_edges.get((at,))[0]
 
     def __iter__(self) -> Iterator[Edge]:
-        for start in range(0, self.core.count, BATCH):
-            yield from self.core.get(range(start, min(start + BATCH, self.core.count)))
-        yield from self.extra
+        count = len(self)
+        for start in range(0, count, BATCH):
+            yield from self.link_edges.get(range(start, min(start + BATCH, count)))
 
-    def append(self, edge: Edge) -> None:
-        self.extend((edge,))
 
-    def extend(self, edges: Iterable[Edge]) -> None:
-        start = len(self.extra)
-        self.extra.extend(edges)
-        for at in range(start, len(self.extra)):
-            set_handle(self.extra[at], self.core.count + at)
+def edge_columns(edges: Sequence[Edge]) -> tuple[list[Any], ...]:
+    """A batch of edges as the field lists `Link.add_edges` takes."""
+    return (
+        [edge.kind for edge in edges],
+        [edge.producer for edge in edges],
+        [(edge.site.path, edge.site.module, edge.site.scope, edge.site.line, edge.site.column) for edge in edges],
+        [edge.surface for edge in edges],
+        [[(target.module, target.symbol) for target in edge.targets] for edge in edges],
+        [edge.resolution.value for edge in edges],
+        [context_bits(edge.contexts) for edge in edges],
+        [[(hop.module, hop.symbol) for hop in edge.via] for edge in edges],
+        [edge.use for edge in edges],
+        [(edge.shape, edge.shape_detail) for edge in edges],
+        [list(edge.attrs) for edge in edges],
+    )
+
+
+def context_bits(contexts: Iterable[Context]) -> int:
+    return sum(1 << CONTEXT_BITS.index(context) for context in contexts)
 
 
 class NativeSymbols(Mapping[str, Mapping[str, str]]):
@@ -193,8 +200,8 @@ class NativeSymbols(Mapping[str, Mapping[str, str]]):
 
 
 class NativeSink:
-    """The native engine's sink (`hoglint.plugins.PackSink`): a refinement of a core edge goes into
-    the link, so every reader of the link sees the one refined edge; pack edges join the graph."""
+    """The native engine's sink (`hoglint.plugins.PackSink`): pack edges and refinements go into
+    the link, so every reader of edges reads one table with the refined edges in it."""
 
     def __init__(self, graph: NativeGraph) -> None:
         self.graph = graph
@@ -213,21 +220,12 @@ class NativeSink:
             self.fail(producer, ProducerFailure(f"sets {conflicts[0]}{more} apart", kinds))
             return
         self.refined.record(producer, refinements)
-        count = self.graph.core.count
-        core = [refinement for refinement in refinements if refinement.handle < count]
         self.graph.link.refine(
-            array("I", (refinement.handle for refinement in core)).tobytes(),
-            [refinement.shape for refinement in core],
-            [refinement.shape_detail for refinement in core],
-            [list(refinement.attrs) for refinement in core],
+            array("I", (refinement.handle for refinement in refinements)).tobytes(),
+            [refinement.shape for refinement in refinements],
+            [refinement.shape_detail for refinement in refinements],
+            [list(refinement.attrs) for refinement in refinements],
         )
-        extra = self.graph.edge_list.extra
-        for refinement in refinements:
-            if refinement.handle >= count:
-                edge = extra[refinement.handle - count]
-                extra[refinement.handle - count] = refined_edge(edge, refinement)
-        self.graph.extra_index = {}
-        self.graph.extra_indexed = 0
 
     def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:
         symbols: Any = self.graph.symbols
@@ -238,15 +236,18 @@ class NativeSink:
 
 
 class NativeGraph(Graph):
-    """A Graph whose core edges live in the link. `by_kind` asks the link for core kinds."""
+    """A Graph whose edges, core and pack, live in the link. `by_kind` and `edges_to` ask it.
+
+    A producer may hand over one Edge object several times; the Python engine gives such an
+    object one handle, its last row, so its ordinal is its last place. `repeats` maps each row of
+    such an object to its last row, so ordinals agree."""
 
     def __init__(self, link: Any, modules: dict[str, str]) -> None:
-        self.core = CoreEdges(link)
+        self.core = LinkEdges(link)
         names, kinds, files = link.symbol_columns()
         symbols = NativeSymbols(names, kinds, array("I", files), link.paths())
         super().__init__(edges=EdgeList(self.core), modules=modules, symbols=symbols)  # type: ignore[arg-type]
-        self.extra_index: dict[str, list[Edge]] = {}
-        self.extra_indexed = 0
+        self.repeats: dict[int, int] = {}
 
     def make_index(self) -> GraphIndex:
         from hoglint.native.rules import NativeGraphIndex  # noqa: PLC0415 - rules imports this module
@@ -258,30 +259,23 @@ class NativeGraph(Graph):
         return self.core.link
 
     def extend(self, edges: Iterable[Edge]) -> None:
-        self.edges.extend(edges)
+        batch = list(edges)
+        if not batch:
+            return
+        first = self.link.add_edges(*edge_columns(batch))
+        last: dict[int, int] = {}
+        for at, edge in enumerate(batch):
+            last[id(edge)] = first + at
+        for at, edge in enumerate(batch):
+            if last[id(edge)] != first + at:
+                self.repeats[first + at] = last[id(edge)]
 
     def catch_up(self) -> None:
-        extra = self.edge_list.extra
-        for edge in extra[self.extra_indexed :]:
-            self.extra_index.setdefault(edge.kind, []).append(edge)
-        self.extra_indexed = len(extra)
-
-    @property
-    def edge_list(self) -> EdgeList:
-        assert isinstance(self.edges, EdgeList)
-        return self.edges
+        return None
 
     def edges_to(self, kind: str, targets: Collection[EntityId]) -> list[Edge]:
-        self.catch_up()
-        core = self.core.get(array("I", self.link.ids_to(kind, [(t.module, t.symbol) for t in targets])))
-        wanted = targets if isinstance(targets, (set, frozenset, dict)) else set(targets)
-        extra = [edge for edge in self.extra_index.get(kind, ()) if any(t in wanted for t in edge.targets)]
-        return core + extra
+        return self.core.get(array("I", self.link.ids_to(kind, [(t.module, t.symbol) for t in targets])))
 
     def by_kind(self, *kinds: str) -> list[Edge]:
-        self.catch_up()
-        if len(kinds) == 1:
-            return self.core.get(self.core.ids_of_kind(kinds[0])) + list(self.extra_index.get(kinds[0], ()))
-        wanted = set(kinds)
-        ids = sorted(i for kind in wanted for i in self.core.ids_of_kind(kind))
-        return self.core.get(ids) + [edge for edge in self.edge_list.extra if edge.kind in wanted]
+        ids = sorted(i for kind in set(kinds) for i in array("I", self.link.ids_of_kind(kind)))
+        return self.core.get(ids)

@@ -115,7 +115,7 @@ use facts::FactSet;
 use index::EdgeIndex;
 use intern::{Interner, Sid};
 use paths::{ModuleIndex, ModuleNamer, PathGlobs};
-use produce::{EdgeStore, KIND_NAMES, Producers, Producing, Symbols};
+use produce::{EdgeStore, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, Symbols};
 use resolve::Core;
 use rustc_hash::{FxHashMap, FxHashSet};
 use scope::{CONTEXT_NAMES, Scope, ctx};
@@ -173,6 +173,27 @@ impl Timings {
 /// One inherit or decorate fact for `SymbolFacts`: (owner symbol, surface, names, frozen).
 pub type ClassFact = (String, String, Vec<String>, bool);
 
+/// A pack edge to add (`Link::add_pack`), its strings interned and its record found.
+pub struct NewPackRow {
+    pub kind: Sid,
+    pub producer: Sid,
+    pub path: Sid,
+    pub file: u32,
+    pub module: Sid,
+    pub scope: Sid,
+    pub line: u32,
+    pub col: u32,
+    pub surface: Sid,
+    pub targets: Vec<resolve::Ent>,
+    pub res: scope::Res,
+    pub ctx: u8,
+    pub via: Vec<resolve::Ent>,
+    pub use_: Sid,
+    pub shape: Sid,
+    pub shape_detail: Sid,
+    pub attrs: Vec<(Sid, Sid)>,
+}
+
 pub struct Link {
     pub core: Core,
     pub scopes: Vec<Scope>,
@@ -185,6 +206,19 @@ pub struct Link {
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
     pub timings: Timings,
+}
+
+/// (module, scope name) of the site of edge `id`, from the parts of a link, so a caller can
+/// hold its index mutably at the same time.
+fn edge_site(edges: &EdgeStore, scopes: &[Scope], module_scope: Sid, id: u32) -> (Sid, Sid) {
+    match edges.pack_row(id) {
+        Some(pack) => (pack.module, pack.scope),
+        None => {
+            let row = &edges.rows[id as usize];
+            let scope = &scopes[row.owner as usize];
+            (scope.module, scope.scope_name(row.scope, module_scope))
+        }
+    }
 }
 
 fn base_contexts(path: &str, tests: &PathGlobs, migrations: &PathGlobs) -> u8 {
@@ -268,6 +302,10 @@ impl Link {
         edges.via.shrink_to_fit();
         edges.attrs.shrink_to_fit();
         let symbols = std::mem::take(&mut producers.symbols);
+        edges.kind_names = KIND_NAMES.iter().map(|kind| core.it.intern(kind)).collect();
+        edges.producers = (0..KIND_NAMES.len() as u8)
+            .map(|kind| core.it.intern(&Self::producer_name(kind)))
+            .collect();
         timings.mark("producers", started);
         Ok(Link {
             core,
@@ -298,41 +336,138 @@ impl Link {
         names
     }
 
+    /// The interned name of an edge kind; None for a kind no edge has.
+    pub fn kind_sid(&self, kind: &str) -> Option<Sid> {
+        self.core.it.get(kind)
+    }
+
+    /// Edges of `kind` from one source module, in graph order.
+    pub fn ids_from(&mut self, kind: Sid, module: Sid) -> Vec<u32> {
+        let (edges, scopes, module_scope) = (&self.edges, &self.scopes, self.settings.module_scope);
+        let module_of = |id| edge_site(edges, scopes, module_scope, id).0;
+        self.index
+            .from_module(edges, module_of, kind, module)
+            .to_vec()
+    }
+
+    /// Source modules of `kind`, in the order their first edge appears.
+    pub fn source_modules(&mut self, kind: Sid) -> Vec<Sid> {
+        let (edges, scopes, module_scope) = (&self.edges, &self.scopes, self.settings.module_scope);
+        let module_of = |id| edge_site(edges, scopes, module_scope, id).0;
+        self.index.source_modules(edges, module_of, kind).to_vec()
+    }
+
+    /// (module, scope name) of the site of edge `id`.
+    pub fn site_of(&self, id: u32) -> (Sid, Sid) {
+        edge_site(&self.edges, &self.scopes, self.settings.module_scope, id)
+    }
+
+    pub fn module_of_edge(&self, id: u32) -> Sid {
+        self.site_of(id).0
+    }
+
+    /// The record of the site of edge `id`: its file id, or `path_key` of a pack edge whose
+    /// path names no record. A key, not an index.
+    pub fn file_key(&self, id: u32) -> u32 {
+        match self.edges.pack_row(id) {
+            Some(pack) if pack.file == NO_FILE => 0x8000_0000 | pack.path,
+            Some(pack) => pack.file,
+            None => self.edges.rows[id as usize].file,
+        }
+    }
+
+    pub fn path_of_edge(&self, id: u32) -> &str {
+        match self.edges.pack_row(id) {
+            Some(pack) => self.core.it.s(pack.path),
+            None => &self.core.facts.files[self.edges.rows[id as usize].file as usize].path,
+        }
+    }
+
+    /// (line, column) of the site of edge `id`.
+    pub fn line_col(&self, id: u32) -> (u32, u32) {
+        match self.edges.pack_row(id) {
+            Some(pack) => (pack.line, pack.col),
+            None => {
+                let row = &self.edges.rows[id as usize];
+                (row.line, row.col)
+            }
+        }
+    }
+
+    /// Appends pack edges after every edge the link holds, and drops the indexes built so far.
+    pub fn add_pack(&mut self, rows: Vec<NewPackRow>) {
+        for new in rows {
+            let targets = (self.edges.targets.len() as u32, new.targets.len() as u32);
+            self.edges.targets.extend(new.targets.iter().copied());
+            let via = (self.edges.via.len() as u32, new.via.len() as u32);
+            self.edges.via.extend(new.via.iter().copied());
+            let attrs = (self.edges.attrs.len() as u32, new.attrs.len() as u32);
+            self.edges.attrs.extend(new.attrs.iter().copied());
+            let overrides = new.attrs.iter().any(|&(key, _)| {
+                let key = self.core.it.s(key);
+                key.starts_with("src.") || key.starts_with("dst.")
+            });
+            self.edges.pack.push(PackRow {
+                kind: new.kind,
+                producer: new.producer,
+                path: new.path,
+                file: new.file,
+                module: new.module,
+                scope: new.scope,
+                line: new.line,
+                col: new.col,
+                surface: new.surface,
+                targets,
+                res: new.res,
+                ctx: new.ctx,
+                via,
+                use_: new.use_,
+                shape: new.shape,
+                shape_detail: new.shape_detail,
+                attrs,
+                irregular: overrides || new.targets.len() > 1,
+            });
+        }
+        self.index.forget();
+    }
+
     /// One edge in the parity tool's normalized form: every Edge field and attr.
     pub fn edge_json(&self, at: usize) -> J {
-        let row = &self.edges.rows[at];
+        let id = at as u32;
         let core = &self.core;
         let it = &core.it;
-        let scope = &self.scopes[row.owner as usize];
-        let path = &core.facts.files[row.file as usize].path;
-        let scope_name = scope.scope_name(row.scope, self.settings.module_scope);
-        let targets: Vec<String> = row.target.iter().map(|&t| core.ent_text(t)).collect();
-        let via: Vec<String> = self
-            .edges
-            .via_of(row)
+        let edges = &self.edges;
+        let (module, scope) = self.site_of(id);
+        let (line, col) = self.line_col(id);
+        let targets: Vec<String> = edges
+            .targets_of(id)
+            .iter()
+            .map(|&t| core.ent_text(t))
+            .collect();
+        let via: Vec<String> = edges
+            .via_of_id(id)
             .iter()
             .map(|&e| core.ent_text(e))
             .collect();
-        let attrs: Vec<J> = self
-            .edges
-            .attrs_with(at as u32)
+        let attrs: Vec<J> = edges
+            .attrs_with(id)
             .map(|&(k, v)| json!([it.s(k), it.s(v)]))
             .collect();
-        let (shape, shape_detail) = self.edges.shape_of(at as u32);
+        let (shape, shape_detail) = edges.shape_of(id);
         json!([
-            KIND_NAMES[row.kind as usize],
-            &**path,
-            it.s(scope.module),
-            it.s(scope_name),
-            row.line,
-            row.col,
-            it.s(row.surface),
+            it.s(edges.kind_of(id)),
+            self.path_of_edge(id),
+            it.s(module),
+            it.s(scope),
+            line,
+            col,
+            it.s(edges.surface_of(id)),
             targets,
-            row.res.name(),
-            Self::context_names(row.ctx),
-            Self::producer_name(row.kind),
+            edges.res_of(id).name(),
+            Self::context_names(edges.ctx_of(id)),
+            it.s(edges.producer_of(id)),
             via,
-            it.s(row.use_),
+            it.s(edges.use_of(id)),
             it.s(shape),
             it.s(shape_detail),
             attrs,
@@ -373,42 +508,43 @@ impl Link {
             .collect()
     }
 
-    /// What `SymbolFacts` reads of the core's inherit or decorate edges, in graph order:
+    /// What `SymbolFacts` reads of the inherit or decorate edges, core and pack, in graph order:
     /// (owner symbol, surface, names, frozen) where the owner is "module.<class or decorated
     /// attr>", the names are the targets, `?<surface>` when unresolved, else the surface, and
     /// frozen says a decorator call passed `frozen=True`.
-    pub fn class_facts(&self, kind: u8, owner_attr: &str) -> Vec<ClassFact> {
-        let core = &self.core;
-        let Some(owner_key) = core.it.get(owner_attr) else {
+    pub fn class_facts(&mut self, kind: Sid, owner_attr: &str) -> Vec<ClassFact> {
+        let Some(owner_key) = self.core.it.get(owner_attr) else {
             return Vec::new();
         };
-        let frozen = (core.it.get("frozen"), core.it.get("1"));
+        let frozen = (self.core.it.get("frozen"), self.core.it.get("1"));
+        let ids = self.index.of_kind(&self.edges, kind).to_vec();
+        let core = &self.core;
+        let edges = &self.edges;
         let mut out = Vec::new();
-        for row in self.edges.rows.iter().filter(|row| row.kind == kind) {
-            let Some(&(_, owner)) = self
-                .edges
-                .attrs_of(row)
-                .iter()
-                .find(|(k, _)| *k == owner_key)
-            else {
+        for id in ids {
+            let Some(&(_, owner)) = edges.attrs_with(id).find(|(k, _)| *k == owner_key) else {
                 continue;
             };
             if owner == intern::EMPTY {
                 continue;
             }
-            let module = self.scopes[row.owner as usize].module;
-            let surface = core.it.s(row.surface).to_string();
-            let names = if row.res == scope::Res::Unresolved {
+            let module = self.module_of_edge(id);
+            let surface = core.it.s(edges.surface_of(id)).to_string();
+            let targets = edges.targets_of(id);
+            let names = if edges.res_of(id) == scope::Res::Unresolved {
                 vec![format!("?{surface}")]
-            } else if let Some(target) = row.target {
-                vec![core.ent_text(target)]
+            } else if !targets.is_empty() {
+                targets
+                    .iter()
+                    .map(|&target| core.ent_text(target))
+                    .collect()
             } else if surface.is_empty() {
                 Vec::new()
             } else {
                 vec![surface.clone()]
             };
             let is_frozen = match frozen {
-                (Some(key), Some(one)) => self.edges.attrs_of(row).contains(&(key, one)),
+                (Some(key), Some(one)) => edges.attrs_with(id).any(|&pair| pair == (key, one)),
                 _ => false,
             };
             out.push((
@@ -421,12 +557,18 @@ impl Link {
         out
     }
 
-    /// Core edge kinds in the order their first edge appears.
-    pub fn kind_order(&self) -> Vec<u8> {
-        let mut out: Vec<u8> = Vec::new();
+    /// Edge kinds in the order their first edge appears: core kinds, then the kinds packs added.
+    pub fn kind_order(&self) -> Vec<Sid> {
+        let mut out: Vec<Sid> = Vec::new();
         for row in &self.edges.rows {
-            if !out.contains(&row.kind) {
-                out.push(row.kind);
+            let kind = self.edges.kind_names[row.kind as usize];
+            if !out.contains(&kind) {
+                out.push(kind);
+            }
+        }
+        for pack in &self.edges.pack {
+            if !out.contains(&pack.kind) {
+                out.push(pack.kind);
             }
         }
         out

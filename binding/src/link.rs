@@ -3,12 +3,11 @@
 use crate::blobs::{Blob, BlobRequest, configs, load};
 use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::{FactSet, decode_lines};
-use hoglint_facts::link::index::kind_code;
-use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
-use hoglint_facts::link::produce::KIND_NAMES;
+use hoglint_facts::link::intern::{Interner, Sid};
+use hoglint_facts::link::produce::NO_FILE;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
-use hoglint_facts::link::scope::Lookup;
-use hoglint_facts::link::{ClassFact, Link as CoreLink, LinkConfig};
+use hoglint_facts::link::scope::{Lookup, Res};
+use hoglint_facts::link::{ClassFact, Link as CoreLink, LinkConfig, NewPackRow};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
@@ -130,8 +129,9 @@ impl Link {
         self.inner.heap()
     }
 
+    /// Every edge: core edges, then pack edges.
     fn edge_count(&self) -> usize {
-        self.inner.edges.rows.len()
+        self.inner.edges.len()
     }
 
     /// Paths of every record, in fact order; a path's index is its file id.
@@ -333,7 +333,7 @@ impl Link {
             ));
         }
         for (((id, shape), detail), pairs) in ids.into_iter().zip(shapes).zip(details).zip(attrs) {
-            if id as usize >= self.inner.edges.rows.len() {
+            if id as usize >= self.inner.edges.len() {
                 return Err(PyKeyError::new_err(id));
             }
             let shape = shape.map(|s| self.sid(&s));
@@ -347,32 +347,111 @@ impl Link {
         Ok(())
     }
 
-    /// Core edge kinds in the order their first edge appears.
-    fn kind_order(&self) -> Vec<&'static str> {
+    /// Edge kinds in the order their first edge appears: core kinds, then pack kinds.
+    fn kind_order(&self) -> Vec<String> {
+        let it = &self.inner.core.it;
         self.inner
             .kind_order()
             .into_iter()
-            .map(|kind| KIND_NAMES[kind as usize])
+            .map(|kind| it.s(kind).to_string())
             .collect()
     }
 
-    /// The core's inherit (`owner_attr` "class") or decorate ("decorated") facts for SymbolFacts:
-    /// [(owner symbol, surface, names)] in graph order.
-    fn class_facts(&self, kind: &str, owner_attr: &str) -> Vec<ClassFact> {
-        match kind_code(kind) {
-            Some(code) => self.inner.class_facts(code, owner_attr),
+    /// The inherit (`owner_attr` "class") or decorate ("decorated") facts of every edge, core
+    /// and pack, for SymbolFacts: [(owner symbol, surface, names, frozen)] in graph order.
+    fn class_facts(&mut self, kind: &str, owner_attr: &str) -> Vec<ClassFact> {
+        match self.inner.kind_sid(kind) {
+            Some(kind) => self.inner.class_facts(kind, owner_attr),
             None => Vec::new(),
         }
     }
 
-    /// Edges as tuples: (kind, path, module, scope, line, column, surface, target module or
-    /// None, target symbol, resolution, context bits, via ((module, symbol), ...), use,
-    /// attrs ((key, value), ...), shape, shape detail), with what refinements set.
+    /// The number of core edges: pack edges come after them.
+    fn core_count(&self) -> usize {
+        self.inner.edges.rows.len()
+    }
+
+    /// Adds pack edges after every edge the link holds (D22), one list per field with a value
+    /// per edge: kinds, producers, paths, modules, scopes, lines, columns, surfaces, targets
+    /// ((module, symbol) pairs), resolutions, context bits, via pairs, uses, shapes, shape
+    /// details, attrs. Returns the first new edge id.
+    #[allow(clippy::too_many_arguments)]
+    fn add_edges(
+        &mut self,
+        kinds: Vec<String>,
+        producers: Vec<String>,
+        sites: Vec<(String, String, String, u32, u32)>,
+        surfaces: Vec<String>,
+        targets: Vec<Vec<Pair>>,
+        resolutions: Vec<String>,
+        contexts: Vec<u8>,
+        via: Vec<Vec<Pair>>,
+        uses: Vec<String>,
+        shapes: Vec<(String, String)>,
+        attrs: Vec<Vec<(String, String)>>,
+    ) -> PyResult<usize> {
+        let count = kinds.len();
+        let lengths = [
+            producers.len(),
+            sites.len(),
+            surfaces.len(),
+            targets.len(),
+            resolutions.len(),
+            contexts.len(),
+            via.len(),
+            uses.len(),
+            shapes.len(),
+            attrs.len(),
+        ];
+        if lengths.iter().any(|&length| length != count) {
+            return Err(PyValueError::new_err("one value per edge in every field"));
+        }
+        let first = self.inner.edges.len();
+        let mut rows = Vec::with_capacity(count);
+        for at in 0..count {
+            let (path, module, scope, line, col) = &sites[at];
+            let res = Res::of_name(&resolutions[at]).ok_or_else(|| {
+                PyValueError::new_err(format!("no resolution {}", resolutions[at]))
+            })?;
+            let ents = |link: &mut Link, pairs: &[Pair]| -> Vec<Ent> {
+                pairs.iter().map(|(m, s)| link.ent(m, s)).collect()
+            };
+            let row = NewPackRow {
+                kind: self.sid(&kinds[at]),
+                producer: self.sid(&producers[at]),
+                path: self.sid(path),
+                file: self.file_of.get(path.as_str()).copied().unwrap_or(NO_FILE),
+                module: self.sid(module),
+                scope: self.sid(scope),
+                line: *line,
+                col: *col,
+                surface: self.sid(&surfaces[at]),
+                targets: ents(self, &targets[at]),
+                res,
+                ctx: contexts[at],
+                via: ents(self, &via[at]),
+                use_: self.sid(&uses[at]),
+                shape: self.sid(&shapes[at].0),
+                shape_detail: self.sid(&shapes[at].1),
+                attrs: attrs[at]
+                    .iter()
+                    .map(|(k, v)| (self.sid(k), self.sid(v)))
+                    .collect(),
+            };
+            rows.push(row);
+        }
+        self.inner.add_pack(rows);
+        Ok(first)
+    }
+
+    /// Edges as tuples: (kind, path, module, scope, line, column, surface, targets ((module,
+    /// symbol), ...), resolution, context bits, via ((module, symbol), ...), use, attrs ((key,
+    /// value), ...), shape, shape detail, producer), with what refinements set.
     fn edges<'py>(&self, py: Python<'py>, ids: &[u8]) -> PyResult<Bound<'py, PyList>> {
         let ids = ids_from(ids)?;
         let link = &self.inner;
-        let core = &link.core;
-        let it = &core.it;
+        let edges = &link.edges;
+        let it = &link.core.it;
         let mut strings: FxHashMap<Sid, Bound<'py, PyString>> = FxHashMap::default();
         let mut text = |sid: Sid| -> Bound<'py, PyString> {
             strings
@@ -383,52 +462,46 @@ impl Link {
         let mut paths: FxHashMap<u32, Bound<'py, PyString>> = FxHashMap::default();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            let Some(row) = link.edges.rows.get(id as usize) else {
+            if id as usize >= edges.len() {
                 return Err(PyKeyError::new_err(id));
+            }
+            let pairs = |ents: &[Ent], text: &mut dyn FnMut(Sid) -> Bound<'py, PyString>| {
+                let items: Vec<Bound<'py, PyTuple>> = ents
+                    .iter()
+                    .map(|e| PyTuple::new(py, [text(e.m), text(e.s)]))
+                    .collect::<PyResult<_>>()?;
+                PyTuple::new(py, items)
             };
-            let scope = &link.scopes[row.owner as usize];
-            let scope_name = scope.scope_name(row.scope, link.settings.module_scope);
-            let (target_module, target_symbol) = match row.target {
-                Some(t) => (Some(text(t.m)), text(t.s)),
-                None => (None, text(EMPTY)),
-            };
-            let via: Vec<Bound<'py, PyTuple>> = link
-                .edges
-                .via_of(row)
-                .iter()
-                .map(|e| PyTuple::new(py, [text(e.m), text(e.s)]))
-                .collect::<PyResult<_>>()?;
-            let attrs: Vec<Bound<'py, PyTuple>> = link
-                .edges
+            let targets = pairs(edges.targets_of(id), &mut text)?;
+            let via = pairs(edges.via_of_id(id), &mut text)?;
+            let attrs: Vec<Bound<'py, PyTuple>> = edges
                 .attrs_with(id)
                 .map(|&(k, v)| PyTuple::new(py, [text(k), text(v)]))
                 .collect::<PyResult<_>>()?;
-            let (shape, shape_detail) = link.edges.shape_of(id);
+            let (shape, shape_detail) = edges.shape_of(id);
             let path = paths
-                .entry(row.file)
-                .or_insert_with(|| PyString::new(py, &core.facts.files[row.file as usize].path))
+                .entry(link.file_key(id))
+                .or_insert_with(|| PyString::new(py, link.path_of_edge(id)))
                 .clone();
-            let target_module = match target_module {
-                Some(module) => module.into_any(),
-                None => py.None().into_bound(py),
-            };
+            let (module, scope) = link.site_of(id);
+            let (line, col) = link.line_col(id);
             let fields: [Bound<'py, PyAny>; 16] = [
-                PyString::new(py, KIND_NAMES[row.kind as usize]).into_any(),
+                text(edges.kind_of(id)).into_any(),
                 path.into_any(),
-                text(scope.module).into_any(),
-                text(scope_name).into_any(),
-                row.line.into_pyobject(py)?.into_any(),
-                row.col.into_pyobject(py)?.into_any(),
-                text(row.surface).into_any(),
-                target_module,
-                target_symbol.into_any(),
-                PyString::new(py, row.res.name()).into_any(),
-                row.ctx.into_pyobject(py)?.into_any(),
-                PyTuple::new(py, via)?.into_any(),
-                text(row.use_).into_any(),
+                text(module).into_any(),
+                text(scope).into_any(),
+                line.into_pyobject(py)?.into_any(),
+                col.into_pyobject(py)?.into_any(),
+                text(edges.surface_of(id)).into_any(),
+                targets.into_any(),
+                PyString::new(py, edges.res_of(id).name()).into_any(),
+                edges.ctx_of(id).into_pyobject(py)?.into_any(),
+                via.into_any(),
+                text(edges.use_of(id)).into_any(),
                 PyTuple::new(py, attrs)?.into_any(),
                 text(shape).into_any(),
                 text(shape_detail).into_any(),
+                text(edges.producer_of(id)).into_any(),
             ];
             out.push(PyTuple::new(py, fields)?);
         }
