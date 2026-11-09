@@ -237,7 +237,11 @@ def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> No
 
 
 ENGINE_PACKAGE = "tools/hoglint/hoglint"
-FAKE_CRATE = {"tools/hoglint/Cargo.toml": "[package]\nname = 'fake'\n", "tools/hoglint/src/main.rs": "fn main() {}\n"}
+FAKE_CRATE = {
+    "tools/hoglint/Cargo.toml": "[package]\nname = 'fake'\n",
+    "tools/hoglint/src/main.rs": "fn main() {}\n",
+    "tools/hoglint/engine-sources.txt": "protocol 1\nsrc/**/*.rs\nhoglint/**/*.py\n",
+}
 
 
 @pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")

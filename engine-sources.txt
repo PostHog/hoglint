@@ -1,0 +1,23 @@
+# The files that define the hoglint engine, as glob patterns relative to tools/hoglint.
+#
+# hoglint/ledger/envelope.py and build.rs both read this file and make the same id from it:
+# the first 8 bytes, in hex, of the sha256 of the protocol line (for example `protocol 1`) and a
+# NUL byte, then, for each matching file sorted by its path: the path, NUL, its bytes, NUL.
+# `**` matches any number of directories, `*` any characters within one path segment. Paths use
+# `/`. Directories named `target` or starting with `.` are never searched.
+#
+# The protocol is the run summary format version (PROTOCOL in hoglint/ledger/envelope.py).
+
+protocol 1
+
+src/**/*.rs
+binding/**/*.rs
+**/Cargo.toml
+Cargo.lock
+build.rs
+rust-toolchain.toml
+binding/pyproject.toml
+engine-sources.txt
+hoglint/**/*.py
+hoglint/**/*.toml
+presets/**/*.toml

@@ -332,10 +332,8 @@ class LocalEngine:
 
     @cached_property
     def id(self) -> str:
-        root = EngineId.root_of(PACKAGE_DIR)
-        if (root / "Cargo.toml").is_file():
-            return EngineId.of(root, self.name)
-        return EngineId.of(root, self.name, self.build_id)
+        crate = EngineId.crate_of(PACKAGE_DIR)
+        return EngineId.of(crate, self.name) if crate is not None else EngineId.installed(self.name, self.build_id)
 
     def framework(self, config: Config) -> str:
         packages = as_tuple(config.discovery.get("external"))
@@ -388,7 +386,7 @@ class BaseEngines:
             return self.local.id
         if not (base_root / package).is_dir():
             return None
-        return EngineId.of(EngineId.root_of(base_root / package), self.local.name)
+        return EngineId.of(base_root / package.parent, self.local.name)
 
     def of(self, base_root: Path) -> BaseEngine | None:
         """None when the base predates the in-repo engine."""

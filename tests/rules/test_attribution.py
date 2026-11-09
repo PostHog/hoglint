@@ -3,12 +3,23 @@ from __future__ import annotations
 import os
 import gzip
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
 
+from hoglint.facts import Extractor
 from hoglint.ledger.couplings import CouplingScan
-from hoglint.ledger.envelope import EngineId, Envelope, PolicyFiles, policy_digest
+from hoglint.ledger.envelope import (
+    ENGINE_SOURCES,
+    PROTOCOL,
+    BuildId,
+    EngineId,
+    EngineSources,
+    Envelope,
+    PolicyFiles,
+    policy_digest,
+)
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord
 from hoglint.ledger.scan import ScanSummary
@@ -133,13 +144,54 @@ def test_the_cache_root_stays_within_its_age_and_size(tmp_path: Path, files: dic
     assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == kept
 
 
-def test_an_engine_id_comes_from_its_sources_only(tmp_path: Path) -> None:
-    sources = {"Cargo.toml": "[package]", "Cargo.lock": "v1", "src/lib.rs": "", "hoglint/cli.py": "", "tests/t.py": ""}
-    write_files(tmp_path / "a", sources)
-    write_files(tmp_path / "b", {**sources, "tests/t.py": "changed", "hoglint/__pycache__/x.py": "junk"})
-    write_files(tmp_path / "c", {**sources, "Cargo.lock": "v2"})
-    ids = [EngineId.of(tmp_path / name) for name in "abc"]
-    assert ids[0] == ids[1] != ids[2]
+ENGINE_FILES = {
+    "engine-sources.txt": "# the engine\nprotocol 1\nsrc/**/*.rs\n**/Cargo.toml\nCargo.lock\nhoglint/**/*.py\n",
+    "Cargo.toml": "[package]",
+    "Cargo.lock": "v1",
+    "src/lib.rs": "lib",
+    "src/link/mod.rs": "link",
+    "binding/Cargo.toml": "[binding]",
+    "hoglint/cli.py": "cli",
+    "hoglint/sub/x.py": "x",
+    "tests/t.py": "not the engine",
+    "src/notes.md": "not the engine",
+    "target/debug/gen.rs": "build output",
+    ".hidden/h.rs": "hidden",
+}
+# The engine digest, spelled out from the engine-sources.txt header, so build.rs can check the same vector.
+ENGINE_DIGEST_INPUT = (
+    b"protocol 1\0"
+    b"Cargo.lock\0v1\0Cargo.toml\0[package]\0binding/Cargo.toml\0[binding]\0"
+    b"hoglint/cli.py\0cli\0hoglint/sub/x.py\0x\0src/lib.rs\0lib\0src/link/mod.rs\0link\0"
+)
+
+
+def test_the_engine_digest_is_the_one_engine_sources_txt_defines(tmp_path: Path) -> None:
+    write_files(tmp_path, ENGINE_FILES)
+    assert EngineSources.read(tmp_path) is not None
+    expected = hashlib.sha256(ENGINE_DIGEST_INPUT).digest()[:8].hex()
+    assert EngineId.of(tmp_path) == f"python-{expected}"
+    (tmp_path / "src/link/mod.rs").write_text("link changed")
+    assert EngineId.of(tmp_path) != f"python-{expected}"
+
+
+CRATE = Path(__file__).resolve().parents[2]
+
+
+def test_the_engine_list_names_the_protocol_this_engine_reads() -> None:
+    sources = EngineSources.read(CRATE)
+    assert sources is not None and sources.protocol == str(PROTOCOL)
+
+
+@pytest.mark.skipif(
+    ENGINE_SOURCES not in (CRATE / "build.rs").read_text(), reason="build.rs does not read engine-sources.txt yet"
+)
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_the_extractor_build_id_is_the_engine_digest() -> None:
+    sources = EngineSources.read(CRATE)
+    assert sources is not None
+    built = BuildId.of_binary(Extractor.find_binary())
+    assert built == sources.digest(), "the hoglint-facts binary is older than its sources: run tools/hoglint/bin/build"
 
 
 USE_SHAPE = """

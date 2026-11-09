@@ -5,8 +5,8 @@ whole envelope equals the one the run would have. Every part is built from file 
 summary made on Linux CI and one made on a Mac agree:
 - tree: the git tree oid of the code (a commit's tree, or the index's from `git write-tree`);
   empty for a working tree, which is never stored.
-- engine: the engine name, then a digest of the summary protocol and the engine's sources (the
-  Python package, the crate's Rust sources, manifests and Cargo.lock). Never a binary's hash or
+- engine: the engine name, then the digest of the files `engine-sources.txt` lists (Python
+  package, Rust sources, manifests, Cargo.lock) and the summary protocol. Never a binary's hash or
   the platform.
 - policy: a digest of the config hash, the exceptions as written and the content of every policy
   data file the config names (a rule's `classify` file, a pack's `policy_file_keys`).
@@ -18,6 +18,7 @@ summary made on Linux CI and one made on a Mac agree:
 from __future__ import annotations
 
 import os
+import fnmatch
 import hashlib
 import subprocess
 import dataclasses
@@ -32,16 +33,16 @@ from hoglint.config.schema import as_tuple, canonical
 from hoglint.facts import site_packages_files
 from hoglint.plugins import REGISTRY
 
-# The version of the run summary format. A reader refuses any other, and it is part of the engine id.
+# The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
 PROTOCOL = 1
 ENGINE_PYTHON = "python"
-ENGINE_SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".rs", ".toml", ".lock"})
-# Directories under the engine root that hold no engine source: tests, policy presets, build output.
-ENGINE_SKIPPED_DIRS = frozenset({"tests", "presets", "target", "__pycache__"})
-# The extractor's build id hashes these crate files after `src/*.rs`, in this order (build.rs).
-CRATE_FILES = ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml")
+ENGINE_SOURCES = "engine-sources.txt"
+PROTOCOL_LINE = "protocol "
+# build.rs before it read engine-sources.txt hashed `src/*.rs`, then these crate files in this order.
+LEGACY_CRATE_FILES = ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml")
 DIGEST_CHARS = 16
-BUILD_ID_BYTES = 6
+LEGACY_BUILD_ID_BYTES = 6
+ENGINE_DIGEST_BYTES = 8
 MISSING = "missing"
 
 
@@ -97,24 +98,86 @@ class Envelope:
         return out
 
 
+def glob_match(pattern: tuple[str, ...], path: tuple[str, ...]) -> bool:
+    """`**` matches any number of segments, `*` any characters within one segment."""
+    if not pattern:
+        return not path
+    if pattern[0] == "**":
+        return any(glob_match(pattern[1:], path[index:]) for index in range(len(path) + 1))
+    return bool(path) and fnmatch.fnmatchcase(path[0], pattern[0]) and glob_match(pattern[1:], path[1:])
+
+
+@dataclass(frozen=True, slots=True)
+class EngineSources:
+    """The files that define an engine, as `engine-sources.txt` in its crate lists them, and their
+    digest. build.rs reads the same file and makes the same digest (see the file's header)."""
+
+    crate: Path
+    protocol: str
+    patterns: tuple[tuple[str, ...], ...]
+
+    @staticmethod
+    def read(crate: Path) -> EngineSources | None:
+        """None when the crate has no list: an engine from before the list existed."""
+        listing = crate / ENGINE_SOURCES
+        if not listing.is_file():
+            return None
+        protocol, patterns = "", []
+        for raw in listing.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith(PROTOCOL_LINE):
+                protocol = line.removeprefix(PROTOCOL_LINE).strip()
+                continue
+            patterns.append(tuple(line.split("/")))
+        return EngineSources(crate, protocol, tuple(patterns))
+
+    def files(self) -> list[str]:
+        out = []
+        for directory, names, files in os.walk(self.crate):
+            names[:] = [name for name in names if name != "target" and not name.startswith(".")]
+            for name in files:
+                rel = (Path(directory) / name).relative_to(self.crate).as_posix()
+                if any(glob_match(pattern, tuple(rel.split("/"))) for pattern in self.patterns):
+                    out.append(rel)
+        return sorted(out, key=lambda rel: rel.encode())
+
+    def digest(self) -> str:
+        hasher = hashlib.sha256()
+        hasher.update(f"{PROTOCOL_LINE}{self.protocol}".encode())
+        hasher.update(b"\0")
+        for rel in self.files():
+            hasher.update(rel.encode())
+            hasher.update(b"\0")
+            hasher.update((self.crate / rel).read_bytes())
+            hasher.update(b"\0")
+        return hasher.digest()[:ENGINE_DIGEST_BYTES].hex()
+
+
 class BuildId:
-    """The extractor build id: of a binary, and of a crate's sources (the same hash build.rs makes)."""
+    """The extractor build id: of a binary, and of a crate's sources (the hash its build.rs makes)."""
 
     @staticmethod
     def of_sources(crate: Path) -> str | None:
-        """None when the directory holds no extractor crate."""
+        """None when the directory holds no extractor crate. A build.rs that reads
+        engine-sources.txt makes the engine digest; an older one hashed `src/*.rs` and the crate files."""
         source_dir = crate / "src"
         if not (crate / "Cargo.toml").is_file() or not source_dir.is_dir():
             return None
+        sources = EngineSources.read(crate)
+        build = crate / "build.rs"
+        if sources is not None and build.is_file() and ENGINE_SOURCES in build.read_text():
+            return sources.digest()
         files = sorted(path for path in source_dir.iterdir() if path.suffix == ".rs")
-        files += [crate / name for name in CRATE_FILES]
+        files += [crate / name for name in LEGACY_CRATE_FILES]
         hasher = hashlib.sha256()
         for path in files:
             hasher.update(path.relative_to(crate).as_posix().encode())
             hasher.update(b"\0")
             hasher.update(path.read_bytes() if path.is_file() else b"")
             hasher.update(b"\0")
-        return hasher.digest()[:BUILD_ID_BYTES].hex()
+        return hasher.digest()[:LEGACY_BUILD_ID_BYTES].hex()
 
     @staticmethod
     def of_binary(binary: Path) -> str:
@@ -128,35 +191,27 @@ class BuildId:
 
 
 class EngineId:
-    """An engine's id, from its sources alone.
+    """An engine's id: its name and the digest of its engine sources.
 
-    `root` is the engine root: the crate directory when the engine ships its sources (the Python
-    package inside it, Rust sources, manifests, Cargo.lock), else the installed Python package.
-    An installed engine has no crate, so the extractor build id stands for it: build.rs makes
-    that id from the same crate sources, so it is no binary's own hash either."""
-
-    @staticmethod
-    def source_files(root: Path) -> list[Path]:
-        out = []
-        for directory, names, files in os.walk(root):
-            names[:] = sorted(n for n in names if n not in ENGINE_SKIPPED_DIRS and not n.startswith("."))
-            out += [Path(directory) / name for name in files if Path(name).suffix in ENGINE_SOURCE_SUFFIXES]
-        return sorted(out, key=lambda path: path.relative_to(root).as_posix())
+    An engine that ships its crate (a checkout) has `engine-sources.txt` next to its Python
+    package. An installed engine has no crate, so its extractor build id stands for the digest:
+    a build.rs that reads the list makes the build id from the same sources."""
 
     @staticmethod
-    def root_of(package_dir: Path) -> Path:
-        """The crate directory around a Python package that ships with its crate, else the package."""
+    def crate_of(package_dir: Path) -> Path | None:
         crate = package_dir.parent
-        return crate if (crate / "Cargo.toml").is_file() else package_dir
+        return crate if (crate / ENGINE_SOURCES).is_file() else None
 
     @staticmethod
-    def of(root: Path, name: str = ENGINE_PYTHON, build_id: str = "") -> str:
-        parts: list[str | bytes] = [str(PROTOCOL)]
-        for path in EngineId.source_files(root):
-            parts += [path.relative_to(root).as_posix(), path.read_bytes()]
-        if not (root / "Cargo.toml").is_file():
-            parts.append(build_id)
-        return f"{name}-{short_digest(parts)}"
+    def of(crate: Path, name: str = ENGINE_PYTHON) -> str:
+        sources = EngineSources.read(crate)
+        if sources is None:
+            raise EngineError(f"{crate} has no {ENGINE_SOURCES}: the engine predates run summary protocol {PROTOCOL}")
+        return f"{name}-{sources.digest()}"
+
+    @staticmethod
+    def installed(name: str, build_id: str) -> str:
+        return f"{name}-{build_id}"
 
 
 class Framework:
