@@ -578,7 +578,7 @@ class Baselines:
         own_tree = self.snapshots.index_tree() if staged else ""
         envelope = dataclasses.replace(wanted, tree=own_tree)
         short = head_tree[:12]
-        stored = self.store.get(wanted)
+        stored = self.store.get(wanted, frozenset({"envelope", "incompletes"}))
         if stored is not None:
             return Baseline(envelope, f"HEAD (tree {short}, stored summary)", stored.obligations())
         if own_tree == head_tree or (not staged and self.snapshots.head_tree_in_worktree(config.ledger.file)):
@@ -752,7 +752,7 @@ class Commands:
         holds HEAD's sources, else a run, which is stored when it has a tree."""
         key, config = self.engine.envelope_at(self.repo, "")
         key = dataclasses.replace(key, tree=self.snapshots.head_tree_in_worktree(config.ledger.file))
-        stored = self.summaries.get(key)
+        stored = self.summaries.get(key, frozenset({"envelope", "findings"}))
         if stored is not None:
             return stored, config
         run = self.runner.run(self.repo)

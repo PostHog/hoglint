@@ -1,7 +1,7 @@
 """A run summary: what one (code, policy, engine) run produced, in the form compare, check and
 query read. It is hoglint's one cached artifact (see `store.py`).
 
-`hoglint scan` writes it as gzip-compressed JSON, so a base engine can run in its own checkout
+`hoglint scan` writes it as zstd-compressed JSON, so a base engine can run in its own checkout
 and process. The file carries a protocol version and its envelope (see `envelope.py`); a reader
 refuses any other protocol instead of guessing. It holds:
 - lines and growth: the scan's ledger line counts, level lines included, and each ledgered
@@ -23,14 +23,13 @@ built on Linux CI serves a Mac.
 from __future__ import annotations
 
 import os
-import gzip
-import zlib
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import orjson
+from compression import zstd
 
 from hoglint.config.schema import canonical
 from hoglint.index import Memo
@@ -51,13 +50,31 @@ from hoglint.rules.base import IncompleteItem
 from hoglint.rules.engine import RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
-GZIP_LEVEL = 1  # a whole-repo summary shrinks about 16 times at level 1, in a tenth of a second
+ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a few hundredths of a second
+# The parts a reader loads on their own (see store.py), and the fields each part holds.
+SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
+    "envelope": ("protocol", "envelope", "schema", "growth", "scope", "with_triples", "advisory"),
+    "incompletes": ("incomplete",),
+    "findings": ("findings", "lines", "equality", "exceptions", "modules"),
+    "couplings": ("triples", "couplings", "witnesses"),
+    "levels": ("levels", "level_failures"),
+}
+ALL_SECTIONS = frozenset(SUMMARY_SECTIONS)
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
 Obligation = tuple[str, str, str]  # (rule, key, reason)
 
 
 class ProtocolError(Exception):
     """A summary file this engine cannot read."""
+
+
+def write_atomic(path: Path, content: bytes) -> None:
+    """Writes through a temporary file in the same directory, so a reader never sees half a file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".write-")
+    with os.fdopen(handle, "wb") as out:
+        out.write(content)
+    Path(temporary).replace(path)
 
 
 def fingerprint(edge: Edge | None) -> str:
@@ -100,6 +117,7 @@ class ScanSummary:
     exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
     advisory: frozenset[str] = frozenset()
     modules: dict[str, str] = field(default_factory=dict)
+    loaded: frozenset[str] = ALL_SECTIONS  # the sections that hold data; a reader may load fewer
 
     @staticmethod
     def from_run(
@@ -218,19 +236,32 @@ class ScanSummary:
             modules=dict(data.get("modules", {})),
         )
 
+    def to_sections(self) -> dict[str, dict[str, Any]]:
+        if self.loaded != ALL_SECTIONS:
+            raise ValueError(f"a summary that holds only {sorted(self.loaded)} cannot be written")
+        data = self.to_json()
+        return {name: {key: data[key] for key in keys} for name, keys in SUMMARY_SECTIONS.items()}
+
+    @staticmethod
+    def from_sections(parts: dict[str, dict[str, Any]]) -> ScanSummary:
+        """A summary of the sections at hand; the envelope section is always one of them."""
+        data: dict[str, Any] = {}
+        for part in parts.values():
+            data.update(part)
+        summary = ScanSummary.from_json(data)
+        summary.loaded = frozenset(parts)
+        return summary
+
     def write(self, path: Path) -> None:
-        """Writes gzip-compressed JSON through a temporary file, so a reader never sees half a summary."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".summary-")
-        with os.fdopen(handle, "wb") as out:
-            out.write(gzip.compress(orjson.dumps(self.to_json()), compresslevel=GZIP_LEVEL, mtime=0))
-        Path(temporary).replace(path)
+        """The whole summary as one zstd-compressed JSON file: what `scan` and `summary export` write."""
+        self.to_sections()
+        write_atomic(path, zstd.compress(orjson.dumps(self.to_json()), ZSTD_LEVEL))
 
     @staticmethod
     def read(path: Path) -> ScanSummary:
         try:
-            data = orjson.loads(gzip.decompress(path.read_bytes()))
-        except (OSError, EOFError, zlib.error, orjson.JSONDecodeError) as error:
+            data = orjson.loads(zstd.decompress(path.read_bytes()))
+        except (OSError, zstd.ZstdError, orjson.JSONDecodeError) as error:
             raise ProtocolError(f"cannot read the summary {path}: {error}") from error
         if not isinstance(data, dict):
             raise ProtocolError(f"{path} is not a scan summary")

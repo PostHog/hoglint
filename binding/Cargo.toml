@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 hoglint-facts = { path = ".." }
-pyo3 = { version = "=0.28.3", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "=0.28.3", features = ["extension-module", "abi3-py312", "multiple-pymethods"] }
 rayon = "1"
 rustc-hash = "2"
 serde_json = "1"

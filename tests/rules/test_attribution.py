@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-import gzip
 import json
 import hashlib
 import datetime
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -98,9 +98,24 @@ def test_a_stored_summary_serves_only_its_exact_envelope(
     path = store.put(STORED, ScanSummary(envelope=STORED, incomplete=records({DYNAMIC: ["f1"]})))
     assert path is not None
     if content is not None:
-        path.write_bytes(gzip.compress(content.encode()))
+        path.write_text(content)
     found = store.get(asked)
     assert (found is not None and found.covers(scope) and found.obligations() == {DYNAMIC: ["f1"]}) is hit
+
+
+def test_a_reader_loads_only_the_sections_it_asks_for_and_equal_sections_are_stored_once(tmp_path: Path) -> None:
+    store = SummaryStore(tmp_path)
+    base = ScanSummary(envelope=STORED, incomplete=records({DYNAMIC: ["f1"]}), modules={"app.a": "app/a.py"})
+    staged = dataclasses.replace(base, envelope=dataclasses.replace(STORED, tree="tree2"))
+    store.put(base.envelope, base)
+    sections = sorted((tmp_path / "summaries").rglob("*.zst"))
+    store.put(staged.envelope, staged)
+    assert sorted((tmp_path / "summaries").rglob("*.zst")) == sections
+    incompletes = store.get(STORED, frozenset({"envelope", "incompletes"}))
+    assert incompletes is not None and incompletes.obligations() == {DYNAMIC: ["f1"]} and not incompletes.modules
+    for section in sections:
+        section.write_bytes(b"not zstd")
+    assert store.get(STORED, frozenset({"envelope", "incompletes"})) is None
 
 
 CLASSIFY = """
@@ -393,7 +408,7 @@ def test_a_side_input_the_tree_does_not_hold_keeps_the_summary_out_of_the_cache(
     (repo / "turbo.json").write_text('{"tasks": {"contract-check": {}}}\n')
     staged = hoglint(repo, "check", "--index")
     assert "not stored: turbo.json differs from the tree" in staged.stderr
-    assert not list((tmp_path / "repo-cache" / "hoglint" / "summaries").rglob("*.json.gz"))
+    assert not list((tmp_path / "repo-cache" / "hoglint" / "summaries").rglob("*.json"))
 
 
 SITE = {
