@@ -87,6 +87,15 @@ class RuleContext:
             self.ordinals[id(edge)] = counters.get(key, 0)
             counters[key] = counters.get(key, 0) + 1
         self.results: dict[str, RuleRun] = {}
+        self.by_kind: dict[str, list[Edge]] = {}
+        for edge in graph.edges:
+            self.by_kind.setdefault(edge.kind, []).append(edge)
+
+    def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
+        """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""
+        if not kinds:
+            return self.graph.edges
+        return [edge for kind in dict.fromkeys(kinds) for edge in self.by_kind.get(kind, [])]
 
     def ordinal(self, edge: Edge) -> int:
         return self.ordinals.get(id(edge), 0)
@@ -304,10 +313,7 @@ class EdgeRule:
         return not contexts & set(self.spec.contexts_exclude)
 
     def edges(self) -> Iterator[Edge]:
-        kinds = set(self.kinds())
-        for edge in self.ctx.graph.edges:
-            if kinds and edge.kind not in kinds:
-                continue
+        for edge in self.ctx.edges_of(self.kinds()):
             if edge.resolution is Resolution.NOT_APPLICABLE:
                 continue
             if self.context_ok(edge):

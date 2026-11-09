@@ -89,7 +89,7 @@ class ConfigLoader:
                 return PACK_PREFIX + path.resolve().parent.name
             return str(path)
 
-    def locate(self, entry: str, including: str) -> Path | None:
+    def locate(self, entry: str) -> Path | None:
         if entry.startswith(PACK_PREFIX):
             pack = self.packs_dir / entry.removeprefix(PACK_PREFIX) / "pack.toml"
             return pack if pack.is_file() else None
@@ -114,7 +114,7 @@ class ConfigLoader:
         if isinstance(extends, str):
             extends = [extends]
         for entry in extends:
-            located = self.locate(entry, label)
+            located = self.locate(entry)
             if located is None:
                 merged.problems.append(f"{label}: extends {entry!r}, which does not exist")
                 continue

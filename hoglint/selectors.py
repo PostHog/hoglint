@@ -567,6 +567,17 @@ class Selector:
     def refs(self) -> list[Ref]:
         return refs(self.node)
 
+    def restricts(self, path: tuple[str, ...]) -> frozenset[str] | None:
+        """Literal values the selector requires at `path` (from `==` or `in` at the top level of
+        an `and`), or None when it does not pin the field. Lets callers pre-filter edges."""
+        parts = self.node.parts if isinstance(self.node, And) else (self.node,)
+        for part in parts:
+            if not isinstance(part, Compare) or not isinstance(part.left, Ref) or part.left.path != path:
+                continue
+            if part.op in ("==", "in"):
+                return frozenset(str(value) for value in literal_values(part.right))
+        return None
+
     def roots(self) -> set[str]:
         return {ref.path[0] for ref in self.refs() if len(ref.path) > 1}
 

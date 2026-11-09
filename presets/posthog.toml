@@ -240,7 +240,6 @@ primitive  = "signature"
 doc        = "A public facade function neither accepts nor returns a model, manager or queryset; Any and bare dict read as unknown."
 select     = "src.zone == 'facade'"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
-unless     = "edge.callable startswith '_'"
 on_unknown = "finding"
 identity   = "facade-slot"
 growth_key = ["dst.symbol"]
@@ -321,9 +320,10 @@ growth_key = ["dst.module"]
 primitive    = "use-shape"
 doc          = "Outside its package, a model appears only in harmless shapes. Judged at the origin, so a re-export hides nothing."
 kinds        = ["reference"]
-select       = "dst.kind == 'model' and src.package != dst.package and edge.shape != none"
+select       = "dst.kind == 'model' and dst.tier == 'product' and src.package != dst.package and edge.shape != none"
 endpoint     = "origin"
-allow_shapes = ["annotation", "isinstance", "exception", "nested-class-attr", "type-use", "_meta", "scalar-chain", "subquery"]
+allow_shapes = ["annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch"]
+contexts     = { exclude = ["test", "migration"] }
 flow         = "def-use"
 requires     = ["django.uses"]
 identity     = "crossing"
@@ -334,7 +334,8 @@ growth_key   = ["dst.symbol", "edge.label"]
 primitive  = "edge"
 doc        = "apps.get_model naming another package's model is counted."
 kinds      = ["model-label"]
-select     = "edge.shape == 'get_model' and src.package != dst.package"
+select     = "edge.shape == 'get_model' and dst.tier == 'product' and src.package != dst.package"
+contexts   = { exclude = ["test", "migration"] }
 identity   = "crossing"
 counted    = true
 growth_key = ["dst.symbol", "edge.label"]
@@ -371,7 +372,7 @@ primitive     = "edge"
 doc           = "A test outside a product that executes the product's wiring is recorded."
 kinds         = ["drives"]
 contexts      = { include = ["test"] }
-select        = "src.package != dst.package"
+select        = "src.package != dst.package and edge.execution != 'none'"
 resolve_calls = "bare-name"
 identity      = "location-module-trigger"
 counted       = true

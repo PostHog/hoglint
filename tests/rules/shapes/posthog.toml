@@ -6,11 +6,17 @@ extends = ["hoglint:django", "tools/hoglint/presets/posthog.toml"]
 source_roots = ["."]
 first_party  = ["posthog", "ee", "common", "products", "tools", "services", "packages"]
 exclude      = ["docs/**", "products/*/evals/**", "products/posthog_ai/eval_harness/**"]
+external     = ["django", "rest_framework"]
 
 [django]
-settings   = "posthog.settings.web"
-db_routing = "products/db_routing.yaml"
-oracles    = ["registry", "migration-loader"]
+settings             = ["posthog.settings", "posthog.settings.*", "ee.settings"]
+db_routing           = "products/db_routing.yaml"
+db_alias_template    = "{database}_db_writer"
+settings_proxies     = { oauth2_settings = "OAUTH2_PROVIDER_" }
+setting_name_helpers = { setting_name = "SOCIAL_AUTH_" }
+hooks                = ["**.register_*"]
+receiver_decorators  = ["django.dispatch.dispatcher.receiver", "posthog.models.signals.mutable_receiver"]
+oracles              = ["registry", "migration-loader"]
 
 [ledger]
 file       = "hoglint.ledger"

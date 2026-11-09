@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 import tomllib
 from collections.abc import Callable, Iterator
@@ -233,6 +234,37 @@ class InventoryPrimitive(EntityRule):
         self.run.incomplete.extend(selector.run.incomplete)
 
 
+def strip_jsonc(text: str) -> str:
+    """turbo.json is JSON with comments and trailing commas; drop both outside strings."""
+    out: list[str] = []
+    index = 0
+    in_string = False
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if char == "\\":
+                out.append(text[index + 1 : index + 2])
+                index += 2
+                continue
+            in_string = char != '"'
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+        elif text.startswith("//", index):
+            index = text.find("\n", index)
+            index = len(text) if index == -1 else index
+            continue
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = len(text) if end == -1 else end + 2
+            continue
+        out.append(char)
+        index += 1
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
 class TurboInputs:
     """Which paths a turbo task watches: the nearest turbo.json with that task decides."""
 
@@ -249,7 +281,7 @@ class TurboInputs:
         result: tuple[str, ...] | None = None
         config = directory / "turbo.json"
         if config.is_file():
-            task = json.loads(config.read_text()).get("tasks", {}).get(self.task)
+            task = json.loads(strip_jsonc(config.read_text())).get("tasks", {}).get(self.task)
             if isinstance(task, dict) and "inputs" in task:
                 result = tuple(task["inputs"])
         self.cache[directory] = result
@@ -302,7 +334,8 @@ class CoveragePrimitive(EntityRule):
                     out.setdefault(render_value(value), (f"rules.{rule_id}.{column}", None))
 
     def from_edges(self, cover: CoverSpec, out: dict[str, tuple[str, str | None]]) -> None:
-        for edge in self.ctx.graph.edges:
+        kinds = cover.selector.restricts(("edge", "kind")) if cover.selector is not None else None
+        for edge in self.ctx.edges_of(tuple(sorted(kinds or ()))):
             src = self.ctx.src_endpoint(edge.site)
             for dst in self.ctx.dst_endpoints(edge, "origin"):
                 env = EdgeEnv(self.ctx, edge, src, dst)

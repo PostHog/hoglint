@@ -18,7 +18,7 @@ from typing import Any
 
 from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec
 from hoglint.model import Edge, Graph, Resolution
-from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Selector, State, Truth, Value, any_of
+from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, State, Truth, Value, any_of
 
 CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -307,6 +307,7 @@ class Labeler:
         self.module_cache: dict[str, LabelSet] = {}
         self.symbol_cache: dict[str, LabelSet] = {}
         self.kind_cache: dict[str, tuple[Value, str]] = {}
+        self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
         self.conflicts: list[str] = []
         self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_assigns = [a for a in config.assigns if a.symbols is None]
@@ -532,6 +533,14 @@ class Labeler:
 
     def field_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
         """A declared field on a module (and the symbol inside it, for symbol fields)."""
+        key = (module, symbol if self.config.fields[name].on == "symbol" else None, name)
+        cached = self.value_cache.get(key)
+        if cached is None:
+            cached = self.compute_value(module, symbol, name)
+            self.value_cache[key] = cached
+        return cached
+
+    def compute_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
         spec = self.config.fields[name]
         if spec.on == "symbol":
             if symbol is None:
@@ -666,6 +675,3 @@ def render(value: Value) -> str:
     if value.chain and len(value.chain) > 1:
         return f"{value.data}  (inside {', '.join(value.chain[1:])})"
     return str(value.data)
-
-
-__all__ = ["Label", "Labeler", "SymbolFacts", "compile_glob", "glob_match", "render", "Selector"]

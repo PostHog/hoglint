@@ -72,8 +72,21 @@ class UseShapePrimitive(EdgeRule):
         return f"{env.src.module} uses {env.dst.symbol} as {env.label()}"
 
 
+def is_private(callable_name: str) -> bool:
+    """A callable is private when any part of its qualname starts with `_` (dunders excepted)."""
+    return any(part.startswith("_") and not part.endswith("__") for part in callable_name.split("."))
+
+
 class SignaturePrimitive(EdgeRule):
-    """Does a public signature mention a denied type? Untyped, Any and bare dict are unknown."""
+    """Does a public signature mention a denied type? Untyped, Any and bare dict are unknown.
+
+    Only public callables count: a private function or method is no part of the signature.
+    """
+
+    def edges(self) -> Iterator[Edge]:
+        for edge in super().edges():
+            if not is_private(edge.attr("callable")):
+                yield edge
 
     def unknown_type(self, env: EdgeEnv) -> bool:
         if env.edge.attr("annotation") == "missing":

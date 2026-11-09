@@ -36,9 +36,6 @@ class ConfigExplainer:
     def render_table(self, section: str, table: dict[str, Any]) -> list[str]:
         lines = ["", f"[{section}]"]
         for key, value in table.items():
-            if isinstance(value, dict) and section == "zones":
-                lines.append(f"{key} = {self.literal(value)}  # {self.source(f'{section}.{key}')}")
-                continue
             lines.append(f"{key} = {self.literal(value)}  # {self.source(f'{section}.{key}')}")
         return lines
 

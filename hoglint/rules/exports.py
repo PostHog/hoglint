@@ -29,10 +29,20 @@ class ExportPrimitive:
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
         self.exposes: dict[str, list[tuple[str, Edge]]] = {}
-        for edge in ctx.graph.by_kind("exposes"):
+        for edge in ctx.edges_of(("exposes",)):
             callable_name = edge.attr("callable") or edge.site.scope
             self.exposes.setdefault(edge.site.module, []).append((callable_name, edge))
         self.reported: set[tuple[str, str, str]] = set()
+        self.top_level: dict[str, list[str]] = {}
+        for symbol in sorted(ctx.graph.symbols):
+            module = ctx.labeler.module_of_symbol(symbol)
+            name = symbol[len(module) + 1 :] if module else ""
+            if module and name and "." not in name and not name.startswith("_"):
+                self.top_level.setdefault(module, []).append(symbol)
+        self.module_imports: dict[str, list[Edge]] = {}
+        for edge in ctx.edges_of(("import",)):
+            if edge.site.scope in (MODULE_SCOPE, ""):
+                self.module_imports.setdefault(edge.site.module, []).append(edge)
 
     def selected_exports(self) -> list[ExportSpec]:
         names = self.spec.exports or tuple(self.ctx.config.exports)
@@ -50,18 +60,8 @@ class ExportPrimitive:
         return self.run
 
     def exported_symbols(self, module: str) -> list[tuple[str, Edge | None]]:
-        out: list[tuple[str, Edge | None]] = []
-        prefix = module + "."
-        for symbol in sorted(self.ctx.graph.symbols):
-            if (
-                symbol.startswith(prefix)
-                and "." not in symbol[len(prefix) :]
-                and not symbol[len(prefix) :].startswith("_")
-            ):
-                out.append((symbol, None))
-        for edge in self.ctx.graph.by_kind("import"):
-            if edge.site.module != module or edge.site.scope not in (MODULE_SCOPE, ""):
-                continue
+        out: list[tuple[str, Edge | None]] = [(symbol, None) for symbol in self.top_level.get(module, [])]
+        for edge in self.module_imports.get(module, []):
             if contexts_of(edge) & {"type_only", "test"}:
                 continue
             if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
