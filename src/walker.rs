@@ -1,125 +1,41 @@
-//! One traversal of a parsed module that emits every row list of an L1 record.
-//! Mirrors `FileWalker` in reference_l1.py; the `Frame` stack is its `path`.
+//! One traversal of a parsed module that collects every row list of an L1 record.
+//! Mirrors `FileWalker` in reference_l1.py.
 
-use crate::json::J;
-use crate::value::{binop, callee_text, cmpop, unaryop, max_nodes, max_symbolic, Encoder, StrValue};
+use crate::config::ExtractConfig;
+use crate::defs::{Bound, DefNode, DefTable};
+use crate::derive::Candidate;
+use crate::facts::flags::{BLOCK, CLASS, FUNC, IF, TC_ELSE, TRY, TYPE_ONLY};
+use crate::facts::{
+    Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
+};
+use crate::path::{Frame, aug_op, bin_step, climb, cmp_step, unary_step};
+use crate::source::LineIndex;
+use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
+use crate::value::{Encoder, StrValue, Value, binop, callee_text, cmpop, unaryop};
 use ruff_python_ast::{self as ast, Expr, ExprContext, InterpolatedStringElement, Pattern, Stmt};
 use ruff_text_size::{Ranged, TextSize};
 use std::collections::{HashMap, HashSet};
 
-pub const TYPE_ONLY: u32 = 1;
-pub const TC_ELSE: u32 = 2;
-pub const FUNC: u32 = 4;
-pub const CLASS: u32 = 8;
-pub const TRY: u32 = 16;
-pub const IF: u32 = 32;
-pub const BLOCK: u32 = 64;
-
-const WATCHED_CALLEES: [&str; 6] = ["get_model", "patch", "object", "setdefault", "append", "connect"];
+const WATCHED_CALLEES: [&str; 6] = [
+    "get_model",
+    "patch",
+    "object",
+    "setdefault",
+    "append",
+    "connect",
+];
 const WATCHED_PREFIXES: [&str; 1] = ["register_"];
-/// Extra callee names from `--watch-callees`, set once at startup.
-static EXTRA_WATCHED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+const WATCHED_DICT_KEY: &str = "kind";
 
-pub fn set_extra_watched(names: Vec<String>) {
-    EXTRA_WATCHED.set(names).ok().expect("watched callees set twice");
-}
+/// Occurrence count and first position per aggregate key.
+pub type Counts<K> = HashMap<K, (i64, i64, i64)>;
 
-fn is_watched(last: &str) -> bool {
-    WATCHED_CALLEES.contains(&last)
-        || WATCHED_PREFIXES.iter().any(|prefix| last.starts_with(prefix))
-        || EXTRA_WATCHED.get().is_some_and(|extra| extra.iter().any(|n| n == last))
-}
-const WRAPPER_STEPS: [&str; 4] = ["await", "ifexp:body", "ifexp:else", "star"];
-
-pub type Derived = HashMap<i64, HashSet<String>>;
-
-pub struct LineIndex {
-    starts: Vec<u32>,
-}
-
-impl LineIndex {
-    /// The text is newline-normalized, so `\n` is the only line break.
-    pub fn new(text: &str) -> LineIndex {
-        let mut starts = vec![0];
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
-                starts.push(i as u32 + 1);
-            }
-        }
-        LineIndex { starts }
-    }
-
-    /// (1-based line, 0-based byte column).
-    pub fn pos(&self, offset: TextSize) -> (i64, i64) {
-        let off = offset.to_u32();
-        let line = self.starts.partition_point(|&s| s <= off) - 1;
-        (line as i64 + 1, (off - self.starts[line]) as i64)
-    }
-
-    pub fn line(&self, offset: TextSize) -> i64 {
-        self.pos(offset).0
-    }
-}
-
-// ---- strings -------------------------------------------------------------------------------
-
-fn is_word_char(ch: char) -> bool {
-    !ch.is_ascii() || ch.is_ascii_alphanumeric() || ch == '_'
-}
-
-fn is_dotted_path(value: &str) -> bool {
-    let mut n = 0;
-    for part in value.split('.') {
-        if part.is_empty() || !part.chars().all(|c| is_word_char(c) || c == '*') {
-            return false;
-        }
-        n += 1;
-    }
-    n >= 2
-}
-
-fn is_camel_name(value: &str) -> bool {
-    value.starts_with(|c: char| c.is_ascii_uppercase()) && value.chars().all(is_word_char)
-}
-
-fn is_symbolic(value: &str, surrogate: bool) -> bool {
-    if value.is_empty() || surrogate || value.chars().count() > max_symbolic() {
-        return false;
-    }
-    is_dotted_path(value) || is_camel_name(value)
-}
-
-/// Matches of `<([A-Z]\w*)\b` (Python `re`, Unicode `\w`).
-fn tag_names(value: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut rest = value;
-    while let Some(at) = rest.find('<') {
-        let after = &rest[at + 1..];
-        if !after.starts_with(|c: char| c.is_ascii_uppercase()) {
-            rest = after;
-            continue;
-        }
-        let end = after.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(after.len());
-        out.push(&after[..end]);
-        rest = &after[end..];
-    }
-    out
-}
-
-fn is_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-fn target_text(target: &Expr) -> String {
-    match target {
-        Expr::Name(n) => n.id.to_string(),
-        Expr::Attribute(a) => format!(".{}", a.attr.as_str()),
-        Expr::Subscript(_) => "[]".to_string(),
-        Expr::Tuple(_) | Expr::List(_) => "()".to_string(),
-        Expr::Starred(_) => "*".to_string(),
-        _ => "?".to_string(),
+fn count<K: std::hash::Hash + Eq>(table: &mut Counts<K>, key: K, l: i64, c: i64) {
+    let entry = table.entry(key).or_insert((0, l, c));
+    entry.0 += 1;
+    if (l, c) < (entry.1, entry.2) {
+        entry.1 = l;
+        entry.2 = c;
     }
 }
 
@@ -131,20 +47,6 @@ fn is_type_checking_test(test: &Expr) -> bool {
     }
 }
 
-pub fn is_stub_body(body: &[Stmt]) -> bool {
-    let mut rest = body;
-    if let Some(Stmt::Expr(e)) = body.first() {
-        if e.value.is_string_literal_expr() {
-            rest = &body[1..];
-        }
-    }
-    rest.iter().all(|s| match s {
-        Stmt::Pass(_) => true,
-        Stmt::Expr(e) => e.value.is_ellipsis_literal_expr(),
-        _ => false,
-    })
-}
-
 fn name_id(expr: &Expr) -> &str {
     match expr {
         Expr::Name(n) => n.id.as_str(),
@@ -152,347 +54,138 @@ fn name_id(expr: &Expr) -> &str {
     }
 }
 
-// ---- def table -----------------------------------------------------------------------------
-
+/// Where a node sits: its scope, the def whose header holds it (-1 = none), and the flags of
+/// the enclosing statements.
 #[derive(Clone, Copy)]
-pub enum DefNode<'a> {
-    Func(&'a ast::StmtFunctionDef),
-    Class(&'a ast::StmtClassDef),
+struct At {
+    scope: i64,
+    header: i64,
+    flags: u32,
 }
 
-pub struct DefEntry<'a> {
-    pub node: DefNode<'a>,
-    pub parent: i64,
-    pub l: i64,
-    pub c: i64,
-    pub e: i64,
-}
-
-/// Every def / async def / class sorted by keyword position. Index = scope id; -1 = module.
-pub struct DefTable<'a> {
-    pub entries: Vec<DefEntry<'a>>,
-    index: HashMap<u32, usize>,
-}
-
-/// Bound name -> (class-like, first-party); a name bound twice ORs both flags.
-pub type Bound<'a> = HashMap<&'a str, (bool, bool)>;
-
-fn skip_back_blank(src: &[u8], mut at: usize) -> usize {
-    while at > 0 && matches!(src[at - 1], b' ' | b'\t' | b'\x0c' | b'\n' | b'\\') {
-        at -= 1;
-    }
-    at
-}
-
-/// Offset of the `def` / `async` / `class` keyword (ruff ranges start at the first decorator).
-fn keyword_start(src: &str, node: DefNode) -> TextSize {
-    let bytes = src.as_bytes();
-    let (name, keyword, is_async) = match node {
-        DefNode::Func(f) => (f.name.range.start(), "def", f.is_async),
-        DefNode::Class(c) => (c.name.range.start(), "class", false),
-    };
-    let mut at = skip_back_blank(bytes, name.to_usize()) - keyword.len();
-    if is_async {
-        at = skip_back_blank(bytes, at) - "async".len();
-    }
-    TextSize::new(at as u32)
-}
-
-struct Collector<'a, 'b> {
-    src: &'a str,
-    first_party: &'b [String],
-    found: Vec<(DefNode<'a>, Option<u32>)>,
-    bound: Bound<'a>,
-}
-
-impl<'a, 'b> Collector<'a, 'b> {
-    fn add(&mut self, name: &'a str, class_like: bool, local: bool) {
-        let old = self.bound.entry(name).or_insert((false, false));
-        old.0 |= class_like;
-        old.1 |= local;
-    }
-
-    fn is_first_party(&self, module: &str) -> bool {
-        let head = module.split('.').next().unwrap_or("");
-        self.first_party.iter().any(|r| r == head)
-    }
-
-    fn body(&mut self, body: &'a [Stmt], owner: Option<u32>) {
-        for stmt in body {
-            self.stmt(stmt, owner);
-        }
-    }
-
-    fn stmt(&mut self, stmt: &'a Stmt, owner: Option<u32>) {
-        match stmt {
-            Stmt::FunctionDef(f) => {
-                self.found.push((DefNode::Func(f), owner));
-                self.body(&f.body, Some(f.range.start().to_u32()));
-            }
-            Stmt::ClassDef(c) => {
-                self.found.push((DefNode::Class(c), owner));
-                self.body(&c.body, Some(c.range.start().to_u32()));
-            }
-            Stmt::Import(i) => {
-                for alias in &i.names {
-                    let name = alias.name.as_str();
-                    let head = name.split('.').next().unwrap_or("");
-                    let bound = alias.asname.as_ref().map(|a| a.as_str()).unwrap_or(head);
-                    let local = self.is_first_party(name);
-                    self.add(bound, false, local);
-                }
-            }
-            Stmt::ImportFrom(i) => {
-                let module = i.module.as_ref().map(|m| m.as_str()).unwrap_or("");
-                let local = i.level > 0 || self.is_first_party(module);
-                for alias in &i.names {
-                    let name = alias.name.as_str();
-                    if name == "*" {
-                        continue;
-                    }
-                    let bound = alias.asname.as_ref().map(|a| a.as_str()).unwrap_or(name);
-                    self.add(bound, name.starts_with(|c: char| c.is_ascii_uppercase()), local);
-                }
-            }
-            Stmt::If(i) => {
-                self.body(&i.body, owner);
-                for clause in &i.elif_else_clauses {
-                    self.body(&clause.body, owner);
-                }
-            }
-            Stmt::For(f) => {
-                self.body(&f.body, owner);
-                self.body(&f.orelse, owner);
-            }
-            Stmt::While(w) => {
-                self.body(&w.body, owner);
-                self.body(&w.orelse, owner);
-            }
-            Stmt::With(w) => self.body(&w.body, owner),
-            Stmt::Try(t) => {
-                self.body(&t.body, owner);
-                for h in &t.handlers {
-                    let ast::ExceptHandler::ExceptHandler(h) = h;
-                    self.body(&h.body, owner);
-                }
-                self.body(&t.orelse, owner);
-                self.body(&t.finalbody, owner);
-            }
-            Stmt::Match(m) => {
-                for case in &m.cases {
-                    self.body(&case.body, owner);
-                }
-            }
-            _ => {}
+impl At {
+    fn site(self, (l, c): (i64, i64)) -> Site {
+        Site {
+            scope: self.scope,
+            header: self.header,
+            l,
+            c,
         }
     }
 }
 
-impl<'a> DefTable<'a> {
-    pub fn build(suite: &'a [Stmt], src: &'a str, lines: &LineIndex, first_party: &[String]) -> (DefTable<'a>, Bound<'a>) {
-        let mut col = Collector { src, first_party, found: Vec::new(), bound: HashMap::new() };
-        col.body(suite, None);
-        let mut rows: Vec<(DefNode<'a>, Option<u32>, i64, i64, u32)> = col
-            .found
-            .iter()
-            .map(|(node, owner)| {
-                let (l, c) = lines.pos(keyword_start(col.src, *node));
-                let start = match node {
-                    DefNode::Func(f) => f.range.start().to_u32(),
-                    DefNode::Class(c) => c.range.start().to_u32(),
-                };
-                (*node, *owner, l, c, start)
-            })
-            .collect();
-        rows.sort_by_key(|r| (r.2, r.3));
-        let index: HashMap<u32, usize> = rows.iter().enumerate().map(|(i, r)| (r.4, i)).collect();
-        let entries = rows
-            .iter()
-            .map(|(node, owner, l, c, _)| {
-                let end = match node {
-                    DefNode::Func(f) => f.range.end(),
-                    DefNode::Class(c) => c.range.end(),
-                };
-                DefEntry {
-                    node: *node,
-                    parent: owner.map(|o| index[&o] as i64).unwrap_or(-1),
-                    l: *l,
-                    c: *c,
-                    e: lines.line(end),
-                }
-            })
-            .collect();
-        (DefTable { entries, index }, col.bound)
-    }
-
-    fn idx(&self, start: TextSize) -> usize {
-        self.index[&start.to_u32()]
-    }
-
-    pub fn is_class(&self, idx: i64) -> bool {
-        idx >= 0 && matches!(self.entries[idx as usize].node, DefNode::Class(_))
-    }
-
-    fn ancestry(&self, mut idx: i64) -> Vec<i64> {
-        let mut out = vec![idx];
-        while idx != -1 {
-            idx = self.entries[idx as usize].parent;
-            out.push(idx);
-        }
-        out
-    }
-}
-
-// ---- traversal -----------------------------------------------------------------------------
-
-/// One `path` entry: the parent of the node being visited and the slot it sits in.
-#[derive(Clone, Copy)]
-enum Frame<'a> {
-    Attr(&'a str),
-    CallFunc,
-    SubValue,
-    Arg(&'a ast::ExprCall, usize),
-    Kw(&'a ast::ExprCall, Option<&'a str>),
-    Nt(&'static str),
-    DictVal(&'a str),
-    Walrus(&'a str),
-    T(&'static str),
-    AssignV(&'a [Expr]),
-    AnnAssignV(&'a Expr),
-    AugAssignV(&'static str, &'a Expr),
-    Base(usize),
-    ClassKw(Option<&'a str>),
-    ParamAnn(&'a str),
-    ParamDefault(&'a str),
-    TypeAliasV(&'a str),
-}
-
-impl Frame<'_> {
-    /// (step text, terminal) as in `FileWalker.step`.
-    fn step(&self) -> (String, bool) {
-        match self {
-            Frame::Attr(a) => (format!(".{a}"), false),
-            Frame::CallFunc => ("()".to_string(), false),
-            Frame::SubValue => ("[]".to_string(), false),
-            Frame::Arg(call, i) => (format!("arg:{i}:{}", callee_text(call)), false),
-            Frame::Kw(call, name) => (format!("kw:{}:{}", name.unwrap_or("**"), callee_text(call)), false),
-            Frame::Nt(s) => (s.to_string(), false),
-            Frame::DictVal(k) => (format!("dict:val:{k}"), false),
-            Frame::Walrus(n) => (format!("walrus:{n}"), false),
-            Frame::T(s) => (s.to_string(), true),
-            Frame::AssignV(targets) => {
-                let names: Vec<String> = targets.iter().map(target_text).collect();
-                (format!("assign:{}", names.join(",")), true)
-            }
-            Frame::AnnAssignV(t) => (format!("annassign:{}", target_text(t)), true),
-            Frame::AugAssignV(op, t) => (format!("augassign:{op}:{}", target_text(t)), true),
-            Frame::Base(i) => (format!("base:{i}"), true),
-            Frame::ClassKw(name) => (format!("classkw:{}", name.unwrap_or("**")), true),
-            Frame::ParamAnn(n) => (format!("param-ann:{n}"), true),
-            Frame::ParamDefault(n) => (format!("param-default:{n}"), true),
-            Frame::TypeAliasV(n) => (format!("typealias:{n}"), true),
-        }
-    }
-}
-
-pub struct Row {
-    pub l: i64,
-    pub c: i64,
-    pub json: String,
-}
-
-impl Row {
-    fn new(l: i64, c: i64, value: J) -> Row {
-        Row { l, c, json: value.to_json() }
-    }
-}
-
-/// Aggregate table: key JSON prefix -> (count, first line, first col).
-type Agg = HashMap<String, (i64, i64, i64)>;
-
-fn aggregate(table: &mut Agg, key: String, l: i64, c: i64) {
-    let entry = table.entry(key).or_insert((0, l, c));
-    entry.0 += 1;
-    if (l, c) < (entry.1, entry.2) {
-        entry.1 = l;
-        entry.2 = c;
-    }
-}
-
-fn key_prefix(items: Vec<J>) -> String {
-    let mut json = J::Arr(items).to_json();
-    json.pop();
-    json
-}
-
-pub struct Walker<'a, 'b> {
-    src: &'a str,
-    lines: &'b LineIndex,
-    pub defs: &'b DefTable<'a>,
-    bound: &'b Bound<'a>,
-    derived: &'b Derived,
-    pub enc: Encoder,
-    path: Vec<Frame<'a>>,
-    pub imports: Vec<Row>,
-    pub assigns: Vec<Row>,
-    pub refs: Vec<Row>,
-    pub calls: Vec<Row>,
-    pub strs: Vec<Row>,
-    pub tags: Vec<Row>,
-    pub watched: Vec<Row>,
-    pub branches: Vec<Row>,
-    pub uses: Agg,
-    pub callees: Agg,
-    pub names: Agg,
+/// Everything one walk collects. Derived-name candidates still need `derive::Derivation`.
+#[derive(Default)]
+pub struct Walk {
+    pub imports: Vec<Import>,
+    pub assigns: Vec<Assign>,
+    /// Use sites of import-bound names.
+    pub refs: Vec<Ref>,
+    pub candidates: Vec<Candidate>,
+    pub calls: Vec<WatchedCall>,
+    pub strs: Vec<DottedStr>,
+    pub tags: Vec<Tag>,
+    pub watched: Vec<WatchedKey>,
+    pub branches: Vec<Branch>,
+    pub uses: Counts<UseKey>,
+    pub callees: Counts<TextKey>,
+    pub names: Counts<TextKey>,
+    /// Statement flags by def index.
     pub def_flags: Vec<u32>,
-    pub new_derived: Derived,
+    /// Statement flags at the position of `refs`, `strs` and `calls` rows, where not 0.
+    pub site_flags: HashMap<(i64, i64), u32>,
 }
 
-impl<'a, 'b> Walker<'a, 'b> {
-    pub fn new(src: &'a str, lines: &'b LineIndex, defs: &'b DefTable<'a>, bound: &'b Bound<'a>, derived: &'b Derived) -> Self {
+pub struct Walker<'a, 'w> {
+    src: &'a str,
+    lines: &'w LineIndex,
+    defs: &'w DefTable<'a>,
+    bound: &'w Bound<'a>,
+    stored: &'w HashSet<&'a str>,
+    config: &'w ExtractConfig,
+    enc: Encoder,
+    path: Vec<Frame<'a>>,
+    out: Walk,
+}
+
+impl<'a, 'w> Walker<'a, 'w> {
+    pub fn new(
+        src: &'a str,
+        lines: &'w LineIndex,
+        defs: &'w DefTable<'a>,
+        bound: &'w Bound<'a>,
+        stored: &'w HashSet<&'a str>,
+        config: &'w ExtractConfig,
+    ) -> Self {
+        let out = Walk {
+            def_flags: vec![0; defs.entries.len()],
+            ..Walk::default()
+        };
         Walker {
             src,
             lines,
             defs,
             bound,
-            derived,
-            enc: Encoder::new(),
+            stored,
+            config,
+            enc: Encoder::default(),
             path: Vec::new(),
-            imports: Vec::new(),
-            assigns: Vec::new(),
-            refs: Vec::new(),
-            calls: Vec::new(),
-            strs: Vec::new(),
-            tags: Vec::new(),
-            watched: Vec::new(),
-            branches: Vec::new(),
-            uses: HashMap::new(),
-            callees: HashMap::new(),
-            names: HashMap::new(),
-            def_flags: vec![0; defs.entries.len()],
-            new_derived: HashMap::new(),
+            out,
         }
     }
 
-    pub fn run(&mut self, suite: &'a [Stmt]) {
-        self.body(suite, -1, 0);
+    pub fn run(mut self, suite: &'a [Stmt]) -> Walk {
+        let module = At {
+            scope: -1,
+            header: -1,
+            flags: 0,
+        };
+        self.body(suite, module);
+        self.out
     }
 
-    fn child(&mut self, frame: Frame<'a>, expr: &'a Expr, scope: i64, header: i64) {
+    fn is_watched(&self, last: &str) -> bool {
+        WATCHED_CALLEES.contains(&last)
+            || WATCHED_PREFIXES
+                .iter()
+                .any(|prefix| last.starts_with(prefix))
+            || self.config.watch_callees.iter().any(|name| name == last)
+    }
+
+    fn max_nodes(&self) -> usize {
+        self.config.limits.max_nodes
+    }
+
+    fn flag_site(&mut self, l: i64, c: i64, flags: u32) {
+        if flags != 0 {
+            self.out.site_flags.insert((l, c), flags);
+        }
+    }
+
+    // ---- traversal ----------------------------------------------------------------------
+
+    fn child(&mut self, frame: Frame<'a>, expr: &'a Expr, at: At) {
         self.path.push(frame);
-        self.expr(expr, scope, header);
+        self.expr(expr, at);
         self.path.pop();
     }
 
-    fn opt_child(&mut self, frame: Frame<'a>, expr: Option<&'a Expr>, scope: i64, header: i64) {
+    fn opt_child(&mut self, frame: Frame<'a>, expr: Option<&'a Expr>, at: At) {
         if let Some(e) = expr {
-            self.child(frame, e, scope, header);
+            self.child(frame, e, at);
         }
     }
 
-    fn body(&mut self, stmts: &'a [Stmt], scope: i64, flags: u32) {
+    fn body(&mut self, stmts: &'a [Stmt], at: At) {
         for stmt in stmts {
-            self.stmt(stmt, scope, flags);
+            self.stmt(stmt, at);
+        }
+    }
+
+    fn inner(at: At, flag: u32) -> At {
+        At {
+            flags: at.flags | flag,
+            ..at
         }
     }
 
@@ -500,195 +193,204 @@ impl<'a, 'b> Walker<'a, 'b> {
         scope == -1 || self.defs.is_class(scope)
     }
 
-    fn stmt(&mut self, stmt: &'a Stmt, scope: i64, flags: u32) {
-        let h = -1;
+    fn stmt(&mut self, stmt: &'a Stmt, at: At) {
         match stmt {
-            Stmt::FunctionDef(f) => self.visit_def(DefNode::Func(f), scope, flags),
-            Stmt::ClassDef(c) => self.visit_def(DefNode::Class(c), scope, flags),
+            Stmt::FunctionDef(f) => self.visit_def(DefNode::Func(f), at),
+            Stmt::ClassDef(c) => self.visit_def(DefNode::Class(c), at),
             Stmt::Import(i) => {
                 for alias in &i.names {
                     let (l, c) = self.lines.pos(alias.range.start());
-                    let row = J::Arr(vec![
-                        J::Int(scope),
-                        J::Int(l),
-                        J::Int(c),
-                        J::Int(flags as i64),
-                        J::s(alias.name.as_str()),
-                        J::Int(0),
-                        J::Null,
-                        J::opt_s(alias.asname.as_ref().map(|a| a.as_str())),
-                    ]);
-                    self.imports.push(Row::new(l, c, row));
+                    self.out.imports.push(Import {
+                        scope: at.scope,
+                        l,
+                        c,
+                        flags: at.flags,
+                        module: Some(alias.name.to_string()),
+                        level: 0,
+                        name: None,
+                        asname: alias.asname.as_ref().map(|a| a.to_string()),
+                    });
                 }
             }
             Stmt::ImportFrom(i) => {
                 for alias in &i.names {
                     let (l, c) = self.lines.pos(alias.range.start());
-                    let row = J::Arr(vec![
-                        J::Int(scope),
-                        J::Int(l),
-                        J::Int(c),
-                        J::Int(flags as i64),
-                        J::opt_s(i.module.as_ref().map(|m| m.as_str())),
-                        J::Int(i.level as i64),
-                        J::s(alias.name.as_str()),
-                        J::opt_s(alias.asname.as_ref().map(|a| a.as_str())),
-                    ]);
-                    self.imports.push(Row::new(l, c, row));
+                    self.out.imports.push(Import {
+                        scope: at.scope,
+                        l,
+                        c,
+                        flags: at.flags,
+                        module: i.module.as_ref().map(|m| m.to_string()),
+                        level: i.level,
+                        name: Some(alias.name.to_string()),
+                        asname: alias.asname.as_ref().map(|a| a.to_string()),
+                    });
                 }
             }
             Stmt::Assign(a) => {
-                if self.assign_scope(scope) {
-                    let t = a.targets.iter().map(|t| self.enc.value(Some(t), false, max_nodes(), self.src)).collect();
-                    let v = self.enc.value(Some(&a.value), false, max_nodes(), self.src);
-                    self.emit_assign(stmt, scope, flags, "=", t, None, v);
+                if self.assign_scope(at.scope) {
+                    let max = self.max_nodes();
+                    let t = a
+                        .targets
+                        .iter()
+                        .map(|t| self.enc.value(Some(t), false, max, self.src))
+                        .collect();
+                    let v = self.enc.value(Some(&a.value), false, max, self.src);
+                    self.emit_assign(stmt, at, "=", t, None, v);
                 }
                 for t in &a.targets {
-                    self.child(Frame::T("assign-target"), t, scope, h);
+                    self.child(Frame::Terminal("assign-target"), t, at);
                 }
-                self.child(Frame::AssignV(&a.targets), &a.value, scope, h);
+                self.child(Frame::AssignValue(&a.targets), &a.value, at);
             }
             Stmt::AnnAssign(a) => {
-                if self.assign_scope(scope) {
-                    let t = vec![self.enc.value(Some(&a.target), false, max_nodes(), self.src)];
-                    let ann = self.enc.value(Some(&a.annotation), true, max_nodes(), self.src);
-                    let v = self.enc.value(a.value.as_deref(), false, max_nodes(), self.src);
-                    self.emit_assign(stmt, scope, flags, ":", t, Some(ann), v);
+                if self.assign_scope(at.scope) {
+                    let max = self.max_nodes();
+                    let t = vec![self.enc.value(Some(&a.target), false, max, self.src)];
+                    let ann = self.enc.value(Some(&a.annotation), true, max, self.src);
+                    let v = self.enc.value(a.value.as_deref(), false, max, self.src);
+                    self.emit_assign(stmt, at, ":", t, Some(ann), v);
                 }
-                self.child(Frame::T("annassign-target"), &a.target, scope, h);
-                self.child(Frame::T("annotation"), &a.annotation, scope, h);
-                self.opt_child(Frame::AnnAssignV(&a.target), a.value.as_deref(), scope, h);
+                self.child(Frame::Terminal("annassign-target"), &a.target, at);
+                self.child(Frame::Terminal("annotation"), &a.annotation, at);
+                let value = a.value.as_deref();
+                self.opt_child(Frame::AnnAssignValue(&a.target), value, at);
             }
             Stmt::AugAssign(a) => {
                 let op = binop(a.op);
-                if self.assign_scope(scope) {
-                    let t = vec![self.enc.value(Some(&a.target), false, max_nodes(), self.src)];
-                    let v = self.enc.value(Some(&a.value), false, max_nodes(), self.src);
-                    let op_text: &'static str = aug_op(op);
-                    self.emit_assign(stmt, scope, flags, op_text, t, None, v);
+                if self.assign_scope(at.scope) {
+                    let max = self.max_nodes();
+                    let t = vec![self.enc.value(Some(&a.target), false, max, self.src)];
+                    let v = self.enc.value(Some(&a.value), false, max, self.src);
+                    self.emit_assign(stmt, at, aug_op(op), t, None, v);
                 }
-                self.child(Frame::T("augassign-target"), &a.target, scope, h);
-                self.child(Frame::AugAssignV(op, &a.target), &a.value, scope, h);
+                self.child(Frame::Terminal("augassign-target"), &a.target, at);
+                self.child(Frame::AugAssignValue(op, &a.target), &a.value, at);
             }
             Stmt::TypeAlias(a) => {
-                if self.assign_scope(scope) {
-                    let t = vec![self.enc.value(Some(&a.name), false, max_nodes(), self.src)];
-                    let v = self.enc.value(Some(&a.value), true, max_nodes(), self.src);
-                    self.emit_assign(stmt, scope, flags, "type", t, None, v);
+                if self.assign_scope(at.scope) {
+                    let max = self.max_nodes();
+                    let t = vec![self.enc.value(Some(&a.name), false, max, self.src)];
+                    let v = self.enc.value(Some(&a.value), true, max, self.src);
+                    self.emit_assign(stmt, at, "type", t, None, v);
                 }
-                self.child(Frame::T("typealias-target"), &a.name, scope, h);
+                self.child(Frame::Terminal("typealias-target"), &a.name, at);
                 if let Some(tp) = &a.type_params {
-                    self.type_params(tp, scope, h);
+                    self.type_params(tp, at);
                 }
-                self.child(Frame::TypeAliasV(name_id(&a.name)), &a.value, scope, h);
+                self.child(Frame::TypeAliasValue(name_id(&a.name)), &a.value, at);
             }
-            Stmt::Expr(e) => self.child(Frame::T("expr"), &e.value, scope, h),
-            Stmt::Return(r) => self.opt_child(Frame::T("return"), r.value.as_deref(), scope, h),
+            Stmt::Expr(e) => self.child(Frame::Terminal("expr"), &e.value, at),
+            Stmt::Return(r) => self.opt_child(Frame::Terminal("return"), r.value.as_deref(), at),
             Stmt::Delete(d) => {
                 for t in &d.targets {
-                    self.child(Frame::T("del"), t, scope, h);
+                    self.child(Frame::Terminal("del"), t, at);
                 }
             }
-            Stmt::If(i) => self.visit_if(&i.test, &i.body, i.range.start(), &i.elif_else_clauses, scope, flags),
+            Stmt::If(i) => {
+                self.visit_if(&i.test, &i.body, i.range.start(), &i.elif_else_clauses, at)
+            }
             Stmt::For(f) => {
-                self.child(Frame::T("for-target"), &f.target, scope, h);
-                self.child(Frame::T("for-iter"), &f.iter, scope, h);
-                self.body(&f.body, scope, flags | BLOCK);
-                self.body(&f.orelse, scope, flags | BLOCK);
+                self.child(Frame::Terminal("for-target"), &f.target, at);
+                self.child(Frame::Terminal("for-iter"), &f.iter, at);
+                self.body(&f.body, Self::inner(at, BLOCK));
+                self.body(&f.orelse, Self::inner(at, BLOCK));
             }
             Stmt::While(w) => {
-                self.child(Frame::T("while-test"), &w.test, scope, h);
-                self.body(&w.body, scope, flags | BLOCK);
-                self.body(&w.orelse, scope, flags | BLOCK);
+                self.child(Frame::Terminal("while-test"), &w.test, at);
+                self.body(&w.body, Self::inner(at, BLOCK));
+                self.body(&w.orelse, Self::inner(at, BLOCK));
             }
             Stmt::With(w) => {
                 for item in &w.items {
-                    self.child(Frame::T("with"), &item.context_expr, scope, h);
-                    self.opt_child(Frame::T("with-target"), item.optional_vars.as_deref(), scope, h);
+                    self.child(Frame::Terminal("with"), &item.context_expr, at);
+                    let target = item.optional_vars.as_deref();
+                    self.opt_child(Frame::Terminal("with-target"), target, at);
                 }
-                self.body(&w.body, scope, flags | BLOCK);
+                self.body(&w.body, Self::inner(at, BLOCK));
             }
             Stmt::Try(t) => {
-                let inner = flags | TRY;
-                self.body(&t.body, scope, inner);
+                let inner = Self::inner(at, TRY);
+                self.body(&t.body, inner);
                 for handler in &t.handlers {
                     let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    self.opt_child(Frame::T("except"), handler.type_.as_deref(), scope, h);
-                    self.body(&handler.body, scope, inner);
+                    self.opt_child(Frame::Terminal("except"), handler.type_.as_deref(), inner);
+                    self.body(&handler.body, inner);
                 }
-                self.body(&t.orelse, scope, inner);
-                self.body(&t.finalbody, scope, inner);
+                self.body(&t.orelse, inner);
+                self.body(&t.finalbody, inner);
             }
             Stmt::Match(m) => {
-                self.child(Frame::T("match"), &m.subject, scope, h);
+                self.child(Frame::Terminal("match"), &m.subject, at);
+                let case_at = Self::inner(at, BLOCK);
                 for case in &m.cases {
-                    self.pattern(&case.pattern, scope);
-                    self.opt_child(Frame::T("case-guard"), case.guard.as_deref(), scope, h);
-                    self.body(&case.body, scope, flags | BLOCK);
+                    self.pattern(&case.pattern, case_at);
+                    let guard = case.guard.as_deref();
+                    self.opt_child(Frame::Terminal("case-guard"), guard, case_at);
+                    self.body(&case.body, case_at);
                 }
             }
             Stmt::Raise(r) => {
-                self.opt_child(Frame::T("raise"), r.exc.as_deref(), scope, h);
-                self.opt_child(Frame::T("raise-from"), r.cause.as_deref(), scope, h);
+                self.opt_child(Frame::Terminal("raise"), r.exc.as_deref(), at);
+                self.opt_child(Frame::Terminal("raise-from"), r.cause.as_deref(), at);
             }
             Stmt::Assert(a) => {
-                self.child(Frame::T("assert"), &a.test, scope, h);
-                self.opt_child(Frame::T("assert-msg"), a.msg.as_deref(), scope, h);
+                self.child(Frame::Terminal("assert"), &a.test, at);
+                self.opt_child(Frame::Terminal("assert-msg"), a.msg.as_deref(), at);
             }
             _ => {}
         }
     }
 
-    fn pattern(&mut self, pattern: &'a Pattern, scope: i64) {
+    fn pattern(&mut self, pattern: &'a Pattern, at: At) {
         match pattern {
-            Pattern::MatchValue(p) => self.child(Frame::T("case"), &p.value, scope, -1),
+            Pattern::MatchValue(p) => self.child(Frame::Terminal("case"), &p.value, at),
             Pattern::MatchSequence(p) => {
                 for sub in &p.patterns {
-                    self.pattern(sub, scope);
+                    self.pattern(sub, at);
                 }
             }
             Pattern::MatchMapping(p) => {
                 for key in &p.keys {
-                    self.child(Frame::T("case"), key, scope, -1);
+                    self.child(Frame::Terminal("case"), key, at);
                 }
                 for sub in &p.patterns {
-                    self.pattern(sub, scope);
+                    self.pattern(sub, at);
                 }
             }
             Pattern::MatchClass(p) => {
-                self.child(Frame::T("case"), &p.cls, scope, -1);
+                self.child(Frame::Terminal("case"), &p.cls, at);
                 for sub in &p.arguments.patterns {
-                    self.pattern(sub, scope);
+                    self.pattern(sub, at);
                 }
                 for kw in &p.arguments.keywords {
-                    self.pattern(&kw.pattern, scope);
+                    self.pattern(&kw.pattern, at);
                 }
             }
             Pattern::MatchAs(p) => {
                 if let Some(sub) = &p.pattern {
-                    self.pattern(sub, scope);
+                    self.pattern(sub, at);
                 }
             }
             Pattern::MatchOr(p) => {
                 for sub in &p.patterns {
-                    self.pattern(sub, scope);
+                    self.pattern(sub, at);
                 }
             }
             Pattern::MatchSingleton(_) | Pattern::MatchStar(_) => {}
         }
     }
 
-    fn type_params(&mut self, tp: &'a ast::TypeParams, scope: i64, header: i64) {
+    fn type_params(&mut self, tp: &'a ast::TypeParams, at: At) {
+        let step = Frame::Terminal("typeparam");
         for param in &tp.type_params {
             match param {
                 ast::TypeParam::TypeVar(t) => {
-                    self.opt_child(Frame::T("typeparam"), t.bound.as_deref(), scope, header);
-                    self.opt_child(Frame::T("typeparam"), t.default.as_deref(), scope, header);
+                    self.opt_child(step, t.bound.as_deref(), at);
+                    self.opt_child(step, t.default.as_deref(), at);
                 }
-                ast::TypeParam::ParamSpec(t) => self.opt_child(Frame::T("typeparam"), t.default.as_deref(), scope, header),
-                ast::TypeParam::TypeVarTuple(t) => {
-                    self.opt_child(Frame::T("typeparam"), t.default.as_deref(), scope, header)
-                }
+                ast::TypeParam::ParamSpec(t) => self.opt_child(step, t.default.as_deref(), at),
+                ast::TypeParam::TypeVarTuple(t) => self.opt_child(step, t.default.as_deref(), at),
             }
         }
     }
@@ -700,500 +402,424 @@ impl<'a, 'b> Walker<'a, 'b> {
         body: &'a [Stmt],
         start: TextSize,
         rest: &'a [ast::ElifElseClause],
-        scope: i64,
-        flags: u32,
+        at: At,
     ) {
-        if let Expr::Compare(cmp) = test {
-            if cmp.operands[0].is_name_expr() {
-                let (l, c) = self.lines.pos(start);
-                let body_end = self.lines.line(body.last().map(|s| s.range().end()).unwrap_or(start));
-                let v = self.enc.value(Some(test), false, max_nodes(), self.src);
-                let row = J::Arr(vec![J::Int(scope), J::Int(-1), J::Int(l), J::Int(c), J::Int(body_end), v]);
-                self.branches.push(Row::new(l, c, row));
-            }
+        if let Expr::Compare(cmp) = test
+            && cmp.operands[0].is_name_expr()
+        {
+            let (l, c) = self.lines.pos(start);
+            let last = body.last().map(|s| s.range().end()).unwrap_or(start);
+            let test_value = self
+                .enc
+                .value(Some(test), false, self.max_nodes(), self.src);
+            self.out.branches.push(Branch {
+                site: at.site((l, c)),
+                body_end: self.lines.line(last),
+                test: test_value,
+            });
         }
-        self.child(Frame::T("if-test"), test, scope, -1);
-        let tc = is_type_checking_test(test);
-        self.body(body, scope, flags | if tc { TYPE_ONLY } else { IF });
-        let else_flags = flags | if tc { TC_ELSE } else { IF };
+        self.child(Frame::Terminal("if-test"), test, at);
+        let type_checking = is_type_checking_test(test);
+        self.body(
+            body,
+            Self::inner(at, if type_checking { TYPE_ONLY } else { IF }),
+        );
+        let else_at = Self::inner(at, if type_checking { TC_ELSE } else { IF });
         let Some(first) = rest.first() else {
             return;
         };
         match &first.test {
-            Some(t) => self.visit_if(t, &first.body, first.range.start(), &rest[1..], scope, else_flags),
-            None => self.body(&first.body, scope, else_flags),
+            Some(t) => self.visit_if(t, &first.body, first.range.start(), &rest[1..], else_at),
+            None => self.body(&first.body, else_at),
         }
     }
 
-    fn visit_def(&mut self, node: DefNode<'a>, scope: i64, flags: u32) {
-        let start = match node {
-            DefNode::Func(f) => f.range.start(),
-            DefNode::Class(c) => c.range.start(),
+    /// Decorators, bases, class keywords, annotations, defaults and type params belong to the
+    /// enclosing scope; the def is their header.
+    fn visit_def(&mut self, node: DefNode<'a>, at: At) {
+        let idx = self.defs.idx(node);
+        self.out.def_flags[idx] = at.flags;
+        let header = At {
+            header: idx as i64,
+            ..at
         };
-        let idx = self.defs.idx(start);
-        self.def_flags[idx] = flags;
-        let h = idx as i64;
+        let body_at = |flag: u32| At {
+            scope: idx as i64,
+            header: -1,
+            flags: at.flags | flag,
+        };
         match node {
             DefNode::Func(f) => {
                 for d in &f.decorator_list {
-                    self.child(Frame::T("decorator"), &d.expression, scope, h);
+                    self.child(Frame::Terminal("decorator"), &d.expression, header);
                 }
                 if let Some(tp) = &f.type_params {
-                    self.type_params(tp, scope, h);
+                    self.type_params(tp, header);
                 }
                 let p = &f.parameters;
-                for param in p.posonlyargs.iter().chain(p.args.iter()).chain(p.kwonlyargs.iter()) {
+                for param in p.posonlyargs.iter().chain(&p.args).chain(&p.kwonlyargs) {
                     let name = param.parameter.name.as_str();
-                    self.opt_child(Frame::ParamAnn(name), param.parameter.annotation.as_deref(), scope, h);
-                    self.opt_child(Frame::ParamDefault(name), param.default.as_deref(), scope, h);
+                    let annotation = param.parameter.annotation.as_deref();
+                    self.opt_child(Frame::ParamAnn(name), annotation, header);
+                    self.opt_child(Frame::ParamDefault(name), param.default.as_deref(), header);
                 }
                 for param in p.vararg.iter().chain(p.kwarg.iter()) {
-                    self.opt_child(Frame::ParamAnn(param.name.as_str()), param.annotation.as_deref(), scope, h);
+                    let annotation = param.annotation.as_deref();
+                    self.opt_child(Frame::ParamAnn(param.name.as_str()), annotation, header);
                 }
-                self.opt_child(Frame::T("returns"), f.returns.as_deref(), scope, h);
-                self.body(&f.body, h, flags | FUNC);
+                self.opt_child(Frame::Terminal("returns"), f.returns.as_deref(), header);
+                self.body(&f.body, body_at(FUNC));
             }
             DefNode::Class(c) => {
                 for d in &c.decorator_list {
-                    self.child(Frame::T("decorator"), &d.expression, scope, h);
+                    self.child(Frame::Terminal("decorator"), &d.expression, header);
                 }
                 if let Some(tp) = &c.type_params {
-                    self.type_params(tp, scope, h);
+                    self.type_params(tp, header);
                 }
                 if let Some(args) = &c.arguments {
                     for (i, base) in args.args.iter().enumerate() {
-                        self.child(Frame::Base(i), base, scope, h);
+                        self.child(Frame::Base(i), base, header);
                     }
                     for kw in args.keywords.iter() {
-                        self.child(Frame::ClassKw(kw.arg.as_ref().map(|a| a.as_str())), &kw.value, scope, h);
+                        let name = kw.arg.as_ref().map(|a| a.as_str());
+                        self.child(Frame::ClassKw(name), &kw.value, header);
                     }
                 }
-                self.body(&c.body, h, flags | CLASS);
+                self.body(&c.body, body_at(CLASS));
             }
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn emit_assign(&mut self, stmt: &Stmt, scope: i64, flags: u32, op: &'static str, t: Vec<J>, ann: Option<J>, v: J) {
+    fn emit_assign(
+        &mut self,
+        stmt: &Stmt,
+        at: At,
+        op: &'static str,
+        t: Vec<Value>,
+        ann: Option<Value>,
+        v: Value,
+    ) {
         let (l, c) = self.lines.pos(stmt.range().start());
-        let mut pairs = vec![("op", J::s(op)), ("t", J::Arr(t)), ("s", J::Int(scope)), ("l", J::Int(l)), ("c", J::Int(c))];
-        if let Some(ann) = ann {
-            pairs.push(("ann", ann));
-        }
-        if flags != 0 {
-            pairs.push(("f", J::Int(flags as i64)));
-        }
-        if !v.is_null() {
-            pairs.push(("v", v));
-        }
-        self.assigns.push(Row::new(l, c, J::obj(pairs)));
+        self.out.assigns.push(Assign {
+            ann,
+            c,
+            f: at.flags,
+            l,
+            op,
+            s: at.scope,
+            t,
+            v,
+        });
     }
 
-    fn expr(&mut self, expr: &'a Expr, scope: i64, header: i64) {
-        let h = header;
+    fn expr(&mut self, expr: &'a Expr, at: At) {
         match expr {
             Expr::Call(call) => {
-                self.emit_call(call, scope, header);
-                self.child(Frame::CallFunc, &call.func, scope, h);
+                self.emit_call(call, at);
+                self.child(Frame::CallFunc, &call.func, at);
                 for (i, arg) in call.arguments.args.iter().enumerate() {
-                    self.child(Frame::Arg(call, i), arg, scope, h);
+                    self.child(Frame::Arg(call, i), arg, at);
                 }
                 for kw in call.arguments.keywords.iter() {
-                    self.child(Frame::Kw(call, kw.arg.as_ref().map(|a| a.as_str())), &kw.value, scope, h);
+                    let name = kw.arg.as_ref().map(|a| a.as_str());
+                    self.child(Frame::Kw(call, name), &kw.value, at);
                 }
             }
-            Expr::StringLiteral(s) => self.emit_string(s, scope, header),
-            Expr::Name(n) => self.emit_ref(n, scope, header),
+            Expr::StringLiteral(s) => self.emit_string(s, at),
+            Expr::Name(n) => self.emit_ref(n, at),
             Expr::Dict(d) => {
-                self.emit_watched(d, scope, header);
+                self.emit_watched(d, at);
                 for item in d.items.iter() {
                     if let Some(key) = &item.key {
-                        self.child(Frame::Nt("dict:key"), key, scope, h);
+                        self.child(Frame::Step("dict:key"), key, at);
                     }
                     let frame = match &item.key {
-                        None => Frame::Nt("dict:**"),
-                        Some(Expr::StringLiteral(k)) if is_identifier(k.value.to_str()) => Frame::DictVal(k.value.to_str()),
-                        Some(_) => Frame::Nt("dict:val"),
+                        None => Frame::Step("dict:**"),
+                        Some(Expr::StringLiteral(k)) if is_identifier(k.value.to_str()) => {
+                            Frame::DictVal(k.value.to_str())
+                        }
+                        Some(_) => Frame::Step("dict:val"),
                     };
-                    self.child(frame, &item.value, scope, h);
+                    self.child(frame, &item.value, at);
                 }
             }
             Expr::BoolOp(b) => {
-                let step = if b.op == ast::BoolOp::And { "bool:and" } else { "bool:or" };
+                let step = if b.op == ast::BoolOp::And {
+                    "bool:and"
+                } else {
+                    "bool:or"
+                };
                 for v in &b.values {
-                    self.child(Frame::Nt(step), v, scope, h);
+                    self.child(Frame::Step(step), v, at);
                 }
             }
             Expr::Named(n) => {
-                self.child(Frame::Nt("walrus-target"), &n.target, scope, h);
-                self.child(Frame::Walrus(name_id(&n.target)), &n.value, scope, h);
+                self.child(Frame::Step("walrus-target"), &n.target, at);
+                self.child(Frame::Walrus(name_id(&n.target)), &n.value, at);
             }
             Expr::BinOp(b) => {
                 let step = bin_step(binop(b.op));
-                self.child(Frame::Nt(step), &b.left, scope, h);
-                self.child(Frame::Nt(step), &b.right, scope, h);
+                self.child(Frame::Step(step), &b.left, at);
+                self.child(Frame::Step(step), &b.right, at);
             }
-            Expr::UnaryOp(u) => self.child(Frame::Nt(unary_step(unaryop(u.op))), &u.operand, scope, h),
+            Expr::UnaryOp(u) => {
+                let step = unary_step(unaryop(u.op));
+                self.child(Frame::Step(step), &u.operand, at);
+            }
             Expr::Lambda(l) => {
                 if let Some(p) = &l.parameters {
-                    for param in p.posonlyargs.iter().chain(p.args.iter()).chain(p.kwonlyargs.iter()) {
-                        self.opt_child(Frame::Nt("lambda:default"), param.default.as_deref(), scope, h);
+                    for param in p.posonlyargs.iter().chain(&p.args).chain(&p.kwonlyargs) {
+                        let default = param.default.as_deref();
+                        self.opt_child(Frame::Step("lambda:default"), default, at);
                     }
                 }
-                self.child(Frame::Nt("lambda"), &l.body, scope, h);
+                self.child(Frame::Step("lambda"), &l.body, at);
             }
             Expr::If(i) => {
-                self.child(Frame::Nt("ifexp:test"), &i.test, scope, h);
-                self.child(Frame::Nt("ifexp:body"), &i.body, scope, h);
-                self.child(Frame::Nt("ifexp:else"), &i.orelse, scope, h);
+                self.child(Frame::Step("ifexp:test"), &i.test, at);
+                self.child(Frame::Step("ifexp:body"), &i.body, at);
+                self.child(Frame::Step("ifexp:else"), &i.orelse, at);
             }
-            Expr::Set(s) => self.elts(&s.elts, "elt:set", scope, h),
-            Expr::List(l) => self.elts(&l.elts, "elt:list", scope, h),
-            Expr::Tuple(t) => self.elts(&t.elts, "elt:tuple", scope, h),
+            Expr::Set(s) => self.elts(&s.elts, "elt:set", at),
+            Expr::List(l) => self.elts(&l.elts, "elt:list", at),
+            Expr::Tuple(t) => self.elts(&t.elts, "elt:tuple", at),
             Expr::ListComp(c) => {
-                self.child(Frame::Nt("comp:elt"), &c.elt, scope, h);
-                self.generators(&c.generators, scope, h);
+                self.child(Frame::Step("comp:elt"), &c.elt, at);
+                self.generators(&c.generators, at);
             }
             Expr::SetComp(c) => {
-                self.child(Frame::Nt("comp:elt"), &c.elt, scope, h);
-                self.generators(&c.generators, scope, h);
+                self.child(Frame::Step("comp:elt"), &c.elt, at);
+                self.generators(&c.generators, at);
             }
             Expr::Generator(c) => {
-                self.child(Frame::Nt("comp:elt"), &c.elt, scope, h);
-                self.generators(&c.generators, scope, h);
+                self.child(Frame::Step("comp:elt"), &c.elt, at);
+                self.generators(&c.generators, at);
             }
             Expr::DictComp(c) => {
-                self.opt_child(Frame::Nt("comp:key"), c.key.as_deref(), scope, h);
-                self.child(Frame::Nt("comp:val"), &c.value, scope, h);
-                self.generators(&c.generators, scope, h);
+                self.opt_child(Frame::Step("comp:key"), c.key.as_deref(), at);
+                self.child(Frame::Step("comp:val"), &c.value, at);
+                self.generators(&c.generators, at);
             }
-            Expr::Await(a) => self.child(Frame::Nt("await"), &a.value, scope, h),
-            Expr::Yield(y) => self.opt_child(Frame::Nt("yield"), y.value.as_deref(), scope, h),
-            Expr::YieldFrom(y) => self.child(Frame::Nt("yieldfrom"), &y.value, scope, h),
+            Expr::Await(a) => self.child(Frame::Step("await"), &a.value, at),
+            Expr::Yield(y) => self.opt_child(Frame::Step("yield"), y.value.as_deref(), at),
+            Expr::YieldFrom(y) => self.child(Frame::Step("yieldfrom"), &y.value, at),
             Expr::Compare(c) => {
-                self.child(Frame::Nt("cmp:left"), &c.operands[0], scope, h);
+                self.child(Frame::Step("cmp:left"), &c.operands[0], at);
                 for (op, operand) in c.ops.iter().zip(c.operands[1..].iter()) {
-                    self.child(Frame::Nt(cmp_step(cmpop(*op))), operand, scope, h);
+                    self.child(Frame::Step(cmp_step(cmpop(*op))), operand, at);
                 }
             }
             Expr::FString(f) => {
                 for part in f.value.iter() {
                     if let ast::FStringPartRef::FString(fs) = part {
-                        self.interpolations(&fs.elements, "fstr", scope, h);
+                        self.interpolations(&fs.elements, "fstr", at);
                     }
                 }
             }
             Expr::TString(t) => {
                 for ts in t.value.iter() {
-                    self.interpolations(&ts.elements, "tstr", scope, h);
+                    self.interpolations(&ts.elements, "tstr", at);
                 }
             }
-            Expr::Attribute(a) => self.child(Frame::Attr(a.attr.as_str()), &a.value, scope, h),
+            Expr::Attribute(a) => self.child(Frame::Attr(a.attr.as_str()), &a.value, at),
             Expr::Subscript(s) => {
-                self.child(Frame::SubValue, &s.value, scope, h);
-                self.child(Frame::Nt("slice"), &s.slice, scope, h);
+                self.child(Frame::SubValue, &s.value, at);
+                self.child(Frame::Step("slice"), &s.slice, at);
             }
-            Expr::Starred(s) => self.child(Frame::Nt("star"), &s.value, scope, h),
+            Expr::Starred(s) => self.child(Frame::Step("star"), &s.value, at),
             Expr::Slice(s) => {
-                self.opt_child(Frame::Nt("slice-part"), s.lower.as_deref(), scope, h);
-                self.opt_child(Frame::Nt("slice-part"), s.upper.as_deref(), scope, h);
-                self.opt_child(Frame::Nt("slice-part"), s.step.as_deref(), scope, h);
+                self.opt_child(Frame::Step("slice-part"), s.lower.as_deref(), at);
+                self.opt_child(Frame::Step("slice-part"), s.upper.as_deref(), at);
+                self.opt_child(Frame::Step("slice-part"), s.step.as_deref(), at);
             }
             _ => {}
         }
     }
 
-    fn elts(&mut self, elts: &'a [Expr], step: &'static str, scope: i64, h: i64) {
+    fn elts(&mut self, elts: &'a [Expr], step: &'static str, at: At) {
         for e in elts {
-            self.child(Frame::Nt(step), e, scope, h);
+            self.child(Frame::Step(step), e, at);
         }
     }
 
-    fn generators(&mut self, gens: &'a [ast::Comprehension], scope: i64, h: i64) {
+    fn generators(&mut self, gens: &'a [ast::Comprehension], at: At) {
         for g in gens {
-            self.child(Frame::Nt("comp:target"), &g.target, scope, h);
-            self.child(Frame::Nt("comp:iter"), &g.iter, scope, h);
+            self.child(Frame::Step("comp:target"), &g.target, at);
+            self.child(Frame::Step("comp:iter"), &g.iter, at);
             for cond in &g.ifs {
-                self.child(Frame::Nt("comp:if"), cond, scope, h);
+                self.child(Frame::Step("comp:if"), cond, at);
             }
         }
     }
 
     /// A format spec is a JoinedStr in CPython: nested fields step `fstr`. An f-string spec slot
     /// is transparent; a t-string `Interpolation.format_spec` slot adds its own `tstr` step.
-    fn interpolations(&mut self, elements: &'a [InterpolatedStringElement], step: &'static str, scope: i64, h: i64) {
+    fn interpolations(
+        &mut self,
+        elements: &'a [InterpolatedStringElement],
+        step: &'static str,
+        at: At,
+    ) {
         for el in elements {
             let InterpolatedStringElement::Interpolation(i) = el else {
                 continue;
             };
-            self.child(Frame::Nt(step), &i.expression, scope, h);
+            self.child(Frame::Step(step), &i.expression, at);
             let Some(spec) = &i.format_spec else {
                 continue;
             };
             if step == "tstr" {
-                self.path.push(Frame::Nt("tstr"));
-                self.interpolations(&spec.elements, "fstr", scope, h);
+                self.path.push(Frame::Step("tstr"));
+                self.interpolations(&spec.elements, "fstr", at);
                 self.path.pop();
             } else {
-                self.interpolations(&spec.elements, "fstr", scope, h);
+                self.interpolations(&spec.elements, "fstr", at);
             }
         }
     }
 
-    // ---- emitters ------------------------------------------------------------------------
+    // ---- emitters -------------------------------------------------------------------------
 
-    fn emit_call(&mut self, call: &'a ast::ExprCall, scope: i64, header: i64) {
+    fn emit_call(&mut self, call: &'a ast::ExprCall, at: At) {
         let callee = callee_text(call);
         let (l, c) = self.lines.pos(call.range().start());
-        aggregate(&mut self.callees, key_prefix(vec![J::Int(scope), J::Int(header), J::s(&callee)]), l, c);
+        let key = TextKey {
+            scope: at.scope,
+            header: at.header,
+            text: callee.clone(),
+        };
+        count(&mut self.out.callees, key, l, c);
         let last = callee.rsplit('.').next().unwrap_or("");
-        if !is_watched(last) {
+        if !self.is_watched(last) {
             return;
         }
-        let args = call.arguments.args.iter().map(|a| self.enc.shallow(a, self.src)).collect();
-        let kws = call
-            .arguments
-            .keywords
-            .iter()
-            .map(|k| J::Arr(vec![J::opt_s(k.arg.as_ref().map(|a| a.as_str())), self.enc.shallow(&k.value, self.src)]))
-            .collect();
-        let row = J::Arr(vec![J::Int(scope), J::Int(header), J::Int(l), J::Int(c), J::Str(callee), J::Arr(args), J::Arr(kws)]);
-        self.calls.push(Row::new(l, c, row));
+        let row = WatchedCall {
+            site: at.site((l, c)),
+            args: self.enc.shallow_args(call, self.src),
+            kws: self.enc.shallow_keywords(call, self.src),
+            callee,
+        };
+        self.out.calls.push(row);
+        self.flag_site(l, c, at.flags);
     }
 
-    fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, scope: i64, header: i64) {
+    fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, at: At) {
         let v = StrValue::of(lit, self.src);
         let value = v.text.as_str();
         let (l, c) = self.lines.pos(lit.range().start());
         if value.contains('<') {
             for name in tag_names(value) {
-                let row = J::Arr(vec![J::Int(scope), J::Int(header), J::Int(l), J::Int(c), J::s(name)]);
-                self.tags.push(Row::new(l, c, row));
+                self.out.tags.push(Tag {
+                    site: at.site((l, c)),
+                    name: name.to_string(),
+                });
             }
         }
         if !value.contains('.') && !value.starts_with(|ch: char| ch.is_ascii_uppercase()) {
             return;
         }
-        let parts = if v.parts.len() > 1 { Some(&v.parts) } else { None };
-        let symbolic = is_symbolic(value, v.surrogate);
+        let max = self.config.limits.max_symbolic;
+        let parts = if v.parts.len() > 1 {
+            Some(&v.parts)
+        } else {
+            None
+        };
+        let symbolic = is_symbolic(value, v.surrogate, max);
         let mut dotted = symbolic && is_dotted_path(value);
         if let Some(parts) = parts {
-            dotted |= parts.iter().any(|(p, s)| is_symbolic(p, *s) && is_dotted_path(p));
+            dotted |= parts
+                .iter()
+                .any(|(p, s)| is_symbolic(p, *s, max) && is_dotted_path(p));
         }
         if !dotted {
             if symbolic {
-                aggregate(&mut self.names, key_prefix(vec![J::Int(scope), J::Int(header), J::s(value)]), l, c);
+                let key = TextKey {
+                    scope: at.scope,
+                    header: at.header,
+                    text: value.to_string(),
+                };
+                count(&mut self.out.names, key, l, c);
             }
             return;
         }
-        let (chain, up) = self.climb();
-        let mut row = vec![
-            J::Int(scope),
-            J::Int(header),
-            J::Int(l),
-            J::Int(c),
-            if symbolic { J::s(value) } else { J::Null },
-            J::Str(chain),
-            J::Str(up),
-        ];
-        if let Some(parts) = parts {
-            row.push(J::Arr(parts.iter().map(|(p, s)| if is_symbolic(p, *s) { J::s(p) } else { J::Null }).collect()));
-        }
-        self.strs.push(Row::new(l, c, J::Arr(row)));
+        let (chain, up) = climb(&self.path);
+        let parts = parts.map(|parts| {
+            parts
+                .iter()
+                .map(|(p, s)| is_symbolic(p, *s, max).then(|| p.clone()))
+                .collect()
+        });
+        self.out.strs.push(DottedStr {
+            site: at.site((l, c)),
+            value: symbolic.then(|| value.to_string()),
+            chain,
+            up,
+            parts,
+        });
+        self.flag_site(l, c, at.flags);
     }
 
-    fn deriving_scope(&self, name: &str, scope: i64) -> Option<i64> {
-        for idx in self.defs.ancestry(scope) {
-            if self.defs.is_class(idx) {
-                continue;
-            }
-            if self.derived.get(&idx).is_some_and(|names| names.contains(name)) {
-                return Some(idx);
-            }
-        }
-        None
-    }
-
-    fn emit_ref(&mut self, name: &'a ast::ExprName, scope: i64, header: i64) {
+    /// An import-bound name is a `refs` row when it is first-party and class-like, else a
+    /// `uses` count. Another load may be a derived local: it becomes a candidate.
+    fn emit_ref(&mut self, name: &'a ast::ExprName, at: At) {
         let id = name.id.as_str();
-        let binding = self.bound.get(id).copied();
-        let mut origin = None;
-        if binding.is_none() {
-            if name.ctx != ExprContext::Load {
-                return;
-            }
-            origin = self.deriving_scope(id, scope);
-            if origin.is_none() {
-                return;
-            }
-        }
         let (l, c) = self.lines.pos(name.range.start());
-        let (chain, up) = self.climb();
-        if let (None, Some((class_like, first_party))) = (origin, binding) {
-            let attr_upper = chain.starts_with('.') && chain[1..].starts_with(|ch: char| ch.is_ascii_uppercase());
-            if !(first_party && (class_like || attr_upper)) {
-                let attrs = leading_attrs(&chain);
-                let key = key_prefix(vec![J::Int(scope), J::Int(header), J::s(id), J::s(attrs)]);
-                aggregate(&mut self.uses, key, l, c);
-                return;
+        let Some(binding) = self.bound.get(id).copied() else {
+            if name.ctx == ExprContext::Load && self.stored.contains(id) {
+                let (chain, up) = climb(&self.path);
+                self.out.candidates.push(Candidate {
+                    site: at.site((l, c)),
+                    root: id.to_string(),
+                    chain,
+                    up,
+                    flags: at.flags,
+                });
             }
-        }
-        let mut row = vec![J::Int(scope), J::Int(header), J::Int(l), J::Int(c), J::s(id), J::Str(chain), J::Str(up.clone())];
-        if let Some(o) = origin {
-            row.push(J::Int(o));
-        }
-        self.refs.push(Row::new(l, c, J::Arr(row)));
-        self.note_derivation(scope, &up);
-    }
-
-    fn note_derivation(&mut self, scope: i64, up: &str) {
-        if self.defs.is_class(scope) {
-            return;
-        }
-        let mut steps = up.split_whitespace().skip_while(|s| WRAPPER_STEPS.contains(s));
-        let Some(first) = steps.next() else {
             return;
         };
-        let (kind, rest) = first.split_once(':').unwrap_or((first, ""));
-        if !matches!(kind, "assign" | "annassign" | "walrus") {
+        let (chain, up) = climb(&self.path);
+        let attr_upper = chain
+            .strip_prefix('.')
+            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_uppercase()));
+        if !(binding.first_party && (binding.class_like || attr_upper)) {
+            let key = UseKey {
+                scope: at.scope,
+                header: at.header,
+                root: id.to_string(),
+                attrs: leading_attrs(&chain).to_string(),
+            };
+            count(&mut self.out.uses, key, l, c);
             return;
         }
-        let names: Vec<&str> = rest.split(',').collect();
-        if names.iter().all(|n| !n.is_empty() && !n.starts_with(['.', '[', '(', '*', '?'])) {
-            let set = self.new_derived.entry(scope).or_default();
-            for n in names {
-                set.insert(n.to_string());
-            }
-        }
+        self.out.refs.push(Ref {
+            site: at.site((l, c)),
+            root: id.to_string(),
+            chain,
+            up,
+            origin: None,
+        });
+        self.flag_site(l, c, at.flags);
     }
 
-    fn emit_watched(&mut self, dict: &'a ast::ExprDict, scope: i64, header: i64) {
+    fn emit_watched(&mut self, dict: &'a ast::ExprDict, at: At) {
         for item in dict.items.iter() {
             let Some(Expr::StringLiteral(key)) = &item.key else {
                 continue;
             };
             let key_text = key.value.to_str();
-            if key_text != "kind" {
+            if key_text != WATCHED_DICT_KEY {
                 continue;
             }
-            let (chain, up) = self.climb();
-            let (l, c) = self.lines.pos(item.value.range().start());
-            let row = J::Arr(vec![
-                J::Int(scope),
-                J::Int(header),
-                J::Int(l),
-                J::Int(c),
-                J::s(key_text),
-                self.enc.shallow(&item.value, self.src),
-                J::Str(chain),
-                J::Str(up),
-            ]);
-            self.watched.push(Row::new(l, c, row));
+            let (chain, up) = climb(&self.path);
+            let position = self.lines.pos(item.value.range().start());
+            self.out.watched.push(WatchedKey {
+                site: at.site(position),
+                key: key_text.to_string(),
+                value: self.enc.shallow(&item.value, self.src),
+                chain,
+                up,
+            });
         }
-    }
-
-    /// Trailer chain above the current node, then the escape steps up to the statement or header slot.
-    fn climb(&self) -> (String, String) {
-        let mut chain = String::new();
-        let mut i = self.path.len();
-        while i > 0 {
-            match self.path[i - 1] {
-                Frame::Attr(a) => {
-                    chain.push('.');
-                    chain.push_str(a);
-                }
-                Frame::CallFunc => chain.push_str("()"),
-                Frame::SubValue => chain.push_str("[]"),
-                _ => break,
-            }
-            i -= 1;
-        }
-        let mut up: Vec<String> = Vec::new();
-        while i > 0 {
-            let (step, terminal) = self.path[i - 1].step();
-            up.push(step);
-            if terminal {
-                break;
-            }
-            i -= 1;
-        }
-        (chain, up.join(" "))
-    }
-}
-
-/// `(\.\w+)*` at the start of a chain.
-fn leading_attrs(chain: &str) -> &str {
-    let bytes = chain.as_bytes();
-    let mut end = 0;
-    let mut i = 0;
-    while i < bytes.len() && bytes[i] == b'.' {
-        let rest = &chain[i + 1..];
-        let len = rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len());
-        if len == 0 {
-            break;
-        }
-        i += 1 + len;
-        end = i;
-    }
-    &chain[..end]
-}
-
-fn aug_op(op: &str) -> &'static str {
-    match op {
-        "+" => "+=",
-        "-" => "-=",
-        "*" => "*=",
-        "@" => "@=",
-        "/" => "/=",
-        "//" => "//=",
-        "%" => "%=",
-        "**" => "**=",
-        "<<" => "<<=",
-        ">>" => ">>=",
-        "|" => "|=",
-        "^" => "^=",
-        _ => "&=",
-    }
-}
-
-fn bin_step(op: &str) -> &'static str {
-    match op {
-        "+" => "bin:+",
-        "-" => "bin:-",
-        "*" => "bin:*",
-        "@" => "bin:@",
-        "/" => "bin:/",
-        "//" => "bin://",
-        "%" => "bin:%",
-        "**" => "bin:**",
-        "<<" => "bin:<<",
-        ">>" => "bin:>>",
-        "|" => "bin:|",
-        "^" => "bin:^",
-        _ => "bin:&",
-    }
-}
-
-fn unary_step(op: &str) -> &'static str {
-    match op {
-        "not" => "unary:not",
-        "-" => "unary:-",
-        "+" => "unary:+",
-        _ => "unary:~",
-    }
-}
-
-fn cmp_step(op: &str) -> &'static str {
-    match op {
-        "==" => "cmp:==",
-        "!=" => "cmp:!=",
-        "<" => "cmp:<",
-        "<=" => "cmp:<=",
-        ">" => "cmp:>",
-        ">=" => "cmp:>=",
-        "is" => "cmp:is",
-        "isnot" => "cmp:isnot",
-        "in" => "cmp:in",
-        _ => "cmp:notin",
     }
 }

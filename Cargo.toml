@@ -1,9 +1,13 @@
 [package]
 name = "hoglint-facts"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 build = "build.rs"
+
+[lib]
+name = "hoglint_facts"
+path = "src/lib.rs"
 
 [[bin]]
 name = "hoglint-facts"
@@ -14,6 +18,8 @@ ruff_python_parser = "=0.0.20"
 ruff_python_ast = "=0.0.20"
 ruff_text_size = "=0.0.20"
 rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "=0.10.9"
 
 [build-dependencies]

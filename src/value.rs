@@ -1,40 +1,156 @@
 //! Value trees (V) and shallow values (SV), schema.md section 4.
+//!
+//! Each struct serializes to one JSON object form. Fields are declared in key order, because
+//! records sort object keys by code point.
 
-use crate::json::J;
+use crate::source::parse_py314;
 use ruff_python_ast::{self as ast, BoolOp, CmpOp, Expr, Number, Operator, UnaryOp};
+use ruff_python_parser::Mode;
 use ruff_text_size::Ranged;
+use serde::Serialize;
 
 pub const MAX_STR: usize = 100;
-const MAX_NODES: usize = 400;
-const MAX_SYMBOLIC: usize = 100;
-
-/// Caps that schema v1.1 raises (`--max-nodes`, `--max-symbolic`); set once at startup.
-pub struct Limits {
-    pub max_nodes: usize,
-    pub max_symbolic: usize,
-}
-
-static LIMITS: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
-
-pub fn set_limits(limits: Limits) {
-    LIMITS.set(limits).ok().expect("limits set twice");
-}
-
-fn limits() -> &'static Limits {
-    LIMITS.get_or_init(|| Limits { max_nodes: MAX_NODES, max_symbolic: MAX_SYMBOLIC })
-}
-
-/// Element budget for assignment values and branch tests (header slots keep MAX_HEADER_NODES).
-pub fn max_nodes() -> usize {
-    limits().max_nodes
-}
-
-/// Longest literal that still counts as symbolic for `strs` and `names`.
-pub fn max_symbolic() -> usize {
-    limits().max_symbolic
-}
 pub const MAX_HEADER_NODES: usize = 64;
 const MAX_DEPTH: usize = 40;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Value {
+    Null,
+    Bool(bool),
+    Int(i64),
+    /// A Name, or an attribute chain rooted at a Name: `a.b.c`.
+    Chain(String),
+    Str(StrConst),
+    Opaque(Opaque),
+    BigCall(BigCall),
+    Attr(Attr),
+    Call(Call),
+    Sub(Sub),
+    List(List),
+    Tuple(Tuple),
+    Set(Set),
+    Dict(Dict),
+    Star(Star),
+    Bin(Bin),
+    BoolOp(BoolOps),
+    Unary(Unary),
+    Compare(Compare),
+}
+
+/// `{"s": text}`; in a type-expression slot also `"sa"`: the parsed text, or null.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StrConst {
+    pub s: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sa: Option<Box<Value>>,
+}
+
+/// `{"o": what}`: a constant or node the tree does not spell out (`float`, `longstr`, `Lambda`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Opaque {
+    pub o: &'static str,
+}
+
+/// A call over the element budget keeps its callee: `{"call": V, "o": "big"}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BigCall {
+    pub call: Box<Value>,
+    pub o: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Attr {
+    pub a: String,
+    pub v: Box<Value>,
+}
+
+/// A keyword argument: `[name | null, value]`. A null name is `**x`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Keyword(pub Option<String>, pub Value);
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Call {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<Value>,
+    pub call: Box<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub kw: Vec<Keyword>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Sub {
+    pub i: Box<Value>,
+    pub sub: Box<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct List {
+    pub list: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Tuple {
+    pub tuple: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Set {
+    pub set: Vec<Value>,
+}
+
+/// Dict items as `[key, value]`. A null key is `**x`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Dict {
+    pub dict: Vec<(Option<Value>, Value)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Star {
+    pub star: Box<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Bin {
+    pub bin: &'static str,
+    pub l: Box<Value>,
+    pub r: Box<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoolOps {
+    #[serde(rename = "bool")]
+    pub op: &'static str,
+    pub vs: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Unary {
+    pub un: &'static str,
+    pub v: Box<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Compare {
+    pub cmp: Box<Value>,
+    pub cs: Vec<Value>,
+    pub ops: Vec<&'static str>,
+}
+
+impl Value {
+    pub fn opaque(what: &'static str) -> Value {
+        Value::Opaque(Opaque { o: what })
+    }
+
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
+    /// Optional def keys are left out when null, false or 0.
+    pub fn is_blank(&self) -> bool {
+        matches!(self, Value::Null | Value::Bool(false) | Value::Int(0))
+    }
+}
 
 pub fn binop(op: Operator) -> &'static str {
     match op {
@@ -128,7 +244,9 @@ pub fn class_name(expr: &Expr) -> &'static str {
 pub fn chain_text(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Name(n) => Some(n.id.to_string()),
-        Expr::Attribute(a) => chain_text(&a.value).map(|base| format!("{base}.{}", a.attr.as_str())),
+        Expr::Attribute(a) => {
+            chain_text(&a.value).map(|base| format!("{base}.{}", a.attr.as_str()))
+        }
         _ => None,
     }
 }
@@ -141,6 +259,10 @@ pub fn callee_text(call: &ast::ExprCall) -> String {
         return format!("?.{}", a.attr.as_str());
     }
     "?".to_string()
+}
+
+pub fn keyword_name(keyword: &ast::Keyword) -> Option<String> {
+    keyword.arg.as_ref().map(|a| a.to_string())
 }
 
 /// True when a `\u` / `\U` escape in a non-raw str part names a surrogate. CPython keeps the
@@ -164,11 +286,13 @@ fn part_has_surrogate(part: &ast::StringLiteral, src: &str) -> bool {
                 continue;
             }
         };
-        let hex = bytes.get(i + 2..i + 2 + width).and_then(|h| std::str::from_utf8(h).ok());
-        if let Some(code) = hex.and_then(|h| u32::from_str_radix(h, 16).ok()) {
-            if (0xD800..=0xDFFF).contains(&code) {
-                return true;
-            }
+        let hex = bytes
+            .get(i + 2..i + 2 + width)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        if let Some(code) = hex.and_then(|h| u32::from_str_radix(h, 16).ok())
+            && (0xD800..=0xDFFF).contains(&code)
+        {
+            return true;
         }
         i += 2;
     }
@@ -179,95 +303,135 @@ fn part_has_surrogate(part: &ast::StringLiteral, src: &str) -> bool {
 pub struct StrValue {
     pub text: String,
     pub surrogate: bool,
+    /// Each implicitly concatenated part, with its own surrogate flag.
     pub parts: Vec<(String, bool)>,
 }
 
 impl StrValue {
     pub fn of(lit: &ast::ExprStringLiteral, src: &str) -> StrValue {
-        let parts: Vec<(String, bool)> =
-            lit.value.iter().map(|p| (p.value.to_string(), part_has_surrogate(p, src))).collect();
-        StrValue { text: lit.value.to_str().to_string(), surrogate: parts.iter().any(|p| p.1), parts }
+        let parts: Vec<(String, bool)> = lit
+            .value
+            .iter()
+            .map(|p| (p.value.to_string(), part_has_surrogate(p, src)))
+            .collect();
+        StrValue {
+            text: lit.value.to_str().to_string(),
+            surrogate: parts.iter().any(|p| p.1),
+            parts,
+        }
     }
 }
 
-pub fn str_constant(text: &str, surrogate: bool) -> J {
+pub fn str_constant(text: &str, surrogate: bool) -> Value {
     if surrogate {
-        return J::o("badstr");
+        return Value::opaque("badstr");
     }
-    if text.chars().count() <= MAX_STR {
-        J::obj(vec![("s", J::s(text))])
-    } else {
-        J::o("longstr")
+    if text.chars().count() > MAX_STR {
+        return Value::opaque("longstr");
     }
+    Value::Str(StrConst {
+        s: text.to_string(),
+        sa: None,
+    })
 }
 
-/// Constants other than str; None when the expression is not a constant.
-fn other_constant(expr: &Expr) -> Option<J> {
+/// Constants other than str; None when the expression is not one.
+fn other_constant(expr: &Expr) -> Option<Value> {
     Some(match expr {
-        Expr::NoneLiteral(_) => J::Null,
-        Expr::BooleanLiteral(b) => J::Bool(b.value),
+        Expr::NoneLiteral(_) => Value::Null,
+        Expr::BooleanLiteral(b) => Value::Bool(b.value),
         Expr::NumberLiteral(n) => match &n.value {
             Number::Int(i) => match i.as_i64() {
-                Some(v) => J::Int(v),
-                None => J::o("int"),
+                Some(v) => Value::Int(v),
+                None => Value::opaque("int"),
             },
-            Number::Float(_) => J::o("float"),
-            Number::Complex { .. } => J::o("complex"),
+            Number::Float(_) => Value::opaque("float"),
+            Number::Complex { .. } => Value::opaque("complex"),
         },
-        Expr::BytesLiteral(_) => J::o("bytes"),
-        Expr::EllipsisLiteral(_) => J::o("..."),
+        Expr::BytesLiteral(_) => Value::opaque("bytes"),
+        Expr::EllipsisLiteral(_) => Value::opaque("..."),
         _ => return None,
     })
 }
 
+/// The chains of a non-empty list or tuple whose elements are all names.
+fn name_elements(elts: &[Expr]) -> Option<Vec<Value>> {
+    if elts.is_empty() {
+        return None;
+    }
+    elts.iter()
+        .map(|e| chain_text(e).map(Value::Chain))
+        .collect()
+}
+
+/// Builds value trees. The element count is per top-level value, so one encoder serves a file.
+#[derive(Default)]
 pub struct Encoder {
     count: usize,
 }
 
 impl Encoder {
-    pub fn new() -> Encoder {
-        Encoder { count: 0 }
-    }
-
-    pub fn shallow(&self, expr: &Expr, src: &str) -> J {
-        if let Expr::StringLiteral(s) = expr {
-            let v = StrValue::of(s, src);
-            return str_constant(&v.text, v.surrogate);
+    /// SV: a constant, a chain, a list or tuple of names (`[post_save, post_delete]`), else the
+    /// node's class.
+    pub fn shallow(&self, expr: &Expr, src: &str) -> Value {
+        match expr {
+            Expr::StringLiteral(s) => {
+                let v = StrValue::of(s, src);
+                return str_constant(&v.text, v.surrogate);
+            }
+            Expr::List(l) => {
+                if let Some(list) = name_elements(&l.elts) {
+                    return Value::List(List { list });
+                }
+            }
+            Expr::Tuple(t) => {
+                if let Some(tuple) = name_elements(&t.elts) {
+                    return Value::Tuple(Tuple { tuple });
+                }
+            }
+            _ => {}
         }
         if let Some(c) = other_constant(expr) {
             return c;
         }
         if let Some(text) = chain_text(expr) {
-            return J::Str(text);
+            return Value::Chain(text);
         }
-        J::o(class_name(expr))
+        Value::opaque(class_name(expr))
+    }
+
+    pub fn shallow_args(&self, call: &ast::ExprCall, src: &str) -> Vec<Value> {
+        call.arguments
+            .args
+            .iter()
+            .map(|a| self.shallow(a, src))
+            .collect()
+    }
+
+    pub fn shallow_keywords(&self, call: &ast::ExprCall, src: &str) -> Vec<Keyword> {
+        call.arguments
+            .keywords
+            .iter()
+            .map(|k| Keyword(keyword_name(k), self.shallow(&k.value, src)))
+            .collect()
     }
 
     /// Decorator form: a chain, or a call with shallow arguments.
-    pub fn shallow_call(&self, expr: &Expr, src: &str) -> J {
+    pub fn shallow_call(&self, expr: &Expr, src: &str) -> Value {
         let Expr::Call(call) = expr else {
             return self.shallow(expr, src);
         };
-        let mut pairs = vec![("call", self.shallow(&call.func, src))];
-        if !call.arguments.args.is_empty() {
-            pairs.push(("args", J::Arr(call.arguments.args.iter().map(|a| self.shallow(a, src)).collect())));
-        }
-        if !call.arguments.keywords.is_empty() {
-            let kws = call
-                .arguments
-                .keywords
-                .iter()
-                .map(|k| J::Arr(vec![J::opt_s(k.arg.as_ref().map(|a| a.as_str())), self.shallow(&k.value, src)]))
-                .collect();
-            pairs.push(("kw", J::Arr(kws)));
-        }
-        J::obj(pairs)
+        Value::Call(Call {
+            args: self.shallow_args(call, src),
+            call: Box::new(self.shallow(&call.func, src)),
+            kw: self.shallow_keywords(call, src),
+        })
     }
 
     /// One top-level value. `typed` marks a type-expression slot.
-    pub fn value(&mut self, expr: Option<&Expr>, typed: bool, budget: usize, src: &str) -> J {
+    pub fn value(&mut self, expr: Option<&Expr>, typed: bool, budget: usize, src: &str) -> Value {
         let Some(expr) = expr else {
-            return J::Null;
+            return Value::Null;
         };
         self.count = 0;
         let result = self.tree(expr, typed, 0, src);
@@ -276,42 +440,54 @@ impl Encoder {
         }
         if let Expr::Call(call) = expr {
             self.count = 0;
-            return J::obj(vec![("call", self.tree(&call.func, false, 1, src)), ("o", J::s("big"))]);
+            return Value::BigCall(BigCall {
+                call: Box::new(self.tree(&call.func, false, 1, src)),
+                o: "big",
+            });
         }
-        J::o("big")
+        Value::opaque("big")
     }
 
-    fn type_string(&mut self, value: &StrValue) -> J {
+    fn type_string(&mut self, value: &StrValue) -> Value {
         let raw = str_constant(&value.text, value.surrogate);
-        if !matches!(&raw, J::Obj(p) if p[0].0 == "s") {
+        let Value::Str(StrConst { s, .. }) = raw else {
             return raw;
-        }
-        let text = value.text.as_str();
+        };
         // CPython rejects leading whitespace (unexpected indent) and null bytes.
-        let starts_blank = text.starts_with([' ', '\t', '\x0c']);
-        let parsed = if starts_blank || text.contains('\0') {
+        let starts_blank = s.starts_with([' ', '\t', '\x0c']);
+        let parsed = if starts_blank || s.contains('\0') {
             None
         } else {
-            Some(crate::record::parse_py314(text, ruff_python_parser::Mode::Expression))
+            Some(parse_py314(&s, Mode::Expression))
         };
         let sa = match &parsed {
             Some(p) if !p.has_syntax_errors() => match p.syntax() {
-                ast::Mod::Expression(e) => self.tree(&e.body, true, 1, text),
-                ast::Mod::Module(_) => J::Null,
+                ast::Mod::Expression(e) => self.tree(&e.body, true, 1, &s),
+                ast::Mod::Module(_) => Value::Null,
             },
-            _ => J::Null,
+            _ => Value::Null,
         };
-        J::obj(vec![("s", J::s(text)), ("sa", sa)])
+        Value::Str(StrConst {
+            s: s.clone(),
+            sa: Some(Box::new(sa)),
+        })
     }
 
-    fn list(&mut self, items: &[Expr], typed: bool, depth: usize, src: &str) -> J {
-        J::Arr(items.iter().map(|e| self.tree(e, typed, depth, src)).collect())
+    fn list(&mut self, items: &[Expr], typed: bool, depth: usize, src: &str) -> Vec<Value> {
+        items
+            .iter()
+            .map(|e| self.tree(e, typed, depth, src))
+            .collect()
     }
 
-    pub fn tree(&mut self, expr: &Expr, typed: bool, depth: usize, src: &str) -> J {
+    fn boxed(&mut self, expr: &Expr, typed: bool, depth: usize, src: &str) -> Box<Value> {
+        Box::new(self.tree(expr, typed, depth, src))
+    }
+
+    fn tree(&mut self, expr: &Expr, typed: bool, depth: usize, src: &str) -> Value {
         self.count += 1;
         if depth > MAX_DEPTH {
-            return J::o("deep");
+            return Value::opaque("deep");
         }
         let d = depth + 1;
         if let Expr::StringLiteral(s) = expr {
@@ -321,72 +497,83 @@ impl Encoder {
             }
             return str_constant(&v.text, v.surrogate);
         }
+        // In a type expression `None` is the type None, so `-> None` differs from no annotation.
+        if typed && expr.is_none_literal_expr() {
+            return Value::Chain("None".to_string());
+        }
         if let Some(c) = other_constant(expr) {
             return c;
         }
         if let Some(text) = chain_text(expr) {
-            return J::Str(text);
+            return Value::Chain(text);
         }
         match expr {
-            Expr::Attribute(a) => {
-                J::obj(vec![("a", J::s(a.attr.as_str())), ("v", self.tree(&a.value, typed, d, src))])
-            }
+            Expr::Attribute(a) => Value::Attr(Attr {
+                a: a.attr.to_string(),
+                v: self.boxed(&a.value, typed, d, src),
+            }),
             Expr::Call(call) => {
-                let mut pairs = vec![("call", self.tree(&call.func, false, d, src))];
-                if !call.arguments.args.is_empty() {
-                    pairs.push(("args", self.list(&call.arguments.args, false, d, src)));
+                let callee = self.boxed(&call.func, false, d, src);
+                let args = self.list(&call.arguments.args, false, d, src);
+                let mut kw = Vec::new();
+                for k in call.arguments.keywords.iter() {
+                    kw.push(Keyword(keyword_name(k), self.tree(&k.value, false, d, src)));
                 }
-                if !call.arguments.keywords.is_empty() {
-                    let mut kws = Vec::new();
-                    for k in call.arguments.keywords.iter() {
-                        let name = J::opt_s(k.arg.as_ref().map(|a| a.as_str()));
-                        kws.push(J::Arr(vec![name, self.tree(&k.value, false, d, src)]));
-                    }
-                    pairs.push(("kw", J::Arr(kws)));
-                }
-                J::obj(pairs)
+                Value::Call(Call {
+                    args,
+                    call: callee,
+                    kw,
+                })
             }
-            Expr::Subscript(s) => J::obj(vec![
-                ("sub", self.tree(&s.value, typed, d, src)),
-                ("i", self.tree(&s.slice, true, d, src)),
-            ]),
-            Expr::List(l) => J::obj(vec![("list", self.list(&l.elts, typed, d, src))]),
-            Expr::Tuple(t) => J::obj(vec![("tuple", self.list(&t.elts, typed, d, src))]),
-            Expr::Set(s) => J::obj(vec![("set", self.list(&s.elts, typed, d, src))]),
+            Expr::Subscript(s) => {
+                let sub = self.boxed(&s.value, typed, d, src);
+                let i = self.boxed(&s.slice, true, d, src);
+                Value::Sub(Sub { i, sub })
+            }
+            Expr::List(l) => Value::List(List {
+                list: self.list(&l.elts, typed, d, src),
+            }),
+            Expr::Tuple(t) => Value::Tuple(Tuple {
+                tuple: self.list(&t.elts, typed, d, src),
+            }),
+            Expr::Set(s) => Value::Set(Set {
+                set: self.list(&s.elts, typed, d, src),
+            }),
             Expr::Dict(dict) => {
                 let mut items = Vec::new();
                 for item in dict.items.iter() {
-                    let key = match &item.key {
-                        Some(k) => self.tree(k, false, d, src),
-                        None => J::Null,
-                    };
-                    items.push(J::Arr(vec![key, self.tree(&item.value, false, d, src)]));
+                    let key = item.key.as_ref().map(|k| self.tree(k, false, d, src));
+                    items.push((key, self.tree(&item.value, false, d, src)));
                 }
-                J::obj(vec![("dict", J::Arr(items))])
+                Value::Dict(Dict { dict: items })
             }
-            Expr::Starred(s) => J::obj(vec![("star", self.tree(&s.value, typed, d, src))]),
+            Expr::Starred(s) => Value::Star(Star {
+                star: self.boxed(&s.value, typed, d, src),
+            }),
             Expr::BinOp(b) => {
                 let op = binop(b.op);
                 let inner = typed || op == "|";
-                J::obj(vec![
-                    ("bin", J::s(op)),
-                    ("l", self.tree(&b.left, inner, d, src)),
-                    ("r", self.tree(&b.right, inner, d, src)),
-                ])
+                let l = self.boxed(&b.left, inner, d, src);
+                let r = self.boxed(&b.right, inner, d, src);
+                Value::Bin(Bin { bin: op, l, r })
             }
-            Expr::BoolOp(b) => {
-                J::obj(vec![("bool", J::s(boolop(b.op))), ("vs", self.list(&b.values, false, d, src))])
-            }
-            Expr::UnaryOp(u) => {
-                J::obj(vec![("un", J::s(unaryop(u.op))), ("v", self.tree(&u.operand, false, d, src))])
-            }
+            Expr::BoolOp(b) => Value::BoolOp(BoolOps {
+                op: boolop(b.op),
+                vs: self.list(&b.values, false, d, src),
+            }),
+            Expr::UnaryOp(u) => Value::Unary(Unary {
+                un: unaryop(u.op),
+                v: self.boxed(&u.operand, false, d, src),
+            }),
             Expr::Compare(c) => {
-                let left = self.tree(&c.operands[0], false, d, src);
-                let ops = J::Arr(c.ops.iter().map(|o| J::s(cmpop(*o))).collect());
-                let cs = self.list(&c.operands[1..], false, d, src);
-                J::obj(vec![("cmp", left), ("ops", ops), ("cs", cs)])
+                let cmp = self.boxed(&c.operands[0], false, d, src);
+                Value::Compare(Compare {
+                    cmp,
+                    cs: self.list(&c.operands[1..], false, d, src),
+                    ops: c.ops.iter().map(|o| cmpop(*o)).collect(),
+                })
             }
-            other => J::o(class_name(other)),
+            other => Value::opaque(class_name(other)),
         }
     }
 }

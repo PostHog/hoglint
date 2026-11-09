@@ -11,7 +11,12 @@ fn inputs(root: &Path) -> Vec<PathBuf> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
         .collect();
     files.sort();
-    for name in ["Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml"] {
+    for name in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "build.rs",
+        "rust-toolchain.toml",
+    ] {
         files.push(root.join(name));
     }
     files

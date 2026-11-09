@@ -1,4 +1,5 @@
-//! L1 fact extractor (schema v1) on the ruff parser. Output matches reference_l1.py line for line.
+//! hoglint-facts: the shell around the `hoglint_facts` core. Reads files, runs `extract` on a
+//! thread pool, keeps the content-hash cache and writes records.
 //!
 //! Usage:
 //!   hoglint-facts --discover <repo_root> [--v1.1] > files.txt
@@ -14,23 +15,76 @@
 //! kind into the --out directory; `cache` keeps one record per source sha256 under --cache and
 //! only parses files whose content has no entry yet (records still stream to --out). The cache
 //! directory name holds the schema version, the build id and every option that changes records.
+//!
+//! A file that cannot be read gets a `read_error` record and the run goes on. Bad arguments,
+//! an unwritable output and a failing git exit non-zero.
 
-mod json;
-mod record;
-mod value;
-mod walker;
-
+use hoglint_facts::{
+    BUILD_ID, ExtractConfig, Facts, FileRecord, Limits, Status, extract, record_line, sha256_hex,
+};
 use rayon::prelude::*;
-use record::{config_id, extract, sha256_hex, FileOut, Times, BUILD_ID, KINDS};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitCode};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+/// Fact list names of a record, for the `kinds` mode.
+const FACT_KINDS: [&str; 13] = [
+    "assigns",
+    "branches",
+    "callees",
+    "calls",
+    "defs",
+    "imports",
+    "names",
+    "refs",
+    "site_flags",
+    "strs",
+    "tags",
+    "uses",
+    "watched",
+];
 
 /// Cache entries store this path; a hit swaps in the real one.
 const PATH_PLACEHOLDER: &str = "\"path\":\"\"";
-static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[derive(Debug)]
+enum ShellError {
+    Usage(String),
+    Io { what: String, error: std::io::Error },
+    Encode(serde_json::Error),
+    Git(String),
+}
+
+impl fmt::Display for ShellError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ShellError::Usage(message) => write!(f, "usage: {message}"),
+            ShellError::Io { what, error } => write!(f, "{what}: {error}"),
+            ShellError::Encode(error) => write!(f, "encode a record: {error}"),
+            ShellError::Git(message) => write!(f, "git ls-files: {message}"),
+        }
+    }
+}
+
+impl From<serde_json::Error> for ShellError {
+    fn from(error: serde_json::Error) -> Self {
+        ShellError::Encode(error)
+    }
+}
+
+fn io_error(what: impl Into<String>) -> impl FnOnce(std::io::Error) -> ShellError {
+    let what = what.into();
+    move |error| ShellError::Io { what, error }
+}
+
+fn usage(message: impl Into<String>) -> ShellError {
+    ShellError::Usage(message.into())
+}
 
 struct Discovery;
 
@@ -40,109 +94,154 @@ impl Discovery {
         if parts.iter().any(|p| p.starts_with('.')) {
             return true;
         }
-        for p in &parts[..parts.len() - 1] {
-            if *p == "docs" || p.ends_with("__pycache__") || p.ends_with("egg-info") {
-                return true;
-            }
-        }
-        false
+        parts[..parts.len() - 1]
+            .iter()
+            .any(|p| *p == "docs" || p.ends_with("__pycache__") || p.ends_with("egg-info"))
     }
 
     /// Git-visible sources minus hidden paths, docs, caches and egg-info. v1.1 adds `.pyi`.
     /// Project excludes are applied by the caller (hoglint.core.discovery).
-    fn files(root: &Path, v11: bool) -> Vec<String> {
+    fn files(root: &Path, v11: bool) -> Result<Vec<String>, ShellError> {
         let patterns: &[&str] = if v11 { &["*.py", "*.pyi"] } else { &["*.py"] };
         let out = Command::new("git")
             .args(["ls-files", "-z", "-co", "--exclude-standard", "--"])
             .args(patterns)
             .current_dir(root)
             .output()
-            .expect("git ls-files");
-        let text = String::from_utf8(out.stdout).expect("utf-8 paths");
-        let mut seen = std::collections::HashSet::new();
+            .map_err(|error| ShellError::Git(error.to_string()))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(ShellError::Git(stderr.trim().to_string()));
+        }
+        let text = String::from_utf8(out.stdout)
+            .map_err(|_| ShellError::Git("a path is not UTF-8".to_string()))?;
+        let mut seen = HashSet::new();
         let mut files: Vec<String> = Vec::new();
         for rel in text.split('\0') {
-            if rel.is_empty() || seen.contains(rel) || Self::is_excluded(rel) {
+            if rel.is_empty() || Self::is_excluded(rel) || !seen.insert(rel) {
                 continue;
             }
-            seen.insert(rel.to_string());
             if root.join(rel).is_file() {
                 files.push(rel.to_string());
             }
         }
         files.sort();
-        files
+        Ok(files)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    Stream,
+    Kinds,
+    Cache,
 }
 
 struct Options {
     root: PathBuf,
     files: Vec<String>,
-    first_party: Vec<String>,
-    extra_callees: Vec<String>,
-    mode: String,
+    config: ExtractConfig,
+    mode: OutputMode,
     out: Option<PathBuf>,
     cache: Option<PathBuf>,
     timing: bool,
+    jobs: usize,
 }
 
-impl Options {
-    fn parse(mut argv: Vec<String>) -> Options {
-        let mut take = |flag: &str| -> Option<String> {
-            let at = argv.iter().position(|a| a == flag)?;
-            let value = argv.get(at + 1).cloned();
-            argv.drain(at..(at + 2).min(argv.len()));
-            value
+/// Command-line arguments, consumed flag by flag; what is left are the positionals.
+struct Args {
+    rest: Vec<String>,
+}
+
+impl Args {
+    fn value(&mut self, flag: &str) -> Result<Option<String>, ShellError> {
+        let Some(at) = self.rest.iter().position(|a| a == flag) else {
+            return Ok(None);
         };
-        let jobs = take("--jobs");
-        let first_party = take("--first-party");
-        let watch_callees = take("--watch-callees");
-        let mode = take("--mode").unwrap_or_else(|| "stream".to_string());
-        let out = take("--out").map(PathBuf::from);
-        let cache = take("--cache").map(PathBuf::from);
-        let max_nodes = take("--max-nodes");
-        let max_symbolic = take("--max-symbolic");
-        let v11 = argv.iter().any(|a| a == "--v1.1");
-        argv.retain(|a| a != "--v1.1");
-        let (default_nodes, default_symbolic) = if v11 { ("1000000", "1000") } else { ("400", "100") };
-        value::set_limits(value::Limits {
-            max_nodes: max_nodes.as_deref().unwrap_or(default_nodes).parse().expect("--max-nodes N"),
-            max_symbolic: max_symbolic.as_deref().unwrap_or(default_symbolic).parse().expect("--max-symbolic N"),
-        });
-        let timing = argv.iter().any(|a| a == "--timing");
-        argv.retain(|a| a != "--timing");
-        if let Some(j) = jobs {
-            let n: usize = j.parse().expect("--jobs N");
-            if n > 0 {
-                rayon::ThreadPoolBuilder::new().num_threads(n).build_global().unwrap();
-            }
+        if at + 1 >= self.rest.len() {
+            return Err(usage(format!("{flag} needs a value")));
         }
-        let first_party = sorted_list(first_party);
-        let extra_callees = sorted_list(watch_callees);
-        walker::set_extra_watched(extra_callees.clone());
-        let root = PathBuf::from(&argv[0]);
-        let listing = &argv[1];
-        let text = if listing == "-" {
-            std::io::read_to_string(std::io::stdin()).expect("stdin")
-        } else {
-            std::fs::read_to_string(listing).expect("file list")
+        let value = self.rest.remove(at + 1);
+        self.rest.remove(at);
+        Ok(Some(value))
+    }
+
+    fn switch(&mut self, flag: &str) -> bool {
+        let before = self.rest.len();
+        self.rest.retain(|a| a != flag);
+        self.rest.len() != before
+    }
+
+    fn number(&mut self, flag: &str) -> Result<Option<usize>, ShellError> {
+        let Some(text) = self.value(flag)? else {
+            return Ok(None);
         };
-        let files = text.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
-        Options { root, files, first_party, extra_callees, mode, out, cache, timing }
+        let number = text
+            .parse()
+            .map_err(|_| usage(format!("{flag} needs a number, got {text:?}")))?;
+        Ok(Some(number))
+    }
+
+    fn list(&mut self, flag: &str) -> Result<Vec<String>, ShellError> {
+        let text = self.value(flag)?.unwrap_or_default();
+        Ok(text.split(',').map(str::to_string).collect())
     }
 }
 
-fn sorted_list(list: Option<String>) -> Vec<String> {
-    let mut items: Vec<String> = list.unwrap_or_default().split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    items.sort();
-    items.dedup();
-    items
+impl Options {
+    fn parse(argv: Vec<String>) -> Result<Options, ShellError> {
+        let mut args = Args { rest: argv };
+        let jobs = args.number("--jobs")?.unwrap_or(0);
+        let first_party = args.list("--first-party")?;
+        let watch_callees = args.list("--watch-callees")?;
+        let mode = match args.value("--mode")?.as_deref() {
+            None | Some("stream") => OutputMode::Stream,
+            Some("kinds") => OutputMode::Kinds,
+            Some("cache") => OutputMode::Cache,
+            Some(other) => return Err(usage(format!("unknown --mode {other}"))),
+        };
+        let out = args.value("--out")?.map(PathBuf::from);
+        let cache = args.value("--cache")?.map(PathBuf::from);
+        let base = if args.switch("--v1.1") {
+            Limits::V1_1
+        } else {
+            Limits::V1
+        };
+        let limits = Limits {
+            max_nodes: args.number("--max-nodes")?.unwrap_or(base.max_nodes),
+            max_symbolic: args.number("--max-symbolic")?.unwrap_or(base.max_symbolic),
+        };
+        let timing = args.switch("--timing");
+        let [root, listing] = args.rest.as_slice() else {
+            return Err(usage("hoglint-facts <repo_root> <file_list|-> [options]"));
+        };
+        let text = if listing == "-" {
+            std::io::read_to_string(std::io::stdin()).map_err(io_error("read the file list"))?
+        } else {
+            std::fs::read_to_string(listing).map_err(io_error(format!("read {listing}")))?
+        };
+        let files = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok(Options {
+            root: PathBuf::from(root),
+            files,
+            config: ExtractConfig::new(first_party, watch_callees, limits),
+            mode,
+            out,
+            cache,
+            timing,
+            jobs,
+        })
+    }
 }
 
+/// CPU seconds summed over threads.
 #[derive(Default)]
 struct Totals {
     read: f64,
-    parse: f64,
     extract: f64,
     serialize: f64,
     cache_io: f64,
@@ -153,187 +252,290 @@ struct Runner<'o> {
     opts: &'o Options,
     cfg: String,
     totals: Mutex<Totals>,
+    tmp_counter: AtomicU64,
 }
 
-impl Runner<'_> {
-    fn read(&self, rel: &str) -> Vec<u8> {
-        std::fs::read(self.opts.root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+impl<'o> Runner<'o> {
+    fn new(opts: &'o Options) -> Self {
+        Runner {
+            opts,
+            cfg: opts.config.config_id(),
+            totals: Mutex::new(Totals::default()),
+            tmp_counter: AtomicU64::new(0),
+        }
     }
 
-    fn fresh(&self, raw: &[u8]) -> (FileOut, Times) {
-        let mut times = Times::default();
-        let out = extract(raw, &self.opts.first_party, &mut times);
-        (out, times)
+    fn add(&self, update: impl FnOnce(&mut Totals)) {
+        if let Ok(mut totals) = self.totals.lock() {
+            update(&mut totals);
+        }
     }
 
-    fn add(&self, read: f64, times: Times, cache_io: f64, parsed: bool) {
-        let mut t = self.totals.lock().unwrap();
-        t.read += read;
-        t.parse += times.parse.as_secs_f64();
-        t.extract += times.extract.as_secs_f64();
-        t.serialize += times.serialize.as_secs_f64();
-        t.cache_io += cache_io;
-        t.parsed_files += parsed as usize;
+    fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        let started = Instant::now();
+        let raw = std::fs::read(self.opts.root.join(rel));
+        let seconds = started.elapsed().as_secs_f64();
+        self.add(|t| t.read += seconds);
+        match raw {
+            Ok(raw) => Some(raw),
+            Err(error) => {
+                eprintln!("hoglint-facts: read {rel}: {error}");
+                None
+            }
+        }
+    }
+
+    fn unreadable() -> FileRecord {
+        FileRecord {
+            sha256: String::new(),
+            bytes: 0,
+            status: Status::ReadError,
+            facts: Facts::default(),
+        }
+    }
+
+    fn extract(&self, raw: &[u8]) -> FileRecord {
+        let started = Instant::now();
+        let record = extract(raw, &self.opts.config);
+        let seconds = started.elapsed().as_secs_f64();
+        self.add(|t| {
+            t.extract += seconds;
+            t.parsed_files += 1;
+        });
+        record
+    }
+
+    fn encode(&self, record: &FileRecord, path: &str) -> Result<String, ShellError> {
+        let started = Instant::now();
+        let line = record_line(record, &self.cfg, path)?;
+        let seconds = started.elapsed().as_secs_f64();
+        self.add(|t| t.serialize += seconds);
+        Ok(line)
     }
 
     /// stream and kinds: parse every file.
-    fn record(&self, rel: &str) -> FileOut {
-        let t0 = Instant::now();
-        let raw = self.read(rel);
-        let read = t0.elapsed().as_secs_f64();
-        let (out, times) = self.fresh(&raw);
-        self.add(read, times, 0.0, true);
-        out
+    fn record(&self, rel: &str) -> FileRecord {
+        match self.read(rel) {
+            Some(raw) => self.extract(&raw),
+            None => Self::unreadable(),
+        }
     }
 
     /// cache: reuse the entry for this content hash, else extract and store one.
-    fn cached_line(&self, rel: &str, dir: &Path) -> String {
-        let t0 = Instant::now();
-        let raw = self.read(rel);
-        let read = t0.elapsed().as_secs_f64();
-        let entry = dir.join(format!("{}.json", sha256_hex(&raw)));
-        let t1 = Instant::now();
+    fn cached_line(&self, rel: &str, dir: &Path) -> Result<String, ShellError> {
+        let Some(raw) = self.read(rel) else {
+            return self.encode(&Self::unreadable(), rel);
+        };
+        let sha256 = sha256_hex(&raw);
+        let entry = dir.join(format!("{sha256}.json"));
+        let started = Instant::now();
         if let Ok(text) = std::fs::read_to_string(&entry) {
-            let line = with_path(&text, rel);
-            self.add(read, Times::default(), t1.elapsed().as_secs_f64(), false);
-            return line;
+            let seconds = started.elapsed().as_secs_f64();
+            self.add(|t| t.cache_io += seconds);
+            return with_path(&text, rel);
         }
-        let (out, times) = self.fresh(&raw);
-        let t2 = Instant::now();
-        let body = out.to_line(&self.cfg, "");
-        // Files with equal content race for one entry; each writer gets its own temp name.
-        let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = dir.join(format!("{}.tmp{}-{n}", out.sha256, std::process::id()));
-        std::fs::write(&tmp, &body).expect("cache write");
-        std::fs::rename(&tmp, &entry).expect("cache rename");
-        self.add(read, times, t2.elapsed().as_secs_f64(), true);
+        let record = self.extract(&raw);
+        let body = self.encode(&record, "")?;
+        let started = Instant::now();
+        self.store(dir, &sha256, &entry, &body);
+        let seconds = started.elapsed().as_secs_f64();
+        self.add(|t| t.cache_io += seconds);
         with_path(&body, rel)
     }
-}
 
-fn with_path(body: &str, rel: &str) -> String {
-    let mut quoted = String::new();
-    json::write_str(&mut quoted, rel);
-    body.replacen(PATH_PLACEHOLDER, &format!("\"path\":{quoted}"), 1)
-}
-
-fn writer(out: &Option<PathBuf>) -> Box<dyn Write> {
-    match out {
-        Some(p) => Box::new(std::io::BufWriter::new(std::fs::File::create(p).expect("create --out"))),
-        None => Box::new(std::io::BufWriter::new(std::io::stdout().lock())),
+    /// Files with equal content race for one entry, so each writer renames its own temp file.
+    /// A failed write only costs a later re-parse.
+    fn store(&self, dir: &Path, sha256: &str, entry: &Path, body: &str) {
+        let n = self.tmp_counter.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!("{sha256}.tmp{}-{n}", std::process::id()));
+        let written = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, entry));
+        if let Err(error) = written {
+            eprintln!("hoglint-facts: cache entry {}: {error}", entry.display());
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 }
 
-fn write_lines(out: &Option<PathBuf>, lines: &[String]) -> usize {
-    let mut w = writer(out);
+fn with_path(body: &str, rel: &str) -> Result<String, ShellError> {
+    let quoted = serde_json::to_string(rel)?;
+    Ok(body.replacen(PATH_PLACEHOLDER, &format!("\"path\":{quoted}"), 1))
+}
+
+fn writer(out: &Option<PathBuf>) -> Result<Box<dyn Write>, ShellError> {
+    Ok(match out {
+        Some(p) => {
+            let file =
+                std::fs::File::create(p).map_err(io_error(format!("create {}", p.display())))?;
+            Box::new(std::io::BufWriter::new(file))
+        }
+        None => Box::new(std::io::BufWriter::new(std::io::stdout().lock())),
+    })
+}
+
+fn write_lines(out: &Option<PathBuf>, lines: &[String]) -> Result<usize, ShellError> {
+    let mut w = writer(out)?;
     let mut total = 0;
     for line in lines {
-        w.write_all(line.as_bytes()).unwrap();
-        w.write_all(b"\n").unwrap();
+        w.write_all(line.as_bytes())
+            .and_then(|()| w.write_all(b"\n"))
+            .map_err(io_error("write records"))?;
         total += line.len() + 1;
     }
-    w.flush().unwrap();
-    total
+    w.flush().map_err(io_error("write records"))?;
+    Ok(total)
 }
 
 /// The py-l2 split store: `envelope.json` = {path: envelope}, `<kind>.json` = {path: rows}.
 /// A later duplicate path wins, as in split_store.py.
-fn write_kinds(dir: &Path, files: &[String], records: &[FileOut], cfg: &str) -> usize {
-    std::fs::create_dir_all(dir).expect("kinds dir");
-    let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    for (i, rel) in files.iter().enumerate() {
-        last.insert(rel.as_str(), i);
+fn write_kinds(
+    dir: &Path,
+    files: &[String],
+    records: &[FileRecord],
+    cfg: &str,
+) -> Result<usize, ShellError> {
+    std::fs::create_dir_all(dir).map_err(io_error(format!("create {}", dir.display())))?;
+    let last: HashMap<&str, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(i, rel)| (rel.as_str(), i))
+        .collect();
+    let keep: Vec<usize> = (0..files.len())
+        .filter(|i| last[files[*i].as_str()] == *i)
+        .collect();
+    let mut envelopes = Vec::new();
+    let mut lists: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+    for &i in &keep {
+        let record = &records[i];
+        let envelope = FileRecord {
+            sha256: record.sha256.clone(),
+            bytes: record.bytes,
+            status: record.status,
+            facts: Facts::default(),
+        };
+        envelopes.push(record_line(&envelope, cfg, &files[i])?);
+        lists.push(serde_json::from_str(&record_line(record, cfg, &files[i])?)?);
     }
-    let keep: Vec<usize> = (0..files.len()).filter(|i| last[files[*i].as_str()] == *i).collect();
     let mut total = 0;
-    let mut write_doc = |name: &str, entries: &mut dyn Iterator<Item = (usize, String)>| {
+    let mut write_doc = |name: &str, entries: Vec<(usize, String)>| -> Result<(), ShellError> {
         let mut doc = String::from("{");
-        let mut first = true;
-        for (i, value) in entries {
-            if !first {
+        for (n, (i, value)) in entries.iter().enumerate() {
+            if n > 0 {
                 doc.push(',');
             }
-            first = false;
-            json::write_str(&mut doc, &files[i]);
+            doc.push_str(&serde_json::to_string(&files[*i])?);
             doc.push(':');
-            doc.push_str(&value);
+            doc.push_str(value);
         }
         doc.push('}');
-        std::fs::write(dir.join(name), &doc).expect("kinds write");
+        std::fs::write(dir.join(name), &doc).map_err(io_error(format!("write {name}")))?;
         total += doc.len();
+        Ok(())
     };
-    let mut envelopes = keep.iter().map(|&i| {
-        let rec = &records[i];
-        let empty = FileOut { sha256: rec.sha256.clone(), bytes: rec.bytes, status: rec.status, lists: Vec::new() };
-        (i, empty.to_line(cfg, &files[i]))
-    });
-    write_doc("envelope.json", &mut envelopes);
-    for kind in KINDS {
-        let mut rows = keep
-            .iter()
-            .filter_map(|&i| records[i].lists.iter().find(|l| l.0 == kind).map(|l| (i, l.1.clone())));
-        write_doc(&format!("{kind}.json"), &mut rows);
+    write_doc(
+        "envelope.json",
+        keep.iter().copied().zip(envelopes).collect(),
+    )?;
+    for kind in FACT_KINDS {
+        let mut rows = Vec::new();
+        for (&i, map) in keep.iter().zip(&lists) {
+            if let Some(value) = map.get(kind) {
+                rows.push((i, serde_json::to_string(value)?));
+            }
+        }
+        write_doc(&format!("{kind}.json"), rows)?;
     }
-    total
+    Ok(total)
 }
 
-fn main() {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    if argv.first().map(String::as_str) == Some("--build-id") {
-        println!("{BUILD_ID}");
-        return;
+fn run_extract(opts: &Options) -> Result<(), ShellError> {
+    if opts.jobs > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(opts.jobs)
+            .build_global()
+            .map_err(|error| usage(format!("--jobs {}: {error}", opts.jobs)))?;
     }
-    if argv.first().map(String::as_str) == Some("--discover") {
-        let files = Discovery::files(Path::new(&argv[1]), argv.iter().any(|a| a == "--v1.1"));
-        let mut out = std::io::BufWriter::new(std::io::stdout().lock());
-        for f in files {
-            writeln!(out, "{f}").unwrap();
-        }
-        return;
-    }
-    let opts = Options::parse(argv);
-    let runner = Runner { opts: &opts, cfg: config_id(&opts.first_party, &opts.extra_callees), totals: Mutex::new(Totals::default()) };
+    let runner = Runner::new(opts);
     let started = Instant::now();
-    let written = match opts.mode.as_str() {
-        "stream" => {
-            let lines: Vec<String> = opts.files.par_iter().map(|rel| runner.record(rel).to_line(&runner.cfg, rel)).collect();
-            write_lines(&opts.out, &lines)
+    let written = match opts.mode {
+        OutputMode::Stream => {
+            let lines: Vec<String> = opts
+                .files
+                .par_iter()
+                .map(|rel| runner.encode(&runner.record(rel), rel))
+                .collect::<Result<_, _>>()?;
+            write_lines(&opts.out, &lines)?
         }
-        "kinds" => {
-            let records: Vec<FileOut> = opts.files.par_iter().map(|rel| runner.record(rel)).collect();
-            let dir = opts.out.clone().expect("--mode kinds needs --out DIR");
-            write_kinds(&dir, &opts.files, &records, &runner.cfg)
+        OutputMode::Kinds => {
+            let Some(dir) = &opts.out else {
+                return Err(usage("--mode kinds needs --out DIR"));
+            };
+            let records: Vec<FileRecord> = opts
+                .files
+                .par_iter()
+                .map(|rel| runner.record(rel))
+                .collect();
+            write_kinds(dir, &opts.files, &records, &runner.cfg)?
         }
-        "cache" => {
-            let base = opts.cache.clone().expect("--mode cache needs --cache DIR");
-            let dir = base.join(format!(
-                "v{}-b{}-{}-n{}-s{}",
-                record::SCHEMA_VERSION,
-                BUILD_ID,
-                runner.cfg,
-                value::max_nodes(),
-                value::max_symbolic()
-            ));
-            std::fs::create_dir_all(&dir).expect("cache dir");
-            let lines: Vec<String> = opts.files.par_iter().map(|rel| runner.cached_line(rel, &dir)).collect();
-            write_lines(&opts.out, &lines)
+        OutputMode::Cache => {
+            let Some(base) = &opts.cache else {
+                return Err(usage("--mode cache needs --cache DIR"));
+            };
+            let dir = base.join(opts.config.cache_namespace());
+            std::fs::create_dir_all(&dir).map_err(io_error(format!("create {}", dir.display())))?;
+            let lines: Vec<String> = opts
+                .files
+                .par_iter()
+                .map(|rel| runner.cached_line(rel, &dir))
+                .collect::<Result<_, _>>()?;
+            write_lines(&opts.out, &lines)?
         }
-        other => panic!("unknown --mode {other}"),
     };
-    if opts.timing {
-        let t = runner.totals.lock().unwrap();
+    if opts.timing
+        && let Ok(t) = runner.totals.lock()
+    {
         eprintln!(
-            "mode={} files={} parsed={} wall={:.3}s out={}B | cpu-sum read={:.3} parse={:.3} extract={:.3} serialize={:.3} cache_io={:.3}",
-            opts.mode,
+            "files={} parsed={} wall={:.3}s out={}B | cpu-sum read={:.3} extract={:.3} serialize={:.3} cache_io={:.3}",
             opts.files.len(),
             t.parsed_files,
             started.elapsed().as_secs_f64(),
             written,
             t.read,
-            t.parse,
             t.extract,
             t.serialize,
             t.cache_io
         );
+    }
+    Ok(())
+}
+
+fn run(argv: Vec<String>) -> Result<(), ShellError> {
+    match argv.first().map(String::as_str) {
+        Some("--build-id") => {
+            println!("{BUILD_ID}");
+            Ok(())
+        }
+        Some("--discover") => {
+            let Some(root) = argv.get(1) else {
+                return Err(usage("hoglint-facts --discover <repo_root> [--v1.1]"));
+            };
+            let files = Discovery::files(Path::new(root), argv.iter().any(|a| a == "--v1.1"))?;
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            for f in files {
+                writeln!(out, "{f}").map_err(io_error("write the file list"))?;
+            }
+            out.flush().map_err(io_error("write the file list"))
+        }
+        _ => run_extract(&Options::parse(argv)?),
+    }
+}
+
+fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    match run(argv) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("hoglint-facts: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
