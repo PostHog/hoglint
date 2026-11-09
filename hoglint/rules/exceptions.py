@@ -18,6 +18,7 @@ from typing import Any
 from hoglint.config.model import Config
 from hoglint.model import Finding, FindingStatus
 from hoglint.rules.base import RuleRun, contexts_of
+from hoglint.selectors import render_data
 
 REQUIRED = ("rule", "match", "reason", "owners", "scope")
 ALLOWED_KEYS = frozenset({*REQUIRED, "review_by"})
@@ -40,19 +41,20 @@ class ExceptionEntry:
 
 def render_match(value: Any) -> str | None:
     """A match value rendered the way identity columns render, or None when it cannot match one."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
-        return str(value)
+    if isinstance(value, (bool, str, int, float)):
+        return render_data(value)
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return ",".join(sorted(value)) or "-"
+        return render_data(value)
     return None
 
 
 @dataclass(frozen=False, slots=True)
 class ExceptionsFile:
+    """`raw` keeps the entries as written, so compare can list changed policy without a second read."""
+
     entries: list[ExceptionEntry] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    raw: list[dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def read(path: Path, config: Config) -> ExceptionsFile:
@@ -73,6 +75,7 @@ class ExceptionsFile:
         if not isinstance(raw_entries, list):
             out.problems.append(f"{name}: `exception` must be a list of [[exception]] tables")
             return out
+        out.raw = [raw for raw in raw_entries if isinstance(raw, dict)]
         for index, raw in enumerate(raw_entries):
             if not isinstance(raw, dict):
                 out.problems.append(f"{name} exception #{index}: must be a table")
@@ -175,10 +178,16 @@ class ExceptionReport:
 def apply_exceptions(runs: dict[str, RuleRun], exceptions: ExceptionsFile, today: datetime.date) -> ExceptionReport:
     """Marks allowed findings in place and reports entries that are stale or past review."""
     used: set[int] = set()
-    for run in runs.values():
+    by_rule: dict[str, list[ExceptionEntry]] = {}
+    for entry in exceptions.entries:
+        by_rule.setdefault(entry.rule, []).append(entry)
+    for rule, run in runs.items():
+        entries = by_rule.get(rule, [])
+        if not entries:
+            continue
         updated: list[Finding] = []
         for finding in run.findings:
-            entry = next((e for e in exceptions.entries if matches(e, finding)), None)
+            entry = next((e for e in entries if matches(e, finding)), None)
             if entry is None:
                 updated.append(finding)
                 continue

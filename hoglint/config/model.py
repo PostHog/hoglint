@@ -262,6 +262,11 @@ class Config:
     edge_kinds: tuple[str, ...] = ()
     use_shapes: tuple[str, ...] = ()
     sections: dict[str, Any] = field(default_factory=dict)  # discovery and pack sections, unvalidated by core
+    pack_sections: tuple[str, ...] = ()  # sections a pack owns, in extends order
     policy_hash: str = ""
     provenance: dict[str, str] = field(default_factory=dict)
     expanded: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def discovery(self) -> dict[str, Any]:
+        return self.sections.get("discovery", {})

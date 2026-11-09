@@ -14,10 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from hoglint.config.model import LevelSpec
+from hoglint.index import Memo
 from hoglint.labels import Labeler
 from hoglint.model import FindingStatus
 from hoglint.rules.base import RuleRun
-from hoglint.selectors import State, Truth
+from hoglint.selectors import Truth
 
 
 @dataclass(frozen=False, slots=True)
@@ -32,16 +33,10 @@ class LevelEvaluator:
         self.spec = spec
         self.labeler = labeler
         self.runs = runs
-        self.group_cache: dict[str, str | None] = {}
+        self.group_of = Memo(self.find_group)
 
-    def group_of(self, subject: str) -> str | None:
-        if subject in self.group_cache:
-            return self.group_cache[subject]
-        module = self.labeler.module_of_symbol(subject) or subject
-        value, _ = self.labeler.field_value(module, None, self.spec.group_by)
-        group = str(value.data) if value.state is State.KNOWN else None
-        self.group_cache[subject] = group
-        return group
+    def find_group(self, subject: str) -> str | None:
+        return self.labeler.known_text(self.labeler.module_of_symbol(subject) or subject, self.spec.group_by)
 
     def groups(self) -> list[str]:
         out: set[str] = set()

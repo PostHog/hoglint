@@ -47,6 +47,11 @@ def render_key(key: LineKey) -> str:
     return "\t".join(escape(part) for part in (key[0], *key[1]))
 
 
+def parse_key(text: str) -> LineKey:
+    parts = [unescape(part) for part in text.split("\t")]
+    return parts[0], tuple(parts[1:])
+
+
 @dataclass(frozen=False, slots=True)
 class LedgerFile:
     schema: int | None = None

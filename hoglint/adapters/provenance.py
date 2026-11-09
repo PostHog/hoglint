@@ -3,12 +3,11 @@ entries in a TOML or JSON file. Outputs: `generated` (bool) and `producer` (a se
 
 from __future__ import annotations
 
-import json
-import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from hoglint.config.loader import read_table
 from hoglint.globs import glob_match
 from hoglint.plugins import REGISTRY
 
@@ -19,9 +18,7 @@ class ProvenanceFile:
 
     @staticmethod
     def read(path: Path) -> ProvenanceFile:
-        text = path.read_text()
-        data = json.loads(text) if path.suffix == ".json" else tomllib.loads(text)
-        return ProvenanceFile(list(data.get("generated", [])))
+        return ProvenanceFile(list(read_table(path).get("generated", [])))
 
     def producers(self, path: str) -> frozenset[str]:
         out = set()

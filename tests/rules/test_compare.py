@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.compare import Comparer, Scans
+from hoglint.compare import Comparer, RawPolicy, Scans
 from hoglint.facts import Extractor
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.growth import AttributionCheck, Renames
@@ -78,8 +78,8 @@ def test_compare_pairs_swaps_and_labels_policy_changes() -> None:
     head = scan({(INVOICE, "core.b", "write"): 1})
     relaxed = scan({})
     scans = Scans(head=head, base_head=relaxed, base=base, head_base=head)
-    base_policy = ({"rules": {RULE: {"primitive": "use-shape"}}}, [])
-    head_policy = (
+    base_policy = RawPolicy({"rules": {RULE: {"primitive": "use-shape"}}}, [])
+    head_policy = RawPolicy(
         {"rules": {RULE: {"primitive": "use-shape", "allow_shapes": ["write"]}}},
         [{"rule": RULE, "reason": "x"}],
     )

@@ -6,9 +6,9 @@ in selectors, rules without identity or growth key, exports without a shape poli
 
 from __future__ import annotations
 
-import re
 import json
 import hashlib
+import dataclasses
 from typing import Any
 
 from hoglint import adapters  # noqa: F401 - registers the builtin coverage adapters and providers
@@ -34,6 +34,7 @@ from hoglint.config.model import (
     ZoneSpec,
     ZoneTable,
 )
+from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
 from hoglint.selectors import Catalog, FieldInfo, FieldType, Selector, SelectorError, suggest
@@ -66,18 +67,6 @@ CORE_USES = (
     "other",
 )
 CORE_SHAPES = ("frozen-dataclass", "dataclass", "abc", "enum", "protocol", "function", "constant", "class")
-PRIMITIVES = (
-    "edge",
-    "entrypoint",
-    "export",
-    "signature",
-    "use-shape",
-    "reach",
-    "cycle",
-    "layout",
-    "coverage",
-    "inventory",
-)
 CORE_VIEWS: dict[str, tuple[str, ...]] = {
     "refs": (),
     "file-imports": ("import", "dotted-path"),
@@ -134,26 +123,25 @@ DISCOVERY_KEYS = frozenset(
     {"source_roots", "first_party", "exclude", "include", "scripts", "external", "tests", "migrations", "plugins"}
 )
 VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections", "views"})
-BUILTIN_NAMES = frozenset(
-    {
-        "module",
-        "symbol",
-        "path",
-        "name",
-        "scope",
-        "decl",
-        "kind",
-        "external",
-        "registry",
-        "context",
-        "exported",
-        "subject",
-    }
-)
-
+CONTEXTS = tuple(c.value for c in Context)
+# Built-in attributes of a module or symbol, readable in entity selectors and on edge endpoints.
+ENTITY_FIELDS: dict[str, FieldInfo] = {
+    "module": FieldInfo(FieldType.ID),
+    "symbol": FieldInfo(FieldType.ID),
+    "path": FieldInfo(FieldType.STRING),
+    "name": FieldInfo(FieldType.STRING),
+    "decl": FieldInfo(FieldType.STRING),
+    "registry": FieldInfo(FieldType.STRING),
+    "lifecycle": FieldInfo(FieldType.ENUM, LIFECYCLES),
+}
+# Endpoint-only attributes: where the edge names it from, and what the edge says about it.
+ENDPOINT_FIELDS: dict[str, FieldInfo] = {
+    "scope": FieldInfo(FieldType.STRING),
+    "external": FieldInfo(FieldType.STRING),
+    "context": FieldInfo(FieldType.ENUM, CONTEXTS),
+}
+BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
 CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles")
-
-CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def as_tuple(value: Any) -> tuple[str, ...]:
@@ -220,22 +208,11 @@ class SchemaBuilder:
             infos[spec.name] = FieldInfo(spec.type, values)
         return infos
 
+    def entity_fields(self) -> dict[str, FieldInfo]:
+        return {**self.field_infos(), **ENTITY_FIELDS, "kind": FieldInfo(FieldType.ENUM, self.kind_names)}
+
     def endpoint_fields(self, dst: bool) -> dict[str, FieldInfo]:
-        fields = self.field_infos()
-        fields.update(
-            {
-                "module": FieldInfo(FieldType.ID),
-                "symbol": FieldInfo(FieldType.ID),
-                "path": FieldInfo(FieldType.STRING),
-                "name": FieldInfo(FieldType.STRING),
-                "scope": FieldInfo(FieldType.STRING),
-                "decl": FieldInfo(FieldType.STRING),
-                "kind": FieldInfo(FieldType.ENUM, self.kind_names),
-                "external": FieldInfo(FieldType.STRING),
-                "registry": FieldInfo(FieldType.STRING),
-                "context": FieldInfo(FieldType.ENUM, tuple(c.value for c in Context)),
-            }
-        )
+        fields = {**self.entity_fields(), **ENDPOINT_FIELDS}
         if dst:
             fields["exported"] = FieldInfo(FieldType.BOOL)
         return fields
@@ -246,7 +223,7 @@ class SchemaBuilder:
             "shape": FieldInfo(FieldType.STRING),
             "use": FieldInfo(FieldType.STRING),
             "label": FieldInfo(FieldType.STRING),
-            "context": FieldInfo(FieldType.ENUM, tuple(c.value for c in Context)),
+            "context": FieldInfo(FieldType.ENUM, CONTEXTS),
             "resolution": FieldInfo(FieldType.ENUM, tuple(r.value for r in Resolution)),
             "surface": FieldInfo(FieldType.STRING),
             "ordinal": FieldInfo(FieldType.INT),
@@ -267,20 +244,7 @@ class SchemaBuilder:
         return Catalog({"src": fields})
 
     def entity_catalog(self) -> Catalog:
-        fields = self.field_infos()
-        fields.update(
-            {
-                "module": FieldInfo(FieldType.ID),
-                "symbol": FieldInfo(FieldType.ID),
-                "path": FieldInfo(FieldType.STRING),
-                "name": FieldInfo(FieldType.STRING),
-                "decl": FieldInfo(FieldType.STRING),
-                "kind": FieldInfo(FieldType.ENUM, self.kind_names),
-                "registry": FieldInfo(FieldType.STRING),
-                "subject": FieldInfo(FieldType.ID),
-            }
-        )
-        return Catalog({"": fields})
+        return Catalog({"": {**self.entity_fields(), "subject": FieldInfo(FieldType.ID)}})
 
     # ── sections ──
 
@@ -305,6 +269,7 @@ class SchemaBuilder:
         roles = self.read_roles(rules)
         outputs = self.read_outputs()
         self.read_discovery()
+        pack_sections = self.read_pack_sections()
         if self.problems:
             raise ConfigError(self.problems)
         sections = {name: value for name, value in self.raw.items() if name not in (*NAMED_SECTIONS, *CORE_SECTIONS)}
@@ -327,6 +292,7 @@ class SchemaBuilder:
             edge_kinds=self.edge_kinds,
             use_shapes=self.use_shapes,
             sections=sections,
+            pack_sections=pack_sections,
             policy_hash=policy_hash(self.raw),
             provenance=dict(self.merged.provenance),
             expanded=self.raw,
@@ -396,8 +362,7 @@ class SchemaBuilder:
             if name not in out:
                 continue
             domain = self.read_domain(f"fields.{name}.required_on", table.get("required_on"))
-            spec = out[name]
-            out[name] = FieldSpec(spec.name, spec.type, spec.values, spec.on, domain, spec.source)
+            out[name] = dataclasses.replace(out[name], domain=domain)
         return out
 
     def read_zones(self, zones_raw: dict[str, Any]) -> ZoneTable:
@@ -668,7 +633,7 @@ class SchemaBuilder:
             self.fail(key, "contexts must be `{ include = [...], exclude = [...] }`")
             return (), ()
         self.check_keys(key, raw, frozenset({"include", "exclude"}))
-        known = tuple(c.value for c in Context)
+        known = CONTEXTS
         out = []
         for part in ("include", "exclude"):
             values = as_tuple(raw.get(part))
@@ -731,8 +696,8 @@ class SchemaBuilder:
         if primitive == "level":
             self.fail(key, "levels are declared under [levels.<name>], not as rules")
             return None
-        if primitive not in PRIMITIVES:
-            self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), PRIMITIVES)}")
+        if primitive not in RULE_KEYS:
+            self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), RULE_KEYS)}")
             return None
         self.check_keys(key, table, RULE_KEYS[primitive])
         entity_rule = primitive in ("layout", "coverage") or (primitive == "inventory" and table.get("on") is not None)
@@ -886,6 +851,25 @@ class SchemaBuilder:
                 str(table.get("path", f".hoglint/{name}.json")),
             )
         return out
+
+    def read_pack_sections(self) -> tuple[str, ...]:
+        """Each pack section is checked against the keys its registered pack allows."""
+        names = as_tuple(self.raw.get("vocabulary", {}).get("sections"))
+        for name in names:
+            table = self.raw.get(name)
+            if table is None:
+                continue
+            pack = REGISTRY.packs.get(name)
+            if pack is None:
+                self.fail(
+                    name, f"no pack registered for [{name}]; extend the pack or name its module in [discovery] plugins"
+                )
+                continue
+            if not isinstance(table, dict):
+                self.fail(name, f"[{name}] must be a table")
+                continue
+            self.check_keys(name, table, pack.allowed_keys)
+        return names
 
     def read_discovery(self) -> None:
         self.check_keys("discovery", self.raw.get("discovery", {}), DISCOVERY_KEYS)

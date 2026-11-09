@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import difflib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -121,7 +121,6 @@ class Or:
 
 Node = Compare | Bare | Not | And | Or
 
-OPERATORS = ("==", "!=", "in", "not in", "startswith", "subset_of")
 KEYWORDS = frozenset({"and", "or", "not", "in", "startswith", "subset_of", "true", "false", "none"})
 
 TOKEN_RE = re.compile(
@@ -427,6 +426,30 @@ def members(value: Value) -> frozenset[str]:
     return frozenset({str(value.data)})
 
 
+def split_list(raw: str) -> list[str]:
+    """A comma-separated list, as producer attrs and symbol facts carry sets."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def render_data(data: object) -> str:
+    """The text of known data as identity columns and exception matches write it: a bool as
+    true/false, a set or list as its sorted items joined by commas, `-` when it is empty."""
+    if isinstance(data, bool):
+        return "true" if data else "false"
+    if isinstance(data, (frozenset, set, tuple, list)):
+        return ",".join(sorted(str(item) for item in data)) or "-"
+    return str(data)
+
+
+def render_value(value: Value) -> str:
+    """A value as one identity column: `?` unknown, `-` none."""
+    if value.state is State.UNKNOWN:
+        return "?"
+    if value.state is State.NONE:
+        return "-"
+    return render_data(value.data)
+
+
 def scalar(value: Value) -> str:
     if isinstance(value.data, bool):
         return "true" if value.data else "false"
@@ -464,7 +487,7 @@ def set_members(value: Value) -> frozenset[str]:
     if value.state is State.NONE:
         return frozenset()
     if isinstance(value.data, str) and not value.chain:
-        return frozenset(item.strip() for item in value.data.split(",") if item.strip())
+        return frozenset(split_list(value.data))
     return members(value)
 
 
@@ -487,8 +510,6 @@ def truthy(value: Value) -> Truth:
         return Truth.UNKNOWN
     if value.state is State.NONE:
         return Truth.FALSE
-    if isinstance(value.data, bool):
-        return Truth.of(value.data)
     return Truth.of(bool(value.data))
 
 
@@ -536,28 +557,36 @@ def evaluate(node: Node, resolve: Resolver) -> Truth:
     return subset(left, right)
 
 
+def leaves(node: Node) -> Iterator[Compare | Bare]:
+    """The comparisons and bare operands of a selector, in order."""
+    if isinstance(node, (And, Or)):
+        for part in node.parts:
+            yield from leaves(part)
+        return
+    if isinstance(node, Not):
+        yield from leaves(node.inner)
+        return
+    yield node
+
+
 def refs(node: Node) -> list[Ref]:
     """Every field a selector reads, in order."""
-    if isinstance(node, (And, Or)):
-        return [ref for part in node.parts for ref in refs(part)]
-    if isinstance(node, Not):
-        return refs(node.inner)
-    operands = [node.operand] if isinstance(node, Bare) else [node.left, node.right]
-    return [operand for operand in operands if isinstance(operand, Ref)]
+    out: list[Ref] = []
+    for leaf in leaves(node):
+        operands = [leaf.operand] if isinstance(leaf, Bare) else [leaf.left, leaf.right]
+        out.extend(operand for operand in operands if isinstance(operand, Ref))
+    return out
 
 
 def compared_values(node: Node, name: str) -> set[str]:
     """Literals compared against a `<root>.<name>` or bare `<name>` field (never `edge.*`)."""
-    if isinstance(node, (And, Or)):
-        return {value for part in node.parts for value in compared_values(part, name)}
-    if isinstance(node, Not):
-        return compared_values(node.inner, name)
-    if isinstance(node, Bare):
-        return set()
     out: set[str] = set()
-    for side, other in ((node.left, node.right), (node.right, node.left)):
-        if isinstance(side, Ref) and side.path[-1] == name and side.path[0] != "edge":
-            out.update(str(value) for value in literal_values(other) if value is not None)
+    for leaf in leaves(node):
+        if isinstance(leaf, Bare):
+            continue
+        for side, other in ((leaf.left, leaf.right), (leaf.right, leaf.left)):
+            if isinstance(side, Ref) and side.path[-1] == name and side.path[0] != "edge":
+                out.update(str(value) for value in literal_values(other) if value is not None)
     return out
 
 
@@ -594,9 +623,3 @@ class Selector:
             if part.op in ("==", "in"):
                 return frozenset(str(value) for value in literal_values(part.right))
         return None
-
-    def roots(self) -> set[str]:
-        return {ref.path[0] for ref in self.refs() if len(ref.path) > 1}
-
-
-ALWAYS = Selector("true", Bare(Literal(True)))

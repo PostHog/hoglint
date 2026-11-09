@@ -16,7 +16,6 @@ bundled into a move still fail.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from hoglint.ledger.file import LineKey, is_level_line
@@ -86,6 +85,11 @@ class AttributionCheck:
         self.head_base = head_base
         self.head = head
         self.renames = renames
+        self.grown: dict[GrowthKey, list[LineKey]] = {}
+        for line, count in head_base.lines.items():
+            key = growth_key(line, base.growth)
+            if key is not None and count > base.lines.get(line, 0):
+                self.grown.setdefault(key, []).append(line)
 
     def run(self) -> GrowthResult:
         result = GrowthResult()
@@ -103,13 +107,8 @@ class AttributionCheck:
         result.rule_growth = self.rule_growth()
         return result
 
-    def grown_lines(self, key: GrowthKey) -> Iterable[LineKey]:
-        for line, count in self.head_base.lines.items():
-            if growth_key(line, self.base.growth) == key and count > self.base.lines.get(line, 0):
-                yield line
-
     def admitted(self, key: GrowthKey) -> bool:
-        lines = list(self.grown_lines(key))
+        lines = self.grown.get(key, [])
         if not lines:
             return False
         for line in lines:

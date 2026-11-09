@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
-import tomllib
 from collections.abc import Iterator
 
+from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RuleSpec
-from hoglint.globs import glob_match
-from hoglint.labels import fill
-from hoglint.model import Edge, Finding
+from hoglint.globs import fill, glob_match
 from hoglint.plugins import REGISTRY
-from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, RuleContext, RuleRun, project, render_value
-from hoglint.selectors import Ref, Resolver, State, Truth, Value
+from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, RuleContext, RuleRun, project
+from hoglint.selectors import Ref, Resolver, State, Truth, Value, render_value
 
 
 class EntityRule:
@@ -34,17 +31,8 @@ class EntityRule:
         return resolve
 
     def emit(self, subject: str, module: str | None, message: str, resolve: Resolver) -> None:
-        self.run.findings.append(
-            Finding(
-                rule=self.spec.id,
-                identity=project(self.spec.identity, resolve),
-                message=message,
-                site=None,
-                owners=self.ctx.owners_of(module),
-                subjects=(module or subject,),
-                ledgerable=self.spec.ledger,
-            )
-        )
+        identity = project(self.spec.identity, resolve)
+        self.run.findings.append(self.ctx.finding(self.spec, identity, message, module, (module or subject,)))
 
     def incomplete(self, subject: str, module: str | None, reason: str) -> None:
         self.run.incomplete.append(IncompleteItem(self.spec.id, subject, reason, (module or subject,)))
@@ -53,10 +41,10 @@ class EntityRule:
         """(module, symbol, subject) for every entity the rule looks at."""
         labeler = self.ctx.labeler
         if self.spec.on == "symbol":
-            for symbol in sorted(self.ctx.graph.symbols):
+            for symbol in labeler.index.sorted_symbols:
                 yield labeler.module_of_symbol(symbol), symbol, symbol
             return
-        for module in sorted(self.ctx.graph.modules):
+        for module, _ in labeler.index.sorted_modules:
             yield module, None, module
 
 
@@ -170,17 +158,10 @@ class LayoutPrimitive(EntityRule):
                 )
 
 
-class InventoryPrimitive(EntityRule):
-    """Every selected edge carries a classification, and every classification still matches one."""
+class EntityInventory(EntityRule):
+    """`exactly_one`: every selected entity has exactly one value of a set field."""
 
     def evaluate(self) -> RuleRun:
-        if self.spec.exactly_one:
-            self.check_exactly_one()
-            return self.run
-        self.check_classified()
-        return self.run
-
-    def check_exactly_one(self) -> None:
         name = self.spec.exactly_one
         for module, symbol, subject in self.entities():
             resolve = self.resolver(module, symbol, subject)
@@ -197,45 +178,40 @@ class InventoryPrimitive(EntityRule):
             count = len(value.data) if value.state is State.KNOWN and isinstance(value.data, frozenset) else 0
             if count != 1:
                 self.emit(subject, module, f"{subject} has {count} {name} values, needs exactly one", resolve)
+        return self.run
 
-    def classifications(self) -> list[tuple[str, ...]]:
+
+class EdgeInventory(EdgeRule):
+    """`classify`: every selected edge carries a classification, and every classification still matches one."""
+
+    def classifications(self) -> set[tuple[str, ...]]:
         repo = self.ctx.repo_root
         if repo is None or not (repo / self.spec.classify).is_file():
-            return []
-        path = repo / self.spec.classify
-        data = json.loads(path.read_text()) if path.suffix == ".json" else tomllib.loads(path.read_text())
-        return [tuple(str(v) for v in entry.get("identity", ())) for entry in data.get("entry", [])]
+            return set()
+        data = read_table(repo / self.spec.classify)
+        return {tuple(str(v) for v in entry.get("identity", ())) for entry in data.get("entry", [])}
 
-    def check_classified(self) -> None:
-        selector = EdgeRule(self.ctx, self.spec)
-        seen: dict[tuple[str, ...], tuple[EdgeEnv, Edge]] = {}
-        for env in selector.envs():
-            selected = selector.selection(env)
+    def evaluate(self) -> RuleRun:
+        seen: dict[tuple[str, ...], EdgeEnv] = {}
+        for env in self.envs():
+            selected = self.selection(env)
             if selected is Truth.FALSE:
                 continue
-            if env.dst.unresolved or selected is Truth.UNKNOWN:
-                selector.on_unresolved(env) if env.dst.unresolved else selector.incomplete(
-                    env, "selection reads an unknown value"
-                )
+            if env.dst.unresolved:
+                self.on_unresolved(env)
                 continue
-            seen.setdefault(project(self.spec.identity, env.resolve), (env, env.edge))
-        classified = set(self.classifications())
-        for identity, (env, _) in sorted(seen.items()):
-            if identity in classified:
+            if selected is Truth.UNKNOWN:
+                self.incomplete(env, "selection reads an unknown value")
                 continue
-            selector.emit(env, f"{' '.join(identity)} has no classification in {self.spec.classify}")
+            seen.setdefault(project(self.spec.identity, env.resolve), env)
+        classified = self.classifications()
+        for identity in sorted(seen):
+            if identity not in classified:
+                self.emit(seen[identity], f"{' '.join(identity)} has no classification in {self.spec.classify}")
         for identity in sorted(classified - set(seen)):
-            self.run.findings.append(
-                Finding(
-                    rule=self.spec.id,
-                    identity=identity,
-                    message=f"classification {' '.join(identity)} matches nothing (stale)",
-                    site=None,
-                    ledgerable=False,
-                )
-            )
-        self.run.findings.extend(selector.run.findings)
-        self.run.incomplete.extend(selector.run.incomplete)
+            message = f"classification {' '.join(identity)} matches nothing (stale)"
+            self.run.findings.append(self.ctx.finding(self.spec, identity, message, None, ledgerable=False))
+        return self.run
 
 
 class CoveragePrimitive(EntityRule):

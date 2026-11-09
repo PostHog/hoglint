@@ -7,25 +7,24 @@ its domain with no value is unknown; outside its domain it is a known `none`.
 
 from __future__ import annotations
 
-import re
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec
-from hoglint.globs import glob_match
-from hoglint.model import Edge, Graph, Resolution
+from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec, RegistrySpec
+from hoglint.globs import fill, glob_match
+from hoglint.index import GraphIndex, Memo
+from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Provided
-from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, State, Truth, Value, any_of
+from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, any_of, refs
 
-CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-def fill(template: Any, captures: dict[str, str]) -> Any:
-    if not isinstance(template, str):
-        return template
-    return CAPTURE_RE.sub(lambda m: captures.get(m.group(1), m.group(0)), template)
+REGISTRY_FIELD = "registry"
+# Entity attributes the labeler answers itself; every other name is a declared field.
+BUILTIN_ENTITY_NAMES = frozenset(
+    {"module", "subject", "symbol", "path", "name", "decl", "kind", "registry", "lifecycle"}
+)
+MODULE_LEVEL_BUILTINS = frozenset({"module", "path", "external", "registry", "lifecycle"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,99 +40,12 @@ class Candidate:
     override: bool
 
 
-# ── Symbol facts ──────────────────────────────────────────────────
+@dataclass(frozen=True, slots=True)
+class PathCandidates:
+    """What assignments and zones say about one path under one policy, and the zone conflicts."""
 
-
-def split_list(raw: str) -> list[str]:
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-DECL_NAMES = {"def": "function", "async": "function"}
-DATACLASS_DECORATORS = frozenset({"dataclasses.dataclass"})
-
-
-class SymbolFacts:
-    """Symbol facts from the graph: declarations, bases and decorators.
-
-    Bases come from `inherit` edges (attr `class`), decorators from `decorate` edges (attr
-    `decorated`). An unresolved base is kept as `?<surface>`, so ancestry knows it is incomplete.
-    Producers may add string facts to Graph.symbols: `abstract`, `frozen`, `metaclass`, `members`.
-    """
-
-    def __init__(self, graph: Graph) -> None:
-        self.symbols = graph.symbols
-        self.base_map: dict[str, list[str]] = {}
-        self.decorator_map: dict[str, list[str]] = {}
-        self.frozen: set[str] = set()
-        self.ancestry_cache: dict[str, tuple[frozenset[str], bool]] = {}
-        self.decl_seen: dict[str, bool] = {}
-        for edge in graph.edges:
-            if edge.kind == "inherit" and edge.attr("class"):
-                owner = f"{edge.site.module}.{edge.attr('class')}"
-                self.base_map.setdefault(owner, []).extend(self.names(edge))
-            elif edge.kind == "decorate" and edge.attr("decorated"):
-                owner = f"{edge.site.module}.{edge.attr('decorated')}"
-                self.decorator_map.setdefault(owner, []).extend([edge.surface, *self.names(edge)])
-                if edge.attr("frozen") == "1":
-                    self.frozen.add(owner)
-
-    @staticmethod
-    def names(edge: Edge) -> list[str]:
-        if edge.resolution is Resolution.UNRESOLVED:
-            return [f"?{edge.surface}"]
-        if edge.targets:
-            return [str(target) for target in edge.targets]
-        return [edge.surface] if edge.surface else []
-
-    def has(self, symbol: str) -> bool:
-        return symbol in self.symbols
-
-    def any_decl(self, decl: str) -> bool:
-        """Whether any symbol has this declaration, so a producer that records it ran."""
-        if decl not in self.decl_seen:
-            self.decl_seen[decl] = any(self.decl(symbol) == decl for symbol in self.symbols)
-        return self.decl_seen[decl]
-
-    def get(self, symbol: str, key: str) -> str:
-        return self.symbols.get(symbol, {}).get(key, "")
-
-    def decl(self, symbol: str) -> str:
-        facts = self.symbols.get(symbol, {})
-        raw = facts.get("decl") or facts.get("kind", "")
-        return DECL_NAMES.get(raw, raw)
-
-    def bases(self, symbol: str) -> list[str]:
-        return self.base_map.get(symbol, []) + split_list(self.get(symbol, "bases"))
-
-    def decorators(self, symbol: str) -> list[str]:
-        return self.decorator_map.get(symbol, []) + split_list(self.get(symbol, "decorators"))
-
-    def is_dataclass(self, symbol: str) -> bool:
-        return bool(DATACLASS_DECORATORS & set(self.decorators(symbol))) or self.get(symbol, "dataclass") == "true"
-
-    def is_frozen(self, symbol: str) -> bool:
-        return symbol in self.frozen or self.get(symbol, "frozen") == "true"
-
-    def ancestors(self, symbol: str) -> tuple[frozenset[str], bool]:
-        """Every base class reachable from `symbol`, and whether the walk saw every base."""
-        cached = self.ancestry_cache.get(symbol)
-        if cached is not None:
-            return cached
-        seen: set[str] = set()
-        complete = True
-        queue = list(self.bases(symbol))
-        while queue:
-            base = queue.pop()
-            if base.startswith("?"):
-                complete = False
-                continue
-            if base in seen:
-                continue
-            seen.add(base)
-            queue.extend(self.bases(base))
-        result = (frozenset(seen), complete)
-        self.ancestry_cache[symbol] = result
-        return result
+    fields: dict[str, list[Candidate]]
+    conflicts: tuple[str, ...]
 
 
 # ── Providers ─────────────────────────────────────────────────────
@@ -146,18 +58,13 @@ class ProviderRunner:
         self.specs = list(specs)
         self.repo_root = repo_root
         self.failures: dict[str, str] = {}
-        self.loaded: dict[str, Any] = {}
-
-    def load(self, spec: ProviderSpec) -> Any:
-        if spec.name in self.loaded:
-            return self.loaded[spec.name]
-        handle: Any = None
-        try:
-            handle = self.open(spec)
-        except Exception as error:  # a provider must never crash the run; its fields read as unknown
-            self.failures[spec.name] = f"{type(error).__name__}: {error}"
-        self.loaded[spec.name] = handle
-        return handle
+        self.handles: dict[str, Any] = {}
+        for spec in self.specs:
+            try:
+                self.handles[spec.name] = self.open(spec)
+            except Exception as error:  # noqa: BLE001 - a provider never crashes the run; its fields read as unknown
+                self.failures[spec.name] = f"{type(error).__name__}: {error}"
+        self.failed_fields = {name for spec in self.specs if spec.name in self.failures for name in spec.sets}
 
     def open(self, spec: ProviderSpec) -> Any:
         if self.repo_root is None:
@@ -167,11 +74,10 @@ class ProviderRunner:
     def values(self, path: str) -> dict[str, Candidate]:
         out: dict[str, Candidate] = {}
         for spec in self.specs:
-            handle = self.load(spec)
-            if handle is None:
+            if spec.name not in self.handles:
                 continue
             source = f"provider {spec.name} ({spec.use})"
-            produced = REGISTRY.providers[spec.use].values(handle, path)
+            produced = REGISTRY.providers[spec.use].values(self.handles[spec.name], path)
             for output, name in spec.bindings:
                 if output not in produced:
                     continue
@@ -182,16 +88,10 @@ class ProviderRunner:
                 out[name] = Candidate(value, f"{source}: {detail}" if detail else source, False)
         return out
 
-    def failed_fields(self) -> set[str]:
-        return {name for spec in self.specs if spec.name in self.failures for name in spec.sets}
-
 
 # ── Labeler ───────────────────────────────────────────────────────
 
-
-@dataclass(frozen=False, slots=True)
-class LabelSet:
-    fields: dict[str, Label] = field(default_factory=dict)
+Labels = dict[str, Label]
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,35 +101,50 @@ class KindMatch:
 
 
 class Labeler:
-    """Computes labels on demand and caches them. `conflicts` holds config errors found while labelling."""
+    """Computes labels on demand and caches them. `conflicts` holds config errors found while labelling.
 
-    def __init__(self, config: Config, graph: Graph, repo_root: Path | None = None) -> None:
+    Assignment and zone candidates depend only on the policy and the path, so they are cached
+    across labelers in one process (compare labels base and head code under one policy).
+    """
+
+    PATH_CANDIDATES: dict[tuple[str, str], PathCandidates] = {}
+
+    def __init__(
+        self, config: Config, graph: Graph, repo_root: Path | None = None, index: GraphIndex | None = None
+    ) -> None:
         self.config = config
         self.graph = graph
-        self.facts = SymbolFacts(graph)
+        self.index = index or GraphIndex(graph)
+        self.facts = self.index.facts
+        self.path_to_module = self.index.path_to_module
+        self.module_of_symbol = self.index.module_of_symbol
         self.providers = ProviderRunner(config.providers.values(), repo_root)
-        self.provider_fields = {name for spec in config.providers.values() for name in spec.sets}
-        self.module_cache: dict[str, LabelSet] = {}
-        self.symbol_cache: dict[str, LabelSet] = {}
-        self.kind_cache: dict[str, KindMatch] = {}
-        self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
         self.conflicts: list[str] = []
-        self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_assigns = [a for a in config.assigns if a.symbols is None]
         self.symbol_assigns = [a for a in config.assigns if a.symbols is not None]
-        self.zone_index = config.zones.by_name()
+        self.zone_fields = [spec.name for spec in config.fields.values() if spec.type is FieldType.ZONE]
+        self.module_labels = Memo(self.label_module)
+        self.symbol_labels = Memo(self.label_symbol)
+        self.kind_match = Memo(self.match_kinds)
+        self.export_member = Memo(self.find_export_member)
+        self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
+        self.exported_cache: dict[tuple[str | None, str | None, str | None, str | None], Truth] = {}
+        self.audience_by_module = all(
+            spec.audience is None or all(self.module_level(ref) for ref in refs(spec.audience.node))
+            for spec in config.exports.values()
+        )
+
+    def module_level(self, ref: Ref) -> bool:
+        """Whether `src.<name>` or `dst.<name>` reads only the endpoint's module, never its symbol or edge."""
+        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst"):
+            return False
+        name = ref.path[1]
+        if name in MODULE_LEVEL_BUILTINS:
+            return True
+        spec = self.config.fields.get(name)
+        return spec is not None and spec.on == "module"
 
     # ── modules and paths ──
-
-    def module_of_symbol(self, symbol: str) -> str | None:
-        if symbol in self.graph.modules:
-            return symbol
-        head = symbol
-        while "." in head:
-            head = head.rpartition(".")[0]
-            if head in self.graph.modules:
-                return head
-        return None
 
     def path_of(self, module: str) -> str | None:
         return self.graph.modules.get(module)
@@ -252,28 +167,45 @@ class Labeler:
             }
         return {}
 
-    def zone_candidate(self, path: str) -> Candidate | None:
+    def zone_candidate(self, path: str) -> tuple[Candidate | None, str]:
+        """The path's zone, or a conflict when several leaf zones match and none overrides."""
         table = self.config.zones
         for within in table.within:
             root = glob_match(within + "/**", path)
             if root is None:
                 continue
-            prefix = fill(within, root) + "/"
-            relative = path[len(prefix) :]
+            relative = path[len(fill(within, root)) + 1 :]
             matched = [zone for zone in table.zones if any(glob_match(p, relative) is not None for p in zone.paths)]
             ancestors = {a for zone in matched for a in table.chain(zone.name)[1:]}
             leaves = [zone for zone in matched if zone.name not in ancestors]
             if not leaves:
-                return Candidate(table.default, f"default private zone under {within}", False)
+                return Candidate(table.default, f"default private zone under {within}", False), ""
             if len(leaves) > 1:
                 overriding = [zone for zone in leaves if zone.override]
                 if len(overriding) != 1:
                     names = ", ".join(zone.name for zone in leaves)
-                    self.conflicts.append(f"{path}: zones {names} all match; mark one `override = true`")
-                    return None
+                    return None, f"{path}: zones {names} all match; mark one `override = true`"
                 leaves = overriding
-            return Candidate(leaves[0].name, f"zones.{leaves[0].name} ({leaves[0].source})", False)
-        return None
+            return Candidate(leaves[0].name, f"zones.{leaves[0].name} ({leaves[0].source})", False), ""
+        return None, ""
+
+    def path_candidates(self, path: str) -> PathCandidates:
+        key = (self.config.policy_hash, path)
+        cached = self.PATH_CANDIDATES.get(key)
+        if cached is not None:
+            return cached
+        collected: dict[str, list[Candidate]] = {}
+        for assignment in self.module_assigns:
+            for name, candidate in self.assignment_candidates(assignment, path).items():
+                collected.setdefault(name, []).append(candidate)
+        conflicts: tuple[str, ...] = ()
+        if self.zone_fields:
+            zone, conflict = self.zone_candidate(path)
+            conflicts = (conflict,) if conflict else ()
+            for name in self.zone_fields if zone is not None else ():
+                collected.setdefault(name, []).append(zone)
+        cached = self.PATH_CANDIDATES[key] = PathCandidates(collected, conflicts)
+        return cached
 
     def resolve_candidates(self, entity: str, name: str, candidates: list[Candidate]) -> Label | None:
         spec = self.config.fields.get(name)
@@ -295,55 +227,40 @@ class Labeler:
             return None
         return Label(pool[0].value, pool[0].source)
 
-    def module_labels(self, module: str) -> LabelSet:
-        cached = self.module_cache.get(module)
-        if cached is not None:
-            return cached
-        labels = LabelSet()
-        path = self.path_of(module)
-        if path is not None:
-            labels = self.label_path(module, path)
-        self.module_cache[module] = labels
-        return labels
-
-    def label_path(self, entity: str, path: str) -> LabelSet:
-        collected: dict[str, list[Candidate]] = {}
-        for assignment in self.module_assigns:
-            for name, candidate in self.assignment_candidates(assignment, path).items():
-                collected.setdefault(name, []).append(candidate)
-        zone_fields = [spec.name for spec in self.config.fields.values() if spec.type is FieldType.ZONE]
-        zone = self.zone_candidate(path) if zone_fields else None
-        if zone is not None:
-            for name in zone_fields:
-                collected.setdefault(name, []).append(zone)
-        for name, candidate in self.providers.values(path).items():
-            collected.setdefault(name, []).append(candidate)
-        labels = LabelSet()
+    def resolve_all(self, entity: str, collected: dict[str, list[Candidate]]) -> Labels:
+        labels: Labels = {}
         for name, candidates in collected.items():
             label = self.resolve_candidates(entity, name, candidates)
             if label is not None:
-                labels.fields[name] = label
-        registry = self.registry_of(path, entity)
-        if registry:
-            labels.fields["registry"] = Label(registry, "registries")
+                labels[name] = label
         return labels
 
-    def registry_of(self, path: str, module: str) -> str:
+    def label_module(self, module: str) -> Labels:
+        path = self.path_of(module)
+        if path is None:
+            return {}
+        cached = self.path_candidates(path)
+        self.conflicts.extend(cached.conflicts)
+        collected = {name: list(candidates) for name, candidates in cached.fields.items()}
+        for name, candidate in self.providers.values(path).items():
+            collected.setdefault(name, []).append(candidate)
+        labels = self.resolve_all(module, collected)
+        registry = self.registry_of(path, module)
+        if registry is not None:
+            labels[REGISTRY_FIELD] = Label(registry.name, "registries")
+        return labels
+
+    def registry_of(self, path: str, module: str) -> RegistrySpec | None:
         for spec in self.config.registries.values():
-            if glob_match(spec.module, path) is not None:
-                return spec.name
-            if spec.loader.rpartition(".")[0] == module:
-                return spec.name
-        return ""
+            if glob_match(spec.module, path) is not None or spec.loader.rpartition(".")[0] == module:
+                return spec
+        return None
 
     # ── symbols ──
 
-    def symbol_labels(self, symbol: str) -> LabelSet:
+    def label_symbol(self, symbol: str) -> Labels:
         if not self.symbol_assigns:
-            return LabelSet()
-        cached = self.symbol_cache.get(symbol)
-        if cached is not None:
-            return cached
+            return {}
         collected: dict[str, list[Candidate]] = {}
         module = self.module_of_symbol(symbol)
         path = self.path_of(module) if module else None
@@ -352,13 +269,7 @@ class Labeler:
                 continue
             for name, value in assignment.sets:
                 collected.setdefault(name, []).append(Candidate(value, assignment.label(), assignment.override))
-        labels = LabelSet()
-        for name, candidates in collected.items():
-            label = self.resolve_candidates(symbol, name, candidates)
-            if label is not None:
-                labels.fields[name] = label
-        self.symbol_cache[symbol] = labels
-        return labels
+        return self.resolve_all(symbol, collected)
 
     def symbol_matches(self, assignment: Assignment, symbol: str, path: str | None) -> bool:
         match = assignment.symbols
@@ -392,11 +303,8 @@ class Labeler:
             return Truth.FALSE if complete else Truth.UNKNOWN
         return Truth.TRUE
 
-    def kind_match(self, symbol: str) -> KindMatch:
-        """Which [kinds] the symbol matches, and whether any could not be decided. Cached per symbol."""
-        cached = self.kind_cache.get(symbol)
-        if cached is not None:
-            return cached
+    def match_kinds(self, symbol: str) -> KindMatch:
+        """Which [kinds] the symbol matches, and whether any could not be decided."""
         matched: list[str] = []
         unknown = False
         for spec in self.config.kinds.values():
@@ -407,9 +315,7 @@ class Labeler:
                 unknown = True
         if len(matched) > 1:
             self.conflicts.append(f"{symbol}: matches kinds {', '.join(matched)}")
-        result = KindMatch(tuple(matched), unknown)
-        self.kind_cache[symbol] = result
-        return result
+        return KindMatch(tuple(matched), unknown)
 
     def kind(self, symbol: str, first_party: bool = True) -> tuple[Value, str]:
         """The symbol's kind from [kinds]. A first-party symbol without facts is unknown."""
@@ -424,13 +330,13 @@ class Labeler:
 
     # ── values ──
 
-    def in_domain(self, domain: Domain | None, path: str | None, entity_resolver: Any) -> bool:
+    def in_domain(self, domain: Domain | None, path: str | None, resolve: Resolver) -> bool:
         if domain is None:
             return False
         if domain.everywhere:
             return True
         if domain.selector is not None:
-            return domain.selector.evaluate(entity_resolver) is Truth.TRUE
+            return domain.selector.evaluate(resolve) is Truth.TRUE
         return path is not None and any(glob_match(glob, path) is not None for glob in domain.globs)
 
     def to_value(self, spec: FieldSpec, label: Label) -> Value:
@@ -442,80 +348,96 @@ class Labeler:
             return Value.known(label.value)
         return Value.known(str(label.value))
 
+    def label_of(self, module: str | None, symbol: str | None, name: str) -> Label | None:
+        """The label a source set on the entity, if any: symbol labels for symbol fields."""
+        if self.config.fields[name].on == "symbol":
+            return self.symbol_labels(symbol).get(name) if symbol else None
+        return self.module_labels(module).get(name) if module else None
+
     def field_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
         """A declared field on a module (and the symbol inside it, for symbol fields)."""
         key = (module, symbol if self.config.fields[name].on == "symbol" else None, name)
         cached = self.value_cache.get(key)
         if cached is None:
-            cached = self.compute_value(module, symbol, name)
-            self.value_cache[key] = cached
+            cached = self.value_cache[key] = self.compute_value(module, symbol, name)
         return cached
 
     def compute_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
         spec = self.config.fields[name]
-        if spec.on == "symbol":
-            if symbol is None:
-                return NONE, "not a symbol"
-            label = self.symbol_labels(symbol).fields.get(name)
-            if label is not None:
-                return self.to_value(spec, label), label.source
-            fact = self.facts.get(symbol, name)
-            if fact:
-                return Value.known(fact), "producer fact"
-        else:
-            labels = self.module_labels(module) if module else LabelSet()
-            label = labels.fields.get(name)
-            if label is not None:
-                return self.to_value(spec, label), label.source
-        if name in self.providers.failed_fields():
+        if spec.on == "symbol" and symbol is None:
+            return NONE, "not a symbol"
+        label = self.label_of(module, symbol, name)
+        if label is not None:
+            return self.to_value(spec, label), label.source
+        if spec.on == "symbol" and symbol is not None and self.facts.get(symbol, name):
+            return Value.known(self.facts.get(symbol, name)), "producer fact"
+        if name in self.providers.failed_fields:
             return UNKNOWN, "provider failed"
         path = self.path_of(module) if module else None
-        resolver = self.entity_resolver(module, symbol, domain_check=False)
-        if self.in_domain(spec.domain, path, resolver):
+        if self.in_domain(spec.domain, path, self.label_resolver(module, symbol)):
             return UNKNOWN, "inside the field's domain, but nothing sets it"
         return NONE, "outside the field's domain"
 
-    def entity_resolver(self, module: str | None, symbol: str | None, domain_check: bool = True) -> Any:
-        """A resolver for bare entity selectors (layout, levels, domains)."""
+    def label_only(self, module: str | None, symbol: str | None, name: str) -> Value:
+        """A field as its labels say, without the domain: what a domain selector itself reads."""
+        label = self.label_of(module, symbol, name)
+        return self.to_value(self.config.fields[name], label) if label is not None else NONE
 
+    def builtin(self, module: str | None, symbol: str | None, name: str) -> Value:
+        """An entity attribute the labeler answers itself (see BUILTIN_ENTITY_NAMES)."""
+        if name in ("module", "subject"):
+            return Value.known(module) if module else NONE
+        if name == "symbol":
+            return Value.known(symbol) if symbol else NONE
+        if name == "path":
+            path = self.path_of(module) if module else None
+            return Value.known(path) if path else NONE
+        if name == "name":
+            target = symbol or module
+            return Value.known(target.rpartition(".")[2]) if target else NONE
+        if name == "decl":
+            decl = self.facts.decl(symbol) if symbol else ""
+            return Value.known(decl) if decl else NONE
+        if name == "kind":
+            return self.kind(symbol)[0] if symbol else NONE
+        label = self.module_labels(module).get(REGISTRY_FIELD) if module else None
+        if label is None:
+            return NONE
+        if name == "registry":
+            return Value.known(str(label.value))
+        lifecycle = self.config.registries[str(label.value)].lifecycle
+        return Value.known(lifecycle) if lifecycle else NONE
+
+    def resolver(self, module: str | None, symbol: str | None, read_field: Callable[..., Value]) -> Resolver:
         def resolve(ref: Ref) -> Value:
             name = ref.path[-1]
-            if name in ("module", "subject"):
-                return Value.known(module) if module else NONE
-            if name == "symbol":
-                return Value.known(symbol) if symbol else NONE
-            if name == "path":
-                path = self.path_of(module) if module else None
-                return Value.known(path) if path else NONE
-            if name == "name":
-                target = symbol or module
-                return Value.known(target.rpartition(".")[2]) if target else NONE
-            if name == "decl":
-                return Value.known(self.facts.decl(symbol)) if symbol and self.facts.decl(symbol) else NONE
-            if name == "kind":
-                return self.kind(symbol)[0] if symbol else NONE
-            if name == "registry":
-                label = self.module_labels(module).fields.get("registry") if module else None
-                return Value.known(str(label.value)) if label else NONE
+            if name in BUILTIN_ENTITY_NAMES:
+                return self.builtin(module, symbol, name)
             if name not in self.config.fields:
                 return UNKNOWN
-            if not domain_check:
-                return self.label_only(module, symbol, name)
-            return self.field_value(module, symbol, name)[0]
+            return read_field(module, symbol, name)
 
         return resolve
 
-    def label_only(self, module: str | None, symbol: str | None, name: str) -> Value:
-        spec = self.config.fields[name]
-        holder = (
-            self.symbol_labels(symbol)
-            if spec.on == "symbol" and symbol
-            else self.module_labels(module)
-            if module
-            else LabelSet()
-        )
-        label = holder.fields.get(name)
-        return self.to_value(spec, label) if label is not None else NONE
+    def entity_value(self, module: str | None, symbol: str | None, name: str) -> Value:
+        if name in BUILTIN_ENTITY_NAMES:
+            return self.builtin(module, symbol, name)
+        if name not in self.config.fields:
+            return UNKNOWN
+        return self.field_value(module, symbol, name)[0]
+
+    def entity_resolver(self, module: str | None, symbol: str | None) -> Resolver:
+        """A resolver for bare entity selectors (layout, levels, domains)."""
+        return lambda ref: self.entity_value(module, symbol, ref.path[-1])
+
+    def label_resolver(self, module: str | None, symbol: str | None) -> Resolver:
+        """Like entity_resolver, but fields read their labels only, so a domain never reads a domain."""
+        return self.resolver(module, symbol, self.label_only)
+
+    def known_text(self, module: str, name: str) -> str | None:
+        """A module field's value as text when it is known."""
+        value, _ = self.field_value(module, None, name)
+        return str(value.data) if value.state is State.KNOWN else None
 
     # ── exports ──
 
@@ -525,19 +447,20 @@ class Labeler:
         root = glob_match(spec.within + "/**", path)
         if root is None:
             return None
-        prefix = fill(spec.within, root) + "/"
-        return path[len(prefix) :]
+        return path[len(fill(spec.within, root)) + 1 :]
 
     def export_covers(self, spec: ExportSpec, path: str) -> bool:
         """Whether the path lies inside the export's `within` and `paths`."""
         relative = self.export_root(spec, path)
         return relative is not None and any(glob_match(pattern, relative) is not None for pattern in spec.paths)
 
-    def export_member(self, spec: ExportSpec, path: str, symbol: str | None) -> Truth:
+    def find_export_member(self, key: tuple[str, str, str | None]) -> Truth:
         """Whether a module (symbol None) or a symbol at `path` belongs to the export.
 
         With `subclass_of` only symbols count: a listed base itself, or a class that inherits one.
         """
+        name, path, symbol = key
+        spec = self.config.exports[name]
         if not self.export_covers(spec, path):
             return Truth.FALSE
         if not spec.subclass_of:
@@ -549,14 +472,32 @@ class Labeler:
             return Truth.TRUE
         return Truth.FALSE if complete else Truth.UNKNOWN
 
-    def exported(self, module: str | None, symbol: str | None, audience_resolver: Any) -> Truth:
-        """Is this module or symbol in an export whose audience includes the caller?"""
+    def exported(
+        self,
+        module: str | None,
+        symbol: str | None,
+        audience_resolver: Resolver,
+        src: tuple[str | None, str | None] | None = None,
+    ) -> Truth:
+        """Is this module or symbol in an export whose audience includes the caller?
+
+        `src` is the caller's (module, path); when every audience reads only module-level fields
+        the answer is cached on it."""
+        key = (*src, module, symbol) if src is not None and self.audience_by_module else None
+        if key is not None and key in self.exported_cache:
+            return self.exported_cache[key]
+        truth = self.compute_exported(module, symbol, audience_resolver)
+        if key is not None:
+            self.exported_cache[key] = truth
+        return truth
+
+    def compute_exported(self, module: str | None, symbol: str | None, audience_resolver: Resolver) -> Truth:
         path = self.path_of(module) if module else None
         if path is None:
             return Truth.UNKNOWN
         results: list[Truth] = []
         for spec in self.config.exports.values():
-            truth = self.export_member(spec, path, symbol)
+            truth = self.export_member((spec.name, path, symbol))
             if truth is Truth.FALSE:
                 continue
             if truth is Truth.TRUE and spec.audience is not None:
@@ -566,14 +507,11 @@ class Labeler:
 
     # ── whole-repo pass ──
 
-    def label_everything(self) -> list[str]:
-        """Labels every module and symbol once, so conflicts surface before rules run."""
+    def label_modules(self) -> list[str]:
+        """Labels every module once, so path conflicts surface before rules run. Symbols are
+        labelled when a rule reads them; their conflicts surface after the rules."""
         for module in self.graph.modules:
             self.module_labels(module)
-        for symbol in self.graph.symbols:
-            self.symbol_labels(symbol)
-            if self.config.kinds:
-                self.kind(symbol)
         return self.conflicts
 
     def explain(self, module: str) -> list[tuple[str, str, str]]:
@@ -584,13 +522,16 @@ class Labeler:
                 continue
             value, source = self.field_value(module, None, name)
             rows.append((name, render(value), source))
-        registry = self.module_labels(module).fields.get("registry")
+        registry = self.module_labels(module).get(REGISTRY_FIELD)
         if registry is not None:
             rows.append(("registry", str(registry.value), registry.source))
+            lifecycle = self.builtin(module, None, "lifecycle")
+            rows.append(("lifecycle", render(lifecycle), f"registries.{registry.value}.lifecycle"))
         return rows
 
 
 def render(value: Value) -> str:
+    """A value as `explain` shows it to a person."""
     if value.state is State.UNKNOWN:
         return "unknown"
     if value.state is State.NONE:

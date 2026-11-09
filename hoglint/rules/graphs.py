@@ -5,19 +5,9 @@ from __future__ import annotations
 from collections import deque
 
 from hoglint.config.model import RuleSpec
-from hoglint.model import Edge, Finding
-from hoglint.rules.base import (
-    EdgeEnv,
-    EdgeRule,
-    Endpoint,
-    IncompleteItem,
-    ModuleEnv,
-    RuleContext,
-    RuleRun,
-    project,
-    render_value,
-)
-from hoglint.selectors import Ref, Selector, State, Truth
+from hoglint.model import Edge
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, IncompleteItem, ModuleEnv, RuleContext, RuleRun, project
+from hoglint.selectors import Ref, Selector, State, Truth, render_value
 
 Hop = tuple[Edge, Endpoint, Truth]
 
@@ -119,14 +109,22 @@ class ReachPrimitive(EdgeRule):
 class CyclePrimitive(EdgeRule):
     """Strongly connected parts of a grouped view: every pair inside one is a finding."""
 
-    def group_field(self) -> str:
-        return self.ctx.config.roles.group if self.spec.view == "packages" else "module"
+    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
+        super().__init__(ctx, spec)
+        self.group_field = ctx.config.roles.group if spec.view == "packages" else "module"
+        self.group_cache: dict[tuple[str, Endpoint], str | None] = {}
 
     def group(self, env: EdgeEnv, root: str) -> str | None:
-        value = env.resolve(Ref((root, self.group_field())))
-        if value.state is not State.KNOWN:
-            return None
-        return render_value(value)
+        """The endpoint's group; cached per endpoint unless the edge's own attributes override labels."""
+        endpoint = env.src if root == "src" else env.dst
+        key = (root, endpoint)
+        if key in self.group_cache and not self.staged.bypass(env.edge):
+            return self.group_cache[key]
+        value = env.resolve(Ref((root, self.group_field)))
+        group = render_value(value) if value.state is State.KNOWN else None
+        if not self.staged.bypass(env.edge):
+            self.group_cache[key] = group
+        return group
 
     def evaluate(self) -> RuleRun:
         pairs: dict[tuple[str, str], list[EdgeEnv]] = {}
@@ -149,18 +147,15 @@ class CyclePrimitive(EdgeRule):
             if components.get(src) is None or components.get(src) != components.get(dst):
                 continue
             first = envs[0]
-            self.run.findings.append(
-                Finding(
-                    rule=self.spec.id,
-                    identity=project(self.spec.identity, first.resolve),
-                    message=f"{src} -> {dst} closes a cycle ({len(envs)} edges)",
-                    site=first.edge.site,
-                    witnesses=tuple(env.edge for env in envs[:3]),
-                    owners=self.ctx.owners_of(first.src.module),
-                    subjects=self.subjects(first),
-                    ledgerable=self.spec.ledger,
-                )
+            finding = self.ctx.finding(
+                self.spec,
+                project(self.spec.identity, first.resolve),
+                f"{src} -> {dst} closes a cycle ({len(envs)} edges)",
+                first.src.module,
+                self.subjects(first),
+                tuple(env.edge for env in envs[:3]),
             )
+            self.run.findings.append(finding)
         return self.run
 
 

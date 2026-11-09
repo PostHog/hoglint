@@ -14,6 +14,7 @@ Merge rules:
 from __future__ import annotations
 
 import copy
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,12 @@ NAMED_SECTIONS = (
 APPEND_SECTIONS = ("assign",)
 UNION_SECTIONS = ("vocabulary",)
 ZONE_SETTINGS = ("within", "default")
+
+
+def read_table(path: Path) -> dict[str, Any]:
+    """A TOML file, or JSON when the name ends in `.json`."""
+    text = path.read_text()
+    return json.loads(text) if path.suffix == ".json" else tomllib.loads(text)
 
 
 class ConfigError(Exception):

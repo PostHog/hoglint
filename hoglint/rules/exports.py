@@ -13,8 +13,8 @@ checked whatever its audience.
 from __future__ import annotations
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
-from hoglint.model import Edge, Finding, Resolution
-from hoglint.rules.base import MODULE_SCOPE, IncompleteItem, RuleContext, RuleRun, contexts_of, project
+from hoglint.model import Context, Edge, Resolution
+from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_ok, project
 from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
 
 ABC_BASES = frozenset({"abc.ABC"})
@@ -23,28 +23,23 @@ ENUM_BASES = frozenset({"enum.Enum", "enum.StrEnum", "enum.IntEnum", "enum.Flag"
 PROTOCOL_BASES = frozenset({"typing.Protocol", "typing_extensions.Protocol"})
 
 
+DEFAULT_EXCLUDED = (Context.TYPE_ONLY, Context.TEST)  # a type-only or test import hands nothing out
+
+
 class ExportPrimitive:
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
         self.spec = spec
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
-        self.exposes: dict[str, list[tuple[str, Edge]]] = {}
-        for edge in ctx.edges_of(("exposes",)):
-            callable_name = edge.attr("callable") or edge.site.scope
-            self.exposes.setdefault(edge.site.module, []).append((callable_name, edge))
+        index = ctx.labeler.index
+        self.exposes = index.exposes
+        self.top_level = index.top_level
+        self.module_imports = index.module_imports
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
-        self.top_level: dict[str, list[str]] = {}
-        for symbol in sorted(ctx.graph.symbols):
-            module = ctx.labeler.module_of_symbol(symbol)
-            name = symbol[len(module) + 1 :] if module else ""
-            if module and name and "." not in name and not name.startswith("_"):
-                self.top_level.setdefault(module, []).append(symbol)
-        self.module_imports: dict[str, list[Edge]] = {}
-        for edge in ctx.edges_of(("import",)):
-            if edge.site.scope in (MODULE_SCOPE, ""):
-                self.module_imports.setdefault(edge.site.module, []).append(edge)
+        self.include = frozenset(spec.contexts_include)
+        self.exclude = frozenset(spec.contexts_exclude or DEFAULT_EXCLUDED)
 
     def selected_exports(self) -> list[ExportSpec]:
         names = self.spec.exports or tuple(self.ctx.config.exports)
@@ -54,11 +49,11 @@ class ExportPrimitive:
         labeler = self.ctx.labeler
         for export in self.selected_exports():
             policy = self.ctx.config.shapes[export.shape]
-            for module, path in sorted(self.ctx.graph.modules.items()):
+            for module, path in self.ctx.labeler.index.sorted_modules:
                 if not labeler.export_covers(export, path):
                     continue
                 for symbol, edge in self.exported_symbols(module):
-                    member = labeler.export_member(export, path, symbol)
+                    member = labeler.export_member((export.name, path, symbol))
                     if member is Truth.FALSE:
                         continue
                     if member is Truth.UNKNOWN:
@@ -71,7 +66,7 @@ class ExportPrimitive:
     def exported_symbols(self, module: str) -> list[tuple[str, Edge | None]]:
         out: list[tuple[str, Edge | None]] = [(symbol, None) for symbol in self.top_level.get(module, [])]
         for edge in self.module_imports.get(module, []):
-            if contexts_of(edge) & {"type_only", "test"}:
+            if not context_ok(edge, self.include, self.exclude):
                 continue
             if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
                 self.unresolved(edge, module)
@@ -227,19 +222,17 @@ class ExportPrimitive:
             return
         self.reported.add(key)
         path = " -> ".join(trail)
-        self.run.findings.append(
-            Finding(
-                rule=self.spec.id,
-                identity=project(self.spec.identity, self.resolver(symbol, module, label)),
-                message=f"{module} exports {path}: {label}",
-                site=edge.site if edge is not None else None,
-                witnesses=(edge,) if edge is not None else (),
-                owners=self.ctx.owners_of(module),
-                subjects=(module, self.ctx.labeler.module_of_symbol(symbol) or symbol),
-                ledgerable=ledgerable and self.spec.ledger,
-                unknown=unknown,
-            )
+        finding = self.ctx.finding(
+            self.spec,
+            project(self.spec.identity, self.resolver(symbol, module, label)),
+            f"{module} exports {path}: {label}",
+            module,
+            (module, self.ctx.labeler.module_of_symbol(symbol) or symbol),
+            (edge,) if edge is not None else (),
+            ledgerable=ledgerable,
+            unknown=unknown,
         )
+        self.run.findings.append(finding)
 
     def unknown(
         self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None, why: str

@@ -18,7 +18,7 @@ from typing import Any
 
 from hoglint.config.schema import canonical
 from hoglint.ledger.file import LedgerFile, LineKey, render_key
-from hoglint.ledger.growth import AttributionCheck, GrowthKey, GrowthResult, Renames, growth_key
+from hoglint.ledger.growth import AttributionCheck, GrowthItem, GrowthKey, GrowthResult, Renames, growth_key
 from hoglint.ledger.scan import ScanSummary, Triple
 
 EXCEPTION_ENTRY = "exception"
@@ -42,6 +42,14 @@ class Swap:
     count: int
 
 
+@dataclass(frozen=True, slots=True)
+class RawPolicy:
+    """One side's policy as written: the expanded config and the exception entries."""
+
+    config: dict[str, Any] = field(default_factory=dict)
+    exceptions: list[dict[str, Any]] = field(default_factory=list)
+
+
 @dataclass(frozen=False, slots=True)
 class Scans:
     """head: head code, head policy. base_head: base code, head policy (same scanner).
@@ -53,8 +61,13 @@ class Scans:
     head_base: ScanSummary | None = None
 
 
+def growth_row(item: GrowthItem) -> str:
+    return f"{item.rule} {' '.join(item.key)}: {item.before} -> {item.after}"
+
+
 @dataclass(frozen=False, slots=True)
 class CompareReport:
+    reference: str = ""
     resolved: list[LineKey] = field(default_factory=list)
     new: list[LineKey] = field(default_factory=list)
     ledger_added: list[tuple[LineKey, int]] = field(default_factory=list)
@@ -79,6 +92,8 @@ class CompareReport:
             out.append(f"{title} ({len(rows)})")
             out.extend(f"  {row}" for row in rows)
 
+        if self.reference:
+            out.append(f"findings and new pairs are against {self.reference}")
         section("findings resolved", [render_key(key) for key in self.resolved])
         section("findings new", [render_key(key) for key in self.new])
         section("ledger lines added", [f"{render_key(key)}  {count}" for key, count in self.ledger_added])
@@ -98,27 +113,18 @@ class CompareReport:
         section("new group edges (pair, kind, context)", [" ".join(t) for t in self.new_triples])
         if self.growth.skipped:
             out.append(f"growth check skipped: {self.growth.skipped}")
-        section(
-            "code growth (fails)",
-            [f"{g.rule} {' '.join(g.key)}: {g.before} -> {g.after}" for g in self.growth.code_growth],
-        )
-        section(
-            "admitted moves (review)",
-            [f"{g.rule} {' '.join(g.key)}: {g.before} -> {g.after}" for g in self.growth.admitted_moves],
-        )
-        section(
-            "rule growth (passes)",
-            [f"{g.rule} {' '.join(g.key)}: {g.before} -> {g.after}" for g in self.growth.rule_growth],
-        )
+        section("code growth (fails)", [growth_row(g) for g in self.growth.code_growth])
+        section("admitted moves (review)", [growth_row(g) for g in self.growth.admitted_moves])
+        section("rule growth (passes)", [growth_row(g) for g in self.growth.rule_growth])
         section("incomplete, introduced (blocks)", [f"{r}: {reason}" for r, _, reason in self.introduced])
         section("incomplete, inherited (reported)", [f"{r}: {reason}" for r, _, reason in self.inherited])
         return "\n".join(out) + "\n"
 
 
-def policy_entries(raw: dict[str, Any], exceptions: list[dict[str, Any]]) -> dict[str, str]:
+def policy_entries(policy: RawPolicy) -> dict[str, str]:
     """Each reviewable unit of policy: a named entry, a plain setting, an assignment, an exception."""
     out: dict[str, str] = {}
-    for section, value in raw.items():
+    for section, value in policy.config.items():
         if section == "assign":
             for entry in value:
                 text = canonical(entry)
@@ -128,7 +134,7 @@ def policy_entries(raw: dict[str, Any], exceptions: list[dict[str, Any]]) -> dic
                 out[f"{section}.{name}"] = canonical(entry)
         else:
             out[section] = canonical(value)
-    for entry in exceptions:
+    for entry in policy.exceptions:
         text = canonical(entry)
         out[f"{EXCEPTION_ENTRY} {text}"] = text
     return out
@@ -203,8 +209,8 @@ class Comparer:
         scans: Scans,
         base_ledger: LedgerFile,
         head_ledger: LedgerFile,
-        base_policy: tuple[dict[str, Any], list[dict[str, Any]]],
-        head_policy: tuple[dict[str, Any], list[dict[str, Any]]],
+        base_policy: RawPolicy,
+        head_policy: RawPolicy,
         touched_modules: set[str],
         renames: Renames,
     ) -> None:
@@ -217,7 +223,7 @@ class Comparer:
         self.renames = renames
 
     def report(self) -> CompareReport:
-        report = CompareReport()
+        report = CompareReport(reference=self.reference_name())
         self.findings(report)
         self.ledger_lines(report)
         self.touched(report)
@@ -230,6 +236,13 @@ class Comparer:
     def reference(self) -> ScanSummary | None:
         """Base code under base policy when the base scanner ran, else under the head policy."""
         return self.scans.base or self.scans.base_head
+
+    def reference_name(self) -> str:
+        if self.scans.base is not None:
+            return "base code under the base policy"
+        if self.scans.base_head is not None:
+            return "base code under the head policy (the base has no hoglint scan)"
+        return ""
 
     def findings(self, report: CompareReport) -> None:
         reference = self.reference()
@@ -263,8 +276,8 @@ class Comparer:
                 report.touched_debt.append((key, count))
 
     def policy_changes(self) -> list[PolicyChange]:
-        before = policy_entries(*self.base_policy)
-        after = policy_entries(*self.head_policy)
+        before = policy_entries(self.base_policy)
+        after = policy_entries(self.head_policy)
         evidence = None
         if self.scans.base is not None and self.scans.base_head is not None and self.scans.head_base is not None:
             evidence = Evidence()
@@ -281,7 +294,7 @@ class Comparer:
         return out
 
     def triples(self, report: CompareReport) -> None:
-        reference = self.scans.base or self.scans.base_head
+        reference = self.reference()
         if reference is None:
             return
         report.new_triples = sorted(self.scans.head.triples - reference.triples)

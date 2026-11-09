@@ -4,11 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.cli import Commands, GraphSource
+from hoglint.cli import Commands
 from hoglint.config import Config
 from hoglint.model import Graph
 from hoglint.rules.base import RuleContext
 from hoglint.rules.engine import Engine
+from hoglint.source import GraphSource
 
 from rules.support import GraphBuilder, write_config
 

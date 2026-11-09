@@ -1,0 +1,205 @@
+"""Policy-independent tables over one Graph: edges by kind and source module, ordinals, symbol
+facts and ancestry, export tables. Built once per graph and shared by every engine that reads it,
+so compare's runs under two policies over one snapshot index it once."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Hashable
+from dataclasses import dataclass, field
+from functools import cached_property
+from typing import Generic, TypeVar
+
+from hoglint.model import Edge, Graph, Resolution
+from hoglint.selectors import split_list
+
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
+
+MODULE_SCOPE = "<module>"
+DECL_NAMES = {"def": "function", "async": "function"}
+DATACLASS_DECORATORS = frozenset({"dataclasses.dataclass"})
+
+
+class Memo(Generic[K, V]):
+    """A function with every answer kept. `None` is a cached answer like any other."""
+
+    def __init__(self, compute: Callable[[K], V]) -> None:
+        self.compute = compute
+        self.values: dict[K, V] = {}
+
+    def __call__(self, key: K) -> V:
+        if key in self.values:
+            return self.values[key]
+        value = self.values[key] = self.compute(key)
+        return value
+
+
+def has_endpoint_attrs(edge: Edge) -> bool:
+    return any(name.startswith(("src.", "dst.")) for name, _ in edge.attrs)
+
+
+@dataclass(frozen=False, slots=True)
+class EdgeGroup:
+    """The edges of one kind from one module. `irregular` holds the ones a module-wide answer
+    cannot speak for: an edge with its own `src.*`/`dst.*` attributes, or a site path that is not
+    the module's."""
+
+    edges: list[Edge] = field(default_factory=list)
+    irregular: list[Edge] = field(default_factory=list)
+
+
+class SymbolFacts:
+    """Symbol facts from the graph: declarations, bases and decorators.
+
+    Bases come from `inherit` edges (attr `class`), decorators from `decorate` edges (attr
+    `decorated`). An unresolved base is kept as `?<surface>`, so ancestry knows it is incomplete.
+    Producers may add string facts to Graph.symbols: `abstract`, `frozen`, `metaclass`, `members`.
+    """
+
+    def __init__(self, graph: Graph, inherits: list[Edge], decorates: list[Edge]) -> None:
+        self.symbols = graph.symbols
+        self.base_map: dict[str, list[str]] = {}
+        self.decorator_map: dict[str, list[str]] = {}
+        self.frozen: set[str] = set()
+        for edge in inherits:
+            if edge.attr("class"):
+                self.base_map.setdefault(f"{edge.site.module}.{edge.attr('class')}", []).extend(self.names(edge))
+        for edge in decorates:
+            if not edge.attr("decorated"):
+                continue
+            owner = f"{edge.site.module}.{edge.attr('decorated')}"
+            self.decorator_map.setdefault(owner, []).extend([edge.surface, *self.names(edge)])
+            if edge.attr("frozen") == "1":
+                self.frozen.add(owner)
+        self.ancestors = Memo(self.walk_ancestors)
+        self.any_decl = Memo(self.find_decl)
+
+    @staticmethod
+    def names(edge: Edge) -> list[str]:
+        if edge.resolution is Resolution.UNRESOLVED:
+            return [f"?{edge.surface}"]
+        if edge.targets:
+            return [str(target) for target in edge.targets]
+        return [edge.surface] if edge.surface else []
+
+    def has(self, symbol: str) -> bool:
+        return symbol in self.symbols
+
+    def find_decl(self, decl: str) -> bool:
+        """Whether any symbol has this declaration, so a producer that records it ran."""
+        return any(self.decl(symbol) == decl for symbol in self.symbols)
+
+    def get(self, symbol: str, key: str) -> str:
+        return self.symbols.get(symbol, {}).get(key, "")
+
+    def decl(self, symbol: str) -> str:
+        facts = self.symbols.get(symbol, {})
+        raw = facts.get("decl") or facts.get("kind", "")
+        return DECL_NAMES.get(raw, raw)
+
+    def bases(self, symbol: str) -> list[str]:
+        return self.base_map.get(symbol, []) + split_list(self.get(symbol, "bases"))
+
+    def decorators(self, symbol: str) -> list[str]:
+        return self.decorator_map.get(symbol, []) + split_list(self.get(symbol, "decorators"))
+
+    def is_dataclass(self, symbol: str) -> bool:
+        return bool(DATACLASS_DECORATORS & set(self.decorators(symbol))) or self.get(symbol, "dataclass") == "true"
+
+    def is_frozen(self, symbol: str) -> bool:
+        return symbol in self.frozen or self.get(symbol, "frozen") == "true"
+
+    def walk_ancestors(self, symbol: str) -> tuple[frozenset[str], bool]:
+        """Every base class reachable from `symbol`, and whether the walk saw every base."""
+        seen: set[str] = set()
+        complete = True
+        queue = list(self.bases(symbol))
+        while queue:
+            base = queue.pop()
+            if base.startswith("?"):
+                complete = False
+                continue
+            if base in seen:
+                continue
+            seen.add(base)
+            queue.extend(self.bases(base))
+        return frozenset(seen), complete
+
+
+class GraphIndex:
+    def __init__(self, graph: Graph) -> None:
+        self.graph = graph
+        self.by_kind: dict[str, list[Edge]] = {}
+        self.groups: dict[str, dict[str, EdgeGroup]] = {}
+        self.endpoint_attr_edges: set[int] = set()
+        for edge in graph.edges:
+            site = edge.site
+            self.by_kind.setdefault(edge.kind, []).append(edge)
+            group = self.groups.setdefault(edge.kind, {}).get(site.module)
+            if group is None:
+                group = self.groups[edge.kind][site.module] = EdgeGroup()
+            group.edges.append(edge)
+            attrs = bool(edge.attrs) and has_endpoint_attrs(edge)
+            if attrs:
+                self.endpoint_attr_edges.add(id(edge))
+            if attrs or (site.path and site.path != graph.modules.get(site.module)):
+                group.irregular.append(edge)
+        self.facts = SymbolFacts(graph, self.by_kind.get("inherit", []), self.by_kind.get("decorate", []))
+        self.path_to_module = {path: module for module, path in graph.modules.items()}
+        self.module_of_symbol = Memo(self.find_module)
+
+    def find_module(self, symbol: str) -> str | None:
+        """The longest module name that prefixes the symbol (the symbol itself when it is a module)."""
+        head = symbol
+        while head:
+            if head in self.graph.modules:
+                return head
+            head = head.rpartition(".")[0]
+        return None
+
+    @cached_property
+    def ordinals(self) -> dict[int, int]:
+        """Each edge's place among edges with the same module, scope, kind and surface."""
+        out: dict[int, int] = {}
+        counters: dict[tuple[str, str, str, str], int] = {}
+        for edge in self.graph.edges:
+            key = (edge.site.module, edge.site.scope, edge.kind, edge.surface)
+            out[id(edge)] = counters.get(key, 0)
+            counters[key] = counters.get(key, 0) + 1
+        return out
+
+    @cached_property
+    def sorted_modules(self) -> list[tuple[str, str]]:
+        return sorted(self.graph.modules.items())
+
+    @cached_property
+    def sorted_symbols(self) -> list[str]:
+        return sorted(self.graph.symbols)
+
+    @cached_property
+    def top_level(self) -> dict[str, list[str]]:
+        """Public top-level symbols per module, sorted."""
+        out: dict[str, list[str]] = {}
+        for symbol in self.sorted_symbols:
+            module = self.module_of_symbol(symbol)
+            name = symbol[len(module) + 1 :] if module else ""
+            if module and name and "." not in name and not name.startswith("_"):
+                out.setdefault(module, []).append(symbol)
+        return out
+
+    @cached_property
+    def module_imports(self) -> dict[str, list[Edge]]:
+        """Module-scope import edges per module."""
+        out: dict[str, list[Edge]] = {}
+        for edge in self.by_kind.get("import", []):
+            if edge.site.scope in (MODULE_SCOPE, ""):
+                out.setdefault(edge.site.module, []).append(edge)
+        return out
+
+    @cached_property
+    def exposes(self) -> dict[str, list[tuple[str, Edge]]]:
+        """(callable qualname, exposes edge) per module."""
+        out: dict[str, list[tuple[str, Edge]]] = {}
+        for edge in self.by_kind.get("exposes", []):
+            out.setdefault(edge.site.module, []).append((edge.attr("callable") or edge.site.scope, edge))
+        return out

@@ -10,6 +10,9 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from functools import cache
+from typing import Any
+
+CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class Braces(StrEnum):
@@ -70,3 +73,10 @@ def glob_match(pattern: str, path: str) -> dict[str, str] | None:
     if match is None:
         return None
     return {key: value for key, value in match.groupdict().items() if value is not None}
+
+
+def fill(template: Any, captures: dict[str, str]) -> Any:
+    """A `{name}` template with the captures of a match filled in; a non-string passes through."""
+    if not isinstance(template, str):
+        return template
+    return CAPTURE_RE.sub(lambda m: captures.get(m.group(1), m.group(0)), template)

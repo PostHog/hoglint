@@ -10,22 +10,32 @@ import datetime
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from hoglint.config.loader import ConfigError
 from hoglint.config.model import Config, RuleSpec
+from hoglint.index import GraphIndex
 from hoglint.labels import Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
 from hoglint.ledger.file import LedgerFile, LineKey, level_line
 from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph, IncompleteCause, Outcome, RuleResult
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, rule_kinds
 from hoglint.rules.edges import EdgePrimitive, EntrypointPrimitive, SignaturePrimitive, UseShapePrimitive
-from hoglint.rules.entities import CoveragePrimitive, InventoryPrimitive, LayoutPrimitive
+from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityInventory, LayoutPrimitive
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile, apply_exceptions
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, ReachPrimitive
 from hoglint.rules.levels import LevelEvaluator, LevelResult
+from hoglint.selectors import Truth
 
-PRIMITIVES = {
+
+class Primitive(Protocol):
+    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None: ...
+
+    def evaluate(self) -> RuleRun: ...
+
+
+PRIMITIVES: dict[str, type[Primitive]] = {
     "edge": EdgePrimitive,
     "entrypoint": EntrypointPrimitive,
     "use-shape": UseShapePrimitive,
@@ -35,12 +45,15 @@ PRIMITIVES = {
     "cycle": CyclePrimitive,
     "layout": LayoutPrimitive,
     "coverage": CoveragePrimitive,
-    "inventory": InventoryPrimitive,
 }
 
 
-def ledger_key(finding: Finding) -> LineKey:
-    return finding.rule, finding.identity
+def primitive_of(spec: RuleSpec) -> type[Primitive]:
+    """The class that runs a rule. An inventory over edges (`classify`) and one over entities
+    (`exactly_one`) share a name in config but not a shape."""
+    if spec.primitive == "inventory":
+        return EdgeInventory if spec.classify else EntityInventory
+    return PRIMITIVES[spec.primitive]
 
 
 @dataclass(frozen=False, slots=True)
@@ -98,32 +111,37 @@ class RunResult:
 
 class Engine:
     def __init__(
-        self, config: Config, graph: Graph, repo_root: Path | None = None, today: datetime.date | None = None
+        self,
+        config: Config,
+        graph: Graph,
+        repo_root: Path | None = None,
+        today: datetime.date | None = None,
+        index: GraphIndex | None = None,
     ) -> None:
         self.config = config
         self.graph = graph
         self.repo_root = repo_root
         self.today = today or datetime.date.today()
-        self.labeler = Labeler(config, graph, repo_root)
+        self.labeler = Labeler(config, graph, repo_root, index)
 
     def failed_producers(self, spec: RuleSpec) -> list[str]:
-        """A producer named in `requires`, or one that makes an edge kind the rule reads."""
+        """A producer named in `requires` (any version), or one that would have made an edge kind the rule reads."""
         kinds = set(rule_kinds(spec, self.config.views))
         out = []
-        for name, reason in sorted(self.graph.failed_producers.items()):
-            stem = name.split("@", 1)[0]
-            produced = stem.removeprefix("core-") if stem.startswith("core-") else stem
-            if name in spec.requires or stem in spec.requires or produced in kinds:
-                out.append(f"producer {name} failed: {reason}")
+        for name, failure in sorted(self.graph.failed_producers.items()):
+            if name.partition("@")[0] in spec.requires or failure.kinds & kinds:
+                out.append(f"producer {name} failed: {failure.reason}")
         return out
 
     def empty_expected_kinds(self) -> set[str]:
         """Kinds marked `expected` that no symbol matched: whatever produces them found nothing."""
-        expected = {name for name, spec in self.config.kinds.items() if spec.expected}
-        if not expected:
-            return set()
-        matched = {kind for symbol in self.graph.symbols for kind in self.labeler.kind_match(symbol).kinds}
-        return expected - matched
+        labeler = self.labeler
+        return {
+            name
+            for name, spec in self.config.kinds.items()
+            if spec.expected
+            and not any(labeler.kind_matches(spec, symbol) is Truth.TRUE for symbol in self.graph.symbols)
+        }
 
     def kinds_read(self, spec: RuleSpec) -> set[str]:
         """Kind names a rule compares against, and for an export rule the kinds its shapes name."""
@@ -143,10 +161,13 @@ class Engine:
             for kind in sorted(self.kinds_read(spec) & empty)
         ]
 
+    def raise_conflicts(self) -> None:
+        if self.labeler.conflicts:
+            raise ConfigError(sorted(set(self.labeler.conflicts)))
+
     def run_rules(self) -> dict[str, RuleRun]:
-        conflicts = self.labeler.label_everything()
-        if conflicts:
-            raise ConfigError(sorted(set(conflicts)))
+        self.labeler.label_modules()
+        self.raise_conflicts()
         ctx = RuleContext(self.config, self.graph, self.labeler, self.repo_root)
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
@@ -159,12 +180,13 @@ class Engine:
                 )
                 ctx.results[spec.id] = run
                 continue
-            ctx.results[spec.id] = PRIMITIVES[spec.primitive](ctx, spec).evaluate()
+            ctx.results[spec.id] = primitive_of(spec)(ctx, spec).evaluate()
         for name in sorted(self.labeler.providers.failures):
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
             run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))
             run.incomplete.append(IncompleteItem(run.spec.id, reason, reason, (), IncompleteCause.EXTRACTOR))
             ctx.results[run.spec.id] = run
+        self.raise_conflicts()
         return ctx.results
 
     def evaluate(
@@ -180,8 +202,9 @@ class Engine:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)
         if rewrite_ledger:
-            ledger = LedgerFile(SCHEMA_VERSION, self.config.policy_hash, dict(result.scan), exists=True)
-        self.mark_accepted(result, ledger)
+            ledger = LedgerFile(SCHEMA_VERSION, self.config.policy_hash, exists=True)
+        if ledger is not None:
+            self.mark_accepted(result, ledger.lines if not rewrite_ledger else result.scan)
         for name, spec in self.config.levels.items():
             level = LevelEvaluator(spec, self.labeler, result.runs).evaluate()
             result.levels[name] = level
@@ -203,22 +226,21 @@ class Engine:
             for finding in run.findings:
                 if finding.status is FindingStatus.ALLOWED or not finding.ledgerable:
                     continue
-                key = ledger_key(finding)
+                key = finding.ledger_key
                 lines[key] = lines.get(key, 0) + 1 if spec.counted else 1
         return lines
 
-    def mark_accepted(self, result: RunResult, ledger: LedgerFile | None) -> None:
-        if ledger is None:
-            return
+    def mark_accepted(self, result: RunResult, recorded: dict[LineKey, int]) -> None:
+        """A new finding is accepted when the ledger records at least as many as the scan counts."""
         for run in result.runs.values():
             updated = []
             for finding in run.findings:
-                key = ledger_key(finding)
+                key = finding.ledger_key
                 accepted = (
                     finding.status is FindingStatus.NEW
                     and finding.ledgerable
-                    and key in ledger.lines
-                    and ledger.lines[key] >= result.scan.get(key, 0)
+                    and key in recorded
+                    and recorded[key] >= result.scan.get(key, 0)
                 )
                 updated.append(dataclasses.replace(finding, status=FindingStatus.ACCEPTED) if accepted else finding)
             run.findings = updated

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 import datetime
 from pathlib import Path
 
@@ -52,8 +53,6 @@ def run(
     config: Config = config_from(tmp_path, FIELDS + rules)
     parsed = None
     if exceptions is not None:
-        import tomllib  # noqa: PLC0415 — only this helper reads exceptions
-
         parsed = ExceptionsFile.parse(tomllib.loads(exceptions), config)
     return Engine(config, graph, tmp_path, today=datetime.date(2026, 11, 9)).evaluate(ledger, parsed)
 
