@@ -51,6 +51,9 @@ class Link:
     def timings(self) -> list[tuple[str, float]]: ...
     def heap(self) -> list[tuple[str, int]]:
         """Estimated heap bytes per part of the link, for memory reports."""
+    def release_kinds(self, kept: list[str]) -> bool:
+        """Drops the rows of the kinds only pack queries read (refs, strs, calls, uses, callees,
+        names, tags) that are not in `kept`. A query of a dropped kind raises."""
     def release_facts(self) -> bool:
         """Drops the records' fact rows once the pack phase ends. Resolutions and row queries
         raise after it. False when the rows are shared and stay."""

@@ -113,6 +113,8 @@ class NativeAnalysis(CoreAnalysis):
         timings.update({f"link.{name}": seconds for name, seconds in link.timings()})
         timings["facts.cached"] = hits
         timings["facts.extracted"] = extracted
+        if self.options.needs is not None:
+            link.release_kinds(sorted(self.options.needs.kinds))
         drifted = link.drifted()
         if drifted:
             WorktreeStatus.of(self.options.repo).mark_drifted(drifted)

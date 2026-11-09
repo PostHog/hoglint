@@ -228,6 +228,7 @@ impl Link {
     ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
         self.rows()?;
         callee_position(kind)?;
+        self.rows_of(kind)?;
         let wanted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
         let last = |callee: &str| wanted.contains(callee.rsplit('.').next().unwrap_or(""));
         let it = &self.inner.core.it;
@@ -342,7 +343,7 @@ impl Link {
         &mut self,
         targets: Vec<Pair>,
     ) -> PyResult<Vec<(u32, i32, u32, u32, u32, (String, Option<HitTuple>, bool))>> {
-        self.rows()?;
+        self.rows_of("uses")?;
         let wanted = targets.iter().map(|(m, s)| self.ent(m, s)).collect();
         let found = self.inner.uses_to(&wanted);
         Ok(found
@@ -384,6 +385,7 @@ impl Link {
         let it = &self.inner.core.it;
         let matches = |text: &str| pattern.is_match(text);
         for kind in &kinds {
+            self.rows_of(kind)?;
             match kind_mentions(facts, kind, it, &matches) {
                 Some(true) => return Ok(true),
                 Some(false) => {}

@@ -90,6 +90,17 @@ impl Link {
         Ok(())
     }
 
+    /// Raises when the rows of `kind` were dropped: no pack declared it (`release_kinds`).
+    pub(crate) fn rows_of(&self, kind: &str) -> PyResult<()> {
+        self.rows()?;
+        if self.inner.core.facts.dropped.contains(&kind) {
+            return Err(PyValueError::new_err(format!(
+                "the link dropped its {kind} rows: no pack declares the kind"
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn scope_index(&self, scope: u32) -> PyResult<usize> {
         let index = scope as usize;
         if index >= self.inner.scopes.len() {
@@ -109,6 +120,12 @@ impl Link {
     /// Estimated heap bytes per part of the link: [(part, bytes)].
     fn heap(&self) -> Vec<(&'static str, usize)> {
         self.inner.heap()
+    }
+
+    /// Drops the rows of the query kinds not in `kept`, the kinds the packs declare: right after
+    /// the link, only packs read them. False when the rows could not be dropped.
+    fn release_kinds(&mut self, kept: Vec<String>) -> bool {
+        self.inner.release_kinds(&kept)
     }
 
     /// Drops the records' fact rows once the pack phase ends (D23): rules read edges, symbols

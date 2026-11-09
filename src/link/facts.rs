@@ -248,7 +248,13 @@ pub struct FactSet {
     pub files: Vec<FileFacts>,
     /// Set once the rows are dropped (`release_rows`).
     pub released: bool,
+    /// The kinds whose rows were dropped early (`release_kinds`).
+    pub dropped: Vec<&'static str>,
 }
+
+/// The kinds of rows the link keeps that only the core producers and pack queries read:
+/// resolution reads imports, defs and assigns, so those stay until `release_rows`.
+pub const QUERY_KINDS: [&str; 7] = ["refs", "strs", "calls", "uses", "callees", "names", "tags"];
 
 impl FactSet {
     pub fn new(text: Vec<u8>, files: Vec<FileFacts>) -> FactSet {
@@ -257,6 +263,7 @@ impl FactSet {
             source: Box::new(Lines { text, lines }),
             files,
             released: false,
+            dropped: Vec::new(),
         }
     }
 
@@ -266,6 +273,29 @@ impl FactSet {
             source,
             files,
             released: false,
+            dropped: Vec::new(),
+        }
+    }
+
+    /// Drops the rows of the query kinds (`QUERY_KINDS`) not in `kept`: after the core
+    /// producers, only packs read them, and a pack reads only the kinds it declares.
+    pub fn release_kinds(&mut self, kept: &[String]) {
+        for kind in QUERY_KINDS {
+            if kept.iter().any(|name| name == kind) || self.dropped.contains(&kind) {
+                continue;
+            }
+            for file in &mut self.files {
+                match kind {
+                    "refs" => file.refs = Vec::new(),
+                    "strs" => file.strs = Vec::new(),
+                    "calls" => file.calls = Vec::new(),
+                    "uses" => file.uses = Vec::new(),
+                    "callees" => file.callees = Vec::new(),
+                    "names" => file.names = Vec::new(),
+                    _ => file.tags = Vec::new(),
+                }
+            }
+            self.dropped.push(kind);
         }
     }
 

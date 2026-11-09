@@ -617,6 +617,16 @@ impl Link {
 
 impl Link {
     /// Estimated heap bytes per part, in a fixed order.
+    /// Drops the rows of the query kinds no pack declares (`FactSet::release_kinds`). False when
+    /// another holder shares the fact set, so nothing is dropped.
+    pub fn release_kinds(&mut self, kept: &[String]) -> bool {
+        let Some(facts) = Arc::get_mut(&mut self.core.facts) else {
+            return false;
+        };
+        facts.release_kinds(kept);
+        true
+    }
+
     /// Drops every record's fact rows (`FactSet::release_rows`), and with them what only
     /// resolution reads: the module tables, the resolver caches and the scopes' bindings. False
     /// when another holder shares the fact set, so nothing is dropped.
