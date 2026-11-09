@@ -123,6 +123,10 @@ class LayoutPrimitive(EntityRule):
                         self.resolver(module, None, f"{root}/{forbidden}"),
                     )
 
+    def assignments_known(self) -> bool:
+        facts = self.ctx.labeler.facts
+        return any(facts.decl(symbol) == "assignment" for symbol in self.ctx.graph.symbols)
+
     def check_registry(self) -> None:
         registry = self.ctx.config.registries[self.spec.registry]
         facts = self.ctx.labeler.facts
@@ -132,6 +136,9 @@ class LayoutPrimitive(EntityRule):
                 continue
             attribute = f"{module}.{registry.attribute}"
             resolve = self.resolver(module, None, attribute)
+            if not facts.has(attribute) and not self.assignments_known():
+                self.incomplete(attribute, module, "no producer records module-level assignments")
+                continue
             if not facts.has(attribute):
                 self.emit(
                     attribute,

@@ -1,0 +1,56 @@
+schema = 1
+extends = ["hoglint:django"]
+
+[discovery]
+source_roots = ["src", "."]
+first_party  = ["sentry", "social_auth", "sudo", "bitfield", "tests", "fixtures"]
+exclude      = ["fixtures/stubs-for-mypy/**"]
+
+[django]
+settings = "sentry.conf.server"
+
+[fields]
+package = { type = "id" }
+owners  = { type = "set" }
+silo    = { type = "enum", values = ["cell", "control", "all"], on = "symbol", required_on = "kind == 'model'" }
+
+[providers.codeowners]
+use  = "codeowners"
+file = ".github/CODEOWNERS"
+sets = ["owners"]
+
+[[assign]]
+match = "src/sentry/{domain}/**"
+set   = { package = "{domain}" }
+
+[[assign]]
+symbols = { decorated_by = "sentry.db.models.base.cell_silo_model" }
+set     = { silo = "cell" }
+
+[[assign]]
+symbols = { decorated_by = "sentry.db.models.base.control_silo_model" }
+set     = { silo = "control" }
+
+[kinds]
+model    = { subclass_of = "django.db.models.Model", abstract = false }
+endpoint = { subclass_of = "sentry.api.base.Endpoint" }
+
+[rules.silo-relations]
+primitive     = "edge"
+doc           = "No foreign key between models of different silos. HybridCloudForeignKey is the escape."
+kinds         = ["relation"]
+require       = "src.silo == dst.silo"
+on_unresolved = "block"
+identity      = ["src.symbol", "dst.symbol"]
+growth_key    = ["src.symbol", "dst.symbol"]
+
+[rules.no-testutils-in-prod]
+primitive  = "edge"
+kinds      = ["import"]
+deny       = "dst.module startswith 'sentry.testutils'"
+unless     = "src.context == 'test' or src.module startswith 'sentry.testutils'"
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+[ledger]
+file = "hoglint.ledger"

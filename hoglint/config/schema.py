@@ -59,6 +59,7 @@ CORE_USES = (
     "decorator",
     "assign",
     "with",
+    "name",
     "other",
 )
 CORE_SHAPES = ("frozen-dataclass", "dataclass", "abc", "enum", "protocol", "function", "constant", "class")

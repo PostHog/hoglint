@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Iterator
+
 from hoglint.config.model import RuleSpec
-from hoglint.model import Remedy
+from hoglint.model import Edge, Remedy
 from hoglint.rules.base import EdgeEnv, EdgeRule, RuleContext
 from hoglint.selectors import Selector, Truth
 
@@ -34,7 +37,21 @@ class EntrypointPrimitive(EdgeRule):
 
 
 class UseShapePrimitive(EdgeRule):
-    """Is this use of a foreign symbol in an allowed shape?"""
+    """Is this use of a foreign symbol in an allowed shape?
+
+    With `flow = "def-use"` the pack's flow-refined shape (edge attr `flow_shape`, written as
+    `kind` or `kind(detail)`) replaces the syntax-only shape.
+    """
+
+    def edges(self) -> Iterator[Edge]:
+        flow = dict(self.spec.producer_options).get("flow") == "def-use"
+        for edge in super().edges():
+            refined = edge.attr("flow_shape") if flow else ""
+            if not refined:
+                yield edge
+                continue
+            kind, _, detail = refined.partition("(")
+            yield dataclasses.replace(edge, shape=kind, shape_detail=detail.removesuffix(")"))
 
     def shape_names(self, env: EdgeEnv) -> set[str]:
         shape = env.edge.shape or env.edge.use or "other"

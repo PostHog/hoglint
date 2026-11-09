@@ -1,0 +1,554 @@
+# PostHog preset: fields, assignments, zones, exports, registries, rules and levels.
+# Nothing here is built into hoglint core. The repo root hoglint.toml extends it next to the
+# Django pack and adds discovery, `[django]`, providers, the ledger and outputs.
+schema = 1
+
+[vocabulary]
+edge_kinds = ["drives"]
+
+# ── Fields ─────────────────────────────────────────────────────
+# required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
+
+[fields]
+package   = { type = "id", required_on = ["products/**", "posthog/**", "ee/**", "common/**", "packages/**"] }
+tier      = { type = "enum", values = ["core", "product", "leaf"], required_on = ["products/**", "posthog/**", "ee/**", "common/**", "packages/**"] }
+role      = { type = "enum", values = ["foundation", "feature"], required_on = ["products/**"] }
+zone      = { type = "zone" }
+owners    = { type = "set" }
+stage     = { type = "enum", values = ["proto-product"] }
+django    = { type = "ordered", values = ["settings", "framework", "orm"] }
+testcode  = { type = "bool" }
+database  = { type = "string", on = "symbol", required_on = "kind == 'model'" }
+generated = { type = "bool", required_on = ["posthog/schema.py", "posthog/schema_enums.py"] }
+producer  = { type = "set" }
+
+# ── Products ───────────────────────────────────────────────────
+
+[[assign]]
+match = "products/{product}/**"
+set   = { package = "{product}", tier = "product", role = "feature" }
+
+# Foundation products others build on. They never depend on feature products.
+[[assign]]
+match    = ["products/access_control/**", "products/notifications/**", "products/event_definitions/**"]
+set      = { role = "foundation" }
+override = true
+
+# Product code that still lives outside products/ keeps its product id (B12).
+[[assign]]
+match    = "posthog/temporal/ai_observability/**"
+set      = { package = "ai_observability", tier = "product", role = "feature" }
+override = true
+
+# ── Core, named core packages, leaves ──────────────────────────
+
+[[assign]]
+match = ["posthog/**", "ee/**", "common/**"]
+set   = { package = "core", tier = "core" }
+
+[[assign]]
+match    = "posthog/{infra}/**"
+only     = { infra = ["egress", "ingress", "kafka_client", "personhog_client"] }
+set      = { package = "{infra}", zone = "infrastructure" }
+override = true
+
+[[assign]]
+match    = "posthog/clickhouse/client/**"
+set      = { package = "clickhouse_client", zone = "infrastructure" }
+override = true
+
+[[assign]]
+match = ["common/**", "posthog/db_backends/**", "posthog/redis.py", "posthog/cache_utils.py"]
+set   = { zone = "infrastructure" }
+
+[[assign]]
+match    = "ee/billing/**"
+set      = { package = "billing", stage = "proto-product" }
+override = true
+
+[[assign]]
+match    = "posthog/session_recordings/**"
+set      = { package = "session_recordings", stage = "proto-product" }
+override = true
+
+[[assign]]
+match    = "ee/hogai/**"
+set      = { package = "hogai", stage = "proto-product" }
+override = true
+
+[[assign]]
+match = ["posthog/egress/**", "posthog/kafka_client/**"]
+set   = { django = "framework" }
+
+# Core wires products in through registration.
+[[assign]]
+match = [
+  "posthog/api/__init__.py", "posthog/api/rest_router.py", "posthog/urls.py", "posthog/ee_urls.py",
+  "posthog/product_urls.py", "posthog/products.py", "posthog/apps.py", "posthog/settings/**",
+]
+set = { zone = "composition" }
+
+# Every package under packages/ is a leaf (B13).
+[[assign]]
+match = "packages/{pkg}/**"
+set   = { package = "{pkg}", tier = "leaf" }
+
+[[assign]]
+match = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
+set   = { testcode = true }
+
+# ── Zones inside a product ─────────────────────────────────────
+# A product file no zone path matches lands in the default private zone `internal`.
+
+[zones]
+within         = "products/{product}"
+default        = "internal"
+composition    = {}
+infrastructure = {}
+backend        = { paths = ["backend/**"] }
+facade         = { parent = "backend", paths = ["backend/facade/**"] }
+contracts      = { parent = "facade", paths = ["backend/facade/contracts.py", "backend/facade/enums.py"] }
+presentation   = { parent = "backend", paths = ["backend/presentation/**", "backend/routes.py"] }
+logic          = { parent = "backend", paths = ["backend/logic.py", "backend/logic/**"] }
+models         = { parent = "backend", paths = ["backend/models.py", "backend/models/**"] }
+migrations     = { parent = "backend", paths = ["backend/migrations/**"] }
+tasks          = { parent = "backend", paths = ["backend/tasks/**"] }
+commands       = { parent = "backend", paths = ["backend/management/commands/**"] }
+tests          = { paths = ["**/tests/**", "**/test/**", "**/test_*.py"], override = true }
+
+# ── Kinds and shapes ───────────────────────────────────────────
+# `model` reads the Django pack's model index, which already handles abstract and proxy models.
+
+[kinds]
+model    = { decl = "model", abstract = false }
+manager  = { subclass_of = ["django.db.models.manager.BaseManager", "django.db.models.manager.Manager", "django.db.models.Manager"] }
+queryset = { subclass_of = ["django.db.models.query.QuerySet", "django.db.models.QuerySet"] }
+command  = { subclass_of = ["django.core.management.base.BaseCommand"] }
+
+[shapes.contract]
+data     = ["frozen-dataclass", "enum"]
+behavior = { kind = "abc", where = "tier == 'core'" }
+deny     = ["model", "manager", "queryset", "command"]
+unknown  = "error"
+
+[shapes.registration]
+allow   = ["class"]
+deny    = ["model", "manager", "queryset"]
+unknown = "error"
+
+[shapes.adapter]
+allow   = ["class"]
+deny    = ["model", "manager", "queryset"]
+unknown = "error"
+
+# ── Exports: the only public surface of a product ──────────────
+
+[exports.facade]
+within   = "products/{product}"
+paths    = ["backend/facade/**"]
+audience = "*"
+shape    = "contract"
+
+[exports.registration]
+within   = "products/{product}"
+paths    = ["backend/routes.py", "backend/webhook_consumers.py", "backend/data_freshness.py", "backend/scopes.py"]
+audience = "src.zone == 'composition' or src.registry != none"
+shape    = "registration"
+
+# Presentation adapters by base class, with an audience (agreed Nov 9).
+[exports.presentation-adapter]
+within      = "products/{product}"
+paths       = ["backend/presentation/**"]
+subclass_of = [
+  "products.access_control.backend.presentation.access_control.AccessControlViewSetMixin",
+  "products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin",
+  "products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin",
+  "products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin",
+  "products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin",
+]
+audience    = "src.zone == 'presentation' or src.tier == 'core'"
+shape       = "adapter"
+
+# ── Registries: core finds product code by file convention ─────
+
+[registries.routes]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/routes.py"
+attribute = "register_routes"
+lifecycle = "setup"
+
+[registries.data_freshness]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/data_freshness.py"
+attribute = "DATA_SOURCES"
+lifecycle = "on-demand"
+
+[registries.scopes]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/scopes.py"
+attribute = "SCOPE_DOCS"
+lifecycle = "on-demand"
+
+[registries.webhook_consumers]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/webhook_consumers.py"
+attribute = "WEBHOOK_CONSUMERS"
+shape     = "abc:posthog.ingress.contracts.WebhookConsumer"
+lifecycle = "first-request"
+
+[registries.health_checks]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/health_checks.py"
+attribute = "HEALTH_CHECKS"
+shape     = "abc:posthog.temporal.health_checks.framework.HealthCheckRegistration"
+lifecycle = "worker-start"
+
+# ── Identities: ledger columns per rule family ─────────────────
+
+[identities]
+crossing                 = ["dst.symbol", "src.module", "edge.label"]
+relation                 = ["dst.symbol", "edge.declaring_model", "edge.field", "edge.accessor"]
+migration-pair           = ["edge.child", "edge.parent"]
+facade-slot              = ["src.module", "edge.callable", "edge.slot", "dst.symbol"]
+receiver-sender          = ["dst.symbol", "src.package", "src.module"]
+location-module-trigger  = ["edge.location", "src.module", "edge.label"]
+package-module           = ["src.package", "src.module"]
+package-file             = ["package", "subject"]
+field-of-model           = ["edge.model", "edge.field"]
+
+# ── The public surface ─────────────────────────────────────────
+
+[rules.public-surface]
+primitive     = "entrypoint"
+doc           = "Other packages name a product only through an export whose audience includes them."
+kinds         = ["import", "reference", "dotted-path"]
+select        = "src.package != dst.package and dst.tier == 'product'"
+endpoint      = "surface"
+allow         = "dst.exported"
+on_unresolved = "finding"
+identity      = "module-symbol"
+growth_key    = ["dst.symbol", "edge.label"]
+
+[rules.export-shape]
+primitive  = "export"
+doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a signature, a base or a re-export."
+identity   = "module-symbol"
+growth_key = ["dst.symbol", "edge.label"]
+
+[rules.facade-signature]
+primitive  = "signature"
+doc        = "A public facade function neither accepts nor returns a model, manager or queryset; Any and bare dict read as unknown."
+select     = "src.zone == 'facade'"
+deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
+unless     = "edge.callable startswith '_'"
+on_unknown = "finding"
+identity   = "facade-slot"
+growth_key = ["dst.symbol"]
+
+[rules.facade-logic]
+primitive  = "edge"
+doc        = "Facade modules stay thin: every callable with a body in a facade is counted, so the count cannot grow."
+kinds      = ["declares"]
+from       = "src.zone == 'facade' and src.zone != 'contracts'"
+select     = "edge.body == '1' and edge.decl in ['def', 'async']"
+identity   = "package-module"
+counted    = true
+growth_key = ["src.package"]
+
+# ── Layers inside a product ────────────────────────────────────
+
+[rules.presentation-uses-facade]
+primitive  = "edge"
+doc        = "Presentation reaches any product's code through a facade or presentation."
+view       = "zones"
+from       = "src.zone == 'presentation'"
+deny       = "dst.tier == 'product' and dst.zone not in ['facade', 'presentation', 'tests']"
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+[rules.facade-no-drf]
+primitive  = "edge"
+doc        = "A facade stays framework-free: no DRF, no django.http, no presentation."
+view       = "zones"
+from       = "src.zone == 'facade'"
+deny       = "dst.external == 'rest_framework' or dst.module startswith 'django.http' or dst.zone == 'presentation'"
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+[rules.contracts-no-django]
+primitive     = "reach"
+doc           = "Contracts never pull in Django, not even through a chain."
+view          = "file-imports"
+from          = "src.zone == 'contracts'"
+deny          = "dst.external == 'django'"
+contexts      = { exclude = ["type_only", "test"] }
+on_unresolved = "incomplete"
+identity      = "module-pair"
+growth_key    = ["src.module"]
+
+[rules.thin-commands]
+primitive  = "edge"
+doc        = "A management command reaches its own product through the facade (B2)."
+view       = "zones"
+from       = "src.zone == 'commands'"
+deny       = "dst.package == src.package and dst.zone in ['models', 'logic', 'tasks']"
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+[rules.atomic-outside-views]
+primitive   = "use-shape"
+doc         = "Views do not open transactions (B10); counted per function."
+kinds       = ["reference"]
+select      = "src.zone == 'presentation' and dst.symbol == 'django.db.transaction.atomic'"
+deny_shapes = ["call", "with", "decorator"]
+identity    = "scope-symbol"
+counted     = true
+growth_key  = ["dst.symbol", "edge.label"]
+
+[rules.prod-imports-test]
+primitive  = "edge"
+doc        = "Production code never imports test code; a test path alone grants no exemption."
+kinds      = ["import", "dotted-path"]
+contexts   = { exclude = ["test"] }
+from       = "src.testcode != true"
+deny       = "dst.testcode == true"
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+# ── Model crossings, relations, signals, drives ────────────────
+
+[rules.model-crossings]
+primitive    = "use-shape"
+doc          = "Outside its package, a model appears only in harmless shapes. Judged at the origin, so a re-export hides nothing."
+kinds        = ["reference"]
+select       = "dst.kind == 'model' and src.package != dst.package and edge.shape != none"
+endpoint     = "origin"
+allow_shapes = ["annotation", "isinstance", "exception", "nested-class-attr", "type-use", "_meta", "scalar-chain", "subquery"]
+flow         = "def-use"
+requires     = ["django.uses"]
+identity     = "crossing"
+counted      = true
+growth_key   = ["dst.symbol", "edge.label"]
+
+[rules.get-model]
+primitive  = "edge"
+doc        = "apps.get_model naming another package's model is counted."
+kinds      = ["model-label"]
+select     = "edge.shape == 'get_model' and src.package != dst.package"
+identity   = "crossing"
+counted    = true
+growth_key = ["dst.symbol", "edge.label"]
+
+[rules.reverse-accessor]
+primitive     = "edge"
+doc           = "A relation into another package is sealed: hidden, with no explicit query name. Owner by defining module."
+kinds         = ["reverse-accessor"]
+select        = "src.package != dst.package"
+on_unresolved = "block"
+identity      = "relation"
+growth_key    = ["dst.symbol"]
+
+[rules.receiver-direction]
+primitive  = "edge"
+doc        = "A product never listens to another product's sender (B6). The ledger keeps the sender."
+kinds      = ["signal"]
+select     = "src.package != dst.package and dst.tier == 'product'"
+identity   = "receiver-sender"
+counted    = true
+growth_key = ["dst.symbol", "src.package"]
+
+[rules.installs]
+primitive  = "edge"
+doc        = "A product registers a callback into another package's hook; the callback's module must be watched."
+kinds      = ["installs"]
+select     = "src.package != dst.package"
+identity   = "module-symbol"
+counted    = true
+growth_key = ["dst.symbol"]
+
+[rules.drives]
+primitive     = "edge"
+doc           = "A test outside a product that executes the product's wiring is recorded."
+kinds         = ["drives"]
+contexts      = { include = ["test"] }
+select        = "src.package != dst.package"
+resolve_calls = "bare-name"
+identity      = "location-module-trigger"
+counted       = true
+growth_key    = ["edge.location", "edge.label"]
+
+[rules.wiring-watched]
+primitive  = "coverage"
+doc        = "Every wiring location another package drives, every receiver or hook callback, and every module outside tests patch is in the contract-check inputs."
+covers     = [
+  "rules.drives.dst.path",
+  "edge.kind in ['signal', 'installs'] and src.package != dst.package: src",
+  "edge.kind == 'dotted-path' and edge.context == 'test' and src.package != dst.package: dst",
+]
+inputs     = { adapter = "turbo", task = "backend:contract-check" }
+identity   = "entity"
+growth_key = ["subject"]
+
+[rules.dynamic-imports]
+primitive     = "edge"
+doc           = "A computed import outside a declared registry loader is unknown: rules that need it go incomplete."
+kinds         = ["dynamic-import"]
+from          = "src.registry == none"
+deny          = "false"
+on_unresolved = "incomplete"
+ledger        = false
+
+# ── Package graph (replaces tach depends_on) ───────────────────
+
+[rules.no-new-package-cycles]
+primitive  = "cycle"
+doc        = "No new dependency may close a cycle between products. A sealed FK still points one way (B9)."
+view       = "packages"
+kinds      = ["import", "reference", "dotted-path", "model-label", "relation"]
+select     = "src.tier == 'product' and dst.tier == 'product'"
+contexts   = { exclude = ["test", "type_only"] }
+identity   = "package-pair"
+growth_key = ["src.package", "dst.package"]
+
+[rules.foundation-direction]
+primitive  = "edge"
+doc        = "Foundation products never depend on feature products."
+view       = "packages"
+from       = "src.role == 'foundation'"
+deny       = "dst.role == 'feature'"
+contexts   = { exclude = ["test", "type_only"] }
+identity   = "package-pair"
+growth_key = ["src.package", "dst.package"]
+
+[rules.infrastructure-direction]
+primitive  = "edge"
+doc        = "Infrastructure never depends on a product or a proto-product."
+kinds      = ["import", "reference", "dotted-path"]
+from       = "src.zone == 'infrastructure'"
+deny       = "dst.tier == 'product' or dst.stage == 'proto-product'"
+contexts   = { exclude = ["test", "type_only"] }
+identity   = "package-pair"
+growth_key = ["src.package", "dst.package"]
+
+[rules.no-product-lists-in-core]
+primitive  = "edge"
+doc        = "Core names a product only through a registry or the registration export (B14)."
+kinds      = ["import", "dotted-path"]
+from       = "src.tier == 'core' and src.registry == none"
+deny       = "dst.tier == 'product'"
+unless     = "src.zone == 'composition' and dst.exported"
+contexts   = { exclude = ["test", "type_only"] }
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+[rules.leaves-stay-leaves]
+primitive     = "edge"
+doc           = "A leaf package (packages/*) ships alone: no app code, no Django, no DRF."
+kinds         = ["import"]
+from          = "src.tier == 'leaf'"
+deny          = "dst.tier in ['core', 'product'] or dst.external in ['django', 'rest_framework']"
+contexts      = { exclude = ["test"] }
+on_unresolved = "block"
+identity      = "module-pair"
+growth_key    = ["src.module", "dst.module"]
+
+[rules.orm-independent]
+primitive  = "signature"
+doc        = "Framework-level core packages use Django, never its models."
+select     = "src.django == 'framework'"
+deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model'"
+on_unknown = "finding"
+identity   = "facade-slot"
+growth_key = ["dst.symbol"]
+
+# ── Django invariants ──────────────────────────────────────────
+
+[rules.migration-database]
+primitive     = "edge"
+doc           = "A migration depends only on migrations that run on the same databases."
+kinds         = ["migration-parent"]
+require       = "edge.child_databases subset_of edge.parent_databases"
+on_unresolved = "block"
+identity      = "migration-pair"
+growth_key    = ["edge.child", "edge.parent"]
+
+[rules.featureflag-relations]
+primitive  = "inventory"
+doc        = "Every relation onto FeatureFlag is classified. Missing and stale entries both fail."
+kinds      = ["relation"]
+select     = "dst.kind == 'model' and dst.name == 'FeatureFlag'"
+classify   = "tools/hoglint/policy/featureflag-relations.toml"
+identity   = "field-of-model"
+growth_key = ["edge.model", "edge.field"]
+
+[rules.own-database]
+primitive  = "layout"
+doc        = "A product model has its own database route (B7). Incomplete until the pack sets `database` on models."
+on         = "symbol"
+select     = "kind == 'model' and tier == 'product' and database != none"
+require    = "database != 'default'"
+identity   = "package-file"
+growth_key = ["package"]
+
+# ── Layout, registries, generated code ─────────────────────────
+
+[rules.product-code-at-home]
+primitive  = "layout"
+doc        = "Product code lives under products/ (B12); counted per package, so a new file outside fails."
+select     = "tier == 'product' and not path startswith 'products/'"
+identity   = "package-file"
+growth_key = ["package"]
+
+[rules.registry-routes]
+primitive  = "layout"
+registry   = "routes"
+identity   = "entity"
+growth_key = ["subject"]
+
+[rules.registry-webhook-consumers]
+primitive  = "layout"
+registry   = "webhook_consumers"
+identity   = "entity"
+growth_key = ["subject"]
+
+[rules.registry-health-checks]
+primitive  = "layout"
+registry   = "health_checks"
+identity   = "entity"
+growth_key = ["subject"]
+
+[rules.generated-producer]
+primitive   = "inventory"
+doc         = "Each generated file has exactly one producer."
+select      = "generated == true"
+exactly_one = "producer"
+on          = "module"
+identity    = "entity"
+growth_key  = ["subject"]
+
+[rules.health-checks-no-dags]
+primitive = "reach"
+doc       = "Health checks never import posthog.dags. The runtime probe stays the authority; this is an early warning."
+view      = "file-imports"
+from      = "src.registry == 'health_checks'"
+deny      = "dst.module startswith 'posthog.dags'"
+report    = "advisory"
+ledger    = false
+
+# Reviewed exceptions to these rules live in hoglint.exceptions.toml.
+
+# ── Levels ─────────────────────────────────────────────────────
+# Isolated is specified apart from lint acceptance. Ledgered debt may coexist; an unknown, an
+# incomplete result or unwatched wiring (strict) forbids the level even when the ledger accepts it.
+
+[levels.isolated]
+doc      = "turbo may skip the full Django suite when only this product changes."
+group_by = "package"
+select   = "tier == 'product'"
+requires = [
+  "public-surface", "export-shape", "facade-signature", "presentation-uses-facade", "facade-no-drf",
+  "contracts-no-django", "model-crossings", "get-model", "reverse-accessor", "receiver-direction",
+  "installs", "wiring-watched", "dynamic-imports",
+]
+strict   = ["wiring-watched"]
+unknown  = "fails"

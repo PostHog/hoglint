@@ -460,12 +460,19 @@ def contained(left: Value, right: Value) -> Truth:
     return Truth.of(bool(members(left) & members(right)))
 
 
+def set_members(value: Value) -> frozenset[str]:
+    """`subset_of` reads a plain string as a comma-separated set (producer attrs carry sets so)."""
+    if value.state is State.NONE:
+        return frozenset()
+    if isinstance(value.data, str) and not value.chain:
+        return frozenset(item.strip() for item in value.data.split(",") if item.strip())
+    return members(value)
+
+
 def subset(left: Value, right: Value) -> Truth:
     if left.is_unknown or right.is_unknown:
         return Truth.UNKNOWN
-    left_items = frozenset() if left.state is State.NONE else members(left)
-    right_items = frozenset() if right.state is State.NONE else members(right)
-    return Truth.of(left_items <= right_items)
+    return Truth.of(set_members(left) <= set_members(right))
 
 
 def starts(left: Value, right: Value) -> Truth:

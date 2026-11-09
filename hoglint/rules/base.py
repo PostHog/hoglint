@@ -198,6 +198,7 @@ class EdgeEnv:
             "label": self.label(),
             "resolution": edge.resolution.value,
             "surface": edge.surface,
+            "producer": edge.producer,
         }
         if name in simple:
             return Value.known(simple[name]) if simple[name] else NONE

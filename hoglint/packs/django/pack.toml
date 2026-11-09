@@ -1,0 +1,12 @@
+# The Django pack's config: the edge kinds and use shapes its producers emit, and its section.
+# Settings for one repo go in that repo's `[django]` table.
+schema = 1
+
+[vocabulary]
+edge_kinds = ["model-label", "relation", "reverse-accessor", "migration-parent", "signal", "installs", "loads"]
+use_shapes = [
+  "_meta", "annotation", "construct", "drf-field-queryset", "drf-model-serializer", "exception", "get_model",
+  "in-collection", "instance-many", "instance-single", "isinstance", "lock", "nested-class-attr", "passed-as-class",
+  "prefetch", "scalar-chain", "subquery", "type-use", "write",
+]
+sections = ["django"]

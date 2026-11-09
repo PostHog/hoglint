@@ -1,0 +1,59 @@
+schema = 1
+extends = ["hoglint:django"]
+
+[discovery]
+source_roots = ["."]
+first_party  = ["zerver", "zproject", "analytics", "confirmation", "corporate", "zilencer", "scripts", "tools"]
+scripts      = { shebang = "python", paths = ["tools/**", "scripts/**"] }
+
+[django]
+settings = { module = "zproject.computed_settings", variants = { dev = "zproject.dev_settings" } }
+
+[fields]
+package  = { type = "id" }
+layer    = { type = "enum", values = ["models", "lib", "actions", "views", "worker"] }
+optional = { type = "bool" }
+
+[[assign]]
+match = "zerver/{layer}/**"
+only  = { layer = ["models", "lib", "actions", "views", "worker"] }
+set   = { package = "zerver", layer = "{layer}" }
+
+[[assign]]
+match = ["corporate/**", "zilencer/**"]
+set   = { optional = true }
+
+[rules.layer-order]
+primitive  = "edge"
+doc        = "Lower layers never import higher ones."
+kinds      = ["import"]
+deny       = """
+  (src.layer == 'models' and dst.layer in ['lib', 'actions', 'views', 'worker'])
+  or (src.layer == 'lib' and dst.layer in ['actions', 'views'])
+  or (src.layer == 'actions' and dst.layer == 'views')
+"""
+contexts   = { exclude = ["test"] }
+identity   = "module-pair"
+growth_key = ["src.module", "dst.module"]
+
+[rules.send-event-from-actions]
+primitive   = "use-shape"
+doc         = "Only actions send events to Tornado."
+select      = "dst.symbol in ['zerver.tornado.django_api.send_event_on_commit', 'zerver.tornado.django_api.send_event_rollback_unsafe']"
+deny_shapes = ["call"]
+unless      = "src.layer == 'actions' or src.context == 'test'"
+identity    = "scope-symbol"
+growth_key  = ["dst.symbol"]
+
+[rules.message-access]
+primitive   = "use-shape"
+doc         = "Fetch a single message through access_message, which checks permissions."
+select      = "dst.symbol == 'zerver.models.Message'"
+deny_shapes = ["instance-single"]
+unless      = "src.context == 'test'"
+remedy      = "zerver.lib.message.access_message"
+identity    = "scope-symbol"
+growth_key  = ["dst.symbol"]
+
+[ledger]
+file = "hoglint.ledger"

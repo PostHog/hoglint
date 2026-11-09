@@ -1,0 +1,25 @@
+# Root hoglint.toml of PostHog as section 10 sketches it, minus providers that read real files.
+schema = 1
+extends = ["hoglint:django", "tools/hoglint/presets/posthog.toml"]
+
+[discovery]
+source_roots = ["."]
+first_party  = ["posthog", "ee", "common", "products", "tools", "services", "packages"]
+exclude      = ["docs/**", "products/*/evals/**", "products/posthog_ai/eval_harness/**"]
+
+[django]
+settings   = "posthog.settings.web"
+db_routing = "products/db_routing.yaml"
+oracles    = ["registry", "migration-loader"]
+
+[ledger]
+file       = "hoglint.ledger"
+exceptions = "hoglint.exceptions.toml"
+equality   = "exact"
+growth     = "attribution"
+report     = { by = "owners" }
+
+[outputs.import-map]
+view   = "file-imports"
+format = "tach-map"
+path   = ".hoglint/import-map.json"

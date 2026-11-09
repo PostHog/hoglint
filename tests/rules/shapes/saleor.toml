@@ -1,0 +1,66 @@
+schema = 1
+extends = ["hoglint:django"]
+
+[discovery]
+source_roots = ["."]
+first_party  = ["saleor"]
+exclude      = ["saleor/static/**"]
+
+[django]
+settings = "saleor.settings"
+
+[fields]
+package = { type = "id", required_on = ["saleor/**"] }
+layer   = { type = "enum", values = ["graphql", "domain"], required_on = ["saleor/**"] }
+
+# One package from two trees, joined on the {d} capture.
+[[assign]]
+match  = ["saleor/{d}/**", "saleor/graphql/{d}/**"]
+except = { d = ["graphql", "tests", "static", "core", "plugins", "webhook"] }
+set    = { package = "{d}" }
+
+[[assign]]
+match = ["saleor/core/**", "saleor/graphql/core/**", "saleor/permission/**"]
+set   = { package = "core" }
+
+# The layer cuts across every package.
+[[assign]]
+match = "saleor/graphql/**"
+set   = { layer = "graphql" }
+
+[[assign]]
+match        = "saleor/**"
+except_paths = ["saleor/graphql/**"]
+set          = { layer = "domain" }
+
+[rules.domain-not-graphql]
+primitive     = "edge"
+doc           = "Non-GraphQL code never imports from the graphql layer."
+kinds         = ["import"]
+from          = "src.layer == 'domain'"
+deny          = "dst.layer == 'graphql'"
+contexts      = { exclude = ["test"] }
+on_unresolved = "finding"
+identity      = "module-pair"
+growth_key    = ["dst.module"]
+
+[rules.dev-only]
+primitive  = "edge"
+doc        = "saleor.core.development is for tests and populatedb only."
+kinds      = ["import"]
+deny       = "dst.module startswith 'saleor.core.development'"
+unless     = "src.context == 'test' or src.module == 'saleor.core.management.commands.populatedb'"
+identity   = "module-pair"
+growth_key = ["dst.module"]
+
+[rules.top-level-imports]
+primitive  = "edge"
+doc        = "Place imports at the top of the file."
+kinds      = ["import"]
+contexts   = { include = ["function_local"], exclude = ["test"] }
+deny       = "true"
+identity   = "module-pair"
+growth_key = ["src.module"]
+
+[ledger]
+file = "hoglint.ledger"
