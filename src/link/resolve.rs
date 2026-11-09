@@ -88,12 +88,51 @@ impl Binding {
     }
 }
 
+/// A map that keeps the order keys were first inserted in, as a Python dict does.
+pub struct OrderedMap<V> {
+    map: FxHashMap<Sid, V>,
+    order: Vec<Sid>,
+}
+
+impl<V> Default for OrderedMap<V> {
+    fn default() -> Self {
+        OrderedMap {
+            map: FxHashMap::default(),
+            order: Vec::new(),
+        }
+    }
+}
+
+impl<V: Copy> OrderedMap<V> {
+    pub fn get(&self, key: &Sid) -> Option<&V> {
+        self.map.get(key)
+    }
+
+    /// `d[key] = value`: a new key goes last, an old one keeps its place.
+    pub fn insert(&mut self, key: Sid, value: V) {
+        if self.map.insert(key, value).is_none() {
+            self.order.push(key);
+        }
+    }
+
+    /// `d.setdefault(key, value)`.
+    pub fn set_default(&mut self, key: Sid, value: V) {
+        if !self.map.contains_key(&key) {
+            self.insert(key, value);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Sid, V)> + '_ {
+        self.order.iter().map(|key| (*key, self.map[key]))
+    }
+}
+
 pub struct ModuleTable {
     pub name: Sid,
     pub is_package: bool,
-    pub names: FxHashMap<Sid, Binding>,
+    pub names: OrderedMap<Binding>,
     pub star_imports: Vec<Sid>,
-    pub lazy: FxHashMap<Sid, Sid>,
+    pub lazy: OrderedMap<Sid>,
     pub record: Option<u32>,
     pub stub_record: Option<u32>,
 }
@@ -329,7 +368,7 @@ impl Core {
     /// PEP 562 lazy exports: module-level dicts of name -> module string in a module with
     /// `__getattr__`. A value is the tail of a module-level string prefix, an absolute module,
     /// or a module under the package or one of its ancestors (nearest first).
-    fn lazy_map(&mut self, module: Sid, is_package: bool, file: u32) -> FxHashMap<Sid, Sid> {
+    fn lazy_map(&mut self, module: Sid, is_package: bool, file: u32) -> OrderedMap<Sid> {
         let package = if is_package {
             module
         } else {
@@ -356,7 +395,7 @@ impl Core {
                 _ => {}
             }
         }
-        let mut out = FxHashMap::default();
+        let mut out = OrderedMap::default();
         for items in maps {
             for (key, value) in items {
                 let (Some(V::Str(key, _)), V::Str(value, _)) = (key, value) else {
@@ -386,9 +425,9 @@ impl Core {
         let mut table = ModuleTable {
             name: module,
             is_package: self.index.is_package(module),
-            names: FxHashMap::default(),
+            names: OrderedMap::default(),
             star_imports: Vec::new(),
-            lazy: FxHashMap::default(),
+            lazy: OrderedMap::default(),
             record: None,
             stub_record: None,
         };
@@ -407,15 +446,15 @@ impl Core {
                 let mut stub_table = ModuleTable {
                     name: module,
                     is_package: table.is_package,
-                    names: FxHashMap::default(),
+                    names: OrderedMap::default(),
                     star_imports: Vec::new(),
-                    lazy: FxHashMap::default(),
+                    lazy: OrderedMap::default(),
                     record: None,
                     stub_record: None,
                 };
                 self.collect(&mut stub_table, stub, true);
-                for (name, binding) in stub_table.names {
-                    table.names.entry(name).or_insert(binding);
+                for (name, binding) in stub_table.names.iter() {
+                    table.names.set_default(name, binding);
                 }
             }
         }

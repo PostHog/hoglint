@@ -8,7 +8,7 @@ is a ledger or exception match.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -193,6 +193,12 @@ class Graph:
         for edge in self.edges[self.indexed :]:
             self.kind_index.setdefault(edge.kind, []).append(edge)
         self.indexed = len(self.edges)
+
+    def edges_to(self, kind: str, targets: Collection[EntityId]) -> list[Edge]:
+        """Edges of `kind` with a target in `targets`, in graph order. The native graph answers
+        this from its index; packs ask it instead of walking every edge of a kind."""
+        wanted = targets if isinstance(targets, (set, frozenset, dict)) else set(targets)
+        return [edge for edge in self.by_kind(kind) if any(target in wanted for target in edge.targets)]
 
     def by_kind(self, *kinds: str) -> list[Edge]:
         self.catch_up()

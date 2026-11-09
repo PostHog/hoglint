@@ -101,7 +101,8 @@ class DjangoRun:
 
     def use_edges(self) -> list[Edge]:
         assert self.registry is not None
-        return UseProducer(self.build, self.registry).produce(self.files, self.graph.by_kind("reference"))
+        models = self.registry.models
+        return UseProducer(self.build, self.registry).produce(self.files, self.graph.edges_to("reference", models))
 
     def get_model_edges(self) -> list[Edge]:
         assert self.registry is not None

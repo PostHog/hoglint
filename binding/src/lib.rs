@@ -9,7 +9,7 @@ use hoglint_facts::link::facts::{V, decode_lines};
 use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
 use hoglint_facts::link::produce::KIND_NAMES;
-use hoglint_facts::link::resolve::{Ent, HitId};
+use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::Lookup;
 use hoglint_facts::link::{Link as CoreLink, LinkConfig};
 use pyo3::exceptions::{PyKeyError, PyValueError};
@@ -232,6 +232,67 @@ impl Link {
             .facts
             .raw(file, key)
             .map(|raw| PyBytes::new(py, raw)))
+    }
+
+    /// One top-level key of every record, in fact order: its JSON text, or None where the
+    /// record has no such key. Packs read a fact kind for a file set in one call.
+    fn raw_kind<'py>(&self, py: Python<'py>, key: &str) -> Vec<Option<Bound<'py, PyBytes>>> {
+        let facts = &self.inner.core.facts;
+        (0..facts.files.len())
+            .map(|file| facts.raw(file, key).map(|raw| PyBytes::new(py, raw)))
+            .collect()
+    }
+
+    /// A module's table, or None when the module does not exist: (is_package, names in
+    /// binding order as (name, binding), star import sources, lazy map in order). A binding is
+    /// the Python resolver's tuple: ("class"|"def", def index, ""|"stub"), ("variable",),
+    /// ("module", dotted), ("from", source, name) or ("alias", chain).
+    #[allow(clippy::type_complexity)]
+    fn table<'py>(
+        &mut self,
+        py: Python<'py>,
+        module: &str,
+    ) -> PyResult<
+        Option<(
+            bool,
+            Vec<(String, Bound<'py, PyTuple>)>,
+            Vec<String>,
+            Vec<Pair>,
+        )>,
+    > {
+        let module = self.sid(module);
+        let Some(id) = self.inner.core.table(module) else {
+            return Ok(None);
+        };
+        let core = &self.inner.core;
+        let it = &core.it;
+        let table = core.table_at(id);
+        let mut names = Vec::new();
+        for (name, binding) in table.names.iter() {
+            let marker = |stub: bool| if stub { "stub" } else { "" };
+            let tuple = match binding {
+                Binding::Class(idx, stub) => ("class", idx, marker(stub)).into_pyobject(py)?,
+                Binding::Def(idx, stub) => ("def", idx, marker(stub)).into_pyobject(py)?,
+                Binding::Variable => PyTuple::new(py, ["variable"])?,
+                Binding::Module(dotted) => ("module", it.s(dotted)).into_pyobject(py)?,
+                Binding::From(source, attr) => {
+                    ("from", it.s(source), it.s(attr)).into_pyobject(py)?
+                }
+                Binding::Alias(chain) => ("alias", it.s(chain)).into_pyobject(py)?,
+            };
+            names.push((it.s(name).to_string(), tuple));
+        }
+        let stars = table
+            .star_imports
+            .iter()
+            .map(|&s| it.s(s).to_string())
+            .collect();
+        let lazy = table
+            .lazy
+            .iter()
+            .map(|(k, v)| (it.s(k).to_string(), it.s(v).to_string()))
+            .collect();
+        Ok(Some((table.is_package, names, stars, lazy)))
     }
 
     /// Top-level keys of a record.
@@ -554,7 +615,7 @@ fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
     module.add("BUILD_ID", hoglint_facts::BUILD_ID)?;
-    module.add("SOURCES_DIGEST", env!("HOGLINT_NATIVE_SOURCES"))?;
+    module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;
     module.add("PROTOCOL", PROTOCOL)?;
     Ok(())
 }

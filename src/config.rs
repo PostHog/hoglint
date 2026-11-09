@@ -4,8 +4,10 @@ use sha2::{Digest, Sha256};
 
 pub const SCHEMA_VERSION: i64 = 3;
 
-/// Hash of the extractor sources, from build.rs. Part of the cache key.
+/// The engine id: a hash of every file engine-sources.txt lists, from build.rs.
 pub const BUILD_ID: &str = env!("HOGLINT_BUILD_ID");
+/// The extractor id: what the fact cache keys on (see build.rs).
+pub const FACTS_ID: &str = env!("HOGLINT_FACTS_ID");
 
 /// One fact list of a record (schema.md section 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,9 +179,9 @@ impl ExtractConfig {
         sha256_hex(parts.join("|").as_bytes())[..8].to_string()
     }
 
-    /// Cache directory name: schema version, build id and every option that changes records.
+    /// Cache directory name: schema version, extractor id and every option that changes records.
     pub fn cache_namespace(&self) -> String {
-        format!("v{SCHEMA_VERSION}-b{BUILD_ID}-{}", self.config_id())
+        format!("v{SCHEMA_VERSION}-b{FACTS_ID}-{}", self.config_id())
     }
 }
 

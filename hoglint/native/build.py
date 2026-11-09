@@ -2,8 +2,8 @@
 
 Packs keep their code: records, file scopes, tables and the module index look the same. Every
 resolution goes to the link, so packs see the resolver caches the core producers left, as
-they do in the Python engine. A record decodes a fact list from the extractor's JSON text the
-first time a pack reads it.
+they do in the Python engine. A fact kind crosses for every file in one call; a record decodes
+its part of it the first time a pack reads it.
 """
 
 from __future__ import annotations
@@ -18,40 +18,65 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
 from hoglint.core.records import RecordBodies
 from hoglint.core.sites import MODULE_SCOPE, FileScope, Lookup
-from hoglint.core.symbols import Hit, Tables
+from hoglint.core.symbols import MODULE_LEVEL_FLAGS, Hit, ModuleTable, Tables
 from hoglint.model import Context, EntityId, Site
 from hoglint.native.graph import CONTEXT_SETS, EdgeMaker
 
 Hits = tuple[str, list[tuple[str, str]]]
 
 
-class NativeRecord(Mapping[str, Any]):
-    """One file's record; each key decodes from the link's JSON text on first read."""
+ABSENT = object()
 
-    __slots__ = ("decoded", "file", "link")
 
-    def __init__(self, link: Any, file: int) -> None:
+class KindTexts:
+    """The JSON text of fact kinds, fetched for every file in one call the first time any file
+    asks for that kind. A text is dropped once its record decodes it."""
+
+    def __init__(self, link: Any) -> None:
         self.link = link
-        self.file = file
-        self.decoded: dict[str, Any] = {}
+        self.kinds: dict[str, list[bytes | None]] = {}
 
-    def __getitem__(self, key: str) -> Any:
-        if key in self.decoded:
-            return self.decoded[key]
-        raw = self.link.raw(self.file, key)
-        if raw is None:
-            raise KeyError(key)
-        value = self.decoded[key] = orjson.loads(raw)
+    def take(self, file: int, key: str) -> bytes | None:
+        texts = self.kinds.get(key)
+        if texts is None:
+            texts = self.kinds[key] = self.link.raw_kind(key)
+        text = texts[file]
+        texts[file] = None
+        return text
+
+
+class NativeRecord(dict[str, Any]):
+    """One file's record. A key decodes from the extractor's JSON text on first read and is
+    kept; a key the record lacks is kept as ABSENT, so each one crosses at most once."""
+
+    __slots__ = ("file", "link", "texts")
+
+    def __init__(self, link: Any, texts: KindTexts, file: int) -> None:
+        super().__init__()
+        self.link = link
+        self.texts = texts
+        self.file = file
+
+    def load(self, key: str) -> Any:
+        text = self.texts.take(self.file, key)
+        value = orjson.loads(text) if text is not None else ABSENT
+        dict.__setitem__(self, key, value)
         return value
 
-    def get(self, key: str, default: Any = None) -> Any:
-        found = self.decoded.get(key, self)
-        if found is not self:
-            return found
-        try:
-            return self[key]
-        except KeyError:
-            return default
+    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+        value = dict.get(self, key, ABSENT)
+        if value is ABSENT and not dict.__contains__(self, key):
+            value = self.load(key)
+        return default if value is ABSENT else value
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key, ABSENT)
+        if value is ABSENT:
+            raise KeyError(key)
+        return value
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and self.get(key, ABSENT) is not ABSENT
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.link.keys(self.file))
@@ -64,7 +89,45 @@ class NativeStore:
     """`FactStore.records` over the link: path -> record, in fact order."""
 
     def __init__(self, link: Any, paths: list[str]) -> None:
-        self.records: dict[str, NativeRecord] = {path: NativeRecord(link, i) for i, path in enumerate(paths)}
+        texts = KindTexts(link)
+        self.records: dict[str, NativeRecord] = {path: NativeRecord(link, texts, i) for i, path in enumerate(paths)}
+
+
+def module_values(record: Mapping[str, Any]) -> dict[str, object]:
+    """name -> value of its last module-level assignment, as Tables.collect records them."""
+    values: dict[str, object] = {}
+    for row in record.get("assigns", ()):
+        if row["s"] != -1 or row.get("f", 0) & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
+            continue
+        if "v" not in row:
+            continue
+        for target in row["t"]:
+            if isinstance(target, str) and "." not in target:
+                values[target] = row["v"]
+    return values
+
+
+class NativeTables(Tables):
+    """Module tables from the link: the link built them for resolution already. `values` comes
+    from the record, because the link keeps no assigned values."""
+
+    def __init__(self, link: Any, store: NativeStore, index: ModuleIndex) -> None:
+        super().__init__(store, index)  # type: ignore[arg-type]
+        self.link = link
+
+    def build(self, module: str) -> ModuleTable | None:
+        found = self.link.table(module)
+        if found is None:
+            return None
+        is_package, names, stars, lazy = found
+        table = ModuleTable(module, self.index.path_of.get(module), is_package)
+        table.names = dict(names)
+        table.star_imports = stars
+        table.lazy = dict(lazy)
+        record = self.record(module)
+        if record is not None and record.get("status") == "ok":
+            table.values = module_values(record)
+        return table
 
 
 class NativeFileScope(FileScope):
@@ -201,7 +264,7 @@ class NativeBuild:
         self.namer = ModuleNamer(config.source_roots, self.external)
         self.index = ModuleIndex(paths, self.namer, config.first_party)
         self.first_party = FirstParty(config.first_party or self.index.repo_heads)
-        self.tables = Tables(self.store, self.index)  # type: ignore[arg-type]
+        self.tables = NativeTables(link, self.store, self.index)
         entities = Entities(maker)
         self.resolver = NativeResolver(link, entities)
         self.classes = NativeClassIndex(link, entities, self.store, paths)

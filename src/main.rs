@@ -18,8 +18,8 @@
 //!
 //! Modes: `stream` writes JSON lines to --out (default stdout); `cache` keeps one record per
 //! source sha256 under --cache and only parses files whose content has no entry yet (records
-//! still stream to --out). The cache directory name holds the schema version, the build id and
-//! the record `cfg`.
+//! still stream to --out). The cache directory name holds the schema version, the extractor id
+//! (FACTS_ID) and the record `cfg`. `--build-id` prints the engine id (see build.rs).
 //!
 //! A file that cannot be read gets a `read_error` record and the run goes on. Bad arguments and
 //! an unwritable output exit non-zero.

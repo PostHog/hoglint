@@ -19,7 +19,7 @@ mod walker;
 pub mod config;
 pub mod link;
 
-pub use config::{BUILD_ID, ExtractConfig, Kind, Kinds, SCHEMA_VERSION, sha256_hex};
+pub use config::{BUILD_ID, ExtractConfig, FACTS_ID, Kind, Kinds, SCHEMA_VERSION, sha256_hex};
 pub use encode::record_line;
 pub use extract::extract;
 pub use facts::{

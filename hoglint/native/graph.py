@@ -9,7 +9,7 @@ edges ask the link by kind (`by_kind`) instead of walking every edge.
 from __future__ import annotations
 
 from array import array
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from typing import Any, SupportsIndex, cast, overload
 
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
@@ -166,6 +166,13 @@ class NativeGraph(Graph):
     def edge_list(self) -> EdgeList:
         assert isinstance(self.edges, EdgeList)
         return self.edges
+
+    def edges_to(self, kind: str, targets: Collection[EntityId]) -> list[Edge]:
+        self.catch_up()
+        core = self.core.get(array("I", self.link.ids_to(kind, [(t.module, t.symbol) for t in targets])))
+        wanted = targets if isinstance(targets, (set, frozenset, dict)) else set(targets)
+        extra = [edge for edge in self.extra_index.get(kind, ()) if any(t in wanted for t in edge.targets)]
+        return core + extra
 
     def by_kind(self, *kinds: str) -> list[Edge]:
         self.catch_up()
