@@ -139,7 +139,12 @@ class SignaturePrimitive(EdgeRule):
         if self.spec.on_unknown == "incomplete":
             self.incomplete(env, message)
             return
-        self.emit(env, message, ledgerable=self.spec.on_unknown == "finding", unknown=True)
+        self.emit(env, judgment, message)
+
+    def flags(self, judgment: Judgment) -> tuple[bool, bool]:
+        if judgment is Judgment.UNKNOWN_TYPE:
+            return self.spec.on_unknown == "finding", True
+        return super().flags(judgment)
 
     def describe(self, env: EdgeEnv) -> str:
         slot = env.edge.attr("slot") or "signature"

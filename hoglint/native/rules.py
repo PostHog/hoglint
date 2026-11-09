@@ -110,17 +110,6 @@ def same_endpoint(endpoint: Endpoint) -> Hashable:
     return endpoint
 
 
-@dataclass(frozen=True, slots=True)
-class GroupJudgment:
-    """What a group's representative decided, and the flags its one finding carries. Every
-    report sets the flags from the rule and the judgment alone, so they hold for each edge of the
-    group; each edge makes its identity, owner and subjects from its own env."""
-
-    judgment: Judgment
-    ledgerable: bool
-    unknown: bool
-
-
 class Rejudged:
     """The detail of a finding made from its group's judgment: the rule judges the edge again
     when something reads the message, site, witnesses or remedies. An edge judged apart from its
@@ -288,7 +277,7 @@ class Grouper:
         self.core = ctx.native.native.core
         self.tables = ctx.endpoint_classes
         self.role = rule.spec.endpoint
-        self.judgments: dict[int, GroupJudgment] = {}
+        self.judgments: dict[int, Judgment] = {}
 
     def env(self, edge: Edge) -> EdgeEnv:
         dst = self.ctx.dst_endpoints(edge, self.role)[0]
@@ -386,17 +375,14 @@ class Grouper:
         ]
         return type(self.link).group(raw, layers)
 
-    def shared(self, env: EdgeEnv) -> tuple[bool, GroupJudgment | None]:
+    def shared(self, env: EdgeEnv) -> tuple[bool, Judgment | None]:
         """Whether the group of `env`'s edge stays, and the judgment its edges share: one whose
         report is one finding, which each edge then makes from its own env."""
         judgment = self.rule.decide(env)
         if judgment is Judgment.CLEAN:
             return False, None
         run = self.rule.reported(env, judgment)
-        if len(run.findings) != 1 or run.incomplete:
-            return True, None
-        finding = run.findings[0]
-        return True, GroupJudgment(judgment, finding.ledgerable, finding.unknown)
+        return True, judgment if len(run.findings) == 1 and not run.incomplete else None
 
     def decide(self, ids: array[int], reads: Reads, record: bool) -> array[int]:
         """Drops the edges whose group the rule's whole decision drops. With `record`, a group
@@ -405,7 +391,7 @@ class Grouper:
         rep_edges = self.core.get(array("I", reps))
         self.audit(rep_edges)
         keep: list[bool] = []
-        judgments: list[GroupJudgment | None] = []
+        judgments: list[Judgment | None] = []
         for edge in rep_edges:
             env = self.env(edge)
             kept, judgment = self.shared(env) if record else (not self.rule.droppable(env), None)
@@ -472,7 +458,7 @@ class NativeRuleContext(RuleContext):
         assert isinstance(index, NativeGraphIndex)
         self.native = index
         self.endpoint_classes = EndpointClasses(self)
-        self.judgments: dict[EdgeRule, dict[int, GroupJudgment]] = {}
+        self.judgments: dict[EdgeRule, dict[int, Judgment]] = {}
 
     def edge_of(self, edge: Edge | int) -> Edge:
         return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
@@ -508,15 +494,14 @@ class NativeRuleContext(RuleContext):
         return out
 
     def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
-        """The finding of a grouped edge: its group's judgment and flags, with the identity, owner
-        and subjects of the edge's own env. The detail (message, site, witnesses, remedies) is
-        made when something reads it."""
-        grouped = self.judgments.get(rule, {}).get(edge.handle)
-        if grouped is None:
+        """The finding of a grouped edge: its group's judgment, with the identity, owner and
+        subjects of the edge's own env. The detail (message, site, witnesses, remedies) is made
+        when something reads it."""
+        judgment = self.judgments.get(rule, {}).get(edge.handle)
+        if judgment is None:
             return None
         env = rule.env(edge, self.src_endpoint(edge.site), self.dst_endpoints(edge, rule.spec.endpoint)[0])
-        detail = Rejudged(rule, edge, grouped.judgment)
-        return rule.finding_of(env, detail, grouped.ledgerable, grouped.unknown)
+        return rule.finding_of(env, judgment, Rejudged(rule, edge, judgment))
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
         return list(dict.fromkeys(kinds)) if kinds else self.native.kind_order()

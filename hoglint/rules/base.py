@@ -716,9 +716,17 @@ class EdgeRule:
             out.append(env.dst.module)
         return tuple(m for m in out if m)
 
-    def finding_of(self, env: EdgeEnv, detail: Shown, ledgerable: bool, unknown: bool) -> Finding:
-        """The finding of one environment. Its identity, owner and subjects name the entity, so
-        they come from the environment, whatever made the decision."""
+    def flags(self, judgment: Judgment) -> tuple[bool, bool]:
+        """(ledgerable, unknown) of the finding `judgment` makes. They come from the rule and the
+        judgment alone, never from the edge, so every edge of a group shares them."""
+        if judgment is Judgment.UNRESOLVED:
+            return self.spec.on_unresolved == "finding", True
+        return True, judgment is Judgment.UNKNOWN_VIOLATION
+
+    def finding_of(self, env: EdgeEnv, judgment: Judgment, detail: Shown) -> Finding:
+        """The finding `judgment` makes for one environment. Its identity, owner and subjects name
+        the entity, so they come from the environment; its flags from the judgment."""
+        ledgerable, unknown = self.flags(judgment)
         return Finding(
             rule=self.spec.id,
             identity=project(self.spec.identity, env.resolve),
@@ -732,15 +740,14 @@ class EdgeRule:
     def emit(
         self,
         env: EdgeEnv,
+        judgment: Judgment,
         message: str,
-        ledgerable: bool = True,
         remedies: tuple[Remedy, ...] = (),
         witnesses: tuple[Edge, ...] = (),
-        unknown: bool = False,
     ) -> Finding:
         shown = witnesses or (env.edge,)
         detail = FindingDetail(message, shown[0].site, shown, remedies or self.remedies())
-        finding = self.finding_of(env, detail, ledgerable, unknown)
+        finding = self.finding_of(env, judgment, detail)
         self.run.findings.append(finding)
         return finding
 
@@ -754,7 +761,7 @@ class EdgeRule:
         if self.spec.on_unresolved == "incomplete":
             self.incomplete(env, what)
             return
-        self.emit(env, what, ledgerable=self.spec.on_unresolved == "finding", unknown=True)
+        self.emit(env, Judgment.UNRESOLVED, what)
 
     def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
         """The finding or incomplete `judgment` makes for one environment, all of it from the
@@ -768,9 +775,9 @@ class EdgeRule:
             unknown = ", ".join(
                 filter(None, (self.unknown_refs(s, env) for s in (self.spec.deny, self.spec.allow, self.spec.require)))
             )
-            self.emit(env, f"{describe}; cannot tell, unassigned: {unknown or 'a value'}", unknown=True)
+            self.emit(env, judgment, f"{describe}; cannot tell, unassigned: {unknown or 'a value'}")
         elif judgment is Judgment.VIOLATION:
-            self.emit(env, describe)
+            self.emit(env, judgment, describe)
 
     def judge(self, env: EdgeEnv, describe: str) -> None:
         """The decision for one edge, then what it reports; `describe` is the finding message."""

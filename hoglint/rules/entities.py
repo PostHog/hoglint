@@ -13,6 +13,7 @@ from hoglint.rules.base import (
     EdgeEnv,
     EdgeRule,
     IncompleteItem,
+    Judgment,
     RuleContext,
     RuleRun,
     StagedSelection,
@@ -229,7 +230,8 @@ class EdgeInventory(EdgeRule):
         classified = self.classifications()
         for identity in sorted(seen):
             if identity not in classified:
-                self.emit(seen[identity], f"{' '.join(identity)} has no classification in {self.spec.classify}")
+                message = f"{' '.join(identity)} has no classification in {self.spec.classify}"
+                self.emit(seen[identity], Judgment.VIOLATION, message)
         for identity in sorted(classified - set(seen)):
             message = f"classification {' '.join(identity)} matches nothing (stale)"
             self.run.findings.append(self.ctx.finding(self.spec, identity, message, None, ledgerable=False))

@@ -14,6 +14,7 @@ from hoglint.rules.base import (
     EdgeRule,
     Endpoint,
     IncompleteItem,
+    Judgment,
     ModuleEnv,
     RuleContext,
     RuleRun,
@@ -177,7 +178,8 @@ class ReachPrimitive(EdgeRule):
         message = f"{env.src.module} reaches {env.dst.symbol or env.dst.module}: {chain}"
         if verdict is Truth.UNKNOWN:
             message += " (cannot tell, a value is unassigned)"
-        self.emit(env, message, witnesses=tuple(path), unknown=verdict is Truth.UNKNOWN)
+        judgment = Judgment.UNKNOWN_VIOLATION if verdict is Truth.UNKNOWN else Judgment.VIOLATION
+        self.emit(env, judgment, message, witnesses=tuple(path))
 
 
 class EndpointsEnv:
