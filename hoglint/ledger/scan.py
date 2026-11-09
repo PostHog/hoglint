@@ -6,13 +6,15 @@ and process. The file carries a protocol version and its envelope (see `envelope
 refuses any other protocol instead of guessing. It holds:
 - lines and growth: the scan's ledger line counts, level lines included, and each ledgered
   rule's growth-key columns;
-- findings: every finding with its identity, status, message, site, witnesses, owner module,
-  subjects and remedies, allowed ones included (owners themselves are read at render time);
+- findings: every finding with its identity, status, witnesses, owner module and subjects,
+  allowed ones included (owners themselves are read at render time), and the message, site and
+  remedies of each finding `check` prints;
 - incomplete: every incomplete item in run order with its cause and a line-free fingerprint, so
   the count and a replacement under one key both survive serialization;
 - triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;
 - couplings and witnesses: what move admission reads, cut to `scope`, the modules a rename touches;
-- levels: the groups that pass each level, and why the others fail;
+- levels: the groups that pass each level, and why the others fail (a blocking finding by its
+  key, not its message);
 - what else `check` prints: ledger equality, stale exceptions with every review date, exception
   problems, advisory rules, and the module of each path for `--changed`.
 
@@ -38,6 +40,7 @@ from hoglint.ledger.envelope import PROTOCOL, Envelope, short_digest
 from hoglint.ledger.equality import EqualityResult
 from hoglint.ledger.file import LineKey, parse_key, render_key
 from hoglint.ledger.records import (
+    BlockRecord,
     ExceptionsRecord,
     FindingRecord,
     IncompleteRecord,
@@ -112,7 +115,7 @@ class ScanSummary:
     couplings: dict[Coupling, int] = field(default_factory=dict)
     witnesses: dict[LineKey, list[Coupling]] = field(default_factory=dict)
     levels: dict[str, list[str]] = field(default_factory=dict)
-    level_failures: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    level_failures: dict[str, dict[str, list[BlockRecord]]] = field(default_factory=dict)
     equality: EqualityResult | None = None
     exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
     advisory: frozenset[str] = frozenset()
@@ -144,7 +147,9 @@ class ScanSummary:
         ]
         summary.levels = {name: list(level.passing) for name, level in result.levels.items()}
         summary.level_failures = {
-            name: {group: [portable.text(why) for why in reasons] for group, reasons in level.failing.items()}
+            name: {
+                group: [BlockRecord.of(block, portable) for block in blocks] for group, blocks in level.blocks.items()
+            }
             for name, level in result.levels.items()
         }
         summary.equality = result.equality
@@ -195,7 +200,10 @@ class ScanSummary:
                 for key, couplings in sorted(self.witnesses.items())
             },
             "levels": self.levels,
-            "level_failures": self.level_failures,
+            "level_failures": {
+                name: {group: [block.to_json() for block in blocks] for group, blocks in failing.items()}
+                for name, failing in self.level_failures.items()
+            },
             "equality": equality_to_json(self.equality),
             "exceptions": self.exceptions.to_json(),
             "advisory": sorted(self.advisory),
@@ -227,7 +235,7 @@ class ScanSummary:
             },
             levels={name: list(groups) for name, groups in data.get("levels", {}).items()},
             level_failures={
-                name: {group: list(why) for group, why in failing.items()}
+                name: {group: [BlockRecord.from_json(block) for block in blocks] for group, blocks in failing.items()}
                 for name, failing in data.get("level_failures", {}).items()
             },
             equality=equality_from_json(data.get("equality")),

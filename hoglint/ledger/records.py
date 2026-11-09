@@ -20,6 +20,7 @@ from hoglint.ledger.file import LineKey, parse_key, render_key
 from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile
+from hoglint.rules.levels import Block
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,17 +66,46 @@ class WitnessRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class FindingRecord:
-    rule: str
-    identity: tuple[str, ...]
-    status: FindingStatus
+class ShownRecord:
+    """What `check` prints of a finding besides its identity: the message, site and remedies."""
+
     message: str
     path: str  # empty when the finding has no site
     line: int
+    remedies: tuple[tuple[str, str], ...]
+
+    @staticmethod
+    def of(finding: Finding, portable: Portable) -> ShownRecord:
+        site = finding.site
+        return ShownRecord(
+            portable.text(finding.message),
+            site.path if site is not None else "",
+            site.line if site is not None else 0,
+            tuple((remedy.kind, remedy.detail) for remedy in finding.remedies),
+        )
+
+    def to_json(self) -> list[Any]:
+        return [self.message, self.path, self.line, [list(remedy) for remedy in self.remedies]]
+
+    @staticmethod
+    def from_json(data: list[Any]) -> ShownRecord:
+        message, path, line, remedies = data
+        return ShownRecord(message, path, int(line), tuple((kind, detail) for kind, detail in remedies))
+
+
+@dataclass(frozen=True, slots=True)
+class FindingRecord:
+    """One finding. `shown` is kept only for a finding `check` prints (new, not accepted by the
+    run's ledger): making it can mean judging the edge again, and no reader of a stored summary
+    prints the others. None means not stored, never empty; a reader that needs it runs the check."""
+
+    rule: str
+    identity: tuple[str, ...]
+    status: FindingStatus
+    shown: ShownRecord | None
     witnesses: tuple[WitnessRecord, ...]
     owner: str  # the module whose owners the finding takes; empty when it has none
     subjects: tuple[str, ...]
-    remedies: tuple[tuple[str, str], ...]
     ledgerable: bool
     unknown: bool
 
@@ -85,18 +115,14 @@ class FindingRecord:
 
     @staticmethod
     def of(finding: Finding, portable: Portable) -> FindingRecord:
-        site = finding.site
         return FindingRecord(
             finding.rule,
             finding.identity,
             finding.status,
-            portable.text(finding.message),
-            site.path if site is not None else "",
-            site.line if site is not None else 0,
+            ShownRecord.of(finding, portable) if finding.status is FindingStatus.NEW else None,
             tuple(WitnessRecord.of(edge) for edge in finding.witnesses),
             finding.subjects[0] if finding.subjects else "",  # RuleContext.finding: owner is the first subject
             finding.subjects,
-            tuple((remedy.kind, remedy.detail) for remedy in finding.remedies),
             finding.ledgerable,
             finding.unknown,
         )
@@ -106,34 +132,53 @@ class FindingRecord:
             self.rule,
             list(self.identity),
             self.status.value,
-            self.message,
-            self.path,
-            self.line,
+            self.shown.to_json() if self.shown is not None else None,
             [witness.to_json() for witness in self.witnesses],
             self.owner,
             list(self.subjects),
-            [list(remedy) for remedy in self.remedies],
             self.ledgerable,
             self.unknown,
         ]
 
     @staticmethod
     def from_json(data: list[Any]) -> FindingRecord:
-        rule, identity, status, message, path, line, witnesses, owner, subjects, remedies, ledgerable, unknown = data
+        rule, identity, status, shown, witnesses, owner, subjects, ledgerable, unknown = data
         return FindingRecord(
             rule,
             tuple(identity),
             FindingStatus(status),
-            message,
-            path,
-            int(line),
+            ShownRecord.from_json(shown) if shown is not None else None,
             tuple(WitnessRecord.from_json(witness) for witness in witnesses),
             owner,
             tuple(subjects),
-            tuple((kind, detail) for kind, detail in remedies),
             bool(ledgerable),
             bool(unknown),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class BlockRecord:
+    """One reason a group fails a level: the key (rule, identity) of a blocking finding, whose
+    message the summary does not keep, or the text of a reason with no finding."""
+
+    rule: str
+    why: str
+    identity: tuple[str, ...]
+    reason: str
+
+    @staticmethod
+    def of(block: Block, portable: Portable) -> BlockRecord:
+        if block.finding is None:
+            return BlockRecord(block.rule, "", (), portable.text(block.text))
+        return BlockRecord(block.rule, block.why, block.finding.identity, "")
+
+    def to_json(self) -> list[Any]:
+        return [self.rule, self.why, list(self.identity), self.reason]
+
+    @staticmethod
+    def from_json(data: list[Any]) -> BlockRecord:
+        rule, why, identity, reason = data
+        return BlockRecord(rule, why, tuple(identity), reason)
 
 
 @dataclass(frozen=True, slots=True)

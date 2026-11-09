@@ -28,7 +28,7 @@ def coupling(key: tuple[str, str, str]) -> tuple[str, str, str, str, tuple[str, 
 
 
 def finding(key: LineKey) -> FindingRecord:
-    return FindingRecord(key[0], key[1], FindingStatus.NEW, "", "", 0, (), (), (), (), True, False)
+    return FindingRecord(key[0], key[1], FindingStatus.NEW, None, (), "", (), True, False)
 
 
 def scan(lines: dict[tuple[str, str, str], int], envelope: Envelope | None = None) -> ScanSummary:

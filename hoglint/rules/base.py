@@ -716,6 +716,10 @@ class EdgeRule:
             out.append(env.dst.module)
         return tuple(m for m in out if m)
 
+    # Whether `report` names the edge as a finding's only witness. Then a finding whose detail is
+    # made when read still has its witness and site without making it.
+    witness_is_edge = True
+
     def flags(self, judgment: Judgment) -> tuple[bool, bool]:
         """(ledgerable, unknown) of the finding `judgment` makes. They come from the rule and the
         judgment alone, never from the edge, so every edge of a group shares them."""
@@ -727,6 +731,7 @@ class EdgeRule:
         """The finding `judgment` makes for one environment. Its identity, owner and subjects name
         the entity, so they come from the environment; its flags from the judgment."""
         ledgerable, unknown = self.flags(judgment)
+        later = self.witness_is_edge and not isinstance(detail, FindingDetail)
         return Finding(
             rule=self.spec.id,
             identity=project(self.spec.identity, env.resolve),
@@ -735,6 +740,7 @@ class EdgeRule:
             subjects=self.subjects(env),
             ledgerable=ledgerable and self.spec.ledger,
             unknown=unknown,
+            witness=env.edge if later else None,
         )
 
     def emit(

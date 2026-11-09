@@ -202,6 +202,9 @@ class Finding:
     subjects: tuple[str, ...] = ()  # modules or entities the finding is about; levels group by them
     ledgerable: bool = True  # False for on_unresolved = "block": the ledger may not accept it
     unknown: bool = False  # exists because something did not resolve; forbids levels even when ledgered
+    # The finding's own edge when it is the only witness, so the witnesses and the site are known
+    # without making a detail that is made when read.
+    witness: Edge | None = field(default=None, compare=False, repr=False)
 
     @property
     def message(self) -> str:
@@ -209,10 +212,14 @@ class Finding:
 
     @property
     def site(self) -> Site | None:
+        if self.witness is not None:
+            return self.witness.site
         return self.detail.get().site
 
     @property
     def witnesses(self) -> tuple[Edge, ...]:
+        if self.witness is not None:
+            return (self.witness,)
         return self.detail.get().witnesses
 
     @property

@@ -26,12 +26,13 @@ from hoglint.ledger.envelope import (
     PolicyFiles,
     policy_digest,
 )
+from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.obligations import Attribution, attribute, rows
-from hoglint.ledger.records import IncompleteRecord
+from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import CacheRoot, SummaryStore
-from hoglint.model import IncompleteCause
+from hoglint.model import FindingStatus, IncompleteCause
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
 
@@ -155,9 +156,75 @@ def test_a_summary_holds_no_absolute_path_and_no_day(tmp_path: Path) -> None:
     result = Engine(anchored, graph, code_root, today=datetime.date(2026, 11, 9)).evaluate(None, exceptions)
     summary = ScanSummary.from_run(result, graph, Envelope(), roots=(policy_root, code_root), exceptions=exceptions)
     assert str(tmp_path) not in json.dumps(summary.to_json())
-    assert [f.message for f in summary.findings] == ["app.a app.b has no classification in policy/flags.toml"]
+    shown = [f.shown for f in summary.findings]
+    assert [s.message for s in shown if s is not None] == ["app.a app.b has no classification in policy/flags.toml"]
+    assert None not in shown
     assert summary.exceptions.expired(datetime.date(2025, 12, 31)) == []
     assert summary.exceptions.expired(datetime.date(2026, 1, 2)) == [("2026-01-01", "exception #0 (flags)")]
+
+
+CROSS = """
+schema = 1
+
+[fields]
+package = { type = "id" }
+
+[[assign]]
+match = "products/{product}/**"
+set = { package = "{product}" }
+
+[[assign]]
+match = "core/**"
+set = { package = "core" }
+
+[rules.cross]
+primitive = "edge"
+kinds = ["import"]
+select = "src.package != dst.package"
+identity = ["src.module", "dst.module"]
+growth_key = ["src.module"]
+remedy = "go through the facade"
+
+[levels.isolated]
+group_by = "package"
+requires = ["cross"]
+"""
+
+
+def test_a_stored_summary_keeps_what_check_prints_and_names_other_findings_by_key(tmp_path: Path) -> None:
+    config = config_from(tmp_path, CROSS)
+    graph = (
+        GraphBuilder()
+        .module("core.a", "core.b", "products.billing.logic", "products.billing.models")
+        .edge("import", "core.a", "products.billing.logic", line=3)
+        .edge("import", "core.b", "products.billing.models", line=7)
+        .graph
+    )
+    accepted = ("cross", ("core.a", "products.billing.logic"))
+    ledger = LedgerFile(schema=1, policy=config.policy_hash, lines={accepted: 1}, exists=True)
+    result = Engine(config, graph, tmp_path).evaluate(ledger)
+    envelope = Envelope("t" * 40, "engine", "policy", "framework")
+    store = SummaryStore(tmp_path / "cache")
+    store.put(envelope, ScanSummary.from_run(result, graph, envelope, roots=(tmp_path,)))
+    stored = store.get(envelope, frozenset({"envelope", "findings", "levels"}))
+    assert stored is not None
+    records = {record.key: record for record in stored.findings}
+    for finding in result.findings():
+        shown = records[finding.ledger_key].shown
+        if finding.status is not FindingStatus.NEW:
+            assert shown is None, finding.ledger_key
+            continue
+        site = finding.site
+        assert site is not None
+        remedies = tuple((remedy.kind, remedy.detail) for remedy in finding.remedies)
+        assert shown == ShownRecord(finding.message, site.path, site.line, remedies)
+    assert {finding.status for finding in result.findings()} == {FindingStatus.NEW, FindingStatus.ACCEPTED}
+    level = result.levels["isolated"]
+    assert stored.levels["isolated"] == level.passing
+    failing = stored.level_failures["isolated"]
+    assert set(failing) == set(level.failing) == {"billing", "core"}
+    new = {finding.ledger_key for finding in result.findings() if finding.status is FindingStatus.NEW}
+    assert {(block.rule, block.identity) for blocks in failing.values() for block in blocks} == new
 
 
 DAY = 86_400.0

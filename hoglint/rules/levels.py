@@ -11,21 +11,59 @@ A level is specified apart from lint acceptance:
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
 from hoglint.config.model import LevelSpec
 from hoglint.index import Memo
 from hoglint.labels import Labeler
-from hoglint.model import FindingStatus
+from hoglint.model import Finding, FindingStatus
 from hoglint.rules.base import RuleRun
 from hoglint.selectors import Truth
+
+
+@dataclass(frozen=True, slots=True)
+class Block:
+    """One reason a group fails a level: a finding of a required rule, whose message is made only
+    when the reason is shown, or a reason with no finding (an incomplete result, a rule that did
+    not run), kept as `text`."""
+
+    rule: str
+    why: str = ""
+    finding: Finding | None = None
+    text: str = ""
+
+    def render(self) -> str:
+        if self.finding is None:
+            return self.text
+        return f"{self.rule}: {self.why}: {self.finding.message}"
+
+
+class Reasons(Mapping[str, list[str]]):
+    """group -> why it fails, as text. A group's reasons are made when they are read."""
+
+    def __init__(self, blocks: dict[str, list[Block]]) -> None:
+        self.blocks = blocks
+
+    def __getitem__(self, group: str) -> list[str]:
+        return [block.render() for block in self.blocks[group]]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.blocks)
+
+    def __len__(self) -> int:
+        return len(self.blocks)
 
 
 @dataclass(frozen=False, slots=True)
 class LevelResult:
     name: str
     passing: list[str] = field(default_factory=list)
-    failing: dict[str, list[str]] = field(default_factory=dict)
+    blocks: dict[str, list[Block]] = field(default_factory=dict)
+
+    @property
+    def failing(self) -> Reasons:
+        return Reasons(self.blocks)
 
 
 class LevelEvaluator:
@@ -53,22 +91,22 @@ class LevelEvaluator:
 
     def evaluate(self) -> LevelResult:
         result = LevelResult(self.spec.name)
-        reasons: dict[str, list[str]] = {group: [] for group in self.groups()}
+        reasons: dict[str, list[Block]] = {group: [] for group in self.groups()}
         for rule_id in self.spec.requires:
             run = self.runs.get(rule_id)
             if run is None:
                 for group in reasons:
-                    reasons[group].append(f"{rule_id} did not run")
+                    reasons[group].append(Block(rule_id, text=f"{rule_id} did not run"))
                 continue
             self.collect(rule_id, run, reasons)
         for group, why in sorted(reasons.items()):
             if why:
-                result.failing[group] = why
+                result.blocks[group] = why
             else:
                 result.passing.append(group)
         return result
 
-    def collect(self, rule_id: str, run: RuleRun, reasons: dict[str, list[str]]) -> None:
+    def collect(self, rule_id: str, run: RuleRun, reasons: dict[str, list[Block]]) -> None:
         strict = rule_id in self.spec.strict
         for finding in run.findings:
             if finding.status is FindingStatus.ALLOWED:
@@ -85,9 +123,9 @@ class LevelEvaluator:
             )
             for group in {self.group_of(subject) for subject in finding.subjects}:
                 if group in reasons:
-                    reasons[group].append(f"{rule_id}: {why}: {finding.message}")
+                    reasons[group].append(Block(rule_id, why, finding))
         for item in run.incomplete:
             groups = {self.group_of(subject) for subject in item.subjects} if item.subjects else set(reasons)
             for group in groups:
                 if group in reasons:
-                    reasons[group].append(f"{rule_id}: incomplete: {item.reason}")
+                    reasons[group].append(Block(rule_id, text=f"{rule_id}: incomplete: {item.reason}"))
