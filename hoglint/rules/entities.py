@@ -38,10 +38,14 @@ class EntityRule:
         self.run.incomplete.append(IncompleteItem(self.spec.id, subject, reason, (module or subject,)))
 
     def entities(self) -> Iterator[tuple[str | None, str | None, str]]:
-        """(module, symbol, subject) for every entity the rule looks at."""
+        """(module, symbol, subject) for every entity the rule looks at. A `select` that pins
+        `kind` is false for a symbol whose kind is known to be another, so on symbols only the
+        pinned kinds' members and the symbols of unknown kind are read."""
         labeler = self.ctx.labeler
         if self.spec.on == "symbol":
-            for symbol in labeler.index.sorted_symbols:
+            wanted = self.spec.select.restricts(("kind",)) if self.spec.select is not None else None
+            symbols = labeler.index.sorted_symbols if wanted is None else labeler.kind_candidates(wanted)
+            for symbol in symbols:
                 yield labeler.module_of_symbol(symbol), symbol, symbol
             return
         for module, _ in labeler.index.sorted_modules:
@@ -60,18 +64,8 @@ class LayoutPrimitive(EntityRule):
             self.check_registry(self.ctx.config.registries[name])
         return self.run
 
-    def kind_ruled_out(self, symbol: str | None, wanted: frozenset[str] | None) -> bool:
-        """Whether `select` pins `kind` and this symbol's kind is known to be another."""
-        if symbol is None or wanted is None:
-            return False
-        kind = self.ctx.labeler.kind(symbol)[0]
-        return kind.state is State.NONE or (kind.state is State.KNOWN and kind.data not in wanted)
-
     def check_entities(self) -> None:
-        wanted = self.spec.select.restricts(("kind",)) if self.spec.select is not None else None
         for module, symbol, subject in self.entities():
-            if self.kind_ruled_out(symbol, wanted):
-                continue
             resolve = self.resolver(module, symbol, subject)
             selected = self.spec.select.evaluate(resolve) if self.spec.select is not None else Truth.TRUE
             if selected is Truth.FALSE:

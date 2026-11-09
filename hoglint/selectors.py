@@ -615,11 +615,13 @@ class Selector:
 
     def restricts(self, path: tuple[str, ...]) -> frozenset[str] | None:
         """Literal values the selector requires at `path` (from `==` or `in` at the top level of
-        an `and`), or None when it does not pin the field. Lets callers pre-filter edges."""
+        an `and`), or None when it does not pin the field. Lets callers pre-filter edges. Only
+        text literals pin: `== none` holds for a field with no value."""
         parts = self.node.parts if isinstance(self.node, And) else (self.node,)
         for part in parts:
             if not isinstance(part, Compare) or not isinstance(part.left, Ref) or part.left.path != path:
                 continue
-            if part.op in ("==", "in"):
-                return frozenset(str(value) for value in literal_values(part.right))
+            values = literal_values(part.right)
+            if part.op in ("==", "in") and all(isinstance(value, str) for value in values):
+                return frozenset(str(value) for value in values)
         return None

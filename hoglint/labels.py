@@ -7,14 +7,15 @@ its domain with no value is unknown; outside its domain it is a known `none`.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec, RegistrySpec
 from hoglint.config.schema import canonical
-from hoglint.globs import fill, glob_match
+from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Provided
@@ -47,6 +48,48 @@ class PathCandidates:
 
     fields: dict[str, list[Candidate]]
     conflicts: tuple[str, ...]
+
+
+class PathAssignment:
+    """A module assignment, compiled once: its globs, its source text, and the candidates of its
+    fixed values. A value with `{name}` templates is filled per match."""
+
+    def __init__(self, assignment: Assignment) -> None:
+        self.assignment = assignment
+        self.match = [compile_label_glob(pattern) for pattern in assignment.match]
+        self.excluded = [compile_label_glob(pattern) for pattern in assignment.except_paths]
+        self.source = assignment.label()
+        self.fixed = {
+            name: Candidate(value, self.source, assignment.override)
+            for name, value in assignment.sets
+            if not (isinstance(value, str) and CAPTURE_RE.search(value))
+        }
+
+    def filled(self, captures: dict[str, str]) -> dict[str, Candidate]:
+        out: dict[str, Candidate] = {}
+        for name, value in self.assignment.sets:
+            fixed = self.fixed.get(name)
+            out[name] = (
+                fixed if fixed is not None else Candidate(fill(value, captures), self.source, self.assignment.override)
+            )
+        return out
+
+    def candidates(self, path: str) -> dict[str, Candidate]:
+        """What the assignment says about the path: nothing unless a `match` glob matches and the
+        captures pass `except` and `only`."""
+        assignment = self.assignment
+        if any(glob.match(path) is not None for glob in self.excluded):
+            return {}
+        for glob in self.match:
+            captures = glob.match(path)
+            if captures is None:
+                continue
+            if any(captures.get(name) in values for name, values in assignment.except_values):
+                continue
+            if any(name in captures and captures[name] not in values for name, values in assignment.only_values):
+                continue
+            return self.filled(captures)
+        return {}
 
 
 class CandidateCache:
@@ -109,9 +152,15 @@ Labels = dict[str, Label]
 
 
 @dataclass(frozen=True, slots=True)
-class KindMatch:
-    kinds: tuple[str, ...]
-    unknown: bool
+class KindSets:
+    """[kinds] as sets. `members` holds every name each kind holds true, `kinds_of` the kinds
+    that hold each name, in config order. `unknown` holds the symbols with facts that no kind
+    holds, but that a kind with `subclass_of` cannot rule out: they pass its other tests and a
+    base on their way up did not resolve. Every other symbol with facts has no kind."""
+
+    members: dict[str, frozenset[str]]
+    kinds_of: dict[str, tuple[str, ...]]
+    unknown: frozenset[str]
 
 
 class Labeler:
@@ -138,16 +187,31 @@ class Labeler:
         self.module_of_symbol = self.index.module_of_symbol
         self.providers = ProviderRunner(config.providers.values(), repo_root)
         self.conflicts: list[str] = []
-        self.module_assigns = [a for a in config.assigns if a.symbols is None]
+        self.module_assigns = GlobIndex((PathAssignment(a), a.match) for a in config.assigns if a.symbols is None)
         self.symbol_assigns = [a for a in config.assigns if a.symbols is not None]
         self.zone_fields = [spec.name for spec in config.fields.values() if spec.type is FieldType.ZONE]
+        self.zone_roots = [(within, compile_label_glob(within + "/**")) for within in config.zones.within]
+        self.zones = GlobIndex(
+            ((zone, [compile_label_glob(pattern) for pattern in zone.paths]), zone.paths) for zone in config.zones.zones
+        )
+        self.zone_candidates = {
+            zone.name: Candidate(zone.name, f"zones.{zone.name} ({zone.source})", False) for zone in config.zones.zones
+        }
+        self.registries = [
+            (spec, compile_label_glob(spec.module), spec.loader.rpartition(".")[0])
+            for spec in config.registries.values()
+        ]
+        self.default_zones = {
+            within: Candidate(config.zones.default, f"default private zone under {within}", False)
+            for within in config.zones.within
+        }
         self.provider_fields = frozenset(name for spec in self.providers.specs for name in spec.sets)
         self.module_labels = Memo(self.label_module)
         self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
-        self.kind_match = Memo(self.match_kinds)
-        self.members_of_kind: dict[str, set[str]] = {}
+        self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
         self.export_member = Memo(self.find_export_member)
+        self.path_exports = Memo(self.find_path_exports)
         self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
         self.exported_cache: dict[tuple[str | None, str | None, str | None, str | None], Truth] = {}
         self.audience_by_module = all(
@@ -170,44 +234,30 @@ class Labeler:
     def path_of(self, module: str) -> str | None:
         return self.graph.modules.get(module)
 
-    def assignment_candidates(self, assignment: Assignment, path: str) -> dict[str, Candidate]:
-        for excluded in assignment.except_paths:
-            if glob_match(excluded, path) is not None:
-                return {}
-        for pattern in assignment.match:
-            captures = glob_match(pattern, path)
-            if captures is None:
-                continue
-            if any(captures.get(name) in values for name, values in assignment.except_values):
-                continue
-            if any(name in captures and captures[name] not in values for name, values in assignment.only_values):
-                continue
-            return {
-                name: Candidate(fill(value, captures), assignment.label(), assignment.override)
-                for name, value in assignment.sets
-            }
-        return {}
-
     def zone_candidate(self, path: str) -> tuple[Candidate | None, str]:
         """The path's zone, or a conflict when several leaf zones match and none overrides."""
         table = self.config.zones
-        for within in table.within:
-            root = glob_match(within + "/**", path)
+        for within, inside in self.zone_roots:
+            root = inside.match(path)
             if root is None:
                 continue
             relative = path[len(fill(within, root)) + 1 :]
-            matched = [zone for zone in table.zones if any(glob_match(p, relative) is not None for p in zone.paths)]
+            matched = [
+                zone
+                for zone, globs in self.zones.candidates(relative)
+                if any(glob.match(relative) is not None for glob in globs)
+            ]
             ancestors = {a for zone in matched for a in table.chain(zone.name)[1:]}
             leaves = [zone for zone in matched if zone.name not in ancestors]
             if not leaves:
-                return Candidate(table.default, f"default private zone under {within}", False), ""
+                return self.default_zones[within], ""
             if len(leaves) > 1:
                 overriding = [zone for zone in leaves if zone.override]
                 if len(overriding) != 1:
                     names = ", ".join(zone.name for zone in leaves)
                     return None, f"{path}: zones {names} all match; mark one `override = true`"
                 leaves = overriding
-            return Candidate(leaves[0].name, f"zones.{leaves[0].name} ({leaves[0].source})", False), ""
+            return self.zone_candidates[leaves[0].name], ""
         return None, ""
 
     def path_candidates(self, path: str) -> PathCandidates:
@@ -215,8 +265,8 @@ class Labeler:
         if cached is not None:
             return cached
         collected: dict[str, list[Candidate]] = {}
-        for assignment in self.module_assigns:
-            for name, candidate in self.assignment_candidates(assignment, path).items():
+        for assignment in self.module_assigns.candidates(path):
+            for name, candidate in assignment.candidates(path).items():
                 collected.setdefault(name, []).append(candidate)
         conflicts: tuple[str, ...] = ()
         if self.zone_fields:
@@ -287,8 +337,8 @@ class Labeler:
         return self.resolve_all(module, collected)
 
     def registry_of(self, path: str, module: str) -> RegistrySpec | None:
-        for spec in self.config.registries.values():
-            if glob_match(spec.module, path) is not None or spec.loader.rpartition(".")[0] == module:
+        for spec, glob, loader_module in self.registries:
+            if glob.match(path) is not None or loader_module == module:
                 return spec
         return None
 
@@ -328,48 +378,77 @@ class Labeler:
                 return False
         return True
 
-    def kind_matches(self, spec: KindSpec, symbol: str) -> Truth:
-        if spec.subclass_of and symbol in spec.subclass_of:
-            return Truth.TRUE
-        if not self.facts.has(symbol):
-            return Truth.UNKNOWN
-        if spec.abstract is False and self.facts.get(symbol, "abstract") == "true":
-            return Truth.FALSE
-        if spec.decl and self.facts.decl(symbol) != spec.decl:
-            return Truth.FALSE
-        if spec.decorated_by and not set(spec.decorated_by) & set(self.facts.decorators(symbol)):
-            return Truth.FALSE
-        if spec.subclass_of:
-            ancestors, complete = self.facts.ancestors(symbol)
-            if set(spec.subclass_of) & ancestors:
-                return Truth.TRUE
-            return Truth.FALSE if complete else Truth.UNKNOWN
-        return Truth.TRUE
+    def kind_tests_pass(self, spec: KindSpec, symbol: str) -> bool:
+        """Whether a symbol with facts passes a kind's tests other than `subclass_of`."""
+        facts = self.facts
+        if spec.decl and facts.decl(symbol) != spec.decl:
+            return False
+        if spec.abstract is False and facts.get(symbol, "abstract") == "true":
+            return False
+        return not spec.decorated_by or bool(set(spec.decorated_by) & set(facts.decorators(symbol)))
 
-    def match_kinds(self, symbol: str) -> KindMatch:
-        """Which [kinds] the symbol matches, and whether any could not be decided."""
-        matched: list[str] = []
-        unknown = False
-        for spec in self.config.kinds.values():
-            truth = self.kind_matches(spec, symbol)
-            if truth is Truth.TRUE:
-                matched.append(spec.name)
-            elif truth is Truth.UNKNOWN:
-                unknown = True
-        if len(matched) > 1:
-            self.conflicts.append(f"{symbol}: matches kinds {', '.join(matched)}")
-        return KindMatch(tuple(matched), unknown)
+    def find_kind_members(self, spec: KindSpec) -> set[str]:
+        """Every name the kind holds: the names `subclass_of` lists, and the symbols with facts that
+        pass its tests and, with `subclass_of`, inherit a listed name."""
+        facts = self.facts
+        out = set(spec.subclass_of)
+        if spec.subclass_of:
+            pool: Iterable[str] = [symbol for symbol in facts.descendants(spec.subclass_of) if facts.has(symbol)]
+        elif spec.decl:
+            pool = [symbol for symbol in self.graph.symbols if facts.decl(symbol) == spec.decl]
+        else:
+            pool = self.graph.symbols
+        out.update(symbol for symbol in pool if self.kind_tests_pass(spec, symbol))
+        return out
+
+    def find_kind_unknowns(self, held: Collection[str]) -> frozenset[str]:
+        """Symbols with facts that no kind holds, whose kind is still unknown: a kind with
+        `subclass_of` lets them pass its other tests, and a base on their way up did not resolve."""
+        specs = [spec for spec in self.config.kinds.values() if spec.subclass_of]
+        if not specs:
+            return frozenset()
+        facts = self.facts
+        unresolved = tuple(name for name in facts.children if name.startswith("?"))
+        return frozenset(
+            symbol
+            for symbol in facts.descendants(unresolved)
+            if symbol not in held and facts.has(symbol) and any(self.kind_tests_pass(spec, symbol) for spec in specs)
+        )
+
+    @cached_property
+    def kind_sets(self) -> KindSets:
+        members = {spec.name: frozenset(self.find_kind_members(spec)) for spec in self.config.kinds.values()}
+        kinds_of: dict[str, list[str]] = {}
+        for name, found in members.items():
+            for symbol in found:
+                kinds_of.setdefault(symbol, []).append(name)
+        unknown = self.find_kind_unknowns(kinds_of)
+        return KindSets(members, {symbol: tuple(kinds) for symbol, kinds in kinds_of.items()}, unknown)
+
+    def kind_members(self, spec: KindSpec) -> frozenset[str]:
+        return self.kind_sets.members[spec.name]
 
     def kind(self, symbol: str, first_party: bool = True) -> tuple[Value, str]:
         """The symbol's kind from [kinds]. A first-party symbol without facts is unknown."""
-        match = self.kind_match(symbol)
-        if len(match.kinds) > 1:
+        sets = self.kind_sets
+        kinds = sets.kinds_of.get(symbol, ())
+        if len(kinds) > 1:
             return UNKNOWN, "conflicting kinds"
-        if match.kinds:
-            return Value.known(match.kinds[0]), f"kinds.{match.kinds[0]}"
-        if match.unknown and (first_party or self.facts.has(symbol)):
+        if kinds:
+            return self.kind_answers[kinds[0]]
+        if symbol in sets.unknown or (first_party and self.config.kinds and not self.facts.has(symbol)):
             return UNKNOWN, "no facts for this symbol, or a base did not resolve"
         return NONE, "no kind matches"
+
+    def kind_candidates(self, wanted: frozenset[str]) -> list[str]:
+        """The symbols with facts whose kind is not known to be outside `wanted`, sorted: members of
+        a wanted kind, names two kinds hold, and symbols of unknown kind."""
+        sets = self.kind_sets
+        found = set(sets.unknown)
+        for name in wanted:
+            found.update(sets.members.get(name, ()))
+        found.update(symbol for symbol, kinds in sets.kinds_of.items() if len(kinds) > 1)
+        return sorted(symbol for symbol in found if self.facts.has(symbol))
 
     # ── values ──
 
@@ -495,10 +574,18 @@ class Labeler:
             return None
         return path[len(fill(spec.within, root)) + 1 :]
 
+    def find_path_exports(self, path: str) -> frozenset[str]:
+        """The exports whose `within` and `paths` the path lies inside."""
+        out = set()
+        for spec in self.config.exports.values():
+            relative = self.export_root(spec, path)
+            if relative is not None and any(glob_match(pattern, relative) is not None for pattern in spec.paths):
+                out.add(spec.name)
+        return frozenset(out)
+
     def export_covers(self, spec: ExportSpec, path: str) -> bool:
         """Whether the path lies inside the export's `within` and `paths`."""
-        relative = self.export_root(spec, path)
-        return relative is not None and any(glob_match(pattern, relative) is not None for pattern in spec.paths)
+        return spec.name in self.path_exports(path)
 
     def find_export_member(self, key: tuple[str, str, str | None]) -> Truth:
         """Whether a module (symbol None) or a symbol at `path` belongs to the export.
@@ -557,62 +644,20 @@ class Labeler:
         """Every config conflict of this graph, found before rules run, whatever the rules read.
 
         Each module is labelled, except for the fields providers set: those are resolved where
-        something reads them (owners at render time). Symbols are checked only where two specs could disagree: kinds
-        when two of them could match one symbol, symbol assignments where two that set a field
-        to different values both reach the symbol's path."""
+        something reads them (owners at render time). Kinds conflict where two kinds' members
+        meet. Symbol assignments are checked only where two that set a field to different values
+        both reach the symbol's path."""
         for module in self.graph.modules:
             self.module_labels(module)
         self.find_kind_conflicts()
         self.find_symbol_assignment_conflicts()
         return self.conflicts
 
-    def kinds_can_overlap(self) -> bool:
-        """Whether two [kinds] could match one symbol. Two that need different `decl`s never do."""
-        specs = list(self.config.kinds.values())
-        return any(
-            not (first.decl and second.decl and first.decl != second.decl)
-            for index, first in enumerate(specs)
-            for second in specs[index + 1 :]
-        )
-
     def find_kind_conflicts(self) -> None:
-        """A symbol with facts can match several kinds; a name without facts only when two kinds
-        list it in `subclass_of`. Each kind's members are found as one set, so the check reads a
-        symbol's facts once per kind that could hold it, not once per kind and symbol."""
-        if not self.kinds_can_overlap():
-            return
-        matched: dict[str, list[str]] = {}
-        for spec in self.config.kinds.values():
-            for symbol in self.kind_members(spec):
-                matched.setdefault(symbol, []).append(spec.name)
-        for symbol, kinds in matched.items():
+        """A name two kinds hold, from each kind's members: no symbol is classified on its own."""
+        for symbol, kinds in self.kind_sets.kinds_of.items():
             if len(kinds) > 1:
                 self.conflicts.append(f"{symbol}: matches kinds {', '.join(kinds)}")
-
-    def kind_members(self, spec: KindSpec) -> set[str]:
-        """Every name `kind_matches` holds TRUE for, among the graph's symbols and the names
-        `subclass_of` lists. The same tests, run over the classes that could pass them."""
-        found = self.members_of_kind.get(spec.name)
-        if found is None:
-            found = self.members_of_kind[spec.name] = self.find_kind_members(spec)
-        return found
-
-    def find_kind_members(self, spec: KindSpec) -> set[str]:
-        facts = self.facts
-        out = set(spec.subclass_of)
-        if spec.subclass_of:
-            pool: Iterable[str] = [symbol for symbol in facts.descendants(spec.subclass_of) if facts.has(symbol)]
-        else:
-            pool = self.graph.symbols
-        for symbol in pool:
-            if spec.abstract is False and facts.get(symbol, "abstract") == "true":
-                continue
-            if spec.decl and facts.decl(symbol) != spec.decl:
-                continue
-            if spec.decorated_by and not set(spec.decorated_by) & set(facts.decorators(symbol)):
-                continue
-            out.add(symbol)
-        return out
 
     def rival_symbol_assigns(self) -> list[Assignment]:
         """Symbol assignments that set a field another symbol assignment sets to a different value."""
