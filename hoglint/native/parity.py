@@ -1,16 +1,26 @@
 """Semantic parity of the native engine against the Python engine, field by field.
 
-Both engines read the same facts. Every core edge is compared in graph order and as a multiset,
-with every field and attr; symbol facts and module tables too. Exit 0 when nothing differs.
+Each engine runs a full check in its own process and dumps normalized outputs: every edge
+(core and pack) with every field and attr, symbol facts, modules, failed producers, findings
+with their witnesses, incompletes, levels, scan lines and the compare ScanSummary (triples and
+couplings). The dumps are then compared in order and as multisets. Exit 0 when nothing differs.
 
-Usage: python -m hoglint.native.parity --repo <root> [--work <dir>]
+Usage:
+  python -m hoglint.native.parity [--repo <root>] [--work <dir>]
+      run both engines and compare
+  python -m hoglint.native.parity --determinism N [--repo <root>] [--work <dir>]
+      run the native engine N times with other hash seeds and thread counts, compare to the first
+  python -m hoglint.native.parity dump --engine native|python --out <dir> [--repo <root>]
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import json
+import time
 import argparse
+import resource
 import tempfile
 import subprocess
 from collections import Counter
@@ -20,13 +30,18 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config import CONFIG_FILE, load_config
-from hoglint.core.analysis import AnalysisOptions, AnalysisResult, CoreAnalysis
-from hoglint.facts import Extractor, site_packages_files
-from hoglint.native.config import link_config
-from hoglint.native.normal import FIELDS, Row, edge_rows
-from hoglint.source import GraphSource, active_packs
+from hoglint.ledger.file import LedgerFile
+from hoglint.ledger.scan import ScanSummary
+from hoglint.model import Finding, Graph
+from hoglint.native.normal import FIELDS, Row, edge_row
+from hoglint.native.source import ENGINES, graph_source
+from hoglint.rules.base import IncompleteItem
+from hoglint.rules.engine import Engine, RunResult
+from hoglint.rules.exceptions import ExceptionsFile
 
 EXAMPLES = 5
+LIST_OUTPUTS = ("edges", "symbols", "modules", "failed", "findings", "incomplete", "scan-lines")
+VALUE_OUTPUTS = ("levels", "summary")
 
 
 @dataclass(frozen=True)
@@ -49,13 +64,13 @@ class RowDiff:
     def render(self) -> str:
         verdict = "equal" if self.equal else "DIFFERENT"
         out = [
-            f"{self.name}: {verdict}  python {self.left}  native {self.right}  same position {self.same_position}"
+            f"{self.name}: {verdict}  left {self.left}  right {self.right}  same position {self.same_position}"
             f"  missing {self.missing}  extra {self.extra}"
         ]
         out.extend(f"  field {name}: {count}" for name, count in self.fields)
         for left, right in self.examples:
-            out.append(f"  python {json.dumps(left, ensure_ascii=False)}")
-            out.append(f"  native {json.dumps(right, ensure_ascii=False)}")
+            out.append(f"  left  {json.dumps(left, ensure_ascii=False)}")
+            out.append(f"  right {json.dumps(right, ensure_ascii=False)}")
         return "\n".join(out)
 
 
@@ -87,69 +102,192 @@ def diff_rows(name: str, left: Sequence[Row], right: Sequence[Row], fields: Sequ
     )
 
 
-class LinkBinary:
-    """The `hoglint-link` debug binary, built next to `hoglint-facts`."""
-
-    def __init__(self, work: Path) -> None:
-        self.binary = Extractor.find_binary().with_name("hoglint-link")
-        self.work = work
-
-    def run(self, facts: Path, config: dict[str, Any]) -> tuple[list[Row], list[Any]]:
-        config_path = self.work / "link.json"
-        config_path.write_text(json.dumps(config))
-        edges, symbols = self.work / "native-edges.jsonl", self.work / "native-symbols.jsonl"
-        command = [str(self.binary), str(facts), str(config_path), "--edges", str(edges), "--symbols", str(symbols)]
-        subprocess.run(command, check=True)
-        with open(edges) as handle:
-            edge_list = [json.loads(line) for line in handle]
-        with open(symbols) as handle:
-            symbol_list = [json.loads(line) for line in handle]
-        return edge_list, symbol_list
+def finding_row(finding: Finding) -> Row:
+    site = finding.site
+    return [
+        finding.rule,
+        list(finding.identity),
+        finding.message,
+        [site.path, site.module, site.scope, site.line, site.column] if site is not None else None,
+        [edge_row(edge) for edge in finding.witnesses],
+        [[remedy.kind, remedy.detail] for remedy in finding.remedies],
+        list(finding.owners),
+        finding.status.value,
+        list(finding.subjects),
+        finding.ledgerable,
+        finding.unknown,
+    ]
 
 
-class Parity:
-    def __init__(self, repo: Path, work: Path) -> None:
+def incomplete_row(item: IncompleteItem) -> Row:
+    return [item.rule, item.key, item.reason, list(item.subjects), item.cause.value]
+
+
+def coupling_rows(graph: Graph) -> list[Row]:
+    """(src module, dst symbol or surface, kind) -> count over every edge: what move admission reads."""
+    counts: Counter[tuple[str, str, str]] = Counter()
+    for edge in graph.edges:
+        if not edge.targets:
+            counts[(edge.site.module, edge.surface, edge.kind)] += 1
+            continue
+        for target in edge.targets:
+            counts[(edge.site.module, str(target), edge.kind)] += 1
+    return [[*key, count] for key, count in sorted(counts.items())]
+
+
+def triple_rows(result: RunResult, graph: Graph) -> list[Row]:
+    """(src group, dst group, kind, context) for every edge between two known groups: compare's
+    new-pair list."""
+    group = result.config.roles.group
+    if not group:
+        return []
+    labeler = result.labeler
+    groups: dict[str, str | None] = {}
+
+    def group_of(module: str) -> str | None:
+        if module not in groups:
+            groups[module] = labeler.known_text(module, group)
+        return groups[module]
+
+    out: set[tuple[str, str, str, str]] = set()
+    for edge in graph.edges:
+        src = group_of(edge.site.module)
+        if src is None:
+            continue
+        context = "+".join(sorted(c.value for c in edge.contexts)) or "prod"
+        for target in edge.targets:
+            module = labeler.module_of_symbol(str(target))
+            dst = group_of(module) if module is not None else None
+            if dst is not None and dst != src:
+                out.add((src, dst, edge.kind, context))
+    return [list(triple) for triple in sorted(out)]
+
+
+def compare_summary(result: RunResult, graph: Graph) -> dict[str, Any]:
+    """The compare ScanSummary's graph-derived parts (triples and couplings), and its own JSON when
+    the ledger package's summary takes this call shape."""
+    summary: dict[str, Any] = {"triples": triple_rows(result, graph), "couplings": coupling_rows(graph)}
+    try:
+        summary["scan_summary"] = ScanSummary.from_run(result, graph, with_couplings=True).to_json()  # type: ignore[call-arg]
+    except TypeError:
+        summary["scan_summary"] = None
+    return summary
+
+
+class Dump:
+    """One engine's check over a repo, written as normalized files into `out`."""
+
+    def __init__(self, repo: Path, engine: str, out: Path, work: Path) -> None:
         self.repo = repo
+        self.engine = engine
+        self.out = out
         self.work = work
+        self.timings: dict[str, float] = {}
 
-    def python_core(self) -> AnalysisResult:
+    def lap(self, name: str, started: float) -> float:
+        now = time.perf_counter()
+        self.timings[name] = round(now - started, 3)
+        return now
+
+    def check(self) -> tuple[Graph, RunResult]:
+        started = time.perf_counter()
         config = load_config(self.repo, self.repo / CONFIG_FILE)
-        source = GraphSource(self.work)
-        options = AnalysisOptions(
-            repo=self.repo,
-            config=source.core_config(config),
-            work_dir=self.work,
-            needs=source.fact_needs(active_packs(config)),
-        )
-        return CoreAnalysis(options).run()
+        graph = graph_source(self.engine, self.work).build(self.repo, config)
+        started = self.lap("graph", started)
+        ledger = LedgerFile.read(self.repo / config.ledger.file)
+        exceptions = ExceptionsFile.read(self.repo / config.ledger.exceptions, config)
+        result = Engine(config, graph, self.repo).evaluate(ledger, exceptions)
+        self.lap("rules", started)
+        return graph, result
 
-    def run(self) -> list[RowDiff]:
-        analysis = self.python_core()
-        core_config = analysis.build.config
-        external = site_packages_files(core_config.external_packages)
-        config = link_config(core_config, analysis.inventory.analyzed, external)
-        native_edges, native_symbols = LinkBinary(self.work).run(self.work / "facts.jsonl", config)
-        graph = analysis.graph
-        python_symbols = [[name, facts["kind"], facts["path"]] for name, facts in graph.symbols.items()]
-        python_modules = [[module, path] for module, path in graph.modules.items()]
-        return [
-            diff_rows("core edges", edge_rows(graph.edges), native_edges, FIELDS),
-            diff_rows("symbols", python_symbols, native_symbols[2:]),
-            diff_rows("modules", python_modules, native_symbols[1]["modules"]),
-            diff_rows("first-party", [sorted(analysis.build.first_party.roots)], [native_symbols[0]["first_party"]]),
-        ]
+    def write_lines(self, name: str, rows: Sequence[Any]) -> None:
+        with open(self.out / f"{name}.jsonl", "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False))
+                handle.write("\n")
+
+    def run(self) -> None:
+        self.out.mkdir(parents=True, exist_ok=True)
+        graph, result = self.check()
+        started = time.perf_counter()
+        summary = compare_summary(result, graph)
+        started = self.lap("summary", started)
+        self.write_lines("findings", [finding_row(f) for f in result.findings()])
+        self.write_lines("incomplete", [incomplete_row(item) for item in result.incomplete()])
+        self.write_lines("scan-lines", [[list(key[1]), key[0], count] for key, count in result.scan.items()])
+        self.write_lines("symbols", [[name, sorted(facts.items())] for name, facts in graph.symbols.items()])
+        self.write_lines("modules", [[module, path] for module, path in graph.modules.items()])
+        failed = [[name, failure.reason, sorted(failure.kinds)] for name, failure in graph.failed_producers.items()]
+        self.write_lines("failed", failed)
+        levels = {name: [level.passing, sorted(level.failing.items())] for name, level in result.levels.items()}
+        (self.out / "levels.json").write_text(json.dumps(levels, ensure_ascii=False))
+        (self.out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False))
+        self.write_lines("edges", [edge_row(edge) for edge in graph.edges])
+        self.lap("write", started)
+        self.timings["maxrss_gb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9, 3)
+        (self.out / "timings.json").write_text(json.dumps(self.timings))
+
+
+def read_lines(path: Path) -> list[Row]:
+    with open(path) as handle:
+        return [json.loads(line) for line in handle]
+
+
+def compare_dumps(left: Path, right: Path) -> list[RowDiff]:
+    diffs = []
+    for name in LIST_OUTPUTS:
+        fields = FIELDS if name == "edges" else ()
+        diffs.append(diff_rows(name, read_lines(left / f"{name}.jsonl"), read_lines(right / f"{name}.jsonl"), fields))
+    for name in VALUE_OUTPUTS:
+        a = json.loads((left / f"{name}.json").read_text())
+        b = json.loads((right / f"{name}.json").read_text())
+        diffs.append(diff_rows(name, [a], [b]))
+    return diffs
+
+
+def dump_in_process(repo: Path, engine: str, out: Path, env: dict[str, str] | None = None) -> None:
+    command = [sys.executable, "-m", "hoglint.native.parity", "dump", "--engine", engine, "--out", str(out)]
+    subprocess.run([*command, "--repo", str(repo)], check=True, env={**os.environ, **(env or {})})
+
+
+def report(title: str, diffs: list[RowDiff], left: Path, right: Path) -> bool:
+    sys.stdout.write(f"{title}\n")
+    sys.stdout.write("\n".join(diff.render() for diff in diffs) + "\n")
+    for side in (left, right):
+        sys.stdout.write(f"timings {side.name}: {(side / 'timings.json').read_text()}\n")
+    return all(diff.equal for diff in diffs)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", nargs="?", choices=("compare", "dump"), default="compare")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--work", type=Path)
+    parser.add_argument("--engine", choices=ENGINES, default="native")
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--determinism", type=int, default=0)
     args = parser.parse_args()
+    repo = args.repo.resolve()
     work = args.work or Path(tempfile.mkdtemp(prefix="hoglint-native-parity-"))
     work.mkdir(parents=True, exist_ok=True)
-    diffs = Parity(args.repo.resolve(), work).run()
-    sys.stdout.write("\n".join(diff.render() for diff in diffs) + "\n")
-    sys.exit(0 if all(diff.equal for diff in diffs) else 1)
+    if args.command == "dump":
+        Dump(repo, args.engine, args.out or work / args.engine, work).run()
+        return
+    ok = True
+    if args.determinism:
+        first = work / "native-0"
+        dump_in_process(repo, "native", first, {"PYTHONHASHSEED": "0", "RAYON_NUM_THREADS": "1"})
+        for run in range(1, args.determinism):
+            other = work / f"native-{run}"
+            env = {"PYTHONHASHSEED": str(run * 7919), "RAYON_NUM_THREADS": str(2 * run)}
+            dump_in_process(repo, "native", other, env)
+            ok = report(f"native run 0 vs run {run} ({env})", compare_dumps(first, other), first, other) and ok
+    else:
+        python, native = work / "python", work / "native"
+        dump_in_process(repo, "python", python)
+        dump_in_process(repo, "native", native)
+        ok = report("python (left) vs native (right)", compare_dumps(python, native), python, native)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

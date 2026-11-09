@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 build = "build.rs"
 
+[workspace]
+members = [".", "binding"]
+
 [lib]
 name = "hoglint_facts"
 path = "src/lib.rs"

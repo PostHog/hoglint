@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Builds the hoglint-facts binary with the toolchain pinned in rust-toolchain.toml.
-# A cargo from flox or Homebrew is often older than the ruff crates allow, so this script
-# always asks rustup for the pinned cargo. Prints the binary path on success.
+# Builds the hoglint-facts binary and the hoglint_native Python extension (the native engine)
+# with the toolchain pinned in rust-toolchain.toml. A cargo from flox or Homebrew is often
+# older than the ruff crates allow, so this script always asks rustup for the pinned cargo.
+# The extension is built by maturin (from PATH, else through uvx) into an abi3 wheel, then
+# unpacked into $CARGO_TARGET_DIR/python, where hoglint.native.bridge finds it. Prints the
+# binary path on success.
 #
 # Usage: tools/hoglint/bin/build [extra cargo args]
 # Env:   CARGO_TARGET_DIR (default: ~/.cache/hoglint-target)
@@ -28,4 +31,22 @@ export PATH="$(dirname "$cargo_bin"):$PATH"
 "$cargo_bin" build --release --locked "$@" >&2
 binary="$CARGO_TARGET_DIR/release/hoglint-facts"
 echo "built $("$binary" --build-id) with rust $toolchain" >&2
+
+maturin_version="1.16.0"
+if command -v maturin >/dev/null 2>&1; then
+    maturin_cmd=(maturin)
+elif command -v uvx >/dev/null 2>&1; then
+    maturin_cmd=(uvx --from "maturin==$maturin_version" maturin)
+else
+    echo "maturin not found and no uvx to run it. Install uv or maturin, then re-run this script." >&2
+    exit 1
+fi
+wheels="$CARGO_TARGET_DIR/wheels"
+rm -f "$wheels"/hoglint_native-*.whl
+(cd binding && "${maturin_cmd[@]}" build --release --locked --out "$wheels" "$@" >&2)
+module_dir="$CARGO_TARGET_DIR/python"
+rm -rf "$module_dir/hoglint_native"
+mkdir -p "$module_dir"
+unzip -q -o "$wheels"/hoglint_native-*.whl 'hoglint_native/*' -d "$module_dir"
+echo "built hoglint_native into $module_dir" >&2
 echo "$binary"

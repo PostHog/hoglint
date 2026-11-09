@@ -1,0 +1,19 @@
+[package]
+name = "hoglint-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "hoglint_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+hoglint-facts = { path = ".." }
+pyo3 = { version = "=0.28.3", features = ["extension-module", "abi3-py312"] }
+rustc-hash = "2"
+
+[build-dependencies]
+pyo3-build-config = "=0.28.3"
+sha2 = "=0.10.9"

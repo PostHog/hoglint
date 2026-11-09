@@ -6,6 +6,7 @@
 //! fact cache keyed on it stay valid when only the link changes.
 
 pub mod facts;
+pub mod index;
 pub mod intern;
 pub mod paths;
 pub mod produce;
@@ -13,6 +14,7 @@ pub mod resolve;
 pub mod scope;
 
 use facts::FactSet;
+use index::EdgeIndex;
 use intern::{Interner, Sid};
 use paths::{ModuleIndex, ModuleNamer, PathGlobs};
 use produce::{EdgeStore, KIND_NAMES, Producers, Producing, Symbols};
@@ -51,6 +53,12 @@ pub struct LinkConfig {
     pub analyzed: Vec<String>,
 }
 
+impl LinkConfig {
+    pub fn from_json(text: &str) -> Result<LinkConfig, serde_json::Error> {
+        serde_json::from_str(text)
+    }
+}
+
 /// Seconds per link stage.
 #[derive(Debug, Default, Clone)]
 pub struct Timings {
@@ -70,6 +78,7 @@ pub struct Link {
     pub scope_of_file: FxHashMap<u32, u32>,
     pub settings: Producing,
     pub edges: EdgeStore,
+    pub index: EdgeIndex,
     pub symbols: Symbols,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
@@ -161,6 +170,7 @@ impl Link {
             scope_of_file,
             settings,
             edges,
+            index: EdgeIndex::default(),
             symbols,
             first_party,
             timings,
@@ -255,6 +265,47 @@ impl Link {
                 })
             })
             .collect()
+    }
+
+    /// What `SymbolFacts` reads of the core's inherit or decorate edges, in graph order:
+    /// (owner symbol, surface, names) where the owner is "module.<class or decorated attr>" and
+    /// the names are the targets, `?<surface>` when unresolved, else the surface.
+    pub fn class_facts(&self, kind: u8, owner_attr: &str) -> Vec<(String, String, Vec<String>)> {
+        let core = &self.core;
+        let Some(owner_key) = core.it.get(owner_attr) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for row in self.edges.rows.iter().filter(|row| row.kind == kind) {
+            let Some(&(_, owner)) = self
+                .edges
+                .attrs_of(row)
+                .iter()
+                .find(|(k, _)| *k == owner_key)
+            else {
+                continue;
+            };
+            if owner == intern::EMPTY {
+                continue;
+            }
+            let module = self.scopes[row.owner as usize].module;
+            let surface = core.it.s(row.surface).to_string();
+            let names = if row.res == scope::Res::Unresolved {
+                vec![format!("?{surface}")]
+            } else if let Some(target) = row.target {
+                vec![core.ent_text(target)]
+            } else if surface.is_empty() {
+                Vec::new()
+            } else {
+                vec![surface.clone()]
+            };
+            out.push((
+                format!("{}.{}", core.it.s(module), core.it.s(owner)),
+                surface,
+                names,
+            ));
+        }
+        out
     }
 
     pub fn first_party_heads(&self) -> Vec<&str> {
