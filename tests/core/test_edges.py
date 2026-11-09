@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from hoglint.core.producers import use_position
+from hoglint.core.build import CoreBuild
+from hoglint.core.config import CoreConfig
+from hoglint.core.producers import BuildContext, Producer, use_position
 from hoglint.core.symbols import FUNC, TC_ELSE, TRY, TYPE_ONLY
-from hoglint.model import Context, Resolution
+from hoglint.facts import FactStore
+from hoglint.model import Context, Graph, Resolution
 from hoglint.outputs.tach_map import TachMap
+from hoglint.plugins import ProducerFailure
 
 from core.support import FileFacts, build, edges_of
 
@@ -172,3 +176,21 @@ def test_tach_map_skips_imports_in_either_type_checking_branch(facts: FileFacts,
     graph = build(files)
     mapping = TachMap(graph, [f.record["path"] for f in files]).dependents()
     assert mapping == ({"checkout/logic.py": [VIEWS]} if counted else {})
+
+
+class PartialProducer(Producer):
+    """Records what a producer may record besides edges: a module and a partial failure."""
+
+    kind = "partial"
+    failure = ProducerFailure("one file unread", frozenset({"partial"}))
+
+    def run(self, context: BuildContext, graph: Graph) -> None:
+        graph.modules["generated.mod"] = "generated/mod.py"
+        graph.failed_producers["partial@1"] = self.failure
+
+
+def test_a_core_producer_keeps_the_modules_and_failures_it_records() -> None:
+    graph = CoreBuild(CoreConfig(), FactStore()).graph((PartialProducer,))
+
+    assert graph.modules["generated.mod"] == "generated/mod.py"
+    assert graph.failed_producers == {"partial@1": PartialProducer.failure}
