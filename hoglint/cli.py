@@ -748,11 +748,15 @@ class Commands:
             return None, None, ""
         scope, framework = head.scope, head.envelope.framework
         base_key = Envelope(base_tree, engine.id, base_policy, framework)
-        base = self.stored(base_key, scope, triples=True)
+        found = self.summaries.get(base_key)
+        base = found if found is not None and found.covers(scope, triples=True) else None
         source = f"the stored summary {base_key.key()}"
         if base is None:
-            missing = "no CI summary was found" if os.environ.get("CI") else "no stored summary fits"
-            source = f"{missing} for {base_key.key()}, so the full base scan ran"
+            if found is not None:
+                source = f"the stored summary {base_key.key()} lacks this rename's couplings, so the full base scan ran"
+            else:
+                missing = "no CI summary was found" if os.environ.get("CI") else "no stored summary was found"
+                source = f"{missing} for {base_key.key()}, so the full base scan ran"
             if engine.binary is None:
                 run = self.runner.run(base_root)
                 base = ScanSummary.from_run(run.result, run.graph, base_key, scope)
