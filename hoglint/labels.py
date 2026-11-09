@@ -141,7 +141,9 @@ class Labeler:
         self.module_assigns = [a for a in config.assigns if a.symbols is None]
         self.symbol_assigns = [a for a in config.assigns if a.symbols is not None]
         self.zone_fields = [spec.name for spec in config.fields.values() if spec.type is FieldType.ZONE]
+        self.provider_fields = frozenset(name for spec in self.providers.specs for name in spec.sets)
         self.module_labels = Memo(self.label_module)
+        self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
         self.kind_match = Memo(self.match_kinds)
         self.export_member = Memo(self.find_export_member)
@@ -253,19 +255,35 @@ class Labeler:
         return labels
 
     def label_module(self, module: str) -> Labels:
+        """Labels from the config's paths, zones and registries. Fields a provider sets are left to
+        `label_provided`, so the conflict check never reads providers' files."""
         path = self.path_of(module)
         if path is None:
             return {}
         cached = self.path_candidates(path)
         self.conflicts.extend(cached.conflicts)
-        collected = {name: list(candidates) for name, candidates in cached.fields.items()}
-        for name, candidate in self.providers.values(path).items():
-            collected.setdefault(name, []).append(candidate)
+        collected = {
+            name: list(candidates) for name, candidates in cached.fields.items() if name not in self.provider_fields
+        }
         labels = self.resolve_all(module, collected)
         registry = self.registry_of(path, module)
         if registry is not None:
             labels[REGISTRY_FIELD] = Label(registry.name, "registries")
         return labels
+
+    def label_provided(self, module: str) -> Labels:
+        """The fields providers set (owners, for example), from the config's paths and the
+        providers' files. Read only when something needs them: owners at render time."""
+        path = self.path_of(module)
+        if path is None:
+            return {}
+        cached = self.path_candidates(path)
+        collected = {
+            name: list(candidates) for name, candidates in cached.fields.items() if name in self.provider_fields
+        }
+        for name, candidate in self.providers.values(path).items():
+            collected.setdefault(name, []).append(candidate)
+        return self.resolve_all(module, collected)
 
     def registry_of(self, path: str, module: str) -> RegistrySpec | None:
         for spec in self.config.registries.values():
@@ -376,6 +394,8 @@ class Labeler:
         """The label a source set on the entity, if any: symbol labels for symbol fields."""
         if self.config.fields[name].on == "symbol":
             return self.symbol_labels(symbol).get(name) if symbol else None
+        if name in self.provider_fields:
+            return self.provider_labels(module).get(name) if module else None
         return self.module_labels(module).get(name) if module else None
 
     def field_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
@@ -534,7 +554,8 @@ class Labeler:
     def find_conflicts(self) -> list[str]:
         """Every config conflict of this graph, found before rules run, whatever the rules read.
 
-        Each module is labelled. Symbols are checked only where two specs could disagree: kinds
+        Each module is labelled, except for the fields providers set: those are resolved where
+        something reads them (owners at render time). Symbols are checked only where two specs could disagree: kinds
         when two of them could match one symbol, symbol assignments where two that set a field
         to different values both reach the symbol's path."""
         for module in self.graph.modules:

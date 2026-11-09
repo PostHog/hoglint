@@ -18,7 +18,7 @@ from pathlib import Path
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex
 from hoglint.labels import BUILTIN_ENTITY_NAMES, Labeler
-from hoglint.model import Context, Edge, EntityId, Finding, Graph, IncompleteCause, Remedy, Resolution, Site
+from hoglint.model import Context, Edge, EntityId, Finding, Graph, IncompleteCause, Owners, Remedy, Resolution, Site
 from hoglint.selectors import (
     NONE,
     UNKNOWN,
@@ -219,7 +219,7 @@ class RuleContext:
             site=site if site is not None or not witnesses else witnesses[0].site,
             witnesses=witnesses,
             remedies=remedies,
-            owners=self.owners_of(owner),
+            owner=Owners(owner, self.owners_of) if owner is not None and self.config.roles.owner else None,
             subjects=subjects,
             ledgerable=ledgerable and spec.ledger,
             unknown=unknown,

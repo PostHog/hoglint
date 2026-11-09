@@ -8,7 +8,7 @@ is a ledger or exception match.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -135,6 +135,18 @@ class Remedy:
 
 
 @dataclass(frozen=True, slots=True)
+class Owners:
+    """Who owns a finding: looked up from its owner module only when output shows it, so a run
+    that prints few findings reads few owners files."""
+
+    module: str
+    lookup: Callable[[str], tuple[str, ...]]
+
+    def get(self) -> tuple[str, ...]:
+        return self.lookup(self.module)
+
+
+@dataclass(frozen=True, slots=True)
 class Finding:
     rule: str
     identity: tuple[str, ...]  # the rule's identity projection; no line numbers
@@ -142,11 +154,15 @@ class Finding:
     site: Site | None
     witnesses: tuple[Edge, ...] = ()
     remedies: tuple[Remedy, ...] = ()
-    owners: tuple[str, ...] = ()
+    owner: Owners | None = field(default=None, compare=False, repr=False)
     status: FindingStatus = FindingStatus.NEW
     subjects: tuple[str, ...] = ()  # modules or entities the finding is about; levels group by them
     ledgerable: bool = True  # False for on_unresolved = "block": the ledger may not accept it
     unknown: bool = False  # exists because something did not resolve; forbids levels even when ledgered
+
+    @property
+    def owners(self) -> tuple[str, ...]:
+        return self.owner.get() if self.owner is not None else ()
 
     @property
     def ledger_key(self) -> tuple[str, tuple[str, ...]]:
