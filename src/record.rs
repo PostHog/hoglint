@@ -42,9 +42,19 @@ pub fn sha256_hex(raw: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn config_id(first_party: &[String]) -> String {
-    sha256_hex(first_party.join(",").as_bytes())[..8].to_string()
+/// Hash of the options that change record content. Without extra callees it keeps the
+/// first-party-only value, so existing records keep their `cfg`.
+pub fn config_id(first_party: &[String], extra_callees: &[String]) -> String {
+    let mut key = first_party.join(",");
+    if !extra_callees.is_empty() {
+        key.push('|');
+        key.push_str(&extra_callees.join(","));
+    }
+    sha256_hex(key.as_bytes())[..8].to_string()
 }
+
+/// Hash of the extractor sources, from build.rs. Part of the cache key.
+pub const BUILD_ID: &str = env!("HOGLINT_BUILD_ID");
 
 impl FileOut {
     /// The record line. `path` None writes an empty path (cache entries are path-free).

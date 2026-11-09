@@ -16,6 +16,16 @@ pub const IF: u32 = 32;
 pub const BLOCK: u32 = 64;
 
 const WATCHED_CALLEES: [&str; 5] = ["get_model", "patch", "object", "setdefault", "append"];
+/// Extra callee names from `--watch-callees`, set once at startup.
+static EXTRA_WATCHED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+pub fn set_extra_watched(names: Vec<String>) {
+    EXTRA_WATCHED.set(names).ok().expect("watched callees set twice");
+}
+
+fn is_watched(last: &str) -> bool {
+    WATCHED_CALLEES.contains(&last) || EXTRA_WATCHED.get().is_some_and(|extra| extra.iter().any(|n| n == last))
+}
 const WRAPPER_STEPS: [&str; 4] = ["await", "ifexp:body", "ifexp:else", "star"];
 
 pub type Derived = HashMap<i64, HashSet<String>>;
@@ -934,7 +944,7 @@ impl<'a, 'b> Walker<'a, 'b> {
         let (l, c) = self.lines.pos(call.range().start());
         aggregate(&mut self.callees, key_prefix(vec![J::Int(scope), J::Int(header), J::s(&callee)]), l, c);
         let last = callee.rsplit('.').next().unwrap_or("");
-        if !WATCHED_CALLEES.contains(&last) {
+        if !is_watched(last) {
             return;
         }
         let args = call.arguments.args.iter().map(|a| self.enc.shallow(a, self.src)).collect();

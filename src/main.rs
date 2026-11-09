@@ -1,15 +1,19 @@
 //! L1 fact extractor (schema v1) on the ruff parser. Output matches reference_l1.py line for line.
 //!
 //! Usage:
-//!   l1 --discover <repo_root> [--v1.1] > files.txt
-//!   l1 <repo_root> <file_list|-> [--jobs N] [--first-party a,b] [--mode stream|kinds|cache]
-//!      [--out PATH] [--cache DIR] [--timing] [--v1.1] [--max-nodes N] [--max-symbolic N]
+//!   hoglint-facts --discover <repo_root> [--v1.1] > files.txt
+//!   hoglint-facts --build-id
+//!   hoglint-facts <repo_root> <file_list|-> [--jobs N] [--first-party a,b] [--watch-callees a,b]
+//!      [--mode stream|kinds|cache] [--out PATH] [--cache DIR] [--timing] [--v1.1]
+//!      [--max-nodes N] [--max-symbolic N]
 //!
 //! `--v1.1` raises the value-tree cap to 1,000,000 and the symbolic-string cap to 1,000.
+//! `--watch-callees` adds callee names (last dotted part) whose calls get a `calls` row.
 //!
 //! Modes: `stream` writes JSON lines to --out (default stdout); `kinds` writes one file per fact
 //! kind into the --out directory; `cache` keeps one record per source sha256 under --cache and
-//! only parses files whose content has no entry yet (records still stream to --out).
+//! only parses files whose content has no entry yet (records still stream to --out). The cache
+//! directory name holds the schema version, the build id and every option that changes records.
 
 mod json;
 mod record;
@@ -17,14 +21,13 @@ mod value;
 mod walker;
 
 use rayon::prelude::*;
-use record::{config_id, extract, sha256_hex, FileOut, Times, KINDS};
+use record::{config_id, extract, sha256_hex, FileOut, Times, BUILD_ID, KINDS};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::Instant;
 
-const DEFAULT_FIRST_PARTY: [&str; 4] = ["posthog", "ee", "products", "common"];
 /// Cache entries store this path; a hit swaps in the real one.
 const PATH_PLACEHOLDER: &str = "\"path\":\"\"";
 static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -32,7 +35,7 @@ static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 struct Discovery;
 
 impl Discovery {
-    fn is_excluded(rel: &str, v11: bool) -> bool {
+    fn is_excluded(rel: &str) -> bool {
         let parts: Vec<&str> = rel.split('/').collect();
         if parts.iter().any(|p| p.starts_with('.')) {
             return true;
@@ -42,16 +45,11 @@ impl Discovery {
                 return true;
             }
         }
-        if v11 {
-            return false;
-        }
-        if rel.starts_with("products/posthog_ai/eval_harness/") {
-            return true;
-        }
-        parts.len() > 3 && parts[0] == "products" && parts[2] == "evals"
+        false
     }
 
-    /// v1: spike C rule. v1.1: union of all channel scopes (adds `.pyi`, evals, eval_harness).
+    /// Git-visible sources minus hidden paths, docs, caches and egg-info. v1.1 adds `.pyi`.
+    /// Project excludes are applied by the caller (hoglint.core.discovery).
     fn files(root: &Path, v11: bool) -> Vec<String> {
         let patterns: &[&str] = if v11 { &["*.py", "*.pyi"] } else { &["*.py"] };
         let out = Command::new("git")
@@ -64,7 +62,7 @@ impl Discovery {
         let mut seen = std::collections::HashSet::new();
         let mut files: Vec<String> = Vec::new();
         for rel in text.split('\0') {
-            if rel.is_empty() || seen.contains(rel) || Self::is_excluded(rel, v11) {
+            if rel.is_empty() || seen.contains(rel) || Self::is_excluded(rel) {
                 continue;
             }
             seen.insert(rel.to_string());
@@ -81,6 +79,7 @@ struct Options {
     root: PathBuf,
     files: Vec<String>,
     first_party: Vec<String>,
+    extra_callees: Vec<String>,
     mode: String,
     out: Option<PathBuf>,
     cache: Option<PathBuf>,
@@ -97,6 +96,7 @@ impl Options {
         };
         let jobs = take("--jobs");
         let first_party = take("--first-party");
+        let watch_callees = take("--watch-callees");
         let mode = take("--mode").unwrap_or_else(|| "stream".to_string());
         let out = take("--out").map(PathBuf::from);
         let cache = take("--cache").map(PathBuf::from);
@@ -117,14 +117,9 @@ impl Options {
                 rayon::ThreadPoolBuilder::new().num_threads(n).build_global().unwrap();
             }
         }
-        let first_party = match first_party {
-            Some(list) => {
-                let mut roots: Vec<String> = list.split(',').map(str::to_string).collect();
-                roots.sort();
-                roots
-            }
-            None => DEFAULT_FIRST_PARTY.iter().map(|s| s.to_string()).collect(),
-        };
+        let first_party = sorted_list(first_party);
+        let extra_callees = sorted_list(watch_callees);
+        walker::set_extra_watched(extra_callees.clone());
         let root = PathBuf::from(&argv[0]);
         let listing = &argv[1];
         let text = if listing == "-" {
@@ -133,8 +128,15 @@ impl Options {
             std::fs::read_to_string(listing).expect("file list")
         };
         let files = text.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
-        Options { root, files, first_party, mode, out, cache, timing }
+        Options { root, files, first_party, extra_callees, mode, out, cache, timing }
     }
+}
+
+fn sorted_list(list: Option<String>) -> Vec<String> {
+    let mut items: Vec<String> = list.unwrap_or_default().split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    items.sort();
+    items.dedup();
+    items
 }
 
 #[derive(Default)]
@@ -277,6 +279,10 @@ fn write_kinds(dir: &Path, files: &[String], records: &[FileOut], cfg: &str) -> 
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("--build-id") {
+        println!("{BUILD_ID}");
+        return;
+    }
     if argv.first().map(String::as_str) == Some("--discover") {
         let files = Discovery::files(Path::new(&argv[1]), argv.iter().any(|a| a == "--v1.1"));
         let mut out = std::io::BufWriter::new(std::io::stdout().lock());
@@ -286,7 +292,7 @@ fn main() {
         return;
     }
     let opts = Options::parse(argv);
-    let runner = Runner { opts: &opts, cfg: config_id(&opts.first_party), totals: Mutex::new(Totals::default()) };
+    let runner = Runner { opts: &opts, cfg: config_id(&opts.first_party, &opts.extra_callees), totals: Mutex::new(Totals::default()) };
     let started = Instant::now();
     let written = match opts.mode.as_str() {
         "stream" => {
@@ -301,8 +307,9 @@ fn main() {
         "cache" => {
             let base = opts.cache.clone().expect("--mode cache needs --cache DIR");
             let dir = base.join(format!(
-                "v{}-{}-n{}-s{}",
+                "v{}-b{}-{}-n{}-s{}",
                 record::SCHEMA_VERSION,
+                BUILD_ID,
                 runner.cfg,
                 value::max_nodes(),
                 value::max_symbolic()

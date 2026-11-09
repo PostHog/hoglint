@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Builds the hoglint-facts binary with the toolchain pinned in rust-toolchain.toml.
+# A cargo from flox or Homebrew is often older than the ruff crates allow, so this script
+# always asks rustup for the pinned cargo. Prints the binary path on success.
+#
+# Usage: tools/hoglint/bin/build [extra cargo args]
+# Env:   CARGO_TARGET_DIR (default: ~/.cache/hoglint-target)
+
+set -euo pipefail
+
+crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$crate_dir"
+
+if ! command -v rustup >/dev/null 2>&1; then
+    echo "rustup not found. Install it from https://rustup.rs, then re-run this script." >&2
+    exit 1
+fi
+
+toolchain="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+if ! rustup which cargo >/dev/null 2>&1; then
+    rustup toolchain install "$toolchain" --profile minimal
+fi
+cargo_bin="$(rustup which cargo)"
+
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/hoglint-target}"
+export PATH="$(dirname "$cargo_bin"):$PATH"
+
+"$cargo_bin" build --release --locked "$@" >&2
+binary="$CARGO_TARGET_DIR/release/hoglint-facts"
+echo "built $("$binary" --build-id) with rust $toolchain" >&2
+echo "$binary"
