@@ -56,6 +56,11 @@ HOOKS = {
             [-1, 1, "register_refund_hook", 1, 6, 1],
         ],
     },
+    "shop/aliased.py": {
+        "imports": [[-1, 1, 0, 0, "billing.hooks", 0, "register_refund_hook", "add_hook"]],
+        "defs": [func_def("wire_aliased", 2), func_def("on_refund", 4, dec=[{"call": "add_hook", "args": []}])],
+        "callees": [[0, -1, "add_hook", 1, 3, 4], [-1, 1, "add_hook", 1, 4, 1]],
+    },
 }
 
 
@@ -95,7 +100,7 @@ def test_signal_edges_resolve_class_and_label_senders_and_keep_the_rest_unresolv
     assert {e.attr("signal") for e in edges.values()} == {"django.db.models.signals.post_save"}
 
 
-def test_installs_edges_see_imports_only_where_they_are_bound_and_skip_class_hooks() -> None:
+def test_installs_edges_see_imports_only_where_they_are_bound_follow_aliases_and_skip_class_hooks() -> None:
     graph = FactRepo(HOOKS).graph(hooks=("billing.hooks.register_refund_hook", "billing.hooks.register_payload"))
 
     edges = sorted(
@@ -105,8 +110,10 @@ def test_installs_edges_see_imports_only_where_they_are_bound_and_skip_class_hoo
 
     assert edges == [
         ("handler", "decorator", "None", Resolution.UNRESOLVED, "shop.wiring.handler"),
+        ("on_refund", "decorator", "billing.hooks.register_refund_hook", Resolution.RESOLVED, "shop.aliased.on_refund"),
         ("wire", "call", "None", Resolution.UNRESOLVED, ""),
         ("wire", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
+        ("wire_aliased", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
     ]
 
 

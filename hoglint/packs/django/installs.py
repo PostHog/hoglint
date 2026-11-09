@@ -7,20 +7,34 @@ name but that resolves to nothing, or to a value, is an unresolved edge. A calle
 to a class or a module is no hook and makes no edge.
 
 Candidates come from queries: callee rows by their spelled last name, and defs whose decorator
-text names a hook. Each one then resolves here.
+text names a hook. A hook imported under another name (`import ... as add_hook`) is found by
+origin: the `import` edge that binds it and the `decorate` edge that applies it. A candidate
+found only by origin makes an edge only when it resolves to a hook.
 """
 
 from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass, field
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.harness import each_item, failure_edge
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
-from hoglint.native.queries import PackQueries, Words
+from hoglint.native.queries import PackQueries, Words, entities_named
 
 INSTALLS_PRODUCER = "django.installs@1"
 HOOK_KINDS = frozenset({"def", "member"})
 NOT_HOOK_KINDS = frozenset({"class", "module"})
+
+
+@dataclass(frozen=False)
+class Aliases:
+    """Hooks a file reaches under names that do not spell them: the names its imports bind, and
+    the (line, column) of defs one decorates."""
+
+    names: set[str] = field(default_factory=set)
+    decorated: set[tuple[int, int]] = field(default_factory=set)
 
 
 def decorator_callees(d: dict) -> set[str]:
@@ -79,15 +93,35 @@ class InstallsProducer:
             return None
         return found
 
-    def call_edges(self, scope: FileScope, rows: list[list]) -> list[Edge]:
+    def is_hook(self, found: Lookup) -> bool:
+        hit = found.hit
+        return hit is not None and hit.kind in HOOK_KINDS and str(hit.origin) in self.hooks
+
+    def aliases(self, files: list[FileScope]) -> dict[str, Aliases]:
+        """Hooks bound or applied under another name, by origin: `import` edges that bind a hook,
+        and `decorate` edges that apply one."""
+        out: dict[str, Aliases] = defaultdict(Aliases)
+        paths = {scope.path for scope in files}
+        targets = [entity for hook in sorted(self.hooks) for entity in entities_named(hook)]
+        for edge in self.queries.edges_to("import", targets):
+            bound = edge.attr("binds")
+            if edge.site.path in paths and bound not in self.hook_names:
+                out[edge.site.path].names.add(bound)
+        for edge in self.queries.edges_to("decorate", targets):
+            if edge.site.path in paths:
+                out[edge.site.path].decorated.add((edge.site.line, edge.site.column))
+        return out
+
+    def call_edges(self, scope: FileScope, rows: list[list], aliases: Aliases) -> list[Edge]:
         out: list[Edge] = []
         for at_scope, header, callee, count, line, column in rows:
-            if not self.names_a_hook(callee):
+            spelled = self.names_a_hook(callee)
+            if not spelled and callee not in aliases.names:
                 continue
             if header != -1 and callee in decorator_callees(scope.defs[header]):
                 continue
             found = self.lookup(scope, callee, at_scope, line)
-            if found is None:
+            if found is None or (not spelled and not self.is_hook(found)):
                 continue
             site = scope.site(at_scope, line, column)
             edge = self.edge(site, scope.contexts(0, at_scope), callee, found, "call", "")
@@ -95,17 +129,20 @@ class InstallsProducer:
                 out.extend([edge] * count)
         return out
 
-    def decorator_edges(self, scope: FileScope) -> list[Edge]:
+    def decorator_edges(self, scope: FileScope, aliases: Aliases) -> list[Edge]:
         out: list[Edge] = []
-        if not self.queries.may_mention(scope, ("defs",), self.hook_words):
+        if not aliases.decorated and not self.queries.may_mention(scope, ("defs",), self.hook_words):
             return out
         for idx, d in enumerate(scope.defs):
             for dec in d.get("dec", ()):
                 callee = dec.get("call") if isinstance(dec, dict) else dec
-                if not isinstance(callee, str) or not self.names_a_hook(callee):
+                if not isinstance(callee, str):
+                    continue
+                spelled = self.names_a_hook(callee)
+                if not spelled and (d["l"], d["c"]) not in aliases.decorated:
                     continue
                 found = self.lookup(scope, callee, d["s"], d["l"])
-                if found is None:
+                if found is None or (not spelled and not self.is_hook(found)):
                     continue
                 qualname = scope.qualnames[idx]
                 site = Site(scope.path, scope.module, qualname, d["l"], d["c"])
@@ -123,8 +160,13 @@ class InstallsProducer:
         if not self.hooks:
             return []
         calls = {scope.path: rows for scope, rows in self.queries.calls_named(files, "callees", self.hook_names)}
+        aliases = self.aliases(files)
 
         def file_edges(scope: FileScope) -> list[Edge]:
-            return self.call_edges(scope, calls.get(scope.path, [])) + self.decorator_edges(scope)
+            found = aliases.get(scope.path, Aliases())
+            rows = calls.get(scope.path, [])
+            if found.names:
+                rows = scope.record.get("callees", [])
+            return self.call_edges(scope, rows, found) + self.decorator_edges(scope, found)
 
         return each_item(files, file_edges, self.failure)
