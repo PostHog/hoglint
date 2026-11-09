@@ -2,15 +2,21 @@
 
 Port of the spike drives channel. The deriver logic is unchanged; the output is hoglint edges,
 one per drive, with the wiring location, the trigger, and how the test reaches the dispatcher.
-Every scanned file gives its imports, top-level names and function bodies; only test files give
-the mentions, scopes and name uses the deriver reads to find a drive.
+
+A file's facts are read on first use, so a run reads only what a drive can come from:
+- every file's `from` imports, indexed by imported name, for the re-export closure of the
+  wiring names;
+- the dispatcher and the NodeKind enum, for the registry of query kinds;
+- the test files that may name a kind (a prefilter on their fact text, see `TestFilter`), pass a
+  `kind` entry, or import a wiring name or module;
+- the bodies of the helpers the call view reaches, one module at a time.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 
 from hoglint.core.build import CoreBuild
@@ -19,6 +25,7 @@ from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
+from hoglint.native.queries import PackQueries, Words
 from hoglint.presets_py.posthog.layout import location_module, product_of_path
 
 QUERY_DISPATCHER = "posthog/hogql_queries/query_runner.py"
@@ -39,6 +46,10 @@ PATCH_CALLS = frozenset({"patch", "object"})
 MAX_CALL_DEPTH = 8
 DRIVES_PRODUCER = "posthog.drives@1"
 MODULE_SCOPE = "<module>"
+
+# The fact kinds where a query kind is spelled, and where a NodeKind member is.
+KIND_TEXT = ("names", "tags", "callees", "imports")
+MEMBER_TEXT = ("refs", "uses")
 
 CAMEL = re.compile(r"^[A-Z]\w*$")
 UPPER = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -102,42 +113,104 @@ class TestFacts:
     attr_uses: Counter[tuple[str, str]]
 
 
-@dataclass(frozen=True)
 class FileFacts:
-    rel: str
-    dotted: str
-    imports: list[ImportEdge]
-    module_aliases: list[tuple[str, str]]
-    top_names: list[str]
-    lazy_map: dict[str, str]
-    reader: FactReader = field(repr=False, compare=False)
-    top_functions: dict[str, list[str]]
-    class_methods: dict[str, list[str]]
-    top_classes: dict[str, str]
-    test: TestFacts | None = None
-    dispatch_branches: list[tuple[list[str], list[str], list[str]]] = field(default_factory=list)
-    enum_members: dict[str, dict[str, str]] = field(default_factory=dict)
+    """One module's facts, each read on first use: most modules give only their imports."""
+
+    def __init__(self, reader: FactReader) -> None:
+        self.reader = reader
+        self.rel = reader.rel
+        self.dotted = reader.scope.module
+        self.is_test = reader.is_test
+
+    @cached_property
+    def import_facts(self) -> tuple[list[ImportEdge], list[tuple[str, str]], set[str]]:
+        return self.reader.read_imports()
+
+    @property
+    def imports(self) -> list[ImportEdge]:
+        return self.import_facts[0]
+
+    @property
+    def module_aliases(self) -> list[tuple[str, str]]:
+        return self.import_facts[1]
+
+    @cached_property
+    def top(self) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]], dict[str, str]]:
+        return self.reader.read_top_names()
+
+    @property
+    def top_names(self) -> list[str]:
+        return self.top[0]
+
+    @property
+    def top_functions(self) -> dict[str, list[str]]:
+        return self.top[1]
+
+    @property
+    def class_methods(self) -> dict[str, list[str]]:
+        return self.top[2]
+
+    @property
+    def top_classes(self) -> dict[str, str]:
+        return self.top[3]
+
+    @cached_property
+    def lazy_map(self) -> dict[str, str]:
+        return self.reader.lazy_map()
+
+    @cached_property
+    def test(self) -> TestFacts | None:
+        if not self.is_test:
+            return None
+        return self.reader.read_test(self.import_facts[2], self.reader.read_scopes(*self.reader.calls))
 
     @cached_property
     def bodies(self) -> dict[str, Body]:
-        """Function bodies by fid. Built on first use: the call view reaches few non-test files."""
+        """Function bodies by fid. The call view reaches few non-test files."""
         return self.reader.read_bodies()
+
+    @cached_property
+    def dispatch_branches(self) -> list[tuple[list[str], list[str], list[str]]]:
+        return self.reader.dispatch_branches() if self.rel == QUERY_DISPATCHER else []
+
+    @cached_property
+    def enum_members(self) -> dict[str, dict[str, str]]:
+        return self.reader.enum_members() if self.rel == NODE_KIND_ENUM else {}
 
 
 class FactReader:
     """One file's records in, one FileFacts out (the spike's L1 view, rebuilt from fact lists)."""
 
-    def __init__(self, scope: FileScope, bodies: RecordBodies, lazy: dict[str, str]) -> None:
+    def __init__(self, scope: FileScope, build: CoreBuild) -> None:
         self.scope = scope
+        self.build = build
         self.record = scope.record
         self.rel = scope.path
-        self.defs: list[dict] = scope.defs
-        self.bodies = bodies
-        self.lazy = lazy
         self.is_test = Context.TEST in scope.base_contexts
         self.ancestry_cache: dict[int, list[int]] = {}
-        self.quals = scope.qualnames
-        self.fids = {i: f"{self.quals[i]}@{d['l']}" for i, d in enumerate(self.defs) if d["k"] != "class"}
+
+    @cached_property
+    def defs(self) -> list[dict]:
+        return self.scope.defs
+
+    @cached_property
+    def bodies(self) -> RecordBodies:
+        return self.build.bodies(self.record)
+
+    @cached_property
+    def quals(self) -> list[str]:
+        return self.scope.qualnames
+
+    @cached_property
+    def fids(self) -> dict[int, str]:
+        return {i: f"{self.quals[i]}@{d['l']}" for i, d in enumerate(self.defs) if d["k"] != "class"}
+
+    def lazy_map(self) -> dict[str, str]:
+        """The PEP 562 lazy names of a product module's table."""
+        if not self.rel.startswith("products/"):
+            return {}
+        table = self.build.tables.get(self.scope.module)
+        return table.lazy if table is not None and self.build.index.path_of.get(self.scope.module) == self.rel else {}
 
     def ancestry(self, idx: int) -> list[int]:
         """idx and every enclosing def, without -1."""
@@ -334,13 +407,10 @@ class FactReader:
 
     def pending(self, s: int, h: int, value: object, chain: str, up: str) -> Pending | None:
         """A `kind` dict entry passed to a call or under a query key, whose value is not a constant."""
-        if chain:
+        target = pending_target(value, chain, up)
+        if target is None:
             return None
-        step = up.split(" ", 1)[0] if up else ""
-        callee = last_name(step.split(":", 2)[2]) if step.startswith("arg:") else None
-        under = step in ("dict:val:query", "dict:val:source")
-        if (callee is None and not under) or is_const(value):
-            return None
+        callee, under = target
         fid, cls = self.enclosing(s, h)
         if isinstance(value, str) and "." not in value:
             return Pending(callee, under, "name", value, None, fid, cls)
@@ -427,28 +497,6 @@ class FactReader:
             out[d["n"]] = members
         return out
 
-    def read(self) -> FileFacts:
-        imports, aliases, bound = self.read_imports()
-        top_names, top_functions, class_methods, top_classes = self.read_top_names()
-        test = None
-        if self.is_test:
-            test = self.read_test(bound, self.read_scopes(*self.calls))
-        return FileFacts(
-            rel=self.rel,
-            dotted=self.scope.module,
-            imports=imports,
-            module_aliases=aliases,
-            top_names=top_names,
-            lazy_map=self.lazy,
-            reader=self,
-            top_functions=top_functions,
-            class_methods=class_methods,
-            top_classes=top_classes,
-            test=test,
-            dispatch_branches=self.dispatch_branches() if self.rel == QUERY_DISPATCHER else [],
-            enum_members=self.enum_members() if self.rel == NODE_KIND_ENUM else {},
-        )
-
 
 @dataclass(frozen=True)
 class RootUse:
@@ -460,6 +508,19 @@ class RootUse:
     line: int
 
 
+def pending_target(value: object, chain: str, up: str) -> tuple[str | None, bool] | None:
+    """(the callee a `kind` entry is passed to, whether it sits under a query key), or None when
+    the entry is no pending kind: it is a constant, or neither passed to a call nor under a key."""
+    if chain:
+        return None
+    step = up.split(" ", 1)[0] if up else ""
+    callee = last_name(step.split(":", 2)[2]) if step.startswith("arg:") else None
+    under = step in ("dict:val:query", "dict:val:source")
+    if (callee is None and not under) or is_const(value):
+        return None
+    return callee, under
+
+
 def is_client_call(callee: str) -> bool:
     if callee.startswith("?") or "." not in callee:
         return False
@@ -467,21 +528,79 @@ def is_client_call(callee: str) -> bool:
     return method in TEST_CLIENT_METHODS and receiver.endswith("client")
 
 
-# --- call view (spike, unchanged) --------------------------------------------------------------
-@dataclass(frozen=False)
-class Reads:
-    files: set[str] = field(default_factory=set)
-    symbols: set[str] = field(default_factory=set)
+def alias_modules(scope: FileScope) -> list[str]:
+    """The module each import of a file names: `import a.b` names a.b, `from a import b` a.b."""
+    out = []
+    for _, _, _, _, target, level, name, _ in scope.record.get("imports", []):
+        if name is None:
+            out.append(target)
+            continue
+        module = absolute_import(scope.module, scope.is_package, target, level)
+        if module is not None:
+            out.append(f"{module}.{name}")
+    return out
 
-    def add(self, other: Reads) -> None:
-        self.files |= other.files
-        self.symbols |= other.symbols
+
+class ImportIndex:
+    """The `from` imports of every file by imported name, each file's rows in reverse source order
+    (the spike's walk). A row's absolute module is worked out only when the re-export closure asks
+    for its name."""
+
+    def __init__(self, facts: dict[str, FileFacts]) -> None:
+        self.by_name: dict[str, list[tuple[FileFacts, list]]] = defaultdict(list)
+        self.found: dict[tuple[str, str], list[tuple[FileFacts, str]]] = {}
+        for ff in facts.values():
+            for row in reversed(ff.reader.record.get("imports", [])):
+                if row[6] is not None:
+                    self.by_name[row[6]].append((ff, row))
+
+    def importers(self, module: str, name: str) -> list[tuple[FileFacts, str]]:
+        """Files with `from <module> import <name> [as bound]`, and the bound name, in file order."""
+        key = (module, name)
+        found = self.found.get(key)
+        if found is not None:
+            return found
+        found = self.found[key] = []
+        for ff, row in self.by_name.get(name, ()):
+            scope = ff.reader.scope
+            if absolute_import(scope.module, scope.is_package, row[4], row[5]) == module:
+                found.append((ff, row[7] or name))
+        return found
 
 
+class TestFilter:
+    """Whether a test file may name a query kind that drives another product, by its fact text:
+    the kind as a string, a tag, a callee or an imported name (a constructor), or its NodeKind
+    member as an attribute. A file it rejects has no mention the deriver turns into a drive."""
+
+    def __init__(self, queries: PackQueries, kinds: dict[str, frozenset[str]], members: dict[str, str]) -> None:
+        self.queries = queries
+        self.kinds = kinds
+        self.members = members
+        self.words: dict[str | None, tuple[Words, Words]] = {}
+
+    def words_for(self, owner: str | None) -> tuple[Words, Words]:
+        """The kinds and members whose drives reach a product other than `owner`."""
+        found = self.words.get(owner)
+        if found is None:
+            kinds = {kind for kind, products in self.kinds.items() if products - {owner}}
+            members = [member for member, kind in self.members.items() if kind in kinds]
+            found = self.words[owner] = (Words.ending(kinds), Words.attributes(members))
+        return found
+
+    def names_a_kind(self, ff: FileFacts, owner: str | None) -> bool:
+        kinds, members = self.words_for(owner)
+        scope = ff.reader.scope
+        return self.queries.may_mention(scope, KIND_TEXT, kinds) or self.queries.may_mention(
+            scope, MEMBER_TEXT, members
+        )
+
+
+# --- call view (spike) -------------------------------------------------------------------------
 class CallView:
     def __init__(self, facts: dict[str, FileFacts]) -> None:
         self.facts = facts
-        self.memo: dict[tuple[str, str, frozenset[str], bool], tuple[bool, list[str], Reads]] = {}
+        self.memo: dict[tuple[str, str, frozenset[str], bool], tuple[bool, list[str]]] = {}
         self.imports_by_bound: dict[str, dict[str, list[ImportEdge]]] = {}
 
     def imports_named(self, ff: FileFacts, name: str) -> list[ImportEdge]:
@@ -497,54 +616,47 @@ class CallView:
     def body_executes(body: Body, dispatchers: frozenset[str]) -> bool:
         return body.client or bool(body.calls & dispatchers)
 
-    def targets(self, module: str, name: str, local: bool, reads: Reads) -> list[tuple[str, Body]]:
+    def targets(self, module: str, name: str, local: bool) -> list[tuple[str, Body]]:
         found: list[tuple[str, Body]] = []
         ff = self.facts.get(module)
         if ff is None:
             return found
-        reads.files.add(ff.rel)
-        reads.symbols.add(f"{module}:<imports>")
         if local:
             for fid in ff.top_functions.get(name, []) + ff.class_methods.get(name, []):
                 found.append((module, ff.bodies[fid]))
-                reads.symbols.add(f"{module}:{fid}")
         for edge in self.imports_named(ff, name):
             target = self.facts.get(edge.module)
             if target is None:
                 continue
-            reads.files.add(target.rel)
             for fid in target.top_functions.get(edge.exported, []):
                 found.append((edge.module, target.bodies[fid]))
-                reads.symbols.add(f"{edge.module}:{fid}")
         return found
 
     def executes(
         self, module: str, name: str, patched: frozenset[str], depth: int = 0, local: bool = False
-    ) -> tuple[bool, list[str], Reads, bool]:
+    ) -> tuple[bool, list[str], bool]:
         if name in patched:
-            return False, [], Reads(), True
+            return False, [], True
         if depth >= MAX_CALL_DEPTH or module not in self.facts:
-            return False, [], Reads(), False
+            return False, [], False
         key = (module, name, patched, local)
         if key in self.memo:
-            ok, chain, reads = self.memo[key]
-            return ok, chain, reads, False
-        reads = Reads()
-        self.memo[key] = (False, [], reads)
+            ok, chain = self.memo[key]
+            return ok, chain, False
+        self.memo[key] = (False, [])
         cut = False
-        for target_module, body in self.targets(module, name, local, reads):
+        for target_module, body in self.targets(module, name, local):
             hop = f"{target_module}:{body.fid}"
             if self.body_executes(body, DISPATCH_CALLS - patched):
-                self.memo[key] = (True, [hop], reads)
-                return True, [hop], reads, cut
+                self.memo[key] = (True, [hop])
+                return True, [hop], cut
             for call in sorted(body.calls):
-                ok, chain, sub, subcut = self.executes(target_module, call, patched, depth + 1, local=True)
-                reads.add(sub)
+                ok, chain, subcut = self.executes(target_module, call, patched, depth + 1, local=True)
                 cut = cut or subcut
                 if ok:
-                    self.memo[key] = (True, [hop, *chain], reads)
-                    return True, [hop, *chain], reads, cut
-        return False, [], reads, cut
+                    self.memo[key] = (True, [hop, *chain])
+                    return True, [hop, *chain], cut
+        return False, [], cut
 
 
 @dataclass(frozen=True)
@@ -553,7 +665,6 @@ class DriveEdge:
     test_module: str
     trigger: str
     detail: str
-    reads: Reads
     site: str = MODULE_SCOPE
     line: int = 0
     execution: str = "n/a"
@@ -562,12 +673,13 @@ class DriveEdge:
 
 
 class Deriver:
-    def __init__(self, facts: dict[str, FileFacts]) -> None:
+    def __init__(self, facts: dict[str, FileFacts], queries: PackQueries) -> None:
         self.facts = facts
+        self.queries = queries
         self.by_rel = {f.rel: f for f in facts.values()}
         self.view = CallView(facts)
-        self.registry_files = {QUERY_DISPATCHER, NODE_KIND_ENUM}
-        self.via_cache: dict[tuple[str, str], frozenset[str]] = {}
+        self.imports = ImportIndex(facts)
+        self.importer_products: dict[str, set[str]] = defaultdict(set)
 
     def read_registry(self) -> None:
         enum_ff = self.by_rel[NODE_KIND_ENUM]
@@ -596,6 +708,8 @@ class Deriver:
             (location_module(product, QUERY_WIRING_LOCATION) + ".", label, product)
             for product, label in self.labels.items()
         ]
+        labelled = {kind: products & self.labels.keys() for kind, products in self.kinds.items()}
+        self.test_filter = TestFilter(self.queries, labelled, self.members)
 
     def module_exists(self, dotted: str) -> bool:
         return dotted in self.facts
@@ -611,7 +725,7 @@ class Deriver:
                 if ff.rel.startswith(prefix):
                     for name in ff.top_names:
                         seeds[(ff.dotted, name)] = label
-                if not ff.rel.startswith(facade) or ff.test is not None:
+                if not ff.rel.startswith(facade) or ff.is_test:
                     continue
                 for name, module in ff.lazy_map.items():
                     src = self.facts[module].rel if module in self.facts else ""
@@ -620,38 +734,52 @@ class Deriver:
         return seeds
 
     def grow_origins(self) -> None:
-        """Every (module, name) that re-exports a seed, through imports, with the hop it came from."""
-        importers: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
-        for ff in self.facts.values():
-            for e in ff.imports:
-                importers[(e.module, e.exported)].append((ff.dotted, e.bound))
+        """Every (module, name) that re-exports a seed, through imports. Also notes the products
+        each module imports a seed of: only those can make a `name` drive."""
         seeds = self.seeds()
         self.origins: dict[tuple[str, str], str] = dict(seeds)
-        self.parent: dict[tuple[str, str], tuple[str, str] | None] = dict.fromkeys(seeds)
         work = list(seeds)
         while work:
             export = work.pop()
             label = self.origins[export]
-            for local in importers.get(export, ()):
+            for importer, bound in self.imports.importers(*export):
+                local = (importer.dotted, bound)
                 if self.origins.get(local) != label:
                     self.origins[local] = label
-                    self.parent[local] = export
                     work.append(local)
         self.origin_modules = {m for m, _ in self.origins}
+        self.origin_products: dict[str, set[str]] = defaultdict(set)
+        for origin, label in self.origins.items():
+            product = label.split(":")[0]
+            self.origin_products[origin[0]].add(product)
+            for importer, _ in self.imports.importers(*origin):
+                self.importer_products[importer.dotted].add(product)
 
-    def via_files(self, export: tuple[str, str]) -> frozenset[str]:
-        if export in self.via_cache:
-            return self.via_cache[export]
-        files = set()
-        cur: tuple[str, str] | None = export
-        seen = set()
-        while cur is not None and cur not in seen:
-            seen.add(cur)
-            if cur[0] in self.facts:
-                files.add(self.facts[cur[0]].rel)
-            cur = self.parent.get(cur)
-        self.via_cache[export] = frozenset(files)
-        return self.via_cache[export]
+    def may_drive(self, ff: FileFacts) -> bool:
+        """False only for a test file that can make no drive. Each test is a part of a drive's
+        own condition: another product's wiring name imported, a module of another product's
+        wiring or re-exports aliased, a `kind` entry that may count, or a kind named."""
+        owner = product_of_path(ff.rel)
+        if self.importer_products.get(ff.dotted, set()) - {owner}:
+            return True
+        if self.may_count_kind(ff) or self.test_filter.names_a_kind(ff, owner):
+            return True
+        prefixes = tuple(prefix for prefix, _, product in self.prefixes if product != owner)
+        for module in alias_modules(ff.reader.scope):
+            if module.startswith(prefixes) or self.origin_products.get(module, set()) - {owner}:
+                return True
+        return False
+
+    def may_count_kind(self, ff: FileFacts) -> bool:
+        """A `kind` entry that is a pending kind, passed to a dispatcher or under a query key."""
+        if not self.queries.has_rows(ff.reader.scope, "watched"):
+            return False
+        dispatchers = frozenset({e.bound for e in ff.imports if e.exported in DISPATCH_CALLS}) | DISPATCH_CALLS
+        for *_, value, chain, up in ff.reader.record.get("watched", []):
+            target = pending_target(value, chain, up)
+            if target is not None and (target[1] or target[0] is None or target[0] in dispatchers):
+                return True
+        return False
 
     def kind_of(self, m: Mention, constructors: dict[str, str], enum_bases: frozenset[str]) -> str | None:
         if m.shape in ("const", "tag"):
@@ -667,43 +795,37 @@ class Deriver:
     def derive_file(self, ff: FileFacts, test: TestFacts) -> list[DriveEdge]:
         edges: list[DriveEdge] = []
         owner = product_of_path(ff.rel)
-        base_reads = {ff.rel}
         for _alias, module in ff.module_aliases:
             for prefix, label, product in self.prefixes:
                 if module.startswith(prefix) and self.module_exists(module) and owner != product:
-                    reads = Reads(base_reads | {self.facts[module].rel}, {f"{module}:<exists>"})
-                    edges.append(DriveEdge(label, ff.dotted, "module-import", module.rsplit(".", 1)[-1], reads))
-        bound: dict[str, tuple[str, tuple[str, str]]] = {}
+                    edges.append(DriveEdge(label, ff.dotted, "module-import", module.rsplit(".", 1)[-1]))
+        bound: dict[str, str] = {}
         for e in ff.imports:
             label = self.origins.get((e.module, e.exported))
             if label is not None:
-                bound[e.bound] = (label, (e.module, e.exported))
-        for name, (label, export) in bound.items():
+                bound[e.bound] = label
+        for name, label in bound.items():
             if owner == label.split(":")[0] or not test.name_uses.get(name):
                 continue
-            reads = Reads(base_reads | self.via_files(export), {f"{export[0]}:{export[1]}"})
-            edges.extend(DriveEdge(label, ff.dotted, "name", name, reads) for _ in range(test.name_uses[name]))
+            edges.extend(DriveEdge(label, ff.dotted, "name", name) for _ in range(test.name_uses[name]))
         aliases = {a: m for a, m in ff.module_aliases if m in self.origin_modules}
         for (base, attr), n in test.attr_uses.items():
             module = aliases.get(base)
             label = self.origins.get((module, attr)) if module else None
             if module is None or label is None or ":" not in label or owner == label.split(":")[0]:
                 continue
-            reads = Reads(base_reads | self.via_files((module, attr)), {f"{module}:{attr}"})
-            edges.extend(DriveEdge(label, ff.dotted, "name", attr, reads) for _ in range(n))
+            edges.extend(DriveEdge(label, ff.dotted, "name", attr) for _ in range(n))
         return edges + self.kind_edges(ff, test, owner)
 
     def executions(
         self, ff: FileFacts, test: TestFacts, dispatchers: frozenset[str], fid: str | None, cls: str | None
-    ) -> tuple[str, list[str], bool, Reads]:
-        reads = Reads({ff.rel}, set())
+    ) -> tuple[str, list[str], bool]:
         body = ff.bodies.get(fid) if fid else None
         scope_key = cls if cls is not None else MODULE_SCOPE
         scope = test.scopes[scope_key]
         if body is None or not body.name.startswith("test"):
-            reads.symbols.add(f"{ff.dotted}:{scope_key}")
             ok = scope.client or bool(scope.calls & dispatchers)
-            return ("direct" if ok else "none"), [], False, reads
+            return ("direct" if ok else "none"), [], False
         helpers: dict[str, list[str]] = {n: [fids[-1]] for n, fids in ff.top_functions.items()}
         if cls is not None:
             for n, fids in self.class_helpers(ff, test, cls).items():
@@ -717,9 +839,8 @@ class Deriver:
                 continue
             seen.add(cur)
             b = ff.bodies[cur]
-            reads.symbols.add(f"{ff.dotted}:{cur}")
             if b.client or b.calls & dispatchers:
-                return ("direct" if not chain else "via-helper"), chain, False, reads
+                return ("direct" if not chain else "via-helper"), chain, False
             for name in sorted(b.calls):
                 if name in helpers:
                     pending.extend((h, [*chain, f"{ff.dotted}:{h}"]) for h in helpers[name])
@@ -728,12 +849,11 @@ class Deriver:
         patched = frozenset(body.patches | scope.rest_patches)
         cut = bool(outward & patched)
         for name in sorted(outward - patched):
-            ok, chain, sub, subcut = self.view.executes(ff.dotted, name, patched)
-            reads.add(sub)
+            ok, chain, subcut = self.view.executes(ff.dotted, name, patched)
             cut = cut or subcut
             if ok:
-                return "via-helper", chain, cut, reads
-        return "none", [], cut, reads
+                return "via-helper", chain, cut
+        return "none", [], cut
 
     @staticmethod
     def class_helpers(ff: FileFacts, test: TestFacts, cls: str) -> dict[str, list[str]]:
@@ -755,7 +875,7 @@ class Deriver:
         enum_bases = frozenset({e.bound for e in ff.imports if e.exported in self.enums}) | self.enums
         dispatchers = frozenset({e.bound for e in ff.imports if e.exported in DISPATCH_CALLS}) | DISPATCH_CALLS
         edges: list[DriveEdge] = []
-        cache: dict[tuple[str | None, str | None], tuple[str, list[str], bool, Reads]] = {}
+        cache: dict[tuple[str | None, str | None], tuple[str, list[str], bool]] = {}
         resolved_fids: set[str | None] = set()
         for m in test.mentions:
             kind = self.kind_of(m, constructors, enum_bases)
@@ -765,8 +885,7 @@ class Deriver:
             key = (m.fid, m.cls)
             if key not in cache:
                 cache[key] = self.executions(ff, test, dispatchers, m.fid, m.cls)
-            execution, chain, patched, reads = cache[key]
-            reads = Reads(reads.files | self.registry_files, reads.symbols | {"<registry>"})
+            execution, chain, patched = cache[key]
             for product in sorted(self.kinds[kind]):
                 if product not in self.labels or owner == product:
                     continue
@@ -776,7 +895,6 @@ class Deriver:
                         ff.dotted,
                         "query-kind",
                         kind,
-                        reads,
                         site=m.fid or (m.cls or MODULE_SCOPE),
                         line=m.line,
                         execution=execution,
@@ -785,7 +903,6 @@ class Deriver:
                     )
                 )
         unresolved = 0
-        ureads = Reads({ff.rel} | self.registry_files, {"<registry>"})
         for p in test.pending:
             if p.dispatch_callee is not None and p.dispatch_callee not in dispatchers and not p.under_query_key:
                 continue
@@ -796,33 +913,31 @@ class Deriver:
                 continue
             if p.fid in resolved_fids:
                 continue
-            execution, _, _, reads = self.executions(ff, test, dispatchers, p.fid, p.cls)
-            ureads.add(reads)
+            execution, _, _ = self.executions(ff, test, dispatchers, p.fid, p.cls)
             unresolved += execution != "none"
         for product in self.query_products if unresolved else ():
             if owner != product:
                 drive = DriveEdge(
-                    self.labels[product], ff.dotted, "unresolved-kind", "unresolved-kind", ureads, execution="direct"
+                    self.labels[product], ff.dotted, "unresolved-kind", "unresolved-kind", execution="direct"
                 )
                 edges.extend([drive] * unresolved)
         return edges
 
 
 class DrivesProducer:
-    """Runs the deriver over every test file and turns each drive into an edge."""
+    """Runs the deriver over the test files that may drive a wiring location, and turns each
+    drive into an edge."""
 
-    def __init__(self, build: CoreBuild) -> None:
+    def __init__(self, build: CoreBuild, queries: PackQueries) -> None:
         self.build = build
+        self.queries = queries
 
     def facts(self) -> dict[str, FileFacts]:
         facts: dict[str, FileFacts] = {}
         for scope in self.build.files:
             if scope.record.get("status") != "ok" or not self.build.first_party.contains(scope.module):
                 continue
-            table = self.build.tables.get(scope.module) if scope.path.startswith("products/") else None
-            lazy = table.lazy if table is not None and self.build.index.path_of.get(scope.module) == scope.path else {}
-            reader = FactReader(scope, self.build.bodies(scope.record), lazy)
-            facts[scope.module] = reader.read()
+            facts[scope.module] = FileFacts(FactReader(scope, self.build))
         return facts
 
     @staticmethod
@@ -849,11 +964,14 @@ class DrivesProducer:
 
     def produce(self) -> list[Edge]:
         facts = self.facts()
-        deriver = Deriver(facts)
+        deriver = Deriver(facts, self.queries)
         deriver.read_registry()
         deriver.grow_origins()
         out: list[Edge] = []
         for ff in facts.values():
-            if ff.test is not None:
-                out.extend(self.edge(drive, ff.rel) for drive in deriver.derive_file(ff, ff.test))
+            if not ff.is_test or not deriver.may_drive(ff):
+                continue
+            test = ff.test
+            assert test is not None
+            out.extend(self.edge(drive, ff.rel) for drive in deriver.derive_file(ff, test))
         return out

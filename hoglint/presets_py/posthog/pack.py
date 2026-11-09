@@ -11,6 +11,7 @@ from hoglint.core.build import CoreBuild
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.facts import FactNeeds
 from hoglint.model import Edge, Graph
+from hoglint.native.queries import PackQueries
 from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
 from hoglint.presets_py.posthog.facade import FACADE_PRODUCER, FacadeFacts
 
@@ -42,7 +43,7 @@ class PosthogPack:
     @staticmethod
     def run(build: CoreBuild, graph: Graph) -> None:
         def drives() -> list[Edge]:
-            return DrivesProducer(build).produce()
+            return DrivesProducer(build, PackQueries.of(build, graph)).produce()
 
         def facade() -> list[Edge]:
             return FacadeFacts(build).produce()
