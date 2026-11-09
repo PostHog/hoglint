@@ -15,7 +15,8 @@ pub const TRY: u32 = 16;
 pub const IF: u32 = 32;
 pub const BLOCK: u32 = 64;
 
-const WATCHED_CALLEES: [&str; 5] = ["get_model", "patch", "object", "setdefault", "append"];
+const WATCHED_CALLEES: [&str; 6] = ["get_model", "patch", "object", "setdefault", "append", "connect"];
+const WATCHED_PREFIXES: [&str; 1] = ["register_"];
 /// Extra callee names from `--watch-callees`, set once at startup.
 static EXTRA_WATCHED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
@@ -24,7 +25,9 @@ pub fn set_extra_watched(names: Vec<String>) {
 }
 
 fn is_watched(last: &str) -> bool {
-    WATCHED_CALLEES.contains(&last) || EXTRA_WATCHED.get().is_some_and(|extra| extra.iter().any(|n| n == last))
+    WATCHED_CALLEES.contains(&last)
+        || WATCHED_PREFIXES.iter().any(|prefix| last.starts_with(prefix))
+        || EXTRA_WATCHED.get().is_some_and(|extra| extra.iter().any(|n| n == last))
 }
 const WRAPPER_STEPS: [&str; 4] = ["await", "ifexp:body", "ifexp:else", "star"];
 
