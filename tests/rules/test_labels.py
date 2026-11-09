@@ -6,7 +6,7 @@ import pytest
 
 from hoglint.adapters.codeowners import CodeownersFile
 from hoglint.config import ConfigError
-from hoglint.labels import Labeler, render
+from hoglint.labels import CandidateCache, Labeler, render
 from hoglint.model import Resolution
 from hoglint.rules.base import RuleContext, read_endpoint
 from hoglint.rules.engine import Engine
@@ -185,3 +185,30 @@ def test_an_edge_endpoint_reads_module_attributes_the_way_entity_selectors_do(la
         assert read_endpoint(ctx, endpoint, name, None, "src") == labeler.entity_value(module, None, name), name
     if module == "products.billing.backend.apps":
         assert labeler.entity_value(module, None, "lifecycle").data == "setup"
+
+
+PACKAGE_ASSIGN = """
+schema = 1
+
+[fields]
+package = { type = "id" }
+
+[[assign]]
+match = "products/{product}/**"
+set = { package = "{product}" }
+"""
+
+
+def test_labelers_sharing_a_cache_keep_the_sources_of_their_own_config(tmp_path: Path) -> None:
+    inline = config_from(tmp_path / "inline", PACKAGE_ASSIGN)
+    split = config_from(tmp_path / "split", 'schema = 1\nextends = ["base.toml"]\n', {"base.toml": PACKAGE_ASSIGN})
+    graph = GraphBuilder().module("products.billing.logic").graph
+    cache = CandidateCache()
+
+    sources = [
+        Labeler(config, graph, candidates=cache).field_value("products.billing.logic", None, "package")[1]
+        for config in (inline, split)
+    ]
+
+    assert inline.policy_hash == split.policy_hash
+    assert ["base.toml" in source for source in sources] == [False, True]

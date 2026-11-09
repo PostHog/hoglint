@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec, RegistrySpec
+from hoglint.config.schema import canonical
 from hoglint.globs import fill, glob_match
 from hoglint.index import GraphIndex, Memo
 from hoglint.model import Graph
@@ -46,6 +47,19 @@ class PathCandidates:
 
     fields: dict[str, list[Candidate]]
     conflicts: tuple[str, ...]
+
+
+class CandidateCache:
+    """Path candidates per config, shared by the labelers of one runner (compare labels base and
+    head code under one policy). Keyed by the policy and by where each key came from: two configs
+    with one policy hash can still name different source files."""
+
+    def __init__(self) -> None:
+        self.tables: dict[tuple[str, str], dict[str, PathCandidates]] = {}
+
+    def table(self, config: Config) -> dict[str, PathCandidates]:
+        key = (config.policy_hash, canonical(config.provenance))
+        return self.tables.setdefault(key, {})
 
 
 # ── Providers ─────────────────────────────────────────────────────
@@ -103,16 +117,20 @@ class KindMatch:
 class Labeler:
     """Computes labels on demand and caches them. `conflicts` holds config errors found while labelling.
 
-    Assignment and zone candidates depend only on the policy and the path, so they are cached
-    across labelers in one process (compare labels base and head code under one policy).
+    Assignment and zone candidates depend only on the config and the path; `candidates` shares
+    them with other labelers.
     """
 
-    PATH_CANDIDATES: dict[tuple[str, str], PathCandidates] = {}
-
     def __init__(
-        self, config: Config, graph: Graph, repo_root: Path | None = None, index: GraphIndex | None = None
+        self,
+        config: Config,
+        graph: Graph,
+        repo_root: Path | None = None,
+        index: GraphIndex | None = None,
+        candidates: CandidateCache | None = None,
     ) -> None:
         self.config = config
+        self.path_candidate_table = (candidates or CandidateCache()).table(config)
         self.graph = graph
         self.index = index or GraphIndex(graph)
         self.facts = self.index.facts
@@ -190,8 +208,7 @@ class Labeler:
         return None, ""
 
     def path_candidates(self, path: str) -> PathCandidates:
-        key = (self.config.policy_hash, path)
-        cached = self.PATH_CANDIDATES.get(key)
+        cached = self.path_candidate_table.get(path)
         if cached is not None:
             return cached
         collected: dict[str, list[Candidate]] = {}
@@ -204,7 +221,7 @@ class Labeler:
             conflicts = (conflict,) if conflict else ()
             for name in self.zone_fields if zone is not None else ():
                 collected.setdefault(name, []).append(zone)
-        cached = self.PATH_CANDIDATES[key] = PathCandidates(collected, conflicts)
+        cached = self.path_candidate_table[path] = PathCandidates(collected, conflicts)
         return cached
 
     def resolve_candidates(self, entity: str, name: str, candidates: list[Candidate]) -> Label | None:

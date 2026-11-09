@@ -23,6 +23,7 @@ from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.schema import as_tuple
 from hoglint.index import GraphIndex
+from hoglint.labels import CandidateCache
 from hoglint.ledger.file import LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.scan import ScanSummary
@@ -115,12 +116,14 @@ class Run:
 
 
 class Runner:
-    """Runs policy over code. One GraphIndex per graph serves every run that reads that graph."""
+    """Runs policy over code. One GraphIndex per graph serves every run that reads that graph, and
+    one CandidateCache every run."""
 
     def __init__(self, source: GraphSource, today: Any = None) -> None:
         self.source = source
         self.today = today
         self.indexes: dict[int, tuple[Graph, GraphIndex]] = {}
+        self.candidates = CandidateCache()
 
     def index_of(self, graph: Graph) -> GraphIndex:
         held = self.indexes.get(id(graph))
@@ -131,7 +134,8 @@ class Runner:
     def evaluate(self, config: Config, code_root: Path) -> tuple[Graph, RunResult]:
         """One policy over one code root, with no ledger and no exceptions."""
         graph = self.source.build(code_root, config)
-        return graph, Engine(config, graph, code_root, self.today, self.index_of(graph)).evaluate()
+        engine = Engine(config, graph, code_root, self.today, self.index_of(graph), self.candidates)
+        return graph, engine.evaluate()
 
     def run(
         self, policy_root: Path, code_root: Path | None = None, staged: bool = False, rewrite_ledger: bool = False
@@ -144,7 +148,7 @@ class Runner:
         graph = self.source.build(code_root, config, staged)
         ledger = LedgerFile.read(policy_root / config.ledger.file)
         exceptions = ExceptionsFile.read(policy_root / config.ledger.exceptions, config)
-        engine = Engine(config, graph, code_root, self.today, self.index_of(graph))
+        engine = Engine(config, graph, code_root, self.today, self.index_of(graph), self.candidates)
         result = engine.evaluate(ledger, exceptions, rewrite_ledger)
         return Run(code_root, config, graph, result, result.ledger or ledger, exceptions)
 
