@@ -44,7 +44,7 @@ DISPATCH_CALLS = frozenset(
 )
 TEST_CLIENT_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
 PATCH_CALLS = frozenset({"patch", "object"})
-MAX_CALL_DEPTH = 8
+MAX_CALL_DEPTH = 16
 UNKNOWN_EXECUTION = "unknown"
 CALL_DEPTH_REASON = "call-depth-limit"
 DRIVES_PRODUCER = "posthog.drives@1"

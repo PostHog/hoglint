@@ -9,7 +9,8 @@ from hoglint.native.queries import PackQueries
 from hoglint.presets_py.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
 
 DISPATCH = sorted(DISPATCH_CALLS)[0]
-HELPERS = MAX_CALL_DEPTH + 1  # h1 -> ... -> h9 -> dispatcher: one hop past the limit from h1
+HELPERS = MAX_CALL_DEPTH + 1  # h1 -> ... -> h<last> -> dispatcher: one hop past the limit from h1
+MIDDLE = 5
 
 
 def callee_row(scope: int, callee: str, line: int) -> list:
@@ -47,7 +48,7 @@ def repo() -> Repo:
             "products/charts/backend/hogql_queries/trends.py": {"defs": [class_def("TrendsRunner", [], 1)]},
             "common/helpers.py": {"defs": helpers, "callees": calls},
             "posthog/test/test_from_the_start.py": calling_test("h1"),
-            "posthog/test/test_from_the_middle.py": calling_test("h5"),
+            "posthog/test/test_from_the_middle.py": calling_test(f"h{MIDDLE}"),
         }
     )
 
@@ -59,6 +60,6 @@ def test_a_walk_the_depth_limit_stops_is_unknown_whichever_test_walks_first(shuf
     edges = DrivesProducer(build, PackQueries.of(build, Graph()), shuffle_seed).produce()
 
     assert [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges] == [
-        ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, 4),
+        ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, HELPERS - MIDDLE),
         ("posthog.test.test_from_the_start", "unknown", Resolution.UNRESOLVED, 0),
     ]
