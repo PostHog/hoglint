@@ -18,7 +18,7 @@
 //! - no read transaction is held while files are extracted.
 
 use crate::factdb::{DbError, FactDb, NewEntry, Row, move_aside};
-use hoglint_facts::link::facts::{FactSet, FileFacts, decode_record};
+use hoglint_facts::link::facts::{FactSet, FileFacts, RecordText, decode_record};
 use hoglint_facts::link::intern::{Interner, Sid};
 use hoglint_facts::link::store::{decode_body, encode_facts, facts_strings};
 use hoglint_facts::{
@@ -30,6 +30,7 @@ use sha2::Sha256;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// One source file of a snapshot: its path, blob oid, and whether its bytes come from the
@@ -395,101 +396,72 @@ struct Again {
     lite: ExtractConfig,
 }
 
-/// The JSON texts of `stored` that the database has, by natural key; None for one it lacks.
-fn read_stored(db: &FactDb, stored: &[&Stored]) -> Result<Vec<Option<Vec<u8>>>, DbError> {
-    db.begin_read()?;
-    let mut out = Vec::with_capacity(stored.len());
-    for record in stored {
-        let json = db.read_json(&record.config, &record.oid)?;
-        out.push(json.filter(|json| json.len() == record.json_len));
-    }
-    db.end_read()?;
-    Ok(out)
-}
-
-/// The record JSON of files whose entries went away, extracted again from the same bytes.
-fn extract_again(again: &Again, lost: &[&Stored]) -> Result<Vec<String>, String> {
-    let full = Profile::new(&again.full);
-    let lite = Profile::new(&again.lite);
-    let oids: Vec<&str> = lost
-        .iter()
-        .filter_map(|record| match &record.source {
-            Source::Git(oid) => Some(oid.as_str()),
-            _ => None,
-        })
-        .collect();
-    let mut from_git = cat_blobs(&again.repo, &oids)?.into_iter();
-    let mut out = Vec::with_capacity(lost.len());
-    for record in lost {
-        let raw = match &record.source {
-            Source::Git(_) => from_git.next().flatten(),
-            Source::Disk(file) | Source::External(file) => std::fs::read(file).ok(),
-        };
-        if let Source::Disk(_) = record.source
-            && raw
-                .as_deref()
-                .is_some_and(|raw| git_blob_id(raw, &record.oid) != record.oid)
-        {
-            return Err(format!("{} changed during the run; run again", record.path));
-        }
-        let profile = if record.lite { &lite } else { &full };
-        let json = profile.record(raw.as_deref())?;
-        if json.len() != record.json_len {
-            return Err(format!(
-                "the facts of {} changed during the run; run again",
-                record.path
-            ));
-        }
-        out.push(json);
-    }
-    Ok(out)
-}
-
-/// The fact text: every record's JSON in fact order, one per line. Stored records are read by
-/// natural key in one transaction of a new connection, since the text is read after the load
-/// returns; a record the database no longer has is extracted again.
-fn read_text(
-    db: Option<&Path>,
-    records: Vec<Json>,
-    len: usize,
-    again: Again,
-) -> Result<Vec<u8>, String> {
-    let stored: Vec<&Stored> = records
-        .iter()
-        .filter_map(|record| match record {
-            Json::Stored(stored) => Some(stored),
-            Json::Fresh(_) => None,
-        })
-        .collect();
-    let mut found: Vec<Option<Vec<u8>>> = vec![None; stored.len()];
-    if let Some(path) = db
-        && let Some(db) = open_cache(path)
+/// The record JSON of a file whose entry went away, extracted again from the same bytes.
+fn extract_again(again: &Again, record: &Stored) -> Result<String, String> {
+    let raw = match &record.source {
+        Source::Git(oid) => cat_blobs(&again.repo, &[oid.as_str()])?.pop().flatten(),
+        Source::Disk(file) | Source::External(file) => std::fs::read(file).ok(),
+    };
+    if let Source::Disk(_) = record.source
+        && raw
+            .as_deref()
+            .is_some_and(|raw| git_blob_id(raw, &record.oid) != record.oid)
     {
-        match read_stored(&db, &stored) {
-            Ok(read) => found = read,
-            Err(error) => give_up(path, &error),
+        return Err(format!("{} changed during the run; run again", record.path));
+    }
+    let config = if record.lite {
+        &again.lite
+    } else {
+        &again.full
+    };
+    let json = Profile::new(config).record(raw.as_deref())?;
+    if json.len() != record.json_len {
+        return Err(format!(
+            "the facts of {} changed during the run; run again",
+            record.path
+        ));
+    }
+    Ok(json)
+}
+
+/// The records' JSON text, one record at a time (`RecordText`): a fresh record from memory, a
+/// stored one from the database by natural key over one connection opened on first use, and
+/// one whose entry went away extracted again.
+struct StoredRecords {
+    db_path: Option<PathBuf>,
+    db: Mutex<Option<FactDb>>,
+    records: Vec<Json>,
+    again: Again,
+}
+
+impl StoredRecords {
+    fn read(&self, stored: &Stored) -> Option<Vec<u8>> {
+        let path = self.db_path.as_deref()?;
+        let mut db = self.db.lock().ok()?;
+        if db.is_none() {
+            *db = open_cache(path);
+        }
+        match db.as_ref()?.read_json(&stored.config, &stored.oid) {
+            Ok(json) => json.filter(|json| json.len() == stored.json_len),
+            Err(error) => {
+                give_up(path, &error);
+                *db = None;
+                None
+            }
         }
     }
-    let lost: Vec<&Stored> = stored
-        .iter()
-        .zip(&found)
-        .filter(|(_, json)| json.is_none())
-        .map(|(record, _)| *record)
-        .collect();
-    let mut made = extract_again(&again, &lost)?.into_iter();
-    let mut found = found.into_iter();
-    let mut text = Vec::with_capacity(len);
-    for record in &records {
-        match record {
-            Json::Fresh(json) => text.extend_from_slice(json.as_bytes()),
-            Json::Stored(_) => match found.next().flatten() {
-                Some(json) => text.extend_from_slice(&json),
-                None => text.extend_from_slice(made.next().unwrap_or_default().as_bytes()),
+}
+
+impl RecordText for StoredRecords {
+    fn record(&self, file: usize) -> Result<Vec<u8>, String> {
+        match &self.records[file] {
+            Json::Fresh(json) => Ok(json.as_bytes().to_vec()),
+            Json::Stored(stored) => match self.read(stored) {
+                Some(json) => Ok(json),
+                None => extract_again(&self.again, stored).map(String::into_bytes),
             },
         }
-        text.push(b'\n');
     }
-    Ok(text)
 }
 
 /// Turns (stage, seconds since start) marks into (stage, seconds the stage took).
@@ -611,13 +583,16 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
             _ => Json::Fresh(String::new()),
         })
         .collect();
-    let path = request.db.clone();
-    let again = Again {
-        repo: request.repo.clone(),
-        full: request.full.clone(),
-        lite: request.lite.clone(),
-    };
-    let text = Box::new(move || read_text(path.as_deref(), records, start, again));
+    let text = Box::new(StoredRecords {
+        db_path: request.db.clone(),
+        db: Mutex::new(None),
+        records,
+        again: Again {
+            repo: request.repo.clone(),
+            full: request.full.clone(),
+            lite: request.lite.clone(),
+        },
+    });
     let stats = BlobStats {
         hits: slots.len() - extracted,
         extracted,

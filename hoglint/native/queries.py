@@ -1,73 +1,52 @@
-"""Candidate queries packs ask of one snapshot: rows by spelling or mention, core edges by origin
-or spelling.
+"""Candidate queries packs ask of one snapshot: rows by spelling or mention, edges by origin or
+spelling, attribute uses by target, and imports by name.
 
 A pack asks here for candidates, then applies its own rule to each one. Every query returns a
 superset of what that rule can accept, so pack output never depends on the engine:
 - the Python engine filters its decoded records and its graph;
-- the native engine asks the link's edge indexes, and runs a bytes prefilter over each file's
-  fact text before any of its rows decode.
-
-The link has no row index yet. So row queries decode the files the prefilter passes and filter
-their rows here; a native row query by spelling replaces that when it exists.
+- the native engine asks the link, which answers from its own rows and edge indexes, so no
+  record decodes to find candidates (D23).
 """
 
 from __future__ import annotations
 
-import re
 import hashlib
 from array import array
+from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 
+import orjson
+
 from hoglint.core.build import CoreBuild
+from hoglint.core.producers import chain_tokens, leading_attrs
 from hoglint.core.records import last_name
 from hoglint.core.sites import FileScope
+from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Graph
-from hoglint.plugins import EdgeBatch
+from hoglint.plugins import AttributeUse, EdgeBatch
 
 # Where the callee text sits in a row of each call kind.
 CALLEE_FIELD = {"calls": 5, "callees": 2}
-EMPTY_LIST = 2  # the length of "[]": a fact kind with no rows
 
 
-def common_substring(texts: list[str]) -> str:
-    """The longest text that every one of `texts` contains."""
-    shortest = min(texts, key=len)
-    for size in range(len(shortest), 0, -1):
-        for start in range(len(shortest) - size + 1):
-            part = shortest[start : start + size]
-            if all(part in text for text in texts):
-                return part
-    return ""
-
-
+@dataclass(frozen=True, slots=True)
 class Words:
-    """Texts to look for in fact JSON, spelled as they appear there.
+    """Texts to look for in a file's facts: strings that end in one of `suffixes`, or hold one of
+    `parts`. `ending(names)` finds callees, string values and imported names that end in a name
+    (`a.b.name`, `name`); `attributes(names)` finds `.name` inside a chain."""
 
-    `ending(names)` finds strings that end in a name (`"a.b.name"`, `"name"`): callees, string
-    values, imported names. `attributes(names)` finds `.name` inside a chain. The test for the
-    text all of them share runs first, because it is a single fast search."""
-
-    def __init__(self, texts: Iterable[str]) -> None:
-        spelled = sorted(set(texts))
-        self.pattern = re.compile("|".join(map(re.escape, spelled)).encode()) if spelled else None
-        common = common_substring(spelled) if spelled else ""
-        self.common = re.compile(re.escape(common).encode()) if common else None
+    suffixes: tuple[str, ...] = ()
+    parts: tuple[str, ...] = ()
 
     @classmethod
     def ending(cls, names: Iterable[str]) -> Words:
-        return cls(f'{name}"' for name in names)
+        return cls(suffixes=tuple(sorted(set(names))))
 
     @classmethod
     def attributes(cls, names: Iterable[str]) -> Words:
-        return cls(f".{name}" for name in names)
-
-    def found_in(self, text: Any) -> bool:
-        if self.pattern is None:
-            return False
-        if self.common is not None and self.common.search(text) is None:
-            return False
-        return self.pattern.search(text) is not None
+        return cls(parts=tuple(sorted({f".{name}" for name in names})))
 
 
 ATTR_COLUMN = "attr:"
@@ -102,12 +81,33 @@ def entities_named(qualified: str) -> list[EntityId]:
     return [EntityId(LANGUAGE_PYTHON, ".".join(parts[:cut]), ".".join(parts[cut:])) for cut in range(1, len(parts))]
 
 
+def first_party_roots(scope: FileScope, roots: set[str], first_party: Any) -> set[str]:
+    """Those of `roots` a first-party import binds anywhere in the file. A name that only
+    third-party imports bind cannot lead into first-party code."""
+    out: set[str] = set()
+    for _, _, _, _, target, level, name, asname in scope.record.get("imports", ()):
+        if name is None:
+            bound = asname or target.split(".")[0]
+            if bound in roots and first_party.contains(target):
+                out.add(bound)
+            continue
+        bound = asname or name
+        if bound not in roots or name == "*":
+            continue
+        source = absolute_import(scope.module, scope.is_package, target, level)
+        if source is not None and first_party.contains(source):
+            out.add(bound)
+    return out
+
+
 class PackQueries:
     """The Python engine's answers, from its decoded records and its graph."""
 
     def __init__(self, build: CoreBuild, graph: Graph) -> None:
         self.build = build
         self.graph = graph
+        # imported name -> (file, row index, file scope, row) of the rows that import it
+        self.imports_by_name: dict[str, list[tuple[int, int, FileScope, list]]] | None = None
 
     @staticmethod
     def of(build: CoreBuild, graph: Graph) -> PackQueries:
@@ -126,14 +126,48 @@ class PackQueries:
     ) -> Iterator[tuple[FileScope, list[list]]]:
         """Rows of a call kind (`calls`, `callees`) whose callee's last dotted name is one of
         `names`, resolved or not, by file in order. Files with no such row are left out."""
-        words = Words.ending(names)
         position = CALLEE_FIELD[kind]
         for scope in scopes:
-            if not self.may_mention(scope, (kind,), words):
-                continue
             rows = [row for row in scope.record.get(kind, ()) if last_name(row[position]) in names]
             if rows:
                 yield scope, rows
+
+    def uses_to(
+        self, scopes: Iterable[FileScope], targets: Collection[EntityId]
+    ) -> Iterator[tuple[FileScope, list[AttributeUse]]]:
+        """`import a.b` then `a.b.Model.objects`: the `uses` rows with attributes whose root a
+        first-party import binds, and whose chain resolves to a class among `targets` with at
+        least one attribute resolved past the root. By file in order; files with none are left out."""
+        context = self.build.context
+        for scope in scopes:
+            rows = [row for row in scope.record.get("uses", ()) if row[3]]
+            if not rows:
+                continue
+            roots = first_party_roots(scope, {row[2] for row in rows}, self.build.first_party)
+            found: list[AttributeUse] = []
+            for at_scope, _, root, attrs, count, line, column in rows:
+                if root not in roots:
+                    continue
+                names = leading_attrs(chain_tokens(attrs))
+                lookup, rest = context.chain_lookup(scope, ".".join([root, *names]), at_scope, line)
+                hit = lookup.hit
+                if hit is None or hit.kind != "class" or len(rest) == len(names) or hit.origin not in targets:
+                    continue
+                found.append(AttributeUse(at_scope, line, column, count, lookup))
+            if found:
+                yield scope, found
+
+    def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
+        """`from x import name` rows of the analyzed files that import one of `names`, by file in
+        order, then row order: [scope, line, column, flags, module, level, name, asname]."""
+        if self.imports_by_name is None:
+            self.imports_by_name = defaultdict(list)
+            for file, scope in enumerate(self.build.files):
+                for at, row in enumerate(scope.record.get("imports", ())):
+                    if row[6] is not None:
+                        self.imports_by_name[row[6]].append((file, at, scope, row))
+        found = sorted(entry for name in set(names) for entry in self.imports_by_name.get(name, ()))
+        return [(scope, row) for _, _, scope, row in found]
 
     def edges_to(self, kind: str, targets: Collection[EntityId]) -> list[Edge]:
         """Edges of `kind` whose target is one of `targets` (by resolved origin), in graph order."""
@@ -154,35 +188,73 @@ class PackQueries:
 
 
 class NativePackQueries(PackQueries):
-    """The native engine's answers: edge queries go to the link, and row queries read the fact
-    text of a file before they decode any of it."""
+    """The native engine's answers, from the link's rows and edge indexes."""
 
     def __init__(self, build: CoreBuild, graph: Graph, link: Any) -> None:
         super().__init__(build, graph)
         self.link = link
+        self.paths: list[str] = link.paths()
+        self.keys: list[str | None] | None = None
 
-    @staticmethod
-    def text(scope: FileScope, kind: str) -> Any:
-        record: Any = scope.record
-        return record.texts.take(record.file, kind)
+    def scope_at(self, file: int) -> FileScope:
+        scope_of: Any = self.build.scope_of
+        return scope_of[self.paths[file]]
 
     def may_mention(self, scope: FileScope, kinds: Iterable[str], words: Words) -> bool:
-        for kind in kinds:
-            text = self.text(scope, kind)
-            if text is not None and words.found_in(text):
-                return True
-        return False
+        record: Any = scope.record
+        return self.link.mentions(record.file, list(kinds), list(words.suffixes), list(words.parts))
 
     def has_rows(self, scope: FileScope, kind: str) -> bool:
-        text = self.text(scope, kind)
-        return text is not None and len(text) > EMPTY_LIST
+        record: Any = scope.record
+        return self.link.has_rows(record.file, kind)
+
+    def calls_named(
+        self, scopes: Iterable[FileScope], kind: str, names: Collection[str]
+    ) -> Iterator[tuple[FileScope, list[list]]]:
+        by_file: dict[int, list[list]] = defaultdict(list)
+        for file, row in self.link.rows_named(kind, sorted(names)):
+            by_file[file].append(orjson.loads(row))
+        for scope in scopes:
+            record: Any = scope.record
+            rows = by_file.get(record.file)
+            if rows:
+                yield scope, rows
+
+    def uses_to(
+        self, scopes: Iterable[FileScope], targets: Collection[EntityId]
+    ) -> Iterator[tuple[FileScope, list[AttributeUse]]]:
+        context: Any = self.build.context
+        files = self.build.files
+        by_scope: dict[str, list[AttributeUse]] = defaultdict(list)
+        for at, at_scope, line, column, count, found in self.link.uses_to([(t.module, t.symbol) for t in targets]):
+            by_scope[files[at].path].append(AttributeUse(at_scope, line, column, count, context.lookup(found)))
+        for scope in scopes:
+            uses = by_scope.get(scope.path)
+            if uses:
+                yield scope, uses
+
+    def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
+        return [(self.scope_at(file), row) for file, row in self.link.import_rows_named(sorted(set(names)))]
 
     def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
-        """The facts are the extractor's text of the blob, so their digest stands for the blob."""
+        """A record's facts are what the extractor made of the file's bytes, so for a file with
+        a cache key the digest stands on the extractor, its options and the key, with no fact
+        text read. A file without one digests its facts' text."""
+        if self.keys is None:
+            self.keys = self.link.blob_keys()
         digest = hashlib.blake2b(digest_size=16)
         for kind in kinds:
-            text = record.texts.take(record.file, kind)
             digest.update(kind.encode())
+            digest.update(b"\0")
+        key = self.keys[record.file]
+        extracted_by: str = getattr(self.build, "extracted_by", "")
+        if key is not None and extracted_by:
+            digest.update(extracted_by.encode())
+            digest.update(b"\0")
+            digest.update(key.encode())
+            return digest.hexdigest()
+        for kind in kinds:
+            text = self.link.raw(record.file, kind)
             digest.update(b"\0" if text is None else text)
             digest.update(b"\0")
         return digest.hexdigest()

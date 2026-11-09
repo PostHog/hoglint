@@ -8,18 +8,17 @@ derived rows of those files show. The core edge stays the one edge of the use.
 
 from __future__ import annotations
 
+from bisect import bisect_left, insort
 from collections import defaultdict
 from typing import NamedTuple
 
 from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.producers import chain_tokens, leading_attrs
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import absolute_import
 from hoglint.model import Edge, Resolution
 from hoglint.packs.django.models import ModelRegistry
 from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition
-from hoglint.plugins import PackReader, Refinement
+from hoglint.plugins import AttributeUse, PackReader, Refinement
 
 USES_PRODUCER = "django.uses@1"
 GET_MODEL_PRODUCER = "django.get-model@1"
@@ -43,21 +42,23 @@ class Use(NamedTuple):
 
 
 class LocalSources:
-    """Which model reference a local holds at a point in its scope. A reassignment starts a new source."""
+    """Which model reference a local holds at a point in its scope. A reassignment starts a new
+    source. Each local keeps its assignments in source order, so a use finds its source with one
+    predecessor search."""
 
     def __init__(self) -> None:
         self.assigned: dict[tuple[str, str], list[tuple[int, int, int]]] = defaultdict(list)
 
     def assign(self, scope: str, local: str, line: int, column: int, index: int) -> None:
-        self.assigned[(scope, local)].append((line, column, index))
+        insort(self.assigned[(scope, local)], (line, column, index))
 
     def held(self, scope: str, local: str, line: int, column: int) -> int | None:
         """The last assignment before the use. A use above every assignment (a loop) takes the first one."""
-        rows = sorted(self.assigned.get((scope, local), ()))
+        rows = self.assigned.get((scope, local))
         if not rows:
             return None
-        before = [index for at_line, at_column, index in rows if (at_line, at_column) < (line, column)]
-        return before[-1] if before else rows[0][2]
+        before = bisect_left(rows, (line, column))
+        return rows[before - 1][2] if before else rows[0][2]
 
 
 class UseProducer:
@@ -101,9 +102,11 @@ class UseProducer:
 
     def produce(self, files: list[FileScope]) -> list[Output]:
         uses = self.by_file()
+        aggregates = {scope.path: found for scope, found in self.reader.uses_to(files, self.registry.models)}
 
         def output_for(scope: FileScope) -> list[Output]:
-            return [*self.shaped(scope, uses.get(scope.path, [])), *self.aggregate_edges(scope)]
+            found = aggregates.get(scope.path, [])
+            return [*self.shaped(scope, uses.get(scope.path, [])), *self.aggregate_edges(scope, found)]
 
         return each_item(files, output_for, self.failure)
 
@@ -151,52 +154,26 @@ class UseProducer:
             out.append(Refinement(use.handle, shape.kind, shape.detail, flow))
         return out
 
-    def first_party_roots(self, scope: FileScope, roots: set[str]) -> set[str]:
-        """Those of `roots` a first-party import binds anywhere in the file. A name that only
-        third-party imports bind cannot lead into first-party code, so its uses never reach a model."""
-        out: set[str] = set()
-        first_party = self.reader.first_party
-        for _, _, _, _, target, level, name, asname in scope.record.get("imports", ()):
-            if name is None:
-                bound = asname or target.split(".")[0]
-                if bound in roots and first_party.contains(target):
-                    out.add(bound)
-                continue
-            bound = asname or name
-            if bound not in roots or name == "*":
-                continue
-            source = absolute_import(scope.module, scope.is_package, target, level)
-            if source is not None and first_party.contains(source):
-                out.add(bound)
-        return out
-
-    def aggregate_edges(self, scope: FileScope) -> list[Edge]:
+    @staticmethod
+    def aggregate_edges(scope: FileScope, found: list[AttributeUse]) -> list[Edge]:
         """`import a.b` then `a.b.Model`: L1 only counts these, so the shape stays unknown."""
         out: list[Edge] = []
-        rows = [row for row in scope.record.get("uses", ()) if row[3]]
-        if not rows:
-            return out
-        roots = self.first_party_roots(scope, {row[2] for row in rows})
-        for at_scope, _, root, attrs, count, line, column in rows:
-            if root not in roots:
-                continue
-            names = leading_attrs(chain_tokens(attrs))
-            found, rest = self.reader.context.chain_lookup(scope, ".".join([root, *names]), at_scope, line)
-            hit = found.hit
-            if hit is None or hit.kind != "class" or len(rest) == len(names) or hit.origin not in self.registry.models:
+        for use in found:
+            hit = use.found.hit
+            if hit is None:
                 continue
             out.append(
                 Edge(
                     kind="reference",
-                    site=scope.site(at_scope, line, column),
-                    surface=found.surface,
+                    site=scope.site(use.scope, use.line, use.column),
+                    surface=use.found.surface,
                     targets=(hit.origin,),
                     resolution=Resolution.RESOLVED,
-                    contexts=scope.contexts(0, at_scope),
+                    contexts=scope.contexts(0, use.scope),
                     producer=USES_PRODUCER,
                     via=hit.via,
                     use="aggregate",
-                    attrs=(("count", str(count)),),
+                    attrs=(("count", str(use.count)),),
                 )
             )
         return out

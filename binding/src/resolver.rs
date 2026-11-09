@@ -116,21 +116,23 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
 
 #[pymethods]
 impl Link {
-    fn resolve_name(&mut self, module: &str, name: &str) -> Option<HitTuple> {
+    fn resolve_name(&mut self, module: &str, name: &str) -> PyResult<Option<HitTuple>> {
+        self.rows()?;
         let (module, name) = (self.sid(module), self.sid(name));
         let hit = self.inner.core.resolve_name(module, name);
-        self.hit(hit)
+        Ok(self.hit(hit))
     }
 
     /// (hit or None, attribute names left over).
-    fn resolve_dotted(&mut self, dotted: &str) -> (Option<HitTuple>, Vec<String>) {
+    fn resolve_dotted(&mut self, dotted: &str) -> PyResult<(Option<HitTuple>, Vec<String>)> {
+        self.rows()?;
         let dotted = self.sid(dotted);
         let (hit, rest) = self.inner.core.resolve_dotted(dotted);
         let rest = rest
             .iter()
             .map(|&s| self.inner.core.it.s(s).to_string())
             .collect();
-        (self.hit(hit), rest)
+        Ok((self.hit(hit), rest))
     }
 
     fn resolve_value(
@@ -138,6 +140,7 @@ impl Link {
         module: &str,
         value: &Bound<'_, PyAny>,
     ) -> PyResult<Option<HitTuple>> {
+        self.rows()?;
         let module = self.sid(module);
         let value = py_value(&mut self.inner.core.it, value)?;
         let hit = self.inner.core.resolve_value(module, &value);
@@ -145,6 +148,7 @@ impl Link {
     }
 
     fn resolve_class(&mut self, module: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<Pair>> {
+        self.rows()?;
         let module = self.sid(module);
         let value = py_value(&mut self.inner.core.it, value)?;
         Ok(self
@@ -154,28 +158,32 @@ impl Link {
             .map(|e| self.pair(e)))
     }
 
-    fn mro(&mut self, module: &str, symbol: &str) -> Vec<Pair> {
+    fn mro(&mut self, module: &str, symbol: &str) -> PyResult<Vec<Pair>> {
+        self.rows()?;
         let class = self.ent(module, symbol);
         let mro = self.inner.core.mro(class);
-        mro.into_iter().map(|e| self.pair(e)).collect()
+        Ok(mro.into_iter().map(|e| self.pair(e)).collect())
     }
 
-    fn bases(&mut self, module: &str, symbol: &str) -> Vec<Pair> {
+    fn bases(&mut self, module: &str, symbol: &str) -> PyResult<Vec<Pair>> {
+        self.rows()?;
         let class = self.ent(module, symbol);
         let bases = self.inner.core.bases(class);
-        bases.into_iter().map(|e| self.pair(e)).collect()
+        Ok(bases.into_iter().map(|e| self.pair(e)).collect())
     }
 
-    fn is_subclass(&mut self, module: &str, symbol: &str, qualified: &str) -> bool {
+    fn is_subclass(&mut self, module: &str, symbol: &str, qualified: &str) -> PyResult<bool> {
+        self.rows()?;
         let class = self.ent(module, symbol);
         let qualified = self.sid(qualified);
-        self.inner.core.is_subclass(class, qualified)
+        Ok(self.inner.core.is_subclass(class, qualified))
     }
 
     /// (file id, def index) of the record that defines a class, or None.
-    fn located(&mut self, module: &str, symbol: &str) -> Option<(u32, u32)> {
+    fn located(&mut self, module: &str, symbol: &str) -> PyResult<Option<(u32, u32)>> {
+        self.rows()?;
         let class = self.ent(module, symbol);
-        self.inner.core.located(class)
+        Ok(self.inner.core.located(class))
     }
 
     /// `BuildContext.value_lookup` at a site of the analyzed file with this scope index.
@@ -186,6 +194,7 @@ impl Link {
         at: i32,
         line: u32,
     ) -> PyResult<Option<(String, Option<HitTuple>, bool)>> {
+        self.rows()?;
         let index = self.scope_index(scope)?;
         let value = py_value(&mut self.inner.core.it, value)?;
         let link = &mut self.inner;
@@ -208,6 +217,7 @@ impl Link {
         at: i32,
         line: u32,
     ) -> PyResult<((String, Option<HitTuple>, bool), Vec<String>)> {
+        self.rows()?;
         let index = self.scope_index(scope)?;
         let chain = self.sid(chain);
         let link = &mut self.inner;

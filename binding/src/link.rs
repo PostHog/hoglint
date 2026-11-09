@@ -2,54 +2,16 @@
 
 use crate::blobs::{Blob, BlobRequest, configs, load};
 use crate::{HitTuple, Pair, ids_bytes, ids_from};
-use hoglint_facts::link::facts::{FactSet, decode_lines};
+use hoglint_facts::link::facts::decode_lines;
 use hoglint_facts::link::intern::{Interner, Sid};
 use hoglint_facts::link::produce::NO_FILE;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::{Lookup, Res};
 use hoglint_facts::link::{ClassFact, Link as CoreLink, LinkConfig, NewPackRow};
 use pyo3::exceptions::{PyKeyError, PyValueError};
-use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyString, PyTuple};
 use rustc_hash::FxHashMap;
-use std::ffi::{c_int, c_void};
-use std::sync::Arc;
-
-/// The JSON text of every record, as one read-only buffer: `memoryview(link.text())` reads it with
-/// no copy. `Link.kind_ranges` says where each record's fact lists sit in it.
-#[pyclass(module = "hoglint_native", frozen)]
-pub(crate) struct FactText {
-    facts: Arc<FactSet>,
-}
-
-#[pymethods]
-impl FactText {
-    unsafe fn __getbuffer__(
-        slf: Bound<'_, Self>,
-        view: *mut ffi::Py_buffer,
-        flags: c_int,
-    ) -> PyResult<()> {
-        let text = slf.get().facts.text().map_err(PyValueError::new_err)?;
-        let buf = text.as_ptr() as *mut c_void;
-        let filled = unsafe {
-            ffi::PyBuffer_FillInfo(
-                view,
-                slf.as_ptr(),
-                buf,
-                text.len() as ffi::Py_ssize_t,
-                1,
-                flags,
-            )
-        };
-        if filled == -1 {
-            return Err(PyErr::fetch(slf.py()));
-        }
-        Ok(())
-    }
-
-    unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
-}
 
 /// A linked snapshot, (cache hits, files extracted), each record's fact cache key, and the
 /// working tree files that changed during the run.
@@ -64,6 +26,8 @@ pub(crate) struct Link {
     pub(crate) keys: Vec<Option<String>>,
     /// Working tree files that changed while the run read them (`BlobStats::drifted`).
     pub(crate) drifted: Vec<String>,
+    /// `from` import rows by imported name, built on the first `import_rows_named`.
+    pub(crate) import_names: Option<FxHashMap<Sid, Vec<(u32, u32)>>>,
 }
 
 impl Link {
@@ -72,8 +36,7 @@ impl Link {
         if key == "path" {
             return Ok(serde_json::to_vec(&*facts.files[file].path).ok());
         }
-        let raw = facts.raw(file, key).map_err(PyValueError::new_err)?;
-        Ok(raw.map(<[u8]>::to_vec))
+        facts.raw(file, key).map_err(PyValueError::new_err)
     }
 
     pub(crate) fn pair(&self, e: Ent) -> Pair {
@@ -108,6 +71,17 @@ impl Link {
         self.inner.core.it.intern(text)
     }
 
+    /// Raises once the link released its fact rows (`release_facts`): a resolution or a row
+    /// query then would answer from nothing.
+    pub(crate) fn rows(&self) -> PyResult<()> {
+        if self.inner.core.facts.released {
+            return Err(PyValueError::new_err(
+                "the link released its fact rows when the pack phase ended",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn scope_index(&self, scope: u32) -> PyResult<usize> {
         let index = scope as usize;
         if index >= self.inner.scopes.len() {
@@ -127,6 +101,14 @@ impl Link {
     /// Estimated heap bytes per part of the link: [(part, bytes)].
     fn heap(&self) -> Vec<(&'static str, usize)> {
         self.inner.heap()
+    }
+
+    /// Drops the records' fact rows once the pack phase ends (D23): rules read edges, symbols
+    /// and scopes, never rows. Resolutions and row queries raise after it. False when the rows
+    /// could not be dropped because another holder shares them.
+    fn release_facts(&mut self) -> bool {
+        self.import_names = None;
+        self.inner.release_facts()
     }
 
     /// Every edge: core edges, then pack edges.
@@ -178,40 +160,12 @@ impl Link {
         Ok(self.raw_value(file, key)?.map(|raw| PyBytes::new(py, &raw)))
     }
 
-    /// The JSON text of every record, for zero-copy reads. The first call reads it from the
-    /// fact database.
-    fn text(&self, py: Python<'_>) -> PyResult<FactText> {
-        let facts = self.inner.core.facts.clone();
-        py.detach(|| facts.text().map(|_| ()))
-            .map_err(PyValueError::new_err)?;
-        Ok(FactText { facts })
-    }
-
-    /// Where one top-level key of every record sits in `text()`: (start, end) u32 pairs in fact
-    /// order, u32::MAX for a record without the key.
-    fn kind_ranges<'py>(&self, py: Python<'py>, key: &str) -> Bound<'py, PyBytes> {
-        let facts = &self.inner.core.facts;
-        let mut out = Vec::with_capacity(facts.files.len() * 2);
-        for file in &facts.files {
-            match file.keys.iter().find(|(name, _)| &**name == key) {
-                Some((_, range)) => out.extend_from_slice(&[range.start as u32, range.end as u32]),
-                None => out.extend_from_slice(&[u32::MAX, u32::MAX]),
-            }
+    /// Whether a record has rows under `key`, read off its key ranges with no JSON text.
+    fn has_rows(&self, file: usize, key: &str) -> PyResult<bool> {
+        if file >= self.inner.core.facts.files.len() {
+            return Err(PyKeyError::new_err(file));
         }
-        ids_bytes(py, &out)
-    }
-
-    /// One top-level key of every record, in fact order: its JSON text, or None where the
-    /// record has no such key. Packs read a fact kind for a file set in one call.
-    fn raw_kind<'py>(
-        &self,
-        py: Python<'py>,
-        key: &str,
-    ) -> PyResult<Vec<Option<Bound<'py, PyBytes>>>> {
-        let count = self.inner.core.facts.files.len();
-        (0..count)
-            .map(|file| Ok(self.raw_value(file, key)?.map(|raw| PyBytes::new(py, &raw))))
-            .collect()
+        Ok(self.inner.core.facts.has_rows(file, key))
     }
 
     /// A module's table, or None when the module does not exist: (is_package, names in
@@ -231,6 +185,7 @@ impl Link {
             Vec<Pair>,
         )>,
     > {
+        self.rows()?;
         let module = self.sid(module);
         let Some(id) = self.inner.core.table(module) else {
             return Ok(None);
@@ -550,6 +505,7 @@ pub(crate) fn link_jsonl(
         file_of,
         keys,
         drifted: Vec::new(),
+        import_names: None,
     })
 }
 
@@ -653,6 +609,7 @@ pub(crate) fn link_blobs(
             file_of,
             keys,
             drifted,
+            import_names: None,
         },
         stats,
     ))

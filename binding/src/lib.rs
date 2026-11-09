@@ -18,7 +18,7 @@ mod queries;
 mod resolver;
 mod rules;
 
-use link::{FactText, Link, link_blobs, link_jsonl};
+use link::{Link, link_blobs, link_jsonl};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -48,7 +48,6 @@ pub(crate) fn ids_from(raw: &[u8]) -> PyResult<Vec<u32>> {
 #[pymodule]
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
-    module.add_class::<FactText>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
     module.add_function(wrap_pyfunction!(link_blobs, module)?)?;
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;

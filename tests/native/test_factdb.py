@@ -57,6 +57,11 @@ def imports(linked: Any) -> list[str]:
     return sorted(symbol for row in linked.edges(linked.ids_of_kind("import")) for _, symbol in row[7])
 
 
+def records(linked: Any) -> list[list[bytes | None]]:
+    """Every record's JSON text, key by key, as the link reads it back."""
+    return [[linked.raw(file, key) for key in linked.keys(file)] for file in range(len(linked.paths()))]
+
+
 def test_a_second_run_reads_every_record_from_the_database(tmp_path: Path) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
@@ -64,7 +69,7 @@ def test_a_second_run_reads_every_record_from_the_database(tmp_path: Path) -> No
     first, first_counts = link(native, BlobSnapshot.index(repo), database)
     second, second_counts = link(native, BlobSnapshot.index(repo), database)
     assert (first_counts, second_counts) == ((0, 3), (3, 0))
-    assert bytes(memoryview(second.text())) == bytes(memoryview(first.text()))
+    assert records(second) == records(first)
     assert second.edges(second.ids_of_kind("import")) == first.edges(first.ids_of_kind("import"))
 
 
@@ -100,7 +105,7 @@ def test_a_record_whose_entry_went_away_is_extracted_again(tmp_path: Path) -> No
         conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record.replace(b"Thing", b"Other")))
         conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
     assert counts == (3, 0)
-    assert bytes(memoryview(run.text())) == bytes(memoryview(fresh.text()))
+    assert records(run) == records(fresh)
 
 
 def test_a_damaged_database_is_moved_aside_and_the_run_goes_on(tmp_path: Path) -> None:

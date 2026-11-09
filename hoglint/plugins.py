@@ -22,7 +22,7 @@ from hoglint.model import Edge, EntityId
 if TYPE_CHECKING:
     from hoglint.core.modules import FirstParty, ModuleIndex
     from hoglint.core.records import RecordBodies
-    from hoglint.core.sites import FileScope
+    from hoglint.core.sites import FileScope, Lookup
     from hoglint.core.symbols import Tables
     from hoglint.native.queries import Words
 
@@ -54,6 +54,19 @@ class EdgeBatch(NamedTuple):
 
     handles: list[int]
     columns: dict[str, list[Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class AttributeUse:
+    """A name used through attributes (`a.b.Model.objects`) whose chain reaches one of a
+    query's targets: where (`scope` is the def index, -1 at module level), how often, and the
+    lookup of the chain."""
+
+    scope: int
+    line: int
+    column: int
+    count: int
+    found: Lookup
 
 
 class PackReader(Protocol):
@@ -90,6 +103,12 @@ class PackReader(Protocol):
     def has_rows(self, scope: FileScope, kind: str) -> bool: ...
 
     def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None: ...
+
+    def uses_to(
+        self, scopes: Iterable[FileScope], targets: Collection[EntityId]
+    ) -> Iterator[tuple[FileScope, list[AttributeUse]]]: ...
+
+    def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]: ...
 
 
 class PackSink(Protocol):

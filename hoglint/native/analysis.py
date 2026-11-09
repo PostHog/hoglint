@@ -99,11 +99,12 @@ class NativeAnalysis(CoreAnalysis):
         native = bridge.load()
         blobs = [(path, *snapshot.blobs[path]) for path in inventory.files]
         database = self.fact_database(native.FACTS_ID, native.FACT_LAYOUT)
+        options = self.extract_options(inventory)
         link, (hits, extracted) = native.link_blobs(
             str(self.options.repo),
             blobs,
             [(path, path) for path in external],
-            self.extract_options(inventory),
+            options,
             json.dumps(link_config(config, inventory.analyzed, external)),
             str(database.path) if database is not None else None,
             self.threads(),
@@ -117,7 +118,7 @@ class NativeAnalysis(CoreAnalysis):
             WorktreeStatus.of(self.options.repo).mark_drifted(drifted)
         started = time.perf_counter()
         graph = NativeGraph(link, {})
-        build = NativeBuild(config, link, external, graph.core.maker)
+        build = NativeBuild(config, link, external, graph.core.maker, f"{native.FACTS_ID}\0{options}")
         graph.modules = build.index.repo_modules()
         if snapshot.conflicts:
             graph.failed_producers[SNAPSHOT_PRODUCER] = self.conflict_failure(snapshot.conflicts)

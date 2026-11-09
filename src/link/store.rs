@@ -7,13 +7,14 @@
 //! a change to the layout never meets facts written by older code.
 
 use super::facts::{
-    Argument, Assign, CallRow, Def, DefKind, FileFacts, Import, Op, Param, RefRow, StrRow, V,
+    Argument, Assign, CallRow, CountRow, Def, DefKind, FileFacts, Import, Op, Param, RefRow,
+    StrRow, TagRow, UseRow, V,
 };
 use super::intern::{Interner, Sid};
 use rustc_hash::FxHashMap;
 
 /// Marks binary facts of this layout.
-pub const MAGIC: &[u8; 8] = b"HLFACTS2";
+pub const MAGIC: &[u8; 8] = b"HLFACTS3";
 
 struct Enc<'i> {
     it: &'i Interner,
@@ -241,6 +242,39 @@ impl Enc<'_> {
                 Argument::Expr => self.u8(4),
             }
         }
+        self.u32(f.uses.len() as u32);
+        for r in &f.uses {
+            self.i32(r.scope);
+            self.i32(r.header);
+            self.sid(r.root);
+            self.sid(r.attrs);
+            self.u32(r.count);
+            self.u32(r.line);
+            self.u32(r.col);
+        }
+        self.counts(&f.callees);
+        self.counts(&f.names);
+        self.u32(f.tags.len() as u32);
+        for r in &f.tags {
+            self.i32(r.scope);
+            self.i32(r.header);
+            self.u32(r.line);
+            self.u32(r.col);
+            self.u32(r.flags);
+            self.sid(r.name);
+        }
+    }
+
+    fn counts(&mut self, rows: &[CountRow]) {
+        self.u32(rows.len() as u32);
+        for r in rows {
+            self.i32(r.scope);
+            self.i32(r.header);
+            self.sid(r.text);
+            self.u32(r.count);
+            self.u32(r.line);
+            self.u32(r.col);
+        }
     }
 }
 
@@ -326,6 +360,21 @@ impl<'b> Dec<'b, '_> {
     fn values(&mut self) -> Result<Vec<V>, String> {
         let n = self.u32()? as usize;
         (0..n).map(|_| self.v()).collect()
+    }
+    fn counts(&mut self) -> Result<Vec<CountRow>, String> {
+        let n = self.u32()? as usize;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(CountRow {
+                scope: self.i32()?,
+                header: self.i32()?,
+                text: self.sid()?,
+                count: self.u32()?,
+                line: self.u32()?,
+                col: self.u32()?,
+            });
+        }
+        Ok(out)
     }
     fn ov(&mut self) -> Result<Option<V>, String> {
         Ok(if self.u8()? == 1 {
@@ -562,6 +611,33 @@ pub fn decode_body(
             argument,
         });
     }
+    let n = d.u32()? as usize;
+    let mut uses = Vec::with_capacity(n);
+    for _ in 0..n {
+        uses.push(UseRow {
+            scope: d.i32()?,
+            header: d.i32()?,
+            root: d.sid()?,
+            attrs: d.sid()?,
+            count: d.u32()?,
+            line: d.u32()?,
+            col: d.u32()?,
+        });
+    }
+    let callees = d.counts()?;
+    let names = d.counts()?;
+    let n = d.u32()? as usize;
+    let mut tags = Vec::with_capacity(n);
+    for _ in 0..n {
+        tags.push(TagRow {
+            scope: d.i32()?,
+            header: d.i32()?,
+            line: d.u32()?,
+            col: d.u32()?,
+            flags: d.u32()?,
+            name: d.sid()?,
+        });
+    }
     Ok(FileFacts {
         path: path.into(),
         status,
@@ -571,6 +647,10 @@ pub fn decode_body(
         refs,
         strs,
         calls,
+        uses,
+        callees,
+        names,
+        tags,
         line: line_start..line_start + json_len,
         keys,
     })

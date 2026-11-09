@@ -7,7 +7,6 @@ use serde_json::Value as J;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::sync::{Mutex, OnceLock};
 
 /// A value tree (schema.md section 4), reduced to the forms resolution reads.
 #[derive(Debug, Clone)]
@@ -158,7 +157,40 @@ pub struct CallRow {
     pub argument: Argument,
 }
 
-/// One file's record. `keys` maps each top-level key to the byte range of its JSON text.
+/// A `uses` row: a name used through attributes in one scope, how often, and where first.
+pub struct UseRow {
+    pub scope: i32,
+    pub header: i32,
+    pub root: Sid,
+    pub attrs: Sid,
+    pub count: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// A `callees` or `names` row: a text in one scope, how often, and where first.
+pub struct CountRow {
+    pub scope: i32,
+    pub header: i32,
+    pub text: Sid,
+    pub count: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// A `tags` row.
+pub struct TagRow {
+    pub scope: i32,
+    pub header: i32,
+    pub line: u32,
+    pub col: u32,
+    pub flags: u32,
+    pub name: Sid,
+}
+
+/// One file's record. `keys` maps each top-level key to the byte range of its JSON text. The
+/// link reads imports, defs, assigns, refs, strs and calls; packs' candidate queries read uses,
+/// callees, names and tags, so no pack decodes whole records to select candidates.
 pub struct FileFacts {
     pub path: Box<str>,
     pub status: Box<str>,
@@ -168,6 +200,10 @@ pub struct FileFacts {
     pub refs: Vec<RefRow>,
     pub strs: Vec<StrRow>,
     pub calls: Vec<CallRow>,
+    pub uses: Vec<UseRow>,
+    pub callees: Vec<CountRow>,
+    pub names: Vec<CountRow>,
+    pub tags: Vec<TagRow>,
     pub line: Range<usize>,
     pub keys: Vec<(Box<str>, Range<usize>)>,
 }
@@ -178,53 +214,94 @@ impl FileFacts {
     }
 }
 
-/// Every record of one snapshot and the text they came from.
-/// Makes the JSON text of a fact set when something first reads it.
-pub type TextSource = Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send>;
+/// Reads one record's JSON text, by the record's place in fact order, when something asks:
+/// the link itself never reads it, and no reader holds the whole snapshot's text.
+pub trait RecordText: Send + Sync {
+    fn record(&self, file: usize) -> Result<Vec<u8>, String>;
+}
 
-/// The facts of a snapshot. Records keep ranges into the JSON text of every record, one per
-/// line in fact order. The link itself never reads that text, so a loader can defer it.
+/// The JSON text of every record held in memory, one per line: a JSONL input.
+struct Lines {
+    text: Vec<u8>,
+    lines: Vec<Range<usize>>,
+}
+
+impl RecordText for Lines {
+    fn record(&self, file: usize) -> Result<Vec<u8>, String> {
+        Ok(self.text[self.lines[file].clone()].to_vec())
+    }
+}
+
+/// The facts of a snapshot. Records keep the ranges of their keys in their own JSON text,
+/// offset by `FileFacts::line.start`.
 pub struct FactSet {
-    text: OnceLock<Result<Vec<u8>, String>>,
-    source: Mutex<Option<TextSource>>,
+    source: Box<dyn RecordText>,
     pub files: Vec<FileFacts>,
+    /// Set once the rows are dropped (`release_rows`).
+    pub released: bool,
 }
 
 impl FactSet {
     pub fn new(text: Vec<u8>, files: Vec<FileFacts>) -> FactSet {
+        let lines = files.iter().map(|f| f.line.clone()).collect();
         FactSet {
-            text: OnceLock::from(Ok(text)),
-            source: Mutex::new(None),
+            source: Box::new(Lines { text, lines }),
             files,
+            released: false,
         }
     }
 
-    /// A fact set whose text `source` makes on first read.
-    pub fn deferred(files: Vec<FileFacts>, source: TextSource) -> FactSet {
+    /// A fact set whose records' JSON text `source` reads one record at a time.
+    pub fn deferred(files: Vec<FileFacts>, source: Box<dyn RecordText>) -> FactSet {
         FactSet {
-            text: OnceLock::new(),
-            source: Mutex::new(Some(source)),
+            source,
             files,
+            released: false,
         }
     }
 
-    pub fn text(&self) -> Result<&[u8], String> {
-        self.text
-            .get_or_init(|| match self.source.lock().map(|mut s| s.take()) {
-                Ok(Some(source)) => source(),
-                _ => Err("the fact text has no source".to_string()),
-            })
-            .as_deref()
-            .map_err(Clone::clone)
+    /// Drops every record's rows. Paths, status, key ranges and the JSON text stay, so `raw`
+    /// and `has_rows` still answer; whatever reads rows must check `released` first.
+    pub fn release_rows(&mut self) {
+        for file in &mut self.files {
+            file.imports = Vec::new();
+            file.defs = Vec::new();
+            file.assigns = Vec::new();
+            file.refs = Vec::new();
+            file.strs = Vec::new();
+            file.calls = Vec::new();
+            file.uses = Vec::new();
+            file.callees = Vec::new();
+            file.names = Vec::new();
+            file.tags = Vec::new();
+        }
+        self.released = true;
+    }
+
+    /// The JSON text of one record.
+    pub fn record(&self, file: usize) -> Result<Vec<u8>, String> {
+        self.source.record(file)
     }
 
     /// The JSON text of one top-level key of a record, as the extractor wrote it.
-    pub fn raw(&self, file: usize, key: &str) -> Result<Option<&[u8]>, String> {
+    pub fn raw(&self, file: usize, key: &str) -> Result<Option<Vec<u8>>, String> {
         let facts = &self.files[file];
         let Some((_, range)) = facts.keys.iter().find(|(name, _)| &**name == key) else {
             return Ok(None);
         };
-        Ok(Some(&self.text()?[range.clone()]))
+        let text = self.record(file)?;
+        let start = facts.line.start;
+        text.get(range.start - start..range.end - start)
+            .map(|slice| Some(slice.to_vec()))
+            .ok_or_else(|| format!("the record of {} is shorter than its keys say", facts.path))
+    }
+
+    /// Whether a record's list under `key` has rows: its JSON text is longer than `[]`.
+    pub fn has_rows(&self, file: usize, key: &str) -> bool {
+        self.files[file]
+            .keys
+            .iter()
+            .any(|(name, range)| &**name == key && range.len() > 2)
     }
 }
 
@@ -371,6 +448,10 @@ struct Parsed {
     refs: J,
     strs: J,
     calls: J,
+    uses: J,
+    callees: J,
+    names: J,
+    tags: J,
 }
 
 fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
@@ -388,6 +469,10 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
         refs: J::Null,
         strs: J::Null,
         calls: J::Null,
+        uses: J::Null,
+        callees: J::Null,
+        names: J::Null,
+        tags: J::Null,
     };
     for (key, raw) in &map {
         let at = raw.get().as_ptr() as usize - start;
@@ -404,6 +489,10 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
             "refs" => parsed.refs = decode(raw)?,
             "strs" => parsed.strs = decode(raw)?,
             "calls" => parsed.calls = decode(raw)?,
+            "uses" => parsed.uses = decode(raw)?,
+            "callees" => parsed.callees = decode(raw)?,
+            "names" => parsed.names = decode(raw)?,
+            "tags" => parsed.tags = decode(raw)?,
             _ => {}
         }
     }
@@ -548,6 +637,44 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
             argument: module_argument(row(r, 6), row(r, 7)),
         })
         .collect();
+    let uses = rows(&parsed.uses)
+        .iter()
+        .map(|r| UseRow {
+            scope: int(row(r, 0)) as i32,
+            header: int(row(r, 1)) as i32,
+            root: it.intern(text(row(r, 2))),
+            attrs: it.intern(text(row(r, 3))),
+            count: int(row(r, 4)) as u32,
+            line: int(row(r, 5)) as u32,
+            col: int(row(r, 6)) as u32,
+        })
+        .collect();
+    let counts = |it: &mut Interner, value: &J| -> Vec<CountRow> {
+        rows(value)
+            .iter()
+            .map(|r| CountRow {
+                scope: int(row(r, 0)) as i32,
+                header: int(row(r, 1)) as i32,
+                text: it.intern(text(row(r, 2))),
+                count: int(row(r, 3)) as u32,
+                line: int(row(r, 4)) as u32,
+                col: int(row(r, 5)) as u32,
+            })
+            .collect()
+    };
+    let callees = counts(it, &parsed.callees);
+    let names = counts(it, &parsed.names);
+    let tags = rows(&parsed.tags)
+        .iter()
+        .map(|r| TagRow {
+            scope: int(row(r, 0)) as i32,
+            header: int(row(r, 1)) as i32,
+            line: int(row(r, 2)) as u32,
+            col: int(row(r, 3)) as u32,
+            flags: int(row(r, 4)) as u32,
+            name: it.intern(text(row(r, 5))),
+        })
+        .collect();
     FileFacts {
         path: parsed.path.into(),
         status: parsed.status.into(),
@@ -557,6 +684,10 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
         refs,
         strs,
         calls,
+        uses,
+        callees,
+        names,
+        tags,
         line,
         keys: parsed.keys,
     }

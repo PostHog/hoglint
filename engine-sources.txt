@@ -25,6 +25,7 @@ src/**/*.rs
 !src/link/mod.rs
 !src/link/paths.rs
 !src/link/produce.rs
+!src/link/queries.rs
 !src/link/resolve.rs
 !src/link/scope.rs
 Cargo.toml

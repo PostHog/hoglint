@@ -2,20 +2,15 @@
 //! select their candidates with.
 
 use crate::link::Link;
-use crate::{Pair, ids_bytes, ids_from};
+use crate::{HitTuple, Pair, ids_bytes, ids_from};
+use hoglint_facts::link::facts::{FileFacts, V};
 use hoglint_facts::link::intern::{EMPTY, Sid};
 use hoglint_facts::link::resolve::{Binding, Ent};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyString};
-use regex::bytes::Regex;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::value::RawValue;
-use std::borrow::Cow;
-
-/// Where an `imports` row holds the imported name: [scope, line, column, flags, module, level,
-/// name, asname].
-const IMPORTED_NAME: usize = 6;
 
 /// Where a call kind's rows hold the callee (`CALLEE_FIELD` in hoglint/native/queries.py).
 fn callee_position(kind: &str) -> PyResult<usize> {
@@ -92,88 +87,295 @@ impl Link {
     }
 }
 
-impl Link {
-    /// The rows of `kind` in the analyzed files whose field at `position` is a string that
-    /// `wanted` accepts: (file id, the row's JSON text) in fact order. A file whose rows of the
-    /// kind hold none of `names` as text is never parsed.
-    fn matching_rows<'py>(
-        &self,
-        py: Python<'py>,
-        kind: &str,
-        position: usize,
-        names: &[String],
-        wanted: impl Fn(&str) -> bool,
-    ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
-        let mut out = Vec::new();
-        if names.is_empty() {
-            return Ok(out);
+/// Every string a value tree holds: chains, string texts, attribute names, callees.
+fn value_strings(value: &V, out: &mut Vec<Sid>) {
+    match value {
+        V::Null | V::Other => {}
+        V::Chain(s) | V::Opaque(s) => out.push(*s),
+        V::Str(s, parsed) => {
+            out.push(*s);
+            if let Some(parsed) = parsed {
+                value_strings(parsed, out);
+            }
         }
-        let pattern = names
-            .iter()
-            .map(|name| regex::escape(name))
-            .collect::<Vec<_>>()
-            .join("|");
-        let mention = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let facts = &self.inner.core.facts;
-        let text = facts.text().map_err(PyValueError::new_err)?;
-        let fail = |e: serde_json::Error| PyValueError::new_err(format!("{kind} rows: {e}"));
-        for (file, record) in facts.files.iter().enumerate() {
-            if !self.inner.scope_of_file.contains_key(&(file as u32)) {
-                continue;
+        V::Call(inner, _) | V::Star(inner) => value_strings(inner, out),
+        V::Attr(inner, name) => {
+            value_strings(inner, out);
+            out.push(*name);
+        }
+        V::Sub(a, b) | V::Bin(_, a, b) => {
+            value_strings(a, out);
+            value_strings(b, out);
+        }
+        V::Tuple(items) | V::List(items) | V::Set(items) => {
+            items.iter().for_each(|item| value_strings(item, out))
+        }
+        V::Dict(pairs) => {
+            for (key, value) in pairs {
+                if let Some(key) = key {
+                    value_strings(key, out);
+                }
+                value_strings(value, out);
             }
-            let Some((_, range)) = record.keys.iter().find(|(key, _)| &**key == kind) else {
-                continue;
-            };
-            let slice = &text[range.clone()];
-            if !mention.is_match(slice) {
-                continue;
+        }
+    }
+}
+
+/// Pushes the strings a record's rows of `kind` hold: interned ids into `sids`, and the fields
+/// the link keeps as plain text into `texts`. False for a kind the link does not decode.
+fn kind_strings<'f>(
+    facts: &'f FileFacts,
+    kind: &str,
+    sids: &mut Vec<Sid>,
+    texts: &mut Vec<&'f str>,
+) -> bool {
+    match kind {
+        "imports" => {
+            for row in &facts.imports {
+                sids.extend(row.target.iter().chain(&row.name).chain(&row.asname));
             }
-            let rows: Vec<&RawValue> = serde_json::from_slice(slice).map_err(fail)?;
-            for row in rows {
-                let fields: Vec<&RawValue> = serde_json::from_str(row.get()).map_err(fail)?;
-                let Some(field) = fields.get(position) else {
-                    continue;
-                };
-                let Ok(field) = serde_json::from_str::<Cow<str>>(field.get()) else {
-                    continue;
-                };
-                if wanted(&field) {
-                    out.push((file as u32, PyBytes::new(py, row.get().as_bytes())));
+        }
+        "defs" => {
+            for def in &facts.defs {
+                sids.push(def.n);
+                def.bases
+                    .iter()
+                    .chain(&def.dec)
+                    .for_each(|v| value_strings(v, sids));
+                for param in &def.params {
+                    sids.push(param.name);
+                    if let Some(annotation) = &param.annotation {
+                        value_strings(annotation, sids);
+                    }
+                }
+                if let Some(ret) = &def.ret {
+                    value_strings(ret, sids);
                 }
             }
         }
-        Ok(out)
+        "refs" => {
+            for row in &facts.refs {
+                sids.push(row.name);
+                texts.push(&row.chain);
+                texts.push(&row.up);
+            }
+        }
+        "uses" => facts
+            .uses
+            .iter()
+            .for_each(|row| sids.extend([row.root, row.attrs])),
+        "callees" => sids.extend(facts.callees.iter().map(|row| row.text)),
+        "names" => sids.extend(facts.names.iter().map(|row| row.text)),
+        "tags" => sids.extend(facts.tags.iter().map(|row| row.name)),
+        "calls" => texts.extend(facts.calls.iter().map(|row| &*row.callee)),
+        _ => return false,
+    }
+    true
+}
+
+impl Link {
+    /// The analyzed files' ids, in fact order.
+    fn analyzed_files(&self) -> Vec<usize> {
+        (0..self.inner.core.facts.files.len())
+            .filter(|file| self.inner.scope_of_file.contains_key(&(*file as u32)))
+            .collect()
+    }
+
+    /// The JSON text of the rows at `positions` of a record's `kind` list.
+    fn json_rows<'py>(
+        &self,
+        py: Python<'py>,
+        file: usize,
+        kind: &str,
+        positions: &[usize],
+    ) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+        let fail = |e: serde_json::Error| PyValueError::new_err(format!("{kind} rows: {e}"));
+        let Some(text) = self.raw_value(file, kind)? else {
+            return Ok(Vec::new());
+        };
+        let rows: Vec<&RawValue> = serde_json::from_slice(&text).map_err(fail)?;
+        positions
+            .iter()
+            .map(|&at| {
+                let row = rows
+                    .get(at)
+                    .ok_or_else(|| PyValueError::new_err(format!("{kind} has no row {at}")))?;
+                Ok(PyBytes::new(py, row.get().as_bytes()))
+            })
+            .collect()
     }
 }
 
 #[pymethods]
 impl Link {
     /// Rows of a call kind (`calls`, `callees`) in the analyzed files whose callee's last dotted
-    /// name is one of `names`, resolved or not: (file id, the row's JSON text) in fact order.
+    /// name is one of `names`, resolved or not: (file id, the row's JSON text) in fact order. The
+    /// callees are matched on the link's own rows; only the files with a match read JSON text.
     fn rows_named<'py>(
         &self,
         py: Python<'py>,
         kind: &str,
         names: Vec<String>,
     ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
-        let position = callee_position(kind)?;
+        self.rows()?;
+        callee_position(kind)?;
         let wanted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
-        self.matching_rows(py, kind, position, &names, |callee| {
-            wanted.contains(callee.rsplit('.').next().unwrap_or(""))
-        })
+        let last = |callee: &str| wanted.contains(callee.rsplit('.').next().unwrap_or(""));
+        let it = &self.inner.core.it;
+        let mut out = Vec::new();
+        for file in self.analyzed_files() {
+            let facts = &self.inner.core.facts.files[file];
+            let positions: Vec<usize> = if kind == "calls" {
+                facts
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| last(&r.callee))
+                    .map(|(at, _)| at)
+                    .collect()
+            } else {
+                facts
+                    .callees
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| last(it.s(r.text)))
+                    .map(|(at, _)| at)
+                    .collect()
+            };
+            if positions.is_empty() {
+                continue;
+            }
+            for row in self.json_rows(py, file, kind, &positions)? {
+                out.push((file as u32, row));
+            }
+        }
+        Ok(out)
     }
 
     /// `imports` rows in the analyzed files that import one of `names` by name (`from x import
-    /// name`): (file id, the row's JSON text) in fact order.
-    fn import_rows_named<'py>(
-        &self,
-        py: Python<'py>,
+    /// name`), in fact order: (file id, (scope, line, column, flags, module or None, level,
+    /// name, asname or None)), from the link's own rows. The first call indexes every such row
+    /// by name, so later calls cost only what they find.
+    #[allow(clippy::type_complexity)]
+    fn import_rows_named(
+        &mut self,
         names: Vec<String>,
-    ) -> PyResult<Vec<(u32, Bound<'py, PyBytes>)>> {
-        let wanted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
-        self.matching_rows(py, "imports", IMPORTED_NAME, &names, |name| {
-            wanted.contains(name)
-        })
+    ) -> PyResult<
+        Vec<(
+            u32,
+            (
+                i32,
+                u32,
+                u32,
+                u32,
+                Option<String>,
+                u32,
+                String,
+                Option<String>,
+            ),
+        )>,
+    > {
+        self.rows()?;
+        if self.import_names.is_none() {
+            self.import_names = Some(self.inner.imports_by_name());
+        }
+        let index = self.import_names.as_ref().expect("built");
+        let it = &self.inner.core.it;
+        let mut found: Vec<(u32, u32)> = names
+            .iter()
+            .filter_map(|name| it.get(name))
+            .filter_map(|name| index.get(&name))
+            .flatten()
+            .copied()
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        let text = |sid: Option<Sid>| sid.map(|s| it.s(s).to_string());
+        let files = &self.inner.core.facts.files;
+        Ok(found
+            .into_iter()
+            .map(|(file, at)| {
+                let row = &files[file as usize].imports[at as usize];
+                let name = row
+                    .name
+                    .map_or(String::new(), |name| it.s(name).to_string());
+                let fields = (
+                    row.scope,
+                    row.line,
+                    row.col,
+                    row.flags,
+                    text(row.target),
+                    row.level,
+                    name,
+                    text(row.asname),
+                );
+                (file, fields)
+            })
+            .collect())
+    }
+
+    /// `uses` rows with attributes whose root a first-party import binds and whose chain
+    /// resolves to a class among `targets` (`Link::uses_to`): (scope, at scope, line, column,
+    /// count, (surface, hit, local)) in scope order.
+    #[allow(clippy::type_complexity)]
+    fn uses_to(
+        &mut self,
+        targets: Vec<Pair>,
+    ) -> PyResult<Vec<(u32, i32, u32, u32, u32, (String, Option<HitTuple>, bool))>> {
+        self.rows()?;
+        let wanted = targets.iter().map(|(m, s)| self.ent(m, s)).collect();
+        let found = self.inner.uses_to(&wanted);
+        Ok(found
+            .into_iter()
+            .map(|hit| {
+                let lookup = self.lookup(hit.found);
+                (hit.scope, hit.at, hit.line, hit.col, hit.count, lookup)
+            })
+            .collect())
+    }
+
+    /// Whether a record's rows of any of `kinds` hold a string that ends in one of `ending` or
+    /// contains one of `inside`, read off the link's own rows: what a pack's text prefilter asks.
+    /// Kinds the link does not decode raise.
+    fn mentions(
+        &self,
+        file: usize,
+        kinds: Vec<String>,
+        ending: Vec<String>,
+        inside: Vec<String>,
+    ) -> PyResult<bool> {
+        self.rows()?;
+        let facts = self
+            .inner
+            .core
+            .facts
+            .files
+            .get(file)
+            .ok_or_else(|| PyKeyError::new_err(file))?;
+        let it = &self.inner.core.it;
+        let matches = |text: &str| {
+            ending.iter().any(|word| text.ends_with(word.as_str()))
+                || inside.iter().any(|word| text.contains(word.as_str()))
+        };
+        for kind in &kinds {
+            let (mut sids, mut texts) = (Vec::new(), Vec::new());
+            if !kind_strings(facts, kind, &mut sids, &mut texts) {
+                return Err(PyValueError::new_err(format!(
+                    "the link does not read {kind} rows"
+                )));
+            }
+            let mut seen: FxHashSet<Sid> = FxHashSet::default();
+            if sids
+                .into_iter()
+                .any(|sid| seen.insert(sid) && matches(it.s(sid)))
+            {
+                return Ok(true);
+            }
+            if texts.into_iter().any(matches) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The fact cache key of each record in fact order: the blob oid of a repo file, the content
@@ -254,7 +456,8 @@ impl Link {
     /// Classes the analyzed modules' own source defines at module level whose MRO holds
     /// `qualified` (the class itself included), as (module, symbol) in scope order and table
     /// order: `is_subclass` asked of every class at once.
-    fn subclasses(&mut self, qualified: &str) -> Vec<Pair> {
+    fn subclasses(&mut self, qualified: &str) -> PyResult<Vec<Pair>> {
+        self.rows()?;
         let qualified = self.sid(qualified);
         let mut seen: FxHashSet<Sid> = FxHashSet::default();
         let modules: Vec<Sid> = self
@@ -284,6 +487,6 @@ impl Link {
                 }
             }
         }
-        out
+        Ok(out)
     }
 }

@@ -22,6 +22,9 @@ the name the code used to the origin, as (module, symbol) pairs."""
 LookupResult = tuple[str, Hit | None, bool]
 """(surface, hit or None, local)."""
 
+ImportRow = tuple[int, int, int, int, str | None, int, str, str | None]
+"""(scope, line, column, flags, module or None, level, name, asname or None)."""
+
 EdgeTuple = tuple[
     str,
     str,
@@ -44,15 +47,13 @@ EdgeTuple = tuple[
 attrs, shape, shape detail, producer), with what refinements set. Context bits follow
 `CONTEXT_BITS` in hoglint.native.graph."""
 
-class FactText:
-    """The JSON text of every record as one read-only buffer: read it with memoryview()."""
-
-    def __buffer__(self, flags: int, /) -> memoryview: ...
-
 class Link:
     def timings(self) -> list[tuple[str, float]]: ...
     def heap(self) -> list[tuple[str, int]]:
         """Estimated heap bytes per part of the link, for memory reports."""
+    def release_facts(self) -> bool:
+        """Drops the records' fact rows once the pack phase ends. Resolutions and row queries
+        raise after it. False when the rows are shared and stay."""
     def edge_count(self) -> int:
         """Every edge, core and pack: ids 0..edge_count()."""
     def core_count(self) -> int:
@@ -77,11 +78,11 @@ class Link:
     def scope_files(self) -> list[int]: ...
     def scopes(self) -> list[tuple[int, str, bool, int]]: ...
     def file_id(self, path: str) -> int | None: ...
-    def raw(self, file: int, key: str) -> bytes | None: ...
+    def raw(self, file: int, key: str) -> bytes | None:
+        """One key of a record as the extractor's JSON text, read from that record alone."""
+    def has_rows(self, file: int, key: str) -> bool:
+        """Whether a record's list under `key` has rows, with no JSON text read."""
     def keys(self, file: int) -> list[str]: ...
-    def raw_kind(self, key: str) -> list[bytes | None]: ...
-    def text(self) -> FactText: ...
-    def kind_ranges(self, key: str) -> bytes: ...
     def table(self, module: str) -> tuple[bool, list[tuple[str, tuple[object, ...]]], list[str], list[Pair]] | None: ...
     def symbols(self) -> list[tuple[str, str, str]]: ...
     def symbol_columns(self) -> tuple[list[str], bytes, bytes]:
@@ -95,9 +96,16 @@ class Link:
     def rows_named(self, kind: str, names: list[str]) -> list[tuple[int, bytes]]:
         """Rows of `calls` or `callees` in the analyzed files whose callee's last dotted name is
         one of `names`, as (file id, row JSON) in fact order: what `PackQueries.calls_named` reads."""
-    def import_rows_named(self, names: list[str]) -> list[tuple[int, bytes]]:
-        """`imports` rows in the analyzed files that import one of `names` by name, as
-        (file id, row JSON) in fact order."""
+    def import_rows_named(self, names: list[str]) -> list[tuple[int, ImportRow]]:
+        """`imports` rows in the analyzed files that import one of `names` by name (`from x
+        import name`), as (file id, row) in fact order, then row order."""
+    def uses_to(self, targets: list[Pair]) -> list[tuple[int, int, int, int, int, LookupResult]]:
+        """`uses` rows with attributes whose root a first-party import binds and whose chain
+        resolves to a class among `targets` with an attribute resolved past the root: (scope,
+        at scope, line, column, count, lookup) in scope order, then row order."""
+    def mentions(self, file: int, kinds: list[str], ending: list[str], inside: list[str]) -> bool:
+        """Whether a record's rows of any of `kinds` hold a string that ends in one of `ending` or
+        holds one of `inside`, read off the link's own rows. A kind the link does not read raises."""
     def blob_keys(self) -> list[str | None]:
         """The fact cache key of each record in fact order: blob oid, or the content hash of a
         third-party file; None for an unreadable file, a file that changed during the run or a

@@ -17,8 +17,10 @@ from __future__ import annotations
 import re
 import random
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
+from typing import Any
 
 from hoglint.core.producers import chain_tokens
 from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
@@ -548,16 +550,28 @@ def alias_modules(scope: FileScope) -> list[str]:
 
 class ImportIndex:
     """The `from` imports of every file by imported name, each file's rows in reverse source order
-    (the spike's walk). A row's absolute module is worked out only when the re-export closure asks
-    for its name."""
+    (the spike's walk). A name's rows come from the reader's import query the first time the
+    re-export closure asks for it, and a row's absolute module is worked out then."""
 
-    def __init__(self, facts: dict[str, FileFacts]) -> None:
-        self.by_name: dict[str, list[tuple[FileFacts, list]]] = defaultdict(list)
+    def __init__(self, facts: dict[str, FileFacts], snapshot: PackReader) -> None:
+        self.snapshot = snapshot
+        self.by_path = {ff.reader.scope.path: ff for ff in facts.values()}
+        self.order = {path: at for at, path in enumerate(self.by_path)}
+        self.by_name: dict[str, list[tuple[FileFacts, Sequence[Any]]]] = {}
         self.found: dict[tuple[str, str], list[tuple[FileFacts, str]]] = {}
-        for ff in facts.values():
-            for row in reversed(ff.reader.record.get("imports", [])):
-                if row[6] is not None:
-                    self.by_name[row[6]].append((ff, row))
+
+    def rows_named(self, name: str) -> list[tuple[FileFacts, Sequence[Any]]]:
+        """Rows that import `name`, by file in `facts` order, each file's rows last first."""
+        found = self.by_name.get(name)
+        if found is not None:
+            return found
+        by_path: dict[str, list[Sequence[Any]]] = defaultdict(list)
+        for scope, row in self.snapshot.importing([name]):
+            if scope.path in self.order:
+                by_path[scope.path].append(row)
+        paths = sorted(by_path, key=self.order.__getitem__)
+        found = self.by_name[name] = [(self.by_path[path], row) for path in paths for row in reversed(by_path[path])]
+        return found
 
     def importers(self, module: str, name: str) -> list[tuple[FileFacts, str]]:
         """Files with `from <module> import <name> [as bound]`, and the bound name, in file order."""
@@ -566,7 +580,7 @@ class ImportIndex:
         if found is not None:
             return found
         found = self.found[key] = []
-        for ff, row in self.by_name.get(name, ()):
+        for ff, row in self.rows_named(name):
             scope = ff.reader.scope
             if absolute_import(scope.module, scope.is_package, row[4], row[5]) == module:
                 found.append((ff, row[7] or name))
@@ -725,7 +739,7 @@ class Deriver:
         self.snapshot = snapshot
         self.by_rel = {f.rel: f for f in facts.values()}
         self.view = CallView(facts)
-        self.imports = ImportIndex(facts)
+        self.imports = ImportIndex(facts, snapshot)
         self.importer_products: dict[str, set[str]] = defaultdict(set)
 
     def read_registry(self) -> None:

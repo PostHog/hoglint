@@ -15,7 +15,7 @@ from hoglint.core.records import RecordBodies
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge, EntityId, Graph
 from hoglint.native.queries import PackQueries
-from hoglint.plugins import EdgeBatch
+from hoglint.plugins import AttributeUse, EdgeBatch
 
 if TYPE_CHECKING:
     from hoglint.native.queries import Words
@@ -68,6 +68,14 @@ class BuildReader:
 
     def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
         return self.queries.fact_digest(record, kinds)
+
+    def uses_to(
+        self, scopes: Iterable[FileScope], targets: Collection[EntityId]
+    ) -> Iterator[tuple[FileScope, list[AttributeUse]]]:
+        return self.queries.uses_to(scopes, targets)
+
+    def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
+        return self.queries.importing(names)
 
 
 def python_pack_io(build: CoreBuild, graph: Graph) -> tuple[BuildReader, GraphSink]:

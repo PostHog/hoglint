@@ -2,13 +2,12 @@
 
 Packs keep their code: records, file scopes, tables and the module index look the same. Every
 resolution goes to the link, so packs see the resolver caches the core producers left, as
-they do in the Python engine. A fact kind crosses for every file in one call; a record decodes
-its part of it the first time a pack reads it.
+they do in the Python engine. A record decodes one fact kind the first time a pack reads it,
+from that record's text alone.
 """
 
 from __future__ import annotations
 
-from array import array
 from collections.abc import Iterator, Mapping
 from functools import cached_property
 from typing import Any
@@ -29,44 +28,22 @@ Hits = tuple[str, list[tuple[str, str]]]
 ABSENT = object()
 
 
-ABSENT_RANGE = 0xFFFFFFFF
-
-
-class KindTexts:
-    """The records' JSON text, read in place: one buffer over the link's memory, and per fact
-    kind where each record's list sits in it, fetched for every file at once on first use."""
-
-    def __init__(self, link: Any) -> None:
-        self.text = memoryview(link.text())
-        self.link = link
-        self.ranges: dict[str, array[int]] = {}
-
-    def take(self, file: int, key: str) -> memoryview | None:
-        ranges = self.ranges.get(key)
-        if ranges is None:
-            ranges = self.ranges[key] = array("I", self.link.kind_ranges(key))
-        start = ranges[2 * file]
-        if start == ABSENT_RANGE:
-            return None
-        return self.text[start : ranges[2 * file + 1]]
-
-
 class NativeRecord(dict[str, Any]):
     """One file's record. A key decodes from the extractor's JSON text on first read and is
-    kept; a key the record lacks is kept as ABSENT, so each one crosses at most once. `path` is
-    the snapshot's: a cached record holds an empty one."""
+    kept; a key the record lacks is kept as ABSENT, so each one crosses at most once. The link
+    reads the text of that one record, never the snapshot's. `path` is the snapshot's: a cached
+    record holds an empty one."""
 
-    __slots__ = ("file", "link", "texts")
+    __slots__ = ("file", "link")
 
-    def __init__(self, link: Any, texts: KindTexts, file: int, path: str) -> None:
+    def __init__(self, link: Any, file: int, path: str) -> None:
         super().__init__()
         self.link = link
-        self.texts = texts
         self.file = file
         dict.__setitem__(self, "path", path)
 
     def load(self, key: str) -> Any:
-        text = self.texts.take(self.file, key)
+        text = self.link.raw(self.file, key)
         value = orjson.loads(text) if text is not None else ABSENT
         dict.__setitem__(self, key, value)
         return value
@@ -97,10 +74,7 @@ class NativeStore:
     """`FactStore.records` over the link: path -> record, in fact order."""
 
     def __init__(self, link: Any, paths: list[str]) -> None:
-        texts = KindTexts(link)
-        self.records: dict[str, NativeRecord] = {
-            path: NativeRecord(link, texts, i, path) for i, path in enumerate(paths)
-        }
+        self.records: dict[str, NativeRecord] = {path: NativeRecord(link, i, path) for i, path in enumerate(paths)}
 
 
 def module_values(record: Mapping[str, Any]) -> dict[str, object]:
@@ -300,11 +274,15 @@ class NativeContext:
 
 
 class NativeBuild:
-    """CoreBuild for packs on the native engine."""
+    """CoreBuild for packs on the native engine. `extracted_by` names what made the facts (the
+    extractor and its options); a pack's per-file cache keys on it (`fact_digest`)."""
 
-    def __init__(self, config: CoreConfig, link: Any, external: Mapping[str, str], maker: EdgeMaker) -> None:
+    def __init__(
+        self, config: CoreConfig, link: Any, external: Mapping[str, str], maker: EdgeMaker, extracted_by: str = ""
+    ) -> None:
         self.config = config
         self.link = link
+        self.extracted_by = extracted_by
         self.external = dict(external)
         paths: list[str] = link.paths()
         self.store = NativeStore(link, paths)
@@ -329,3 +307,17 @@ class NativeBuild:
         if found is None:
             found = self.bodies_cache[path] = RecordBodies(record)  # type: ignore[arg-type]
         return found
+
+    def release(self) -> None:
+        """Drops what packs read, once the pack phase ends (D23): the decoded records, the
+        tables and file scopes over them, and the link's fact rows. Rules read edges, symbols
+        and scopes only. The objects may sit in reference cycles, which no collector frees in a
+        native run (`batch_mode`), so their contents are cleared here."""
+        for record in self.store.records.values():
+            dict.clear(record)
+        self.store.records.clear()
+        self.tables.cache.clear()
+        self.files.clear()
+        self.scope_of.clear()
+        self.bodies_cache.clear()
+        self.link.release_facts()

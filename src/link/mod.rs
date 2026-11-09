@@ -11,6 +11,7 @@ pub mod index;
 pub mod intern;
 pub mod paths;
 pub mod produce;
+pub mod queries;
 pub mod resolve;
 pub mod scope;
 pub mod store;
@@ -72,6 +73,7 @@ pub mod heap {
     pub fn record(f: &FileFacts) -> (usize, usize) {
         let mut rows = vec(&f.imports) + vec(&f.defs) + vec(&f.assigns) + vec(&f.refs);
         rows += vec(&f.strs) + vec(&f.calls) + vec(&f.keys);
+        rows += vec(&f.uses) + vec(&f.callees) + vec(&f.names) + vec(&f.tags);
         let mut texts = text(&f.path) + text(&f.status);
         texts += f.keys.iter().map(|(k, _)| text(k)).sum::<usize>();
         for d in &f.defs {
@@ -587,6 +589,18 @@ impl Link {
 
 impl Link {
     /// Estimated heap bytes per part, in a fixed order.
+    /// Drops every record's fact rows (`FactSet::release_rows`). False when another holder
+    /// shares the fact set, so nothing is dropped.
+    pub fn release_facts(&mut self) -> bool {
+        match Arc::get_mut(&mut self.core.facts) {
+            Some(facts) => {
+                facts.release_rows();
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn heap(&self) -> Vec<(&'static str, usize)> {
         let facts = &self.core.facts;
         let (mut rows, mut texts) = (heap::vec(&facts.files), 0);
