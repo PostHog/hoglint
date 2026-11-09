@@ -16,6 +16,7 @@ from hoglint.core.analysis import CoreAnalysis
 from hoglint.core.discovery import Discovery, Inventory
 from hoglint.core.producers import PRODUCERS
 from hoglint.facts import site_packages_files
+from hoglint.ledger.status import WorktreeStatus
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
 from hoglint.native.config import link_config
@@ -49,13 +50,13 @@ class NativeAnalysis(CoreAnalysis):
             return int(override)
         return 1 if self.options.staged else 0
 
-    def fact_database(self, facts_id: str) -> FactDatabase | None:
-        """The fact database of this build, pruned on the first run of the day; None without a cache."""
+    def fact_database(self, facts_id: str, layout: int) -> FactDatabase | None:
+        """The fact database of this build, pruned on the first run of the day; None without a
+        cache, or when the cache is not usable (logged once)."""
         if self.options.cache_dir is None:
             return None
-        database = FactDatabase(self.options.cache_dir, facts_id)
-        database.prune_daily()
-        return database
+        database = FactDatabase(self.options.cache_dir, facts_id, layout)
+        return database if database.open_for_run() else None
 
     def blob_snapshot(self) -> BlobSnapshot:
         if self.options.tree:
@@ -97,7 +98,7 @@ class NativeAnalysis(CoreAnalysis):
         started = time.perf_counter()
         native = bridge.load()
         blobs = [(path, *snapshot.blobs[path]) for path in inventory.files]
-        database = self.fact_database(native.FACTS_ID)
+        database = self.fact_database(native.FACTS_ID, native.FACT_LAYOUT)
         link, (hits, extracted) = native.link_blobs(
             str(self.options.repo),
             blobs,
@@ -111,6 +112,9 @@ class NativeAnalysis(CoreAnalysis):
         timings.update({f"link.{name}": seconds for name, seconds in link.timings()})
         timings["facts.cached"] = hits
         timings["facts.extracted"] = extracted
+        drifted = link.drifted()
+        if drifted:
+            WorktreeStatus.of(self.options.repo).mark_drifted(drifted)
         started = time.perf_counter()
         symbols = {name: {"kind": kind, "path": path} for name, kind, path in link.symbols()}
         graph = NativeGraph(link, {}, symbols)

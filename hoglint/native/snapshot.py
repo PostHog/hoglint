@@ -4,7 +4,8 @@
   incomplete.
 - A commit's tree: `git ls-tree -r`.
 - The working tree: the index, then `git status --porcelain=v2 -uall` for what differs; a dirty
-  or untracked file is hashed with `git hash-object`, and its bytes come from the working tree.
+  or untracked file is hashed from its raw bytes (`git hash-object --no-filters`), as the
+  extractor reads them, and its bytes come from the working tree.
 
 Paths come only from git, never from listing or stat-ing the file system, so a case-insensitive
 file system cannot change a result.
@@ -107,7 +108,8 @@ class BlobSnapshot:
             if kind == "u" or change != ".":
                 dirty.append(path)
         if dirty:
-            oids = git(repo, "hash-object", "--stdin-paths", stdin="".join(f"{path}\n" for path in dirty)).split()
+            paths = "".join(f"{path}\n" for path in dirty)
+            oids = git(repo, "hash-object", "--no-filters", "--stdin-paths", stdin=paths).split()
             for path, oid in zip(dirty, oids):
                 snapshot.blobs[path] = (oid, True)
         return snapshot

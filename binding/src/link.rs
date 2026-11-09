@@ -52,8 +52,9 @@ impl FactText {
     unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
 }
 
-/// A linked snapshot, (cache hits, files extracted) and each record's fact cache key.
-type Loaded = (CoreLink, (usize, usize), Vec<Option<String>>);
+/// A linked snapshot, (cache hits, files extracted), each record's fact cache key, and the
+/// working tree files that changed during the run.
+type Loaded = (CoreLink, (usize, usize), Vec<Option<String>>, Vec<String>);
 
 /// One linked snapshot: facts, module index, resolver state and the core edges.
 #[pyclass(module = "hoglint_native", unsendable)]
@@ -62,6 +63,8 @@ pub(crate) struct Link {
     pub(crate) file_of: FxHashMap<String, u32>,
     /// The fact cache key of each record (`BlobStats::keys`); None for JSONL input.
     pub(crate) keys: Vec<Option<String>>,
+    /// Working tree files that changed while the run read them (`BlobStats::drifted`).
+    pub(crate) drifted: Vec<String>,
 }
 
 impl Link {
@@ -417,6 +420,7 @@ pub(crate) fn link_jsonl(
         inner,
         file_of,
         keys,
+        drifted: Vec::new(),
     })
 }
 
@@ -485,7 +489,7 @@ pub(crate) fn link_blobs(
         .num_threads(threads)
         .build()
         .map_err(|e| PyValueError::new_err(format!("threads: {e}")))?;
-    let (inner, stats, keys) = py
+    let (inner, stats, keys, drifted) = py
         .detach(move || {
             pool.install(|| -> Result<Loaded, String> {
                 let started = std::time::Instant::now();
@@ -497,7 +501,12 @@ pub(crate) fn link_blobs(
                 for (at, stage) in stats.stages.iter().enumerate() {
                     link.timings.stages.insert(at + 1, *stage);
                 }
-                Ok((link, (stats.hits, stats.extracted), stats.keys))
+                Ok((
+                    link,
+                    (stats.hits, stats.extracted),
+                    stats.keys,
+                    stats.drifted,
+                ))
             })
         })
         .map_err(PyValueError::new_err)?;
@@ -514,6 +523,7 @@ pub(crate) fn link_blobs(
             inner,
             file_of,
             keys,
+            drifted,
         },
         stats,
     ))

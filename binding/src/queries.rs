@@ -195,6 +195,13 @@ impl Link {
         self.keys.clone()
     }
 
+    /// Working tree files whose bytes did not hash to the snapshot's oid when the run read them:
+    /// they changed during the run, so no fact entry was stored for them, and no run summary of
+    /// this run may be stored either.
+    fn drifted(&self) -> Vec<String> {
+        self.drifted.clone()
+    }
+
     /// Classes the analyzed modules' own source defines at module level whose MRO holds
     /// `qualified` (the class itself included), as (module, symbol) in scope order and table
     /// order: `is_subclass` asked of every class at once.

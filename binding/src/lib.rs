@@ -54,5 +54,6 @@ fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;
     module.add("NATIVE_ID", hoglint_facts::NATIVE_ID)?;
     module.add("PROTOCOL", PROTOCOL)?;
+    module.add("FACT_LAYOUT", factdb::LAYOUT)?;
     Ok(())
 }

@@ -11,6 +11,8 @@ NATIVE_ID: str
 binary, so every platform agrees; a loaded module must report its sources' id."""
 PROTOCOL: int
 """The binding's call protocol."""
+FACT_LAYOUT: int
+"""The fact database's table layout: part of the database file name."""
 
 Pair = tuple[str, str]
 Hit = tuple[str, list[Pair]]
@@ -59,7 +61,11 @@ class Link:
         (file id, row JSON) in fact order."""
     def blob_keys(self) -> list[str | None]:
         """The fact cache key of each record in fact order: blob oid, or the content hash of a
-        third-party file; None for an unreadable file or a JSONL input."""
+        third-party file; None for an unreadable file, a file that changed during the run or a
+        JSONL input."""
+    def drifted(self) -> list[str]:
+        """Working tree files whose bytes did not hash to the snapshot's oid when the run read
+        them: no fact entry and no run summary is stored for this run's view of them."""
     def subclasses(self, qualified: str) -> list[Pair]:
         """Module-level classes of the analyzed modules whose MRO holds `qualified`, the class
         itself included, in scope and table order: `is_subclass` asked of every class at once."""

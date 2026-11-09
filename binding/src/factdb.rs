@@ -10,21 +10,54 @@
 //! WAL mode lets runs read while another run writes. Writes skip keys already stored and run in
 //! short transactions, so runs that extract the same blob at once store it once and hold the
 //! write lock briefly. Reads go through `pread`, not a memory map: ten runs that map one file
-//! at once wait on each other's page faults. The daily prune lives in `hoglint/native/factdb.py`.
+//! at once wait on each other's page faults. Every read is by natural key (config, oid): an
+//! entry id can be reused after a prune. The daily prune lives in `hoglint/native/factdb.py`.
+//!
+//! The database is a cache. An entry that is gone is a miss, and an error is the caller's to
+//! log and run past (`blobs.rs`).
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// The table layout. A database with another `user_version` is emptied and set up again.
-const LAYOUT: i64 = 2;
+/// The table layout. It is part of the database file name (`hoglint/native/factdb.py`), so two
+/// builds with different layouts never share a file; a file with another `user_version` is
+/// emptied and set up again.
+pub const LAYOUT: i64 = 2;
 /// Entries per write transaction.
 const ROWS_PER_WRITE: usize = 256;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn fail(e: rusqlite::Error) -> String {
-    format!("fact database: {e}")
+/// A fact database error; `corrupt` when the file is no database or a damaged one.
+#[derive(Debug)]
+pub struct DbError {
+    pub message: String,
+    pub corrupt: bool,
 }
+
+impl From<rusqlite::Error> for DbError {
+    fn from(e: rusqlite::Error) -> DbError {
+        let corrupt = matches!(
+            e.sqlite_error_code(),
+            Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase)
+        );
+        DbError {
+            message: format!("fact database: {e}"),
+            corrupt,
+        }
+    }
+}
+
+impl From<std::io::Error> for DbError {
+    fn from(e: std::io::Error) -> DbError {
+        DbError {
+            message: format!("fact database: {e}"),
+            corrupt: false,
+        }
+    }
+}
+
+type Result<T> = std::result::Result<T, DbError>;
 
 /// Days since the Unix epoch, in UTC.
 fn today() -> i64 {
@@ -35,10 +68,9 @@ fn today() -> i64 {
     (seconds / 86_400) as i64
 }
 
-/// A stored entry: its id, the day a run last read it, and the length of its JSON text.
+/// A stored entry: the day a run last read it, and the length of its JSON text.
 #[derive(Clone, Copy)]
 pub struct Row {
-    pub id: i64,
     pub used: i64,
     pub json_len: usize,
 }
@@ -52,18 +84,17 @@ pub struct FactDb {
 }
 
 impl FactDb {
-    pub fn open(path: &Path) -> Result<FactDb, String> {
+    pub fn open(path: &Path) -> Result<FactDb> {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+            std::fs::create_dir_all(dir)?;
         }
-        let conn = Connection::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(fail)?;
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.execute_batch(
             "PRAGMA auto_vacuum = INCREMENTAL;
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;",
-        )
-        .map_err(fail)?;
+        )?;
         let db = FactDb {
             conn,
             today: today(),
@@ -72,15 +103,15 @@ impl FactDb {
         Ok(db)
     }
 
-    fn layout(&self) -> Result<i64, String> {
-        self.conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(fail)
+    fn layout(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?)
     }
 
     /// Creates the tables when the layout differs. The check repeats under the write lock, so
     /// runs that open a new database at once set it up once.
-    fn set_up(&self) -> Result<(), String> {
+    fn set_up(&self) -> Result<()> {
         if self.layout()? == LAYOUT {
             return Ok(());
         }
@@ -109,56 +140,56 @@ impl FactDb {
     }
 
     /// Starts a read transaction: every read until `end_read` sees one state.
-    pub fn begin_read(&self) -> Result<(), String> {
-        self.conn.execute_batch("BEGIN").map_err(fail)
+    pub fn begin_read(&self) -> Result<()> {
+        Ok(self.conn.execute_batch("BEGIN")?)
     }
 
-    pub fn end_read(&self) -> Result<(), String> {
-        self.conn.execute_batch("COMMIT").map_err(fail)
+    pub fn end_read(&self) -> Result<()> {
+        Ok(self.conn.execute_batch("COMMIT")?)
     }
 
-    pub fn find(&self, config: &str, oid: &str) -> Result<Option<Row>, String> {
+    pub fn find(&self, config: &str, oid: &str) -> Result<Option<Row>> {
         let mut stmt = self
             .conn
-            .prepare_cached("SELECT id, used, json_len FROM keys WHERE config = ?1 AND oid = ?2")
-            .map_err(fail)?;
-        stmt.query_row(params![config, oid], |r| {
-            Ok(Row {
-                id: r.get(0)?,
-                used: r.get(1)?,
-                json_len: r.get::<_, i64>(2)? as usize,
+            .prepare_cached("SELECT used, json_len FROM keys WHERE config = ?1 AND oid = ?2")?;
+        Ok(stmt
+            .query_row(params![config, oid], |r| {
+                Ok(Row {
+                    used: r.get(0)?,
+                    json_len: r.get::<_, i64>(1)? as usize,
+                })
             })
-        })
-        .optional()
-        .map_err(fail)
+            .optional()?)
     }
 
-    /// Calls `f` with the blob `sql` selects for entry `id`.
-    fn read<R>(&self, sql: &str, id: i64, f: impl FnOnce(&[u8]) -> R) -> Result<R, String> {
-        let mut stmt = self.conn.prepare_cached(sql).map_err(fail)?;
-        let mut rows = stmt.query([id]).map_err(fail)?;
-        let found = rows
-            .next()
-            .map_err(fail)?
-            .ok_or("fact database: an entry went away during the run; run again")?;
-        let blob = found
-            .get_ref(0)
-            .map_err(fail)?
-            .as_blob()
-            .map_err(|e| fail(e.into()))?;
-        Ok(f(blob))
+    /// The blob `sql` selects for the entry of (config, oid), or None when the entry is gone.
+    fn read(&self, sql: &str, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self.conn.prepare_cached(sql)?;
+        Ok(stmt
+            .query_row(params![config, oid], |r| r.get::<_, Vec<u8>>(0))
+            .optional()?)
     }
 
-    pub fn read_facts<R>(&self, row: Row, f: impl FnOnce(&[u8]) -> R) -> Result<R, String> {
-        self.read("SELECT body FROM facts WHERE id = ?1", row.id, f)
+    /// The binary facts of an entry, or None when it is gone.
+    pub fn read_facts(&self, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
+        self.read(
+            "SELECT f.body FROM facts f JOIN keys k ON k.id = f.id WHERE k.config = ?1 AND k.oid = ?2",
+            config,
+            oid,
+        )
     }
 
-    pub fn read_json<R>(&self, row: Row, f: impl FnOnce(&[u8]) -> R) -> Result<R, String> {
-        self.read("SELECT json FROM records WHERE id = ?1", row.id, f)
+    /// The record JSON of an entry, or None when it is gone.
+    pub fn read_json(&self, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
+        self.read(
+            "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.config = ?1 AND k.oid = ?2",
+            config,
+            oid,
+        )
     }
 
     /// Stores new entries; a key already stored keeps its entry.
-    pub fn store(&self, entries: &[NewEntry]) -> Result<(), String> {
+    pub fn store(&self, entries: &[NewEntry]) -> Result<()> {
         for chunk in entries.chunks(ROWS_PER_WRITE) {
             self.write(|conn| {
                 let mut exists = conn.prepare_cached("SELECT 1 FROM keys WHERE config = ?1 AND oid = ?2")?;
@@ -183,7 +214,7 @@ impl FactDb {
     }
 
     /// Records that this run read the entries of `keys` ((config id, oid)) today.
-    pub fn touch(&self, keys: &[(&str, &str)]) -> Result<(), String> {
+    pub fn touch(&self, keys: &[(&str, &str)]) -> Result<()> {
         for chunk in keys.chunks(ROWS_PER_WRITE) {
             self.write(|conn| {
                 let mut stmt = conn.prepare_cached(
@@ -198,12 +229,26 @@ impl FactDb {
         Ok(())
     }
 
-    fn write(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<()>) -> Result<(), String> {
-        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(fail)?;
+    fn write(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<()>) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
         if let Err(e) = f(&self.conn) {
             let _ = self.conn.execute_batch("ROLLBACK");
-            return Err(fail(e));
+            return Err(e.into());
         }
-        self.conn.execute_batch("COMMIT").map_err(fail)
+        Ok(self.conn.execute_batch("COMMIT")?)
+    }
+}
+
+/// Moves a damaged database aside with its `-wal` and `-shm` files, so the next open starts an
+/// empty one. A stale `-wal` left beside a new file would be replayed into it.
+pub fn move_aside(path: &Path) {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for suffix in ["", "-wal", "-shm"] {
+        let from = format!("{}{suffix}", path.display());
+        let to = format!("{}.corrupt-{stamp}{suffix}", path.display());
+        let _ = std::fs::rename(from, to);
     }
 }

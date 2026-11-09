@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from hoglint.cli import Snapshots, TreeSummaries
 from hoglint.facts import Extractor
 from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
@@ -167,9 +168,14 @@ NOW = 100 * DAY
     "files, kept",
     [
         # a file older than the age bound goes, a fresh one stays
-        ({"facts/v3-old/a.json": (31, 10), "summaries/e1/t1/p-f.json": (1, 10)}, ["summaries/e1/t1/p-f.json"]),
+        ({"bin/v3-old/a.json": (31, 10), "summaries/e1/t1/p-f.json": (1, 10)}, ["summaries/e1/t1/p-f.json"]),
         # over the size bound the oldest go first
         ({"a": (3, 60), "b": (2, 60), "c": (1, 60)}, ["b", "c"]),
+        # the fact cache has its own pruner, which deletes a database only with its -wal
+        (
+            {"facts/x-l2.sqlite": (31, 100), "facts/x-l2.sqlite-wal": (31, 100), "a": (1, 10)},
+            ["a", "facts/x-l2.sqlite", "facts/x-l2.sqlite-wal"],
+        ),
     ],
 )
 def test_the_cache_root_stays_within_its_age_and_size(tmp_path: Path, files: dict, kept: list[str]) -> None:
@@ -462,3 +468,17 @@ def test_side_input_drift_is_read_from_one_git_status(
     status = WorktreeStatus(records)
     assert status.side_input_drift(against_index=False) == against_head
     assert status.side_input_drift(against_index=True) == against_index
+
+
+def test_a_source_file_that_changed_while_the_run_read_it_keeps_the_summary_out(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git_in(repo, "init", "-q")
+    WorktreeStatus.taken[repo.resolve()] = WorktreeStatus([])
+    try:
+        WorktreeStatus.of(repo).mark_drifted(["app/views.py"])
+        store = SummaryStore(tmp_path / "cache")
+        TreeSummaries(Snapshots(repo, tmp_path / "work"), store).put(ScanSummary(Envelope(tree="abc", engine="e")))
+    finally:
+        WorktreeStatus.taken.pop(repo.resolve())
+    assert not list((tmp_path / "cache" / "summaries").rglob("*"))

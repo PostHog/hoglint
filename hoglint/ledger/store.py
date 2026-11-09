@@ -47,6 +47,7 @@ SECTION_DIGEST_CHARS = 32
 MAX_BYTES = 2 * 1024**3
 MAX_AGE = datetime.timedelta(days=30)
 PRUNED_MARK = ".pruned"
+FACTS = "facts"  # the fact cache, pruned by its own pruner
 
 
 def cache_root() -> Path:
@@ -54,7 +55,9 @@ def cache_root() -> Path:
 
 
 class CacheRoot:
-    """Keeps the cache root within its age and size bounds, once a day."""
+    """Keeps the cache root within its age and size bounds, once a day. `facts/` has a pruner of
+    its own (`hoglint/native/factdb.py`), which deletes a database only with its `-wal` and
+    `-shm` files, so this one never walks it."""
 
     def __init__(self, root: Path, max_bytes: int = MAX_BYTES, max_age: datetime.timedelta = MAX_AGE) -> None:
         self.root = root
@@ -78,7 +81,9 @@ class CacheRoot:
     def files(self) -> list[tuple[float, int, Path]]:
         """(modified time, size, path) of every file under the root but the mark."""
         out = []
-        for directory, _, names in os.walk(self.root):
+        for directory, subdirectories, names in os.walk(self.root):
+            if Path(directory) == self.root and FACTS in subdirectories:
+                subdirectories.remove(FACTS)
             for name in names:
                 path = Path(directory) / name
                 if path.parent == self.root and name == PRUNED_MARK:
@@ -108,7 +113,11 @@ class CacheRoot:
 
     def remove_old_empty_directories(self, cutoff: float) -> None:
         """A directory made within the age bound stays, so a run about to write into it never loses it."""
-        directories = sorted((Path(d) for d, _, _ in os.walk(self.root)), key=lambda d: len(d.parts), reverse=True)
+        facts = self.root / FACTS
+        walked = (Path(d) for d, _, _ in os.walk(self.root))
+        directories = sorted(
+            (d for d in walked if not d.is_relative_to(facts)), key=lambda d: len(d.parts), reverse=True
+        )
         for directory in directories:
             try:
                 if directory != self.root and directory.stat().st_mtime < cutoff and not any(directory.iterdir()):

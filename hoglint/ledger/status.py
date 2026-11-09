@@ -8,6 +8,7 @@ must equal the tree a summary is filed under. One `git status --porcelain=v2 -ua
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -59,6 +60,12 @@ class WorktreeStatus:
     def __init__(self, records: list[str]) -> None:
         self.records = records
         self.entries = parse(records)
+        self.drifted: set[str] = set()
+
+    def mark_drifted(self, paths: Iterable[str]) -> None:
+        """Source files that changed while this process read them: the run used what it read,
+        which no tree holds, so no summary of the run may be stored."""
+        self.drifted.update(paths)
 
     @staticmethod
     def start(repo: Path) -> None:
@@ -83,11 +90,12 @@ class WorktreeStatus:
 
     def side_input_drift(self, against_index: bool) -> list[str]:
         """Files other than Python sources where the working tree differs from HEAD, or from the
-        index when `against_index`."""
+        index when `against_index`, and source files that changed while this process read them."""
         return sorted(
             {
                 entry.path
                 for entry in self.entries
                 if not entry.path.endswith(SOURCE_SUFFIXES) and (entry.unstaged or (entry.staged and not against_index))
             }
+            | self.drifted
         )

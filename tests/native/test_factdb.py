@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import json
+import time
 import sqlite3
 import datetime
 import subprocess
@@ -17,6 +19,7 @@ from hoglint.native.factdb import EPOCH, MAX_AGE_DAYS, FactDatabase, files_under
 from hoglint.native.snapshot import BlobSnapshot
 
 TODAY = datetime.date(2026, 11, 9)
+DAY = 86_400
 
 
 def native_module() -> Any:
@@ -30,31 +33,87 @@ def make_repo(root: Path) -> Path:
     repo = root / "repo"
     (repo / "app").mkdir(parents=True)
     (repo / "app" / "__init__.py").write_text("")
-    (repo / "app" / "models.py").write_text("class Thing:\n    pass\n")
+    (repo / "app" / "models.py").write_text("class Thing:\n    pass\n\nclass Other:\n    pass\n")
     (repo / "app" / "views.py").write_text("from app.models import Thing\n\nTHING = Thing()\n")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     return repo
 
 
-def link(native: Any, repo: Path, database: FactDatabase) -> tuple[Any, tuple[int, int]]:
-    snapshot = BlobSnapshot.index(repo)
+def fact_database(native: Any, root: Path) -> FactDatabase:
+    return FactDatabase(root / "cache" / "facts", native.FACTS_ID, native.FACT_LAYOUT)
+
+
+def link(native: Any, snapshot: BlobSnapshot, database: FactDatabase | None) -> tuple[Any, tuple[int, int]]:
     paths = sorted(snapshot.blobs)
     blobs = [(path, *snapshot.blobs[path]) for path in paths]
     extract = {"first_party": ["app"], "kinds": [], "lite_kinds": list(LITE_KINDS)}
     config = link_config(CoreConfig(), tuple(paths), {})
-    return native.link_blobs(str(repo), blobs, [], json.dumps(extract), json.dumps(config), str(database.path), 1)
+    db = str(database.path) if database is not None else None
+    return native.link_blobs(str(snapshot.repo), blobs, [], json.dumps(extract), json.dumps(config), db, 1)
+
+
+def imports(linked: Any) -> list[str]:
+    return sorted(row[8] for row in linked.edges(linked.ids_of_kind("import")))
 
 
 def test_a_second_run_reads_every_record_from_the_database(tmp_path: Path) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
-    database = FactDatabase(tmp_path / "cache" / "facts", native.FACTS_ID)
-    first, first_counts = link(native, repo, database)
-    second, second_counts = link(native, repo, database)
+    database = fact_database(native, tmp_path)
+    first, first_counts = link(native, BlobSnapshot.index(repo), database)
+    second, second_counts = link(native, BlobSnapshot.index(repo), database)
     assert (first_counts, second_counts) == ((0, 3), (3, 0))
     assert bytes(memoryview(second.text())) == bytes(memoryview(first.text()))
     assert second.edges(second.ids_of_kind("import")) == first.edges(first.ids_of_kind("import"))
+
+
+def test_a_working_tree_file_that_changes_during_the_run_is_never_stored(tmp_path: Path) -> None:
+    native = native_module()
+    repo = make_repo(tmp_path)
+    database = fact_database(native, tmp_path)
+    views = repo / "app" / "views.py"
+    views.write_text("from app.models import Thing\n")
+    snapshot = BlobSnapshot.worktree(repo)
+    views.write_text("from app.models import Other\n")
+    changed, _ = link(native, snapshot, database)
+    assert (imports(changed), changed.drifted()) == (["Other"], ["app/views.py"])
+    views.write_text("from app.models import Thing\n")
+    again, counts = link(native, BlobSnapshot.worktree(repo), database)
+    assert (imports(again), again.drifted(), counts) == (["Thing"], [], (2, 1))
+
+
+def test_a_record_whose_entry_went_away_is_extracted_again(tmp_path: Path) -> None:
+    native = native_module()
+    repo = make_repo(tmp_path)
+    database = fact_database(native, tmp_path)
+    link(native, BlobSnapshot.index(repo), database)
+    run, counts = link(native, BlobSnapshot.index(repo), database)
+    fresh, _ = link(native, BlobSnapshot.index(repo), None)
+    with sqlite3.connect(database.path) as conn:
+        newest, length = conn.execute("SELECT id, json_len FROM keys ORDER BY id DESC LIMIT 1").fetchone()
+        record = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
+        FactDatabase.delete(conn, [newest])
+        # Another blob's entry takes the freed id and has a record of the same length.
+        body = conn.execute("SELECT body FROM facts LIMIT 1").fetchone()[0]
+        reused = conn.execute("INSERT INTO facts (body) VALUES (?)", (body,)).lastrowid
+        conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record.replace(b"Thing", b"Other")))
+        conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
+    assert counts == (3, 0)
+    assert bytes(memoryview(run.text())) == bytes(memoryview(fresh.text()))
+
+
+def test_a_damaged_database_is_moved_aside_and_the_run_goes_on(tmp_path: Path) -> None:
+    native = native_module()
+    repo = make_repo(tmp_path)
+    database = fact_database(native, tmp_path)
+    database.directory.mkdir(parents=True)
+    database.path.write_bytes(b"not a database" * 512)
+    run, counts = link(native, BlobSnapshot.index(repo), database)
+    assert (imports(run), counts) == (["Thing"], (0, 3))
+    aside = [path.name for path in database.directory.iterdir() if ".corrupt-" in path.name]
+    assert (len(aside), database.path.exists()) == (1, False)
+    assert database.open_for_run(TODAY)
 
 
 def stored_ids(database: FactDatabase) -> list[int]:
@@ -67,8 +126,8 @@ def test_the_daily_prune_drops_unread_entries_then_other_files_then_old_entries(
 ) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
-    database = FactDatabase(tmp_path / "cache" / "facts", native.FACTS_ID)
-    link(native, repo, database)
+    database = fact_database(native, tmp_path)
+    link(native, BlobSnapshot.index(repo), database)
     ids = stored_ids(database)
     today = (TODAY - EPOCH).days
     with sqlite3.connect(database.path) as conn:
@@ -91,4 +150,40 @@ def test_the_daily_prune_drops_unread_entries_then_other_files_then_old_entries(
     database.prune(TODAY)
     with sqlite3.connect(database.path) as conn:
         bodies = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
-    assert (stored_ids(database), bodies) == ([], 0)
+        free = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    assert (stored_ids(database), bodies, free) == ([], 0, 0)
+
+
+def other_database(directory: Path, name: str, opened_days_ago: float) -> list[Path]:
+    """Another facts id's database unit, last opened `opened_days_ago`."""
+    files = [directory / f"{name}{suffix}" for suffix in ("", "-wal", "-shm", ".opened")]
+    for path in files:
+        path.write_bytes(b"x" * 1024)
+    stamp = time.time() - opened_days_ago * DAY
+    os.utime(files[-1], (stamp, stamp))
+    return files
+
+
+@pytest.mark.parametrize(
+    "opened_days_ago, max_bytes, deleted",
+    [
+        # over the size bound, a database some run opened today stays whole
+        (0.1, 0, False),
+        # over the size bound, one no run opened since yesterday goes whole
+        (2, 0, True),
+        # within the size bound, only one no run opened for 30 days goes
+        (2, None, False),
+        (31, None, True),
+    ],
+)
+def test_another_database_goes_only_whole_and_only_when_no_run_has_it_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened_days_ago: float, max_bytes: int | None, deleted: bool
+) -> None:
+    native = native_module()
+    database = fact_database(native, tmp_path)
+    database.directory.mkdir(parents=True)
+    files = other_database(database.directory, "0123456789abcdef-l2.sqlite", opened_days_ago)
+    if max_bytes is not None:
+        monkeypatch.setattr("hoglint.native.factdb.MAX_BYTES", max_bytes)
+    database.prune(TODAY)
+    assert [path.exists() for path in files] == [not deleted] * len(files)
