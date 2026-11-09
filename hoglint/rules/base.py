@@ -56,6 +56,7 @@ class IncompleteItem:
     reason: str
     subjects: tuple[str, ...] = ()
     cause: IncompleteCause = IncompleteCause.INHERITED
+    edge: Edge | None = field(default=None, compare=False)  # the edge that raised it; compare fingerprints it
 
 
 @dataclass(frozen=False, slots=True)
@@ -571,7 +572,7 @@ class EdgeRule:
 
     def incomplete(self, env: EdgeEnv, reason: str) -> None:
         key = f"{env.src.module}|{env.edge.kind}|{env.edge.surface}"
-        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(env)))
+        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(env), edge=env.edge))
 
     def subjects(self, env: EdgeEnv) -> tuple[str, ...]:
         out = [env.src.module]

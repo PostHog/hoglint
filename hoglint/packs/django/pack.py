@@ -155,6 +155,7 @@ class DjangoPack:
     name = SECTION
     allowed_keys = ALLOWED_KEYS
     edge_kinds = EDGE_KINDS
+    policy_file_keys = ("db_routing",)  # keys that name policy data files; see hoglint/ledger/envelope.py
 
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
         return FACT_NEEDS

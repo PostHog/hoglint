@@ -55,7 +55,7 @@ def graph() -> Graph:
 def commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Commands:
     built = graph()
 
-    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False) -> Graph:
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
         return built
 
     monkeypatch.setattr(GraphSource, "build", build)

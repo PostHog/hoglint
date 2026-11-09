@@ -1,116 +1,228 @@
-"""A scan summary: what one (code, policy, scanner) triple produced, in a form base and head compare.
+"""A run summary: what one (code, policy, engine) run produced, in the form compare, check and
+query read. It is hoglint's one cached artifact (see `store.py`).
 
-`hoglint scan` writes it as JSON, so the base scanner can run in its own checkout and process.
+`hoglint scan` writes it as gzip-compressed JSON, so a base engine can run in its own checkout
+and process. The file carries a protocol version and its envelope (see `envelope.py`); a reader
+refuses any other protocol instead of guessing. It holds:
+- lines and growth: the scan's ledger line counts, level lines included, and each ledgered
+  rule's growth-key columns;
+- findings: every finding with its identity, status, message, site, witnesses, owners, subjects
+  and remedies, allowed ones included;
+- incomplete: every incomplete item in run order with its cause and a line-free fingerprint, so
+  the count and a replacement under one key both survive serialization;
+- triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;
+- couplings and witnesses: what move admission reads, cut to `scope`, the modules a rename touches;
+- levels: the groups that pass each level, and why the others fail;
+- what else `check` prints: ledger equality, exception problems, advisory rules, and the module
+  of each path for `--changed`.
 """
 
 from __future__ import annotations
 
-import json
+import os
+import gzip
+import zlib
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import orjson
+
+from hoglint.config.schema import canonical
 from hoglint.index import Memo
+from hoglint.ledger.couplings import Coupling, CouplingScan
+from hoglint.ledger.envelope import PROTOCOL, Envelope, short_digest
+from hoglint.ledger.equality import EqualityResult
 from hoglint.ledger.file import LineKey, parse_key, render_key
+from hoglint.ledger.records import (
+    ExceptionsRecord,
+    FindingRecord,
+    IncompleteRecord,
+    equality_from_json,
+    equality_to_json,
+)
 from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph
+from hoglint.rules.base import IncompleteItem
 from hoglint.rules.engine import RunResult
 
-Coupling = tuple[str, str, str]  # (src module, dst symbol or module, edge kind)
+GZIP_LEVEL = 1  # a whole-repo summary shrinks about 16 times at level 1, in a tenth of a second
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
+Obligation = tuple[str, str, str]  # (rule, key, reason)
 
 
-def coupling_of(edge: Edge) -> list[Coupling]:
-    if not edge.targets:
-        return [(edge.site.module, edge.surface, edge.kind)]
-    return [(edge.site.module, str(target), edge.kind) for target in edge.targets]
+class ProtocolError(Exception):
+    """A summary file this engine cannot read."""
+
+
+def fingerprint(edge: Edge | None) -> str:
+    """What tells apart two items of one obligation without line numbers: the site's scope and the
+    edge's use, shape and attributes. Empty for an item that no single edge raised."""
+    if edge is None:
+        return ""
+    attrs = canonical(sorted(edge.attrs))
+    return short_digest([edge.site.scope, edge.kind, edge.surface, edge.use, edge.shape, edge.shape_detail, attrs])
+
+
+def obligation_of(item: IncompleteItem) -> tuple[Obligation, str]:
+    return (item.rule, item.key, item.reason), fingerprint(item.edge)
+
+
+def obligations_of(items: list[IncompleteItem]) -> dict[Obligation, list[str]]:
+    out: dict[Obligation, list[str]] = {}
+    for item in items:
+        obligation, mark = obligation_of(item)
+        out.setdefault(obligation, []).append(mark)
+    return {obligation: sorted(marks) for obligation, marks in out.items()}
 
 
 @dataclass(frozen=False, slots=True)
 class ScanSummary:
+    envelope: Envelope = field(default_factory=Envelope)
     schema: int = 0
-    policy: str = ""
     lines: dict[LineKey, int] = field(default_factory=dict)
     growth: dict[str, tuple[int, ...]] = field(default_factory=dict)
-    findings: set[LineKey] = field(default_factory=set)
-    incomplete: dict[tuple[str, str], str] = field(default_factory=dict)
+    findings: list[FindingRecord] = field(default_factory=list)
+    incomplete: list[IncompleteRecord] = field(default_factory=list)
     triples: set[Triple] = field(default_factory=set)
+    with_triples: bool = False
+    scope: frozenset[str] = frozenset()
     couplings: dict[Coupling, int] = field(default_factory=dict)
     witnesses: dict[LineKey, list[Coupling]] = field(default_factory=dict)
     levels: dict[str, list[str]] = field(default_factory=dict)
+    level_failures: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    equality: EqualityResult | None = None
+    exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
+    advisory: frozenset[str] = frozenset()
+    modules: dict[str, str] = field(default_factory=dict)
 
     @staticmethod
     def from_run(
         result: RunResult,
         graph: Graph,
-        schema: int = SCHEMA_VERSION,
-        with_couplings: bool = False,
+        envelope: Envelope,
+        scope: frozenset[str] = frozenset(),
         with_triples: bool = True,
     ) -> ScanSummary:
-        """`with_couplings` adds what move admission reads; `with_triples` what compare's new-pair list reads."""
+        """`scope` names the modules whose couplings and witnesses move admission reads."""
         config = result.config
-        summary = ScanSummary(schema=schema, policy=config.policy_hash, lines=dict(result.scan))
+        summary = ScanSummary(envelope=envelope, schema=SCHEMA_VERSION, lines=dict(result.scan), scope=scope)
         for rule in config.rules.values():
             if rule.ledger and rule.identity:
                 summary.growth[rule.id] = tuple(rule.identity.index(column) for column in rule.growth_key)
-        for finding in result.findings():
-            if finding.status is FindingStatus.ALLOWED:
-                continue
-            key = finding.ledger_key
-            summary.findings.add(key)
-            if with_couplings and finding.ledgerable:
-                for edge in finding.witnesses:
-                    summary.witnesses.setdefault(key, []).extend(coupling_of(edge))
-        for item in result.incomplete():
-            summary.incomplete[(item.rule, item.key)] = item.reason
+        summary.findings = [FindingRecord.of(finding) for finding in result.findings()]
+        summary.incomplete = [IncompleteRecord.of(item, fingerprint(item.edge)) for item in result.incomplete()]
         summary.levels = {name: list(level.passing) for name, level in result.levels.items()}
+        summary.level_failures = {name: dict(level.failing) for name, level in result.levels.items()}
+        summary.equality = result.equality
+        summary.exceptions = ExceptionsRecord.of(result.exceptions)
+        summary.advisory = frozenset(rule for rule in config.rules if result.advisory(rule))
+        summary.modules = dict(graph.modules)
         if with_triples:
             summary.triples = group_triples(result, graph)
-        if with_couplings:
-            for edge in graph.edges:
-                for coupling in coupling_of(edge):
-                    summary.couplings[coupling] = summary.couplings.get(coupling, 0) + 1
+            summary.with_triples = True
+        couplings = CouplingScan(result, graph, scope)
+        summary.couplings = couplings.counts()
+        summary.witnesses = couplings.witnesses()
         return summary
+
+    def finding_keys(self) -> set[LineKey]:
+        """The ledger key of every finding that no exception allows."""
+        return {finding.key for finding in self.findings if finding.status is not FindingStatus.ALLOWED}
+
+    def obligations(self) -> dict[Obligation, list[str]]:
+        out: dict[Obligation, list[str]] = {}
+        for item in self.incomplete:
+            out.setdefault((item.rule, item.key, item.reason), []).append(item.mark)
+        return {obligation: sorted(marks) for obligation, marks in out.items()}
+
+    def covers(self, scope: frozenset[str], triples: bool = False) -> bool:
+        """Whether this summary's couplings answer move admission for renames within `scope`, and
+        it lists triples when a reader needs them."""
+        return scope <= self.scope and (self.with_triples or not triples)
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "protocol": PROTOCOL,
+            "envelope": self.envelope.to_json(),
             "schema": self.schema,
-            "policy": self.policy,
             "lines": {render_key(key): count for key, count in sorted(self.lines.items())},
             "growth": {rule: list(indexes) for rule, indexes in sorted(self.growth.items())},
-            "findings": sorted(render_key(key) for key in self.findings),
-            "incomplete": [[rule, key, reason] for (rule, key), reason in sorted(self.incomplete.items())],
+            "findings": [finding.to_json() for finding in self.findings],
+            "incomplete": [item.to_json() for item in self.incomplete],
             "triples": sorted(list(triple) for triple in self.triples),
-            "couplings": [[*coupling, count] for coupling, count in sorted(self.couplings.items())],
+            "with_triples": self.with_triples,
+            "scope": sorted(self.scope),
+            "couplings": [
+                [rule, src, dst, kind, list(values), count]
+                for (rule, src, dst, kind, values), count in sorted(self.couplings.items())
+            ],
             "witnesses": {
-                render_key(key): [list(c) for c in couplings] for key, couplings in sorted(self.witnesses.items())
+                render_key(key): [[rule, src, dst, kind, list(values)] for rule, src, dst, kind, values in couplings]
+                for key, couplings in sorted(self.witnesses.items())
             },
             "levels": self.levels,
+            "level_failures": self.level_failures,
+            "equality": equality_to_json(self.equality),
+            "exceptions": self.exceptions.to_json(),
+            "advisory": sorted(self.advisory),
+            "modules": self.modules,
         }
 
     @staticmethod
     def from_json(data: dict[str, Any]) -> ScanSummary:
+        protocol = data.get("protocol", 0)
+        if protocol != PROTOCOL:
+            raise ProtocolError(f"the summary speaks protocol {protocol}; this engine reads protocol {PROTOCOL}")
         return ScanSummary(
+            envelope=Envelope.from_json(data.get("envelope", {})),
             schema=int(data.get("schema", 0)),
-            policy=str(data.get("policy", "")),
             lines={parse_key(text): int(count) for text, count in data.get("lines", {}).items()},
             growth={rule: tuple(indexes) for rule, indexes in data.get("growth", {}).items()},
-            findings={parse_key(text) for text in data.get("findings", [])},
-            incomplete={(rule, key): reason for rule, key, reason in data.get("incomplete", [])},
+            findings=[FindingRecord.from_json(finding) for finding in data.get("findings", [])],
+            incomplete=[IncompleteRecord.from_json(item) for item in data.get("incomplete", [])],
             triples={(a, b, c, d) for a, b, c, d in data.get("triples", [])},
-            couplings={(a, b, c): int(n) for a, b, c, n in data.get("couplings", [])},
+            with_triples=bool(data.get("with_triples", False)),
+            scope=frozenset(data.get("scope", [])),
+            couplings={
+                (rule, src, dst, kind, tuple(values)): int(count)
+                for rule, src, dst, kind, values, count in data.get("couplings", [])
+            },
             witnesses={
-                parse_key(text): [(a, b, c) for a, b, c in couplings]
+                parse_key(text): [(rule, src, dst, kind, tuple(values)) for rule, src, dst, kind, values in couplings]
                 for text, couplings in data.get("witnesses", {}).items()
             },
             levels={name: list(groups) for name, groups in data.get("levels", {}).items()},
+            level_failures={
+                name: {group: list(why) for group, why in failing.items()}
+                for name, failing in data.get("level_failures", {}).items()
+            },
+            equality=equality_from_json(data.get("equality")),
+            exceptions=ExceptionsRecord.from_json(data.get("exceptions", {})),
+            advisory=frozenset(data.get("advisory", [])),
+            modules=dict(data.get("modules", {})),
         )
 
     def write(self, path: Path) -> None:
-        path.write_text(json.dumps(self.to_json()))
+        """Writes gzip-compressed JSON through a temporary file, so a reader never sees half a summary."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".summary-")
+        with os.fdopen(handle, "wb") as out:
+            out.write(gzip.compress(orjson.dumps(self.to_json()), compresslevel=GZIP_LEVEL, mtime=0))
+        Path(temporary).replace(path)
 
     @staticmethod
     def read(path: Path) -> ScanSummary:
-        return ScanSummary.from_json(json.loads(path.read_text()))
+        try:
+            data = orjson.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, EOFError, zlib.error, orjson.JSONDecodeError) as error:
+            raise ProtocolError(f"cannot read the summary {path}: {error}") from error
+        if not isinstance(data, dict):
+            raise ProtocolError(f"{path} is not a scan summary")
+        try:
+            return ScanSummary.from_json(data)
+        except (TypeError, ValueError, KeyError, AttributeError) as error:
+            raise ProtocolError(f"{path} is not a well-formed summary: {error}") from error
 
 
 def group_triples(result: RunResult, graph: Graph) -> set[Triple]:

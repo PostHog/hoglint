@@ -1,25 +1,29 @@
 """Growth by attribution.
 
 Three scans decide where new debt came from:
-- base: base code under the base scanner and base policy,
-- head_base: head code under the base scanner and base policy,
-- head: head code under the head scanner and head policy.
+- base: base code under the base engine and base policy,
+- head_base: head code under the base engine and base policy,
+- head: head code under the head engine and head policy.
 
 Sums run per growth key, never one grand total. More debt in head_base than in base is code
 growth and fails. More debt only in head than in head_base is rule growth: better detection found
-old debt, so it passes and the change lists it.
+old debt, so it passes and the change lists it. Less debt in head than in head_base is shrink:
+the new engine, policy or environment no longer sees debt that the head code still has. It
+passes, and the change lists it with the cause for the DevEx reviewer.
 
 Move admission: code growth passes as an admitted move when every coupling behind the new lines
-already existed in base, under the renamed modules, with at least the same count. New uses
-bundled into a move still fail.
+already existed in base, under the renamed modules, with at least the same count. A coupling
+carries the rule's `edge.*` identity columns (see `couplings.py`), so new uses bundled into a
+move, and a use whose shape changed in the move, still fail.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from hoglint.ledger.couplings import Coupling
 from hoglint.ledger.file import LineKey, is_level_line
-from hoglint.ledger.scan import Coupling, ScanSummary
+from hoglint.ledger.scan import ScanSummary
 
 GrowthKey = tuple[str, tuple[str, ...]]  # (rule, growth columns)
 
@@ -37,6 +41,8 @@ class GrowthResult:
     code_growth: list[GrowthItem] = field(default_factory=list)
     rule_growth: list[GrowthItem] = field(default_factory=list)
     admitted_moves: list[GrowthItem] = field(default_factory=list)
+    shrink: list[GrowthItem] = field(default_factory=list)
+    shrink_causes: list[str] = field(default_factory=list)
     skipped: str = ""
 
     @property
@@ -78,6 +84,10 @@ class Renames:
             head = head.rpartition(".")[0]
         return name
 
+    def modules(self) -> frozenset[str]:
+        """Old and new names: the modules whose couplings move admission reads."""
+        return frozenset({*self.head_to_base, *self.head_to_base.values()})
+
 
 class AttributionCheck:
     def __init__(self, base: ScanSummary, head_base: ScanSummary, head: ScanSummary, renames: Renames) -> None:
@@ -104,7 +114,9 @@ class AttributionCheck:
                 result.admitted_moves.append(item)
             else:
                 result.code_growth.append(item)
-        result.rule_growth = self.rule_growth()
+        result.rule_growth, result.shrink = self.engine_and_policy_change()
+        if result.shrink:
+            result.shrink_causes = self.head_base.envelope.causes(self.head.envelope)
         return result
 
     def admitted(self, key: GrowthKey) -> bool:
@@ -118,19 +130,22 @@ class AttributionCheck:
         return True
 
     def existed(self, coupling: Coupling) -> bool:
-        src, dst, kind = coupling
-        original = (self.renames.back(src), self.renames.back(dst), kind)
+        rule, src, dst, kind, values = coupling
+        original = (rule, self.renames.back(src), self.renames.back(dst), kind, values)
         if original == coupling:
             return False
         return self.base.couplings.get(original, 0) >= self.head_base.couplings.get(coupling, 0)
 
-    def rule_growth(self) -> list[GrowthItem]:
-        """Debt only the head scanner or policy sees, per rule and growth key of the head policy."""
+    def engine_and_policy_change(self) -> tuple[list[GrowthItem], list[GrowthItem]]:
+        """Head code under both engines and policies, per growth key of the head policy: debt only
+        the head sees (rule growth), and debt only the base engine and policy see (shrink)."""
         head_sums = sums(self.head.lines, self.head.growth)
         before_sums = sums(self.head_base.lines, self.head.growth)
-        out = []
-        for key, after in sorted(head_sums.items()):
-            before = before_sums.get(key, 0)
+        grown, shrunk = [], []
+        for key in sorted(set(head_sums) | set(before_sums)):
+            before, after = before_sums.get(key, 0), head_sums.get(key, 0)
             if after > before:
-                out.append(GrowthItem(key[0], key[1], before, after))
-        return out
+                grown.append(GrowthItem(key[0], key[1], before, after))
+            elif after < before:
+                shrunk.append(GrowthItem(key[0], key[1], before, after))
+        return grown, shrunk

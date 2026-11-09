@@ -8,7 +8,11 @@ It lists apart:
 - policy entries changed, each labelled tighten or relax by running both policies on both
   snapshots (anything hoglint cannot classify counts as relax),
 - new (package pair, edge kind, context) triples,
-- growth by attribution, and incomplete results split into introduced and inherited.
+- growth by attribution, debt the new engine, policy or environment no longer sees, and
+  incomplete results split into introduced, ambiguous and inherited.
+
+A base that has hoglint but whose engine cannot run is incomplete (exit 2), never a skip. Only a
+base that predates hoglint skips the growth check.
 """
 
 from __future__ import annotations
@@ -19,9 +23,11 @@ from typing import Any
 from hoglint.config.schema import canonical
 from hoglint.ledger.file import LedgerFile, LineKey, render_key
 from hoglint.ledger.growth import AttributionCheck, GrowthItem, GrowthKey, GrowthResult, Renames, growth_key
-from hoglint.ledger.scan import ScanSummary, Triple
+from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute, rows
+from hoglint.ledger.scan import Obligation, ScanSummary, Triple
 
 EXCEPTION_ENTRY = "exception"
+FILE_ENTRY = "file"
 RULE_SECTION = "rules."
 LEVEL_SECTION = "levels."
 
@@ -44,21 +50,26 @@ class Swap:
 
 @dataclass(frozen=True, slots=True)
 class RawPolicy:
-    """One side's policy as written: the expanded config and the exception entries."""
+    """One side's policy as written: the expanded config, the exception entries, and the content
+    digest of each policy data file."""
 
     config: dict[str, Any] = field(default_factory=dict)
     exceptions: list[dict[str, Any]] = field(default_factory=list)
+    files: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=False, slots=True)
 class Scans:
-    """head: head code, head policy. base_head: base code, head policy (same scanner).
-    base and head_base use the base scanner and base policy; None when the base has no hoglint."""
+    """head: head code, head policy. base_head: base code, head policy (same engine).
+    base and head_base use the base engine and base policy; None when the base has no hoglint or
+    its engine could not run (`base_failure` says which)."""
 
     head: ScanSummary
     base_head: ScanSummary | None = None
     base: ScanSummary | None = None
     head_base: ScanSummary | None = None
+    base_failure: str = ""
+    base_source: str = ""
 
 
 def growth_row(item: GrowthItem) -> str:
@@ -68,6 +79,8 @@ def growth_row(item: GrowthItem) -> str:
 @dataclass(frozen=False, slots=True)
 class CompareReport:
     reference: str = ""
+    base_failure: str = ""
+    base_source: str = ""
     resolved: list[LineKey] = field(default_factory=list)
     new: list[LineKey] = field(default_factory=list)
     ledger_added: list[tuple[LineKey, int]] = field(default_factory=list)
@@ -77,11 +90,17 @@ class CompareReport:
     policy: list[PolicyChange] = field(default_factory=list)
     new_triples: list[Triple] = field(default_factory=list)
     growth: GrowthResult = field(default_factory=GrowthResult)
-    introduced: list[tuple[str, str, str]] = field(default_factory=list)
-    inherited: list[tuple[str, str, str]] = field(default_factory=list)
+    labels: Labels = field(default_factory=dict)
 
-    def exit_code(self, head_failed: bool) -> int:
-        if self.introduced:
+    def incomplete(self, label: Attribution) -> list[Obligation]:
+        return [obligation for attribution, obligation in rows(self.labels) if attribution is label]
+
+    @property
+    def blocking(self) -> bool:
+        return bool(self.base_failure) or any(label in BLOCKING for items in self.labels.values() for label in items)
+
+    def exit_code(self, head_failed: bool, head_blocking: bool = False) -> int:
+        if self.blocking or head_blocking:
             return 2
         return 1 if head_failed or self.growth.failed else 0
 
@@ -92,6 +111,10 @@ class CompareReport:
             out.append(f"{title} ({len(rows)})")
             out.extend(f"  {row}" for row in rows)
 
+        if self.base_failure:
+            out.append(f"base scan failed (blocks): {self.base_failure}")
+        if self.base_source:
+            out.append(f"base summary: {self.base_source}")
         if self.reference:
             out.append(f"findings and new pairs are against {self.reference}")
         section("findings resolved", [render_key(key) for key in self.resolved])
@@ -116,13 +139,23 @@ class CompareReport:
         section("code growth (fails)", [growth_row(g) for g in self.growth.code_growth])
         section("admitted moves (review)", [growth_row(g) for g in self.growth.admitted_moves])
         section("rule growth (passes)", [growth_row(g) for g in self.growth.rule_growth])
-        section("incomplete, introduced (blocks)", [f"{r}: {reason}" for r, _, reason in self.introduced])
-        section("incomplete, inherited (reported)", [f"{r}: {reason}" for r, _, reason in self.inherited])
+        causes = "+".join(self.growth.shrink_causes)
+        section(
+            "debt the new scanner, policy or environment no longer sees (review)",
+            [f"{growth_row(g)}  [{causes}]" for g in self.growth.shrink],
+        )
+        for label, title in (
+            (Attribution.INTRODUCED, "incomplete, introduced (blocks)"),
+            (Attribution.AMBIGUOUS, "incomplete, ambiguous replacement (blocks)"),
+            (Attribution.INHERITED, "incomplete, inherited (reported)"),
+        ):
+            section(title, [f"{rule}: {reason}" for rule, _, reason in self.incomplete(label)])
         return "\n".join(out) + "\n"
 
 
 def policy_entries(policy: RawPolicy) -> dict[str, str]:
-    """Each reviewable unit of policy: a named entry, a plain setting, an assignment, an exception."""
+    """Each reviewable unit of policy: a named entry, a plain setting, an assignment, an exception,
+    a data file."""
     out: dict[str, str] = {}
     for section, value in policy.config.items():
         if section == "assign":
@@ -137,6 +170,8 @@ def policy_entries(policy: RawPolicy) -> dict[str, str]:
     for entry in policy.exceptions:
         text = canonical(entry)
         out[f"{EXCEPTION_ENTRY} {text}"] = text
+    for path, digest in policy.files.items():
+        out[f"{FILE_ENTRY} {path}"] = digest
     return out
 
 
@@ -150,9 +185,10 @@ class Evidence:
     levels_lost: set[str] = field(default_factory=set)
 
     def add(self, old: ScanSummary, new: ScanSummary) -> None:
-        for rule, _ in old.findings - new.findings:
+        old_keys, new_keys = old.finding_keys(), new.finding_keys()
+        for rule, _ in old_keys - new_keys:
             self.lost[rule] = self.lost.get(rule, 0) + 1
-        for rule, _ in new.findings - old.findings:
+        for rule, _ in new_keys - old_keys:
             self.gained[rule] = self.gained.get(rule, 0) + 1
         for name in set(old.levels) | set(new.levels):
             before, after = set(old.levels.get(name, ())), set(new.levels.get(name, ()))
@@ -223,7 +259,9 @@ class Comparer:
         self.renames = renames
 
     def report(self) -> CompareReport:
-        report = CompareReport(reference=self.reference_name())
+        report = CompareReport(
+            reference=self.reference_name(), base_failure=self.scans.base_failure, base_source=self.scans.base_source
+        )
         self.findings(report)
         self.ledger_lines(report)
         self.touched(report)
@@ -234,7 +272,7 @@ class Comparer:
         return report
 
     def reference(self) -> ScanSummary | None:
-        """Base code under base policy when the base scanner ran, else under the head policy."""
+        """Base code under base policy when the base engine ran, else under the head policy."""
         return self.scans.base or self.scans.base_head
 
     def reference_name(self) -> str:
@@ -248,9 +286,9 @@ class Comparer:
         reference = self.reference()
         if reference is None:
             return
-        head = self.scans.head.findings
-        report.resolved = sorted(reference.findings - head)
-        report.new = sorted(head - reference.findings)
+        head, before = self.scans.head.finding_keys(), reference.finding_keys()
+        report.resolved = sorted(before - head)
+        report.new = sorted(head - before)
 
     def ledger_lines(self, report: CompareReport) -> None:
         base, head = self.base_ledger.lines, self.head_ledger.lines
@@ -300,17 +338,14 @@ class Comparer:
         report.new_triples = sorted(self.scans.head.triples - reference.triples)
 
     def growth(self, report: CompareReport) -> None:
+        if self.scans.base_failure:
+            report.growth = GrowthResult(skipped="the base engine could not run, so growth is unknown")
+            return
         if self.scans.base is None or self.scans.head_base is None:
-            report.growth = GrowthResult(skipped="the base commit has no hoglint scanner")
+            report.growth = GrowthResult(skipped="the base commit predates hoglint")
             return
         report.growth = AttributionCheck(self.scans.base, self.scans.head_base, self.scans.head, self.renames).run()
 
     def incomplete(self, report: CompareReport) -> None:
         reference = self.reference()
-        before = set(reference.incomplete) if reference is not None else set()
-        for (rule, key), reason in sorted(self.scans.head.incomplete.items()):
-            row = (rule, key, reason)
-            if (rule, key) in before:
-                report.inherited.append(row)
-            else:
-                report.introduced.append(row)
+        report.labels = attribute(self.scans.head.obligations(), reference.obligations() if reference else {})

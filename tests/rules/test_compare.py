@@ -11,64 +11,98 @@ import pytest
 
 from hoglint.compare import Comparer, RawPolicy, Scans
 from hoglint.facts import Extractor
-from hoglint.ledger.file import LedgerFile
+from hoglint.ledger.envelope import BuildId, Envelope
+from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
+from hoglint.ledger.records import FindingRecord
 from hoglint.ledger.scan import ScanSummary
+from hoglint.model import FindingStatus
 
 RULE = "model-crossings"
 GROWTH = {RULE: (0, 2)}  # identity (target, consumer module, shape); growth by (target, shape)
 
 
-def scan(
-    lines: dict[tuple[str, str, str], int], couplings: dict[tuple[str, str, str], int] | None = None
-) -> ScanSummary:
-    summary = ScanSummary(schema=1, lines={(RULE, key): count for key, count in lines.items()}, growth=GROWTH)
-    summary.findings = set(summary.lines)
-    summary.couplings = dict(couplings or {})
-    summary.witnesses = {(RULE, key): [(key[1], key[0], "reference")] for key in lines}
+def coupling(key: tuple[str, str, str]) -> tuple[str, str, str, str, tuple[str, ...]]:
+    """The coupling behind a model-crossings line: the rule, both ends, the edge kind, the shape label."""
+    return RULE, key[1], key[0], "reference", (key[2],)
+
+
+def finding(key: LineKey) -> FindingRecord:
+    return FindingRecord(key[0], key[1], FindingStatus.NEW, "", "", 0, (), (), (), (), True, False)
+
+
+def scan(lines: dict[tuple[str, str, str], int], envelope: Envelope | None = None) -> ScanSummary:
+    summary = ScanSummary(
+        envelope=envelope or Envelope(),
+        schema=1,
+        lines={(RULE, key): count for key, count in lines.items()},
+        growth=GROWTH,
+    )
+    summary.findings = [finding(key) for key in summary.lines]
+    summary.couplings = {coupling(key): count for key, count in lines.items()}
+    summary.witnesses = {(RULE, key): [coupling(key)] for key in lines}
     return summary
 
 
 INVOICE = "billing.models.Invoice"
+MOVED = {"alerts.util": "billing.util"}
 
 
 @pytest.mark.parametrize(
-    "base, head_base, renames, code, admitted",
+    "base, head_base, renames, base_use, code, admitted",
     [
         # a consumer split in two keeps the sum per (target, shape): no growth
         (
             {(INVOICE, "core.a", "write"): 2},
             {(INVOICE, "core.b", "write"): 1, (INVOICE, "core.c", "write"): 1},
             {},
+            "write",
             0,
             0,
         ),
         # a new use is code growth
-        ({(INVOICE, "core.a", "write"): 1}, {(INVOICE, "core.a", "write"): 2}, {}, 1, 0),
+        ({(INVOICE, "core.a", "write"): 1}, {(INVOICE, "core.a", "write"): 2}, {}, "write", 1, 0),
         # a consumer swap: one use leaves, another arrives on the same key; passes on purpose
-        ({(INVOICE, "core.a", "write"): 1}, {(INVOICE, "core.b", "write"): 1}, {}, 0, 0),
+        ({(INVOICE, "core.a", "write"): 1}, {(INVOICE, "core.b", "write"): 1}, {}, "write", 0, 0),
         # moved into a product: the same coupling existed under the old module name
-        ({}, {(INVOICE, "alerts.util", "write"): 1}, {"alerts.util": "billing.util"}, 0, 1),
+        ({}, {(INVOICE, "alerts.util", "write"): 1}, MOVED, "write", 0, 1),
         # a move that brings a new use along fails
-        ({}, {(INVOICE, "alerts.util", "write"): 2}, {"alerts.util": "billing.util"}, 1, 0),
+        ({}, {(INVOICE, "alerts.util", "write"): 2}, MOVED, "write", 1, 0),
+        # a move that also turns an annotation into a write fails (adversary fixture fx3)
+        ({}, {(INVOICE, "alerts.util", "write"): 1}, MOVED, "annotation", 1, 0),
     ],
 )
 def test_growth_by_attribution_and_move_admission(
-    base: dict, head_base: dict, renames: dict[str, str], code: int, admitted: int
+    base: dict, head_base: dict, renames: dict[str, str], base_use: str, code: int, admitted: int
 ) -> None:
-    base_couplings = {("billing.util", INVOICE, "reference"): 1}
+    base_scan = scan(base)
+    base_scan.couplings[coupling((INVOICE, "billing.util", base_use))] = 1
     head_base_scan = scan(head_base)
-    head_base_scan.couplings = {(key[1], key[0], "reference"): count for key, count in head_base.items()}
-    result = AttributionCheck(scan(base, base_couplings), head_base_scan, head_base_scan, Renames(renames)).run()
+    result = AttributionCheck(base_scan, head_base_scan, head_base_scan, Renames(renames)).run()
     assert (len(result.code_growth), len(result.admitted_moves)) == (code, admitted)
 
 
-def test_rule_growth_passes_and_is_listed() -> None:
-    base = scan({(INVOICE, "core.a", "write"): 1})
-    head = scan({(INVOICE, "core.a", "write"): 1, (INVOICE, "core.a", "lock"): 1})
-    result = AttributionCheck(base, base, head, Renames({})).run()
+@pytest.mark.parametrize(
+    "head_lines, head_envelope, rule_growth, shrink, causes",
+    [
+        # better detection finds old debt: rule growth, listed, passes
+        ({"write": 1, "lock": 1}, Envelope(engine="new"), [("lock", 0, 1)], [], []),
+        # a new engine no longer sees debt the head code still has
+        ({}, Envelope(engine="new"), [], [("write", 1, 0)], ["scanner"]),
+        # a policy change does the same
+        ({}, Envelope(policy="new"), [], [("write", 1, 0)], ["policy"]),
+    ],
+)
+def test_engine_and_policy_changes_list_growth_and_shrink_with_their_cause(
+    head_lines: dict[str, int], head_envelope: Envelope, rule_growth: list, shrink: list, causes: list[str]
+) -> None:
+    head_base = scan({(INVOICE, "core.a", "write"): 1})
+    head = scan({(INVOICE, "core.a", use): count for use, count in head_lines.items()}, head_envelope)
+    result = AttributionCheck(head_base, head_base, head, Renames({})).run()
     assert not result.failed
-    assert [(g.key, g.before, g.after) for g in result.rule_growth] == [((INVOICE, "lock"), 0, 1)]
+    assert [(g.key[1], g.before, g.after) for g in result.rule_growth] == rule_growth
+    assert [(g.key[1], g.before, g.after) for g in result.shrink] == shrink
+    assert result.shrink_causes == causes
 
 
 def test_compare_pairs_swaps_and_labels_policy_changes() -> None:
@@ -147,12 +181,27 @@ FILES = {
 }
 
 
-def hoglint(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    package_root = Path(__file__).resolve().parents[2]
-    env = {**os.environ, "PYTHONPATH": str(package_root)}
-    return subprocess.run(
-        [sys.executable, "-m", "hoglint", "--repo", str(repo), *args], capture_output=True, text=True, env=env
-    )
+def hoglint(
+    repo: Path, *args: str, package_root: Path | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Runs the hoglint package under `package_root` on `repo`, from outside both so the working
+    directory never shadows that package, with a cache of its own so tests never touch the user's."""
+    root = package_root or Path(__file__).resolve().parents[2]
+    cache = repo.parent / f"{repo.name}-cache"
+    full_env = {**os.environ, "PYTHONPATH": str(root), "XDG_CACHE_HOME": str(cache), **(env or {})}
+    command = [sys.executable, "-m", "hoglint", "--repo", str(repo), *args]
+    return subprocess.run(command, capture_output=True, text=True, env=full_env, cwd=repo.parent)
+
+
+def write_files(root: Path, files: dict[str, str]) -> None:
+    for name, content in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(textwrap.dedent(content))
+
+
+def git_in(repo: Path, *args: str) -> str:
+    command = ["git", "-C", str(repo), "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t"]
+    return subprocess.run([*command, *args], check=True, capture_output=True, text=True).stdout
 
 
 @pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
@@ -185,3 +234,82 @@ def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> No
     grown = hoglint(tmp_path, "compare", "--base", "base")
     assert grown.returncode == 1
     assert "code growth (fails) (1)" in grown.stdout
+
+
+ENGINE_PACKAGE = "tools/hoglint/hoglint"
+FAKE_CRATE = {"tools/hoglint/Cargo.toml": "[package]\nname = 'fake'\n", "tools/hoglint/src/main.rs": "fn main() {}\n"}
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@pytest.mark.parametrize(
+    "base_engine, code, says",
+    [
+        # the base commit has no engine: nothing to attribute against, the growth check is skipped
+        ("absent", 0, "growth check skipped: the base commit predates hoglint"),
+        # the base engine exists but cannot run: incomplete, never a skip
+        ("broken", 2, "base scan failed (blocks): the base engine failed"),
+    ],
+)
+def test_compare_tells_a_base_without_engine_from_a_base_engine_that_fails(
+    tmp_path: Path, base_engine: str, code: int, says: str
+) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {**FILES, "hoglint.toml": CONFIG.replace("[fields]", 'exclude = ["tools/**"]\n\n[fields]')})
+    package = Path(__file__).resolve().parents[2] / "hoglint"
+    env = {}
+    if base_engine == "broken":
+        shutil.copytree(package, repo / ENGINE_PACKAGE, ignore=shutil.ignore_patterns("__pycache__"))
+        (repo / ENGINE_PACKAGE / "__main__.py").write_text("raise SystemExit('broken base engine')\n")
+        write_files(repo, FAKE_CRATE)
+        fake_binary = tmp_path / "base-facts"
+        fake_binary.write_text(f"#!/bin/sh\necho {BuildId.of_sources(repo / 'tools/hoglint')}\n")
+        fake_binary.chmod(0o755)
+        env["HOGLINT_BASE_FACTS_BIN"] = str(fake_binary)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+
+    shutil.rmtree(repo / "tools", ignore_errors=True)
+    shutil.copytree(package, repo / ENGINE_PACKAGE, ignore=shutil.ignore_patterns("__pycache__"))
+    head_engine = repo / "tools/hoglint"
+    assert hoglint(repo, "check", "--write-ledger", package_root=head_engine).returncode == 0
+    git_in(repo, "add", "-A")
+    compared = hoglint(repo, "compare", "--base", "base", package_root=head_engine, env=env)
+    assert compared.returncode == code, compared.stdout + compared.stderr
+    assert says in compared.stdout
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@pytest.mark.parametrize(
+    "imported, says",
+    [
+        # a summary exported by CI and imported by key replaces the base scan
+        (True, "base summary: the stored summary {key}"),
+        # without it, compare runs the base scan and says no CI summary was found
+        (False, "base summary: no CI summary was found for {key}, so the full base scan ran"),
+    ],
+)
+def test_compare_reads_a_ci_summary_by_its_key(tmp_path: Path, imported: bool, says: str) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, FILES)
+    git_in(repo, "init", "-q")
+    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+    published = tmp_path / "summary.json"
+    ci = {"XDG_CACHE_HOME": str(tmp_path / "ci-cache"), "CI": "true"}
+    key = hoglint(repo, "summary", "export", "--file", str(published), env=ci).stdout.strip()
+    assert key.startswith("hoglint-summary-p")
+    assert hoglint(repo, "summary", "key", "--ref", "base", env=ci).stdout.strip() == key
+
+    (repo / "core" / "api.py").write_text("from products.billing.logic import charge\n")
+    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    git_in(repo, "add", "-A")
+    pr = {"XDG_CACHE_HOME": str(tmp_path / "pr-cache"), "CI": "true"}
+    if imported:
+        assert hoglint(repo, "summary", "import", "--file", str(published), env=pr).stdout.strip() == key
+    compared = hoglint(repo, "compare", "--base", "base", env=pr)
+    assert says.format(key=key) in compared.stdout, compared.stdout + compared.stderr
+    assert "code growth (fails) (1)" in compared.stdout
