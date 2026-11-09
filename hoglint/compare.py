@@ -13,10 +13,10 @@ It lists apart:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from hoglint.config.schema import canonical
 from hoglint.ledger.file import LedgerFile, LineKey, render_key
 from hoglint.ledger.growth import AttributionCheck, GrowthKey, GrowthResult, Renames, growth_key
 from hoglint.ledger.scan import ScanSummary, Triple
@@ -113,17 +113,6 @@ class CompareReport:
         section("incomplete, introduced (blocks)", [f"{r}: {reason}" for r, _, reason in self.introduced])
         section("incomplete, inherited (reported)", [f"{r}: {reason}" for r, _, reason in self.inherited])
         return "\n".join(out) + "\n"
-
-
-def canonical(value: Any) -> str:
-    def clean(item: Any) -> Any:
-        if isinstance(item, dict):
-            return {k: clean(v) for k, v in sorted(item.items()) if k != "__source__"}
-        if isinstance(item, list):
-            return [clean(v) for v in item]
-        return item
-
-    return json.dumps(clean(value), sort_keys=True, default=str)
 
 
 def policy_entries(raw: dict[str, Any], exceptions: list[dict[str, Any]]) -> dict[str, str]:

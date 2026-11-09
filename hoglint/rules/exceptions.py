@@ -38,6 +38,17 @@ class ExceptionEntry:
         return f"exception #{self.index} ({self.rule})"
 
 
+def render_match(value: Any) -> str | None:
+    """A match value rendered the way identity columns render, or None when it cannot match one."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return ",".join(sorted(value)) or "-"
+    return None
+
+
 @dataclass(frozen=False, slots=True)
 class ExceptionsFile:
     entries: list[ExceptionEntry] = field(default_factory=list)
@@ -58,7 +69,14 @@ class ExceptionsFile:
         out = ExceptionsFile()
         if data.get("schema") != 1:
             out.problems.append(f"{name}: `schema = 1` is required")
-        for index, raw in enumerate(data.get("exception", [])):
+        raw_entries = data.get("exception", [])
+        if not isinstance(raw_entries, list):
+            out.problems.append(f"{name}: `exception` must be a list of [[exception]] tables")
+            return out
+        for index, raw in enumerate(raw_entries):
+            if not isinstance(raw, dict):
+                out.problems.append(f"{name} exception #{index}: must be a table")
+                continue
             entry = out.parse_entry(index, raw, config, name)
             if entry is not None:
                 out.entries.append(entry)
@@ -73,6 +91,9 @@ class ExceptionsFile:
         if missing:
             self.problems.append(f"{where}: missing {', '.join(missing)}")
             return None
+        if not isinstance(raw["rule"], str):
+            self.problems.append(f"{where}: rule must be a string")
+            return None
         rule = config.rules.get(raw["rule"])
         if rule is None:
             self.problems.append(f"{where}: unknown rule {raw['rule']!r}")
@@ -80,27 +101,57 @@ class ExceptionsFile:
         if raw["scope"] not in SCOPES:
             self.problems.append(f"{where}: scope must be prod or test")
             return None
+        reported = len(self.problems)
+        match = self.parse_match(where, raw["match"], rule.id, rule.identity)
+        review_by = self.parse_review_by(where, raw.get("review_by"))
+        owners = self.parse_owners(where, raw["owners"])
+        if len(self.problems) > reported:
+            return None
+        return ExceptionEntry(index, rule.id, match, str(raw["reason"]), owners, raw["scope"], review_by)
+
+    def parse_match(self, where: str, raw: Any, rule_id: str, identity: tuple[str, ...]) -> tuple[tuple[int, str], ...]:
+        if not isinstance(raw, dict):
+            self.problems.append(
+                f'{where}: match must be a table of identity columns, such as {{ "src.module" = "..." }}'
+            )
+            return ()
         match: list[tuple[int, str]] = []
-        for column, value in dict(raw["match"]).items():
-            if column not in rule.identity:
+        for column, value in raw.items():
+            if column not in identity:
                 self.problems.append(
-                    f"{where}: {column!r} is not an identity column of {rule.id} ({', '.join(rule.identity)})"
+                    f"{where}: {column!r} is not an identity column of {rule_id} ({', '.join(identity)})"
                 )
-                return None
-            match.append((rule.identity.index(column), str(value)))
-        review_by = raw.get("review_by")
-        if isinstance(review_by, str):
-            review_by = datetime.date.fromisoformat(review_by)
-        owners = raw["owners"]
-        return ExceptionEntry(
-            index,
-            rule.id,
-            tuple(match),
-            str(raw["reason"]),
-            tuple([owners] if isinstance(owners, str) else owners),
-            raw["scope"],
-            review_by,
-        )
+                continue
+            rendered = render_match(value)
+            if rendered is None:
+                self.problems.append(
+                    f"{where}: match value for {column!r} must be a string, number, bool or list of strings"
+                )
+                continue
+            match.append((identity.index(column), rendered))
+        return tuple(match)
+
+    def parse_review_by(self, where: str, raw: Any) -> datetime.date | None:
+        if raw is None:
+            return None
+        if isinstance(raw, datetime.datetime):
+            return raw.date()
+        if isinstance(raw, datetime.date):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return datetime.date.fromisoformat(raw)
+            except ValueError:
+                pass
+        self.problems.append(f"{where}: review_by must be a date such as 2026-12-31, found {raw!r}")
+        return None
+
+    def parse_owners(self, where: str, raw: Any) -> tuple[str, ...]:
+        owners = [raw] if isinstance(raw, str) else raw
+        if not isinstance(owners, list) or not all(isinstance(owner, str) for owner in owners):
+            self.problems.append(f"{where}: owners must be a string or a list of strings")
+            return ()
+        return tuple(owners)
 
 
 def in_scope(entry: ExceptionEntry, finding: Finding) -> bool:

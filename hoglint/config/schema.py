@@ -103,7 +103,7 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
     "export": COMMON_RULE_KEYS | {"exports", "contexts", "on_unknown", "unknown_types"},
-    "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "deny", "unless"},
+    "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
     "coverage": COMMON_RULE_KEYS | {"covers", "inputs"},
@@ -114,7 +114,7 @@ DEFAULT_UNKNOWN_TYPES = ("typing.Any", "builtins.dict", "typing.Dict", "builtins
 FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
 ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_paths", "symbols", "doc", "__source__"})
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
-KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "doc"})
+KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
 SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "doc"})
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
@@ -252,6 +252,12 @@ class SchemaBuilder:
             "edge": self.edge_fields(),
         }
         return Catalog({root: all_roots[root] for root in roots}, open_roots=frozenset({"edge"}) & set(roots))
+
+    def module_catalog(self) -> Catalog:
+        """`src.*` of a module alone: reach's `from` sees no edge, so no `edge.*` and no context."""
+        fields = self.endpoint_fields(dst=False)
+        del fields["context"]
+        return Catalog({"src": fields})
 
     def entity_catalog(self) -> Catalog:
         fields = self.field_infos()
@@ -411,6 +417,7 @@ class SchemaBuilder:
                 abstract if isinstance(abstract, bool) else None,
                 str(table.get("decl", "")),
                 self.source(key),
+                bool(table.get("expected", False)),
             )
             if not (out[name].subclass_of or out[name].decorated_by or out[name].decl):
                 self.fail(key, "a kind needs subclass_of, decorated_by or decl")
@@ -682,6 +689,7 @@ class SchemaBuilder:
         edge_catalog = self.edge_catalog()
         entity_catalog = self.entity_catalog()
         predicate_catalog = entity_catalog if entity_rule else edge_catalog
+        from_catalog = self.module_catalog() if primitive == "reach" else self.edge_catalog(("src", "edge"))
 
         kinds = as_tuple(table.get("kinds"))
         for kind in kinds:
@@ -738,7 +746,7 @@ class SchemaBuilder:
                 table.get("endpoint", "surface" if primitive == "entrypoint" else "origin"),
                 ENDPOINTS,
             ),
-            from_=self.parse(f"{key}.from", table.get("from"), self.edge_catalog(("src", "edge"))),
+            from_=self.parse(f"{key}.from", table.get("from"), from_catalog),
             select=self.parse(f"{key}.select", table.get("select"), predicate_catalog),
             deny=self.parse(f"{key}.deny", table.get("deny"), predicate_catalog),
             allow=self.parse(f"{key}.allow", table.get("allow"), predicate_catalog),
@@ -834,16 +842,21 @@ class SchemaBuilder:
         self.check_keys("discovery", self.raw.get("discovery", {}), DISCOVERY_KEYS)
 
 
-def policy_hash(raw: dict[str, Any]) -> str:
-    def clean(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {k: clean(v) for k, v in sorted(value.items()) if k != "__source__"}
-        if isinstance(value, list):
-            return [clean(v) for v in value]
-        return value
+def without_sources(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: without_sources(v) for k, v in sorted(value.items()) if k != "__source__"}
+    if isinstance(value, list):
+        return [without_sources(v) for v in value]
+    return value
 
-    text = json.dumps(clean(raw), sort_keys=True, default=str)
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+def canonical(value: Any) -> str:
+    """Stable JSON of a raw config value, without the loader's `__source__` notes."""
+    return json.dumps(without_sources(value), sort_keys=True, default=str)
+
+
+def policy_hash(raw: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical(raw).encode()).hexdigest()[:16]
 
 
 def build_config(merged: MergedConfig) -> Config:

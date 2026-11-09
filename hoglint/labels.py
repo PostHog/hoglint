@@ -107,6 +107,7 @@ class SymbolFacts:
         self.decorator_map: dict[str, list[str]] = {}
         self.frozen: set[str] = set()
         self.ancestry_cache: dict[str, tuple[frozenset[str], bool]] = {}
+        self.decl_seen: dict[str, bool] = {}
         for edge in graph.edges:
             if edge.kind == "inherit" and edge.attr("class"):
                 owner = f"{edge.site.module}.{edge.attr('class')}"
@@ -127,6 +128,12 @@ class SymbolFacts:
 
     def has(self, symbol: str) -> bool:
         return symbol in self.symbols
+
+    def any_decl(self, decl: str) -> bool:
+        """Whether any symbol has this declaration, so a producer that records it ran."""
+        if decl not in self.decl_seen:
+            self.decl_seen[decl] = any(self.decl(symbol) == decl for symbol in self.symbols)
+        return self.decl_seen[decl]
 
     def get(self, symbol: str, key: str) -> str:
         return self.symbols.get(symbol, {}).get(key, "")
@@ -173,15 +180,42 @@ class SymbolFacts:
 # ── Providers ─────────────────────────────────────────────────────
 
 
+def codeowners_segment(segment: str) -> str:
+    out: list[str] = []
+    for char in segment:
+        if char == "*":
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(char))
+    return "".join(out)
+
+
 @cache
 def codeowners_regex(pattern: str) -> re.Pattern[str]:
+    """GitHub CODEOWNERS matching, which follows gitignore with one documented exception.
+
+    A pattern with a slash at the start or in the middle is anchored at the repo root; otherwise
+    it matches at any depth. A trailing slash matches only a directory's contents. A pattern that
+    names a directory also owns everything below it, but a last segment of `*` matches only the
+    files directly inside (`docs/*` owns `docs/a.md`, not `docs/sub/b.md`). `**` spans directories.
+    """
     anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
-    body = pattern.strip("/")
     directory = pattern.endswith("/")
-    regex = compile_glob(body).pattern.removesuffix(r"\Z")
-    prefix = "" if anchored else "(?:.*/)?"
-    suffix = "/.*" if directory else "(?:/.*)?"
-    return re.compile(prefix + regex + suffix + r"\Z")
+    segments = pattern.strip("/").split("/")
+    out = "" if anchored else "(?:.*/)?"
+    for index, segment in enumerate(segments):
+        last = index == len(segments) - 1
+        if segment == "**":
+            out += ".*" if last else "(?:.*/)?"
+            continue
+        out += codeowners_segment(segment) + ("" if last else "/")
+    if directory:
+        out += "/.*"
+    elif segments[-1] not in ("*", "**") or len(segments) == 1:
+        out += "(?:/.*)?"
+    return re.compile(out + r"\Z")
 
 
 class CodeownersFile:
@@ -295,6 +329,12 @@ class LabelSet:
     fields: dict[str, Label] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class KindMatch:
+    kinds: tuple[str, ...]
+    unknown: bool
+
+
 class Labeler:
     """Computes labels on demand and caches them. `conflicts` holds config errors found while labelling."""
 
@@ -306,7 +346,7 @@ class Labeler:
         self.provider_fields = {name for spec in config.providers.values() for name in spec.sets}
         self.module_cache: dict[str, LabelSet] = {}
         self.symbol_cache: dict[str, LabelSet] = {}
-        self.kind_cache: dict[str, tuple[Value, str]] = {}
+        self.kind_cache: dict[str, KindMatch] = {}
         self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
         self.conflicts: list[str] = []
         self.path_to_module = {path: module for module, path in graph.modules.items()}
@@ -434,6 +474,8 @@ class Labeler:
     # ── symbols ──
 
     def symbol_labels(self, symbol: str) -> LabelSet:
+        if not self.symbol_assigns:
+            return LabelSet()
         cached = self.symbol_cache.get(symbol)
         if cached is not None:
             return cached
@@ -485,8 +527,8 @@ class Labeler:
             return Truth.FALSE if complete else Truth.UNKNOWN
         return Truth.TRUE
 
-    def kind(self, symbol: str, first_party: bool = True) -> tuple[Value, str]:
-        """The symbol's kind from [kinds]. A first-party symbol without facts is unknown."""
+    def kind_match(self, symbol: str) -> KindMatch:
+        """Which [kinds] the symbol matches, and whether any could not be decided. Cached per symbol."""
         cached = self.kind_cache.get(symbol)
         if cached is not None:
             return cached
@@ -498,18 +540,22 @@ class Labeler:
                 matched.append(spec.name)
             elif truth is Truth.UNKNOWN:
                 unknown = True
-        result: tuple[Value, str]
         if len(matched) > 1:
             self.conflicts.append(f"{symbol}: matches kinds {', '.join(matched)}")
-            result = (UNKNOWN, "conflicting kinds")
-        elif matched:
-            result = (Value.known(matched[0]), f"kinds.{matched[0]}")
-        elif unknown and (first_party or self.facts.has(symbol)):
-            result = (UNKNOWN, "no facts for this symbol, or a base did not resolve")
-        else:
-            result = (NONE, "no kind matches")
+        result = KindMatch(tuple(matched), unknown)
         self.kind_cache[symbol] = result
         return result
+
+    def kind(self, symbol: str, first_party: bool = True) -> tuple[Value, str]:
+        """The symbol's kind from [kinds]. A first-party symbol without facts is unknown."""
+        match = self.kind_match(symbol)
+        if len(match.kinds) > 1:
+            return UNKNOWN, "conflicting kinds"
+        if match.kinds:
+            return Value.known(match.kinds[0]), f"kinds.{match.kinds[0]}"
+        if match.unknown and (first_party or self.facts.has(symbol)):
+            return UNKNOWN, "no facts for this symbol, or a base did not resolve"
+        return NONE, "no kind matches"
 
     # ── values ──
 
@@ -617,6 +663,27 @@ class Labeler:
         prefix = fill(spec.within, root) + "/"
         return path[len(prefix) :]
 
+    def export_covers(self, spec: ExportSpec, path: str) -> bool:
+        """Whether the path lies inside the export's `within` and `paths`."""
+        relative = self.export_root(spec, path)
+        return relative is not None and any(glob_match(pattern, relative) is not None for pattern in spec.paths)
+
+    def export_member(self, spec: ExportSpec, path: str, symbol: str | None) -> Truth:
+        """Whether a module (symbol None) or a symbol at `path` belongs to the export.
+
+        With `subclass_of` only symbols count: a listed base itself, or a class that inherits one.
+        """
+        if not self.export_covers(spec, path):
+            return Truth.FALSE
+        if not spec.subclass_of:
+            return Truth.TRUE
+        if symbol is None:
+            return Truth.FALSE
+        ancestors, complete = self.facts.ancestors(symbol)
+        if set(spec.subclass_of) & (ancestors | {symbol}):
+            return Truth.TRUE
+        return Truth.FALSE if complete else Truth.UNKNOWN
+
     def exported(self, module: str | None, symbol: str | None, audience_resolver: Any) -> Truth:
         """Is this module or symbol in an export whose audience includes the caller?"""
         path = self.path_of(module) if module else None
@@ -624,16 +691,9 @@ class Labeler:
             return Truth.UNKNOWN
         results: list[Truth] = []
         for spec in self.config.exports.values():
-            relative = self.export_root(spec, path)
-            if relative is None or not any(glob_match(p, relative) is not None for p in spec.paths):
+            truth = self.export_member(spec, path, symbol)
+            if truth is Truth.FALSE:
                 continue
-            truth = Truth.TRUE
-            if spec.subclass_of:
-                if symbol is None:
-                    continue
-                ancestors, complete = self.facts.ancestors(symbol)
-                if not set(spec.subclass_of) & ancestors:
-                    truth = Truth.FALSE if complete else Truth.UNKNOWN
             if truth is Truth.TRUE and spec.audience is not None:
                 truth = spec.audience.evaluate(audience_resolver)
             results.append(truth)

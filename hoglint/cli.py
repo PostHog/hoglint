@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import tomllib
 import argparse
 import tempfile
 import importlib
@@ -20,15 +21,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hoglint.compare import Comparer, CompareReport, Scans, canonical
+from hoglint.compare import Comparer, CompareReport, Scans
 from hoglint.config import Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
+from hoglint.config.schema import canonical
 from hoglint.ledger.file import LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph
-from hoglint.rules.base import EdgeEnv, RuleContext, rule_kinds
-from hoglint.rules.engine import Engine, RunResult
+from hoglint.rules.base import EdgeRule, RuleContext
+from hoglint.rules.engine import PRIMITIVES, Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.selectors import Selector
 
@@ -237,15 +239,19 @@ class Runner:
         self.source = source
         self.today = today
 
-    def run(self, policy_root: Path, code_root: Path | None = None, staged: bool = False) -> Run:
-        """Policy (config, ledger, exceptions) from one root, code from another, or both from one."""
+    def run(
+        self, policy_root: Path, code_root: Path | None = None, staged: bool = False, rewrite_ledger: bool = False
+    ) -> Run:
+        """Policy (config, ledger, exceptions) from one root, code from another, or both from one.
+
+        With `rewrite_ledger` the run is judged against the ledger it would write, not the file."""
         code_root = code_root or policy_root
         config = load_config(policy_root, policy_root / CONFIG_FILE)
         graph = self.source.build(code_root, config, staged)
         ledger = LedgerFile.read(policy_root / config.ledger.file)
         exceptions = ExceptionsFile.read(policy_root / config.ledger.exceptions, config)
-        result = Engine(config, graph, code_root, self.today).evaluate(ledger, exceptions)
-        return Run(code_root, config, graph, result, ledger)
+        result = Engine(config, graph, code_root, self.today).evaluate(ledger, exceptions, rewrite_ledger)
+        return Run(code_root, config, graph, result, result.ledger or ledger)
 
 
 # ── rendering ─────────────────────────────────────────────────────
@@ -322,16 +328,12 @@ class Commands:
 
     def check(self, index: bool, write_ledger: bool, changed: bool) -> int:
         policy_root = self.snapshots.index() if index else self.repo
-        run = self.runner.run(policy_root, self.repo, staged=index)
+        run = self.runner.run(policy_root, self.repo, staged=index, rewrite_ledger=write_ledger)
         if write_ledger:
             if index:
                 sys.stderr.write("--write-ledger writes the working tree file, not the index\n")
-            ledger = LedgerFile(
-                schema=SCHEMA_VERSION, policy=run.config.policy_hash, lines=dict(run.result.scan), exists=True
-            )
-            ledger.write(self.repo / run.config.ledger.file)
-            sys.stdout.write(f"wrote {len(ledger.lines)} lines to {run.config.ledger.file}\n")
-            run = self.runner.run(self.repo, self.repo, staged=index)
+            run.ledger.write(self.repo / run.config.ledger.file)
+            sys.stdout.write(f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}\n")
         self.write_outputs(run)
         touched = None
         if changed:
@@ -388,16 +390,19 @@ class Commands:
             f"         resolution={edge.resolution.value} contexts={sorted(c.value for c in edge.contexts)}\n"
         )
         for spec in run.config.rules.values():
-            if edge.kind not in rule_kinds(spec):
+            primitive = PRIMITIVES[spec.primitive]
+            if not issubclass(primitive, EdgeRule):
                 continue
-            for dst in ctx.dst_endpoints(edge, spec.endpoint):
-                env = EdgeEnv(ctx, edge, ctx.src_endpoint(edge.site), dst)
+            rule = primitive(ctx, spec)
+            if not rule.sees(edge):
+                continue
+            for env in rule.envs_of(edge):
                 parts = []
                 for name in ("from_", "select", "deny", "allow", "require", "unless"):
                     selector: Selector | None = getattr(spec, name)
                     if selector is not None:
                         parts.append(f"{name.rstrip('_')}: {selector.source} -> {selector.evaluate(env.resolve).value}")
-                sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {dst.symbol or dst.module})\n")
+                sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {env.dst.symbol or env.dst.module})\n")
                 sys.stdout.write("".join(f"           {part}\n" for part in parts))
         for finding in run.result.findings():
             if edge in finding.witnesses:
@@ -477,8 +482,6 @@ class Commands:
     def raw_exceptions(path: Path) -> list[dict[str, Any]]:
         if not path.is_file():
             return []
-        import tomllib  # noqa: PLC0415 — compare alone reads raw exception entries
-
         return list(tomllib.loads(path.read_text()).get("exception", []))
 
     def module_renames(self, base_sha: str, config: Config) -> Renames:

@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import dataclasses
-from collections.abc import Iterator
-
 from hoglint.config.model import RuleSpec
 from hoglint.model import Edge, Remedy
-from hoglint.rules.base import EdgeEnv, EdgeRule, RuleContext
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, RuleContext
 from hoglint.selectors import Selector, Truth
 
 EXPORTED = Selector.parse("dst.exported")
@@ -40,24 +37,26 @@ class UseShapePrimitive(EdgeRule):
     """Is this use of a foreign symbol in an allowed shape?
 
     With `flow = "def-use"` the pack's flow-refined shape (edge attr `flow_shape`, written as
-    `kind` or `kind(detail)`) replaces the syntax-only shape.
+    `kind` or `kind(detail)`) replaces the syntax-only shape. The environment carries the refined
+    shape; the edge stays the graph's own, so its ordinal and its witness identity hold.
     """
 
-    def edges(self) -> Iterator[Edge]:
-        flow = dict(self.spec.producer_options).get("flow") == "def-use"
-        for edge in super().edges():
-            refined = edge.attr("flow_shape") if flow else ""
-            if not refined:
-                yield edge
-                continue
-            kind, _, detail = refined.partition("(")
-            yield dataclasses.replace(edge, shape=kind, shape_detail=detail.removesuffix(")"))
+    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
+        super().__init__(ctx, spec)
+        self.flow = dict(spec.producer_options).get("flow") == "def-use"
+
+    def env(self, edge: Edge, src: Endpoint, dst: Endpoint) -> EdgeEnv:
+        refined = edge.attr("flow_shape") if self.flow else ""
+        if not refined:
+            return EdgeEnv(self.ctx, edge, src, dst)
+        shape, _, detail = refined.partition("(")
+        return EdgeEnv(self.ctx, edge, src, dst, shape, detail.removesuffix(")"))
 
     def shape_names(self, env: EdgeEnv) -> set[str]:
-        shape = env.edge.shape or env.edge.use or "other"
+        shape = env.shape or env.edge.use or "other"
         names = {shape}
-        if env.edge.shape_detail:
-            names.add(f"{shape}({env.edge.shape_detail})")
+        if env.shape_detail:
+            names.add(f"{shape}({env.shape_detail})")
         return names
 
     def violation(self, env: EdgeEnv) -> Truth:
@@ -83,10 +82,8 @@ class SignaturePrimitive(EdgeRule):
     Only public callables count: a private function or method is no part of the signature.
     """
 
-    def edges(self) -> Iterator[Edge]:
-        for edge in super().edges():
-            if not is_private(edge.attr("callable")):
-                yield edge
+    def sees(self, edge: Edge) -> bool:
+        return super().sees(edge) and not is_private(edge.attr("callable"))
 
     def unknown_type(self, env: EdgeEnv) -> bool:
         if env.edge.attr("annotation") == "missing":

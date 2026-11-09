@@ -88,6 +88,7 @@ class KindSpec:
     abstract: bool | None = None
     decl: str = ""
     source: str = ""
+    expected: bool = False  # zero matching symbols means a producer found nothing, not a clean repo
 
 
 @dataclass(frozen=True, slots=True)

@@ -16,8 +16,23 @@ from pathlib import Path
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.labels import Labeler
-from hoglint.model import Context, Edge, Finding, Graph, IncompleteCause, Remedy, Resolution, Site
-from hoglint.selectors import NONE, UNKNOWN, Ref, Selector, State, Truth, Value, all_of, any_of
+from hoglint.model import Context, Edge, EntityId, Finding, Graph, IncompleteCause, Remedy, Resolution, Site
+from hoglint.selectors import (
+    NONE,
+    UNKNOWN,
+    And,
+    Node,
+    Ref,
+    Resolver,
+    Selector,
+    State,
+    Truth,
+    Value,
+    all_of,
+    any_of,
+    evaluate,
+    refs,
+)
 
 MODULE_SCOPE = "<module>"
 VIEW_KINDS: dict[str, tuple[str, ...]] = {
@@ -30,6 +45,8 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "use-shape": ("reference",),
     "signature": ("exposes",),
 }
+DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
+EDGE_DEPENDENT_FIELDS = frozenset({"context", "exported"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,24 +89,48 @@ class Endpoint:
         return f"{self.module}.{head}"
 
 
+def has_endpoint_attrs(edge: Edge) -> bool:
+    return any(name.startswith(("src.", "dst.")) for name, _ in edge.attrs)
+
+
+@dataclass(frozen=False, slots=True)
+class EdgeGroup:
+    """The edges of one kind from one module. `irregular` holds the ones a module-wide answer
+    cannot speak for: an edge with its own `src.*`/`dst.*` attributes, or a site path that is not
+    the module's."""
+
+    edges: list[Edge] = field(default_factory=list)
+    irregular: list[Edge] = field(default_factory=list)
+
+
 class RuleContext:
-    """Shared state of one evaluation: config, graph, labels and per-edge ordinals."""
+    """Shared state of one evaluation: config, graph, labels, per-edge ordinals and endpoint caches."""
 
     def __init__(self, config: Config, graph: Graph, labeler: Labeler, repo_root: Path | None = None) -> None:
         self.config = config
         self.graph = graph
         self.labeler = labeler
         self.repo_root = repo_root
-        self.ordinals: dict[int, int] = {}
-        counters: dict[tuple[str, str, str, str], int] = {}
-        for edge in graph.edges:
-            key = (edge.site.module, edge.site.scope, edge.kind, edge.surface)
-            self.ordinals[id(edge)] = counters.get(key, 0)
-            counters[key] = counters.get(key, 0) + 1
-        self.results: dict[str, RuleRun] = {}
+        self.ordinals: dict[int, int] | None = None
         self.by_kind: dict[str, list[Edge]] = {}
+        self.groups: dict[str, dict[str, EdgeGroup]] = {}
+        self.endpoint_attr_edges: set[int] = set()
         for edge in graph.edges:
+            site = edge.site
             self.by_kind.setdefault(edge.kind, []).append(edge)
+            group = self.groups.setdefault(edge.kind, {}).get(site.module)
+            if group is None:
+                group = self.groups[edge.kind][site.module] = EdgeGroup()
+            group.edges.append(edge)
+            attrs = bool(edge.attrs) and has_endpoint_attrs(edge)
+            if attrs:
+                self.endpoint_attr_edges.add(id(edge))
+            if attrs or (site.path and site.path != graph.modules.get(site.module)):
+                group.irregular.append(edge)
+        self.results: dict[str, RuleRun] = {}
+        self.src_cache: dict[tuple[str, str, str], Endpoint] = {}
+        self.symbol_cache: dict[tuple[str, Resolution], Endpoint] = {}
+        self.target_cache: dict[tuple[EntityId, bool], Endpoint] = {}
 
     def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
         """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""
@@ -97,15 +138,55 @@ class RuleContext:
             return self.graph.edges
         return [edge for kind in dict.fromkeys(kinds) for edge in self.by_kind.get(kind, [])]
 
+    def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
+        return list(dict.fromkeys(kinds)) if kinds else list(self.groups)
+
+    def module_groups(self, kinds: tuple[str, ...]) -> Iterator[tuple[str, EdgeGroup]]:
+        """(source module, its edges) kind by kind in the order named; every kind when none is named."""
+        for kind in self.kinds_or_all(kinds):
+            yield from self.groups.get(kind, {}).items()
+
+    def groups_of(self, kinds: tuple[str, ...], module: str) -> list[EdgeGroup]:
+        out = []
+        for kind in self.kinds_or_all(kinds):
+            group = self.groups.get(kind, {}).get(module)
+            if group is not None:
+                out.append(group)
+        return out
+
     def ordinal(self, edge: Edge) -> int:
+        """The edge's place among edges with the same module, scope, kind and surface."""
+        if self.ordinals is None:
+            self.ordinals = {}
+            counters: dict[tuple[str, str, str, str], int] = {}
+            for each in self.graph.edges:
+                key = (each.site.module, each.site.scope, each.kind, each.surface)
+                self.ordinals[id(each)] = counters.get(key, 0)
+                counters[key] = counters.get(key, 0) + 1
         return self.ordinals.get(id(edge), 0)
 
     def src_endpoint(self, site: Site) -> Endpoint:
+        key = (site.module, site.scope, site.path)
+        cached = self.src_cache.get(key)
+        if cached is not None:
+            return cached
         scope = site.scope if site.scope and site.scope != MODULE_SCOPE else ""
         symbol = f"{site.module}.{scope}" if scope else None
-        return Endpoint(site.module, symbol, site.path or self.labeler.path_of(site.module), scope=scope)
+        endpoint = Endpoint(site.module, symbol, site.path or self.labeler.path_of(site.module), scope=scope)
+        self.src_cache[key] = endpoint
+        return endpoint
+
+    def module_endpoint(self, module: str) -> Endpoint:
+        return Endpoint(module, None, self.labeler.path_of(module))
 
     def symbol_endpoint(self, name: str, resolution: Resolution) -> Endpoint:
+        key = (name, resolution)
+        cached = self.symbol_cache.get(key)
+        if cached is None:
+            cached = self.symbol_cache[key] = self.new_symbol_endpoint(name, resolution)
+        return cached
+
+    def new_symbol_endpoint(self, name: str, resolution: Resolution) -> Endpoint:
         if resolution is Resolution.EXTERNAL:
             module = self.labeler.module_of_symbol(name) or name
             return Endpoint(module, name, self.labeler.path_of(module), external=name.split(".", 1)[0])
@@ -125,22 +206,22 @@ class RuleContext:
             return [self.symbol_endpoint(edge.surface, edge.resolution)]
         if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
             return [Endpoint(None, edge.surface, unresolved=True)]
-        endpoints = []
-        for target in edge.targets:
-            name = str(target)
-            if edge.resolution is Resolution.EXTERNAL:
-                endpoints.append(
-                    Endpoint(
-                        target.module,
-                        name,
-                        self.labeler.path_of(target.module),
-                        external=target.module.split(".", 1)[0],
-                    )
-                )
-                continue
-            symbol = name if target.symbol else None
-            endpoints.append(Endpoint(target.module, symbol, self.labeler.path_of(target.module)))
-        return endpoints
+        external = edge.resolution is Resolution.EXTERNAL
+        return [self.target_endpoint(target, external) for target in edge.targets]
+
+    def target_endpoint(self, target: EntityId, external: bool) -> Endpoint:
+        key = (target, external)
+        cached = self.target_cache.get(key)
+        if cached is not None:
+            return cached
+        name = str(target)
+        path = self.labeler.path_of(target.module)
+        if external:
+            endpoint = Endpoint(target.module, name, path, external=target.module.split(".", 1)[0])
+        else:
+            endpoint = Endpoint(target.module, name if target.symbol else None, path)
+        self.target_cache[key] = endpoint
+        return endpoint
 
     def owners_of(self, module: str | None) -> tuple[str, ...]:
         if module is None or "owners" not in self.config.fields:
@@ -163,27 +244,81 @@ def rule_kinds(spec: RuleSpec) -> tuple[str, ...]:
 
 
 def contexts_of(edge: Edge) -> frozenset[str]:
-    return frozenset(c.value for c in edge.contexts) or frozenset({Context.PROD.value})
+    """The edge's contexts; `Context` is a `StrEnum`, so the members compare as their names."""
+    return edge.contexts or DEFAULT_CONTEXTS
 
 
 def split_values(raw: str) -> frozenset[str]:
     return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
 
-class EdgeEnv:
-    """Resolves `src.*`, `dst.*` and `edge.*` for one edge and one destination endpoint."""
+def read_endpoint(ctx: RuleContext, endpoint: Endpoint, name: str, edge: Edge | None, root: str) -> Value:
+    """`src.<name>` or `dst.<name>` of one endpoint. `context` and `exported` need the edge: see EdgeEnv."""
+    if name == "symbol":
+        target = endpoint.symbol or endpoint.module
+        return Value.known(target) if target else UNKNOWN
+    if endpoint.unresolved:
+        return UNKNOWN
+    labeler = ctx.labeler
+    if name == "module":
+        return Value.known(endpoint.module) if endpoint.module else NONE
+    if name == "path":
+        return Value.known(endpoint.path) if endpoint.path else NONE
+    if name == "scope":
+        return Value.known(endpoint.scope) if endpoint.scope else NONE
+    if name == "name":
+        target = endpoint.symbol or endpoint.module or ""
+        return Value.known(target.rpartition(".")[2]) if target else NONE
+    if name == "external":
+        return Value.known(endpoint.external) if endpoint.external else NONE
+    if name == "kind":
+        if endpoint.symbol is None:
+            return NONE
+        return labeler.kind(endpoint.symbol, first_party=endpoint.external is None)[0]
+    if name == "decl":
+        decl = labeler.facts.decl(endpoint.symbol) if endpoint.symbol else ""
+        return Value.known(decl) if decl else NONE
+    if name == "registry":
+        return labeler.entity_resolver(endpoint.module, endpoint.symbol)(Ref(("registry",)))
+    attr = edge.attr(f"{root}.{name}") if edge is not None and id(edge) in ctx.endpoint_attr_edges else ""
+    if attr:
+        spec = ctx.config.fields.get(name)
+        return Value.known(split_values(attr)) if spec is not None and spec.type.value == "set" else Value.known(attr)
+    if name not in ctx.config.fields:
+        return UNKNOWN
+    if endpoint.external is not None:
+        return NONE
+    return labeler.field_value(endpoint.module, endpoint.label_symbol, name)[0]
 
-    def __init__(self, ctx: RuleContext, edge: Edge, src: Endpoint, dst: Endpoint) -> None:
+
+class EdgeEnv:
+    """Resolves `src.*`, `dst.*` and `edge.*` for one edge and one destination endpoint.
+
+    `shape` and `shape_detail` default to the edge's; a primitive that refines the shape (use-shape
+    with def-use flow) passes its own, so the edge itself stays the witness.
+    """
+
+    def __init__(
+        self,
+        ctx: RuleContext,
+        edge: Edge,
+        src: Endpoint,
+        dst: Endpoint,
+        shape: str | None = None,
+        shape_detail: str | None = None,
+    ) -> None:
         self.ctx = ctx
         self.edge = edge
         self.src = src
         self.dst = dst
+        self.shape = edge.shape if shape is None else shape
+        self.shape_detail = edge.shape_detail if shape_detail is None else shape_detail
 
     def label(self) -> str:
         if self.dst.unresolved:
             return f"unresolved-{self.edge.kind}"
-        if self.edge.shape:
-            return f"{self.edge.shape}({self.edge.shape_detail})" if self.edge.shape_detail else self.edge.shape
+        if self.shape:
+            return f"{self.shape}({self.shape_detail})" if self.shape_detail else self.shape
         return self.edge.kind
 
     def resolve(self, ref: Ref) -> Value:
@@ -193,16 +328,16 @@ class EdgeEnv:
         if root == "edge":
             return self.edge_value(name)
         if root == "src":
-            return self.endpoint_value(self.src, name, is_dst=False)
+            return self.endpoint_value(self.src, name, root)
         if root == "dst":
-            return self.endpoint_value(self.dst, name, is_dst=True)
+            return self.endpoint_value(self.dst, name, root)
         return UNKNOWN
 
     def edge_value(self, name: str) -> Value:
         edge = self.edge
         simple = {
             "kind": edge.kind,
-            "shape": edge.shape,
+            "shape": self.shape,
             "use": edge.use,
             "label": self.label(),
             "resolution": edge.resolution.value,
@@ -218,60 +353,33 @@ class EdgeEnv:
         raw = edge.attr(name)
         return Value.known(raw) if raw else NONE
 
-    def endpoint_value(self, endpoint: Endpoint, name: str, is_dst: bool) -> Value:
+    def endpoint_value(self, endpoint: Endpoint, name: str, root: str) -> Value:
         if name == "context":
             return Value.known(contexts_of(self.edge))
-        if name == "symbol":
-            target = endpoint.symbol or endpoint.module
-            return Value.known(target) if target else UNKNOWN
-        if endpoint.unresolved:
-            return UNKNOWN
-        labeler = self.ctx.labeler
-        if name == "module":
-            return Value.known(endpoint.module) if endpoint.module else NONE
-        if name == "path":
-            return Value.known(endpoint.path) if endpoint.path else NONE
-        if name == "scope":
-            return Value.known(endpoint.scope) if endpoint.scope else NONE
-        if name == "name":
-            target = endpoint.symbol or endpoint.module or ""
-            return Value.known(target.rpartition(".")[2]) if target else NONE
-        if name == "external":
-            return Value.known(endpoint.external) if endpoint.external else NONE
-        if name == "kind":
-            if endpoint.symbol is None:
-                return NONE
-            return labeler.kind(endpoint.symbol, first_party=endpoint.external is None)[0]
-        if name == "decl":
-            decl = labeler.facts.decl(endpoint.symbol) if endpoint.symbol else ""
-            return Value.known(decl) if decl else NONE
-        if name == "registry":
-            return labeler.entity_resolver(endpoint.module, endpoint.symbol)(Ref(("registry",)))
         if name == "exported":
-            return self.exported(endpoint)
-        attr = self.edge.attr(f"{'dst' if is_dst else 'src'}.{name}")
-        if attr:
-            spec = self.ctx.config.fields.get(name)
-            return (
-                Value.known(split_values(attr)) if spec is not None and spec.type.value == "set" else Value.known(attr)
-            )
-        if name not in self.ctx.config.fields:
-            return UNKNOWN
-        if endpoint.external is not None:
-            return NONE
-        return labeler.field_value(endpoint.module, endpoint.label_symbol, name)[0]
+            return UNKNOWN if endpoint.unresolved else self.exported(endpoint)
+        return read_endpoint(self.ctx, endpoint, name, self.edge, root)
 
     def exported(self, endpoint: Endpoint) -> Value:
         if endpoint.external is not None:
             return NONE
-
-        def audience(ref: Ref) -> Value:
-            return self.resolve(ref)
-
-        truth = self.ctx.labeler.exported(endpoint.module, endpoint.symbol, audience)
+        truth = self.ctx.labeler.exported(endpoint.module, endpoint.symbol, self.resolve)
         if truth is Truth.UNKNOWN:
             return UNKNOWN
         return Value.known(truth is Truth.TRUE)
+
+
+class ModuleEnv:
+    """Resolves `src.*` for a module on its own, with no edge (reach's `from`)."""
+
+    def __init__(self, ctx: RuleContext, endpoint: Endpoint) -> None:
+        self.ctx = ctx
+        self.endpoint = endpoint
+
+    def resolve(self, ref: Ref) -> Value:
+        if len(ref.path) != 2 or ref.path[0] != "src" or ref.path[1] in EDGE_DEPENDENT_FIELDS:
+            return UNKNOWN
+        return read_endpoint(self.ctx, self.endpoint, ref.path[1], None, "src")
 
 
 def render_value(value: Value) -> str:
@@ -286,13 +394,114 @@ def render_value(value: Value) -> str:
     return str(value.data)
 
 
-def project(columns: tuple[str, ...], resolve: object) -> tuple[str, ...]:
+def project(columns: tuple[str, ...], resolve: Resolver) -> tuple[str, ...]:
     """A finding's identity: one string per column, never a line number."""
-    out: list[str] = []
-    for column in columns:
-        ref = Ref(tuple(column.split(".")))
-        out.append(render_value(resolve(ref)))  # type: ignore[operator]
-    return tuple(out)
+    return tuple(render_value(resolve(Ref(tuple(column.split("."))))) for column in columns)
+
+
+# ── staged selection ─────────────────────────────────────────────
+
+
+def conjuncts(selectors: tuple[Selector | None, ...]) -> list[Node]:
+    out: list[Node] = []
+    for selector in selectors:
+        if selector is None:
+            continue
+        out.extend(selector.node.parts if isinstance(selector.node, And) else (selector.node,))
+    return out
+
+
+def endpoint_only(node: Node) -> str:
+    """`src` or `dst` when the node reads only that endpoint's own fields, else ''."""
+    roots: set[str] = set()
+    node_refs = refs(node)
+    for ref in node_refs:
+        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst") or ref.path[1] in EDGE_DEPENDENT_FIELDS:
+            return ""
+        roots.add(ref.path[0])
+    return roots.pop() if len(roots) == 1 else ""
+
+
+def joined(parts: list[Node]) -> Node | None:
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else And(tuple(parts))
+
+
+class StagedSelection:
+    """A rule's selection split into the parts that read only `src`, only `dst`, and the rest.
+
+    The endpoint parts are evaluated once per endpoint and cached, so a rule over a million edges
+    reads each module's labels once. An edge with its own `src.*` or `dst.*` attributes bypasses
+    the cache, because those attributes override labels.
+    """
+
+    def __init__(self, ctx: RuleContext, selectors: tuple[Selector | None, ...]) -> None:
+        self.ctx = ctx
+        parts = conjuncts(selectors)
+        self.src_part = joined([part for part in parts if endpoint_only(part) == "src"])
+        self.dst_part = joined([part for part in parts if endpoint_only(part) == "dst"])
+        self.rest = joined([part for part in parts if endpoint_only(part) == ""])
+        self.module_level = self.src_part is not None and all(self.module_level_ref(ref) for ref in refs(self.src_part))
+        self.rest_modules = self.rest is not None and all(self.module_level_ref(ref) for ref in refs(self.rest))
+        self.rest_cache: dict[tuple[object, ...], Truth] = {}
+        self.module_cache: dict[str, Truth] = {}
+        self.src_cache: dict[Endpoint, Truth] = {}
+        self.dst_cache: dict[Endpoint, Truth] = {}
+
+    def module_level_ref(self, ref: Ref) -> bool:
+        """Whether `src.<name>` or `dst.<name>` reads only the endpoint's module, never its symbol."""
+        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst"):
+            return False
+        name = ref.path[1]
+        if name in ("module", "path", "external", "registry"):
+            return True
+        spec = self.ctx.config.fields.get(name)
+        return spec is not None and spec.on == "module"
+
+    def module_false(self, module: str) -> bool:
+        """True when the `src` part is false for every regular edge of the module."""
+        if not self.module_level or self.src_part is None:
+            return False
+        cached = self.module_cache.get(module)
+        if cached is None:
+            cached = evaluate(self.src_part, ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
+            self.module_cache[module] = cached
+        return cached is Truth.FALSE
+
+    def part_truth(self, part: Node | None, cache: dict[Endpoint, Truth], edge: Edge, endpoint: Endpoint) -> Truth:
+        if part is None:
+            return Truth.TRUE
+        if id(edge) in self.ctx.endpoint_attr_edges:
+            return evaluate(part, EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
+        cached = cache.get(endpoint)
+        if cached is None:
+            cached = evaluate(part, EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
+            cache[endpoint] = cached
+        return cached
+
+    def src_truth(self, edge: Edge, src: Endpoint) -> Truth:
+        return self.part_truth(self.src_part, self.src_cache, edge, src)
+
+    def dst_truth(self, edge: Edge, dst: Endpoint) -> Truth:
+        return self.part_truth(self.dst_part, self.dst_cache, edge, dst)
+
+    def rest_truth(self, rest: Node, env: EdgeEnv) -> Truth:
+        """The rest of the selection; one evaluation per module pair when it reads only module fields."""
+        if not self.rest_modules or id(env.edge) in self.ctx.endpoint_attr_edges:
+            return evaluate(rest, env.resolve)
+        src, dst = env.src, env.dst
+        key = (src.module, src.path, dst.module, dst.path, dst.external, dst.unresolved)
+        cached = self.rest_cache.get(key)
+        if cached is None:
+            cached = self.rest_cache[key] = evaluate(rest, env.resolve)
+        return cached
+
+    def truth(self, env: EdgeEnv) -> Truth:
+        parts = [self.src_truth(env.edge, env.src), self.dst_truth(env.edge, env.dst)]
+        if self.rest is not None:
+            parts.append(self.rest_truth(self.rest, env))
+        return all_of(parts)
 
 
 class EdgeRule:
@@ -302,34 +511,61 @@ class EdgeRule:
         self.ctx = ctx
         self.spec = spec
         self.run = RuleRun(spec)
+        self.kind_set = frozenset(self.kinds())
+        self.include = frozenset(spec.contexts_include)
+        self.exclude = frozenset(spec.contexts_exclude)
+        self.staged = StagedSelection(ctx, self.selectors())
 
     def kinds(self) -> tuple[str, ...]:
         return rule_kinds(self.spec)
 
+    def selectors(self) -> tuple[Selector | None, ...]:
+        """The selectors that pick edges, in the order they apply."""
+        return self.spec.from_, self.spec.select
+
     def context_ok(self, edge: Edge) -> bool:
         contexts = contexts_of(edge)
-        if self.spec.contexts_include and not contexts & set(self.spec.contexts_include):
+        if self.include and not contexts & self.include:
             return False
-        return not contexts & set(self.spec.contexts_exclude)
+        return not contexts & self.exclude
 
-    def edges(self) -> Iterator[Edge]:
-        for edge in self.ctx.edges_of(self.kinds()):
-            if edge.resolution is Resolution.NOT_APPLICABLE:
+    def sees(self, edge: Edge) -> bool:
+        """Whether the rule looks at this edge at all. The engine and `explain` both ask this."""
+        if self.kind_set and edge.kind not in self.kind_set:
+            return False
+        if edge.resolution is Resolution.NOT_APPLICABLE:
+            return False
+        return self.context_ok(edge)
+
+    def env(self, edge: Edge, src: Endpoint, dst: Endpoint) -> EdgeEnv:
+        return EdgeEnv(self.ctx, edge, src, dst)
+
+    def envs_of(self, edge: Edge) -> list[EdgeEnv]:
+        """One environment per destination of the edge, selected or not."""
+        src = self.ctx.src_endpoint(edge.site)
+        return [self.env(edge, src, dst) for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint)]
+
+    def group_envs(self, module: str, group: EdgeGroup) -> Iterator[EdgeEnv]:
+        """The environments of one module's edges whose selection is not false. The module-wide and
+        endpoint-only parts go first, so most edges are dropped before any per-edge work."""
+        staged = self.staged
+        for edge in group.irregular if staged.module_false(module) else group.edges:
+            if not self.sees(edge):
                 continue
-            if self.context_ok(edge):
-                yield edge
+            src = self.ctx.src_endpoint(edge.site)
+            if staged.src_truth(edge, src) is Truth.FALSE:
+                continue
+            for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint):
+                if staged.dst_truth(edge, dst) is Truth.FALSE:
+                    continue
+                yield self.env(edge, src, dst)
 
     def envs(self) -> Iterator[EdgeEnv]:
-        for edge in self.edges():
-            src = self.ctx.src_endpoint(edge.site)
-            for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint):
-                yield EdgeEnv(self.ctx, edge, src, dst)
+        for module, group in self.ctx.module_groups(self.kinds()):
+            yield from self.group_envs(module, group)
 
     def selection(self, env: EdgeEnv) -> Truth:
-        parts = [
-            selector.evaluate(env.resolve) for selector in (self.spec.from_, self.spec.select) if selector is not None
-        ]
-        return all_of(parts)
+        return self.staged.truth(env)
 
     def violation(self, env: EdgeEnv) -> Truth:
         """True when the predicate says the edge breaks the rule. No predicate: selection is the finding."""

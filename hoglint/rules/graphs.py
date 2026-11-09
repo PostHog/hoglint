@@ -4,56 +4,88 @@ from __future__ import annotations
 
 from collections import deque
 
+from hoglint.config.model import RuleSpec
 from hoglint.model import Edge, Finding
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, project, render_value
-from hoglint.selectors import Ref, State, Truth
+from hoglint.rules.base import (
+    EdgeEnv,
+    EdgeRule,
+    Endpoint,
+    IncompleteItem,
+    ModuleEnv,
+    RuleContext,
+    RuleRun,
+    project,
+    render_value,
+)
+from hoglint.selectors import Ref, Selector, State, Truth
+
+Hop = tuple[Edge, Endpoint, Truth]
 
 
 class ReachPrimitive(EdgeRule):
-    """Is a denied target reachable from a selected module through the view's edges?"""
+    """Is a denied target reachable from a selected module through the view's edges?
 
-    def adjacency(self) -> dict[str, list[tuple[Edge, Endpoint]]]:
-        out: dict[str, list[tuple[Edge, Endpoint]]] = {}
-        for edge in self.edges():
-            for dst in self.ctx.dst_endpoints(edge, "origin"):
-                out.setdefault(edge.site.module, []).append((edge, dst))
-        for hops in out.values():
-            hops.sort(key=lambda hop: (hop[1].module or "", hop[1].symbol or "", hop[0].surface))
+    `from` picks the start modules and reads the module alone (`src.*`, no edge). `select` picks
+    the edges the search may follow, each judged with its own source. `deny` is judged with the
+    start module as `src`, so a condition on the start holds along the whole chain.
+    """
+
+    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
+        super().__init__(ctx, spec)
+        self.hop_cache: dict[str, list[Hop]] = {}
+
+    def selectors(self) -> tuple[Selector | None, ...]:
+        return (self.spec.select,)
+
+    def hops(self, module: str) -> list[Hop]:
+        """The selected edges out of one module, built when the search first reaches it."""
+        cached = self.hop_cache.get(module)
+        if cached is not None:
+            return cached
+        out: list[Hop] = []
+        for group in self.ctx.groups_of(self.kinds(), module):
+            for env in self.group_envs(module, group):
+                selected = self.selection(env)
+                if selected is not Truth.FALSE:
+                    out.append((env.edge, env.dst, selected))
+        out.sort(key=lambda hop: (hop[1].module or "", hop[1].symbol or "", hop[0].surface))
+        self.hop_cache[module] = out
         return out
 
-    def sources(self, adjacency: dict[str, list[tuple[Edge, Endpoint]]]) -> list[str]:
+    def sources(self) -> list[str]:
         out = []
-        for module in sorted(adjacency):
-            if self.spec.from_ is None:
-                out.append(module)
+        for module in sorted({module for module, _ in self.ctx.module_groups(self.kinds())}):
+            truth = Truth.TRUE
+            if self.spec.from_ is not None:
+                truth = self.spec.from_.evaluate(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
+            if truth is Truth.FALSE or not self.hops(module):
                 continue
-            first_edge = adjacency[module][0][0]
-            env = EdgeEnv(self.ctx, first_edge, self.ctx.src_endpoint(first_edge.site), Endpoint(None, None))
-            truth = self.spec.from_.evaluate(env.resolve)
             if truth is Truth.TRUE:
                 out.append(module)
-            elif truth is Truth.UNKNOWN:
-                self.incomplete(env, f"cannot tell whether {module} is selected")
+                continue
+            reason = f"cannot tell whether {module} is selected"
+            self.run.incomplete.append(IncompleteItem(self.spec.id, module, reason, (module,)))
         return out
 
-    def evaluate(self):  # type: ignore[override]
-        adjacency = self.adjacency()
-        for source in self.sources(adjacency):
-            self.search(source, adjacency)
+    def evaluate(self) -> RuleRun:
+        for source in self.sources():
+            self.search(source)
         return self.run
 
-    def search(self, source: str, adjacency: dict[str, list[tuple[Edge, Endpoint]]]) -> None:
-        origin = self.ctx.src_endpoint(adjacency[source][0][0].site)
-        origin = Endpoint(origin.module, None, origin.path)
+    def search(self, source: str) -> None:
+        origin = self.ctx.module_endpoint(source)
         parents: dict[str, tuple[str, Edge] | None] = {source: None}
         queue = deque([source])
         reported: set[str] = set()
         while queue:
             module = queue.popleft()
-            for edge, dst in adjacency.get(module, []):
+            for edge, dst, selected in self.hops(module):
                 env = EdgeEnv(self.ctx, edge, origin, dst)
                 if dst.unresolved:
                     self.on_unresolved(env)
+                    continue
+                if selected is Truth.UNKNOWN:
+                    self.incomplete(env, f"cannot tell whether to follow {edge.kind} {edge.surface!r}")
                     continue
                 verdict = self.spec.deny.evaluate(env.resolve) if self.spec.deny is not None else Truth.FALSE
                 target = dst.symbol or dst.module or ""
@@ -96,15 +128,14 @@ class CyclePrimitive(EdgeRule):
             return None
         return render_value(value)
 
-    def evaluate(self):  # type: ignore[override]
+    def evaluate(self) -> RuleRun:
         pairs: dict[tuple[str, str], list[EdgeEnv]] = {}
         for env in self.envs():
             selected = self.selection(env)
             if selected is Truth.FALSE:
                 continue
             if env.dst.unresolved:
-                if self.spec.on_unresolved == "incomplete":
-                    self.incomplete(env, f"{env.edge.kind} {env.edge.surface!r} did not resolve")
+                self.on_unresolved(env)
                 continue
             if selected is Truth.UNKNOWN:
                 self.incomplete(env, "selection reads an unknown value")

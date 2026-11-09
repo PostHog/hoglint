@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from hoglint.config import ConfigError
-from hoglint.labels import Labeler, render
+from hoglint.labels import CodeownersFile, Labeler, render
 from hoglint.model import Resolution
 from hoglint.rules.engine import Engine
 
@@ -126,6 +126,30 @@ def test_symbol_labels_kinds_and_domains(labeler: Labeler) -> None:
     assert render(labeler.field_value("posthog.models.team", "posthog.models.team.Team", "silo")[0]) == "cell"
     # a base that did not resolve leaves the kind unknown, so silo's domain is unknown too
     assert render(labeler.kind("posthog.models.team.Mystery")[0]) == "unknown"
+    # without facts a third-party symbol has no kind, a first-party one an unknown kind: asked in
+    # that order, the first answer must not stick to the second question
+    assert render(labeler.kind("posthog.models.team.Ghost", first_party=False)[0]) == "none"
+    assert render(labeler.kind("posthog.models.team.Ghost")[0]) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "pattern, path, owned",
+    [
+        ("/docs/*", "docs/a.md", True),
+        ("/docs/*", "docs/sub/b.md", False),
+        ("/docs/", "docs/sub/b.md", True),
+        ("docs/", "x/docs/a.md", True),
+        ("/apps/github", "apps/github/x/y.py", True),
+        ("apps/github", "lib/apps/github/x.py", False),
+        ("*.js", "a/b/c.js", True),
+        ("**/logs", "a/logs/x.txt", True),
+        ("docs/**", "docs/a/b.md", True),
+        ("/scripts/*.sh", "scripts/x/a.sh", False),
+        ("/src/{x}/", "src/y/a.py", False),
+    ],
+)
+def test_codeowners_patterns_follow_github(pattern: str, path: str, owned: bool) -> None:
+    assert (CodeownersFile(f"{pattern} @team").owners(path) is not None) is owned
 
 
 def test_conflicting_assignments_are_a_config_error(tmp_path: Path) -> None:

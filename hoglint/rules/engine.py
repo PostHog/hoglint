@@ -53,6 +53,7 @@ class RunResult:
     exceptions: ExceptionReport = field(default_factory=ExceptionReport)
     scan: dict[LineKey, int] = field(default_factory=dict)
     equality: EqualityResult | None = None
+    ledger: LedgerFile | None = None
 
     def findings(self) -> list[Finding]:
         return [finding for run in self.runs.values() for finding in run.findings]
@@ -117,14 +118,41 @@ class Engine:
                 out.append(f"producer {name} failed: {reason}")
         return out
 
+    def empty_expected_kinds(self) -> set[str]:
+        """Kinds marked `expected` that no symbol matched: whatever produces them found nothing."""
+        expected = {name for name, spec in self.config.kinds.items() if spec.expected}
+        if not expected:
+            return set()
+        matched = {kind for symbol in self.graph.symbols for kind in self.labeler.kind_match(symbol).kinds}
+        return expected - matched
+
+    def kinds_read(self, spec: RuleSpec) -> set[str]:
+        """Kind names a rule compares against, and for an export rule the kinds its shapes name."""
+        out: set[str] = set()
+        for selector in (spec.from_, spec.select, spec.deny, spec.allow, spec.require, spec.unless):
+            if selector is not None:
+                out |= selector.compared_values("kind")
+        if spec.primitive == "export":
+            for name in spec.exports or tuple(self.config.exports):
+                policy = self.config.shapes[self.config.exports[name].shape]
+                out |= {*policy.deny, *policy.data, *policy.allow}
+        return out
+
+    def missing_kinds(self, spec: RuleSpec, empty: set[str]) -> list[str]:
+        return [
+            f"kind {kind} matched no symbol, but [kinds] marks it expected"
+            for kind in sorted(self.kinds_read(spec) & empty)
+        ]
+
     def run_rules(self) -> dict[str, RuleRun]:
         conflicts = self.labeler.label_everything()
         if conflicts:
             raise ConfigError(sorted(set(conflicts)))
         ctx = RuleContext(self.config, self.graph, self.labeler, self.repo_root)
+        empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
         for spec in ordered:
-            failures = self.failed_producers(spec)
+            failures = self.failed_producers(spec) + self.missing_kinds(spec, empty)
             if failures:
                 run = RuleRun(spec)
                 run.incomplete.extend(
@@ -140,17 +168,29 @@ class Engine:
             ctx.results[run.spec.id] = run
         return ctx.results
 
-    def evaluate(self, ledger: LedgerFile | None = None, exceptions: ExceptionsFile | None = None) -> RunResult:
+    def evaluate(
+        self,
+        ledger: LedgerFile | None = None,
+        exceptions: ExceptionsFile | None = None,
+        rewrite_ledger: bool = False,
+    ) -> RunResult:
+        """One run. With `rewrite_ledger`, findings and levels are judged against the ledger this
+        run writes (its own scan), so the next check over the same code finds that ledger equal."""
         result = RunResult(self.config, self.labeler, self.run_rules())
         if exceptions is not None:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)
+        if rewrite_ledger:
+            ledger = LedgerFile(SCHEMA_VERSION, self.config.policy_hash, dict(result.scan), exists=True)
         self.mark_accepted(result, ledger)
         for name, spec in self.config.levels.items():
             level = LevelEvaluator(spec, self.labeler, result.runs).evaluate()
             result.levels[name] = level
             for group in level.passing:
                 result.scan[(LEVEL_PREFIX + name, (group,))] = 1
+        if rewrite_ledger and ledger is not None:
+            ledger.lines = dict(result.scan)
+            result.ledger = ledger
         if ledger is not None:
             result.equality = check_equality(result.scan, ledger, SCHEMA_VERSION, self.config.policy_hash)
         return result

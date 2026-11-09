@@ -14,6 +14,7 @@ unknown value is unknown, and Kleene logic carries it through `and`, `or` and `n
 from __future__ import annotations
 
 import re
+import difflib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -392,8 +393,6 @@ class Validator:
 
 
 def suggest(word: str, choices: Iterable[str]) -> str:
-    import difflib  # noqa: PLC0415 — only error paths need it
-
     close = difflib.get_close_matches(word, list(choices), n=1)
     return f" (did you mean {close[0]!r}?)" if close else ""
 
@@ -547,6 +546,21 @@ def refs(node: Node) -> list[Ref]:
     return [operand for operand in operands if isinstance(operand, Ref)]
 
 
+def compared_values(node: Node, name: str) -> set[str]:
+    """Literals compared against a `<root>.<name>` or bare `<name>` field (never `edge.*`)."""
+    if isinstance(node, (And, Or)):
+        return {value for part in node.parts for value in compared_values(part, name)}
+    if isinstance(node, Not):
+        return compared_values(node.inner, name)
+    if isinstance(node, Bare):
+        return set()
+    out: set[str] = set()
+    for side, other in ((node.left, node.right), (node.right, node.left)):
+        if isinstance(side, Ref) and side.path[-1] == name and side.path[0] != "edge":
+            out.update(str(value) for value in literal_values(other) if value is not None)
+    return out
+
+
 @dataclass(frozen=True, slots=True)
 class Selector:
     """A parsed and validated selector, kept with its source text for explain output."""
@@ -566,6 +580,9 @@ class Selector:
 
     def refs(self) -> list[Ref]:
         return refs(self.node)
+
+    def compared_values(self, name: str) -> set[str]:
+        return compared_values(self.node, name)
 
     def restricts(self, path: tuple[str, ...]) -> frozenset[str] | None:
         """Literal values the selector requires at `path` (from `==` or `in` at the top level of

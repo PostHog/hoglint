@@ -8,7 +8,7 @@ import pytest
 
 from hoglint.config import Config
 from hoglint.ledger.file import LedgerFile
-from hoglint.model import Context, FindingStatus, Graph, Resolution
+from hoglint.model import Context, FindingStatus, Graph, IncompleteCause, Resolution
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
@@ -124,17 +124,61 @@ def test_edge_rule_unknown_never_escapes_a_deny(tmp_path: Path) -> None:
     assert ghost and ghost[0].unknown
 
 
+CYCLE = """
+[rules.no-cycles]
+primitive = "cycle"
+view = "packages"
+select = "src.tier == 'product' and dst.tier == 'product'"
+identity = "package-pair"
+growth_key = ["src.package", "dst.package"]
+"""
+
+
+@pytest.mark.parametrize(
+    "rules, rule_id, src",
+    [(EDGE_RULE, "no-product-from-core", "core.api"), (CYCLE, "no-cycles", "products.billing.logic")],
+)
 @pytest.mark.parametrize(
     "mode, ledgerable, incomplete",
     [("finding", True, 0), ("block", False, 0), ("incomplete", None, 1)],
 )
-def test_on_unresolved_modes(tmp_path: Path, mode: str, ledgerable: bool | None, incomplete: int) -> None:
-    graph = base_graph().edge("import", "core.api", None, "products.gone.x", resolution=Resolution.UNRESOLVED).graph
-    result = run(tmp_path, EDGE_RULE + f'on_unresolved = "{mode}"\n', graph)
-    rule_run = result.runs["no-product-from-core"]
+def test_on_unresolved_modes(
+    tmp_path: Path, rules: str, rule_id: str, src: str, mode: str, ledgerable: bool | None, incomplete: int
+) -> None:
+    graph = base_graph().edge("import", src, None, "products.gone.x", resolution=Resolution.UNRESOLVED).graph
+    result = run(tmp_path, rules + f'on_unresolved = "{mode}"\n', graph)
+    rule_run = result.runs[rule_id]
     assert len(rule_run.incomplete) == incomplete
     if ledgerable is not None:
         assert [f.ledgerable for f in rule_run.findings] == [ledgerable]
+
+
+def test_an_edge_with_its_own_src_label_is_judged_on_its_own(tmp_path: Path) -> None:
+    graph = (
+        base_graph()
+        .edge("import", "core.api", "products.billing.models.Invoice", attrs=(("src.tier", "product"),))
+        .edge("import", "core.api", "products.billing.logic.charge")
+        .graph
+    )
+    result = run(tmp_path, EDGE_RULE, graph)
+    assert identities(result, "no-product-from-core") == [("core.api", "products.billing.logic")]
+
+
+def test_a_kind_marked_expected_that_matches_nothing_makes_its_rules_incomplete(tmp_path: Path) -> None:
+    graph = (
+        GraphBuilder()
+        .module("core.api", "products.billing.models")
+        .edge("reference", "core.api", "products.billing.models")
+        .graph
+    )
+    expected = FIELDS.replace(
+        'subclass_of = "django.db.models.Model" }', 'subclass_of = "django.db.models.Model", expected = true }'
+    )
+    config = config_from(tmp_path, expected + USE_SHAPE + EDGE_RULE)
+    result = Engine(config, graph, tmp_path).evaluate()
+    assert [item.cause for item in result.runs["model-crossings"].incomplete] == [IncompleteCause.EXTRACTOR]
+    assert result.runs["no-product-from-core"].incomplete == []
+    assert result.exit_code() == 2
 
 
 def test_unknown_selection_makes_the_rule_incomplete(tmp_path: Path) -> None:
@@ -228,6 +272,36 @@ def test_use_shape_counts_per_identity_and_ledger_accepts(tmp_path: Path) -> Non
     assert stale.exit_code() == 1
 
 
+FLOW_SHAPE = """
+[rules.model-sites]
+primitive = "use-shape"
+kinds = ["reference"]
+select = "dst.kind == 'model'"
+allow_shapes = ["annotation"]
+flow = "def-use"
+identity = "site"
+growth_key = ["src.module"]
+"""
+
+
+def test_use_shape_with_flow_keeps_the_graph_edge_and_its_ordinal(tmp_path: Path) -> None:
+    builder = base_graph()
+    for line in (1, 2):
+        builder.edge(
+            "reference",
+            "core.api",
+            "products.billing.models.Invoice",
+            shape="instance-single",
+            attrs=(("flow_shape", "write(save)"),),
+            line=line,
+        )
+    graph = builder.graph
+    findings = run(tmp_path, FLOW_SHAPE, graph).runs["model-sites"].findings
+    assert sorted(f.identity[-1] for f in findings) == ["0", "1"]
+    assert all(any(f.witnesses[0] is edge for edge in graph.edges) for f in findings)
+    assert {f.message.rsplit(" as ", 1)[1] for f in findings} == {"write(save)"}
+
+
 REACH = """
 [rules.contracts-no-django]
 primitive = "reach"
@@ -260,14 +334,44 @@ def test_reach_follows_chains_and_skips_type_only(tmp_path: Path) -> None:
     assert len(result.runs["contracts-no-django"].findings[0].witnesses) == 2
 
 
-CYCLE = """
-[rules.no-cycles]
-primitive = "cycle"
-view = "packages"
-select = "src.tier == 'product' and dst.tier == 'product'"
-identity = "package-pair"
-growth_key = ["src.package", "dst.package"]
+REACH_START = """
+[rules.named-contracts]
+primitive = "reach"
+view = "file-imports"
+from = "src.name == 'contracts'"
+deny = "dst.external == 'django'"
+identity = "module-pair"
+growth_key = ["src.module"]
+
+[rules.imports-only]
+primitive = "reach"
+view = "file-imports"
+from = "src.name == 'contracts'"
+select = "edge.kind == 'import'"
+deny = "dst.external == 'django'"
+identity = "module-pair"
+growth_key = ["src.module"]
 """
+
+
+def test_reach_starts_from_the_module_and_follows_only_selected_edges(tmp_path: Path) -> None:
+    graph = (
+        base_graph()
+        # a function-local import: the module, not this edge's scope, decides whether the search starts
+        .edge(
+            "import", "products.billing.facade.contracts", "django.http", scope="helper", resolution=Resolution.EXTERNAL
+        )
+        .edge("dotted-path", "products.billing.facade.contracts", "products.billing.logic")
+        .edge("import", "products.billing.logic", "django.db.models", resolution=Resolution.EXTERNAL)
+        .graph
+    )
+    result = run(tmp_path, REACH_START, graph)
+    contracts = "products.billing.facade.contracts"
+    assert sorted(identities(result, "named-contracts")) == [
+        (contracts, "django.db.models"),
+        (contracts, "django.http"),
+    ]
+    assert identities(result, "imports-only") == [(contracts, "django.http")]
 
 
 def test_cycle_reports_every_pair_inside_a_component(tmp_path: Path) -> None:
@@ -307,6 +411,58 @@ def test_signature_denies_models_and_reads_any_as_unknown(tmp_path: Path) -> Non
         ("charge", "return", "products.billing.models.Invoice"): False,
         ("charge", "param:payload", "typing.Any"): True,
     }
+
+
+ADAPTER = """
+[shapes.adapter]
+allow = ["class"]
+deny = ["model"]
+
+[exports.adapter]
+within = "products/{product}"
+paths = ["presentation/**"]
+subclass_of = ["products.billing.presentation.mixins.BillingMixin"]
+shape = "adapter"
+
+[rules.export-shape]
+primitive = "export"
+identity = "module-symbol"
+growth_key = ["dst.symbol"]
+
+[rules.public-surface]
+primitive = "entrypoint"
+kinds = ["import"]
+select = "src.package != dst.package and dst.tier == 'product'"
+identity = "module-symbol"
+growth_key = ["dst.symbol"]
+"""
+
+
+def test_export_by_base_class_hands_out_only_the_adapters(tmp_path: Path) -> None:
+    graph = (
+        base_graph()
+        .module("products.billing.presentation.mixins", "products.billing.presentation.views")
+        .symbol("products.billing.presentation.mixins.BillingMixin")
+        .symbol("products.billing.presentation.views.InvoiceViewSet")
+        .symbol("products.billing.presentation.views.render", "def")
+        .edge(
+            "inherit",
+            "products.billing.presentation.views",
+            "products.billing.presentation.mixins.BillingMixin",
+            attrs=(("class", "InvoiceViewSet"),),
+        )
+        # views uses the model internally; importing it does not export it
+        .edge("import", "products.billing.presentation.views", "products.billing.models.Invoice")
+        .edge("import", "core.views", "products.billing.presentation.mixins.BillingMixin")
+        .edge("import", "core.views", "products.billing.presentation.views.InvoiceViewSet")
+        .edge("import", "core.views", "products.billing.presentation.views.render")
+        .graph
+    )
+    result = run(tmp_path, ADAPTER, graph)
+    assert identities(result, "export-shape") == []
+    assert identities(result, "public-surface") == [
+        ("products.billing.presentation.views.render", "core.views", "import")
+    ]
 
 
 EXPORT = """
@@ -379,11 +535,16 @@ growth_key = ["package"]
 """
 
 
+def turbo_package(root: Path, directory: str, turbo: dict[str, object] | None, script: str = "contract-check") -> None:
+    """A workspace package that runs `script`, with an optional package turbo.json."""
+    (root / directory).mkdir(parents=True, exist_ok=True)
+    (root / directory / "package.json").write_text(json.dumps({"name": directory, "scripts": {script: "true"}}))
+    if turbo is not None:
+        (root / directory / "turbo.json").write_text(json.dumps(turbo))
+
+
 def test_coverage_reads_turbo_inputs_and_layout_selects_entities(tmp_path: Path) -> None:
-    (tmp_path / "products" / "billing").mkdir(parents=True)
-    (tmp_path / "products" / "billing" / "turbo.json").write_text(
-        json.dumps({"tasks": {"contract-check": {"inputs": ["facade/**"]}}})
-    )
+    turbo_package(tmp_path, "products/billing", {"tasks": {"contract-check": {"inputs": ["facade/**"]}}})
     graph = (
         base_graph()
         .module("core.tests.test_billing")
@@ -423,14 +584,8 @@ strict = ["wiring-watched"]
 
 
 def test_level_lets_ledgered_debt_coexist_but_not_unknowns_or_unwatched_wiring(tmp_path: Path) -> None:
-    (tmp_path / "products" / "billing").mkdir(parents=True)
-    (tmp_path / "products" / "billing" / "turbo.json").write_text(
-        json.dumps({"tasks": {"contract-check": {"inputs": ["**"]}}})
-    )
-    (tmp_path / "products" / "alerts").mkdir(parents=True)
-    (tmp_path / "products" / "alerts" / "turbo.json").write_text(
-        json.dumps({"tasks": {"contract-check": {"inputs": ["facade/**"]}}})
-    )
+    turbo_package(tmp_path, "products/billing", {"tasks": {"contract-check": {"inputs": ["**"]}}})
+    turbo_package(tmp_path, "products/alerts", {"tasks": {"contract-check": {"inputs": ["facade/**"]}}})
     graph = (
         base_graph()
         .symbol("products.alerts.logic.Alert")
@@ -484,3 +639,38 @@ def test_exceptions_allow_and_stale_or_expired_entries_are_reported(tmp_path: Pa
     assert [e.index for e in result.exceptions.stale] == [1]
     assert [e.index for e in result.exceptions.expired] == [0]
     assert result.exit_code() == 1  # the stale entry fails; the expired one only reports
+
+
+@pytest.mark.parametrize(
+    "entry, problem",
+    [
+        ('match = "core.api"', "match must be a table"),
+        ('match = { "src.module" = { nested = 1 } }', "match value for 'src.module'"),
+        ('match = { "src.module" = "core.api" }\nreview_by = "soon"', "review_by must be a date"),
+        ('match = { "src.module" = "core.api" }\nreview_by = 5', "review_by must be a date"),
+    ],
+)
+def test_malformed_exceptions_are_reported_not_raised(tmp_path: Path, entry: str, problem: str) -> None:
+    text = (
+        f'schema = 1\n[[exception]]\nrule = "model-crossings"\nreason = "r"\nowners = ["t"]\nscope = "prod"\n{entry}\n'
+    )
+    graph = base_graph().edge("reference", "core.api", "products.billing.models.Invoice", shape="write").graph
+    result = run(tmp_path, USE_SHAPE, graph, LedgerFile(), text)
+    assert any(problem in line for line in result.exceptions.problems)
+    assert result.exit_code() == 1
+
+
+def test_exception_match_values_render_like_identities(tmp_path: Path) -> None:
+    rules = """
+[rules.unexported]
+primitive = "edge"
+kinds = ["import"]
+select = "src.package != dst.package and dst.tier == 'product'"
+identity = ["src.module", "dst.exported"]
+growth_key = ["src.module"]
+"""
+    text = 'schema = 1\n[[exception]]\nrule = "unexported"\nmatch = { "dst.exported" = false }\nreason = "r"\nowners = "t"\nscope = "prod"\n'
+    graph = base_graph().edge("import", "core.api", "products.billing.logic.charge").graph
+    result = run(tmp_path, ENTRYPOINT + rules, graph, LedgerFile(), text)
+    assert [f.status for f in result.runs["unexported"].findings] == [FindingStatus.ALLOWED]
+    assert result.exceptions.stale == []

@@ -88,6 +88,11 @@ ledger = false
             "not an identity column",
         ),
         ("[rules.other]\nprimitive = 'edge'\non_unresolved = 'ignore'\nledger = false\n", "no `ignore`"),
+        # reach's `from` reads the start module alone: there is no edge to read
+        (
+            "[rules.other]\nprimitive = 'reach'\nview = 'file-imports'\nfrom = \"edge.kind == 'import'\"\nledger = false\n",
+            "unknown field 'edge.kind'",
+        ),
         ("[[assign]]\nmatch = 'x/**'\nset = { tier = 'leaf' }\n", "'leaf' is not a value of field 'tier'"),
         ("[[assign]]\nmatch = 'x/**'\nset = { package = '{pkg}' }\n", "`{pkg}` is not captured"),
         (

@@ -118,9 +118,10 @@ tests          = { paths = ["**/tests/**", "**/test/**", "**/test_*.py"], overri
 
 # ── Kinds and shapes ───────────────────────────────────────────
 # `model` reads the Django pack's model index, which already handles abstract and proxy models.
+# It is `expected`: zero models means the pack read nothing, so every rule about models goes incomplete.
 
 [kinds]
-model    = { decl = "model", abstract = false }
+model    = { decl = "model", abstract = false, expected = true }
 manager  = { subclass_of = ["django.db.models.manager.BaseManager", "django.db.models.manager.Manager", "django.db.models.Manager"] }
 queryset = { subclass_of = ["django.db.models.query.QuerySet", "django.db.models.QuerySet"] }
 command  = { subclass_of = ["django.core.management.base.BaseCommand"] }

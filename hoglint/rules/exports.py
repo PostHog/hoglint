@@ -4,17 +4,18 @@ The check is recursive. An exported class must have an allowed shape, and the ty
 fields, its bases' fields and its methods' signatures must too. An exported function's
 signature types are checked the same way. Re-exports are judged at their origin, so a shim
 module hides nothing. Shape names are core recognizers plus the config's [kinds].
+
+Membership is the labeler's: an export's paths, narrowed by `subclass_of`. The audience is not
+read here: it limits who may use an export, not what the export hands out, so every member is
+checked whatever its audience.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
-from hoglint.labels import glob_match
 from hoglint.model import Edge, Finding, Resolution
 from hoglint.rules.base import MODULE_SCOPE, IncompleteItem, RuleContext, RuleRun, contexts_of, project
-from hoglint.selectors import NONE, Ref, State, Truth, Value
+from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
 
 ABC_BASES = frozenset({"abc.ABC"})
 ABC_METAS = frozenset({"abc.ABCMeta"})
@@ -33,6 +34,7 @@ class ExportPrimitive:
             callable_name = edge.attr("callable") or edge.site.scope
             self.exposes.setdefault(edge.site.module, []).append((callable_name, edge))
         self.reported: set[tuple[str, str, str]] = set()
+        self.visited: set[tuple[str, str, str]] = set()
         self.top_level: dict[str, list[str]] = {}
         for symbol in sorted(ctx.graph.symbols):
             module = ctx.labeler.module_of_symbol(symbol)
@@ -49,13 +51,20 @@ class ExportPrimitive:
         return [self.ctx.config.exports[name] for name in names]
 
     def evaluate(self) -> RuleRun:
+        labeler = self.ctx.labeler
         for export in self.selected_exports():
             policy = self.ctx.config.shapes[export.shape]
             for module, path in sorted(self.ctx.graph.modules.items()):
-                relative = self.ctx.labeler.export_root(export, path)
-                if relative is None or not any(glob_match(p, relative) is not None for p in export.paths):
+                if not labeler.export_covers(export, path):
                     continue
                 for symbol, edge in self.exported_symbols(module):
+                    member = labeler.export_member(export, path, symbol)
+                    if member is Truth.FALSE:
+                        continue
+                    if member is Truth.UNKNOWN:
+                        why = f"cannot tell whether it is in export {export.name}: a base did not resolve"
+                        self.unknown(symbol, module, policy, (symbol,), edge, why)
+                        continue
                     self.check(symbol, module, policy, edge, (symbol,))
         return self.run
 
@@ -122,6 +131,12 @@ class ExportPrimitive:
     # ── recursion ──
 
     def check(self, symbol: str, module: str, policy: ShapePolicy, edge: Edge | None, trail: tuple[str, ...]) -> None:
+        """Findings are keyed by (symbol, module), so a symbol already checked for this module and
+        policy adds nothing the second time."""
+        visit = (module, policy.name, symbol)
+        if visit in self.visited:
+            return
+        self.visited.add(visit)
         shapes, complete = self.recognize(symbol)
         denied = sorted(shapes & set(policy.deny))
         if denied:
@@ -180,7 +195,7 @@ class ExportPrimitive:
 
     # ── output ──
 
-    def resolver(self, symbol: str, module: str, label: str) -> Callable[[Ref], Value]:
+    def resolver(self, symbol: str, module: str, label: str) -> Resolver:
         labeler = self.ctx.labeler
 
         def resolve(ref: Ref) -> Value:

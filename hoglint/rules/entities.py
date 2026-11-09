@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import re
 import json
 import tomllib
-from collections.abc import Callable, Iterator
-from pathlib import Path
+from collections.abc import Iterator
 
 from hoglint.config.model import CoverSpec, RuleSpec
 from hoglint.labels import fill, glob_match
 from hoglint.model import Edge, Finding
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, RuleContext, RuleRun, project, render_value
-from hoglint.selectors import Ref, State, Truth, Value
-
-Resolver = Callable[[Ref], Value]
+from hoglint.rules.turbo import TurboError, TurboInputs
+from hoglint.selectors import Ref, Resolver, State, Truth, Value
 
 
 class EntityRule:
@@ -74,8 +71,18 @@ class LayoutPrimitive(EntityRule):
             self.check_registry()
         return self.run
 
+    def kind_ruled_out(self, symbol: str | None, wanted: frozenset[str] | None) -> bool:
+        """Whether `select` pins `kind` and this symbol's kind is known to be another."""
+        if symbol is None or wanted is None:
+            return False
+        kind = self.ctx.labeler.kind(symbol)[0]
+        return kind.state is State.NONE or (kind.state is State.KNOWN and kind.data not in wanted)
+
     def check_entities(self) -> None:
+        wanted = self.spec.select.restricts(("kind",)) if self.spec.select is not None else None
         for module, symbol, subject in self.entities():
+            if self.kind_ruled_out(symbol, wanted):
+                continue
             resolve = self.resolver(module, symbol, subject)
             selected = self.spec.select.evaluate(resolve) if self.spec.select is not None else Truth.TRUE
             if selected is Truth.FALSE:
@@ -124,10 +131,6 @@ class LayoutPrimitive(EntityRule):
                         self.resolver(module, None, f"{root}/{forbidden}"),
                     )
 
-    def assignments_known(self) -> bool:
-        facts = self.ctx.labeler.facts
-        return any(facts.decl(symbol) == "assignment" for symbol in self.ctx.graph.symbols)
-
     def check_registry(self) -> None:
         registry = self.ctx.config.registries[self.spec.registry]
         facts = self.ctx.labeler.facts
@@ -137,7 +140,7 @@ class LayoutPrimitive(EntityRule):
                 continue
             attribute = f"{module}.{registry.attribute}"
             resolve = self.resolver(module, None, attribute)
-            if not facts.has(attribute) and not self.assignments_known():
+            if not facts.has(attribute) and not facts.any_decl("assignment"):
                 self.incomplete(attribute, module, "no producer records module-level assignments")
                 continue
             if not facts.has(attribute):
@@ -234,78 +237,6 @@ class InventoryPrimitive(EntityRule):
         self.run.incomplete.extend(selector.run.incomplete)
 
 
-def strip_jsonc(text: str) -> str:
-    """turbo.json is JSON with comments and trailing commas; drop both outside strings."""
-    out: list[str] = []
-    index = 0
-    in_string = False
-    while index < len(text):
-        char = text[index]
-        if in_string:
-            out.append(char)
-            if char == "\\":
-                out.append(text[index + 1 : index + 2])
-                index += 2
-                continue
-            in_string = char != '"'
-            index += 1
-            continue
-        if char == '"':
-            in_string = True
-        elif text.startswith("//", index):
-            index = text.find("\n", index)
-            index = len(text) if index == -1 else index
-            continue
-        elif text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            index = len(text) if end == -1 else end + 2
-            continue
-        out.append(char)
-        index += 1
-    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
-
-
-class TurboInputs:
-    """Which paths a turbo task watches: the nearest turbo.json with that task decides."""
-
-    DEFAULT_MARKER = "$TURBO_DEFAULT$"
-
-    def __init__(self, repo_root: Path, task: str) -> None:
-        self.repo_root = repo_root
-        self.task = task
-        self.cache: dict[Path, tuple[str, ...] | None] = {}
-
-    def inputs_for(self, directory: Path) -> tuple[str, ...] | None:
-        if directory in self.cache:
-            return self.cache[directory]
-        result: tuple[str, ...] | None = None
-        config = directory / "turbo.json"
-        if config.is_file():
-            task = json.loads(strip_jsonc(config.read_text())).get("tasks", {}).get(self.task)
-            if isinstance(task, dict) and "inputs" in task:
-                result = tuple(task["inputs"])
-        self.cache[directory] = result
-        return result
-
-    def covered(self, path: str) -> tuple[bool, str]:
-        """(covered, the turbo.json that decided). A package without a narrowed task covers all."""
-        directory = (self.repo_root / path).parent
-        while directory != self.repo_root and self.repo_root in directory.parents:
-            inputs = self.inputs_for(directory)
-            if inputs is not None:
-                relative = str((self.repo_root / path).relative_to(directory))
-                decided = str((directory / "turbo.json").relative_to(self.repo_root))
-                if self.DEFAULT_MARKER in inputs:
-                    return True, decided
-                positive = [p for p in inputs if not p.startswith("!")]
-                negative = [p[1:] for p in inputs if p.startswith("!")]
-                hit = any(glob_match(p, relative) is not None for p in positive)
-                miss = any(glob_match(p, relative) is not None for p in negative)
-                return hit and not miss, decided
-            directory = directory.parent
-        return True, ""
-
-
 class CoveragePrimitive(EntityRule):
     """Does an outside input list (turbo task inputs) cover every path the rule names?"""
 
@@ -363,7 +294,13 @@ class CoveragePrimitive(EntityRule):
         if adapter == "turbo" and repo is None:
             self.incomplete("inputs", None, "no repo root to read turbo.json from")
             return self.run
-        turbo = TurboInputs(repo, str(self.spec.input("task", ""))) if adapter == "turbo" and repo is not None else None
+        turbo = None
+        if adapter == "turbo" and repo is not None:
+            try:
+                turbo = TurboInputs(repo, str(self.spec.input("task", "")))
+            except TurboError as error:
+                self.incomplete("inputs", None, f"cannot read the turbo config: {error}")
+                return self.run
         globs = tuple(self.spec.input("paths", ()))
         for location, (why, module) in sorted(self.required().items()):
             for path in self.expand(location):
