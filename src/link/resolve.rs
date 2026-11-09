@@ -3,6 +3,7 @@
 //! the order of queries gives the same answers.
 
 use super::facts::{Def, FactSet, Import, Op, V};
+use super::heap;
 use super::intern::{EMPTY, Interner, Sid};
 use super::paths::{ModuleIndex, ModuleNamer};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -248,7 +249,53 @@ fn def_binding(i: usize, d: &Def, stub: bool) -> Binding {
     }
 }
 
+impl<V> OrderedMap<V> {
+    fn heap(&self) -> usize {
+        heap::map(&self.map) + heap::vec(&self.order)
+    }
+}
+
 impl Core {
+    /// Estimated heap bytes of the interner, the module index, the tables and the resolver
+    /// caches (`Link::heap`). The interner's join and split caches are not counted.
+    pub fn heap(&self) -> Vec<(&'static str, usize)> {
+        let it = &self.it;
+        let strings: usize = (0..it.len() as Sid)
+            .map(|id| it.s(id).len().next_multiple_of(8) + 16)
+            .sum();
+        let interner = strings + it.len() * (16 + 32);
+        let index = &self.index;
+        let mut module_index = heap::map(&index.path_of) + heap::vec(&index.modules);
+        module_index += heap::vec(&index.module_of_file) + heap::map(&index.package);
+        module_index +=
+            heap::set(&index.dirs) + heap::map(&index.stub_of) + heap::set(&index.repo_heads);
+        let tables: usize = self
+            .tables
+            .iter()
+            .map(|t| t.names.heap() + heap::vec(&t.star_imports) + t.lazy.heap())
+            .sum();
+        let mut resolver =
+            heap::vec(&self.hits) + heap::vec(&self.chains) + heap::map(&self.module_hits);
+        resolver += heap::map(&self.name_cache)
+            + heap::set(&self.in_progress)
+            + heap::map(&self.from_cache);
+        let classes = |cache: &FxHashMap<Ent, Vec<Ent>>| -> usize {
+            heap::map(cache) + cache.values().map(heap::vec).sum::<usize>()
+        };
+        resolver += classes(&self.mro_cache) + classes(&self.bases_cache);
+        resolver += heap::map(&self.ancestor_cache)
+            + self.ancestor_cache.values().map(heap::set).sum::<usize>();
+        vec![
+            ("interner", interner),
+            ("module_index", module_index),
+            (
+                "module_tables",
+                heap::vec(&self.tables) + tables + heap::map(&self.table_of),
+            ),
+            ("resolver_caches", resolver),
+        ]
+    }
+
     pub fn new(it: Interner, facts: Arc<FactSet>, namer: ModuleNamer, index: ModuleIndex) -> Core {
         let mut it = it;
         let module_attributes = MODULE_ATTRIBUTES

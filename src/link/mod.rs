@@ -15,6 +15,102 @@ pub mod resolve;
 pub mod scope;
 pub mod store;
 
+/// Estimated heap bytes of a link's parts, for memory reports (`Link.heap()` in the binding).
+/// The estimate counts allocated capacity and hash table buckets; allocator overhead and
+/// fragmentation are not in it, so it stays below the process RSS.
+pub mod heap {
+    use super::facts::{Argument, FileFacts, V};
+    use rustc_hash::{FxHashMap, FxHashSet};
+    use std::mem::size_of;
+
+    pub fn vec<T>(items: &Vec<T>) -> usize {
+        items.capacity() * size_of::<T>()
+    }
+
+    pub fn text(s: &str) -> usize {
+        s.len()
+    }
+
+    /// Buckets of a hash table that holds `capacity` items at hashbrown's 7/8 load factor.
+    fn buckets(capacity: usize) -> usize {
+        if capacity == 0 {
+            return 0;
+        }
+        (capacity * 8 / 7).next_power_of_two()
+    }
+
+    pub fn map<K, T>(table: &FxHashMap<K, T>) -> usize {
+        buckets(table.capacity()) * (size_of::<(K, T)>() + 1)
+    }
+
+    pub fn set<K>(table: &FxHashSet<K>) -> usize {
+        buckets(table.capacity()) * (size_of::<K>() + 1)
+    }
+
+    pub fn value(v: &V) -> usize {
+        match v {
+            V::Null | V::Chain(_) | V::Opaque(_) | V::Other => 0,
+            V::Str(_, parsed) => parsed.as_ref().map_or(0, |p| size_of::<V>() + value(p)),
+            V::Call(inner, _) | V::Attr(inner, _) | V::Star(inner) => size_of::<V>() + value(inner),
+            V::Sub(a, b) | V::Bin(_, a, b) => 2 * size_of::<V>() + value(a) + value(b),
+            V::Tuple(items) | V::List(items) | V::Set(items) => values(items),
+            V::Dict(pairs) => {
+                let mut out = vec(pairs);
+                for (key, val) in pairs {
+                    out += key.as_ref().map_or(0, value) + value(val);
+                }
+                out
+            }
+        }
+    }
+
+    fn values(items: &Vec<V>) -> usize {
+        vec(items) + items.iter().map(value).sum::<usize>()
+    }
+
+    /// (rows and values, row text) of one record.
+    pub fn record(f: &FileFacts) -> (usize, usize) {
+        let mut rows = vec(&f.imports) + vec(&f.defs) + vec(&f.assigns) + vec(&f.refs);
+        rows += vec(&f.strs) + vec(&f.calls) + vec(&f.keys);
+        let mut texts = text(&f.path) + text(&f.status);
+        texts += f.keys.iter().map(|(k, _)| text(k)).sum::<usize>();
+        for d in &f.defs {
+            rows += values(&d.bases) + values(&d.dec) + vec(&d.params);
+            rows += d
+                .params
+                .iter()
+                .map(|p| p.annotation.as_ref().map_or(0, value))
+                .sum::<usize>();
+            rows += d.ret.as_ref().map_or(0, value);
+        }
+        for a in &f.assigns {
+            rows += values(&a.targets);
+            rows += a.value.as_ref().map_or(0, value) + a.ann.as_ref().map_or(0, value);
+        }
+        for r in &f.refs {
+            texts += text(&r.chain) + text(&r.up);
+        }
+        for r in &f.strs {
+            texts += r.value.as_deref().map_or(0, text) + text(&r.up);
+            if let Some(parts) = &r.parts {
+                rows += vec(parts);
+                texts += parts
+                    .iter()
+                    .map(|p| p.as_deref().map_or(0, text))
+                    .sum::<usize>();
+            }
+        }
+        for c in &f.calls {
+            texts += text(&c.callee);
+            texts += match &c.argument {
+                Argument::Literal(s) | Argument::Name(s) | Argument::Opaque(s) => text(s),
+                Argument::Missing | Argument::Expr => 0,
+            };
+        }
+        (rows, texts)
+    }
+}
+
 use facts::FactSet;
 use index::EdgeIndex;
 use intern::{Interner, Sid};
@@ -340,6 +436,34 @@ impl Link {
             .map(|&s| self.core.it.s(s))
             .collect();
         out.sort_unstable();
+        out
+    }
+}
+
+impl Link {
+    /// Estimated heap bytes per part, in a fixed order.
+    pub fn heap(&self) -> Vec<(&'static str, usize)> {
+        let facts = &self.core.facts;
+        let (mut rows, mut texts) = (heap::vec(&facts.files), 0);
+        for f in &facts.files {
+            let (r, t) = heap::record(f);
+            rows += r;
+            texts += t;
+        }
+        let mut out = vec![("facts.rows", rows), ("facts.row_text", texts)];
+        out.extend(self.core.heap());
+        let scopes = heap::vec(&self.scopes) + self.scopes.iter().map(|s| s.heap()).sum::<usize>();
+        out.push(("scopes", scopes + heap::map(&self.scope_of_file)));
+        let edges = &self.edges;
+        out.push(("edges.rows", heap::vec(&edges.rows)));
+        out.push((
+            "edges.via_attrs",
+            heap::vec(&edges.via) + heap::vec(&edges.attrs),
+        ));
+        out.push(("edges.index", self.index.heap()));
+        out.push(("edges.endpoint_tables", self.endpoints.heap()));
+        let symbols = heap::vec(&self.symbols.order) + heap::map(&self.symbols.at);
+        out.push(("symbols", symbols));
         out
     }
 }

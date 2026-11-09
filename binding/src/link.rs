@@ -122,6 +122,11 @@ impl Link {
         self.inner.timings.stages.clone()
     }
 
+    /// Estimated heap bytes per part of the link: [(part, bytes)].
+    fn heap(&self) -> Vec<(&'static str, usize)> {
+        self.inner.heap()
+    }
+
     fn edge_count(&self) -> usize {
         self.inner.edges.rows.len()
     }

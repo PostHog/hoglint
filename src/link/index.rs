@@ -2,6 +2,7 @@
 //! spelling. Each one is built on its first query. Ids are edge positions, so every answer is
 //! in graph order.
 
+use super::heap;
 use super::intern::{EMPTY, Interner, Sid};
 use super::produce::{EdgeRow, KIND_NAMES};
 use super::resolve::Ent;
@@ -37,6 +38,26 @@ fn merged<'a>(lists: impl Iterator<Item = &'a Vec<u32>>) -> Vec<u32> {
 }
 
 impl EdgeIndex {
+    /// Estimated heap bytes (`Link::heap`).
+    pub fn heap(&self) -> usize {
+        let lists =
+            |lists: &Vec<Vec<u32>>| heap::vec(lists) + lists.iter().map(heap::vec).sum::<usize>();
+        let mut out = self.by_kind.as_ref().map_or(0, lists);
+        if let Some(by_target) = &self.by_target {
+            out += heap::map(by_target) + by_target.values().map(heap::vec).sum::<usize>();
+        }
+        if let Some(by_source) = &self.by_source {
+            out += heap::map(by_source) + by_source.values().map(heap::vec).sum::<usize>();
+        }
+        for by_name in self.by_spelling.values() {
+            out += heap::map(by_name) + by_name.values().map(heap::vec).sum::<usize>();
+        }
+        for by_site in self.by_site.values() {
+            out += heap::map(by_site) + by_site.values().map(heap::vec).sum::<usize>();
+        }
+        out
+    }
+
     pub fn of_kind(&mut self, rows: &[EdgeRow], kind: u8) -> &[u32] {
         let by_kind = self.by_kind.get_or_insert_with(|| {
             let mut out = vec![Vec::new(); KIND_NAMES.len()];

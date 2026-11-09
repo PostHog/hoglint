@@ -6,6 +6,7 @@
 //! the link never re-implements a rule's meaning.
 
 use super::Link;
+use super::heap;
 use super::intern::{EMPTY, Sid};
 use super::produce::EdgeRow;
 use super::scope::Res;
@@ -71,6 +72,18 @@ struct Table {
 /// unresolved endpoint, external flag, entity or EMPTY).
 type DstKey = (Sid, bool, Sid);
 const UNRESOLVED_MODULE: Sid = u32::MAX;
+
+impl EndpointTables {
+    /// Estimated heap bytes (`Link::heap`).
+    pub fn heap(&self) -> usize {
+        let tables: usize = self
+            .tables
+            .values()
+            .map(|t| heap::map(&t.ids) + heap::vec(&t.reps))
+            .sum();
+        heap::map(&self.tables) + tables + heap::map(&self.module_of)
+    }
+}
 
 impl Link {
     /// Edges a rule sees: kind in `kinds` (every kind when empty), resolution not

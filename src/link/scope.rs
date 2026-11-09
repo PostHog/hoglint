@@ -2,6 +2,7 @@
 //! hoglint/core/producers.py BuildContext).
 
 use super::facts::V;
+use super::heap;
 use super::intern::{EMPTY, Sid};
 use super::resolve::{
     Binding, Core, Ent, FUNC, HitId, HitKind, IF, TC_ELSE, TRY, TYPE_ONLY, import_binding,
@@ -88,6 +89,15 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// Estimated heap bytes (`Link::heap`).
+    pub fn heap(&self) -> usize {
+        let mut out = heap::vec(&self.qualnames) + heap::vec(&self.in_function);
+        out += heap::map(&self.local_bindings)
+            + self.local_bindings.values().map(heap::vec).sum::<usize>();
+        out += heap::map(&self.members) + heap::set(&self.scoped_names);
+        out + heap::map(&self.module_lookups) + heap::map(&self.ctx_cache)
+    }
+
     pub fn scope_name(&self, scope: i32, module_scope: Sid) -> Sid {
         if scope == -1 {
             module_scope
