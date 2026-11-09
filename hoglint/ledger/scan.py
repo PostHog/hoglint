@@ -6,8 +6,8 @@ and process. The file carries a protocol version and its envelope (see `envelope
 refuses any other protocol instead of guessing. It holds:
 - lines and growth: the scan's ledger line counts, level lines included, and each ledgered
   rule's growth-key columns;
-- findings: every finding with its identity, status, message, site, witnesses, owners, subjects
-  and remedies, allowed ones included;
+- findings: every finding with its identity, status, message, site, witnesses, owner module,
+  subjects and remedies, allowed ones included (owners themselves are read at render time);
 - incomplete: every incomplete item in run order with its cause and a line-free fingerprint, so
   the count and a replacement under one key both survive serialization;
 - triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;

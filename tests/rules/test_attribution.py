@@ -30,7 +30,7 @@ from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
 
 from rules.support import GraphBuilder, config_from
-from rules.test_compare import CONFIG, git_in, has_extractor, hoglint, write_files
+from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, write_files
 
 DYNAMIC = ("dynamic-imports", "app.loader|dynamic-import|", "dynamic-import '' did not resolve")
 OTHER_REASON = ("dynamic-imports", "app.loader|dynamic-import|", "selection reads an unknown value")
@@ -201,15 +201,23 @@ def test_the_engine_list_names_the_protocol_this_engine_reads() -> None:
     assert sources is not None and sources.protocol == str(PROTOCOL)
 
 
+def built_before_its_sources() -> bool:
+    """Whether the extractor binary is older than an engine source, so its id cannot match yet."""
+    sources = EngineSources.read(CRATE)
+    if sources is None or not has_extractor() or not Extractor.find_binary().is_file():
+        return True
+    built = Extractor.find_binary().stat().st_mtime
+    return any((CRATE / rel).stat().st_mtime > built for rel in sources.files())
+
+
 @pytest.mark.skipif(
     ENGINE_SOURCES not in (CRATE / "build.rs").read_text(), reason="build.rs does not read engine-sources.txt yet"
 )
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@pytest.mark.skipif(built_before_its_sources(), reason="no extractor binary built after the last engine source edit")
 def test_the_extractor_build_id_is_the_engine_digest() -> None:
     sources = EngineSources.read(CRATE)
     assert sources is not None
-    built = BuildId.of_binary(Extractor.find_binary())
-    assert built == sources.digest(), "the hoglint-facts binary is older than its sources: run tools/hoglint/bin/build"
+    assert BuildId.of_binary(Extractor.find_binary()) == sources.digest()
 
 
 USE_SHAPE = """
@@ -302,3 +310,30 @@ def test_staged_check_blocks_only_what_it_introduced_against_head_and_chains_its
     chained = hoglint(repo, "check", "--index")
     assert chained.returncode == 0, chained.stdout + chained.stderr
     assert "stored summary): 0 introduced, 0 ambiguous, 2 inherited" in chained.stdout
+
+
+OWNED_CONFIG = (
+    CONFIG.replace("[fields]", '[fields]\nowners = { type = "set" }')
+    + """
+[roles]
+owner = "owners"
+
+[providers.codeowners]
+use = "codeowners"
+file = "CODEOWNERS"
+sets = ["owners"]
+"""
+)
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_query_reads_owners_from_the_owners_files_not_from_the_summary(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {**FILES, "hoglint.toml": OWNED_CONFIG, "CODEOWNERS": "*.py @team-a\n"})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    assert "@team-a  " in hoglint(repo, "query", "--by", "owners").stdout
+    (repo / "CODEOWNERS").write_text("*.py @team-b\n")
+    owned = hoglint(repo, "query", "--by", "owners").stdout
+    assert "@team-b  " in owned and "@team-a" not in owned

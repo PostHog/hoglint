@@ -27,7 +27,7 @@ from hoglint.config.explain import ConfigExplainer
 from hoglint.config.schema import as_tuple
 from hoglint.facts import Extractor
 from hoglint.index import GraphIndex
-from hoglint.labels import CandidateCache
+from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.envelope import (
     ENGINE_PYTHON,
     BuildId,
@@ -48,7 +48,7 @@ from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
 from hoglint.rules.base import EdgeRule, IncompleteItem, RuleContext
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
-from hoglint.selectors import Selector
+from hoglint.selectors import Selector, State
 from hoglint.source import GraphSource
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -535,6 +535,23 @@ class Baselines:
         return Attributed(attribute(head, reference), baseline.against, portable_of(run))
 
 
+class ReadTimeOwners:
+    """A finding's owners, looked up when it is rendered, from the owners files under `root`.
+    Summaries never store owners (D12), so an owners file edit needs no new summary."""
+
+    def __init__(self, config: Config, modules: dict[str, str], root: Path) -> None:
+        self.field = config.roles.owner
+        self.labeler = Labeler(config, Graph(modules=dict(modules)), root)
+
+    def of(self, finding: FindingRecord) -> tuple[str, ...]:
+        if not self.field or not finding.owner:
+            return ()
+        value, _ = self.labeler.field_value(finding.owner, None, self.field)
+        if value.state is State.KNOWN and isinstance(value.data, frozenset):
+            return tuple(sorted(value.data))
+        return ()
+
+
 # ── commands ──────────────────────────────────────────────────────
 
 
@@ -638,12 +655,14 @@ class Commands:
         return 0
 
     def query(self, by: str) -> int:
+        summary, config = self.current_summary()
+        owners = ReadTimeOwners(config, summary.modules, self.repo) if by == "owners" else None
         counts: dict[str, Counter[str]] = {}
-        for finding in self.current_findings():
+        for finding in summary.findings:
             if finding.status is FindingStatus.ALLOWED:
                 continue
-            if by == "owners":
-                keys = finding.owners or ("(no owner)",)
+            if owners is not None:
+                keys = owners.of(finding) or ("(no owner)",)
             else:
                 keys = (self.target_of(finding),)
             for key in keys:
@@ -654,18 +673,18 @@ class Commands:
             sys.stdout.write(f"{key}  {total}  ({detail})\n")
         return 0
 
-    def current_findings(self) -> list[FindingRecord]:
-        """The findings of the working tree: from the stored summary of HEAD's tree when the working
-        tree holds HEAD's sources, else from a run, which is stored when it has a tree."""
+    def current_summary(self) -> tuple[ScanSummary, Config]:
+        """The summary of the working tree: the stored summary of HEAD's tree when the working tree
+        holds HEAD's sources, else a run, which is stored when it has a tree."""
         key, config = self.engine.envelope_at(self.repo, "")
         key = dataclasses.replace(key, tree=self.snapshots.head_tree_in_worktree(config.ledger.file))
         stored = self.summaries.get(key)
         if stored is not None:
-            return stored.findings
+            return stored, config
         run = self.runner.run(self.repo)
         summary = summary_of(run, self.engine.envelope(run, key.tree), with_triples=False)
         self.summaries.put(summary.envelope, summary)
-        return summary.findings
+        return summary, run.config
 
     @staticmethod
     def target_of(finding: FindingRecord) -> str:

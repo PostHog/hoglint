@@ -4,6 +4,8 @@ A record keeps what `check`, `query` and compare print or count, and nothing tha
 graph: no Edge objects, no labels. Each record writes itself as a JSON list. Records are the same
 on every machine and every day: text carries paths relative to the repo root (see `Portable`),
 and exceptions keep their review dates, so "past review" is decided when a reader renders them.
+Owners are never stored: a finding names its owner module, and a reader looks the owners up in
+the snapshot's owners files when it renders them.
 """
 
 from __future__ import annotations
@@ -69,7 +71,7 @@ class FindingRecord:
     path: str  # empty when the finding has no site
     line: int
     witnesses: tuple[WitnessRecord, ...]
-    owners: tuple[str, ...]
+    owner: str  # the module whose owners the finding takes; empty when it has none
     subjects: tuple[str, ...]
     remedies: tuple[tuple[str, str], ...]
     ledgerable: bool
@@ -90,7 +92,7 @@ class FindingRecord:
             site.path if site is not None else "",
             site.line if site is not None else 0,
             tuple(WitnessRecord.of(edge) for edge in finding.witnesses),
-            finding.owners,
+            finding.subjects[0] if finding.subjects else "",  # RuleContext.finding: owner is the first subject
             finding.subjects,
             tuple((remedy.kind, remedy.detail) for remedy in finding.remedies),
             finding.ledgerable,
@@ -106,7 +108,7 @@ class FindingRecord:
             self.path,
             self.line,
             [witness.to_json() for witness in self.witnesses],
-            list(self.owners),
+            self.owner,
             list(self.subjects),
             [list(remedy) for remedy in self.remedies],
             self.ledgerable,
@@ -115,7 +117,7 @@ class FindingRecord:
 
     @staticmethod
     def from_json(data: list[Any]) -> FindingRecord:
-        rule, identity, status, message, path, line, witnesses, owners, subjects, remedies, ledgerable, unknown = data
+        rule, identity, status, message, path, line, witnesses, owner, subjects, remedies, ledgerable, unknown = data
         return FindingRecord(
             rule,
             tuple(identity),
@@ -124,7 +126,7 @@ class FindingRecord:
             path,
             int(line),
             tuple(WitnessRecord.from_json(witness) for witness in witnesses),
-            tuple(owners),
+            owner,
             tuple(subjects),
             tuple((kind, detail) for kind, detail in remedies),
             bool(ledgerable),
