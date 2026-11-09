@@ -16,7 +16,8 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site, set_handle
+from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site, refined_edge, set_handle
+from hoglint.plugins import ProducerFailure, RefinedFields, Refinement
 
 # Bit order of the link's context bits (src/link/scope.rs `ctx`).
 CONTEXT_BITS = (
@@ -57,7 +58,10 @@ class EdgeMaker:
         return found
 
     def edge(self, row: tuple[Any, ...], handle: int) -> Edge:
-        kind, path, module, scope, line, column, surface, target_module, target_symbol, res, bits, via, use, attrs = row
+        kind, path, module, scope, line, column, surface, target_module, target_symbol, res, bits, via, use, attrs = (
+            row[:14]
+        )
+        shape, shape_detail = row[14:]
         producer = self.producers.get(kind)
         if producer is None:
             producer = self.producers[kind] = producer_of(kind)
@@ -72,8 +76,8 @@ class EdgeMaker:
             producer,
             tuple(self.entity(m, s) for m, s in via),
             use,
-            "",
-            "",
+            shape,
+            shape_detail,
             attrs,
             handle,
         )
@@ -186,6 +190,51 @@ class NativeSymbols(Mapping[str, Mapping[str, str]]):
             if name not in self.at and name not in self.added:
                 self.new_names += 1
             self.added[name] = values
+
+
+class NativeSink:
+    """The native engine's sink (`hoglint.plugins.PackSink`): a refinement of a core edge goes into
+    the link, so every reader of the link sees the one refined edge; pack edges join the graph."""
+
+    def __init__(self, graph: NativeGraph) -> None:
+        self.graph = graph
+        self.refined = RefinedFields()
+
+    def add_edges(self, producer: str, edges: Sequence[Edge]) -> None:
+        self.graph.extend(edges)
+
+    def own_attrs(self, handle: int) -> dict[str, str]:
+        return dict(self.graph.edges[handle].attrs)
+
+    def refine(self, producer: str, kinds: frozenset[str], refinements: Sequence[Refinement]) -> None:
+        conflicts = self.refined.conflicts(producer, refinements, self.own_attrs)
+        if conflicts:
+            more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
+            self.fail(producer, ProducerFailure(f"sets {conflicts[0]}{more} apart", kinds))
+            return
+        self.refined.record(producer, refinements)
+        count = self.graph.core.count
+        core = [refinement for refinement in refinements if refinement.handle < count]
+        self.graph.link.refine(
+            array("I", (refinement.handle for refinement in core)).tobytes(),
+            [refinement.shape for refinement in core],
+            [refinement.shape_detail for refinement in core],
+            [list(refinement.attrs) for refinement in core],
+        )
+        extra = self.graph.edge_list.extra
+        for refinement in refinements:
+            if refinement.handle >= count:
+                edge = extra[refinement.handle - count]
+                extra[refinement.handle - count] = refined_edge(edge, refinement)
+        self.graph.extra_index = {}
+        self.graph.extra_indexed = 0
+
+    def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:
+        symbols: Any = self.graph.symbols
+        symbols.update(facts)
+
+    def fail(self, producer: str, failure: ProducerFailure) -> None:
+        self.graph.failed_producers[producer] = failure
 
 
 class NativeGraph(Graph):

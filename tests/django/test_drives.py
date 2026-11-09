@@ -4,8 +4,8 @@ import pytest
 
 from core.support import Repo, class_def, func_def, import_row
 from hoglint.core.config import CoreConfig
+from hoglint.core.reader import python_pack_io
 from hoglint.model import Graph, Resolution
-from hoglint.native.queries import PackQueries
 from hoglint.presets_py.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
 
 DISPATCH = sorted(DISPATCH_CALLS)[0]
@@ -57,7 +57,7 @@ def repo() -> Repo:
 def test_a_walk_the_depth_limit_stops_is_unknown_whichever_test_walks_first(shuffle_seed: int) -> None:
     build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
 
-    edges = DrivesProducer(build, PackQueries.of(build, Graph()), shuffle_seed).produce()
+    edges = DrivesProducer(python_pack_io(build, Graph())[0], shuffle_seed).produce()
 
     assert [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges] == [
         ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, HELPERS - MIDDLE),

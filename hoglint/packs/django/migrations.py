@@ -23,13 +23,12 @@ import yaml
 import orjson
 
 from hoglint.core import records as records_module
-from hoglint.core.build import CoreBuild
 from hoglint.core.harness import PRODUCER_ERROR, failure_text
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
-from hoglint.native.queries import PackQueries
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
+from hoglint.plugins import PackReader
 
 Key = tuple[str, str]
 FIRST = "__first__"
@@ -401,37 +400,34 @@ class MigrationGraph:
 
 
 class MigrationReader:
-    def __init__(
-        self, build: CoreBuild, apps: AppRegistry, config: DjangoPackConfig, queries: PackQueries, cache: SummaryCache
-    ) -> None:
-        self.build = build
+    def __init__(self, reader: PackReader, apps: AppRegistry, config: DjangoPackConfig, cache: SummaryCache) -> None:
+        self.reader = reader
         self.apps = apps
-        self.queries = queries
         self.cache = cache
         self.parser = MigrationParser(apps, config)
         self.by_directory: dict[str, list[str]] = {}
-        for path in sorted(build.store.records):
+        for path in sorted(reader.paths):
             directory, _, name = path.rpartition("/")
             if name.endswith(".py") and name[0] not in "_~":
                 self.by_directory.setdefault(directory, []).append(path)
 
     def files(self, package_module: str) -> list[str]:
         """`<package>/*.py` whose stem does not start with _ or ~ (iterdir of the package)."""
-        return self.by_directory.get(self.build.index.path_of[package_module].rpartition("/")[0], [])
+        return self.by_directory.get(self.reader.index.path_of[package_module].rpartition("/")[0], [])
 
     def summary(self, path: str) -> Summary:
-        record = self.build.store.records[path]
-        digest = self.queries.fact_digest(record, SUMMARY_KINDS)
+        record = self.reader.record(path)
+        digest = self.reader.fact_digest(record, SUMMARY_KINDS)
         found = self.cache.get(digest) if digest is not None else None
         if found is None:
-            found = MigrationSummary(self.build.bodies(record)).read()
+            found = MigrationSummary(self.reader.bodies(record)).read()
             if digest is not None:
                 self.cache.put(digest, found)
         return found
 
     def parse(self, app_label: str, path: str) -> MigrationDecl:
         """A migration that cannot be read keeps its node, with its parents unknown."""
-        module = self.build.index.module_of[path]
+        module = self.reader.index.module_of[path]
         try:
             return self.parser.decl(app_label, path, module, self.summary(path))
         except Exception as error:  # noqa: BLE001 - one unreadable migration is unknown, the others still count
@@ -444,7 +440,7 @@ class MigrationReader:
         unmigrated: set[str] = set()
         for app in self.apps.apps:
             module = f"{app.name}.migrations"
-            if not (self.build.index.is_file_module(module) and self.build.index.is_package(module)):
+            if not (self.reader.index.is_file_module(module) and self.reader.index.is_package(module)):
                 unmigrated.add(app.label)
                 continue
             migrated.add(app.label)

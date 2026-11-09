@@ -299,7 +299,11 @@ impl Link {
     fn symbol_columns<'py>(
         &self,
         py: Python<'py>,
-    ) -> (Vec<Bound<'py, PyString>>, Bound<'py, PyBytes>, Bound<'py, PyBytes>) {
+    ) -> (
+        Vec<Bound<'py, PyString>>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+    ) {
         let order = &self.inner.symbols.order;
         let it = &self.inner.core.it;
         let names = order
@@ -309,6 +313,38 @@ impl Link {
         let kinds: Vec<u8> = order.iter().map(|&(_, kind, _)| kind).collect();
         let files: Vec<u32> = order.iter().map(|&(_, _, file)| file).collect();
         (names, PyBytes::new(py, &kinds), ids_bytes(py, &files))
+    }
+
+    /// Applies refinements to core edges (D22): for each edge id, the shape and shape detail to
+    /// set (None keeps the edge's) and attrs to add after the edge's own. Python checks first that
+    /// no two producers set one field apart.
+    #[allow(clippy::type_complexity)]
+    fn refine(
+        &mut self,
+        ids: &[u8],
+        shapes: Vec<Option<String>>,
+        details: Vec<Option<String>>,
+        attrs: Vec<Vec<(String, String)>>,
+    ) -> PyResult<()> {
+        let ids = ids_from(ids)?;
+        if shapes.len() != ids.len() || details.len() != ids.len() || attrs.len() != ids.len() {
+            return Err(PyValueError::new_err(
+                "one shape, detail and attr list per edge",
+            ));
+        }
+        for (((id, shape), detail), pairs) in ids.into_iter().zip(shapes).zip(details).zip(attrs) {
+            if id as usize >= self.inner.edges.rows.len() {
+                return Err(PyKeyError::new_err(id));
+            }
+            let shape = shape.map(|s| self.sid(&s));
+            let detail = detail.map(|s| self.sid(&s));
+            let pairs: Vec<(Sid, Sid)> = pairs
+                .iter()
+                .map(|(k, v)| (self.sid(k), self.sid(v)))
+                .collect();
+            self.inner.edges.refine(id, shape, detail, &pairs);
+        }
+        Ok(())
     }
 
     /// Core edge kinds in the order their first edge appears.
@@ -331,7 +367,7 @@ impl Link {
 
     /// Edges as tuples: (kind, path, module, scope, line, column, surface, target module or
     /// None, target symbol, resolution, context bits, via ((module, symbol), ...), use,
-    /// attrs ((key, value), ...), producer).
+    /// attrs ((key, value), ...), shape, shape detail), with what refinements set.
     fn edges<'py>(&self, py: Python<'py>, ids: &[u8]) -> PyResult<Bound<'py, PyList>> {
         let ids = ids_from(ids)?;
         let link = &self.inner;
@@ -364,10 +400,10 @@ impl Link {
                 .collect::<PyResult<_>>()?;
             let attrs: Vec<Bound<'py, PyTuple>> = link
                 .edges
-                .attrs_of(row)
-                .iter()
+                .attrs_with(id)
                 .map(|&(k, v)| PyTuple::new(py, [text(k), text(v)]))
                 .collect::<PyResult<_>>()?;
+            let (shape, shape_detail) = link.edges.shape_of(id);
             let path = paths
                 .entry(row.file)
                 .or_insert_with(|| PyString::new(py, &core.facts.files[row.file as usize].path))
@@ -376,7 +412,7 @@ impl Link {
                 Some(module) => module.into_any(),
                 None => py.None().into_bound(py),
             };
-            let fields: [Bound<'py, PyAny>; 14] = [
+            let fields: [Bound<'py, PyAny>; 16] = [
                 PyString::new(py, KIND_NAMES[row.kind as usize]).into_any(),
                 path.into_any(),
                 text(scope.module).into_any(),
@@ -391,6 +427,8 @@ impl Link {
                 PyTuple::new(py, via)?.into_any(),
                 text(row.use_).into_any(),
                 PyTuple::new(py, attrs)?.into_any(),
+                text(shape).into_any(),
+                text(shape_detail).into_any(),
             ];
             out.push(PyTuple::new(py, fields)?);
         }

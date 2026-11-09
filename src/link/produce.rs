@@ -5,6 +5,7 @@ use super::facts::{Argument, Assign, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{Core, Ent, absolute_import};
 use super::scope::{LookupNames, Res, Resolved, Scope, UNRESOLVED};
+use rustc_hash::FxHashMap;
 
 pub const KIND_NAMES: [&str; 9] = [
     "import",
@@ -46,11 +47,22 @@ pub struct EdgeRow {
     pub attrs: (u32, u32),
 }
 
+/// Fields a pack set on a core edge it did not make (D22): the edge stays one edge, and every
+/// reader sees it with these fields. `attrs` come after the edge's own.
+#[derive(Clone, Default)]
+pub struct Refinement {
+    pub shape: Sid,
+    pub shape_detail: Sid,
+    pub attrs: Vec<(Sid, Sid)>,
+}
+
 #[derive(Default)]
 pub struct EdgeStore {
     pub rows: Vec<EdgeRow>,
     pub via: Vec<Ent>,
     pub attrs: Vec<(Sid, Sid)>,
+    /// Refinements by edge id. Python checks that two producers never set one field apart.
+    pub refined: FxHashMap<u32, Refinement>,
 }
 
 impl EdgeStore {
@@ -58,8 +70,50 @@ impl EdgeStore {
         &self.via[row.via.0 as usize..(row.via.0 + row.via.1) as usize]
     }
 
+    /// The attrs core gave the edge, without what packs added (`attrs_with`).
     pub fn attrs_of(&self, row: &EdgeRow) -> &[(Sid, Sid)] {
         &self.attrs[row.attrs.0 as usize..(row.attrs.0 + row.attrs.1) as usize]
+    }
+
+    /// Every attr of edge `id`: its own, then those refinements added.
+    pub fn attrs_with(&self, id: u32) -> impl Iterator<Item = &(Sid, Sid)> {
+        let added = self
+            .refined
+            .get(&id)
+            .map_or(&[][..], |r| r.attrs.as_slice());
+        self.attrs_of(&self.rows[id as usize]).iter().chain(added)
+    }
+
+    /// (shape, shape detail) of edge `id`: EMPTY for an edge no pack refined.
+    pub fn shape_of(&self, id: u32) -> (Sid, Sid) {
+        self.refined
+            .get(&id)
+            .map_or((EMPTY, EMPTY), |r| (r.shape, r.shape_detail))
+    }
+
+    /// Sets the fields a refinement names (`shape`, `shape_detail` when Some) and appends its
+    /// attrs, for edge `id`.
+    pub fn refine(
+        &mut self,
+        id: u32,
+        shape: Option<Sid>,
+        shape_detail: Option<Sid>,
+        attrs: &[(Sid, Sid)],
+    ) {
+        let found = self.refined.entry(id).or_default();
+        if let Some(shape) = shape {
+            found.shape = shape;
+        }
+        if let Some(detail) = shape_detail {
+            found.shape_detail = detail;
+        }
+        let row = &self.rows[id as usize];
+        let own = &self.attrs[row.attrs.0 as usize..(row.attrs.0 + row.attrs.1) as usize];
+        for pair in attrs {
+            if !own.contains(pair) && !found.attrs.contains(pair) {
+                found.attrs.push(*pair);
+            }
+        }
     }
 }
 

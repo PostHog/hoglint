@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from hoglint.facts import FACT_KINDS, FactNeeds
-from hoglint.model import Graph
+from hoglint.plugins import PackReader, PackSink
 from hoglint.source import GraphSource
 
 DECLARED = FactNeeds(kinds=frozenset({"imports"}), watch_callees=frozenset({"connect"}))
@@ -18,7 +18,7 @@ class UndeclaredPack:
     allowed_keys: frozenset[str] = frozenset()
     edge_kinds: frozenset[str] = frozenset()
 
-    def produce(self, section: Mapping[str, Any], core: Any, graph: Graph, root: Path) -> None:
+    def produce(self, section: Mapping[str, Any], reader: PackReader, sink: PackSink, root: Path) -> None:
         return None
 
 

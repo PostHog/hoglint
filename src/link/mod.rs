@@ -315,10 +315,10 @@ impl Link {
             .collect();
         let attrs: Vec<J> = self
             .edges
-            .attrs_of(row)
-            .iter()
+            .attrs_with(at as u32)
             .map(|&(k, v)| json!([it.s(k), it.s(v)]))
             .collect();
+        let (shape, shape_detail) = self.edges.shape_of(at as u32);
         json!([
             KIND_NAMES[row.kind as usize],
             &**path,
@@ -333,8 +333,8 @@ impl Link {
             Self::producer_name(row.kind),
             via,
             it.s(row.use_),
-            "",
-            "",
+            it.s(shape),
+            it.s(shape_detail),
             attrs,
         ])
     }

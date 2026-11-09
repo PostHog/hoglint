@@ -16,14 +16,14 @@ from __future__ import annotations
 import re
 import hashlib
 from array import array
-from collections.abc import Collection, Iterable, Iterator
-from typing import Any, NamedTuple
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from typing import Any
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.records import last_name
 from hoglint.core.sites import FileScope
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
-from hoglint.native.graph import CONTEXT_SETS, RESOLUTIONS, producer_of
+from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Graph
+from hoglint.plugins import EdgeBatch
 
 # Where the callee text sits in a row of each call kind.
 CALLEE_FIELD = {"calls": 5, "callees": 2}
@@ -70,32 +70,30 @@ class Words:
         return self.pattern.search(text) is not None
 
 
-class EdgeFields(NamedTuple):
-    """An edge's fields without its kind: what a pack copies from a core edge it shapes."""
+ATTR_COLUMN = "attr:"
+EDGE_COLUMNS: dict[str, Callable[[Edge], Any]] = {
+    "path": lambda edge: edge.site.path,
+    "module": lambda edge: edge.site.module,
+    "scope": lambda edge: edge.site.scope,
+    "line": lambda edge: edge.site.line,
+    "column": lambda edge: edge.site.column,
+    "surface": lambda edge: edge.surface,
+    "target": lambda edge: edge.target,
+    "producer": lambda edge: edge.producer,
+}
 
-    site: Site
-    surface: str
-    targets: tuple[EntityId, ...]
-    resolution: Resolution
-    contexts: frozenset[Context]
-    producer: str
-    via: tuple[EntityId, ...]
-    use: str
-    attrs: tuple[tuple[str, str], ...]
 
-    @staticmethod
-    def of(edge: Edge) -> EdgeFields:
-        return EdgeFields(
-            edge.site,
-            edge.surface,
-            edge.targets,
-            edge.resolution,
-            edge.contexts,
-            edge.producer,
-            edge.via,
-            edge.use,
-            edge.attrs,
-        )
+def column_of(edge: Edge, name: str) -> Any:
+    """One `EdgeBatch` column's value for an edge."""
+    if name.startswith(ATTR_COLUMN):
+        return edge.attr(name[len(ATTR_COLUMN) :])
+    return EDGE_COLUMNS[name](edge)
+
+
+def batch_of(edges: Sequence[Edge], columns: Sequence[str]) -> EdgeBatch:
+    return EdgeBatch(
+        [edge.handle for edge in edges], {name: [column_of(edge, name) for edge in edges] for name in columns}
+    )
 
 
 def entities_named(qualified: str) -> list[EntityId]:
@@ -145,9 +143,9 @@ class PackQueries:
         """Edges of `kind` whose surface's last dotted name is one of `names`, resolved or not."""
         return [edge for edge in self.graph.by_kind(kind) if edge.surface.rpartition(".")[2] in names]
 
-    def fields_to(self, kind: str, targets: Collection[EntityId]) -> list[EdgeFields]:
-        """`edges_to` as fields, for a pack that makes its own edges from them."""
-        return [EdgeFields.of(edge) for edge in self.edges_to(kind, targets)]
+    def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch:
+        """`edges_to` as a projected batch: handles, and only the columns asked for."""
+        return batch_of(self.edges_to(kind, targets), columns)
 
     def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
         """A digest of a file's facts of `kinds`, for a pack that caches what it reads from one
@@ -203,32 +201,24 @@ class NativePackQueries(PackQueries):
         extra = [edge for edge in self.pack_edges(kind) if edge.surface.rpartition(".")[2] in names]
         return core + extra
 
-    def fields_to(self, kind: str, targets: Collection[EntityId]) -> list[EdgeFields]:
-        """The link's rows of the core edges by target, made into fields with no Edge in between;
-        pack edges of the kind come after them, as in graph order."""
+    def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch:
+        """The link's core edges by target as columns, with no Edge in between; pack edges of
+        the kind come after them, as in graph order."""
         graph: Any = self.graph
         maker = graph.core.maker
         ids = array("I", self.link.ids_to(kind, [(target.module, target.symbol) for target in targets]))
-        rows = self.link.edges(ids.tobytes()) if ids else []
-        out = [self.fields(maker, row) for row in rows]
+        names = ["target_module" if name == "target" else name for name in columns]
+        found = self.link.columns(ids.tobytes(), names) if ids else [[] for _ in columns]
+        batch = EdgeBatch(list(ids), dict(zip(columns, found)))
+        if "target" in batch.columns:
+            pairs = zip(batch.columns["target"], self.link.columns(ids.tobytes(), ["target_symbol"])[0] if ids else [])
+            batch.columns["target"] = [
+                maker.entity(module, symbol) if module is not None else None for module, symbol in pairs
+            ]
         wanted = set(targets)
-        out.extend(
-            EdgeFields.of(edge) for edge in self.pack_edges(kind) if any(target in wanted for target in edge.targets)
-        )
-        return out
-
-    @staticmethod
-    def fields(maker: Any, row: tuple[Any, ...]) -> EdgeFields:
-        kind, path, module, scope, line, column, surface, target_module, target_symbol, res, bits, via, use, attrs = row
-        targets = (maker.entity(target_module, target_symbol),) if target_module is not None else ()
-        return EdgeFields(
-            Site(path, module, scope, line, column),
-            surface,
-            targets,
-            RESOLUTIONS[res],
-            CONTEXT_SETS[bits],
-            producer_of(kind),
-            tuple(maker.entity(m, s) for m, s in via),
-            use,
-            attrs,
-        )
+        extra = [edge for edge in self.pack_edges(kind) if any(target in wanted for target in edge.targets)]
+        more = batch_of(extra, columns)
+        batch.handles.extend(more.handles)
+        for name in columns:
+            batch.columns[name].extend(more.columns[name])
+        return batch

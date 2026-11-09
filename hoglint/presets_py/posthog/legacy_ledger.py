@@ -19,6 +19,7 @@ from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
 from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty
+from hoglint.core.reader import python_pack_io
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.packs.django.config import SECTION, DjangoPackConfig
@@ -442,8 +443,9 @@ class Parity:
     def produce(self, graph: Graph) -> None:
         """The repo's own `[django]` table drives the Django pack, so parity checks the real config."""
         section = tomllib.loads((self.repo_root / ROOT_CONFIG).read_text()).get(SECTION, {})
-        DjangoPack.run(self.build, DjangoPackConfig.from_section(section), graph, self.repo_root)
-        POSTHOG_PACK.run(self.build, graph)
+        reader, sink = python_pack_io(self.build, graph)
+        DjangoPack.run(reader, DjangoPackConfig.from_section(section), sink, self.repo_root)
+        POSTHOG_PACK.run(reader, sink)
 
     def lines(self, graph: Graph) -> list[str]:
         policy = CrossingsPolicy.from_facts(self.build)

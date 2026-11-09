@@ -9,9 +9,6 @@ use super::resolve::Ent;
 use super::scope::Scope;
 use rustc_hash::FxHashMap;
 
-/// Edge ids of one kind by (file, line, column, surface).
-type BySite = FxHashMap<(u32, u32, u32, Sid), Vec<u32>>;
-
 #[derive(Default)]
 pub struct EdgeIndex {
     by_kind: Option<Vec<Vec<u32>>>,
@@ -19,7 +16,6 @@ pub struct EdgeIndex {
     by_source: Option<FxHashMap<(u8, Sid), Vec<u32>>>,
     source_order: Option<Vec<Vec<Sid>>>,
     by_spelling: FxHashMap<u8, FxHashMap<Sid, Vec<u32>>>,
-    by_site: FxHashMap<u8, BySite>,
 }
 
 pub fn kind_code(kind: &str) -> Option<u8> {
@@ -51,9 +47,6 @@ impl EdgeIndex {
         }
         for by_name in self.by_spelling.values() {
             out += heap::map(by_name) + by_name.values().map(heap::vec).sum::<usize>();
-        }
-        for by_site in self.by_site.values() {
-            out += heap::map(by_site) + by_site.values().map(heap::vec).sum::<usize>();
         }
         out
     }
@@ -144,31 +137,5 @@ impl EdgeIndex {
         }
         let by_spelling = &self.by_spelling[&kind];
         merged(names.iter().filter_map(|name| by_spelling.get(name)))
-    }
-
-    /// Whether a core edge of `kind` sits at (file, line, column) with this surface and target:
-    /// the edge a pack edge with the same fields copies.
-    pub fn has_twin(
-        &mut self,
-        rows: &[EdgeRow],
-        kind: u8,
-        site: (u32, u32, u32),
-        surface: Sid,
-        target: Option<Ent>,
-    ) -> bool {
-        let by_site = self.by_site.entry(kind).or_insert_with(|| {
-            let mut out: BySite = FxHashMap::default();
-            for (i, row) in rows.iter().enumerate() {
-                if row.kind == kind {
-                    out.entry((row.file, row.line, row.col, row.surface))
-                        .or_default()
-                        .push(i as u32);
-                }
-            }
-            out
-        });
-        by_site
-            .get(&(site.0, site.1, site.2, surface))
-            .is_some_and(|ids| ids.iter().any(|&i| rows[i as usize].target == target))
     }
 }

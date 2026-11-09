@@ -16,7 +16,7 @@ from hoglint.config import Config
 from hoglint.config.schema import as_tuple, canonical
 from hoglint.facts import FACT_KINDS, FactNeeds
 from hoglint.model import Graph
-from hoglint.plugins import REGISTRY, Pack, ProducerFailure
+from hoglint.plugins import REGISTRY, Pack, PackReader, PackSink, ProducerFailure
 
 if TYPE_CHECKING:
     from hoglint.core.config import CoreConfig
@@ -30,6 +30,16 @@ def active_packs(config: Config) -> list[tuple[Pack, Mapping[str, Any]]]:
         if pack is not None and isinstance(section, dict):
             out.append((pack, section))
     return out
+
+
+def run_packs(packs: list[tuple[Pack, Mapping[str, Any]]], reader: PackReader, sink: PackSink, root: Path) -> None:
+    """Each active pack in order, into one sink. A pack that raises is a failed producer."""
+    for pack, section in packs:
+        try:
+            pack.produce(section, reader, sink, root)
+        except Exception as error:  # noqa: BLE001 - a failed pack makes its rules incomplete, never clean
+            reason = f"{type(error).__name__}: {error}"
+            sink.fail(pack.name, ProducerFailure(reason, frozenset(pack.edge_kinds)))
 
 
 class GraphSource:
@@ -86,6 +96,7 @@ class GraphSource:
 
     def build_fresh(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> Graph:
         from hoglint.core.analysis import AnalysisOptions, CoreAnalysis  # noqa: PLC0415 - see core_config
+        from hoglint.core.reader import python_pack_io  # noqa: PLC0415 - see core_config
 
         packs = active_packs(config)
         work = Path(tempfile.mkdtemp(dir=self.work_dir))
@@ -99,10 +110,6 @@ class GraphSource:
         )
         analysis = CoreAnalysis(options).run()
         graph = analysis.graph
-        for pack, section in packs:
-            try:
-                pack.produce(section, analysis, graph, code_root)
-            except Exception as error:  # noqa: BLE001 - a failed pack makes its rules incomplete, never clean
-                reason = f"{type(error).__name__}: {error}"
-                graph.failed_producers[pack.name] = ProducerFailure(reason, frozenset(pack.edge_kinds))
+        reader, sink = python_pack_io(analysis.build, graph)
+        run_packs(packs, reader, sink, code_root)
         return graph

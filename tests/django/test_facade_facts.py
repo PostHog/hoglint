@@ -7,6 +7,7 @@ import pytest
 from core.support import func_def
 from django_facts import FactRepo
 from hoglint.core.config import CoreConfig
+from hoglint.core.reader import python_pack_io
 from hoglint.model import Edge, Graph
 from hoglint.presets_py.posthog.facade import FacadeFacts
 from hoglint.presets_py.posthog.pack import POSTHOG_PACK
@@ -21,7 +22,8 @@ FACADE = {
 
 
 def test_a_null_return_is_no_untyped_slot_but_an_untyped_parameter_is() -> None:
-    edges = FacadeFacts(FactRepo(FACADE).build(CoreConfig(first_party=("products",)))).produce()
+    build = FactRepo(FACADE).build(CoreConfig(first_party=("products",)))
+    edges = FacadeFacts(python_pack_io(build, Graph())[0]).produce()
 
     slots = sorted(
         (e.site.scope, e.attr("slot"), e.surface, e.attr("annotation")) for e in edges if e.kind == "exposes"
@@ -59,7 +61,7 @@ def test_a_facade_failure_leaves_rules_on_core_copied_kinds_complete(
 
     monkeypatch.setattr(FacadeFacts, "produce", fail)
     graph = Graph()
-    POSTHOG_PACK.run(FactRepo(FACADE).build(CoreConfig(first_party=("products",))), graph)
+    POSTHOG_PACK.run(*python_pack_io(FactRepo(FACADE).build(CoreConfig(first_party=("products",))), graph))
 
     result = Engine(config_from(tmp_path, RULES), graph, tmp_path).evaluate()
 

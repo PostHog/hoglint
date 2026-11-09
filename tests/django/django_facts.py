@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.support import SITE, Repo, assign_row, class_def, func_def, import_row
 from hoglint.core.config import CoreConfig
+from hoglint.core.reader import python_pack_io
 from hoglint.model import Graph
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
@@ -83,5 +84,6 @@ class FactRepo(Repo):
         config = DjangoPackConfig(
             settings_modules=("proj.settings",), routing=routing, hooks=hooks, scan_roots=scan_roots
         )
-        DjangoPack.run(build, config, graph, Path("."))
+        reader, sink = python_pack_io(build, graph)
+        DjangoPack.run(reader, config, sink, Path("."))
         return graph

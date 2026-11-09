@@ -6,7 +6,6 @@ use hoglint_facts::link::Link as CoreLink;
 use hoglint_facts::link::groups::{Endpoint, Role};
 use hoglint_facts::link::index::kind_code;
 use hoglint_facts::link::intern::{EMPTY, Sid};
-use hoglint_facts::link::resolve::Ent;
 use hoglint_facts::link::scope::Res;
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
@@ -326,47 +325,5 @@ impl Link {
             })
             .collect();
         ids_bytes(py, &seen)
-    }
-
-    /// For each (path, line, column, surface, target module or None, target symbol): whether a
-    /// core edge of `kind` has exactly those fields, so a pack edge with them copies it. One byte
-    /// per row.
-    fn core_twins<'py>(
-        &mut self,
-        py: Python<'py>,
-        kind: &str,
-        rows: Vec<(String, u32, u32, String, Option<String>, String)>,
-    ) -> Bound<'py, PyBytes> {
-        let Some(code) = kind_code(kind) else {
-            return PyBytes::new(py, &vec![0; rows.len()]);
-        };
-        let mut out = Vec::with_capacity(rows.len());
-        for (path, line, column, surface, module, symbol) in rows {
-            let it = &self.inner.core.it;
-            let (Some(&file), Some(surface)) = (self.file_of.get(&path), it.get(&surface)) else {
-                out.push(0);
-                continue;
-            };
-            let target = match module {
-                Some(module) => match (it.get(&module), it.get(&symbol)) {
-                    (Some(m), Some(s)) => Some(Ent { m, s }),
-                    _ => {
-                        out.push(0);
-                        continue;
-                    }
-                },
-                None => None,
-            };
-            let link = &mut self.inner;
-            let twin = link.index.has_twin(
-                &link.edges.rows,
-                code,
-                (file, line, column),
-                surface,
-                target,
-            );
-            out.push(u8::from(twin));
-        }
-        PyBytes::new(py, &out)
     }
 }

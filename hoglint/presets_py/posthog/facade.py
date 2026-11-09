@@ -20,11 +20,11 @@ from collections import Counter
 from dataclasses import dataclass
 from functools import cached_property
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.records import RecordBodies, chain_last, sequence_items, str_literal
 from hoglint.core.sites import binding_surface
 from hoglint.core.symbols import TYPE_ONLY, ModuleTable, absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
+from hoglint.plugins import PackReader
 from hoglint.presets_py.posthog.layout import backend_product, backend_rel
 
 FACADE_PRODUCER = "posthog.facade-facts@1"
@@ -212,9 +212,9 @@ class Handed:
 
 
 class FacadeFacts:
-    def __init__(self, build: CoreBuild) -> None:
-        self.build = build
-        self.index = build.index
+    def __init__(self, reader: PackReader) -> None:
+        self.reader = reader
+        self.index = reader.index
         self.edges: list[Edge] = []
         self.classes_done: set[str] = set()
         self.signatures: Counter[tuple[str, str]] = Counter()
@@ -227,16 +227,16 @@ class FacadeFacts:
         return self.views[module]
 
     def read_view(self, module: str) -> ModuleView | None:
-        if not self.build.first_party.contains(module):
+        if not self.reader.first_party.contains(module):
             return None
-        table = self.build.tables.get(module)
-        record = self.build.tables.record(module) if table is not None else None
+        table = self.reader.tables.get(module)
+        record = self.reader.tables.record(module) if table is not None else None
         if table is None or record is None or record.get("status") != "ok":
             return None
-        return ModuleView(module, table, record, self.build.bodies(record))
+        return ModuleView(module, table, record, self.reader.bodies(record))
 
     def is_module(self, module: str) -> bool:
-        return self.build.first_party.contains(module) and self.index.exists(module)
+        return self.reader.first_party.contains(module) and self.index.exists(module)
 
     def resolve(self, qualified: str) -> Origin:
         if qualified not in self.origins:
@@ -245,13 +245,13 @@ class FacadeFacts:
 
     def read_origin(self, qualified: str) -> Origin:
         """Where a qualified name leads, stopping at the first name outside the repo."""
-        if not self.build.first_party.contains(qualified):
+        if not self.reader.first_party.contains(qualified):
             return Origin("external", qualified)
-        hit, rest = self.build.resolver.resolve_dotted(qualified)
+        hit, rest = self.reader.resolver.resolve_dotted(qualified)
         if hit is None:
             return Origin("unresolved", qualified)
         chain = [str(step) for step in hit.chain]
-        outside = next((step for step in chain if not self.build.first_party.contains(step)), None)
+        outside = next((step for step in chain if not self.reader.first_party.contains(step)), None)
         if outside is not None:
             return Origin("external", outside, tuple(chain[: chain.index(outside)]))
         via = tuple(chain[:-1])
@@ -270,7 +270,7 @@ class FacadeFacts:
     def facade_files(self) -> list[str]:
         """Facade modules in path order, like rglob over products/<p>/backend/facade."""
         out = []
-        for scope in self.build.files:
+        for scope in self.reader.files:
             parts = scope.path.split("/")
             if len(parts) < 5 or parts[0] != "products" or parts[2] != "backend" or parts[3] != "facade":
                 continue

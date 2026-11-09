@@ -22,10 +22,12 @@ the name the code used to the origin, as (module, symbol) pairs."""
 LookupResult = tuple[str, Hit | None, bool]
 """(surface, hit or None, local)."""
 
-EdgeTuple = tuple[str, str, str, str, int, int, str, str | None, str, str, int, tuple[Pair, ...], str, tuple[Pair, ...]]
+EdgeTuple = tuple[
+    str, str, str, str, int, int, str, str | None, str, str, int, tuple[Pair, ...], str, tuple[Pair, ...], str, str
+]
 """(kind, path, module, scope, line, column, surface, target module or None, target symbol,
-resolution, context bits, via, use, attrs). Context bits follow `CONTEXT_BITS` in
-hoglint.native.graph."""
+resolution, context bits, via, use, attrs, shape, shape detail), with what refinements set.
+Context bits follow `CONTEXT_BITS` in hoglint.native.graph."""
 
 class FactText:
     """The JSON text of every record as one read-only buffer: read it with memoryview()."""
@@ -87,10 +89,17 @@ class Link:
     def dst_parts(self, ids: bytes) -> list[tuple[str, str, str | None, str]]: ...
     def stable_keys(self, ids: bytes, which: str) -> tuple[bytes, int, bytes, bytes]: ...
     def ids_seen_from(self, kind: str, module: str, include: int, exclude: int) -> bytes: ...
-    def core_twins(self, kind: str, rows: list[tuple[str, int, int, str, str | None, str]]) -> bytes: ...
     @staticmethod
     def keep_classes(ids: bytes, key_of: bytes, class_of: bytes, keep: bytes) -> bytes: ...
     def edges(self, ids: bytes) -> list[EdgeTuple]: ...
+    def refine(
+        self, ids: bytes, shapes: list[str | None], details: list[str | None], attrs: list[list[tuple[str, str]]]
+    ) -> None:
+        """Refines core edges (D22): per edge, the shape and shape detail to set (None keeps the
+        edge's) and attrs to add after its own."""
+    def columns(self, ids: bytes, names: list[str]) -> list[list[object]]:
+        """Projected columns of edges: one list per name (path, module, scope, line, column,
+        surface, target_module, target_symbol, producer, attr:<name>), one value per edge."""
     def resolve_name(self, module: str, name: str) -> Hit | None: ...
     def resolve_dotted(self, dotted: str) -> tuple[Hit | None, list[str]]: ...
     def resolve_value(self, module: str, value: object) -> Hit | None: ...

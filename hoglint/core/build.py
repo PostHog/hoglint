@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from hoglint.core.config import CoreConfig
-from hoglint.core.harness import ProducerPlan, ProducerStep
+from hoglint.core.harness import GraphSink, ProducerPlan, ProducerStep
 from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
 from hoglint.core.producers import PRODUCERS, BuildContext, Producer
 from hoglint.core.records import RecordBodies
@@ -72,5 +72,5 @@ class CoreBuild:
         """The core edges of the given producers. A consumer that needs only some kinds asks for
         only their producers, so an unrelated failure never makes it incomplete."""
         graph = Graph(modules=self.index.repo_modules())
-        ProducerPlan(self.step(producer_class(), graph) for producer_class in producers).run(graph)
+        ProducerPlan(self.step(producer_class(), graph) for producer_class in producers).run(GraphSink(graph))
         return graph

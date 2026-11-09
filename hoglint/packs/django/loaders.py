@@ -6,9 +6,9 @@ the admin app imports each app's `admin` module.
 
 from __future__ import annotations
 
-from hoglint.core.build import CoreBuild
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import INSTALLED_APPS, AppRegistry, InstalledApp
+from hoglint.plugins import PackReader
 
 LOADS_PRODUCER = "django.loaders@1"
 POPULATE = "django.apps.registry.Apps.populate"
@@ -18,22 +18,22 @@ PROD = frozenset({Context.PROD})
 
 
 class AppLoads:
-    def __init__(self, build: CoreBuild, apps: AppRegistry) -> None:
-        self.build = build
+    def __init__(self, reader: PackReader, apps: AppRegistry) -> None:
+        self.reader = reader
         self.apps = apps
 
     def settings_site(self) -> Site:
         """Where INSTALLED_APPS is first assigned; the edges start there."""
         for module in self.apps.settings_modules:
-            record = self.build.tables.record(module) or {}
+            record = self.reader.tables.record(module) or {}
             for row in record.get("assigns", ()):
                 if row["s"] == -1 and INSTALLED_APPS in row["t"]:
                     return Site(record["path"], module, "<module>", row["l"], row["c"])
         return Site("", "", "<module>", 0)
 
     def edge(self, site: Site, app: InstalledApp, module: str, role: str, loader: str) -> Edge:
-        exists = self.build.index.exists(module)
-        resolution = self.build.first_party.resolution(app.name) if exists else Resolution.UNRESOLVED
+        exists = self.reader.index.exists(module)
+        resolution = self.reader.first_party.resolution(app.name) if exists else Resolution.UNRESOLVED
         targets = (EntityId(LANGUAGE_PYTHON, module),) if exists else ()
         return Edge(
             kind="loads",
@@ -57,6 +57,6 @@ class AppLoads:
                 out.append(self.edge(site, app, app.config.rpartition(".")[0], "config", POPULATE))
             for role, loader, wanted in (("models", POPULATE, True), ("admin", AUTODISCOVER, admin)):
                 module = f"{app.name}.{role}"
-                if wanted and self.build.index.exists(module):
+                if wanted and self.reader.index.exists(module):
                     out.append(self.edge(site, app, module, role, loader))
         return out

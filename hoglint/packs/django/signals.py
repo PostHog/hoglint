@@ -13,15 +13,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.harness import each_item, failure_edge
 from hoglint.core.records import sequence_items, str_literal, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import Hit
 from hoglint.model import Edge, EntityId, Resolution, Site
-from hoglint.native.queries import PackQueries, Words, entities_named
+from hoglint.native.queries import Words, entities_named
 from hoglint.packs.django.config import DjangoPackConfig
 from hoglint.packs.django.models import ModelRegistry
+from hoglint.plugins import PackReader
 
 SIGNALS_PRODUCER = "django.signals@1"
 CONNECT = "connect"
@@ -48,18 +48,15 @@ class FileCandidates:
 
 
 class SignalProducer:
-    def __init__(
-        self, build: CoreBuild, registry: ModelRegistry, config: DjangoPackConfig, queries: PackQueries
-    ) -> None:
-        self.build = build
+    def __init__(self, reader: PackReader, registry: ModelRegistry, config: DjangoPackConfig) -> None:
+        self.reader = reader
         self.registry = registry
-        self.queries = queries
         self.receivers = frozenset(config.receiver_decorators)
         self.signal_bases = config.signal_bases
         self.signal_cache: dict[EntityId, bool] = {}
 
     def lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> Hit | None:
-        found = self.build.context.value_lookup(scope, chain, at_scope, line)
+        found = self.reader.context.value_lookup(scope, chain, at_scope, line)
         return found.hit if found is not None else None
 
     def is_signal(self, hit: Hit | None) -> bool:
@@ -72,12 +69,12 @@ class SignalProducer:
         return self.signal_cache[origin]
 
     def built_by_signal_class(self, origin: EntityId) -> bool:
-        table = self.build.tables.get(origin.module)
+        table = self.reader.tables.get(origin.module)
         value = table.values.get(origin.symbol) if table is not None else None
         if not isinstance(value, dict) or not isinstance(value.get("call"), str):
             return False
-        cls = self.build.resolver.resolve_class(origin.module, value["call"])
-        return cls is not None and any(self.build.classes.is_subclass(cls, base) for base in self.signal_bases)
+        cls = self.reader.resolver.resolve_class(origin.module, value["call"])
+        return cls is not None and any(self.reader.classes.is_subclass(cls, base) for base in self.signal_bases)
 
     def signal_name(self, scope: FileScope, value: object, at_scope: int, line: int) -> str:
         if not isinstance(value, str):
@@ -99,13 +96,13 @@ class SignalProducer:
             ref = self.registry.resolve_label(label, app, None)
             if ref is None:
                 return Sender(label, (), Resolution.UNRESOLVED, "unknown-label")
-            return Sender(label, (ref,), self.build.first_party.resolution(ref.module))
+            return Sender(label, (ref,), self.reader.first_party.resolution(ref.module))
         if not isinstance(value, str):
             return Sender(value_text(value), (), Resolution.UNRESOLVED, "variable-sender")
         hit = self.lookup(scope, value, at_scope, line)
         if hit is None or hit.kind != "class":
             return Sender(value, (), Resolution.UNRESOLVED, "variable-sender")
-        return Sender(value, (hit.origin,), self.build.first_party.resolution(hit.origin.module))
+        return Sender(value, (hit.origin,), self.reader.first_party.resolution(hit.origin.module))
 
     def edge(
         self, scope: FileScope, site: Site, flags: int, sender: Sender, signal: str, receiver: str, how: str
@@ -244,17 +241,17 @@ class SignalProducer:
         out: dict[str, FileCandidates] = {}
         paths = {scope.path for scope in files}
         targets = [entity for name in sorted(self.receivers) for entity in entities_named(name)]
-        for edge in self.queries.edges_to("decorate", targets):
+        for edge in self.reader.edges_to("decorate", targets):
             if edge.site.path in paths:
                 out.setdefault(edge.site.path, FileCandidates()).defs.add((edge.site.line, edge.site.column))
         spelled = Words.ending(name.rpartition(".")[2] for name in self.receivers)
         for scope in files:
-            if self.queries.may_mention(scope, ("defs", "imports"), spelled):
+            if self.reader.may_mention(scope, ("defs", "imports"), spelled):
                 decorated = {(d["l"], d["c"]) for d in scope.defs if d.get("dec")}
                 out.setdefault(scope.path, FileCandidates()).defs.update(decorated)
-        for scope, rows in self.queries.calls_named(files, "calls", (CONNECT,)):
+        for scope, rows in self.reader.calls_named(files, "calls", (CONNECT,)):
             out.setdefault(scope.path, FileCandidates()).calls = rows
-        for scope, rows in self.queries.calls_named(files, "callees", (CONNECT,)):
+        for scope, rows in self.reader.calls_named(files, "callees", (CONNECT,)):
             out.setdefault(scope.path, FileCandidates()).callees = rows
         return out
 

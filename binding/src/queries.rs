@@ -2,15 +2,16 @@
 //! select their candidates with.
 
 use crate::link::Link;
-use crate::{Pair, ids_bytes};
+use crate::{Pair, ids_bytes, ids_from};
+use hoglint_facts::link::Link as CoreLink;
 use hoglint_facts::link::index::kind_code;
-use hoglint_facts::link::intern::Sid;
+use hoglint_facts::link::intern::{EMPTY, Sid};
 use hoglint_facts::link::resolve::{Binding, Ent};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyList, PyString};
 use regex::bytes::Regex;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 
@@ -193,6 +194,70 @@ impl Link {
     /// a pack keys a per-file cache on.
     fn blob_keys(&self) -> Vec<Option<String>> {
         self.keys.clone()
+    }
+
+    /// Columns of edges `ids`, one list per name in `names` with a value per edge: `path`,
+    /// `module`, `scope`, `line`, `column`, `surface`, `target_module` (None without a target),
+    /// `target_symbol`, `producer`, or `attr:<name>` ("" without it). Only these cross, with
+    /// no Edge made: a pack's projected candidate batch.
+    fn columns<'py>(
+        &self,
+        py: Python<'py>,
+        ids: &[u8],
+        names: Vec<String>,
+    ) -> PyResult<Vec<Bound<'py, PyList>>> {
+        let ids = ids_from(ids)?;
+        let link = &self.inner;
+        let it = &link.core.it;
+        if let Some(&bad) = ids.iter().find(|&&id| id as usize >= link.edges.rows.len()) {
+            return Err(PyKeyError::new_err(bad));
+        }
+        let mut strings: FxHashMap<Sid, Bound<'py, PyString>> = FxHashMap::default();
+        let mut text = |sid: Sid| -> Bound<'py, PyAny> {
+            strings
+                .entry(sid)
+                .or_insert_with(|| PyString::new(py, it.s(sid)))
+                .clone()
+                .into_any()
+        };
+        let mut out = Vec::with_capacity(names.len());
+        for name in &names {
+            let attr = name.strip_prefix("attr:").map(|key| it.get(key));
+            let mut values: Vec<Bound<'py, PyAny>> = Vec::with_capacity(ids.len());
+            for &id in &ids {
+                let row = &link.edges.rows[id as usize];
+                let scope = &link.scopes[row.owner as usize];
+                let value = match (name.as_str(), attr) {
+                    (_, Some(key)) => {
+                        let found =
+                            key.and_then(|key| link.edges.attrs_with(id).find(|(k, _)| *k == key));
+                        text(found.map_or(EMPTY, |&(_, v)| v))
+                    }
+                    ("path", _) => {
+                        PyString::new(py, &link.core.facts.files[row.file as usize].path).into_any()
+                    }
+                    ("module", _) => text(scope.module),
+                    ("scope", _) => text(scope.scope_name(row.scope, link.settings.module_scope)),
+                    ("line", _) => row.line.into_pyobject(py)?.into_any(),
+                    ("column", _) => row.col.into_pyobject(py)?.into_any(),
+                    ("surface", _) => text(row.surface),
+                    ("target_module", _) => match row.target {
+                        Some(target) => text(target.m),
+                        None => py.None().into_bound(py),
+                    },
+                    ("target_symbol", _) => text(row.target.map_or(EMPTY, |target| target.s)),
+                    ("producer", _) => {
+                        PyString::new(py, &CoreLink::producer_name(row.kind)).into_any()
+                    }
+                    (other, _) => {
+                        return Err(PyValueError::new_err(format!("no edge column {other}")));
+                    }
+                };
+                values.push(value);
+            }
+            out.push(PyList::new(py, values)?);
+        }
+        Ok(out)
     }
 
     /// Working tree files whose bytes did not hash to the snapshot's oid when the run read them:

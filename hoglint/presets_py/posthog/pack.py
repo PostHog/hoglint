@@ -6,12 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from hoglint.core.analysis import AnalysisResult
-from hoglint.core.build import CoreBuild
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.facts import FactNeeds
-from hoglint.model import Edge, Graph
-from hoglint.native.queries import PackQueries
+from hoglint.model import Edge
+from hoglint.plugins import PackReader, PackSink
 from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
 from hoglint.presets_py.posthog.facade import FACADE_PRODUCER, FacadeFacts
 
@@ -37,23 +35,23 @@ class PosthogPack:
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
         return FACT_NEEDS
 
-    def produce(self, section: Mapping[str, Any], core: AnalysisResult, graph: Graph, root: Path) -> None:
-        self.run(core.build, graph)
+    def produce(self, section: Mapping[str, Any], reader: PackReader, sink: PackSink, root: Path) -> None:
+        self.run(reader, sink)
 
     @staticmethod
-    def run(build: CoreBuild, graph: Graph) -> None:
+    def run(reader: PackReader, sink: PackSink) -> None:
         def drives() -> list[Edge]:
-            return DrivesProducer(build, PackQueries.of(build, graph)).produce()
+            return DrivesProducer(reader).produce()
 
         def facade() -> list[Edge]:
-            return FacadeFacts(build).produce()
+            return FacadeFacts(reader).produce()
 
         ProducerPlan(
             [
                 ProducerStep(DRIVES_PRODUCER, frozenset({"drives"}), drives),
                 ProducerStep(FACADE_PRODUCER, FACADE_KINDS, facade),
             ]
-        ).run(graph)
+        ).run(sink)
 
 
 POSTHOG_PACK = PosthogPack()

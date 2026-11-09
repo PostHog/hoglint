@@ -10,13 +10,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import entity
 from hoglint.model import Context, EntityId
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DjangoPackConfig
+from hoglint.plugins import PackReader
 
 MODEL_BASE = "django.db.models.base.Model"
 FK = "django.db.models.fields.related.ForeignKey"
@@ -62,10 +62,10 @@ class ClassBody:
 class ModelIndex:
     """Model-ness, Meta, abstract and proxy over the class index. Every answer is memoized."""
 
-    def __init__(self, build: CoreBuild) -> None:
-        self.build = build
-        self.resolver = build.resolver
-        self.classes = build.classes
+    def __init__(self, reader: PackReader) -> None:
+        self.reader = reader
+        self.resolver = reader.resolver
+        self.classes = reader.classes
         self.body_cache: dict[tuple[str, int], ClassBody] = {}
         self.model_cache: dict[EntityId, bool] = {}
         self.abstract_cache: dict[EntityId, bool] = {}
@@ -74,7 +74,7 @@ class ModelIndex:
     def body_of(self, record: dict, idx: int) -> ClassBody:
         key = (record["path"], idx)
         if key not in self.body_cache:
-            self.body_cache[key] = ClassBody(self.build.bodies(record), idx)
+            self.body_cache[key] = ClassBody(self.reader.bodies(record), idx)
         return self.body_cache[key]
 
     def info(self, ref: EntityId) -> ClassBody:
@@ -263,23 +263,23 @@ class LabelRef:
 class ModelRegistry:
     """Every first-party model with its app label, plus the label table."""
 
-    def __init__(self, build: CoreBuild, apps: AppRegistry) -> None:
-        self.build = build
+    def __init__(self, reader: PackReader, apps: AppRegistry) -> None:
+        self.reader = reader
         self.apps = apps
-        self.index = ModelIndex(build)
+        self.index = ModelIndex(reader)
         self.models: dict[EntityId, ModelEntry] = {}
         self.by_label: dict[str, EntityId] = {}
         self.failures: list[str] = []
 
     def discover(self, files: Iterable[FileScope]) -> None:
         """Models in the given prod files: classes whose MRO reaches Django's Model."""
-        index = self.build.index
+        index = self.reader.index
         for scope in files:
             if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
                 continue
             if index.path_of.get(scope.module) != scope.path:
                 continue
-            table = self.build.tables.get(scope.module)
+            table = self.reader.tables.get(scope.module)
             if table is None:
                 continue
             for name, idx in table.classes().items():
@@ -316,7 +316,7 @@ class ModelRegistry:
         return f"{app_label}.{ref.symbol}" if app_label else None
 
     def is_first_party(self, module: str) -> bool:
-        return self.build.first_party.contains(module)
+        return self.reader.first_party.contains(module)
 
     def resolve_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
         """`app.Model`, `Model` (same app) or `self` to a model class, as Django's registry would."""
@@ -331,7 +331,7 @@ class ModelRegistry:
         for app in self.apps.apps:
             if app.label != label or self.is_first_party(app.name):
                 continue
-            hit = self.build.resolver.resolve_name(f"{app.name}.models", model_name)
+            hit = self.reader.resolver.resolve_name(f"{app.name}.models", model_name)
             if hit is not None and hit.kind == "class" and self.index.is_model(hit.origin):
                 return hit.origin
         return None
@@ -353,7 +353,7 @@ class RelationBuilder:
     def __init__(self, registry: ModelRegistry, config: DjangoPackConfig) -> None:
         self.registry = registry
         self.index = registry.index
-        self.build = registry.build
+        self.reader = registry.reader
         self.apps = registry.apps
         self.config = config
         self.field_class_kind: dict[EntityId, tuple[str, str | None] | None] = {}
@@ -384,7 +384,7 @@ class RelationBuilder:
         """`kwargs.setdefault("to", "app.Model")` anywhere inside a first-party field class."""
         if not self.registry.is_first_party(ref.module):
             return None
-        found = self.build.classes.located(ref)
+        found = self.reader.classes.located(ref)
         if found is None:
             return None
         record, idx = found
@@ -416,14 +416,14 @@ class RelationBuilder:
     def field_decl(self, ref: EntityId, name: str, value: object, line: int) -> FieldDecl | None:
         if not (isinstance(value, dict) and "call" in value):
             return None
-        field_class = self.build.resolver.resolve_class(ref.module, value["call"])
+        field_class = self.reader.resolver.resolve_class(ref.module, value["call"])
         kind = self.field_kind(field_class) if field_class is not None else None
         args = value.get("args", [])
         if kind is None and args and isinstance(args[0], dict) and "call" in args[0]:
             # A pass-through wrapper: wrap(models.ForeignKey(...), ...).
             value = args[0]
             args = value.get("args", [])
-            field_class = self.build.resolver.resolve_class(ref.module, value["call"])
+            field_class = self.reader.resolver.resolve_class(ref.module, value["call"])
             kind = self.field_kind(field_class) if field_class is not None else None
         if kind is None:
             return None
@@ -501,7 +501,7 @@ class RelationBuilder:
                 value = self.apps.setting(proxy.prefix + name) if head == proxy.name else None
                 if value is not None:
                     return self.label_target(decl, cls, value)
-        found = self.build.resolver.resolve_class(decl.owner.module, expr)
+        found = self.reader.resolver.resolve_class(decl.owner.module, expr)
         if found is not None:
             return found
         return f"{UNRESOLVED_PREFIX}{value_text(expr)}"

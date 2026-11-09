@@ -17,11 +17,11 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.harness import each_item, failure_edge
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
-from hoglint.native.queries import PackQueries, Words, entities_named
+from hoglint.native.queries import Words, entities_named
+from hoglint.plugins import PackReader
 
 INSTALLS_PRODUCER = "django.installs@1"
 HOOK_KINDS = frozenset({"def", "member"})
@@ -42,9 +42,8 @@ def decorator_callees(d: dict) -> set[str]:
 
 
 class InstallsProducer:
-    def __init__(self, build: CoreBuild, hooks: tuple[str, ...], queries: PackQueries) -> None:
-        self.build = build
-        self.queries = queries
+    def __init__(self, reader: PackReader, hooks: tuple[str, ...]) -> None:
+        self.reader = reader
         self.hooks = frozenset(hooks)
         self.hook_names = frozenset(hook.rpartition(".")[2] for hook in hooks)
         self.hook_words = Words.ending(self.hook_names)
@@ -79,7 +78,7 @@ class InstallsProducer:
             site,
             found.surface,
             (hit.origin,),
-            self.build.first_party.resolution(hit.origin.module),
+            self.reader.first_party.resolution(hit.origin.module),
             contexts,
             INSTALLS_PRODUCER,
             via=hit.via,
@@ -88,7 +87,7 @@ class InstallsProducer:
         )
 
     def lookup(self, scope: FileScope, callee: str, at_scope: int, line: int) -> Lookup | None:
-        found = self.build.context.value_lookup(scope, callee, at_scope, line)
+        found = self.reader.context.value_lookup(scope, callee, at_scope, line)
         if found is not None and found.hit is not None and found.hit.kind in NOT_HOOK_KINDS:
             return None
         return found
@@ -103,11 +102,11 @@ class InstallsProducer:
         out: dict[str, Aliases] = defaultdict(Aliases)
         paths = {scope.path for scope in files}
         targets = [entity for hook in sorted(self.hooks) for entity in entities_named(hook)]
-        for edge in self.queries.edges_to("import", targets):
+        for edge in self.reader.edges_to("import", targets):
             bound = edge.attr("binds")
             if edge.site.path in paths and bound not in self.hook_names:
                 out[edge.site.path].names.add(bound)
-        for edge in self.queries.edges_to("decorate", targets):
+        for edge in self.reader.edges_to("decorate", targets):
             if edge.site.path in paths:
                 out[edge.site.path].decorated.add((edge.site.line, edge.site.column))
         return out
@@ -131,7 +130,7 @@ class InstallsProducer:
 
     def decorator_edges(self, scope: FileScope, aliases: Aliases) -> list[Edge]:
         out: list[Edge] = []
-        if not aliases.decorated and not self.queries.may_mention(scope, ("defs",), self.hook_words):
+        if not aliases.decorated and not self.reader.may_mention(scope, ("defs",), self.hook_words):
             return out
         for idx, d in enumerate(scope.defs):
             for dec in d.get("dec", ()):
@@ -159,7 +158,7 @@ class InstallsProducer:
     def produce(self, files: list[FileScope]) -> list[Edge]:
         if not self.hooks:
             return []
-        calls = {scope.path: rows for scope, rows in self.queries.calls_named(files, "callees", self.hook_names)}
+        calls = {scope.path: rows for scope, rows in self.reader.calls_named(files, "callees", self.hook_names)}
         aliases = self.aliases(files)
 
         def file_edges(scope: FileScope) -> list[Edge]:

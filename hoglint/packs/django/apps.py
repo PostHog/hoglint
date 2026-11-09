@@ -9,11 +9,11 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass, field
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.symbols import entity
 from hoglint.model import EntityId
 from hoglint.packs.django.config import DjangoPackConfig
+from hoglint.plugins import PackReader
 
 APP_CONFIG = "django.apps.config.AppConfig"
 INSTALLED_APPS = "INSTALLED_APPS"
@@ -78,21 +78,21 @@ class SettingsValues:
 class SettingsReader:
     """Replays assigns, `+=` and `X.append(<const>)` of each settings module in source order."""
 
-    def __init__(self, build: CoreBuild) -> None:
-        self.build = build
+    def __init__(self, reader: PackReader) -> None:
+        self.reader = reader
 
     def modules(self, patterns: tuple[str, ...]) -> list[str]:
-        known = sorted(self.build.index.path_of)
+        known = sorted(self.reader.index.path_of)
         out: list[str] = []
         for pattern in patterns:
             matches = [m for m in known if fnmatch.fnmatchcase(m, pattern)] if "*" in pattern else [pattern]
-            out.extend(m for m in matches if self.build.index.is_file_module(m) and m not in out)
+            out.extend(m for m in matches if self.reader.index.is_file_module(m) and m not in out)
         return out
 
     def read(self, modules: list[str]) -> SettingsValues:
         values = SettingsValues()
         for module in modules:
-            self.read_record(self.build.tables.record(module) or {}, values)
+            self.read_record(self.reader.tables.record(module) or {}, values)
         return values
 
     @staticmethod
@@ -123,10 +123,10 @@ class SettingsReader:
 
 
 class AppRegistry:
-    def __init__(self, build: CoreBuild, config: DjangoPackConfig) -> None:
-        self.build = build
-        self.settings_modules = SettingsReader(build).modules(config.settings_modules)
-        self.settings = SettingsReader(build).read(self.settings_modules)
+    def __init__(self, reader: PackReader, config: DjangoPackConfig) -> None:
+        self.reader = reader
+        self.settings_modules = SettingsReader(reader).modules(config.settings_modules)
+        self.settings = SettingsReader(reader).read(self.settings_modules)
         self.apps: list[InstalledApp] = [self.app_for_entry(e) for e in self.settings.lists.get(INSTALLED_APPS, [])]
         self.by_label = {app.label: app for app in self.apps}
         self.by_name_length = sorted(self.apps, key=lambda a: -len(a.name))
@@ -137,18 +137,18 @@ class AppRegistry:
 
     def config_attrs(self, ref: EntityId) -> dict[str, object]:
         attrs: dict[str, object] = {}
-        for cls in reversed(self.build.classes.mro(ref)):
-            found = self.build.classes.located(cls)
+        for cls in reversed(self.reader.classes.mro(ref)):
+            found = self.reader.classes.located(cls)
             if found is not None:
-                attrs.update(self.build.bodies(found[0]).constants(found[1]))
+                attrs.update(self.reader.bodies(found[0]).constants(found[1]))
         return attrs
 
     def is_app_config(self, ref: EntityId) -> bool:
-        return str(ref) != APP_CONFIG and self.build.classes.is_subclass(ref, APP_CONFIG)
+        return str(ref) != APP_CONFIG and self.reader.classes.is_subclass(ref, APP_CONFIG)
 
     def default_config(self, entry: str) -> EntityId | None:
         """Django's choice of AppConfig in `<entry>.apps`: the only one, else the only default=True."""
-        table = self.build.tables.get(f"{entry}.apps")
+        table = self.reader.tables.get(f"{entry}.apps")
         if table is None:
             return None
         candidates = []
@@ -162,7 +162,7 @@ class AppRegistry:
         return defaults[0] if len(defaults) == 1 else None
 
     def app_for_entry(self, entry: str) -> InstalledApp:
-        hit, rest = self.build.resolver.resolve_dotted(entry)
+        hit, rest = self.reader.resolver.resolve_dotted(entry)
         found = hit if hit is not None and not rest else None
         config: EntityId | None = None
         if found is not None and found.kind == "class" and self.is_app_config(found.origin):

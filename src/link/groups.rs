@@ -259,29 +259,33 @@ impl Link {
     }
 
     /// Edge keys over the edge fields a rule reads: `kind`, `context`, `resolution`, `use`,
-    /// `surface`, or an attr name. Other built-in fields (`shape`, `label`, `producer`) follow
-    /// from the kind for core edges.
+    /// `surface`, `shape`, `shape_detail`, `label` (kind, shape and detail; whether the
+    /// destination resolved is in its dst key), or an attr name, refinements included. `producer`
+    /// follows from the kind for core edges.
     pub fn edge_keys(&mut self, ids: &[u32], fields: &[String]) -> Keyed {
         let attr_keys: Vec<Option<Sid>> =
             fields.iter().map(|name| self.core.it.get(name)).collect();
-        let rows = &self.edges.rows;
         let edges = &self.edges;
         Keyed::of(ids, |id| {
-            let row = &rows[id as usize];
-            let attrs = edges.attrs_of(row);
-            let mut key: Vec<u32> = Vec::with_capacity(fields.len() + 1);
+            let row = &edges.rows[id as usize];
+            let (shape, detail) = edges.shape_of(id);
+            let mut key: Vec<u32> = Vec::with_capacity(fields.len() + 2);
             key.push(row.kind as u32);
             for (name, attr) in fields.iter().zip(&attr_keys) {
-                key.push(match name.as_str() {
-                    "kind" | "shape" | "label" | "producer" | "shape_detail" => 0,
-                    "context" => row.ctx as u32,
-                    "resolution" => row.res as u32,
-                    "use" => row.use_,
-                    "surface" => row.surface,
-                    _ => attr
-                        .and_then(|a| attrs.iter().find(|(k, _)| *k == a))
-                        .map_or(EMPTY, |(_, v)| *v),
-                });
+                match name.as_str() {
+                    "kind" | "producer" => key.push(0),
+                    "shape" => key.push(shape),
+                    "shape_detail" => key.push(detail),
+                    "label" => key.extend([shape, detail]),
+                    "context" => key.push(row.ctx as u32),
+                    "resolution" => key.push(row.res as u32),
+                    "use" => key.push(row.use_),
+                    "surface" => key.push(row.surface),
+                    _ => key.push(
+                        attr.and_then(|a| edges.attrs_with(id).find(|(k, _)| *k == a))
+                            .map_or(EMPTY, |(_, v)| *v),
+                    ),
+                }
             }
             key
         })

@@ -20,13 +20,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from functools import cached_property
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.producers import chain_tokens
 from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
-from hoglint.native.queries import PackQueries, Words
+from hoglint.native.queries import Words
+from hoglint.plugins import PackReader
 from hoglint.presets_py.posthog.layout import location_module, product_of_path
 
 QUERY_DISPATCHER = "posthog/hogql_queries/query_runner.py"
@@ -184,9 +184,9 @@ class FileFacts:
 class FactReader:
     """One file's records in, one FileFacts out (the spike's L1 view, rebuilt from fact lists)."""
 
-    def __init__(self, scope: FileScope, build: CoreBuild) -> None:
+    def __init__(self, scope: FileScope, snapshot: PackReader) -> None:
         self.scope = scope
-        self.build = build
+        self.snapshot = snapshot
         self.record = scope.record
         self.rel = scope.path
         self.is_test = Context.TEST in scope.base_contexts
@@ -198,7 +198,7 @@ class FactReader:
 
     @cached_property
     def bodies(self) -> RecordBodies:
-        return self.build.bodies(self.record)
+        return self.snapshot.bodies(self.record)
 
     @cached_property
     def quals(self) -> list[str]:
@@ -212,8 +212,10 @@ class FactReader:
         """The PEP 562 lazy names of a product module's table."""
         if not self.rel.startswith("products/"):
             return {}
-        table = self.build.tables.get(self.scope.module)
-        return table.lazy if table is not None and self.build.index.path_of.get(self.scope.module) == self.rel else {}
+        table = self.snapshot.tables.get(self.scope.module)
+        return (
+            table.lazy if table is not None and self.snapshot.index.path_of.get(self.scope.module) == self.rel else {}
+        )
 
     def ancestry(self, idx: int) -> list[int]:
         """idx and every enclosing def, without -1."""
@@ -576,8 +578,8 @@ class TestFilter:
     the kind as a string, a tag, a callee or an imported name (a constructor), or its NodeKind
     member as an attribute. A file it rejects has no mention the deriver turns into a drive."""
 
-    def __init__(self, queries: PackQueries, kinds: dict[str, frozenset[str]], members: dict[str, str]) -> None:
-        self.queries = queries
+    def __init__(self, snapshot: PackReader, kinds: dict[str, frozenset[str]], members: dict[str, str]) -> None:
+        self.snapshot = snapshot
         self.kinds = kinds
         self.members = members
         self.words: dict[str | None, tuple[Words, Words]] = {}
@@ -594,7 +596,7 @@ class TestFilter:
     def names_a_kind(self, ff: FileFacts, owner: str | None) -> bool:
         kinds, members = self.words_for(owner)
         scope = ff.reader.scope
-        return self.queries.may_mention(scope, KIND_TEXT, kinds) or self.queries.may_mention(
+        return self.snapshot.may_mention(scope, KIND_TEXT, kinds) or self.snapshot.may_mention(
             scope, MEMBER_TEXT, members
         )
 
@@ -718,9 +720,9 @@ class DriveEdge:
 
 
 class Deriver:
-    def __init__(self, facts: dict[str, FileFacts], queries: PackQueries) -> None:
+    def __init__(self, facts: dict[str, FileFacts], snapshot: PackReader) -> None:
         self.facts = facts
-        self.queries = queries
+        self.snapshot = snapshot
         self.by_rel = {f.rel: f for f in facts.values()}
         self.view = CallView(facts)
         self.imports = ImportIndex(facts)
@@ -754,7 +756,7 @@ class Deriver:
             for product, label in self.labels.items()
         ]
         labelled = {kind: products & self.labels.keys() for kind, products in self.kinds.items()}
-        self.test_filter = TestFilter(self.queries, labelled, self.members)
+        self.test_filter = TestFilter(self.snapshot, labelled, self.members)
 
     def module_exists(self, dotted: str) -> bool:
         return dotted in self.facts
@@ -817,7 +819,7 @@ class Deriver:
 
     def may_count_kind(self, ff: FileFacts) -> bool:
         """A `kind` entry that is a pending kind, passed to a dispatcher or under a query key."""
-        if not self.queries.has_rows(ff.reader.scope, "watched"):
+        if not self.snapshot.has_rows(ff.reader.scope, "watched"):
             return False
         dispatchers = frozenset({e.bound for e in ff.imports if e.exported in DISPATCH_CALLS}) | DISPATCH_CALLS
         for *_, value, chain, up in ff.reader.record.get("watched", []):
@@ -978,17 +980,16 @@ class DrivesProducer:
     `shuffle_seed` derives the tests in a shuffled order (edges still come out in file order):
     tests use it to show that no answer depends on which tests ran first."""
 
-    def __init__(self, build: CoreBuild, queries: PackQueries, shuffle_seed: int | None = None) -> None:
-        self.build = build
-        self.queries = queries
+    def __init__(self, snapshot: PackReader, shuffle_seed: int | None = None) -> None:
+        self.snapshot = snapshot
         self.shuffle_seed = shuffle_seed
 
     def facts(self) -> dict[str, FileFacts]:
         facts: dict[str, FileFacts] = {}
-        for scope in self.build.files:
-            if scope.record.get("status") != "ok" or not self.build.first_party.contains(scope.module):
+        for scope in self.snapshot.files:
+            if scope.record.get("status") != "ok" or not self.snapshot.first_party.contains(scope.module):
                 continue
-            facts[scope.module] = FileFacts(FactReader(scope, self.build))
+            facts[scope.module] = FileFacts(FactReader(scope, self.snapshot))
         return facts
 
     @staticmethod
@@ -1027,7 +1028,7 @@ class DrivesProducer:
 
     def produce(self) -> list[Edge]:
         facts = self.facts()
-        deriver = Deriver(facts, self.queries)
+        deriver = Deriver(facts, self.snapshot)
         deriver.read_registry()
         deriver.grow_origins()
         tests = [ff for ff in facts.values() if ff.is_test and deriver.may_drive(ff)]

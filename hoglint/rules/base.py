@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
-from functools import cache, cached_property
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -59,8 +59,6 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
 EDGE_DEPENDENT_FIELDS = frozenset({"context", "exported"})
-# Edge fields a pack sets on its copy of a core edge: a rule that reads one judges the copy too.
-REFINED_FIELDS = frozenset({"shape", "shape_detail", "label", "flow_shape"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,10 +176,6 @@ class RuleContext:
         """The finding of an edge whose group's judgment grouped evaluation already decided, or
         None to judge it."""
         return None
-
-    @property
-    def core_copies(self) -> frozenset[int]:
-        return self.index.core_copies
 
     def ordinal(self, edge: Edge) -> int:
         """The edge's place among edges with the same module, scope, kind and surface."""
@@ -595,22 +589,12 @@ class EdgeRule:
         return self.spec.from_, self.spec.select
 
     def sees(self, edge: Edge) -> bool:
-        """Whether the rule looks at this edge at all. The engine and `explain` both ask this. A
-        pack's copy of a core edge is seen only by a rule that reads what the pack refined."""
+        """Whether the rule looks at this edge at all. The engine and `explain` both ask this."""
         if self.kind_set and edge.kind not in self.kind_set:
             return False
         if edge.resolution is Resolution.NOT_APPLICABLE:
             return False
-        if not self.reads_refinements and id(edge) in self.ctx.core_copies:
-            return False
         return context_ok(edge, self.include, self.exclude)
-
-    @cached_property
-    def reads_refinements(self) -> bool:
-        """Whether the decision reads a field a pack refines on its copy of a core edge."""
-        return any(
-            len(ref.path) == 2 and ref.path[0] == "edge" and ref.path[1] in REFINED_FIELDS for ref in self.read_refs()
-        )
 
     def env(self, edge: Edge, src: Endpoint, dst: Endpoint) -> EdgeEnv:
         return EdgeEnv(self.ctx, edge, src, dst)

@@ -5,13 +5,16 @@ from __future__ import annotations
 import gc
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from hoglint.config import Config
 from hoglint.core.analysis import AnalysisOptions
+from hoglint.core.reader import BuildReader
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
-from hoglint.plugins import ProducerFailure
-from hoglint.source import GraphSource, active_packs
+from hoglint.native.graph import NativeSink
+from hoglint.native.queries import NativePackQueries
+from hoglint.source import GraphSource, active_packs, run_packs
 
 ENGINES = ("python", "native")
 
@@ -30,12 +33,9 @@ class NativeGraphSource(GraphSource):
         )
         analysis = NativeAnalysis(options).run()
         graph = analysis.graph
-        for pack, section in packs:
-            try:
-                pack.produce(section, analysis, graph, code_root)  # type: ignore[arg-type]
-            except Exception as error:  # noqa: BLE001 - a failed pack makes its rules incomplete, never clean
-                reason = f"{type(error).__name__}: {error}"
-                graph.failed_producers[pack.name] = ProducerFailure(reason, frozenset(pack.edge_kinds))
+        build: Any = analysis.build
+        reader = BuildReader(build, NativePackQueries(build, graph, graph.link))
+        run_packs(packs, reader, NativeSink(graph), code_root)
         return graph
 
 

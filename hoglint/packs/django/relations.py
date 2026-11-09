@@ -56,7 +56,7 @@ class RelationEdges:
             return (), Resolution.UNRESOLVED
         name = relation.concrete_target.rpartition(".")[2]
         entity = EntityId(LANGUAGE_PYTHON, relation.target_module, name)
-        return (entity,), self.registry.build.first_party.resolution(relation.target_module)
+        return (entity,), self.registry.reader.first_party.resolution(relation.target_module)
 
     @staticmethod
     def site(relation: Relation) -> Site:
@@ -114,7 +114,7 @@ class RelationEdges:
                 resolution = Resolution.UNRESOLVED
             else:
                 targets = (ref.target,)
-                resolution = self.registry.build.first_party.resolution(ref.target.module)
+                resolution = self.registry.reader.first_party.resolution(ref.target.module)
             site = Site(self.module_path.get(ref.module, ""), ref.module, ref.owner, ref.line)
             out.append(
                 Edge(
