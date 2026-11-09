@@ -109,7 +109,7 @@ pub struct Assign {
     #[serde(skip_serializing_if = "is_zero")]
     pub f: u32,
     pub l: i64,
-    pub op: &'static str,
+    pub op: String,
     pub s: i64,
     pub t: Vec<Value>,
     #[serde(skip_serializing_if = "Value::is_null")]
@@ -325,93 +325,79 @@ impl Serialize for Param {
     }
 }
 
+impl Site {
+    /// Starts a row with the site columns `[s, h, l, c]`.
+    fn head<S: Serializer>(&self, s: S) -> Result<S::SerializeSeq, S::Error> {
+        let mut row = s.serialize_seq(None)?;
+        row.serialize_element(&self.scope)?;
+        row.serialize_element(&self.header)?;
+        row.serialize_element(&self.l)?;
+        row.serialize_element(&self.c)?;
+        Ok(row)
+    }
+}
+
 impl Serialize for Ref {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let Site {
-            scope,
-            header,
-            l,
-            c,
-        } = self.site;
-        let (root, chain, up) = (&self.root, &self.chain, &self.up);
-        match self.origin {
-            Some(origin) => (scope, header, l, c, root, chain, up, origin).serialize(s),
-            None => (scope, header, l, c, root, chain, up).serialize(s),
+        let mut row = self.site.head(s)?;
+        row.serialize_element(&self.root)?;
+        row.serialize_element(&self.chain)?;
+        row.serialize_element(&self.up)?;
+        if let Some(origin) = self.origin {
+            row.serialize_element(&origin)?;
         }
+        row.end()
     }
 }
 
 impl Serialize for WatchedCall {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let Site {
-            scope,
-            header,
-            l,
-            c,
-        } = self.site;
-        (scope, header, l, c, &self.callee, &self.args, &self.kws).serialize(s)
+        let mut row = self.site.head(s)?;
+        row.serialize_element(&self.callee)?;
+        row.serialize_element(&self.args)?;
+        row.serialize_element(&self.kws)?;
+        row.end()
     }
 }
 
 impl Serialize for DottedStr {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let Site {
-            scope,
-            header,
-            l,
-            c,
-        } = self.site;
-        let (value, chain, up) = (&self.value, &self.chain, &self.up);
-        match &self.parts {
-            Some(parts) => (scope, header, l, c, value, chain, up, parts).serialize(s),
-            None => (scope, header, l, c, value, chain, up).serialize(s),
+        let mut row = self.site.head(s)?;
+        row.serialize_element(&self.value)?;
+        row.serialize_element(&self.chain)?;
+        row.serialize_element(&self.up)?;
+        if let Some(parts) = &self.parts {
+            row.serialize_element(parts)?;
         }
+        row.end()
     }
 }
 
 impl Serialize for Tag {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let Site {
-            scope,
-            header,
-            l,
-            c,
-        } = self.site;
-        (scope, header, l, c, &self.name).serialize(s)
+        let mut row = self.site.head(s)?;
+        row.serialize_element(&self.name)?;
+        row.end()
     }
 }
 
 impl Serialize for WatchedKey {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let Site {
-            scope,
-            header,
-            l,
-            c,
-        } = self.site;
-        let row = (
-            scope,
-            header,
-            l,
-            c,
-            &self.key,
-            &self.value,
-            &self.chain,
-            &self.up,
-        );
-        row.serialize(s)
+        let mut row = self.site.head(s)?;
+        row.serialize_element(&self.key)?;
+        row.serialize_element(&self.value)?;
+        row.serialize_element(&self.chain)?;
+        row.serialize_element(&self.up)?;
+        row.end()
     }
 }
 
 impl Serialize for Branch {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let Site {
-            scope,
-            header,
-            l,
-            c,
-        } = self.site;
-        (scope, header, l, c, self.body_end, &self.test).serialize(s)
+        let mut row = self.site.head(s)?;
+        row.serialize_element(&self.body_end)?;
+        row.serialize_element(&self.test)?;
+        row.end()
     }
 }
 

@@ -1,7 +1,7 @@
 //! One file's bytes to its L1 record (reference `FileRecord`).
 
-use crate::config::{ExtractConfig, sha256_hex};
-use crate::defs::{DefNode, DefTable, StoredNames, is_stub_body};
+use crate::config::ExtractConfig;
+use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
 use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, SiteFlags, Status};
 use crate::source::{LineIndex, parse_py314, source_text};
@@ -10,9 +10,9 @@ use crate::walker::{Counts, Walk, Walker};
 use ruff_python_ast::{Expr, Parameters};
 use ruff_python_parser::Mode;
 
-/// Builds the record for one file's bytes. Never fails: a file CPython rejects gets a status.
-pub fn extract(raw: &[u8], config: &ExtractConfig) -> FileRecord {
-    let sha256 = sha256_hex(raw);
+/// Builds the record for one file's bytes and their `sha256_hex`. Never fails: a file CPython
+/// rejects gets a status.
+pub fn extract(raw: &[u8], sha256: String, config: &ExtractConfig) -> FileRecord {
     let bytes = raw.len();
     let failed = |status: Status| FileRecord {
         sha256: sha256.clone(),
@@ -57,16 +57,13 @@ impl<'s, 'c> FileFacts<'s, 'c> {
 
     fn collect(&self, suite: &'s [ruff_python_ast::Stmt]) -> Facts {
         let (defs, bound) = DefTable::build(suite, self.src, &self.lines, self.config);
-        let stored = StoredNames::collect(suite);
+        let stored = stored_names(suite);
         let walker = Walker::new(self.src, &self.lines, &defs, &bound, &stored, self.config);
         let mut walk = walker.run(suite);
         let candidates = std::mem::take(&mut walk.candidates);
-        let derived = Derivation::new(&defs).resolve(&walk.refs, candidates);
-        for (row, flags) in derived {
-            if flags != 0 {
-                walk.site_flags.insert((row.site.l, row.site.c), flags);
-            }
-            walk.refs.push(row);
+        for derived in Derivation::new(&defs).resolve(&walk.refs, candidates) {
+            walk.flag_site(derived.row.site.l, derived.row.site.c, derived.flags);
+            walk.refs.push(derived.row);
         }
         let def_rows = (0..defs.entries.len())
             .map(|idx| self.def_record(&defs, &walk.def_flags, idx))
@@ -104,42 +101,14 @@ impl<'s, 'c> FileFacts<'s, 'c> {
     }
 
     fn params(&self, enc: &mut Encoder, p: &Parameters) -> Vec<Param> {
-        let mut out = Vec::new();
-        let positional = p.posonlyargs.iter().map(|param| (param, "po"));
-        let rest = p.args.iter().map(|param| (param, "a"));
-        for (param, kind) in positional.chain(rest) {
-            out.push(Param {
-                name: param.parameter.name.to_string(),
+        parameter_kinds(p)
+            .map(|(param, kind)| Param {
+                name: param.name().to_string(),
                 kind,
-                annotation: self.header_value(enc, param.parameter.annotation.as_deref(), true),
-                default: self.default_value(enc, param.default.as_deref()),
-            });
-        }
-        if let Some(v) = &p.vararg {
-            out.push(Param {
-                name: v.name.to_string(),
-                kind: "va",
-                annotation: self.header_value(enc, v.annotation.as_deref(), true),
-                default: Value::Null,
-            });
-        }
-        for param in p.kwonlyargs.iter() {
-            out.push(Param {
-                name: param.parameter.name.to_string(),
-                kind: "ko",
-                annotation: self.header_value(enc, param.parameter.annotation.as_deref(), true),
-                default: self.default_value(enc, param.default.as_deref()),
-            });
-        }
-        if let Some(k) = &p.kwarg {
-            out.push(Param {
-                name: k.name.to_string(),
-                kind: "kw",
-                annotation: self.header_value(enc, k.annotation.as_deref(), true),
-                default: Value::Null,
-            });
-        }
-        out
+                annotation: self.header_value(enc, param.annotation(), true),
+                default: self.default_value(enc, param.default()),
+            })
+            .collect()
     }
 
     fn default_value(&self, enc: &Encoder, default: Option<&Expr>) -> Value {
@@ -154,17 +123,22 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         let mut def = Def {
             bases: Vec::new(),
             c: entry.c,
-            dec: Vec::new(),
+            dec: entry
+                .node
+                .decorators()
+                .iter()
+                .map(|d| enc.shallow_call(&d.expression, self.src))
+                .collect(),
             e: entry.e,
             f: flags[idx],
-            k: DefKind::Def,
+            k: DefKind::Class,
             kw: Vec::new(),
             l: entry.l,
             n: String::new(),
             params: Vec::new(),
             ret: Value::Null,
             s: entry.parent,
-            stub: false,
+            stub: is_stub_body(entry.node.body()),
         };
         match entry.node {
             DefNode::Func(f) => {
@@ -174,24 +148,11 @@ impl<'s, 'c> FileFacts<'s, 'c> {
                 } else {
                     DefKind::Def
                 };
-                def.dec = f
-                    .decorator_list
-                    .iter()
-                    .map(|d| enc.shallow_call(&d.expression, self.src))
-                    .collect();
-                def.stub = is_stub_body(&f.body);
                 def.params = self.params(&mut enc, &f.parameters);
                 def.ret = self.header_value(&mut enc, f.returns.as_deref(), true);
             }
             DefNode::Class(c) => {
                 def.n = c.name.to_string();
-                def.k = DefKind::Class;
-                def.dec = c
-                    .decorator_list
-                    .iter()
-                    .map(|d| enc.shallow_call(&d.expression, self.src))
-                    .collect();
-                def.stub = is_stub_body(&c.body);
                 if let Some(arguments) = &c.arguments {
                     for base in arguments.args.iter() {
                         def.bases

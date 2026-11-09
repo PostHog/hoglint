@@ -10,6 +10,9 @@ use ruff_text_size::Ranged;
 use serde::Serialize;
 
 pub const MAX_STR: usize = 100;
+/// Element budget for assignment values and branch tests.
+pub const MAX_NODES: usize = 1_000_000;
+/// The same budget for header slots: decorators, bases, class keywords, annotations, defaults.
 pub const MAX_HEADER_NODES: usize = 64;
 const MAX_DEPTH: usize = 40;
 
@@ -320,19 +323,19 @@ impl StrValue {
             parts,
         }
     }
-}
 
-pub fn str_constant(text: &str, surrogate: bool) -> Value {
-    if surrogate {
-        return Value::opaque("badstr");
+    pub fn constant(&self) -> Value {
+        if self.surrogate {
+            return Value::opaque("badstr");
+        }
+        if self.text.chars().count() > MAX_STR {
+            return Value::opaque("longstr");
+        }
+        Value::Str(StrConst {
+            s: self.text.clone(),
+            sa: None,
+        })
     }
-    if text.chars().count() > MAX_STR {
-        return Value::opaque("longstr");
-    }
-    Value::Str(StrConst {
-        s: text.to_string(),
-        sa: None,
-    })
 }
 
 /// Constants other than str; None when the expression is not one.
@@ -375,10 +378,7 @@ impl Encoder {
     /// node's class.
     pub fn shallow(&self, expr: &Expr, src: &str) -> Value {
         match expr {
-            Expr::StringLiteral(s) => {
-                let v = StrValue::of(s, src);
-                return str_constant(&v.text, v.surrogate);
-            }
+            Expr::StringLiteral(s) => return StrValue::of(s, src).constant(),
             Expr::List(l) => {
                 if let Some(list) = name_elements(&l.elts) {
                     return Value::List(List { list });
@@ -449,7 +449,7 @@ impl Encoder {
     }
 
     fn type_string(&mut self, value: &StrValue) -> Value {
-        let raw = str_constant(&value.text, value.surrogate);
+        let raw = value.constant();
         let Value::Str(StrConst { s, .. }) = raw else {
             return raw;
         };
@@ -495,7 +495,7 @@ impl Encoder {
             if typed {
                 return self.type_string(&v);
             }
-            return str_constant(&v.text, v.surrogate);
+            return v.constant();
         }
         // In a type expression `None` is the type None, so `-> None` differs from no annotation.
         if typed && expr.is_none_literal_expr() {

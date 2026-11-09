@@ -1,19 +1,18 @@
 //! One small Python snippet per fact kind. Expected rows come from the reference extractor.
 
-use crate::{ExtractConfig, Limits, Status, extract, record_line};
+use crate::{ExtractConfig, FileRecord, Status, extract, record_line, sha256_hex};
 
 fn config() -> ExtractConfig {
-    ExtractConfig::new(
-        vec!["app".to_string()],
-        vec!["import_module".to_string()],
-        Limits::V1_1,
-    )
+    ExtractConfig::new(vec!["app".to_string()], vec!["import_module".to_string()])
+}
+
+fn record(raw: &[u8]) -> FileRecord {
+    extract(raw, sha256_hex(raw), &config())
 }
 
 /// The JSON of one fact list of the record for `source`, or "" when the list is empty.
 fn facts(source: &str, kind: &str) -> String {
-    let record = extract(source.as_bytes(), &config());
-    let line = record_line(&record, "cfg", "f.py").unwrap();
+    let line = record_line(&record(source.as_bytes()), "cfg", "f.py").unwrap();
     let value: serde_json::Value = serde_json::from_str(&line).unwrap();
     value.get(kind).map(|v| v.to_string()).unwrap_or_default()
 }
@@ -207,7 +206,7 @@ fn files_cpython_rejects_get_a_status_and_no_facts() {
         (b"x = 1\0\n", Status::SyntaxError),
     ];
     for (raw, status) in cases {
-        let record = extract(raw, &config());
+        let record = record(raw);
         assert_eq!(record.status, status);
         assert!(record.facts.defs.is_empty() && record.facts.assigns.is_empty());
     }

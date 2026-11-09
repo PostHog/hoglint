@@ -4,7 +4,7 @@
 use crate::config::ExtractConfig;
 use crate::source::LineIndex;
 use ruff_python_ast::visitor::{self, Visitor};
-use ruff_python_ast::{self as ast, Expr, ExprContext, Stmt};
+use ruff_python_ast::{self as ast, AnyParameterRef, Expr, ExprContext, Stmt};
 use ruff_text_size::TextSize;
 use std::collections::{HashMap, HashSet};
 
@@ -29,6 +29,44 @@ impl DefNode<'_> {
             DefNode::Class(c) => c.range.end(),
         }
     }
+}
+
+impl<'a> DefNode<'a> {
+    pub fn decorators(&self) -> &'a [ast::Decorator] {
+        match self {
+            DefNode::Func(f) => &f.decorator_list,
+            DefNode::Class(c) => &c.decorator_list,
+        }
+    }
+
+    pub fn type_params(&self) -> Option<&'a ast::TypeParams> {
+        match self {
+            DefNode::Func(f) => f.type_params.as_deref(),
+            DefNode::Class(c) => c.type_params.as_deref(),
+        }
+    }
+
+    pub fn body(&self) -> &'a [Stmt] {
+        match self {
+            DefNode::Func(f) => &f.body,
+            DefNode::Class(c) => &c.body,
+        }
+    }
+}
+
+/// Every parameter with its kind (`po`, `a`, `va`, `ko`, `kw`), in that order.
+pub fn parameter_kinds(
+    p: &ast::Parameters,
+) -> impl Iterator<Item = (AnyParameterRef<'_>, &'static str)> {
+    let with_default =
+        |kind: &'static str| move |param| (AnyParameterRef::NonVariadic(param), kind);
+    let variadic = |kind: &'static str| move |param| (AnyParameterRef::Variadic(param), kind);
+    let po = p.posonlyargs.iter().map(with_default("po"));
+    let a = p.args.iter().map(with_default("a"));
+    let va = p.vararg.as_deref().map(variadic("va"));
+    let ko = p.kwonlyargs.iter().map(with_default("ko"));
+    let kw = p.kwarg.as_deref().map(variadic("kw"));
+    po.chain(a).chain(va).chain(ko).chain(kw)
 }
 
 pub struct DefEntry<'a> {
@@ -235,17 +273,15 @@ impl<'a> DefTable<'a> {
 
 /// Every name the file stores to anywhere. A local can only be derived from a tracked use
 /// when it is assigned, so loads of other names never need a use-site row.
-#[derive(Default)]
-pub struct StoredNames<'a> {
-    pub names: HashSet<&'a str>,
+pub fn stored_names(suite: &[Stmt]) -> HashSet<&str> {
+    let mut collector = StoredNames::default();
+    collector.visit_body(suite);
+    collector.names
 }
 
-impl<'a> StoredNames<'a> {
-    pub fn collect(suite: &'a [Stmt]) -> HashSet<&'a str> {
-        let mut collector = StoredNames::default();
-        collector.visit_body(suite);
-        collector.names
-    }
+#[derive(Default)]
+struct StoredNames<'a> {
+    names: HashSet<&'a str>,
 }
 
 impl<'a> Visitor<'a> for StoredNames<'a> {

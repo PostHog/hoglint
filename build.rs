@@ -24,6 +24,8 @@ fn inputs(root: &Path) -> Vec<PathBuf> {
 
 fn main() {
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    // A directory entry makes cargo rerun this script when a source file is added or removed.
+    println!("cargo:rerun-if-changed=src");
     let mut hasher = Sha256::new();
     for path in inputs(&root) {
         println!("cargo:rerun-if-changed={}", path.display());

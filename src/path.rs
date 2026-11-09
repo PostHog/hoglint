@@ -14,6 +14,8 @@ pub enum Frame<'a> {
     Kw(&'a ast::ExprCall, Option<&'a str>),
     /// A non-terminal step with fixed text.
     Step(&'static str),
+    /// A non-terminal operator step: a prefix (`bin:`, `unary:`, `cmp:`, `bool:`) and the operator.
+    Op(&'static str, &'static str),
     DictVal(&'a str),
     Walrus(&'a str),
     /// A terminal step with fixed text: a statement or header slot.
@@ -53,6 +55,7 @@ impl Frame<'_> {
                 false,
             ),
             Frame::Step(s) => (s.to_string(), false),
+            Frame::Op(prefix, op) => (format!("{prefix}{op}"), false),
             Frame::DictVal(k) => (format!("dict:val:{k}"), false),
             Frame::Walrus(n) => (format!("walrus:{n}"), false),
             Frame::Terminal(s) => (s.to_string(), true),
@@ -98,64 +101,4 @@ pub fn climb(path: &[Frame]) -> (String, String) {
         i -= 1;
     }
     (chain, up.join(" "))
-}
-
-pub fn aug_op(op: &str) -> &'static str {
-    match op {
-        "+" => "+=",
-        "-" => "-=",
-        "*" => "*=",
-        "@" => "@=",
-        "/" => "/=",
-        "//" => "//=",
-        "%" => "%=",
-        "**" => "**=",
-        "<<" => "<<=",
-        ">>" => ">>=",
-        "|" => "|=",
-        "^" => "^=",
-        _ => "&=",
-    }
-}
-
-pub fn bin_step(op: &str) -> &'static str {
-    match op {
-        "+" => "bin:+",
-        "-" => "bin:-",
-        "*" => "bin:*",
-        "@" => "bin:@",
-        "/" => "bin:/",
-        "//" => "bin://",
-        "%" => "bin:%",
-        "**" => "bin:**",
-        "<<" => "bin:<<",
-        ">>" => "bin:>>",
-        "|" => "bin:|",
-        "^" => "bin:^",
-        _ => "bin:&",
-    }
-}
-
-pub fn unary_step(op: &str) -> &'static str {
-    match op {
-        "not" => "unary:not",
-        "-" => "unary:-",
-        "+" => "unary:+",
-        _ => "unary:~",
-    }
-}
-
-pub fn cmp_step(op: &str) -> &'static str {
-    match op {
-        "==" => "cmp:==",
-        "!=" => "cmp:!=",
-        "<" => "cmp:<",
-        "<=" => "cmp:<=",
-        ">" => "cmp:>",
-        ">=" => "cmp:>=",
-        "is" => "cmp:is",
-        "isnot" => "cmp:isnot",
-        "in" => "cmp:in",
-        _ => "cmp:notin",
-    }
 }

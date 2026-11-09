@@ -1,5 +1,8 @@
 //! Text rules for string literals and chains (schema.md section 5, `strs` and `uses`).
 
+/// Longest literal, in code points, that still counts as symbolic for `strs` and `names`.
+const MAX_SYMBOLIC: usize = 1_000;
+
 fn is_word_char(ch: char) -> bool {
     !ch.is_ascii() || ch.is_ascii_alphanumeric() || ch == '_'
 }
@@ -20,9 +23,9 @@ fn is_camel_name(value: &str) -> bool {
     value.starts_with(|c: char| c.is_ascii_uppercase()) && value.chars().all(is_word_char)
 }
 
-/// A dotted path or a CamelCase name, at most `max_len` code points, without surrogates.
-pub fn is_symbolic(value: &str, surrogate: bool, max_len: usize) -> bool {
-    if value.is_empty() || surrogate || value.chars().count() > max_len {
+/// A dotted path or a CamelCase name, at most `MAX_SYMBOLIC` code points, without surrogates.
+pub fn is_symbolic(value: &str, surrogate: bool) -> bool {
+    if value.is_empty() || surrogate || value.chars().count() > MAX_SYMBOLIC {
         return false;
     }
     is_dotted_path(value) || is_camel_name(value)

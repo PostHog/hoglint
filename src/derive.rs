@@ -6,17 +6,14 @@
 //! (a candidate); the worklist activates candidates as their names get derived.
 
 use crate::defs::DefTable;
-use crate::facts::{Ref, Site};
+use crate::facts::Ref;
 use std::collections::{HashMap, HashSet};
 
 const WRAPPER_STEPS: [&str; 4] = ["await", "ifexp:body", "ifexp:else", "star"];
 
-/// A load of a name no import binds, with its use-site context.
+/// A load of a name no import binds: its row once derived, and its statement flags.
 pub struct Candidate {
-    pub site: Site,
-    pub root: String,
-    pub chain: String,
-    pub up: String,
+    pub row: Ref,
     pub flags: u32,
 }
 
@@ -79,15 +76,18 @@ impl<'d, 'a> Derivation<'d, 'a> {
             })
     }
 
-    /// The `refs` rows of active candidates, each with its statement flags.
-    pub fn resolve(mut self, tracked: &[Ref], candidates: Vec<Candidate>) -> Vec<(Ref, u32)> {
+    /// The active candidates, each row with its deriving scope as `origin`.
+    pub fn resolve(mut self, tracked: &[Ref], candidates: Vec<Candidate>) -> Vec<Candidate> {
         let mut queue: Vec<String> = Vec::new();
         for row in tracked {
             self.note(row.site.scope, &row.up, &mut queue);
         }
         let mut waiting: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, candidate) in candidates.iter().enumerate() {
-            waiting.entry(candidate.root.as_str()).or_default().push(i);
+            waiting
+                .entry(candidate.row.root.as_str())
+                .or_default()
+                .push(i);
         }
         let mut active = vec![false; candidates.len()];
         while let Some(name) = queue.pop() {
@@ -95,32 +95,22 @@ impl<'d, 'a> Derivation<'d, 'a> {
                 continue;
             };
             for &i in indexes {
-                let candidate = &candidates[i];
-                if active[i]
-                    || self
-                        .deriving_scope(&candidate.root, candidate.site.scope)
-                        .is_none()
-                {
+                let row = &candidates[i].row;
+                if active[i] || self.deriving_scope(&row.root, row.site.scope).is_none() {
                     continue;
                 }
                 active[i] = true;
-                self.note(candidate.site.scope, &candidate.up, &mut queue);
+                self.note(row.site.scope, &row.up, &mut queue);
             }
         }
         let mut rows = Vec::new();
-        for (candidate, is_active) in candidates.into_iter().zip(active) {
+        for (mut candidate, is_active) in candidates.into_iter().zip(active) {
             if !is_active {
                 continue;
             }
-            let origin = self.deriving_scope(&candidate.root, candidate.site.scope);
-            let row = Ref {
-                site: candidate.site,
-                root: candidate.root,
-                chain: candidate.chain,
-                up: candidate.up,
-                origin,
-            };
-            rows.push((row, candidate.flags));
+            let row = &mut candidate.row;
+            row.origin = self.deriving_scope(&row.root, row.site.scope);
+            rows.push(candidate);
         }
         rows
     }

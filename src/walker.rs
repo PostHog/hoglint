@@ -8,10 +8,12 @@ use crate::facts::flags::{BLOCK, CLASS, FUNC, IF, TC_ELSE, TRY, TYPE_ONLY};
 use crate::facts::{
     Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
 };
-use crate::path::{Frame, aug_op, bin_step, climb, cmp_step, unary_step};
+use crate::path::{Frame, climb};
 use crate::source::LineIndex;
 use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
-use crate::value::{Encoder, StrValue, Value, binop, callee_text, cmpop, unaryop};
+use crate::value::{
+    Encoder, MAX_NODES, StrValue, Value, binop, boolop, callee_text, cmpop, unaryop,
+};
 use ruff_python_ast::{self as ast, Expr, ExprContext, InterpolatedStringElement, Pattern, Stmt};
 use ruff_text_size::{Ranged, TextSize};
 use std::collections::{HashMap, HashSet};
@@ -96,6 +98,14 @@ pub struct Walk {
     pub site_flags: HashMap<(i64, i64), u32>,
 }
 
+impl Walk {
+    pub fn flag_site(&mut self, l: i64, c: i64, flags: u32) {
+        if flags != 0 {
+            self.site_flags.insert((l, c), flags);
+        }
+    }
+}
+
 pub struct Walker<'a, 'w> {
     src: &'a str,
     lines: &'w LineIndex,
@@ -152,14 +162,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             || self.config.watch_callees.iter().any(|name| name == last)
     }
 
-    fn max_nodes(&self) -> usize {
-        self.config.limits.max_nodes
-    }
-
-    fn flag_site(&mut self, l: i64, c: i64, flags: u32) {
-        if flags != 0 {
-            self.out.site_flags.insert((l, c), flags);
-        }
+    /// A value tree under the assignment budget.
+    fn value(&mut self, expr: Option<&Expr>, typed: bool) -> Value {
+        self.enc.value(expr, typed, MAX_NODES, self.src)
     }
 
     // ---- traversal ----------------------------------------------------------------------
@@ -199,44 +204,26 @@ impl<'a, 'w> Walker<'a, 'w> {
             Stmt::ClassDef(c) => self.visit_def(DefNode::Class(c), at),
             Stmt::Import(i) => {
                 for alias in &i.names {
-                    let (l, c) = self.lines.pos(alias.range.start());
-                    self.out.imports.push(Import {
-                        scope: at.scope,
-                        l,
-                        c,
-                        flags: at.flags,
-                        module: Some(alias.name.to_string()),
-                        level: 0,
-                        name: None,
-                        asname: alias.asname.as_ref().map(|a| a.to_string()),
-                    });
+                    let module = Some(alias.name.to_string());
+                    self.push_import(alias, at, module, 0, None);
                 }
             }
             Stmt::ImportFrom(i) => {
                 for alias in &i.names {
-                    let (l, c) = self.lines.pos(alias.range.start());
-                    self.out.imports.push(Import {
-                        scope: at.scope,
-                        l,
-                        c,
-                        flags: at.flags,
-                        module: i.module.as_ref().map(|m| m.to_string()),
-                        level: i.level,
-                        name: Some(alias.name.to_string()),
-                        asname: alias.asname.as_ref().map(|a| a.to_string()),
-                    });
+                    let module = i.module.as_ref().map(|m| m.to_string());
+                    let name = Some(alias.name.to_string());
+                    self.push_import(alias, at, module, i.level, name);
                 }
             }
             Stmt::Assign(a) => {
                 if self.assign_scope(at.scope) {
-                    let max = self.max_nodes();
                     let t = a
                         .targets
                         .iter()
-                        .map(|t| self.enc.value(Some(t), false, max, self.src))
+                        .map(|t| self.value(Some(t), false))
                         .collect();
-                    let v = self.enc.value(Some(&a.value), false, max, self.src);
-                    self.emit_assign(stmt, at, "=", t, None, v);
+                    let v = self.value(Some(&a.value), false);
+                    self.emit_assign(stmt, at, "=".to_string(), t, None, v);
                 }
                 for t in &a.targets {
                     self.child(Frame::Terminal("assign-target"), t, at);
@@ -245,11 +232,10 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Stmt::AnnAssign(a) => {
                 if self.assign_scope(at.scope) {
-                    let max = self.max_nodes();
-                    let t = vec![self.enc.value(Some(&a.target), false, max, self.src)];
-                    let ann = self.enc.value(Some(&a.annotation), true, max, self.src);
-                    let v = self.enc.value(a.value.as_deref(), false, max, self.src);
-                    self.emit_assign(stmt, at, ":", t, Some(ann), v);
+                    let t = vec![self.value(Some(&a.target), false)];
+                    let ann = self.value(Some(&a.annotation), true);
+                    let v = self.value(a.value.as_deref(), false);
+                    self.emit_assign(stmt, at, ":".to_string(), t, Some(ann), v);
                 }
                 self.child(Frame::Terminal("annassign-target"), &a.target, at);
                 self.child(Frame::Terminal("annotation"), &a.annotation, at);
@@ -259,20 +245,18 @@ impl<'a, 'w> Walker<'a, 'w> {
             Stmt::AugAssign(a) => {
                 let op = binop(a.op);
                 if self.assign_scope(at.scope) {
-                    let max = self.max_nodes();
-                    let t = vec![self.enc.value(Some(&a.target), false, max, self.src)];
-                    let v = self.enc.value(Some(&a.value), false, max, self.src);
-                    self.emit_assign(stmt, at, aug_op(op), t, None, v);
+                    let t = vec![self.value(Some(&a.target), false)];
+                    let v = self.value(Some(&a.value), false);
+                    self.emit_assign(stmt, at, format!("{op}="), t, None, v);
                 }
                 self.child(Frame::Terminal("augassign-target"), &a.target, at);
                 self.child(Frame::AugAssignValue(op, &a.target), &a.value, at);
             }
             Stmt::TypeAlias(a) => {
                 if self.assign_scope(at.scope) {
-                    let max = self.max_nodes();
-                    let t = vec![self.enc.value(Some(&a.name), false, max, self.src)];
-                    let v = self.enc.value(Some(&a.value), true, max, self.src);
-                    self.emit_assign(stmt, at, "type", t, None, v);
+                    let t = vec![self.value(Some(&a.name), false)];
+                    let v = self.value(Some(&a.value), true);
+                    self.emit_assign(stmt, at, "type".to_string(), t, None, v);
                 }
                 self.child(Frame::Terminal("typealias-target"), &a.name, at);
                 if let Some(tp) = &a.type_params {
@@ -409,9 +393,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         {
             let (l, c) = self.lines.pos(start);
             let last = body.last().map(|s| s.range().end()).unwrap_or(start);
-            let test_value = self
-                .enc
-                .value(Some(test), false, self.max_nodes(), self.src);
+            let test_value = self.value(Some(test), false);
             self.out.branches.push(Branch {
                 site: at.site((l, c)),
                 body_end: self.lines.line(last),
@@ -443,40 +425,23 @@ impl<'a, 'w> Walker<'a, 'w> {
             header: idx as i64,
             ..at
         };
-        let body_at = |flag: u32| At {
-            scope: idx as i64,
-            header: -1,
-            flags: at.flags | flag,
-        };
-        match node {
+        for d in node.decorators() {
+            self.child(Frame::Terminal("decorator"), &d.expression, header);
+        }
+        if let Some(tp) = node.type_params() {
+            self.type_params(tp, header);
+        }
+        let flag = match node {
             DefNode::Func(f) => {
-                for d in &f.decorator_list {
-                    self.child(Frame::Terminal("decorator"), &d.expression, header);
-                }
-                if let Some(tp) = &f.type_params {
-                    self.type_params(tp, header);
-                }
-                let p = &f.parameters;
-                for param in p.posonlyargs.iter().chain(&p.args).chain(&p.kwonlyargs) {
-                    let name = param.parameter.name.as_str();
-                    let annotation = param.parameter.annotation.as_deref();
-                    self.opt_child(Frame::ParamAnn(name), annotation, header);
-                    self.opt_child(Frame::ParamDefault(name), param.default.as_deref(), header);
-                }
-                for param in p.vararg.iter().chain(p.kwarg.iter()) {
-                    let annotation = param.annotation.as_deref();
-                    self.opt_child(Frame::ParamAnn(param.name.as_str()), annotation, header);
+                for param in f.parameters.iter() {
+                    let name = param.name().as_str();
+                    self.opt_child(Frame::ParamAnn(name), param.annotation(), header);
+                    self.opt_child(Frame::ParamDefault(name), param.default(), header);
                 }
                 self.opt_child(Frame::Terminal("returns"), f.returns.as_deref(), header);
-                self.body(&f.body, body_at(FUNC));
+                FUNC
             }
             DefNode::Class(c) => {
-                for d in &c.decorator_list {
-                    self.child(Frame::Terminal("decorator"), &d.expression, header);
-                }
-                if let Some(tp) = &c.type_params {
-                    self.type_params(tp, header);
-                }
                 if let Some(args) = &c.arguments {
                     for (i, base) in args.args.iter().enumerate() {
                         self.child(Frame::Base(i), base, header);
@@ -486,16 +451,43 @@ impl<'a, 'w> Walker<'a, 'w> {
                         self.child(Frame::ClassKw(name), &kw.value, header);
                     }
                 }
-                self.body(&c.body, body_at(CLASS));
+                CLASS
             }
-        }
+        };
+        let body_at = At {
+            scope: idx as i64,
+            header: -1,
+            flags: at.flags | flag,
+        };
+        self.body(node.body(), body_at);
+    }
+
+    fn push_import(
+        &mut self,
+        alias: &ast::Alias,
+        at: At,
+        module: Option<String>,
+        level: u32,
+        name: Option<String>,
+    ) {
+        let (l, c) = self.lines.pos(alias.range.start());
+        self.out.imports.push(Import {
+            scope: at.scope,
+            l,
+            c,
+            flags: at.flags,
+            module,
+            level,
+            name,
+            asname: alias.asname.as_ref().map(|a| a.to_string()),
+        });
     }
 
     fn emit_assign(
         &mut self,
         stmt: &Stmt,
         at: At,
-        op: &'static str,
+        op: String,
         t: Vec<Value>,
         ann: Option<Value>,
         v: Value,
@@ -545,13 +537,8 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             Expr::BoolOp(b) => {
-                let step = if b.op == ast::BoolOp::And {
-                    "bool:and"
-                } else {
-                    "bool:or"
-                };
                 for v in &b.values {
-                    self.child(Frame::Step(step), v, at);
+                    self.child(Frame::Op("bool:", boolop(b.op)), v, at);
                 }
             }
             Expr::Named(n) => {
@@ -559,20 +546,14 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.child(Frame::Walrus(name_id(&n.target)), &n.value, at);
             }
             Expr::BinOp(b) => {
-                let step = bin_step(binop(b.op));
-                self.child(Frame::Step(step), &b.left, at);
-                self.child(Frame::Step(step), &b.right, at);
+                let step = Frame::Op("bin:", binop(b.op));
+                self.child(step, &b.left, at);
+                self.child(step, &b.right, at);
             }
-            Expr::UnaryOp(u) => {
-                let step = unary_step(unaryop(u.op));
-                self.child(Frame::Step(step), &u.operand, at);
-            }
+            Expr::UnaryOp(u) => self.child(Frame::Op("unary:", unaryop(u.op)), &u.operand, at),
             Expr::Lambda(l) => {
-                if let Some(p) = &l.parameters {
-                    for param in p.posonlyargs.iter().chain(&p.args).chain(&p.kwonlyargs) {
-                        let default = param.default.as_deref();
-                        self.opt_child(Frame::Step("lambda:default"), default, at);
-                    }
+                for param in l.parameters.iter().flat_map(|p| p.iter()) {
+                    self.opt_child(Frame::Step("lambda:default"), param.default(), at);
                 }
                 self.child(Frame::Step("lambda"), &l.body, at);
             }
@@ -584,17 +565,17 @@ impl<'a, 'w> Walker<'a, 'w> {
             Expr::Set(s) => self.elts(&s.elts, "elt:set", at),
             Expr::List(l) => self.elts(&l.elts, "elt:list", at),
             Expr::Tuple(t) => self.elts(&t.elts, "elt:tuple", at),
-            Expr::ListComp(c) => {
-                self.child(Frame::Step("comp:elt"), &c.elt, at);
-                self.generators(&c.generators, at);
-            }
-            Expr::SetComp(c) => {
-                self.child(Frame::Step("comp:elt"), &c.elt, at);
-                self.generators(&c.generators, at);
-            }
-            Expr::Generator(c) => {
-                self.child(Frame::Step("comp:elt"), &c.elt, at);
-                self.generators(&c.generators, at);
+            Expr::ListComp(ast::ExprListComp {
+                elt, generators, ..
+            })
+            | Expr::SetComp(ast::ExprSetComp {
+                elt, generators, ..
+            })
+            | Expr::Generator(ast::ExprGenerator {
+                elt, generators, ..
+            }) => {
+                self.child(Frame::Step("comp:elt"), elt, at);
+                self.generators(generators, at);
             }
             Expr::DictComp(c) => {
                 self.opt_child(Frame::Step("comp:key"), c.key.as_deref(), at);
@@ -607,7 +588,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             Expr::Compare(c) => {
                 self.child(Frame::Step("cmp:left"), &c.operands[0], at);
                 for (op, operand) in c.ops.iter().zip(c.operands[1..].iter()) {
-                    self.child(Frame::Step(cmp_step(cmpop(*op))), operand, at);
+                    self.child(Frame::Op("cmp:", cmpop(*op)), operand, at);
                 }
             }
             Expr::FString(f) => {
@@ -701,7 +682,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             callee,
         };
         self.out.calls.push(row);
-        self.flag_site(l, c, at.flags);
+        self.out.flag_site(l, c, at.flags);
     }
 
     fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, at: At) {
@@ -719,18 +700,17 @@ impl<'a, 'w> Walker<'a, 'w> {
         if !value.contains('.') && !value.starts_with(|ch: char| ch.is_ascii_uppercase()) {
             return;
         }
-        let max = self.config.limits.max_symbolic;
         let parts = if v.parts.len() > 1 {
             Some(&v.parts)
         } else {
             None
         };
-        let symbolic = is_symbolic(value, v.surrogate, max);
+        let symbolic = is_symbolic(value, v.surrogate);
         let mut dotted = symbolic && is_dotted_path(value);
         if let Some(parts) = parts {
             dotted |= parts
                 .iter()
-                .any(|(p, s)| is_symbolic(p, *s, max) && is_dotted_path(p));
+                .any(|(p, s)| is_symbolic(p, *s) && is_dotted_path(p));
         }
         if !dotted {
             if symbolic {
@@ -747,7 +727,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         let parts = parts.map(|parts| {
             parts
                 .iter()
-                .map(|(p, s)| is_symbolic(p, *s, max).then(|| p.clone()))
+                .map(|(p, s)| is_symbolic(p, *s).then(|| p.clone()))
                 .collect()
         });
         self.out.strs.push(DottedStr {
@@ -757,7 +737,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             up,
             parts,
         });
-        self.flag_site(l, c, at.flags);
+        self.out.flag_site(l, c, at.flags);
     }
 
     /// An import-bound name is a `refs` row when it is first-party and class-like, else a
@@ -768,13 +748,15 @@ impl<'a, 'w> Walker<'a, 'w> {
         let Some(binding) = self.bound.get(id).copied() else {
             if name.ctx == ExprContext::Load && self.stored.contains(id) {
                 let (chain, up) = climb(&self.path);
-                self.out.candidates.push(Candidate {
+                let row = Ref {
                     site: at.site((l, c)),
                     root: id.to_string(),
                     chain,
                     up,
-                    flags: at.flags,
-                });
+                    origin: None,
+                };
+                let flags = at.flags;
+                self.out.candidates.push(Candidate { row, flags });
             }
             return;
         };
@@ -799,7 +781,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             up,
             origin: None,
         });
-        self.flag_site(l, c, at.flags);
+        self.out.flag_site(l, c, at.flags);
     }
 
     fn emit_watched(&mut self, dict: &'a ast::ExprDict, at: At) {

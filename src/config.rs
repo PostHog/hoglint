@@ -7,41 +7,19 @@ pub const SCHEMA_VERSION: i64 = 2;
 /// Hash of the extractor sources, from build.rs. Part of the cache key.
 pub const BUILD_ID: &str = env!("HOGLINT_BUILD_ID");
 
-/// Element caps of value trees and symbolic strings. Schema v1.1 raises both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Limits {
-    /// Element budget for assignment values and branch tests (header slots use their own cap).
-    pub max_nodes: usize,
-    /// Longest literal, in code points, that still counts as symbolic for `strs` and `names`.
-    pub max_symbolic: usize,
-}
-
-impl Limits {
-    pub const V1: Limits = Limits {
-        max_nodes: 400,
-        max_symbolic: 100,
-    };
-    pub const V1_1: Limits = Limits {
-        max_nodes: 1_000_000,
-        max_symbolic: 1_000,
-    };
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractConfig {
     /// Top-level module names whose imports are first-party. Sorted, no duplicates.
     pub first_party: Vec<String>,
     /// Extra callee names (last dotted part) whose calls get a `calls` row. Sorted, no duplicates.
     pub watch_callees: Vec<String>,
-    pub limits: Limits,
 }
 
 impl ExtractConfig {
-    pub fn new(first_party: Vec<String>, watch_callees: Vec<String>, limits: Limits) -> Self {
+    pub fn new(first_party: Vec<String>, watch_callees: Vec<String>) -> Self {
         ExtractConfig {
             first_party: sorted_unique(first_party),
             watch_callees: sorted_unique(watch_callees),
-            limits,
         }
     }
 
@@ -63,12 +41,7 @@ impl ExtractConfig {
 
     /// Cache directory name: schema version, build id and every option that changes records.
     pub fn cache_namespace(&self) -> String {
-        format!(
-            "v{SCHEMA_VERSION}-b{BUILD_ID}-{}-n{}-s{}",
-            self.config_id(),
-            self.limits.max_nodes,
-            self.limits.max_symbolic
-        )
+        format!("v{SCHEMA_VERSION}-b{BUILD_ID}-{}", self.config_id())
     }
 }
 
@@ -80,8 +53,12 @@ fn sorted_unique(mut items: Vec<String>) -> Vec<String> {
 }
 
 pub fn sha256_hex(raw: &[u8]) -> String {
-    Sha256::digest(raw)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(raw);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    out
 }

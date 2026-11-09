@@ -18,7 +18,7 @@ mod walker;
 
 pub mod config;
 
-pub use config::{BUILD_ID, ExtractConfig, Limits, SCHEMA_VERSION, sha256_hex};
+pub use config::{BUILD_ID, ExtractConfig, SCHEMA_VERSION, sha256_hex};
 pub use encode::record_line;
 pub use extract::extract;
 pub use facts::{

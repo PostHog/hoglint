@@ -5,49 +5,31 @@
 //!   hoglint-facts --discover <repo_root> [--v1.1] > files.txt
 //!   hoglint-facts --build-id
 //!   hoglint-facts <repo_root> <file_list|-> [--jobs N] [--first-party a,b] [--watch-callees a,b]
-//!      [--mode stream|kinds|cache] [--out PATH] [--cache DIR] [--timing] [--v1.1]
-//!      [--max-nodes N] [--max-symbolic N]
+//!      [--mode stream|cache] [--out PATH] [--cache DIR] [--timing] [--v1.1]
 //!
-//! `--v1.1` raises the value-tree cap to 1,000,000 and the symbolic-string cap to 1,000.
+//! `--v1.1` is accepted and changes nothing: the v1.1 caps are the only caps.
 //! `--watch-callees` adds callee names (last dotted part) whose calls get a `calls` row.
+//! `--timing` prints wall time, output size and per-stage CPU seconds to stderr.
 //!
-//! Modes: `stream` writes JSON lines to --out (default stdout); `kinds` writes one file per fact
-//! kind into the --out directory; `cache` keeps one record per source sha256 under --cache and
-//! only parses files whose content has no entry yet (records still stream to --out). The cache
-//! directory name holds the schema version, the build id and every option that changes records.
+//! Modes: `stream` writes JSON lines to --out (default stdout); `cache` keeps one record per
+//! source sha256 under --cache and only parses files whose content has no entry yet (records
+//! still stream to --out). The cache directory name holds the schema version, the build id and
+//! every option that changes records.
 //!
 //! A file that cannot be read gets a `read_error` record and the run goes on. Bad arguments,
 //! an unwritable output and a failing git exit non-zero.
 
 use hoglint_facts::{
-    BUILD_ID, ExtractConfig, Facts, FileRecord, Limits, Status, extract, record_line, sha256_hex,
+    BUILD_ID, ExtractConfig, Facts, FileRecord, Status, extract, record_line, sha256_hex,
 };
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-
-/// Fact list names of a record, for the `kinds` mode.
-const FACT_KINDS: [&str; 13] = [
-    "assigns",
-    "branches",
-    "callees",
-    "calls",
-    "defs",
-    "imports",
-    "names",
-    "refs",
-    "site_flags",
-    "strs",
-    "tags",
-    "uses",
-    "watched",
-];
 
 /// Cache entries store this path; a hit swaps in the real one.
 const PATH_PLACEHOLDER: &str = "\"path\":\"\"";
@@ -133,7 +115,6 @@ impl Discovery {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OutputMode {
     Stream,
-    Kinds,
     Cache,
 }
 
@@ -196,21 +177,12 @@ impl Options {
         let watch_callees = args.list("--watch-callees")?;
         let mode = match args.value("--mode")?.as_deref() {
             None | Some("stream") => OutputMode::Stream,
-            Some("kinds") => OutputMode::Kinds,
             Some("cache") => OutputMode::Cache,
             Some(other) => return Err(usage(format!("unknown --mode {other}"))),
         };
         let out = args.value("--out")?.map(PathBuf::from);
         let cache = args.value("--cache")?.map(PathBuf::from);
-        let base = if args.switch("--v1.1") {
-            Limits::V1_1
-        } else {
-            Limits::V1
-        };
-        let limits = Limits {
-            max_nodes: args.number("--max-nodes")?.unwrap_or(base.max_nodes),
-            max_symbolic: args.number("--max-symbolic")?.unwrap_or(base.max_symbolic),
-        };
+        args.switch("--v1.1");
         let timing = args.switch("--timing");
         let [root, listing] = args.rest.as_slice() else {
             return Err(usage("hoglint-facts <repo_root> <file_list|-> [options]"));
@@ -228,7 +200,7 @@ impl Options {
         Ok(Options {
             root: PathBuf::from(root),
             files,
-            config: ExtractConfig::new(first_party, watch_callees, limits),
+            config: ExtractConfig::new(first_party, watch_callees),
             mode,
             out,
             cache,
@@ -238,21 +210,24 @@ impl Options {
     }
 }
 
-/// CPU seconds summed over threads.
-#[derive(Default)]
-struct Totals {
-    read: f64,
-    extract: f64,
-    serialize: f64,
-    cache_io: f64,
-    parsed_files: usize,
+/// The shell stages `--timing` reports, in CPU seconds summed over threads.
+#[derive(Clone, Copy)]
+enum Stage {
+    Read,
+    Extract,
+    Serialize,
+    CacheIo,
 }
+
+const STAGES: [&str; 4] = ["read", "extract", "serialize", "cache_io"];
 
 struct Runner<'o> {
     opts: &'o Options,
     cfg: String,
-    totals: Mutex<Totals>,
     tmp_counter: AtomicU64,
+    /// Per stage: calls and nanoseconds. Only `--timing` fills them.
+    calls: [AtomicU64; 4],
+    nanos: [AtomicU64; 4],
 }
 
 impl<'o> Runner<'o> {
@@ -260,23 +235,43 @@ impl<'o> Runner<'o> {
         Runner {
             opts,
             cfg: opts.config.config_id(),
-            totals: Mutex::new(Totals::default()),
             tmp_counter: AtomicU64::new(0),
+            calls: Default::default(),
+            nanos: Default::default(),
         }
     }
 
-    fn add(&self, update: impl FnOnce(&mut Totals)) {
-        if let Ok(mut totals) = self.totals.lock() {
-            update(&mut totals);
+    fn timed<T>(&self, stage: Stage, work: impl FnOnce() -> T) -> T {
+        if !self.opts.timing {
+            return work();
         }
+        let started = Instant::now();
+        let result = work();
+        let nanos = started.elapsed().as_nanos() as u64;
+        self.calls[stage as usize].fetch_add(1, Ordering::Relaxed);
+        self.nanos[stage as usize].fetch_add(nanos, Ordering::Relaxed);
+        result
+    }
+
+    fn report(&self, wall: f64, written: usize) {
+        let seconds: Vec<String> = STAGES
+            .iter()
+            .zip(&self.nanos)
+            .map(|(name, nanos)| {
+                let total = nanos.load(Ordering::Relaxed) as f64 / 1e9;
+                format!("{name}={total:.3}")
+            })
+            .collect();
+        eprintln!(
+            "files={} parsed={} wall={wall:.3}s out={written}B | cpu-sum {}",
+            self.opts.files.len(),
+            self.calls[Stage::Extract as usize].load(Ordering::Relaxed),
+            seconds.join(" ")
+        );
     }
 
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
-        let started = Instant::now();
-        let raw = std::fs::read(self.opts.root.join(rel));
-        let seconds = started.elapsed().as_secs_f64();
-        self.add(|t| t.read += seconds);
-        match raw {
+        match self.timed(Stage::Read, || std::fs::read(self.opts.root.join(rel))) {
             Ok(raw) => Some(raw),
             Err(error) => {
                 eprintln!("hoglint-facts: read {rel}: {error}");
@@ -294,31 +289,22 @@ impl<'o> Runner<'o> {
         }
     }
 
-    fn extract(&self, raw: &[u8]) -> FileRecord {
-        let started = Instant::now();
-        let record = extract(raw, &self.opts.config);
-        let seconds = started.elapsed().as_secs_f64();
-        self.add(|t| {
-            t.extract += seconds;
-            t.parsed_files += 1;
-        });
-        record
+    fn extract(&self, raw: &[u8], sha256: String) -> FileRecord {
+        self.timed(Stage::Extract, || extract(raw, sha256, &self.opts.config))
     }
 
     fn encode(&self, record: &FileRecord, path: &str) -> Result<String, ShellError> {
-        let started = Instant::now();
-        let line = record_line(record, &self.cfg, path)?;
-        let seconds = started.elapsed().as_secs_f64();
-        self.add(|t| t.serialize += seconds);
+        let line = self.timed(Stage::Serialize, || record_line(record, &self.cfg, path))?;
         Ok(line)
     }
 
-    /// stream and kinds: parse every file.
-    fn record(&self, rel: &str) -> FileRecord {
-        match self.read(rel) {
-            Some(raw) => self.extract(&raw),
+    /// stream: parse every file.
+    fn line(&self, rel: &str) -> Result<String, ShellError> {
+        let record = match self.read(rel) {
+            Some(raw) => self.extract(&raw, sha256_hex(&raw)),
             None => Self::unreadable(),
-        }
+        };
+        self.encode(&record, rel)
     }
 
     /// cache: reuse the entry for this content hash, else extract and store one.
@@ -328,18 +314,14 @@ impl<'o> Runner<'o> {
         };
         let sha256 = sha256_hex(&raw);
         let entry = dir.join(format!("{sha256}.json"));
-        let started = Instant::now();
-        if let Ok(text) = std::fs::read_to_string(&entry) {
-            let seconds = started.elapsed().as_secs_f64();
-            self.add(|t| t.cache_io += seconds);
+        if let Ok(text) = self.timed(Stage::CacheIo, || std::fs::read_to_string(&entry)) {
             return with_path(&text, rel);
         }
-        let record = self.extract(&raw);
+        let record = self.extract(&raw, sha256);
         let body = self.encode(&record, "")?;
-        let started = Instant::now();
-        self.store(dir, &sha256, &entry, &body);
-        let seconds = started.elapsed().as_secs_f64();
-        self.add(|t| t.cache_io += seconds);
+        self.timed(Stage::CacheIo, || {
+            self.store(dir, &record.sha256, &entry, &body)
+        });
         with_path(&body, rel)
     }
 
@@ -385,68 +367,6 @@ fn write_lines(out: &Option<PathBuf>, lines: &[String]) -> Result<usize, ShellEr
     Ok(total)
 }
 
-/// The py-l2 split store: `envelope.json` = {path: envelope}, `<kind>.json` = {path: rows}.
-/// A later duplicate path wins, as in split_store.py.
-fn write_kinds(
-    dir: &Path,
-    files: &[String],
-    records: &[FileRecord],
-    cfg: &str,
-) -> Result<usize, ShellError> {
-    std::fs::create_dir_all(dir).map_err(io_error(format!("create {}", dir.display())))?;
-    let last: HashMap<&str, usize> = files
-        .iter()
-        .enumerate()
-        .map(|(i, rel)| (rel.as_str(), i))
-        .collect();
-    let keep: Vec<usize> = (0..files.len())
-        .filter(|i| last[files[*i].as_str()] == *i)
-        .collect();
-    let mut envelopes = Vec::new();
-    let mut lists: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
-    for &i in &keep {
-        let record = &records[i];
-        let envelope = FileRecord {
-            sha256: record.sha256.clone(),
-            bytes: record.bytes,
-            status: record.status,
-            facts: Facts::default(),
-        };
-        envelopes.push(record_line(&envelope, cfg, &files[i])?);
-        lists.push(serde_json::from_str(&record_line(record, cfg, &files[i])?)?);
-    }
-    let mut total = 0;
-    let mut write_doc = |name: &str, entries: Vec<(usize, String)>| -> Result<(), ShellError> {
-        let mut doc = String::from("{");
-        for (n, (i, value)) in entries.iter().enumerate() {
-            if n > 0 {
-                doc.push(',');
-            }
-            doc.push_str(&serde_json::to_string(&files[*i])?);
-            doc.push(':');
-            doc.push_str(value);
-        }
-        doc.push('}');
-        std::fs::write(dir.join(name), &doc).map_err(io_error(format!("write {name}")))?;
-        total += doc.len();
-        Ok(())
-    };
-    write_doc(
-        "envelope.json",
-        keep.iter().copied().zip(envelopes).collect(),
-    )?;
-    for kind in FACT_KINDS {
-        let mut rows = Vec::new();
-        for (&i, map) in keep.iter().zip(&lists) {
-            if let Some(value) = map.get(kind) {
-                rows.push((i, serde_json::to_string(value)?));
-            }
-        }
-        write_doc(&format!("{kind}.json"), rows)?;
-    }
-    Ok(total)
-}
-
 fn run_extract(opts: &Options) -> Result<(), ShellError> {
     if opts.jobs > 0 {
         rayon::ThreadPoolBuilder::new()
@@ -456,54 +376,27 @@ fn run_extract(opts: &Options) -> Result<(), ShellError> {
     }
     let runner = Runner::new(opts);
     let started = Instant::now();
-    let written = match opts.mode {
-        OutputMode::Stream => {
-            let lines: Vec<String> = opts
-                .files
-                .par_iter()
-                .map(|rel| runner.encode(&runner.record(rel), rel))
-                .collect::<Result<_, _>>()?;
-            write_lines(&opts.out, &lines)?
-        }
-        OutputMode::Kinds => {
-            let Some(dir) = &opts.out else {
-                return Err(usage("--mode kinds needs --out DIR"));
-            };
-            let records: Vec<FileRecord> = opts
-                .files
-                .par_iter()
-                .map(|rel| runner.record(rel))
-                .collect();
-            write_kinds(dir, &opts.files, &records, &runner.cfg)?
-        }
+    let lines: Vec<String> = match opts.mode {
+        OutputMode::Stream => opts
+            .files
+            .par_iter()
+            .map(|rel| runner.line(rel))
+            .collect::<Result<_, _>>()?,
         OutputMode::Cache => {
             let Some(base) = &opts.cache else {
                 return Err(usage("--mode cache needs --cache DIR"));
             };
             let dir = base.join(opts.config.cache_namespace());
             std::fs::create_dir_all(&dir).map_err(io_error(format!("create {}", dir.display())))?;
-            let lines: Vec<String> = opts
-                .files
+            opts.files
                 .par_iter()
                 .map(|rel| runner.cached_line(rel, &dir))
-                .collect::<Result<_, _>>()?;
-            write_lines(&opts.out, &lines)?
+                .collect::<Result<_, _>>()?
         }
     };
-    if opts.timing
-        && let Ok(t) = runner.totals.lock()
-    {
-        eprintln!(
-            "files={} parsed={} wall={:.3}s out={}B | cpu-sum read={:.3} extract={:.3} serialize={:.3} cache_io={:.3}",
-            opts.files.len(),
-            t.parsed_files,
-            started.elapsed().as_secs_f64(),
-            written,
-            t.read,
-            t.extract,
-            t.serialize,
-            t.cache_io
-        );
+    let written = write_lines(&opts.out, &lines)?;
+    if opts.timing {
+        runner.report(started.elapsed().as_secs_f64(), written);
     }
     Ok(())
 }
