@@ -44,6 +44,8 @@ DISPATCH_CALLS = frozenset(
 TEST_CLIENT_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
 PATCH_CALLS = frozenset({"patch", "object"})
 MAX_CALL_DEPTH = 8
+UNKNOWN_EXECUTION = "unknown"
+CALL_DEPTH_REASON = "call-depth-limit"
 DRIVES_PRODUCER = "posthog.drives@1"
 MODULE_SCOPE = "<module>"
 
@@ -597,10 +599,37 @@ class TestFilter:
 
 
 # --- call view (spike) -------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Reach:
+    """What the call view finds from one called name: a chain of hops to a dispatcher, or a miss.
+
+    `cut`: a patched name stopped a path. `exhausted`: the depth limit stopped a path, so a miss
+    is unknown, not none. `open`: the miss met a name that is still being walked (a cycle), so
+    it may change once that walk ends."""
+
+    ok: bool
+    chain: tuple[str, ...] = ()
+    cut: bool = False
+    exhausted: bool = False
+    open: bool = False
+
+    @property
+    def final(self) -> bool:
+        """Whether the answer holds at any depth: a hit, or a miss that saw the whole call graph."""
+        return self.ok or not (self.exhausted or self.open)
+
+
+MISS = Reach(False)
+PATCHED = Reach(False, cut=True)
+TOO_DEEP = Reach(False, exhausted=True)
+IN_PROGRESS = Reach(False, open=True)
+
+
 class CallView:
     def __init__(self, facts: dict[str, FileFacts]) -> None:
         self.facts = facts
-        self.memo: dict[tuple[str, str, frozenset[str], bool], tuple[bool, list[str]]] = {}
+        self.memo: dict[tuple[str, str, frozenset[str], bool], Reach] = {}
+        self.walking: set[tuple[str, str, frozenset[str], bool]] = set()
         self.imports_by_bound: dict[str, dict[str, list[ImportEdge]]] = {}
 
     def imports_named(self, ff: FileFacts, name: str) -> list[ImportEdge]:
@@ -632,31 +661,42 @@ class CallView:
                 found.append((edge.module, target.bodies[fid]))
         return found
 
-    def executes(
-        self, module: str, name: str, patched: frozenset[str], depth: int = 0, local: bool = False
-    ) -> tuple[bool, list[str], bool]:
+    def executes(self, module: str, name: str, patched: frozenset[str], depth: int = 0, local: bool = False) -> Reach:
+        """Only a final answer is memoized: a miss the depth limit or a cycle cut short may be a
+        hit from another depth or once the cycle's walk ends."""
         if name in patched:
-            return False, [], True
-        if depth >= MAX_CALL_DEPTH or module not in self.facts:
-            return False, [], False
+            return PATCHED
+        if module not in self.facts:
+            return MISS
+        if depth >= MAX_CALL_DEPTH:
+            return TOO_DEEP
         key = (module, name, patched, local)
-        if key in self.memo:
-            ok, chain = self.memo[key]
-            return ok, chain, False
-        self.memo[key] = (False, [])
-        cut = False
+        found = self.memo.get(key)
+        if found is not None:
+            return found
+        if key in self.walking:
+            return IN_PROGRESS
+        self.walking.add(key)
+        found = self.walk(module, name, patched, depth, local)
+        self.walking.discard(key)
+        if found.final:
+            self.memo[key] = found
+        return found
+
+    def walk(self, module: str, name: str, patched: frozenset[str], depth: int, local: bool) -> Reach:
+        cut = exhausted = open_ = False
         for target_module, body in self.targets(module, name, local):
             hop = f"{target_module}:{body.fid}"
             if self.body_executes(body, DISPATCH_CALLS - patched):
-                self.memo[key] = (True, [hop])
-                return True, [hop], cut
+                return Reach(True, (hop,), cut)
             for call in sorted(body.calls):
-                ok, chain, subcut = self.executes(target_module, call, patched, depth + 1, local=True)
-                cut = cut or subcut
-                if ok:
-                    self.memo[key] = (True, [hop, *chain])
-                    return True, [hop, *chain], cut
-        return False, [], cut
+                found = self.executes(target_module, call, patched, depth + 1, local=True)
+                cut = cut or found.cut
+                exhausted = exhausted or found.exhausted
+                open_ = open_ or found.open
+                if found.ok:
+                    return Reach(True, (hop, *found.chain), cut)
+        return Reach(False, (), cut, exhausted, open_)
 
 
 @dataclass(frozen=True)
@@ -848,12 +888,14 @@ class Deriver:
                     outward.add(name)
         patched = frozenset(body.patches | scope.rest_patches)
         cut = bool(outward & patched)
+        exhausted = False
         for name in sorted(outward - patched):
-            ok, chain, subcut = self.view.executes(ff.dotted, name, patched)
-            cut = cut or subcut
-            if ok:
-                return "via-helper", chain, cut
-        return "none", [], cut
+            found = self.view.executes(ff.dotted, name, patched)
+            cut = cut or found.cut
+            exhausted = exhausted or found.exhausted
+            if found.ok:
+                return "via-helper", list(found.chain), cut
+        return (UNKNOWN_EXECUTION if exhausted else "none"), [], cut
 
     @staticmethod
     def class_helpers(ff: FileFacts, test: TestFacts, cls: str) -> dict[str, list[str]]:
@@ -941,25 +983,37 @@ class DrivesProducer:
         return facts
 
     @staticmethod
-    def edge(drive: DriveEdge, path: str) -> Edge:
+    def resolution(drive: DriveEdge) -> Resolution:
+        """A kind the test may pass is a candidate; a test the call view could not follow to its
+        end may or may not run the wiring, so the drive is unresolved: an obligation, never none."""
+        if drive.trigger == "unresolved-kind":
+            return Resolution.CANDIDATES
+        if drive.execution == UNKNOWN_EXECUTION:
+            return Resolution.UNRESOLVED
+        return Resolution.RESOLVED
+
+    def edge(self, drive: DriveEdge, path: str) -> Edge:
         unresolved = drive.trigger == "unresolved-kind"
         product, _, location = drive.label.partition(":")
+        attrs = [
+            ("location", drive.label),
+            ("execution", drive.execution),
+            ("chain", " > ".join(drive.chain)),
+            ("patched", "true" if drive.patched else "false"),
+        ]
+        if drive.execution == UNKNOWN_EXECUTION:
+            attrs.append(("reason", CALL_DEPTH_REASON))
         return Edge(
             kind="drives",
             site=Site(path, drive.test_module, drive.site.split("@", 1)[0], drive.line),
             surface=drive.detail,
             targets=(EntityId(LANGUAGE_PYTHON, location_module(product, location)),),
-            resolution=Resolution.CANDIDATES if unresolved else Resolution.RESOLVED,
+            resolution=self.resolution(drive),
             contexts=frozenset({Context.TEST}),
             producer=DRIVES_PRODUCER,
             shape=drive.trigger,
             shape_detail="unresolved-kind" if unresolved else drive.detail,
-            attrs=(
-                ("location", drive.label),
-                ("execution", drive.execution),
-                ("chain", " > ".join(drive.chain)),
-                ("patched", "true" if drive.patched else "false"),
-            ),
+            attrs=tuple(attrs),
         )
 
     def produce(self) -> list[Edge]:
