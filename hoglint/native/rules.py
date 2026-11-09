@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import dataclasses
 from array import array
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Hashable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,15 @@ class NativeSymbolFacts(SymbolFacts):
 NO_CLASS = 0xFFFFFFFF
 
 
+def module_parts(endpoint: Endpoint) -> Hashable:
+    """The parts of an endpoint that its module-level fields depend on."""
+    return (endpoint.unresolved, endpoint.module, endpoint.path, endpoint.external)
+
+
+def same_endpoint(endpoint: Endpoint) -> Hashable:
+    return endpoint
+
+
 class Rejudged:
     """The detail of a finding made from its group's judgment: the rule judges the edge again
     when something reads the message, site, witnesses or remedies. An edge judged apart from its
@@ -130,7 +140,7 @@ class Rejudged:
 
 @dataclass(frozen=False, slots=True)
 class Classes:
-    """The label class of the keys of one endpoint table that rules met, for one list of fields:
+    """The label class of the keys of one endpoint table that rules met, for one list of columns:
     `rows` holds each class's values, `class_of` each key's class (NO_CLASS until a rule meets
     the key)."""
 
@@ -138,14 +148,14 @@ class Classes:
     rows: list[tuple[Any, ...]] = field(default_factory=list)
     index: dict[tuple[Any, ...], int] = field(default_factory=dict)
 
-    def fill(self, keys: array[int], endpoints: list[Endpoint], row: Callable[[Endpoint], tuple[Any, ...]]) -> None:
-        if len(self.class_of) < len(endpoints):
-            self.class_of.extend(array("I", [NO_CLASS]) * (len(endpoints) - len(self.class_of)))
+    def fill(self, keys: array[int], size: int, columns: list[list[Any]]) -> None:
+        if len(self.class_of) < size:
+            self.class_of.extend(array("I", [NO_CLASS]) * (size - len(self.class_of)))
         class_of = self.class_of
         for key in keys:
             if class_of[key] != NO_CLASS:
                 continue
-            values = row(endpoints[key])
+            values = tuple(column[key] for column in columns)
             found = self.index.get(values)
             if found is None:
                 found = self.index[values] = len(self.rows)
@@ -153,13 +163,28 @@ class Classes:
             class_of[key] = found
 
 
+@dataclass(frozen=True, slots=True)
+class Column:
+    """One value an endpoint has for rules: `read` makes it, and endpoints with the same `basis`
+    share it."""
+
+    name: str
+    read: Callable[[Endpoint], Any]
+    basis: Callable[[Endpoint], Hashable]
+
+
+UNREAD = object()
+
+
 class EndpointClasses:
     """Label classes of rule endpoints, shared by every rule of a run.
 
     The link gives each endpoint a stable key per table (`Link.stable_keys`): a source module or
-    scope, a destination module or entity. Each key becomes an Endpoint once, and gets its class
-    once per field list. Core edges carry no endpoint attributes, so a class depends on the
-    endpoint alone. A rule then judges classes, never keys or edges.
+    scope, a destination module or entity. Each key becomes an Endpoint once. Every value rules
+    read of an endpoint is a column of its table, one slot per key, filled once per run; keys
+    whose endpoints share a basis (the same module parts, for a module-level value) share the
+    value, so it is read once per module. A rule's class of a key is the tuple of the columns
+    it reads. Core edges carry no endpoint attributes, so a class depends on the endpoint alone.
     """
 
     def __init__(self, ctx: NativeRuleContext) -> None:
@@ -167,7 +192,12 @@ class EndpointClasses:
         self.link = ctx.native.native.link
         self.core = ctx.native.native.core
         self.endpoints: dict[str, list[Endpoint]] = {}
-        self.classes: dict[tuple[Any, ...], Classes] = {}
+        self.columns: dict[tuple[str, str], list[Any]] = {}
+        self.shared: dict[tuple[str, Callable[[Endpoint], Hashable]], dict[Hashable, Any]] = {}
+        self.classes: dict[tuple[str, tuple[str, ...]], Classes] = {}
+        self.labeler = ctx.labeler
+        self.exports = list(ctx.config.exports)
+        self.symbol_exports: dict[str | None, bool] = {}
 
     def keys(self, ids: array[int], which: str) -> tuple[bytes, array[int]]:
         """The stable key of each id in table `which`, and the distinct keys among them."""
@@ -188,15 +218,52 @@ class EndpointClasses:
             out.append(self.ctx.dst_endpoints_of(role, RESOLUTIONS[resolution], surface, targets)[0])
         return out
 
-    def of(
-        self, which: str, keys: array[int], fields: tuple[Any, ...], row: Callable[[Endpoint], tuple[Any, ...]]
-    ) -> Classes:
-        """Classes of table `which` for `fields`, with every key in `keys` filled; `row` makes an
-        endpoint's values."""
-        classes = self.classes.get((which, fields))
+    def export_basis(self, endpoint: Endpoint) -> Hashable:
+        """What an endpoint's export membership depends on: its module parts, and its symbol where
+        an export that decides by class covers the module's path."""
+        reads_symbol = self.symbol_exports.get(endpoint.module)
+        if reads_symbol is None:
+            path = self.labeler.path_of(endpoint.module) if endpoint.module else None
+            reads_symbol = path is not None and self.labeler.export_reads_symbol(path)
+            self.symbol_exports[endpoint.module] = reads_symbol
+        symbol = endpoint.symbol if reads_symbol else None
+        return (endpoint.unresolved, endpoint.module, endpoint.path, endpoint.external, symbol)
+
+    def exports_of(self, endpoint: Endpoint) -> tuple[Any, ...]:
+        """What `dst.exported` reads of the destination: whether it is external or outside the
+        graph, and its membership of every export."""
+        path = self.labeler.path_of(endpoint.module) if endpoint.module else None
+        values: list[Any] = [endpoint.external is not None, path is None]
+        if path is not None:
+            values.extend(self.labeler.export_member((name, path, endpoint.symbol)) for name in self.exports)
+        return tuple(values)
+
+    def column(self, which: str, keys: array[int], spec: Column) -> list[Any]:
+        """Column `spec` of table `which`, with every key in `keys` filled."""
+        endpoints = self.endpoints.get(which, [])
+        column = self.columns.setdefault((which, spec.name), [])
+        if len(column) < len(endpoints):
+            column.extend([UNREAD] * (len(endpoints) - len(column)))
+        shared = self.shared.setdefault((spec.name, spec.basis), {})
+        for key in keys:
+            if column[key] is not UNREAD:
+                continue
+            endpoint = endpoints[key]
+            base = spec.basis(endpoint)
+            value = shared.get(base, UNREAD)
+            if value is UNREAD:
+                value = shared[base] = spec.read(endpoint)
+            column[key] = value
+        return column
+
+    def of(self, which: str, keys: array[int], specs: list[Column]) -> Classes:
+        """Classes of table `which` over the columns `specs`, with every key in `keys` filled."""
+        names = tuple(spec.name for spec in specs)
+        classes = self.classes.get((which, names))
         if classes is None:
-            classes = self.classes[(which, fields)] = Classes()
-        classes.fill(keys, self.endpoints.get(which, []), row)
+            classes = self.classes[(which, names)] = Classes()
+        columns = [self.column(which, keys, spec) for spec in specs]
+        classes.fill(keys, len(self.endpoints.get(which, [])), columns)
         return classes
 
 
@@ -211,7 +278,6 @@ class Grouper:
         self.core = ctx.native.native.core
         self.tables = ctx.endpoint_classes
         self.role = rule.spec.endpoint
-        self.exports = list(ctx.config.exports.values())
         self.judgments: dict[int, Judgment] = {}
 
     def env(self, edge: Edge) -> EdgeEnv:
@@ -235,8 +301,26 @@ class Grouper:
         kept = type(self.link).keep_classes(ids.tobytes(), key_of, classes.class_of.tobytes(), bytes(keep))
         return array("I", kept)
 
-    def values(self, root: str, names: tuple[str, ...]) -> Callable[[Endpoint], tuple[Any, ...]]:
-        return lambda endpoint: tuple(read_endpoint(self.ctx, endpoint, name, None, root) for name in names)
+    def field_column(self, root: str, name: str) -> Column:
+        """`root.name` of an endpoint: a module-level value is shared by endpoints with the same
+        module parts."""
+        module_level = self.labeler.module_level(Ref((root, name)))
+        return Column(
+            f"{root}.{name}",
+            lambda endpoint: read_endpoint(self.ctx, endpoint, name, None, root),
+            module_parts if module_level else same_endpoint,
+        )
+
+    def field_columns(self, root: str, names: tuple[str, ...]) -> list[Column]:
+        return [self.field_column(root, name) for name in names]
+
+    def dst_columns(self, names: tuple[str, ...], exported: bool) -> list[Column]:
+        """The columns of a destination's class: whether it resolved, the fields `names`, and with
+        `exported` what export membership reads."""
+        out = [Column("dst.unresolved", attrgetter("unresolved"), module_parts), *self.field_columns("dst", names)]
+        if exported:
+            out.append(Column("dst.exports", self.tables.exports_of, self.tables.export_basis))
+        return out
 
     @staticmethod
     def class_keep(node: Node, root: str, names: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[bool]:
@@ -270,19 +354,8 @@ class Grouper:
         which = self.src_table(reads) if root == "src" else self.dst_table(reads)
         names = tuple(sorted(reads.src if root == "src" else reads.dst))
         key_of, keys = self.tables.keys(ids, which)
-        classes = self.tables.of(which, keys, ("values", names), self.values(root, names))
+        classes = self.tables.of(which, keys, self.field_columns(root, names))
         return self.keep_classes(ids, key_of, classes, self.class_keep(node, root, names, classes.rows))
-
-    def dst_class(self, endpoint: Endpoint, names: tuple[str, ...], exported: bool) -> tuple[Any, ...]:
-        values: list[Any] = [endpoint.unresolved]
-        values.extend(read_endpoint(self.ctx, endpoint, name, None, "dst") for name in names)
-        if exported:
-            path = self.labeler.path_of(endpoint.module) if endpoint.module else None
-            values.append(endpoint.external is not None)
-            values.append(path is None)
-            if path is not None:
-                values.extend(self.labeler.export_member((spec.name, path, endpoint.symbol)) for spec in self.exports)
-        return tuple(values)
 
     def layers(self, ids: array[int], reads: Reads) -> tuple[bytes, bytes]:
         """Groups `ids` by the classes of what `reads` names: (group of each id, representatives)."""
@@ -292,13 +365,8 @@ class Grouper:
         dst_names = tuple(sorted(reads.dst - {"unresolved"}))
         src_key, src_keys = self.tables.keys(ids, src_which)
         dst_key, dst_keys = self.tables.keys(ids, dst_which)
-        src_classes = self.tables.of(src_which, src_keys, ("values", src_names), self.values("src", src_names))
-        dst_classes = self.tables.of(
-            dst_which,
-            dst_keys,
-            ("class", reads.exported, dst_names),
-            lambda endpoint: self.dst_class(endpoint, dst_names, reads.exported),
-        )
+        src_classes = self.tables.of(src_which, src_keys, self.field_columns("src", src_names))
+        dst_classes = self.tables.of(dst_which, dst_keys, self.dst_columns(dst_names, reads.exported))
         edge_key, edge_reps = self.link.edge_keys(raw, sorted(reads.edge))
         edge_classes = array("I", range(len(array("I", edge_reps)))).tobytes()
         layers = [

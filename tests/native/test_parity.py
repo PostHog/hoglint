@@ -69,6 +69,59 @@ ledger = false
 }
 
 
+# One presentation module whose classes and function differ only in their bases: an export that
+# decides by class must keep them apart when the native engine classes destinations.
+ADAPTER_REPO = {
+    "hoglint.toml": """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core", "products"]
+
+[fields]
+package = { type = "id" }
+tier = { type = "enum", values = ["core", "product"] }
+
+[[assign]]
+match = "products/{product}/**"
+set = { package = "{product}", tier = "product" }
+
+[[assign]]
+match = "core/**"
+set = { package = "core", tier = "core" }
+
+[shapes.adapter]
+allow = ["class"]
+
+[exports.adapter]
+within = "products/{product}"
+paths = ["presentation/**"]
+subclass_of = ["products.billing.presentation.mixins.BillingMixin"]
+shape = "adapter"
+
+[rules.public-surface]
+primitive = "entrypoint"
+kinds = ["import"]
+select = "src.package != dst.package and dst.tier == 'product'"
+identity = ["dst.symbol"]
+ledger = false
+""",
+    "core/__init__.py": "",
+    "core/views.py": "from products.billing.presentation.views import InvoiceViewSet, Plain, render\n",
+    "products/__init__.py": "",
+    "products/billing/__init__.py": "",
+    "products/billing/presentation/__init__.py": "",
+    "products/billing/presentation/mixins.py": "class BillingMixin:\n    pass\n",
+    "products/billing/presentation/views.py": (
+        "from products.billing.presentation.mixins import BillingMixin\n\n\n"
+        "class InvoiceViewSet(BillingMixin):\n    pass\n\n\n"
+        "class Plain:\n    pass\n\n\n"
+        "def render():\n    pass\n"
+    ),
+}
+
+
 def dumps(tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     try:
         bridge.load()
@@ -123,3 +176,15 @@ def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path
     assert Rejudged(rule, edge, Judgment.VIOLATION).get().message
     with pytest.raises(EngineError):
         Rejudged(rule, edge, Judgment.UNKNOWN_VIOLATION).get()
+
+
+def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = dumps(tmp_path, ADAPTER_REPO, monkeypatch)
+    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    flagged = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "public-surface"]
+    assert sorted(flagged) == [
+        ["products.billing.presentation.views.Plain"],
+        ["products.billing.presentation.views.render"],
+    ]

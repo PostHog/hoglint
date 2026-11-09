@@ -37,6 +37,7 @@ from hoglint.selectors import (
     NONE,
     UNKNOWN,
     And,
+    ClassSelection,
     Node,
     Ref,
     Resolver,
@@ -46,7 +47,6 @@ from hoglint.selectors import (
     Value,
     all_of,
     any_of,
-    evaluate,
     refs,
     render_value,
     split_list,
@@ -347,17 +347,18 @@ def read_endpoint(ctx: RuleContext, endpoint: Endpoint, name: str, edge: Edge | 
         return ctx.labeler.kind(endpoint.symbol, first_party=endpoint.external is None)[0]
     if name in BUILTIN_ENTITY_NAMES:
         return ctx.labeler.builtin(endpoint.module, endpoint.symbol, name)
+    spec = ctx.config.fields.get(name)
     attr = edge.attr(f"{root}.{name}") if edge is not None and has_endpoint_attrs(edge) else ""
     if attr:
-        spec = ctx.config.fields.get(name)
         if spec is not None and spec.type.value == "set":
             return Value.known(frozenset(split_list(attr)))
         return Value.known(attr)
-    if name not in ctx.config.fields:
+    if spec is None:
         return UNKNOWN
     if endpoint.external is not None:
         return NONE
-    return ctx.labeler.field_value(endpoint.module, endpoint.label_symbol, name)[0]
+    symbol = endpoint.label_symbol if spec.on == "symbol" else None
+    return ctx.labeler.field_value(endpoint.module, symbol, name)[0]
 
 
 class EdgeEnv:
@@ -491,6 +492,10 @@ def joined(parts: list[Node]) -> Node | None:
     return parts[0] if len(parts) == 1 else And(tuple(parts))
 
 
+def classes_of(node: Node | None) -> ClassSelection | None:
+    return ClassSelection(node) if node is not None else None
+
+
 class StagedSelection:
     """A rule's selection split into the parts that read only `src`, only `dst`, and the rest.
 
@@ -505,6 +510,9 @@ class StagedSelection:
         self.src_part = joined([part for part in parts if endpoint_only(part) == "src"])
         self.dst_part = joined([part for part in parts if endpoint_only(part) == "dst"])
         self.rest = joined([part for part in parts if endpoint_only(part) == ""])
+        self.src_classes = classes_of(self.src_part)
+        self.dst_classes = classes_of(self.dst_part)
+        self.rest_classes = classes_of(self.rest)
         self.module_level = self.module_only(self.src_part)
         self.rest_modules = self.module_only(self.rest)
         self.rest_cache: dict[tuple[object, ...], Truth] = {}
@@ -522,38 +530,40 @@ class StagedSelection:
 
     def module_false(self, module: str) -> bool:
         """True when the `src` part is false for every regular edge of the module."""
-        if not self.module_level or self.src_part is None:
+        if not self.module_level or self.src_classes is None:
             return False
         cached = self.module_cache.get(module)
         if cached is None:
-            cached = evaluate(self.src_part, ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
+            cached = self.src_classes.truth(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
             self.module_cache[module] = cached
         return cached is Truth.FALSE
 
-    def part_truth(self, part: Node | None, cache: dict[Endpoint, Truth], edge: Edge, endpoint: Endpoint) -> Truth:
-        if part is None:
+    def part_truth(
+        self, classes: ClassSelection | None, cache: dict[Endpoint, Truth], edge: Edge, endpoint: Endpoint
+    ) -> Truth:
+        if classes is None:
             return Truth.TRUE
         if self.bypass(edge):
-            return evaluate(part, EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
+            return classes.truth(EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
         cached = cache.get(endpoint)
         if cached is None:
-            cached = cache[endpoint] = evaluate(part, EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
+            cached = cache[endpoint] = classes.truth(EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
         return cached
 
     def src_truth(self, edge: Edge, src: Endpoint) -> Truth:
-        return self.part_truth(self.src_part, self.src_cache, edge, src)
+        return self.part_truth(self.src_classes, self.src_cache, edge, src)
 
     def dst_truth(self, edge: Edge, dst: Endpoint) -> Truth:
-        return self.part_truth(self.dst_part, self.dst_cache, edge, dst)
+        return self.part_truth(self.dst_classes, self.dst_cache, edge, dst)
 
-    def rest_truth(self, rest: Node, env: EdgeEnv) -> Truth:
+    def rest_truth(self, rest: ClassSelection, env: EdgeEnv) -> Truth:
         """The rest of the selection; one evaluation per module pair when it reads only module fields."""
         if not self.rest_modules or self.bypass(env.edge):
-            return evaluate(rest, env.resolve)
+            return rest.truth(env.resolve)
         key = self.rest_key(env)
         cached = self.rest_cache.get(key)
         if cached is None:
-            cached = self.rest_cache[key] = evaluate(rest, env.resolve)
+            cached = self.rest_cache[key] = rest.truth(env.resolve)
         return cached
 
     @staticmethod
@@ -564,8 +574,8 @@ class StagedSelection:
 
     def truth(self, env: EdgeEnv) -> Truth:
         parts = [self.src_truth(env.edge, env.src), self.dst_truth(env.edge, env.dst)]
-        if self.rest is not None:
-            parts.append(self.rest_truth(self.rest, env))
+        if self.rest_classes is not None:
+            parts.append(self.rest_truth(self.rest_classes, env))
         return all_of(parts)
 
 
@@ -580,6 +590,10 @@ class EdgeRule:
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(spec.contexts_exclude or ())
         self.staged = StagedSelection(ctx, self.selectors())
+        self.deny_classes = ClassSelection(spec.deny.node) if spec.deny is not None else None
+        self.allow_classes = ClassSelection(spec.allow.node) if spec.allow is not None else None
+        self.require_classes = ClassSelection(spec.require.node) if spec.require is not None else None
+        self.unless_classes = ClassSelection(spec.unless.node) if spec.unless is not None else None
 
     def kinds(self) -> tuple[str, ...]:
         return rule_kinds(self.spec, self.ctx.config.views)
@@ -672,18 +686,18 @@ class EdgeRule:
     def violation(self, env: EdgeEnv) -> Truth:
         """True when the predicate says the edge breaks the rule. No predicate: selection is the finding."""
         parts: list[Truth] = []
-        if self.spec.deny is not None:
-            parts.append(self.spec.deny.evaluate(env.resolve))
-        if self.spec.allow is not None:
-            parts.append(self.spec.allow.evaluate(env.resolve).negate())
-        if self.spec.require is not None:
-            parts.append(self.spec.require.evaluate(env.resolve).negate())
+        if self.deny_classes is not None:
+            parts.append(self.deny_classes.truth(env.resolve))
+        if self.allow_classes is not None:
+            parts.append(self.allow_classes.truth(env.resolve).negate())
+        if self.require_classes is not None:
+            parts.append(self.require_classes.truth(env.resolve).negate())
         if not parts:
             return Truth.TRUE
         return any_of(parts)
 
     def excused(self, env: EdgeEnv) -> bool:
-        return self.spec.unless is not None and self.spec.unless.evaluate(env.resolve) is Truth.TRUE
+        return self.unless_classes is not None and self.unless_classes.truth(env.resolve) is Truth.TRUE
 
     def unknown_refs(self, selector: Selector | None, env: EdgeEnv) -> str:
         if selector is None:

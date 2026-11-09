@@ -212,7 +212,9 @@ class Labeler:
         self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
         self.export_member = Memo(self.find_export_member)
         self.path_exports = Memo(self.find_path_exports)
-        self.value_cache: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
+        self.module_ordinal = {module: at for at, module in enumerate(graph.modules)}
+        self.columns: dict[str, list[tuple[Value, str] | None]] = {}
+        self.sparse_values: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
         self.exported_cache: dict[tuple[str | None, str | None, str | None, str | None], Truth] = {}
         self.audience_by_module = all(
             spec.audience is None or all(self.module_level(ref) for ref in refs(spec.audience.node))
@@ -478,13 +480,29 @@ class Labeler:
             return self.provider_labels(module).get(name) if module else None
         return self.module_labels(module).get(name) if module else None
 
+    def column(self, name: str) -> list[tuple[Value, str] | None]:
+        """A module field's values, one slot per module ordinal; a slot fills on its first read."""
+        found = self.columns.get(name)
+        if found is None:
+            found = self.columns[name] = [None] * len(self.module_ordinal)
+        return found
+
     def field_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
-        """A declared field on a module (and the symbol inside it, for symbol fields)."""
-        key = (module, symbol if self.config.fields[name].on == "symbol" else None, name)
-        cached = self.value_cache.get(key)
-        if cached is None:
-            cached = self.value_cache[key] = self.compute_value(module, symbol, name)
-        return cached
+        """A declared field on a module (and the symbol inside it, for symbol fields). A module
+        field of a graph module is read from its column; symbol fields stay sparse."""
+        on_module = self.config.fields[name].on == "module"
+        at = self.module_ordinal.get(module) if on_module and module is not None else None
+        if at is not None:
+            column = self.column(name)
+            found = column[at]
+            if found is None:
+                found = column[at] = self.compute_value(module, None, name)
+            return found
+        key = (module, None if on_module else symbol, name)
+        found = self.sparse_values.get(key)
+        if found is None:
+            found = self.sparse_values[key] = self.compute_value(module, symbol, name)
+        return found
 
     def compute_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
         spec = self.config.fields[name]
@@ -582,6 +600,11 @@ class Labeler:
             if relative is not None and any(glob_match(pattern, relative) is not None for pattern in spec.paths):
                 out.add(spec.name)
         return frozenset(out)
+
+    def export_reads_symbol(self, path: str) -> bool:
+        """Whether an export that decides by class (`subclass_of`) covers the path. Elsewhere a
+        symbol's export membership is its path's."""
+        return any(self.config.exports[name].subclass_of for name in self.path_exports(path))
 
     def export_covers(self, spec: ExportSpec, path: str) -> bool:
         """Whether the path lies inside the export's `within` and `paths`."""

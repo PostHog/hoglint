@@ -20,7 +20,7 @@ from hoglint.rules.base import (
     project,
     read_endpoint,
 )
-from hoglint.selectors import UNKNOWN, Ref, Selector, State, Truth, Value, render_value
+from hoglint.selectors import UNKNOWN, ClassSelection, Ref, Selector, State, Truth, Value, render_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +44,7 @@ class ReachPrimitive(EdgeRule):
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
+        self.from_classes = ClassSelection(spec.from_.node) if spec.from_ is not None else None
         self.hop_cache: dict[str, list[Hop]] = {}
         self.verdicts: dict[tuple[Endpoint, Endpoint], tuple[Truth, bool]] = {}
         judged = [selector for selector in (spec.deny, spec.unless) if selector is not None]
@@ -52,6 +53,10 @@ class ReachPrimitive(EdgeRule):
             for selector in judged
             for ref in selector.refs()
         )
+        self.origin_free = self.endpoint_verdicts and all(
+            ref.path[0] != "src" for selector in judged for ref in selector.refs()
+        )
+        self.hop_verdicts: dict[str, list[tuple[Truth, bool] | None]] = {}
 
     def selectors(self) -> tuple[Selector | None, ...]:
         return (self.spec.select,)
@@ -81,8 +86,8 @@ class ReachPrimitive(EdgeRule):
         out = []
         for module in self.ctx.source_modules(self.kinds()):
             truth = Truth.TRUE
-            if self.spec.from_ is not None:
-                truth = self.spec.from_.evaluate(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
+            if self.from_classes is not None:
+                truth = self.from_classes.truth(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
             if truth is Truth.FALSE or not self.hops(module):
                 continue
             if truth is Truth.TRUE:
@@ -113,9 +118,22 @@ class ReachPrimitive(EdgeRule):
         return found
 
     def judge_hop(self, env: EdgeEnv | EndpointsEnv) -> tuple[Truth, bool]:
-        verdict = self.spec.deny.evaluate(env.resolve) if self.spec.deny is not None else Truth.FALSE
-        excused = self.spec.unless is not None and self.spec.unless.evaluate(env.resolve) is Truth.TRUE
+        verdict = self.deny_classes.truth(env.resolve) if self.deny_classes is not None else Truth.FALSE
+        excused = self.unless_classes is not None and self.unless_classes.truth(env.resolve) is Truth.TRUE
         return verdict, excused
+
+    def kept_verdict(self, module: str, at: int, hop: Hop, origin: Endpoint) -> tuple[Truth, bool]:
+        """The verdict of the `at`-th hop out of `module`, kept per hop when no start module
+        changes it."""
+        if not self.origin_free:
+            return self.verdict(hop, origin)
+        kept = self.hop_verdicts.get(module)
+        if kept is None:
+            kept = self.hop_verdicts[module] = [None] * len(self.hops(module))
+        found = kept[at]
+        if found is None:
+            found = kept[at] = self.verdict(hop, origin)
+        return found
 
     def search(self, source: str) -> None:
         origin = self.ctx.module_endpoint(source)
@@ -124,7 +142,7 @@ class ReachPrimitive(EdgeRule):
         reported: set[str] = set()
         while queue:
             module = queue.popleft()
-            for hop in self.hops(module):
+            for at, hop in enumerate(self.hops(module)):
                 dst = hop.dst
                 if dst.unresolved:
                     self.on_unresolved(self.hop_env(hop, origin))
@@ -133,7 +151,7 @@ class ReachPrimitive(EdgeRule):
                     env = self.hop_env(hop, origin)
                     self.incomplete(env, f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
                     continue
-                verdict, excused = self.verdict(hop, origin)
+                verdict, excused = self.kept_verdict(module, at, hop, origin)
                 target = dst.symbol or dst.module or ""
                 if verdict is not Truth.FALSE and not excused and target not in reported:
                     reported.add(target)

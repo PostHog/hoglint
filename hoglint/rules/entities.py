@@ -21,7 +21,20 @@ from hoglint.rules.base import (
     joined,
     project,
 )
-from hoglint.selectors import Node, Ref, Resolver, Selector, State, Truth, Value, all_of, evaluate, refs, render_value
+from hoglint.selectors import (
+    ClassSelection,
+    Node,
+    Ref,
+    Resolver,
+    Selector,
+    State,
+    Truth,
+    Value,
+    all_of,
+    evaluate,
+    refs,
+    render_value,
+)
 
 # The edge fields that every edge of one kind with one set of contexts shares.
 KIND_AND_CONTEXT = frozenset({("edge", "kind"), ("edge", "context")})
@@ -34,6 +47,7 @@ class EntityRule:
         self.ctx = ctx
         self.spec = spec
         self.run = RuleRun(spec)
+        self.selection = ClassSelection(spec.select.node) if spec.select is not None else None
 
     def resolver(self, module: str | None, symbol: str | None, subject: str) -> Resolver:
         base = self.ctx.labeler.entity_resolver(module, symbol)
@@ -82,7 +96,7 @@ class LayoutPrimitive(EntityRule):
     def check_entities(self) -> None:
         for module, symbol, subject in self.entities():
             resolve = self.resolver(module, symbol, subject)
-            selected = self.spec.select.evaluate(resolve) if self.spec.select is not None else Truth.TRUE
+            selected = self.selection.truth(resolve) if self.selection is not None else Truth.TRUE
             if selected is Truth.FALSE:
                 continue
             if selected is Truth.UNKNOWN:
@@ -173,8 +187,8 @@ class EntityInventory(EntityRule):
         name = self.spec.exactly_one
         for module, symbol, subject in self.entities():
             resolve = self.resolver(module, symbol, subject)
-            if self.spec.select is not None:
-                selected = self.spec.select.evaluate(resolve)
+            if self.selection is not None:
+                selected = self.selection.truth(resolve)
                 if selected is Truth.UNKNOWN:
                     self.incomplete(subject, module, "cannot tell whether this entity is selected")
                 if selected is not Truth.TRUE:
