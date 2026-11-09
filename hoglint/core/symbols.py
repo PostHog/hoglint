@@ -264,6 +264,7 @@ class Resolver:
         self.in_progress.add(key)
         hit = self.lookup(module, name)
         self.in_progress.discard(key)
+        # A result that met a cycle is never cached, so each top-level answer is a pure function of the tables.
         if not self.met_cycle:
             self.name_cache[key] = hit
         self.met_cycle = outer or self.met_cycle

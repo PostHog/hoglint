@@ -110,3 +110,42 @@ def build(files: list[FileFacts], config: CoreConfig | None = None) -> Graph:
 
 def edges_of(graph: Graph, kind: str, path: str) -> list[Edge]:
     return [edge for edge in graph.edges if edge.kind == kind and edge.site.path == path]
+
+
+# A re-export cycle where both packages have the submodule (adv-correctness F3), and a package that
+# imports its own submodule: the names a resolver meets a cycle on, and one it does not.
+CYCLE_SOURCES = {
+    "app/__init__.py": "",
+    "app/p/__init__.py": "from app.q import X\n",
+    "app/q/__init__.py": "from app.p import X\n",
+    "app/p/X.py": "",
+    "app/q/X.py": "",
+    "app/pkg/__init__.py": "from app.pkg import sub\n",
+    "app/pkg/sub.py": "",
+}
+CYCLE_KEYS = (("app.p", "X"), ("app.q", "X"), ("app.pkg", "sub"), ("app", "p"))
+
+
+def cycle_files() -> list[FileFacts]:
+    return [
+        FileFacts("app/__init__.py"),
+        FileFacts("app/p/__init__.py").import_from("app.q", "X"),
+        FileFacts("app/q/__init__.py").import_from("app.p", "X"),
+        FileFacts("app/p/X.py"),
+        FileFacts("app/q/X.py"),
+        FileFacts("app/pkg/__init__.py").import_from("app.pkg", "sub"),
+        FileFacts("app/pkg/sub.py"),
+    ]
+
+
+def cycle_answers(order: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], tuple[str, tuple[str, ...]] | None]:
+    """The Python resolver's answer for each key, asked in `order` of a fresh resolver."""
+    store = FactStore()
+    for facts in cycle_files():
+        store.records[facts.record["path"]] = facts.record
+    resolver = CoreBuild(CoreConfig(), store).resolver
+    out: dict[tuple[str, str], tuple[str, tuple[str, ...]] | None] = {}
+    for module, name in order:
+        hit = resolver.resolve_name(module, name)
+        out[(module, name)] = (hit.kind, tuple(str(step) for step in hit.chain)) if hit is not None else None
+    return out

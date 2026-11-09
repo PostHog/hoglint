@@ -578,6 +578,8 @@ impl Core {
         self.in_progress.insert(key);
         let hit = self.lookup(module, name);
         self.in_progress.remove(&key);
+        // A result that met a cycle is never cached, so each top-level answer is a pure function
+        // of the tables.
         if !self.met_cycle {
             self.name_cache.insert(key, hit);
         }

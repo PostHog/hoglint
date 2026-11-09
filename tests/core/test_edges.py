@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from hoglint.core.build import CoreBuild
@@ -11,7 +13,7 @@ from hoglint.model import Context, Graph, Resolution
 from hoglint.outputs.tach_map import TachMap
 from hoglint.plugins import ProducerFailure
 
-from core.support import FileFacts, build, edges_of
+from core.support import CYCLE_KEYS, FileFacts, build, cycle_answers, edges_of
 
 VIEWS = "web/views.py"
 
@@ -194,3 +196,9 @@ def test_a_core_producer_keeps_the_modules_and_failures_it_records() -> None:
 
     assert graph.modules["generated.mod"] == "generated/mod.py"
     assert graph.failed_producers == {"partial@1": PartialProducer.failure}
+
+
+def test_names_that_meet_a_re_export_cycle_answer_the_same_in_every_order() -> None:
+    answers = [cycle_answers(order) for order in itertools.permutations(CYCLE_KEYS)]
+    assert all(found == answers[0] for found in answers)
+    assert answers[0][("app.pkg", "sub")] == ("module", ("app.pkg.sub", "app.pkg.sub"))
