@@ -59,6 +59,7 @@ class GraphBuilder:
         attrs: tuple[tuple[str, str], ...] = (),
         via: tuple[str, ...] = (),
         line: int = 1,
+        producer: str = "test@1",
     ) -> GraphBuilder:
         targets: tuple[EntityId, ...] = ()
         if target is not None and resolution is Resolution.EXTERNAL:
@@ -73,7 +74,7 @@ class GraphBuilder:
                 targets=targets,
                 resolution=resolution,
                 contexts=frozenset(contexts),
-                producer="test@1",
+                producer=producer,
                 via=tuple(self.entity(hop) for hop in via),
                 use=use,
                 shape=shape,

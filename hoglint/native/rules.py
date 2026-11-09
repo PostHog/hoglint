@@ -489,6 +489,25 @@ class NativeGraphIndex(GraphIndex):
         return lambda module: self.group(kind, module)
 
     @cached_property
+    def core_copies(self) -> frozenset[int]:  # type: ignore[override]
+        """Pack edges that repeat a core edge's kind, site, surface and targets, asked of the link
+        kind by kind. A pack edge with several targets never copies a core edge."""
+        by_kind: dict[str, list[Edge]] = {}
+        for edge in self.graph.edge_list.extra:
+            if len(edge.targets) <= 1:
+                by_kind.setdefault(edge.kind, []).append(edge)
+        out: set[int] = set()
+        for kind, edges in by_kind.items():
+            rows = []
+            for edge in edges:
+                target = edge.targets[0] if edge.targets else None
+                module, symbol = (target.module, target.symbol) if target is not None else (None, "")
+                rows.append((edge.site.path, edge.site.line, edge.site.column, edge.surface, module, symbol))
+            flags = self.native.link.core_twins(kind, rows)
+            out.update(id(edge) for edge, flag in zip(edges, flags) if flag)
+        return frozenset(out)
+
+    @cached_property
     def ordinals(self) -> dict[int, int]:  # type: ignore[override]
         """Each edge's place among edges with the same module, scope, kind and surface. Reads
         every edge: only explain asks for it."""

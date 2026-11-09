@@ -274,6 +274,31 @@ def test_use_shape_counts_per_identity_and_ledger_accepts(tmp_path: Path) -> Non
     assert stale.exit_code() == 1
 
 
+COPIES = (
+    """
+[rules.no-product-from-core]
+primitive = "edge"
+kinds = ["reference"]
+from = "src.tier == 'core'"
+deny = "dst.tier == 'product'"
+identity = "module-pair"
+growth_key = ["src.module", "dst.module"]
+"""
+    + USE_SHAPE
+)
+
+
+def test_a_pack_copy_of_a_core_edge_counts_once_unless_the_rule_reads_its_shape(tmp_path: Path) -> None:
+    builder = base_graph()
+    builder.edge("reference", "core.api", "products.billing.models.Invoice", producer="core-reference@1")
+    builder.edge("reference", "core.api", "products.billing.models.Invoice", shape="instance-many", detail="filter")
+    result = run(tmp_path, COPIES, builder.graph)
+    assert len(result.runs["no-product-from-core"].findings) == 1
+    assert ("products.billing.models.Invoice", "core.api", "instance-many(filter)") in identities(
+        result, "model-crossings"
+    )
+
+
 FLOW_SHAPE = """
 [rules.model-sites]
 primitive = "use-shape"

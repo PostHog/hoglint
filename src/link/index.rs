@@ -15,6 +15,7 @@ pub struct EdgeIndex {
     by_source: Option<FxHashMap<(u8, Sid), Vec<u32>>>,
     source_order: Option<Vec<Vec<Sid>>>,
     by_spelling: Option<FxHashMap<(u8, Sid), Vec<u32>>>,
+    by_site: FxHashMap<u8, FxHashMap<(u32, u32, u32, Sid), Vec<u32>>>,
 }
 
 pub fn kind_code(kind: &str) -> Option<u8> {
@@ -122,5 +123,31 @@ impl EdgeIndex {
                 .iter()
                 .filter_map(|name| by_spelling.get(&(kind, *name))),
         )
+    }
+
+    /// Whether a core edge of `kind` sits at (file, line, column) with this surface and target:
+    /// the edge a pack edge with the same fields copies.
+    pub fn has_twin(
+        &mut self,
+        rows: &[EdgeRow],
+        kind: u8,
+        site: (u32, u32, u32),
+        surface: Sid,
+        target: Option<Ent>,
+    ) -> bool {
+        let by_site = self.by_site.entry(kind).or_insert_with(|| {
+            let mut out: FxHashMap<(u32, u32, u32, Sid), Vec<u32>> = FxHashMap::default();
+            for (i, row) in rows.iter().enumerate() {
+                if row.kind == kind {
+                    out.entry((row.file, row.line, row.col, row.surface))
+                        .or_default()
+                        .push(i as u32);
+                }
+            }
+            out
+        });
+        by_site
+            .get(&(site.0, site.1, site.2, surface))
+            .is_some_and(|ids| ids.iter().any(|&i| rows[i as usize].target == target))
     }
 }

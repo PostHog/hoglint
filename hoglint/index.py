@@ -160,6 +160,18 @@ class SymbolFacts:
         return frozenset(seen), complete
 
 
+CORE_PRODUCER_PREFIX = "core-"
+
+
+def is_core(edge: Edge) -> bool:
+    return edge.producer.startswith(CORE_PRODUCER_PREFIX)
+
+
+def copy_key(edge: Edge) -> tuple[object, ...]:
+    site = edge.site
+    return (edge.kind, site.path, site.line, site.column, edge.surface, edge.targets)
+
+
 def index_of(graph: Graph) -> GraphIndex:
     """The index of a graph. A graph that keeps its edges outside Python makes its own."""
     make = getattr(graph, "make_index", None)
@@ -198,6 +210,16 @@ class GraphIndex:
                 return head
             head = head.rpartition(".")[0]
         return None
+
+    @cached_property
+    def core_copies(self) -> frozenset[int]:
+        """Pack edges that repeat a core edge's kind, site, surface and targets: a pack refining a
+        coupling core already made (a shape for a model use, for example). A rule that reads none
+        of the refined fields judges that coupling once, from the core edge."""
+        pack = [edge for edge in self.graph.edges if not is_core(edge)]
+        kinds = {edge.kind for edge in pack}
+        keys = {copy_key(edge) for edge in self.graph.edges if is_core(edge) and edge.kind in kinds}
+        return frozenset(id(edge) for edge in pack if copy_key(edge) in keys)
 
     @cached_property
     def ordinals(self) -> dict[int, int]:
