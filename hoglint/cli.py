@@ -48,6 +48,7 @@ from hoglint.ledger.growth import Renames
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, Portable
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, obligation_of, obligations_of
+from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import ExtractorStore, SummaryStore
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
 from hoglint.native.source import ENGINES, batch_mode, graph_source
@@ -70,6 +71,20 @@ def git(repo: Path, *args: str) -> str:
 # Policy files hoglint reads from a snapshot: the config and its presets, ledger, exceptions and
 # data files (classification, routing). Each data file the policy names is added by path.
 POLICY_PATTERNS = ("*.toml", "*.ledger", "*.yaml", "*.yml")
+
+
+class PendingTree:
+    """`git write-tree` of the index, started early so it runs while hoglint evaluates the code.
+    The oid is empty while the index holds conflicts."""
+
+    def __init__(self, repo: Path) -> None:
+        command = ["git", "-C", str(repo), "write-tree"]
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+    @cached_property
+    def oid(self) -> str:
+        out, _ = self.process.communicate()
+        return out.strip() if self.process.returncode == 0 else ""
 
 
 class Snapshots:
@@ -147,24 +162,8 @@ class Snapshots:
         except subprocess.CalledProcessError:
             return ""
 
-    def index_tree(self) -> str:
-        """The index as a tree id; empty while the index holds conflicts."""
-        try:
-            return git(self.repo, "write-tree").strip()
-        except subprocess.CalledProcessError:
-            return ""
-
     def clean(self) -> bool:
         return not git(self.repo, "status", "--porcelain", "-z", "--untracked-files=all").strip("\0")
-
-    def side_input_drift(self, tree: str) -> list[str]:
-        """Files other than Python sources where the working tree differs from `tree`, untracked
-        ones included. hoglint still reads such files (owners, turbo.json, layout checks) from the
-        working tree, whatever snapshot the code comes from."""
-        others = ("--", ":!*.py", ":!*.pyi")
-        changed = git(self.repo, "diff", "--name-only", "-z", tree, *others).split("\0")
-        untracked = git(self.repo, "ls-files", "--others", "--exclude-standard", "-z", *others).split("\0")
-        return sorted({path for path in changed + untracked if path})
 
     def head_tree_in_worktree(self, ledger_path: str) -> str:
         """HEAD's tree when the working tree holds HEAD's sources and ledger, the files a run reads
@@ -526,11 +525,12 @@ class TreeSummaries:
         self.snapshots = snapshots
         self.store = store
 
-    def put(self, summary: ScanSummary) -> None:
+    def put(self, summary: ScanSummary, against_index: bool = False) -> None:
+        """`against_index`: the summary is of the index's tree, not of HEAD's."""
         tree = summary.envelope.tree
         if not tree:
             return
-        drift = self.snapshots.side_input_drift(tree)
+        drift = WorktreeStatus.of(self.snapshots.repo).side_input_drift(against_index)
         if drift:
             more = f" and {len(drift) - 1} more" if len(drift) > 1 else ""
             sys.stderr.write(
@@ -545,14 +545,16 @@ class TreeSummaries:
 class Baseline:
     """What one check run attributes its incomplete results against.
 
-    `envelope` is the run's own; its tree is set when the run's code is a git tree (the index, or a
-    clean HEAD), so the run's summary is stored for the next commit. `reference` is None when the
+    `envelope` is the run's own; its tree is set when the run's code is HEAD's tree, and `pending`
+    names the index's tree for a staged run, so the run's summary is stored for the next commit. `reference` is None when the
     run itself is the baseline (`is_self`) or when there is no commit to compare with."""
 
     envelope: Envelope
     against: str
     reference: dict[Obligation, list[str]] | None = None
     is_self: bool = False
+    staged: bool = False
+    pending: PendingTree | None = None  # the index's tree, for a staged run's own summary
 
 
 class Baselines:
@@ -574,18 +576,23 @@ class Baselines:
         head_tree = self.snapshots.tree_of("HEAD")
         if not head_tree:
             return Baseline(Envelope(), "nothing (no commit yet)")
+        pending = PendingTree(self.repo) if staged else None
+        WorktreeStatus.start(self.repo)  # the side-input check reads it after the evaluation
         wanted, config = self.engine.envelope_at(policy_root, head_tree)
-        own_tree = self.snapshots.index_tree() if staged else ""
-        envelope = dataclasses.replace(wanted, tree=own_tree)
+        own = dataclasses.replace(wanted, tree="")
         short = head_tree[:12]
         stored = self.store.get(wanted, frozenset({"envelope", "incompletes"}))
         if stored is not None:
-            return Baseline(envelope, f"HEAD (tree {short}, stored summary)", stored.obligations())
+            return Baseline(
+                own, f"HEAD (tree {short}, stored summary)", stored.obligations(), staged=staged, pending=pending
+            )
+        own_tree = pending.oid if pending is not None else ""
         if own_tree == head_tree or (not staged and self.snapshots.head_tree_in_worktree(config.ledger.file)):
-            return Baseline(wanted, f"HEAD (tree {short}, this run)", is_self=True)
+            return Baseline(wanted, f"HEAD (tree {short}, this run)", is_self=True, staged=staged)
         summary = self.evaluate(policy_root, config.ledger.file, wanted)
         self.trees.put(summary)
-        return Baseline(envelope, f"HEAD (tree {short}, computed and stored)", summary.obligations())
+        computed = f"HEAD (tree {short}, computed and stored)"
+        return Baseline(own, computed, summary.obligations(), staged=staged, pending=pending)
 
     def evaluate(self, policy_root: Path, ledger_path: str, envelope: Envelope) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
@@ -601,9 +608,10 @@ class Baselines:
     def attribute(self, baseline: Baseline, run: Run, store: bool) -> Attributed:
         """`store` keeps the run's summary under its tree; a run that rewrote the ledger has none."""
         head = obligations_of(run.result.incomplete(), portable_of(run))
-        if store and baseline.envelope.tree:
-            summary = summary_of(run, baseline.envelope, with_triples=False)
-            self.trees.put(summary)
+        tree = baseline.pending.oid if baseline.pending is not None else baseline.envelope.tree
+        if store and tree:
+            summary = summary_of(run, dataclasses.replace(baseline.envelope, tree=tree), with_triples=False)
+            self.trees.put(summary, against_index=baseline.staged)
         reference = head if baseline.is_self else baseline.reference
         return Attributed(attribute(head, reference), baseline.against, portable_of(run))
 
@@ -755,6 +763,7 @@ class Commands:
         stored = self.summaries.get(key, frozenset({"envelope", "findings"}))
         if stored is not None:
             return stored, config
+        WorktreeStatus.start(self.repo)
         run = self.runner.run(self.repo)
         summary = summary_of(run, self.engine.envelope(run, key.tree), with_triples=False)
         self.trees.put(summary)
@@ -775,6 +784,7 @@ class Commands:
     # ── compare ──
 
     def compare(self, ref: str) -> int:
+        WorktreeStatus.start(self.repo)  # the side-input check of the head summaries reads it
         base_sha = self.snapshots.merge_base(ref)
         base_tree = self.snapshots.tree_of(base_sha)
         base_root = self.snapshots.commit(base_sha)

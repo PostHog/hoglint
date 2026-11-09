@@ -34,6 +34,8 @@ class Portable:
         return Portable(tuple(sorted(prefixes, key=len, reverse=True)))
 
     def text(self, value: str) -> str:
+        if "/" not in value:  # every root is an absolute path; most text names modules, not files
+            return value
         for prefix in self.prefixes:
             value = value.replace(prefix, "")
         return value

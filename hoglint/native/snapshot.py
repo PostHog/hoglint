@@ -16,6 +16,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hoglint.ledger.status import WorktreeStatus
+
 SOURCE_SUFFIXES = (".py", ".pyi")
 SUBMODULE_MODE = "160000"
 
@@ -83,14 +85,15 @@ class BlobSnapshot:
         snapshot = BlobSnapshot.index(repo)
         snapshot.conflicts = []
         dirty: list[str] = []
-        status = records(git(repo, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--", "*.py", "*.pyi"))
+        status = WorktreeStatus.of(repo).records  # shared with the summary store's side-input check
         at = 0
         while at < len(status):
             record = status[at]
             at += 1
             kind = record[0]
             if kind == "?":
-                dirty.append(record[2:])
+                if is_source(record[2:]):
+                    dirty.append(record[2:])
                 continue
             if kind == "2":
                 at += 1  # the next record is the original path of a rename or copy

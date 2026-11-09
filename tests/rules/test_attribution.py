@@ -28,6 +28,7 @@ from hoglint.ledger.envelope import (
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord
 from hoglint.ledger.scan import ScanSummary
+from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import IncompleteCause
 from hoglint.rules.engine import Engine
@@ -438,3 +439,26 @@ def test_the_framework_digest_comes_from_distribution_metadata(
     before = Framework.digest(("django", "rest_framework"))
     (tmp_path / edited).write_text(content)
     assert (Framework.digest(("django", "rest_framework")) != before) is changes
+
+
+ENTRY = "N... 100644 100644 100644 1111111 2222222"
+
+
+@pytest.mark.parametrize(
+    "records, against_head, against_index",
+    [
+        (["? notes/todo.md"], ["notes/todo.md"], ["notes/todo.md"]),
+        ([f"1 .M {ENTRY} turbo.json"], ["turbo.json"], ["turbo.json"]),
+        # staged only: the index tree holds it, HEAD's does not
+        ([f"1 M. {ENTRY} owners.yaml"], ["owners.yaml"], []),
+        ([f"2 R. {ENTRY} R100 conf/new.toml", "conf/old.toml"], ["conf/new.toml", "conf/old.toml"], []),
+        # sources come from the snapshot itself, never from the working tree
+        ([f"1 .M {ENTRY} app/a.py", "? app/b.pyi"], [], []),
+    ],
+)
+def test_side_input_drift_is_read_from_one_git_status(
+    records: list[str], against_head: list[str], against_index: list[str]
+) -> None:
+    status = WorktreeStatus(records)
+    assert status.side_input_drift(against_index=False) == against_head
+    assert status.side_input_drift(against_index=True) == against_index
