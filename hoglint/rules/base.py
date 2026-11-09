@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 
 from hoglint.config.model import Config, RuleSpec
@@ -377,9 +378,14 @@ class ModuleEnv:
         return read_endpoint(self.ctx, self.endpoint, ref.path[1], None, "src")
 
 
+@cache
+def column_ref(column: str) -> Ref:
+    return Ref(tuple(column.split(".")))
+
+
 def project(columns: tuple[str, ...], resolve: Resolver) -> tuple[str, ...]:
     """A finding's identity: one string per column, never a line number."""
-    return tuple(render_value(resolve(Ref(tuple(column.split("."))))) for column in columns)
+    return tuple(render_value(resolve(column_ref(column))) for column in columns)
 
 
 # ── staged selection ─────────────────────────────────────────────

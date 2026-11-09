@@ -8,6 +8,7 @@ from hoglint.adapters.codeowners import CodeownersFile
 from hoglint.config import ConfigError
 from hoglint.labels import Labeler, render
 from hoglint.model import Resolution
+from hoglint.rules.base import RuleContext, read_endpoint
 from hoglint.rules.engine import Engine
 
 from rules.support import GraphBuilder, config_from
@@ -48,6 +49,12 @@ set = { silo = "cell" }
 
 [kinds]
 model = { subclass_of = "django.db.models.Model", abstract = false }
+
+[registries.apps]
+loader = "posthog.products.load_product_modules"
+module = "products/{product}/backend/apps.py"
+attribute = "APP"
+lifecycle = "setup"
 
 [zones]
 within = "products/{product}"
@@ -168,3 +175,13 @@ def test_explain_names_each_source(labeler: Labeler) -> None:
     assert rows["package"][0] == "egress"
     assert "posthog/egress/**" in rows["package"][1]
     assert rows["owners"][1].startswith("provider codeowners")
+
+
+@pytest.mark.parametrize("module", ["products.billing.backend.apps", "posthog.egress.client", "tools.script"])
+def test_an_edge_endpoint_reads_module_attributes_the_way_entity_selectors_do(labeler: Labeler, module: str) -> None:
+    ctx = RuleContext(labeler.config, labeler.graph, labeler)
+    endpoint = ctx.module_endpoint(module)
+    for name in ("module", "path", "name", "decl", "registry", "lifecycle", "package", "tier", "zone", "owners"):
+        assert read_endpoint(ctx, endpoint, name, None, "src") == labeler.entity_value(module, None, name), name
+    if module == "products.billing.backend.apps":
+        assert labeler.entity_value(module, None, "lifecycle").data == "setup"
