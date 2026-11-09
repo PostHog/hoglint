@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import fnmatch
 import tempfile
 import subprocess
 from dataclasses import dataclass
@@ -105,6 +106,26 @@ class StagedIndex:
 
     def close(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+class GitTree(StagedIndex):
+    """The blobs of one git tree, read by id into a temp tree. Never reads the index or the working tree."""
+
+    def __init__(self, repo: Path, tree: str) -> None:
+        super().__init__(repo)
+        self.tree = tree
+
+    def entries(self, patterns: tuple[str, ...]) -> dict[str, str]:
+        out = subprocess.run(
+            ["git", "ls-tree", "-r", "-z", self.tree], cwd=self.repo, capture_output=True, check=True
+        ).stdout.decode()
+        blobs: dict[str, str] = {}
+        for entry in out.split("\0"):
+            meta, _, rel = entry.partition("\t")
+            parts = meta.split()
+            if len(parts) == 3 and parts[1] == "blob" and any(fnmatch.fnmatchcase(rel, p) for p in patterns):
+                blobs[rel] = parts[2]
+        return blobs
 
 
 Snapshot = WorkingTree | StagedIndex

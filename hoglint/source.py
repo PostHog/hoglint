@@ -33,20 +33,23 @@ def active_packs(config: Config) -> list[tuple[Pack, Mapping[str, Any]]]:
 
 
 class GraphSource:
-    """Builds and caches one Graph per (code root, staged, config sections)."""
+    """Builds and caches one Graph per (code root, staged or git tree, config sections).
+
+    `tree` names a git tree whose blobs are the code, read by id with no checkout."""
 
     def __init__(self, work_dir: Path) -> None:
         self.work_dir = work_dir
         self.cache: dict[tuple[str, str], Graph] = {}
 
-    def key(self, code_root: Path, config: Config, staged: bool) -> tuple[str, str]:
+    def key(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
         sections = {name: config.sections.get(name) for name in sorted(config.sections)}
-        return f"{code_root}{':staged' if staged else ''}", canonical(sections)
+        snapshot = f":tree={tree}" if tree else ":staged" if staged else ""
+        return f"{code_root}{snapshot}", canonical(sections)
 
-    def build(self, code_root: Path, config: Config, staged: bool = False) -> Graph:
-        key = self.key(code_root, config, staged)
+    def build(self, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        key = self.key(code_root, config, staged, tree)
         if key not in self.cache:
-            self.cache[key] = self.build_fresh(code_root, config, staged)
+            self.cache[key] = self.build_fresh(code_root, config, staged, tree)
         return self.cache[key]
 
     @staticmethod
@@ -81,7 +84,7 @@ class GraphSource:
             needs = needs | wanted
         return needs
 
-    def build_fresh(self, code_root: Path, config: Config, staged: bool) -> Graph:
+    def build_fresh(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> Graph:
         from hoglint.core.analysis import AnalysisOptions, CoreAnalysis  # noqa: PLC0415 - see core_config
 
         packs = active_packs(config)
@@ -92,6 +95,7 @@ class GraphSource:
             work_dir=work,
             staged=staged,
             needs=self.fact_needs(packs),
+            tree=tree,
         )
         analysis = CoreAnalysis(options).run()
         graph = analysis.graph

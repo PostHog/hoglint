@@ -8,7 +8,7 @@ from pathlib import Path
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
-from hoglint.core.discovery import Discovery, Inventory, Snapshot, StagedIndex, WorkingTree
+from hoglint.core.discovery import Discovery, GitTree, Inventory, Snapshot, StagedIndex, WorkingTree
 from hoglint.core.modules import ModuleNamer
 from hoglint.core.producers import PRODUCERS, TABLE_KINDS, Producer
 from hoglint.facts import Extractor, ExtractRequest, FactNeeds, FactStore, default_cache_dir, site_packages_files
@@ -41,6 +41,7 @@ class AnalysisOptions:
     cache_dir: Path | None = field(default_factory=default_cache_dir)
     producers: tuple[type[Producer], ...] = PRODUCERS
     needs: FactNeeds | None = None
+    tree: str = ""  # a git tree id: read that tree's blobs instead of the index or the working tree
 
 
 @dataclass(frozen=False)
@@ -58,6 +59,8 @@ class CoreAnalysis:
         self.extractor = extractor or Extractor()
 
     def snapshot(self) -> Snapshot:
+        if self.options.tree:
+            return GitTree(self.options.repo, self.options.tree)
         if self.options.staged:
             return StagedIndex(self.options.repo)
         return WorkingTree(self.options.repo)
