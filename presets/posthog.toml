@@ -5,6 +5,7 @@ schema = 1
 
 [vocabulary]
 edge_kinds = ["drives"]
+sections   = ["posthog"]  # the PostHog pack (hoglint.presets_py.posthog): drives and facade facts
 
 # ── Fields ─────────────────────────────────────────────────────
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
@@ -137,12 +138,8 @@ behavior = { kind = "abc", where = "tier == 'core'" }
 deny     = ["model", "manager", "queryset", "command"]
 unknown  = "error"
 
+# Registration modules and presentation adapters hand out classes, never ORM types.
 [shapes.registration]
-allow   = ["class"]
-deny    = ["model", "manager", "queryset"]
-unknown = "error"
-
-[shapes.adapter]
 allow   = ["class"]
 deny    = ["model", "manager", "queryset"]
 unknown = "error"
@@ -173,7 +170,7 @@ subclass_of = [
   "products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin",
 ]
 audience    = "src.zone == 'presentation' or src.tier == 'core'"
-shape       = "adapter"
+shape       = "registration"
 
 # ── Registries: core finds product code by file convention ─────
 
@@ -506,21 +503,10 @@ select     = "tier == 'product' and not path startswith 'products/'"
 identity   = "package-file"
 growth_key = ["package"]
 
-[rules.registry-routes]
+[rules.registry-slots]
 primitive  = "layout"
-registry   = "routes"
-identity   = "entity"
-growth_key = ["subject"]
-
-[rules.registry-webhook-consumers]
-primitive  = "layout"
-registry   = "webhook_consumers"
-identity   = "entity"
-growth_key = ["subject"]
-
-[rules.registry-health-checks]
-primitive  = "layout"
-registry   = "health_checks"
+doc        = "A file in a registry slot defines the slot's attribute, and its members subclass the slot's base."
+registry   = ["routes", "webhook_consumers", "health_checks"]
 identity   = "entity"
 growth_key = ["subject"]
 

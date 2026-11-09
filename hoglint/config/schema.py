@@ -729,9 +729,10 @@ class SchemaBuilder:
             base = shape.split("(", 1)[0]
             if base not in self.use_shapes:
                 self.fail(key, f"unknown use shape {shape!r}{suggest(base, self.use_shapes)}")
-        registry = str(table.get("registry", ""))
-        if registry and registry not in registries:
-            self.fail(key, f"unknown registry {registry!r}{suggest(registry, registries)}")
+        registry = as_tuple(table.get("registry"))
+        for name in registry:
+            if name not in registries:
+                self.fail(key, f"unknown registry {name!r}{suggest(name, registries)}")
         for export in as_tuple(table.get("exports")):
             if export not in exports:
                 self.fail(key, f"unknown export {export!r}{suggest(export, exports)}")

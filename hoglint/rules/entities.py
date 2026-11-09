@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from hoglint.config.loader import read_table
-from hoglint.config.model import CoverSpec, RuleSpec
+from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.globs import fill, glob_match
 from hoglint.plugins import REGISTRY
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, RuleContext, RuleRun, project
@@ -56,8 +56,8 @@ class LayoutPrimitive(EntityRule):
             self.check_entities()
         if self.spec.within and (self.spec.files or self.spec.absent):
             self.check_files()
-        if self.spec.registry:
-            self.check_registry()
+        for name in self.spec.registry:
+            self.check_registry(self.ctx.config.registries[name])
         return self.run
 
     def kind_ruled_out(self, symbol: str | None, wanted: frozenset[str] | None) -> bool:
@@ -120,11 +120,10 @@ class LayoutPrimitive(EntityRule):
                         self.resolver(module, None, f"{root}/{forbidden}"),
                     )
 
-    def check_registry(self) -> None:
-        registry = self.ctx.config.registries[self.spec.registry]
+    def check_registry(self, registry: RegistrySpec) -> None:
         facts = self.ctx.labeler.facts
         base = registry.shape.removeprefix("abc:")
-        for module, path in sorted(self.ctx.graph.modules.items()):
+        for module, path in self.ctx.labeler.index.sorted_modules:
             if glob_match(registry.module, path) is None:
                 continue
             attribute = f"{module}.{registry.attribute}"

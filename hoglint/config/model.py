@@ -195,7 +195,7 @@ class RuleSpec:
     within: str = ""
     files: tuple[str, ...] = ()
     absent: tuple[str, ...] = ()
-    registry: str = ""
+    registry: tuple[str, ...] = ()  # layout: the registries whose slots it checks
     exports: tuple[str, ...] = ()
     unknown_types: tuple[str, ...] = ()
     producer_options: tuple[tuple[str, Any], ...] = ()
