@@ -505,6 +505,7 @@ class NativeRuleContext(RuleContext):
         self.native = index
         self.endpoint_classes = EndpointClasses(self)
         self.judgments: dict[EdgeRule, dict[int, Judgment]] = {}
+        self.reach_tables: dict[EdgeRule, dict[str, list[Hop]]] = {}
 
     def edge_of(self, edge: Edge | int) -> Edge:
         return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
@@ -512,31 +513,45 @@ class NativeRuleContext(RuleContext):
     def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
         """Core hops as edge ids with endpoints from the link, then pack edges as Edges, judged
         one by one as before they lived in the link. Only for a rule with no `select`: every core
-        edge it sees is followed, so no core edge is judged here."""
+        edge it sees is followed, so no core edge is judged here. Every module's hops are made at
+        once, the first time the rule asks for one."""
         if rule.spec.select is not None or rule.spec.endpoint not in GROUPED_ROLES:
             return None
+        found = self.reach_tables.get(rule)
+        if found is None:
+            found = self.reach_tables[rule] = self.all_reach_hops(rule)
+        return list(found.get(module, ()))
+
+    def all_reach_hops(self, rule: EdgeRule) -> dict[str, list[Hop]]:
+        """`reach_hops` of every module: per kind, each module's core hops, then its pack hops."""
         link = self.native.native.link
         core_count = self.native.core_count
         tables = self.endpoint_classes
         which = f"dst-{rule.spec.endpoint}-entity"
         include, exclude = context_bits(rule.include), context_bits(rule.exclude)
-        out: list[Hop] = []
+        out: dict[str, list[Hop]] = {}
         for kind in self.kinds_or_all(rule.kinds()):
-            seen = array("I", link.ids_seen_from(kind, module, include, exclude))
-            ids = array("I", (i for i in seen if i < core_count))
-            if ids:
-                key_of, _ = tables.keys(ids, which)
+            by_module: dict[str, list[Hop]] = {}
+            core = array("I", (i for i in array("I", link.candidates([kind], include, exclude)) if i < core_count))
+            if core:
+                key_of, _ = tables.keys(core, which)
                 endpoints = tables.endpoints[which]
-                surfaces = [surface for _, surface, _, _ in link.dst_parts(ids.tobytes())]
-                for edge_id, key, surface in zip(ids, array("I", key_of), surfaces):
-                    out.append(Hop(edge_id, endpoints[key], Truth.TRUE, surface))
-            pack = self.native.pack_edges(kind, module)
-            if pack:
-                group = EdgeGroup(pack, [edge for edge in pack if self.native.is_irregular(edge)])
+                modules = link.columns(core.tobytes(), ["module"])[0]
+                surfaces = [surface for _, surface, _, _ in link.dst_parts(core.tobytes())]
+                for edge_id, key, module, surface in zip(core, array("I", key_of), modules, surfaces):
+                    by_module.setdefault(module, []).append(Hop(edge_id, endpoints[key], Truth.TRUE, surface))
+            pack: dict[str, list[Edge]] = {}
+            pack_ids = array("I", (i for i in array("I", link.ids_of_kind(kind)) if i >= core_count))
+            for edge in self.native.native.core.get(pack_ids):
+                pack.setdefault(edge.site.module, []).append(edge)
+            for module, edges in pack.items():
+                group = EdgeGroup(edges, [edge for edge in edges if self.native.is_irregular(edge)])
                 for env in rule.group_envs(module, group):
                     selected = rule.selection(env)
                     if selected is not Truth.FALSE:
-                        out.append(Hop(env.edge, env.dst, selected, env.edge.surface))
+                        by_module.setdefault(module, []).append(Hop(env.edge, env.dst, selected, env.edge.surface))
+            for module, hops in by_module.items():
+                out.setdefault(module, []).extend(hops)
         return out
 
     def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
