@@ -978,7 +978,9 @@ def parser() -> argparse.ArgumentParser:
     compare.set_defaults(handler=lambda commands, args: commands.compare(args.base))
     explain_config = sub.add_parser("explain-config", help="the expanded config, each key with its source")
     explain_config.set_defaults(handler=lambda commands, args: commands.explain_config())
-    scan = sub.add_parser("scan", help="write a scan summary (protocol 1) of code under this policy and engine")
+    scan = sub.add_parser(
+        "scan", help=f"write a scan summary (protocol {PROTOCOL}) of code under this policy and engine"
+    )
     scan.add_argument("--code-root", type=Path, required=True)
     scan.add_argument("--out", type=Path, required=True)
     scan.add_argument("--tree", default="", help="the git tree id of the code, when it is one")

@@ -2,8 +2,11 @@
 
 Each engine runs a full check in its own process and dumps normalized outputs: every edge
 (core and pack) with every field and attr, symbol facts, modules, failed producers, findings
-with their witnesses, incompletes, levels, scan lines and the compare ScanSummary (triples and
-couplings). The dumps are then compared in order and as multisets. Exit 0 when nothing differs.
+with their witnesses, incompletes, levels, scan lines, the coupling count of every edge, and the
+run summary as the store keeps it, built by the code `check` and `compare` use (with triples,
+and the couplings and witnesses of a sample of modules). The dumps are then compared in order
+and as multisets. Exit 0 when nothing differs. A dump step that fails fails the run: no output
+is ever left empty because something went wrong.
 
 Usage:
   python -m hoglint.native.parity [--repo <root>] [--work <dir>]
@@ -34,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config import CONFIG_FILE, load_config
+from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import Finding, Graph
@@ -46,8 +50,22 @@ from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
 EXAMPLES = 5
-LIST_OUTPUTS = ("edges", "symbols", "modules", "failed", "findings", "incomplete", "scan-lines")
-VALUE_OUTPUTS = ("levels", "summary")
+LIST_OUTPUTS = (
+    "edges",
+    "symbols",
+    "modules",
+    "failed",
+    "findings",
+    "incomplete",
+    "scan-lines",
+    "couplings",
+    "stored-summary",
+)
+VALUE_OUTPUTS = ("levels",)
+# The stored summary's key: both engines' summaries are stored under one, so they compare.
+DUMP_ENVELOPE = Envelope("dump-tree", "dump-engine", "dump-policy", "dump-framework")
+# Every n-th module, sorted, is the rename scope whose couplings and witnesses the summary keeps.
+SCOPE_STEP = 50
 
 
 @dataclass(frozen=True)
@@ -141,43 +159,27 @@ def coupling_rows(graph: Graph) -> list[Row]:
     return [[*key, count] for key, count in sorted(counts.items())]
 
 
-def triple_rows(result: RunResult, graph: Graph) -> list[Row]:
-    """(src group, dst group, kind, context) for every edge between two known groups: compare's
-    new-pair list."""
-    group = result.config.roles.group
-    if not group:
-        return []
-    labeler = result.labeler
-    groups: dict[str, str | None] = {}
-
-    def group_of(module: str) -> str | None:
-        if module not in groups:
-            groups[module] = labeler.known_text(module, group)
-        return groups[module]
-
-    out: set[tuple[str, str, str, str]] = set()
-    for edge in graph.edges:
-        src = group_of(edge.site.module)
-        if src is None:
-            continue
-        context = "+".join(sorted(c.value for c in edge.contexts)) or "prod"
-        for target in edge.targets:
-            module = labeler.module_of_symbol(str(target))
-            dst = group_of(module) if module is not None else None
-            if dst is not None and dst != src:
-                out.add((src, dst, edge.kind, context))
-    return [list(triple) for triple in sorted(out)]
+def summary_rows(sections: dict[str, dict[str, Any]]) -> list[Row]:
+    """The stored summary, one row per entry: [section, field, item] for a list entry, [section,
+    field, key, value] for a mapping entry, [section, field, value] for any other field."""
+    out: list[Row] = []
+    for section, fields in sections.items():
+        for name, value in fields.items():
+            if isinstance(value, list):
+                out.extend([section, name, item] for item in value)
+            elif isinstance(value, dict):
+                out.extend([section, name, key, value[key]] for key in sorted(value))
+            else:
+                out.append([section, name, value])
+    return out
 
 
-def compare_summary(result: RunResult, graph: Graph) -> dict[str, Any]:
-    """The compare ScanSummary's graph-derived parts (triples and couplings), and its own JSON when
-    the ledger package's summary takes this call shape."""
-    summary: dict[str, Any] = {"triples": triple_rows(result, graph), "couplings": coupling_rows(graph)}
-    try:
-        summary["scan_summary"] = ScanSummary.from_run(result, graph, with_couplings=True).to_json()  # type: ignore[call-arg]
-    except TypeError:
-        summary["scan_summary"] = None
-    return summary
+def stored_summary(result: RunResult, graph: Graph, repo: Path, exceptions: ExceptionsFile) -> list[Row]:
+    """The run summary as the store writes it (`ScanSummary.to_sections`), built by the code check
+    and compare use: with triples, and the couplings and witnesses of a sample of modules."""
+    scope = frozenset(sorted(graph.modules)[::SCOPE_STEP])
+    summary = ScanSummary.from_run(result, graph, DUMP_ENVELOPE, scope, True, (repo,), exceptions)
+    return summary_rows(summary.to_sections())
 
 
 class Dump:
@@ -195,17 +197,19 @@ class Dump:
         self.timings[name] = round(now - started, 3)
         return now
 
-    def check(self) -> tuple[Graph, RunResult]:
+    def check(self) -> tuple[Graph, RunResult, ExceptionsFile]:
         batch_mode(self.engine)
         started = time.perf_counter()
         config = load_config(self.repo, self.repo / CONFIG_FILE)
         graph = graph_source(self.engine, self.work).build(self.repo, config)
+        if not graph.modules:
+            raise RuntimeError(f"the {self.engine} engine read no module under {self.repo}: nothing to compare")
         started = self.lap("graph", started)
         ledger = LedgerFile.read(self.repo / config.ledger.file)
         exceptions = ExceptionsFile.read(self.repo / config.ledger.exceptions, config)
         result = Engine(config, graph, self.repo).evaluate(ledger, exceptions)
         self.lap("rules", started)
-        return graph, result
+        return graph, result, exceptions
 
     def write_lines(self, name: str, rows: Sequence[Any]) -> None:
         with open(self.out / f"{name}.jsonl", "w") as handle:
@@ -215,9 +219,9 @@ class Dump:
 
     def run(self) -> None:
         self.out.mkdir(parents=True, exist_ok=True)
-        graph, result = self.check()
+        graph, result, exceptions = self.check()
         started = time.perf_counter()
-        summary = compare_summary(result, graph)
+        summary = stored_summary(result, graph, self.repo, exceptions)
         started = self.lap("summary", started)
         self.write_lines("findings", [finding_row(f) for f in result.findings()])
         self.write_lines("incomplete", [incomplete_row(item) for item in result.incomplete()])
@@ -228,7 +232,8 @@ class Dump:
         self.write_lines("failed", failed)
         levels = {name: [level.passing, sorted(level.failing.items())] for name, level in result.levels.items()}
         (self.out / "levels.json").write_text(json.dumps(levels, ensure_ascii=False))
-        (self.out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False))
+        self.write_lines("stored-summary", summary)
+        self.write_lines("couplings", coupling_rows(graph))
         self.write_lines("edges", [edge_row(edge) for edge in graph.edges])
         self.lap("write", started)
         self.timings["maxrss_gb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9, 3)
