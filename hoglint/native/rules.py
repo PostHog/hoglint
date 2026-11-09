@@ -22,13 +22,23 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Config
-from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
+from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
 from hoglint.model import Edge, Finding, FindingDetail, Graph
-from hoglint.native.graph import CONTEXT_BITS, RESOLUTIONS, NativeGraph
+from hoglint.native.graph import CONTEXT_BITS, RESOLUTIONS, SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.rules.audit import ReadAudit, audit_rule
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext, conjuncts, joined, read_endpoint
+from hoglint.rules.base import (
+    EdgeEnv,
+    EdgeRule,
+    Endpoint,
+    Judgment,
+    RuleContext,
+    RuleRun,
+    conjuncts,
+    joined,
+    read_endpoint,
+)
 from hoglint.rules.graphs import Hop
 from hoglint.rules.reads import Reads, granularity
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
@@ -84,18 +94,43 @@ class LazyModules(Mapping[str, Any]):
     def __len__(self) -> int:
         return len(self.modules)
 
+    def __contains__(self, module: object) -> bool:
+        """Membership with no value made: `Mapping.__contains__` would make it."""
+        return module in self.known
+
 
 class NativeSymbolFacts(SymbolFacts):
-    """SymbolFacts from the link's inherit and decorate facts: one edge table, core and pack."""
+    """SymbolFacts from the link's inherit and decorate facts: one edge table, core and pack.
+    Facts are read from the symbol columns (`NativeSymbols.fact`), with no dict per read."""
 
     def __init__(self, graph: NativeGraph) -> None:
         super().__init__(graph, [], [])
+        symbols: Any = graph.symbols
+        self.columns: NativeSymbols = symbols
         for owner, _, names, _ in graph.link.class_facts("inherit", "class"):
             self.add_base(owner, names)
         for owner, surface, names, frozen in graph.link.class_facts("decorate", "decorated"):
             self.add_decorator(owner, surface, names)
             if frozen:
                 self.frozen.add(owner)
+
+    def get(self, symbol: str, key: str) -> str:
+        return self.columns.fact(symbol, key)
+
+    def decl(self, symbol: str) -> str:
+        raw = self.columns.fact(symbol, "decl") or self.columns.fact(symbol, "kind")
+        return DECL_NAMES.get(raw, raw)
+
+    def with_decl(self, decl: str) -> list[str]:
+        """The core's symbols with the declaration from the kind column, merged in order with the
+        symbols whose facts packs wrote."""
+        kinds = [kind for kind in SYMBOL_KINDS if DECL_NAMES.get(kind, kind) == decl]
+        core = set(self.columns.core_with_kinds(kinds))
+        added = {name for name in self.columns.added if self.decl(name) == decl}
+        return [name for name in self.columns if name in core or name in added]
+
+    def find_decl(self, decl: str) -> bool:
+        return bool(self.with_decl(decl))
 
 
 NO_CLASS = 0xFFFFFFFF
@@ -133,8 +168,19 @@ class Rejudged:
                     f"rule {self.rule.spec.id} judges {self.edge.kind} {site.path}:{site.line} {judged}, "
                     f"apart from its group's {self.judgment}"
                 )
-            self.made = self.rule.recorded(envs).findings[0].detail.get()
+            self.made = self.reported(envs[0]).findings[0].detail.get()
         return self.made
+
+    def reported(self, env: EdgeEnv) -> RuleRun:
+        """What the group's judgment reports for `env`, message included, kept out of the rule's
+        run: the judgment is checked already, so the rule does not decide again."""
+        rule = self.rule
+        saved, rule.run = rule.run, RuleRun(rule.spec)
+        try:
+            rule.report(env, self.judgment, rule.describe(env))
+            return rule.run
+        finally:
+            rule.run = saved
 
 
 @dataclass(frozen=False, slots=True)

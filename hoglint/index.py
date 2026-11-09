@@ -145,6 +145,10 @@ class SymbolFacts:
         """Whether any symbol has this declaration, so a producer that records it ran."""
         return any(self.decl(symbol) == decl for symbol in self.symbols)
 
+    def with_decl(self, decl: str) -> list[str]:
+        """The symbols with this declaration, in `graph.symbols` order."""
+        return [symbol for symbol in self.symbols if self.decl(symbol) == decl]
+
     def get(self, symbol: str, key: str) -> str:
         return self.symbols.get(symbol, {}).get(key, "")
 

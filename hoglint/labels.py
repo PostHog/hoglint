@@ -397,7 +397,7 @@ class Labeler:
         if spec.subclass_of:
             pool: Iterable[str] = [symbol for symbol in facts.descendants(spec.subclass_of) if facts.has(symbol)]
         elif spec.decl:
-            pool = [symbol for symbol in self.graph.symbols if facts.decl(symbol) == spec.decl]
+            pool = facts.with_decl(spec.decl)
         else:
             pool = self.graph.symbols
         out.update(symbol for symbol in pool if self.kind_tests_pass(spec, symbol))

@@ -182,6 +182,26 @@ class NativeSymbols(Mapping[str, Mapping[str, str]]):
         at = self.at[name]
         return {"kind": SYMBOL_KINDS[self.kinds[at]], "path": self.paths[self.files[at]]}
 
+    def fact(self, name: str, key: str) -> str:
+        """One fact of a symbol, "" when it has none, with no dict made."""
+        found = self.added.get(name)
+        if found is not None:
+            return found.get(key, "")
+        at = self.at.get(name)
+        if at is None:
+            return ""
+        if key == "kind":
+            return SYMBOL_KINDS[self.kinds[at]]
+        if key == "path":
+            return self.paths[self.files[at]]
+        return ""
+
+    def core_with_kinds(self, kinds: Collection[str]) -> list[str]:
+        """The core's symbols whose kind is one of `kinds` and whose facts no pack replaced, in
+        insertion order, found in the kind column."""
+        codes = {code for code, kind in enumerate(SYMBOL_KINDS) if kind in kinds}
+        return [name for name, code in zip(self.names, self.kinds) if code in codes and name not in self.added]
+
     def __contains__(self, name: object) -> bool:
         return name in self.added or name in self.at
 
