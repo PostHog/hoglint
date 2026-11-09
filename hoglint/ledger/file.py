@@ -31,6 +31,8 @@ def escape(value: str) -> str:
 
 
 def unescape(value: str) -> str:
+    if "\\" not in value:
+        return value
     out: list[str] = []
     index = 0
     while index < len(value):
