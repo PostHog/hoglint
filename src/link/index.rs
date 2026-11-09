@@ -8,14 +8,17 @@ use super::resolve::Ent;
 use super::scope::Scope;
 use rustc_hash::FxHashMap;
 
+/// Edge ids of one kind by (file, line, column, surface).
+type BySite = FxHashMap<(u32, u32, u32, Sid), Vec<u32>>;
+
 #[derive(Default)]
 pub struct EdgeIndex {
     by_kind: Option<Vec<Vec<u32>>>,
     by_target: Option<FxHashMap<Ent, Vec<u32>>>,
     by_source: Option<FxHashMap<(u8, Sid), Vec<u32>>>,
     source_order: Option<Vec<Vec<Sid>>>,
-    by_spelling: Option<FxHashMap<(u8, Sid), Vec<u32>>>,
-    by_site: FxHashMap<u8, FxHashMap<(u32, u32, u32, Sid), Vec<u32>>>,
+    by_spelling: FxHashMap<u8, FxHashMap<Sid, Vec<u32>>>,
+    by_site: FxHashMap<u8, BySite>,
 }
 
 pub fn kind_code(kind: &str) -> Option<u8> {
@@ -99,7 +102,8 @@ impl EdgeIndex {
     }
 
     /// Edges of `kind` whose surface ends in one of `names` (the last dotted part), resolved or
-    /// not: what a pack turns into an unknown edge when the origin does not resolve.
+    /// not: what a pack turns into an unknown edge when the origin does not resolve. Each kind's
+    /// index is built on its first query, so a pack that asks about one kind reads only its edges.
     pub fn spelled(
         &mut self,
         it: &mut Interner,
@@ -107,22 +111,18 @@ impl EdgeIndex {
         kind: u8,
         names: &[Sid],
     ) -> Vec<u32> {
-        if self.by_spelling.is_none() {
-            let mut out: FxHashMap<(u8, Sid), Vec<u32>> = FxHashMap::default();
-            for (i, row) in rows.iter().enumerate() {
+        if !self.by_spelling.contains_key(&kind) {
+            let mut out: FxHashMap<Sid, Vec<u32>> = FxHashMap::default();
+            for &i in self.of_kind(rows, kind) {
+                let row = &rows[i as usize];
                 if row.surface != EMPTY {
-                    let last = it.last(row.surface);
-                    out.entry((row.kind, last)).or_default().push(i as u32);
+                    out.entry(it.last(row.surface)).or_default().push(i);
                 }
             }
-            self.by_spelling = Some(out);
+            self.by_spelling.insert(kind, out);
         }
-        let by_spelling = self.by_spelling.as_ref().expect("built");
-        merged(
-            names
-                .iter()
-                .filter_map(|name| by_spelling.get(&(kind, *name))),
-        )
+        let by_spelling = &self.by_spelling[&kind];
+        merged(names.iter().filter_map(|name| by_spelling.get(name)))
     }
 
     /// Whether a core edge of `kind` sits at (file, line, column) with this surface and target:
@@ -136,7 +136,7 @@ impl EdgeIndex {
         target: Option<Ent>,
     ) -> bool {
         let by_site = self.by_site.entry(kind).or_insert_with(|| {
-            let mut out: FxHashMap<(u32, u32, u32, Sid), Vec<u32>> = FxHashMap::default();
+            let mut out: BySite = FxHashMap::default();
             for (i, row) in rows.iter().enumerate() {
                 if row.kind == kind {
                     out.entry((row.file, row.line, row.col, row.surface))

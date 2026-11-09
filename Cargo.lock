@@ -337,6 +337,7 @@ dependencies = [
  "pyo3",
  "pyo3-build-config",
  "rayon",
+ "regex",
  "rusqlite",
  "rustc-hash",
  "serde_json",

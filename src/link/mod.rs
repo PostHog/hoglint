@@ -74,6 +74,9 @@ impl Timings {
     }
 }
 
+/// One inherit or decorate fact for `SymbolFacts`: (owner symbol, surface, names, frozen).
+pub type ClassFact = (String, String, Vec<String>, bool);
+
 pub struct Link {
     pub core: Core,
     pub scopes: Vec<Scope>,
@@ -275,11 +278,7 @@ impl Link {
     /// (owner symbol, surface, names, frozen) where the owner is "module.<class or decorated
     /// attr>", the names are the targets, `?<surface>` when unresolved, else the surface, and
     /// frozen says a decorator call passed `frozen=True`.
-    pub fn class_facts(
-        &self,
-        kind: u8,
-        owner_attr: &str,
-    ) -> Vec<(String, String, Vec<String>, bool)> {
+    pub fn class_facts(&self, kind: u8, owner_attr: &str) -> Vec<ClassFact> {
         let core = &self.core;
         let Some(owner_key) = core.it.get(owner_attr) else {
             return Vec::new();

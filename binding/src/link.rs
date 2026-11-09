@@ -8,7 +8,7 @@ use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
 use hoglint_facts::link::produce::KIND_NAMES;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::Lookup;
-use hoglint_facts::link::{Link as CoreLink, LinkConfig};
+use hoglint_facts::link::{ClassFact, Link as CoreLink, LinkConfig};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
@@ -291,11 +291,7 @@ impl Link {
 
     /// The core's inherit (`owner_attr` "class") or decorate ("decorated") facts for SymbolFacts:
     /// [(owner symbol, surface, names)] in graph order.
-    fn class_facts(
-        &self,
-        kind: &str,
-        owner_attr: &str,
-    ) -> Vec<(String, String, Vec<String>, bool)> {
+    fn class_facts(&self, kind: &str, owner_attr: &str) -> Vec<ClassFact> {
         match kind_code(kind) {
             Some(code) => self.inner.class_facts(code, owner_attr),
             None => Vec::new(),
