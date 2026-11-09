@@ -1,23 +1,37 @@
-# The files that define the hoglint engine, as glob patterns relative to tools/hoglint.
+# The files that define hoglint, as glob patterns relative to tools/hoglint, in three sections.
+# Each section makes one id, and each one adds files to the section above it:
+#   [facts]   the extractor. Its id keys the per-blob fact cache, so a link or Python change
+#             never re-extracts.
+#   [native]  [facts] plus the link and the binding: the whole Rust side. The loaded extractor
+#             and native module must report this id, or the run stops with "rebuild" (exit 2).
+#   [engine]  [native] plus the Python engine and presets, and the protocol line. Its id keys run
+#             summaries (hoglint/ledger/envelope.py) and is what CI publishes them under.
 #
-# hoglint/ledger/envelope.py and build.rs both read this file and make the same id from it:
-# the first 8 bytes, in hex, of the sha256 of the protocol line (for example `protocol 1`) and a
-# NUL byte, then, for each matching file sorted by its path: the path, NUL, its bytes, NUL.
-# `**` matches any number of directories, `*` any characters within one path segment. Paths use
-# `/`. Directories named `target` or starting with `.` are never searched.
+# A section's files are the section above's files, plus every file that matches one of its own
+# patterns and none of its own `!` patterns. `**` matches any number of directories, none
+# included; `*` matches any characters within one path segment. Paths use `/`. Directories
+# named `target` or starting with `.` are never searched.
 #
+# An id is the first 8 bytes, in hex, of the sha256 of: for [engine] only, the protocol line
+# (`protocol 1`) and a NUL byte; then, for each of the section's files sorted by path (bytewise),
+# the path, NUL, the file's bytes, NUL. build.rs and envelope.py both compute them from this file.
 # The protocol is the run summary format version (PROTOCOL in hoglint/ledger/envelope.py).
 
-protocol 1
-
+[facts]
 src/**/*.rs
-binding/**/*.rs
-**/Cargo.toml
+!src/link/**
+Cargo.toml
 Cargo.lock
 build.rs
 rust-toolchain.toml
-binding/pyproject.toml
-engine-sources.txt
+
+[native]
+src/link/**
+binding/**
+
+[engine]
+protocol 1
 hoglint/**/*.py
 hoglint/**/*.toml
 presets/**/*.toml
+engine-sources.txt

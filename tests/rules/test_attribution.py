@@ -12,10 +12,13 @@ import pytest
 from hoglint.facts import Extractor
 from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
-    ENGINE_SOURCES,
+    ENGINE,
+    FACTS,
+    NATIVE,
     PROTOCOL,
-    BuildId,
-    EngineId,
+    SECTIONS,
+    BinaryIds,
+    EngineError,
     EngineSources,
     Envelope,
     PolicyFiles,
@@ -162,35 +165,73 @@ def test_the_cache_root_stays_within_its_age_and_size(tmp_path: Path, files: dic
     assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == kept
 
 
+ENGINE_LIST = """# a test engine
+[facts]
+src/**/*.rs
+!src/link/**
+Cargo.toml
+Cargo.lock
+
+[native]
+src/link/**
+binding/**
+
+[engine]
+protocol 1
+hoglint/**/*.py
+"""
 ENGINE_FILES = {
-    "engine-sources.txt": "# the engine\nprotocol 1\nsrc/**/*.rs\n**/Cargo.toml\nCargo.lock\nhoglint/**/*.py\n",
+    "engine-sources.txt": ENGINE_LIST,
     "Cargo.toml": "[package]",
     "Cargo.lock": "v1",
     "src/lib.rs": "lib",
     "src/link/mod.rs": "link",
     "binding/Cargo.toml": "[binding]",
+    "binding/src/lib.rs": "bind",
     "hoglint/cli.py": "cli",
-    "hoglint/sub/x.py": "x",
     "tests/t.py": "not the engine",
     "src/notes.md": "not the engine",
     "target/debug/gen.rs": "build output",
     ".hidden/h.rs": "hidden",
 }
-# The engine digest, spelled out from the engine-sources.txt header, so build.rs can check the same vector.
-ENGINE_DIGEST_INPUT = (
+# Each id's input spelled out from the engine-sources.txt header, so build.rs can check the same vectors.
+FACTS_INPUT = b"Cargo.lock\0v1\0Cargo.toml\0[package]\0src/lib.rs\0lib\0"
+NATIVE_INPUT = (
+    b"Cargo.lock\0v1\0Cargo.toml\0[package]\0binding/Cargo.toml\0[binding]\0binding/src/lib.rs\0bind\0"
+    b"src/lib.rs\0lib\0src/link/mod.rs\0link\0"
+)
+ENGINE_INPUT = (
     b"protocol 1\0"
-    b"Cargo.lock\0v1\0Cargo.toml\0[package]\0binding/Cargo.toml\0[binding]\0"
-    b"hoglint/cli.py\0cli\0hoglint/sub/x.py\0x\0src/lib.rs\0lib\0src/link/mod.rs\0link\0"
+    b"Cargo.lock\0v1\0Cargo.toml\0[package]\0binding/Cargo.toml\0[binding]\0binding/src/lib.rs\0bind\0"
+    b"hoglint/cli.py\0cli\0src/lib.rs\0lib\0src/link/mod.rs\0link\0"
 )
 
 
-def test_the_engine_digest_is_the_one_engine_sources_txt_defines(tmp_path: Path) -> None:
+@pytest.mark.parametrize("section, spelled", [(FACTS, FACTS_INPUT), (NATIVE, NATIVE_INPUT), (ENGINE, ENGINE_INPUT)])
+def test_each_id_is_the_one_engine_sources_txt_defines(tmp_path: Path, section: str, spelled: bytes) -> None:
     write_files(tmp_path, ENGINE_FILES)
-    assert EngineSources.read(tmp_path) is not None
-    expected = hashlib.sha256(ENGINE_DIGEST_INPUT).digest()[:8].hex()
-    assert EngineId.of(tmp_path) == f"python-{expected}"
-    (tmp_path / "src/link/mod.rs").write_text("link changed")
-    assert EngineId.of(tmp_path) != f"python-{expected}"
+    sources = EngineSources.read(tmp_path)
+    assert sources is not None
+    assert sources.digest(section) == hashlib.sha256(spelled).digest()[:8].hex()
+
+
+@pytest.mark.parametrize(
+    "edited, changed",
+    [
+        # a Python edit never asks for a rebuild and never re-extracts
+        ("hoglint/cli.py", {ENGINE}),
+        ("src/link/mod.rs", {NATIVE, ENGINE}),
+        ("binding/src/lib.rs", {NATIVE, ENGINE}),
+        ("src/lib.rs", {FACTS, NATIVE, ENGINE}),
+    ],
+)
+def test_an_edit_changes_only_the_ids_whose_sources_it_touches(tmp_path: Path, edited: str, changed: set[str]) -> None:
+    write_files(tmp_path, ENGINE_FILES)
+    before = EngineSources.read(tmp_path)
+    assert before is not None
+    ids = {section: before.digest(section) for section in SECTIONS}
+    (tmp_path / edited).write_text("edited")
+    assert {section for section in SECTIONS if before.digest(section) != ids[section]} == changed
 
 
 CRATE = Path(__file__).resolve().parents[2]
@@ -201,23 +242,25 @@ def test_the_engine_list_names_the_protocol_this_engine_reads() -> None:
     assert sources is not None and sources.protocol == str(PROTOCOL)
 
 
-def built_before_its_sources() -> bool:
-    """Whether the extractor binary is older than an engine source, so its id cannot match yet."""
+def built_before_its_sources(section: str) -> bool:
+    """Whether the extractor binary is older than a source of the section, so its id cannot match yet."""
     sources = EngineSources.read(CRATE)
     if sources is None or not has_extractor() or not Extractor.find_binary().is_file():
         return True
     built = Extractor.find_binary().stat().st_mtime
-    return any((CRATE / rel).stat().st_mtime > built for rel in sources.files())
+    return any((CRATE / rel).stat().st_mtime > built for rel in sources.files(section))
 
 
-@pytest.mark.skipif(
-    ENGINE_SOURCES not in (CRATE / "build.rs").read_text(), reason="build.rs does not read engine-sources.txt yet"
-)
-@pytest.mark.skipif(built_before_its_sources(), reason="no extractor binary built after the last engine source edit")
-def test_the_extractor_build_id_is_the_engine_digest() -> None:
+@pytest.mark.parametrize("section", SECTIONS)
+def test_the_extractor_reports_the_ids_of_its_sources(section: str) -> None:
+    if built_before_its_sources(section):
+        pytest.skip(f"no extractor binary built after the last [{section}] source edit")
+    try:
+        reported = BinaryIds.of(Extractor.find_binary(), section)
+    except EngineError:
+        pytest.skip(f"the extractor binary does not report its [{section}] id yet")
     sources = EngineSources.read(CRATE)
-    assert sources is not None
-    assert BuildId.of_binary(Extractor.find_binary()) == sources.digest()
+    assert sources is not None and reported == sources.digest(section)
 
 
 USE_SHAPE = """

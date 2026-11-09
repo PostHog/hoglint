@@ -5,8 +5,8 @@ whole envelope equals the one the run would have. Every part is built from file 
 summary made on Linux CI and one made on a Mac agree:
 - tree: the git tree oid of the code (a commit's tree, or the index's from `git write-tree`);
   empty for a working tree, which is never stored.
-- engine: the engine name, then the digest of the files `engine-sources.txt` lists (Python
-  package, Rust sources, manifests, Cargo.lock) and the summary protocol. Never a binary's hash or
+- engine: the engine name, then the `[engine]` id of `engine-sources.txt`: a digest of the Rust
+  and Python sources, manifests, Cargo.lock and the summary protocol. Never a binary's hash or
   the platform.
 - policy: a digest of the config hash, the exceptions as written and the content of every policy
   data file the config names (a rule's `classify` file, a pack's `policy_file_keys`).
@@ -38,11 +38,13 @@ PROTOCOL = 1
 ENGINE_PYTHON = "python"
 ENGINE_SOURCES = "engine-sources.txt"
 PROTOCOL_LINE = "protocol "
-# build.rs before it read engine-sources.txt hashed `src/*.rs`, then these crate files in this order.
-LEGACY_CRATE_FILES = ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml")
+# The sections of engine-sources.txt, each adding files to the one before it.
+FACTS, NATIVE, ENGINE = "facts", "native", "engine"
+SECTIONS = (FACTS, NATIVE, ENGINE)
+# The flag that makes a hoglint-facts binary print each id.
+ID_FLAGS = {FACTS: "--facts-id", NATIVE: "--native-id", ENGINE: "--build-id"}
 DIGEST_CHARS = 16
-LEGACY_BUILD_ID_BYTES = 6
-ENGINE_DIGEST_BYTES = 8
+SOURCE_DIGEST_BYTES = 8
 MISSING = "missing"
 
 
@@ -108,13 +110,24 @@ def glob_match(pattern: tuple[str, ...], path: tuple[str, ...]) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceSection:
+    """The files one section of engine-sources.txt adds: those matching a pattern and no `!` pattern."""
+
+    patterns: tuple[tuple[str, ...], ...] = ()
+    excludes: tuple[tuple[str, ...], ...] = ()
+
+    def adds(self, parts: tuple[str, ...]) -> bool:
+        return any(glob_match(p, parts) for p in self.patterns) and not any(glob_match(p, parts) for p in self.excludes)
+
+
+@dataclass(frozen=True, slots=True)
 class EngineSources:
-    """The files that define an engine, as `engine-sources.txt` in its crate lists them, and their
-    digest. build.rs reads the same file and makes the same digest (see the file's header)."""
+    """The three source sets `engine-sources.txt` in a crate defines, and their ids. build.rs reads
+    the same file and makes the same ids (see the file's header)."""
 
     crate: Path
     protocol: str
-    patterns: tuple[tuple[str, ...], ...]
+    sections: tuple[SourceSection, ...]  # in SECTIONS order
 
     @staticmethod
     def read(crate: Path) -> EngineSources | None:
@@ -122,71 +135,67 @@ class EngineSources:
         listing = crate / ENGINE_SOURCES
         if not listing.is_file():
             return None
-        protocol, patterns = "", []
+        protocol, current = "", ""
+        patterns: dict[str, list[tuple[str, ...]]] = {name: [] for name in SECTIONS}
+        excludes: dict[str, list[tuple[str, ...]]] = {name: [] for name in SECTIONS}
         for raw in listing.read_text().splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
+            if line.startswith("[") and line.endswith("]"):
+                current = line[1:-1]
+                if current not in patterns:
+                    raise EngineError(f"{listing}: unknown section [{current}]")
+                continue
+            if not current:
+                raise EngineError(f"{listing}: {line!r} is outside a section")
             if line.startswith(PROTOCOL_LINE):
                 protocol = line.removeprefix(PROTOCOL_LINE).strip()
-                continue
-            patterns.append(tuple(line.split("/")))
-        return EngineSources(crate, protocol, tuple(patterns))
+            elif line.startswith("!"):
+                excludes[current].append(tuple(line[1:].split("/")))
+            else:
+                patterns[current].append(tuple(line.split("/")))
+        sections = tuple(SourceSection(tuple(patterns[name]), tuple(excludes[name])) for name in SECTIONS)
+        return EngineSources(crate, protocol, sections)
 
-    def files(self) -> list[str]:
+    def crate_files(self) -> list[str]:
         out = []
         for directory, names, files in os.walk(self.crate):
             names[:] = [name for name in names if name != "target" and not name.startswith(".")]
-            for name in files:
-                rel = (Path(directory) / name).relative_to(self.crate).as_posix()
-                if any(glob_match(pattern, tuple(rel.split("/"))) for pattern in self.patterns):
-                    out.append(rel)
+            out += [(Path(directory) / name).relative_to(self.crate).as_posix() for name in files]
+        return out
+
+    def files(self, section: str) -> list[str]:
+        """The section's files: those of every section up to it, sorted by path bytes."""
+        wanted = self.sections[: SECTIONS.index(section) + 1]
+        out = [rel for rel in self.crate_files() if any(part.adds(tuple(rel.split("/"))) for part in wanted)]
         return sorted(out, key=lambda rel: rel.encode())
 
-    def digest(self) -> str:
+    def digest(self, section: str = ENGINE) -> str:
         hasher = hashlib.sha256()
-        hasher.update(f"{PROTOCOL_LINE}{self.protocol}".encode())
-        hasher.update(b"\0")
-        for rel in self.files():
+        if section == ENGINE:
+            hasher.update(f"{PROTOCOL_LINE}{self.protocol}".encode())
+            hasher.update(b"\0")
+        for rel in self.files(section):
             hasher.update(rel.encode())
             hasher.update(b"\0")
             hasher.update((self.crate / rel).read_bytes())
             hasher.update(b"\0")
-        return hasher.digest()[:ENGINE_DIGEST_BYTES].hex()
+        return hasher.digest()[:SOURCE_DIGEST_BYTES].hex()
 
 
-class BuildId:
-    """The extractor build id: of a binary, and of a crate's sources (the hash its build.rs makes)."""
-
-    @staticmethod
-    def of_sources(crate: Path) -> str | None:
-        """None when the directory holds no extractor crate. A build.rs that reads
-        engine-sources.txt makes the engine digest; an older one hashed `src/*.rs` and the crate files."""
-        source_dir = crate / "src"
-        if not (crate / "Cargo.toml").is_file() or not source_dir.is_dir():
-            return None
-        sources = EngineSources.read(crate)
-        build = crate / "build.rs"
-        if sources is not None and build.is_file() and ENGINE_SOURCES in build.read_text():
-            return sources.digest()
-        files = sorted(path for path in source_dir.iterdir() if path.suffix == ".rs")
-        files += [crate / name for name in LEGACY_CRATE_FILES]
-        hasher = hashlib.sha256()
-        for path in files:
-            hasher.update(path.relative_to(crate).as_posix().encode())
-            hasher.update(b"\0")
-            hasher.update(path.read_bytes() if path.is_file() else b"")
-            hasher.update(b"\0")
-        return hasher.digest()[:LEGACY_BUILD_ID_BYTES].hex()
+class BinaryIds:
+    """The ids a hoglint-facts binary reports about the sources it was built from."""
 
     @staticmethod
-    def of_binary(binary: Path) -> str:
+    def of(binary: Path, section: str) -> str:
+        flag = ID_FLAGS[section]
         try:
-            completed = subprocess.run([str(binary), "--build-id"], capture_output=True, text=True, timeout=60)
+            completed = subprocess.run([str(binary), flag], capture_output=True, text=True, timeout=60)
         except OSError as error:
             raise EngineError(f"cannot run {binary}: {error}") from error
         if completed.returncode != 0 or not completed.stdout.strip():
-            raise EngineError(f"{binary} --build-id failed: {completed.stderr.strip()[-500:]}")
+            raise EngineError(f"{binary} {flag} failed, so it predates its sources: {completed.stderr.strip()[-300:]}")
         return completed.stdout.strip()
 
 
@@ -194,8 +203,8 @@ class EngineId:
     """An engine's id: its name and the digest of its engine sources.
 
     An engine that ships its crate (a checkout) has `engine-sources.txt` next to its Python
-    package. An installed engine has no crate, so its extractor build id stands for the digest:
-    a build.rs that reads the list makes the build id from the same sources."""
+    package. An installed engine has no crate, so its binary's engine id stands for the digest:
+    build.rs makes that id from the same list."""
 
     @staticmethod
     def crate_of(package_dir: Path) -> Path | None:
@@ -207,7 +216,7 @@ class EngineId:
         sources = EngineSources.read(crate)
         if sources is None:
             raise EngineError(f"{crate} has no {ENGINE_SOURCES}: the engine predates run summary protocol {PROTOCOL}")
-        return f"{name}-{sources.digest()}"
+        return f"{name}-{sources.digest(ENGINE)}"
 
     @staticmethod
     def installed(name: str, build_id: str) -> str:

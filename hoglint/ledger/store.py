@@ -1,15 +1,15 @@
-"""The hoglint cache root, the run summary store, and extractor binaries by build id.
+"""The hoglint cache root, the run summary store, and extractor binaries by native id.
 
 Root: `$XDG_CACHE_HOME/hoglint`, else `~/.cache/hoglint`, one per machine and shared by every
-worktree. It holds the fact cache (`facts/`, namespaced by extractor build id), run summaries
+worktree. It holds the fact cache (`facts/`, namespaced by the `[facts]` id), run summaries
 (`summaries/`) and extractor binaries (`extractors/`).
 
 Summaries: `summaries/<engine id>/<tree>/<policy>-<framework>.json.gz`. The key is the envelope
 (code tree oid, engine id, policy hash, framework digest; see `envelope.py`), and the engine id
-names the namespace, so an old engine's summaries age out together. The file is the gzip-compressed
-JSON that `ScanSummary.write` writes, `protocol` first; `Envelope.key` names it as one string. `get` answers only the exact key, and the envelope
-inside the file must match it too: a corrupt file, another protocol or another envelope is a
-miss, never a result. A summary of a working tree has no tree oid and is never stored. The
+names the namespace, so an old engine's summaries age out together. The file is the
+gzip-compressed JSON that `ScanSummary.write` writes, `protocol` first; `Envelope.key` names it
+as one string. `get` answers only the exact key, and the envelope inside the file must match it
+too: a corrupt file, another protocol or another envelope is a miss, never a result. A summary of a working tree has no tree oid and is never stored. The
 ledger never stands in for a summary: it lacks incompletes, triples, couplings and every finding
 the ledger does not count. A CI job may later publish summaries of master trees under the same key
 and format for readers to fetch read-only; nothing here fetches or publishes.
@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 
 from hoglint.facts import BINARY_NAME
-from hoglint.ledger.envelope import BuildId, EngineError, Envelope
+from hoglint.ledger.envelope import NATIVE, BinaryIds, EngineError, Envelope
 from hoglint.ledger.scan import ProtocolError, ScanSummary
 
 MAX_BYTES = 2 * 1024**3
@@ -152,24 +152,24 @@ class ExtractorStore:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or cache_root() / "extractors"
 
-    def path(self, build_id: str) -> Path:
-        return self.root / build_id / BINARY_NAME
+    def path(self, native_id: str) -> Path:
+        return self.root / native_id / BINARY_NAME
 
-    def find(self, build_id: str) -> Path | None:
-        path = self.path(build_id)
+    def find(self, native_id: str) -> Path | None:
+        path = self.path(native_id)
         if not path.is_file():
             return None
         try:
-            if BuildId.of_binary(path) != build_id:
+            if BinaryIds.of(path, NATIVE) != native_id:
                 return None
         except EngineError:
             return None
         os.utime(path)
         return path
 
-    def keep(self, binary: Path, build_id: str) -> None:
-        """Copies a binary in under its build id, unless one is already there."""
-        path = self.path(build_id)
+    def keep(self, binary: Path, native_id: str) -> None:
+        """Copies a binary in under its native id, unless one is already there."""
+        path = self.path(native_id)
         if path.is_file():
             return
         path.parent.mkdir(parents=True, exist_ok=True)

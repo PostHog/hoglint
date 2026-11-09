@@ -29,10 +29,15 @@ from hoglint.facts import Extractor
 from hoglint.index import GraphIndex
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.envelope import (
+    ENGINE,
     ENGINE_PYTHON,
-    BuildId,
+    ENGINE_SOURCES,
+    NATIVE,
+    PROTOCOL,
+    BinaryIds,
     EngineError,
     EngineId,
+    EngineSources,
     Envelope,
     Framework,
     PolicyFiles,
@@ -214,6 +219,14 @@ class Runner:
         return Run(code_root, config, graph, result, result.ledger or ledger, exceptions, policy_root)
 
 
+def native_id_of(crate: Path) -> str:
+    """The `[native]` id of a crate's sources."""
+    sources = EngineSources.read(crate)
+    if sources is None:
+        raise EngineError(f"{crate} has no {ENGINE_SOURCES}: the engine predates run summary protocol {PROTOCOL}")
+    return sources.digest(NATIVE)
+
+
 def portable_of(run: Run) -> Portable:
     return Portable.of(run.policy_root or run.root, run.root)
 
@@ -348,13 +361,16 @@ class LocalEngine:
             raise EngineError(str(error)) from error
 
     @cached_property
-    def build_id(self) -> str:
-        return BuildId.of_binary(self.binary)
+    def native_id(self) -> str:
+        """The `[native]` id the extractor binary was built from."""
+        return BinaryIds.of(self.binary, NATIVE)
 
     @cached_property
     def id(self) -> str:
         crate = EngineId.crate_of(PACKAGE_DIR)
-        return EngineId.of(crate, self.name) if crate is not None else EngineId.installed(self.name, self.build_id)
+        if crate is not None:
+            return EngineId.of(crate, self.name)
+        return EngineId.installed(self.name, BinaryIds.of(self.binary, ENGINE))
 
     def framework(self, config: Config) -> str:
         packages = as_tuple(config.discovery.get("external"))
@@ -417,40 +433,39 @@ class BaseEngines:
             return None if engine_id is None else BaseEngine(engine_id)
         crate = package.parent
         self.check_local(crate)
-        build_id = BuildId.of_sources(base_root / crate)
-        if build_id is None:
-            raise EngineError(f"the base engine has no extractor sources in {crate}")
         if engine_id == self.local.id:
             return BaseEngine(engine_id)
-        return BaseEngine(engine_id, self.binary(build_id, crate), base_root / package.parent)
+        return BaseEngine(engine_id, self.binary(native_id_of(base_root / crate), crate), base_root / package.parent)
 
     def check_local(self, crate: Path) -> None:
-        """This checkout's extractor must be the build of its own sources, and it is kept for later bases."""
-        expected = BuildId.of_sources(self.repo / crate)
-        if expected is None:
+        """This checkout's extractor must be built from its own Rust sources (`[native]`; a Python
+        edit needs no rebuild), and it is kept for later bases. A checkout without its source list
+        runs an extractor it does not describe, so there is nothing to check."""
+        if EngineSources.read(self.repo / crate) is None:
             return
-        if expected != self.local.build_id:
+        expected = native_id_of(self.repo / crate)
+        if expected != self.local.native_id:
             raise EngineError(
-                f"{self.local.binary} is extractor build {self.local.build_id}, but the sources in {crate} "
-                f"are build {expected}; rebuild it with {crate}/bin/build"
+                f"{self.local.binary} was built from native sources {self.local.native_id}, but the sources in "
+                f"{crate} are {expected}; rebuild it with {crate}/bin/build"
             )
         self.extractors.keep(self.local.binary, expected)
 
-    def binary(self, build_id: str, crate: Path) -> Path:
+    def binary(self, native_id: str, crate: Path) -> Path:
         override = os.environ.get("HOGLINT_BASE_FACTS_BIN")
         if override:
-            found = BuildId.of_binary(Path(override))
-            if found != build_id:
-                raise EngineError(f"HOGLINT_BASE_FACTS_BIN is extractor build {found}; the base needs {build_id}")
+            found = BinaryIds.of(Path(override), NATIVE)
+            if found != native_id:
+                raise EngineError(f"HOGLINT_BASE_FACTS_BIN is native build {found}; the base needs {native_id}")
             return Path(override)
-        if build_id == self.local.build_id:
+        if native_id == self.local.native_id:
             return self.local.binary
-        stored = self.extractors.find(build_id)
+        stored = self.extractors.find(native_id)
         if stored is not None:
             return stored
         raise EngineError(
-            f"no hoglint-facts binary of build {build_id} for the base engine: build {crate}/bin/build in a "
-            f"checkout of the base commit and copy the binary it prints to {self.extractors.path(build_id)}, "
+            f"no hoglint-facts binary of native build {native_id} for the base engine: build {crate}/bin/build "
+            f"in a checkout of the base commit and copy the binary it prints to {self.extractors.path(native_id)}, "
             "or set HOGLINT_BASE_FACTS_BIN"
         )
 

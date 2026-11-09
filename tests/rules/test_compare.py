@@ -11,7 +11,7 @@ import pytest
 
 from hoglint.compare import Comparer, RawPolicy, Scans
 from hoglint.facts import Extractor
-from hoglint.ledger.envelope import BuildId, Envelope
+from hoglint.ledger.envelope import NATIVE, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.records import FindingRecord
@@ -240,7 +240,7 @@ ENGINE_PACKAGE = "tools/hoglint/hoglint"
 FAKE_CRATE = {
     "tools/hoglint/Cargo.toml": "[package]\nname = 'fake'\n",
     "tools/hoglint/src/main.rs": "fn main() {}\n",
-    "tools/hoglint/engine-sources.txt": "protocol 1\nsrc/**/*.rs\nhoglint/**/*.py\n",
+    "tools/hoglint/engine-sources.txt": "[facts]\nsrc/**/*.rs\n[native]\n[engine]\nprotocol 1\nhoglint/**/*.py\n",
 }
 
 
@@ -266,7 +266,9 @@ def test_compare_tells_a_base_without_engine_from_a_base_engine_that_fails(
         (repo / ENGINE_PACKAGE / "__main__.py").write_text("raise SystemExit('broken base engine')\n")
         write_files(repo, FAKE_CRATE)
         fake_binary = tmp_path / "base-facts"
-        fake_binary.write_text(f"#!/bin/sh\necho {BuildId.of_sources(repo / 'tools/hoglint')}\n")
+        base_sources = EngineSources.read(repo / "tools/hoglint")
+        assert base_sources is not None
+        fake_binary.write_text(f"#!/bin/sh\necho {base_sources.digest(NATIVE)}\n")
         fake_binary.chmod(0o755)
         env["HOGLINT_BASE_FACTS_BIN"] = str(fake_binary)
     git_in(repo, "init", "-q")
