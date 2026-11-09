@@ -73,7 +73,7 @@ def test_posthog_preset_products_zones_exports_and_isolated(tmp_path: Path) -> N
         ("products.alerts.backend.logic", "products.access_control.backend.logic", "import"),
         ("products.billing.backend.logic.charge", "posthog.api.thing", "import"),
         ("products.billing.backend.logic.charge", "products.alerts.backend.presentation.views", "import"),
-        ("products.billing.backend.models.Invoice", "products.alerts.backend.logic", "write(save)"),
+        ("products.billing.backend.models.Invoice", "products.alerts.backend.logic", "reference"),
     ]
     assert found(result, "presentation-uses-facade") == [
         ("products.alerts.backend.presentation.views", "products.billing.backend.logic")
