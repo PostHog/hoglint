@@ -32,12 +32,20 @@ def assign(target: str, value: object, line: int, scope: int = -1, flags: int = 
 DJANGO: dict[str, dict] = {
     f"{SITE}django/db/models/base.py": {"defs": [class_def("Model", [], 1)]},
     f"{SITE}django/db/models/fields/related.py": {
-        "defs": [class_def("ForeignKey", [], 1), class_def("OneToOneField", ["ForeignKey"], 2)]
+        "defs": [
+            class_def("ForeignKey", [], 1),
+            class_def("OneToOneField", ["ForeignKey"], 2),
+            class_def("ManyToManyField", [], 3),
+        ]
     },
     f"{SITE}django/dispatch/dispatcher.py": {"defs": [class_def("Signal", [], 1), func_def("receiver", 2)]},
     f"{SITE}django/db/models/signals.py": {
         "imports": [import_from("django.dispatch.dispatcher", "Signal")],
-        "assigns": [assign("post_save", {"call": "Signal"}, 2)],
+        "assigns": [assign("post_save", {"call": "Signal"}, 2), assign("post_delete", {"call": "Signal"}, 3)],
+    },
+    f"{SITE}django/contrib/auth/models.py": {
+        "imports": [import_from("django.db.models.base", "Model")],
+        "defs": [class_def("Group", ["Model"], 1)],
     },
     f"{SITE}django/apps/config.py": {"defs": [class_def("AppConfig", [], 1)]},
 }

@@ -16,6 +16,7 @@ import yaml
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
+from hoglint.packs.django.sites import PRODUCER_ERROR
 from hoglint.spike.core import CLASS, NO_CONST, SITE_MARKER, Core, const_of, is_const
 
 Key = tuple[str, str]
@@ -291,6 +292,15 @@ class MigrationReader:
                 out.append(path)
         return sorted(out)
 
+    def parse(self, app_label: str, path: str) -> MigrationDecl:
+        """A migration that cannot be read keeps its node, with its parents unknown."""
+        module = self.core.index.module_of[path]
+        try:
+            return self.parser.parse(app_label, path, module, self.core.store.records[path])
+        except Exception as error:  # one unreadable migration is unknown, the others still count
+            reason = f"{PRODUCER_ERROR}: {type(error).__name__}: {error}"
+            return MigrationDecl(app_label, PurePosixPath(path).stem, path, module, unresolved=[reason])
+
     def read(self, projection: AliasProjection) -> MigrationGraph:
         decls: dict[Key, MigrationDecl] = {}
         migrated: set[str] = set()
@@ -302,9 +312,7 @@ class MigrationReader:
                 continue
             migrated.add(app.label)
             for path in self.files(module):
-                record = self.core.store.records[path]
-                name = self.core.index.module_of[path]
-                decls[(app.label, PurePosixPath(path).stem)] = self.parser.parse(app.label, path, name, record)
+                decls[(app.label, PurePosixPath(path).stem)] = self.parse(app.label, path)
         graph = StaticGraph(decls, migrated, unmigrated)
         graph.build()
         aliases = {app: projection.aliases(app) for app in {a for a, _ in graph.nodes} | migrated | unmigrated}

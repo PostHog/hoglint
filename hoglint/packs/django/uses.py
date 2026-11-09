@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Resolution
 from hoglint.packs.django.models import ModelRegistry
 from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition, split_chain
-from hoglint.packs.django.sites import PathKinds, make_site
+from hoglint.packs.django.sites import PathKinds, failure_edge, file_site, make_site
 from hoglint.packs.django.symbols import FileBindings, Symbol, SymbolKind, SymbolResolver
 from hoglint.spike.core import ClassRef, Core, module_of_path
 
@@ -75,6 +75,24 @@ class ModelUses:
         return []
 
 
+class LocalSources:
+    """Which model reference a local holds at a point in its scope. A reassignment starts a new source."""
+
+    def __init__(self) -> None:
+        self.assigned: dict[tuple[int, str], list[tuple[int, int, int]]] = defaultdict(list)
+
+    def assign(self, scope: int, local: str, line: int, column: int, index: int) -> None:
+        self.assigned[(scope, local)].append((line, column, index))
+
+    def held(self, scope: int, local: str, line: int, column: int) -> int | None:
+        """The last assignment before the use. A use above every assignment (a loop) takes the first one."""
+        rows = sorted(self.assigned.get((scope, local), ()))
+        if not rows:
+            return None
+        before = [index for at_line, at_column, index in rows if (at_line, at_column) < (line, column)]
+        return before[-1] if before else rows[0][2]
+
+
 class UseProducer:
     """`reference` edges onto first-party models, each with a Django shape."""
 
@@ -91,13 +109,16 @@ class UseProducer:
             module, is_package = module_of_path(path)
             if "refs" not in record and "uses" not in record:
                 continue
-            bindings = FileBindings(record, module, is_package)
-            edges.extend(self.file_edges(path, record, module, bindings))
+            try:
+                bindings = FileBindings(record, module, is_package)
+                edges.extend(self.file_edges(path, record, module, bindings))
+            except Exception as error:  # one unreadable file is unknown, the other files still count
+                edges.append(failure_edge("reference", REFERENCE_PRODUCER, file_site(path), error))
         return edges
 
     def file_edges(self, path: str, record: dict, module: str, bindings: FileBindings) -> list[Edge]:
         out: list[Edge] = []
-        sources: dict[tuple[int, str], int] = {}
+        sources = LocalSources()
         positions: dict[int, UsePosition] = {}
         later: dict[int, list[UsePosition]] = defaultdict(list)
         derived: list[list] = []
@@ -112,19 +133,19 @@ class UseProducer:
                 shape = self.shapes.classify(position)
                 local = position.local_target()
                 if local is not None:
-                    sources[(scope, local)] = len(out)
+                    sources.assign(scope, local, line, column, len(out))
                 positions[len(out)] = position
                 out.append(self.edge(path, record, module, scope, line, column, hit, shape))
         for row in sorted(derived, key=lambda r: (r[2], r[3])):
-            scope, _, _, _, root, chain, up, origin = row
-            index = sources.get((origin, root))
+            scope, _, line, column, root, chain, up, origin = row
+            index = sources.held(origin, root, line, column)
             if index is None:
                 continue
             position = UsePosition(split_chain(chain), tuple(up.split()))
             later[index].append(position)
             local = position.local_target()
             if local is not None:
-                sources[(scope, local)] = index
+                sources.assign(scope, local, line, column, index)
         for index, uses in later.items():
             refined = self.shapes.refine(positions[index], uses)
             current = Shape(out[index].shape, out[index].shape_detail)
@@ -177,12 +198,20 @@ class GetModelProducer:
     def produce(self, files: list[tuple[str, dict]]) -> list[Edge]:
         out = []
         for path, record in files:
-            module, _ = module_of_path(path)
-            for row in record.get("calls", ()):
-                callee = row[4]
-                if "." not in callee or callee.rsplit(".", 1)[-1] != "get_model":
-                    continue
-                out.append(self.edge(path, record, module, row))
+            try:
+                out.extend(self.file_edges(path, record))
+            except Exception as error:  # one unreadable file is unknown, the other files still count
+                out.append(failure_edge("model-label", MODEL_LABEL_PRODUCER, file_site(path), error))
+        return out
+
+    def file_edges(self, path: str, record: dict) -> list[Edge]:
+        module, _ = module_of_path(path)
+        out = []
+        for row in record.get("calls", ()):
+            callee = row[4]
+            if "." not in callee or callee.rsplit(".", 1)[-1] != "get_model":
+                continue
+            out.append(self.edge(path, record, module, row))
         return out
 
     @staticmethod

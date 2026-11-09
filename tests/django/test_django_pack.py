@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django_facts import FactRepo, func_def, import_from
+from django_facts import FactRepo, assign, class_def, func_def, import_from
 from hoglint.model import Resolution
 from hoglint.spike.core import FUNC
 
@@ -27,9 +27,12 @@ RECEIVERS = {
 }
 
 HOOKS = {
-    "billing/hooks.py": {"defs": [func_def("register_refund_hook", 1)]},
+    "billing/hooks.py": {"defs": [func_def("register_refund_hook", 1), class_def("register_payload", [], 2)]},
     "shop/wiring.py": {
-        "imports": [import_from("billing.hooks", "register_refund_hook", scope=0, flags=FUNC, line=2)],
+        "imports": [
+            import_from("billing.hooks", "register_refund_hook", scope=0, flags=FUNC, line=2),
+            import_from("billing.hooks", "register_payload", scope=0, flags=FUNC, line=2),
+        ],
         "defs": [
             func_def("wire", 1),
             func_def("handler", 7, dec=[{"call": "register_refund_hook", "args": []}]),
@@ -37,6 +40,7 @@ HOOKS = {
         "callees": [
             [0, -1, "register_refund_hook", 1, 3, 4],
             [0, -1, "self.registry.register_thing", 1, 4, 4],
+            [0, -1, "register_payload", 1, 5, 4],
             [-1, 1, "register_refund_hook", 1, 6, 1],
         ],
     },
@@ -79,7 +83,7 @@ def test_signal_edges_resolve_class_and_label_senders_and_keep_the_rest_unresolv
     assert {e.attr("signal") for e in edges.values()} == {"django.db.models.signals.post_save"}
 
 
-def test_installs_edges_from_calls_and_decorators_through_function_local_imports() -> None:
+def test_installs_edges_from_calls_and_decorators_through_function_local_imports_and_no_class_hooks() -> None:
     graph = FactRepo(HOOKS).graph(hooks=("**.register_*",))
 
     edges = sorted(
@@ -92,3 +96,113 @@ def test_installs_edges_from_calls_and_decorators_through_function_local_imports
         ("wire", "call", "None", Resolution.UNRESOLVED, ""),
         ("wire", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
     ]
+
+
+RECEIVER_LISTS = {
+    "shop/receivers.py": {
+        "imports": [
+            import_from("django.dispatch.dispatcher", "receiver"),
+            import_from("django.db.models.signals", "post_save", line=2),
+            import_from("django.db.models.signals", "post_delete", line=2),
+            import_from("shop.models", "Order", line=3),
+        ],
+        "defs": [
+            func_def("on_opaque", 6, dec=[{"call": "receiver", "args": [{"o": "List"}], "kw": [["sender", "Order"]]}]),
+            func_def(
+                "on_literal",
+                9,
+                dec=[
+                    {"call": "receiver", "args": [{"tuple": ["post_save", "post_delete"]}], "kw": [["sender", "Order"]]}
+                ],
+            ),
+        ],
+        "uses": [[-1, 0, "post_save", "", 1, 5, 11], [-1, 0, "post_delete", "", 1, 5, 22]],
+    }
+}
+
+
+def test_receiver_on_a_list_of_signals_gives_one_edge_per_signal() -> None:
+    graph = FactRepo(RECEIVER_LISTS).graph()
+
+    edges = sorted((e.site.scope, e.attr("signal"), str(e.target)) for e in graph.by_kind("signal"))
+
+    assert edges == [
+        ("on_literal", "django.db.models.signals.post_delete", "shop.models.Order"),
+        ("on_literal", "django.db.models.signals.post_save", "shop.models.Order"),
+        ("on_opaque", "django.db.models.signals.post_delete", "shop.models.Order"),
+        ("on_opaque", "django.db.models.signals.post_save", "shop.models.Order"),
+    ]
+
+
+TEAMS = {
+    "shop/teams.py": {
+        "imports": [
+            import_from("django.db.models.base", "Model"),
+            import_from("django.db.models.fields.related", "ManyToManyField"),
+            import_from("django.contrib.auth.models", "Group"),
+        ],
+        "defs": [
+            class_def("Team", ["Model"], 2),
+            class_def("Staff", ["Group"], 4),
+            class_def("Ledger", ["Model"], 6),
+            class_def("Meta", [], 7, scope=2, flags=8),
+            class_def("Entry", ["Ledger"], 9),
+        ],
+        "assigns": [
+            assign("friends", {"call": "ManyToManyField", "args": [{"s": "Team"}]}, 3, scope=0, flags=8),
+            assign("app_label", {"s": "books"}, 8, scope=3, flags=8),
+        ],
+    }
+}
+
+
+def test_relations_follow_django_for_m2m_to_own_name_concrete_parents_and_meta() -> None:
+    graph = FactRepo(TEAMS).graph()
+
+    relations = {(e.site.scope, e.attr("field")): e for e in graph.by_kind("relation")}
+    accessors = {e.attr("field"): e.surface for e in graph.by_kind("reverse-accessor")}
+
+    assert graph.failed_producers == {}
+    assert relations[("Team", "friends")].attr("hidden") == "false"
+    assert accessors["friends"] == "team_set"
+    assert str(relations[("Staff", "group_ptr")].target) == "django.contrib.auth.models.Group"
+    assert graph.symbols["shop.teams.Ledger"]["label"] == "books.Ledger"
+    assert graph.symbols["shop.teams.Entry"]["label"] == "shop.Entry"
+
+
+def test_a_model_that_cannot_be_read_is_an_unresolved_edge_and_the_others_still_count() -> None:
+    broken = {
+        "shop/teams.py": {
+            **TEAMS["shop/teams.py"],
+            "assigns": [{"s": 0, "c": 0, "op": "=", "t": ["friends"], "v": {"call": "ManyToManyField"}, "f": 8}],
+        }
+    }
+    graph = FactRepo(broken).graph()
+
+    failed = [e for e in graph.by_kind("relation") if e.attr("reason") == "producer-error"]
+
+    assert graph.failed_producers == {}
+    assert [(e.site.scope, e.resolution) for e in failed] == [("Team", Resolution.UNRESOLVED)]
+    assert {e.attr("field") for e in graph.by_kind("relation")} >= {"order", "group_ptr"}
+
+
+VIEWS = {
+    "shop/views.py": {
+        "imports": [import_from("shop.models", "Order"), import_from("billing.models", "Invoice", line=2)],
+        "defs": [func_def("close", 3)],
+        "refs": [
+            [0, -1, 4, 9, "Order", ".objects.filter()", "assign:qs"],
+            [0, -1, 5, 4, "qs", ".update()", "expr", 0],
+            [0, -1, 6, 9, "Invoice", ".objects.filter()", "assign:qs"],
+            [0, -1, 7, 4, "qs", ".count()", "expr", 0],
+        ],
+    }
+}
+
+
+def test_a_reassigned_local_hands_each_later_use_to_the_assignment_before_it() -> None:
+    graph = FactRepo(VIEWS).graph()
+
+    flow = {e.surface: e.attr("flow_shape") for e in graph.by_kind("reference") if e.site.module == "shop.views"}
+
+    assert flow == {"shop.models.Order": "write(update)", "billing.models.Invoice": ""}

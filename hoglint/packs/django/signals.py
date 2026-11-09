@@ -7,18 +7,21 @@ No sender, or a sender that is not a class, gives an unresolved edge: unknown is
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.config import DjangoPackConfig
 from hoglint.packs.django.models import ModelRegistry
-from hoglint.packs.django.sites import PathKinds, make_site
+from hoglint.packs.django.sites import PathKinds, failure_edge, file_site, make_site
 from hoglint.packs.django.symbols import FileNames, Symbol, SymbolKind, SymbolResolver
 from hoglint.spike.core import ClassRef, Core, const_of, module_of_path, qualname
 
 SIGNAL_PRODUCER = "django.signals@1"
 CONNECT = "connect"
 UNKNOWN = "?"
+OPAQUE_SEQUENCES = frozenset({"List", "Tuple"})
+PLAIN_ATTRS = re.compile(r"(\.\w+)*")
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,14 @@ def sv_text(value: object) -> str:
     if isinstance(value, dict) and "o" in value:
         return f"<{value['o']}>"
     return UNKNOWN
+
+
+def sequence_items(value: object) -> list[object] | None:
+    """Elements of a literal list or tuple V value, else None."""
+    if not isinstance(value, dict):
+        return None
+    items = value.get("list", value.get("tuple"))
+    return items if isinstance(items, list) else None
 
 
 class SignalProducer:
@@ -114,22 +125,69 @@ class SignalProducer:
             attrs=tuple(attrs),
         )
 
+    def header_signals(self, names: FileNames, idx: int) -> list[str]:
+        """Signals named anywhere in the header of def `idx`, in source order."""
+        found: list[tuple[int, int, str]] = []
+        for _, header, root, attrs, count, line, column in names.record.get("uses", ()):
+            if header != idx or not PLAIN_ATTRS.fullmatch(attrs):
+                continue
+            symbol = names.resolve(root + attrs)
+            if self.is_signal(symbol) and symbol is not None:
+                found.extend([(line, column, symbol.qualified)] * count)
+        for row in names.record.get("refs", ()):
+            _, header, line, column, root, chain = row[:6]
+            if len(row) > 7 or header != idx or not PLAIN_ATTRS.fullmatch(chain):
+                continue
+            symbol = names.resolve(root + chain)
+            if self.is_signal(symbol) and symbol is not None:
+                found.append((line, column, symbol.qualified))
+        return [qualified for _, _, qualified in sorted(found)]
+
+    def decorator_signals(self, names: FileNames, idx: int, receivers: list[dict]) -> list[list[str]]:
+        """The signals of each receiver decorator on one def.
+
+        `@receiver([a, b])` arrives as an opaque list argument. Its names still show up as uses
+        in the def header, so a lone opaque list takes the header signals no other decorator names.
+        """
+        out: list[list[str]] = []
+        opaque: list[int] = []
+        for position, dec in enumerate(receivers):
+            args = dec.get("args", [])
+            first = args[0] if args else None
+            items = sequence_items(first)
+            if items is not None:
+                out.append([self.signal_name(names, item) for item in items])
+            elif isinstance(first, dict) and first.get("o") in OPAQUE_SEQUENCES:
+                out.append([UNKNOWN])
+                opaque.append(position)
+            else:
+                out.append([self.signal_name(names, first)] if args else [UNKNOWN])
+        if len(opaque) != 1:
+            return out
+        named = {signal for position, signals in enumerate(out) if position not in opaque for signal in signals}
+        listed = [signal for signal in self.header_signals(names, idx) if signal not in named]
+        if listed:
+            out[opaque[0]] = listed
+        return out
+
     def decorator_edges(self, path: str, names: FileNames) -> list[Edge]:
         out: list[Edge] = []
         module = names.module
         defs = names.record.get("defs", [])
         for idx, d in enumerate(defs):
+            receivers = []
             for dec in d.get("dec", ()):
                 if not isinstance(dec, dict) or not isinstance(dec.get("call"), str):
                     continue
                 found = names.resolve(dec["call"])
-                if found is None or found.qualified not in self.receivers:
-                    continue
-                args = dec.get("args", [])
-                signals = [self.signal_name(names, args[0])] if args else [UNKNOWN]
+                if found is not None and found.qualified in self.receivers:
+                    receivers.append(dec)
+            if not receivers:
+                continue
+            site = Site(path, module, qualname(defs, idx), d["l"], d["c"])
+            receiver = f"{module}.{qualname(defs, idx)}"
+            for dec, signals in zip(receivers, self.decorator_signals(names, idx, receivers), strict=True):
                 sender = self.sender(names, dec.get("kw", []))
-                site = Site(path, module, qualname(defs, idx), d["l"], d["c"])
-                receiver = f"{module}.{qualname(defs, idx)}"
                 out.extend(self.edge(site, path, sender, signal, receiver, "decorator") for signal in signals)
         return out
 
@@ -173,11 +231,16 @@ class SignalProducer:
             out.extend(self.edge(site, path, sender, signal.qualified, UNKNOWN, "connect") for _ in range(count))
         return out
 
+    def file_edges(self, path: str, record: dict) -> list[Edge]:
+        module, is_package = module_of_path(path)
+        names = FileNames(self.symbols, record, module, is_package)
+        return self.decorator_edges(path, names) + self.connect_edges(path, names)
+
     def produce(self, files: list[tuple[str, dict]]) -> list[Edge]:
         out: list[Edge] = []
         for path, record in files:
-            module, is_package = module_of_path(path)
-            names = FileNames(self.symbols, record, module, is_package)
-            out.extend(self.decorator_edges(path, names))
-            out.extend(self.connect_edges(path, names))
+            try:
+                out.extend(self.file_edges(path, record))
+            except Exception as error:  # one unreadable file is unknown, the other files still count
+                out.append(failure_edge("signal", SIGNAL_PRODUCER, file_site(path), error))
         return out

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
-from hoglint.model import Context, Site
-from hoglint.packs.django.symbols import scope_name
-from hoglint.spike.core import FUNC, IF, SITE_MARKER, TRY, TYPE_ONLY, Core
+from hoglint.model import Context, Edge, Resolution, Site
+from hoglint.packs.django.symbols import MODULE_SCOPE, scope_name
+from hoglint.spike.core import FUNC, IF, SITE_MARKER, TRY, TYPE_ONLY, Core, module_of_path
+
+PRODUCER_ERROR = "producer-error"
 
 TEST_DIRS = frozenset({"test", "tests"})
 MIGRATION_DIR = "migrations"
@@ -47,6 +49,24 @@ class PathKinds:
 
 def make_site(record: dict, module: str, scope: int, line: int, column: int = 0) -> Site:
     return Site(record["path"], module, scope_name(record.get("defs", []), scope), line, column)
+
+
+def file_site(path: str) -> Site:
+    return Site(path, module_of_path(path)[0], MODULE_SCOPE, 0)
+
+
+def failure_edge(kind: str, producer: str, site: Site, error: Exception) -> Edge:
+    """One item a producer could not read: unknown on that item, while the other items still count."""
+    return Edge(
+        kind=kind,
+        site=site,
+        surface="",
+        targets=(),
+        resolution=Resolution.UNRESOLVED,
+        contexts=PathKinds.contexts(site.path),
+        producer=producer,
+        attrs=(("reason", PRODUCER_ERROR), ("error", f"{type(error).__name__}: {error}")),
+    )
 
 
 def first_party_records(core: Core, roots: tuple[str, ...]) -> list[tuple[str, dict]]:

@@ -21,6 +21,7 @@ O2O = "django.db.models.fields.related.OneToOneField"
 M2M = "django.db.models.fields.related.ManyToManyField"
 GENERIC = "django.contrib.contenttypes.fields.GenericRelation"
 AUTH_USER_MODEL = "AUTH_USER_MODEL"
+RECURSIVE = "self"
 UNRESOLVED_PREFIX = "?"
 
 
@@ -108,10 +109,14 @@ class ModelIndex:
         return attrs
 
     def meta(self, ref: ClassRef) -> dict[str, object]:
+        """Own Meta, else the first inherited one. Django removes Meta from concrete models, so only
+        abstract models and plain mixins pass theirs on."""
         info = self.info(ref)
         if info.meta_idx is not None:
             return self.meta_attrs(ref.module, info.meta_idx)
         for base in self.mro(ref)[1:]:
+            if self.is_model(base) and not self.is_abstract(base):
+                continue
             base_info = self.info(base)
             if base_info.meta_idx is not None:
                 attrs = self.meta_attrs(base.module, base_info.meta_idx)
@@ -253,6 +258,7 @@ class ModelRegistry:
         self.models: dict[ClassRef, ModelEntry] = {}
         self.by_label: dict[str, ClassRef] = {}
         self.unknowns: list[dict[str, str]] = []
+        self.failures: list[str] = []
 
     def discover(self) -> None:
         for path in sorted(self.core.store.records):
@@ -271,8 +277,11 @@ class ModelRegistry:
                 continue
             for name in table.classes:
                 ref = ClassRef(module, name)
-                if self.index.is_model(ref):
-                    self.register(ref, path, table.class_lines[name])
+                try:
+                    if self.index.is_model(ref):
+                        self.register(ref, path, table.class_lines[name])
+                except Exception as error:  # one unreadable class is a gap, the other models still count
+                    self.failures.append(f"{ref.id}: {type(error).__name__}: {error}")
 
     def register(self, ref: ClassRef, path: str, line: int) -> None:
         meta = self.index.meta(ref)
@@ -305,7 +314,7 @@ class ModelRegistry:
 
     def resolve_label(self, value: str, app_label: str, self_ref: ClassRef | None) -> ClassRef | None:
         """`app.Model`, `Model` (same app) or `self` to a model class, as Django's registry would."""
-        if value == "self":
+        if value == RECURSIVE:
             return self_ref
         if "." not in value:
             value = f"{app_label}.{value}"
@@ -530,13 +539,7 @@ class RelationBuilder:
         query_name = decl.related_query_name
         symmetrical = decl.symmetrical
         if decl.kind == "m2m" and symmetrical is None:
-            target = decl.target
-            symmetrical = (
-                isinstance(target, dict)
-                and "s" in target
-                and len(target) == 1
-                and target["s"] in ("self", contributed.ref.name)
-            )
+            symmetrical = const_of(decl.target) == RECURSIVE
         if decl.kind == "generic":
             related_name = query_name or "+"
         if decl.kind == "m2m":
@@ -586,7 +589,8 @@ class RelationBuilder:
     def ptr_record(
         self, model: ModelEntry, name: str, parent: ClassRef, contributed: ModelEntry, from_parent: bool
     ) -> Relation:
-        target = self.registry.models[parent]
+        found = self.registry.target_info(parent)
+        target_label = found[1] if found is not None else parent.id
         class_lower = contributed.ref.name.lower()
         return Relation(
             model=model.ref.id,
@@ -599,7 +603,7 @@ class RelationBuilder:
             declared_in=contributed.ref.module,
             declared_line=contributed.line,
             concrete_target=parent.id,
-            target_label=target.label,
+            target_label=target_label,
             target_module=parent.module,
             from_abstract=None,
             from_concrete_parent=from_parent,
@@ -626,15 +630,14 @@ class RelationBuilder:
             out.append(self.ptr_record(model, name, parent, entry, from_parent))
         return out
 
-    def relations(self) -> list[Relation]:
-        out = []
-        for ref, entry in self.registry.models.items():
-            if entry.abstract or entry.proxy:
+    def concrete_entries(self) -> list[ModelEntry]:
+        return [entry for entry in self.registry.models.values() if not entry.abstract and not entry.proxy]
+
+    def model_relations(self, entry: ModelEntry) -> list[Relation]:
+        out = self.fields_of(entry, entry, False)
+        for parent in self.concrete_parents(entry.ref):
+            parent_entry = self.registry.models.get(parent)
+            if parent_entry is None:
                 continue
-            out.extend(self.fields_of(entry, entry, False))
-            for parent in self.concrete_parents(ref):
-                parent_entry = self.registry.models.get(parent)
-                if parent_entry is None:
-                    continue
-                out.extend(self.fields_of(parent_entry, entry, True))
+            out.extend(self.fields_of(parent_entry, entry, True))
         return out

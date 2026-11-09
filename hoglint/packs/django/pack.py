@@ -99,6 +99,9 @@ class DjangoPack:
             for name in DEPENDENT_PRODUCERS:
                 graph.failed_producers[name] = f"{MODELS_PRODUCER} failed"
             return None
+        failures = producers.registry.failures
+        if failures:
+            graph.failed_producers[MODELS_PRODUCER] = f"{len(failures)} classes unread, first {failures[0]}"
         for name, producer in producers.in_order():
             try:
                 graph.edges.extend(producer())

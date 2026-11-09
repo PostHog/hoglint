@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
-from hoglint.packs.django.models import ModelRegistry, Relation, RelationBuilder
+from hoglint.packs.django.models import ModelEntry, ModelRegistry, Relation, RelationBuilder
+from hoglint.packs.django.sites import failure_edge
 
 RELATION_PRODUCER = "django.relations@1"
 ACCESSOR_PRODUCER = "django.reverse-accessors@1"
@@ -139,12 +140,22 @@ class RelationEdges:
             )
         return out
 
-    def produce(self) -> list[Edge]:
+    def model_edges(self, entry: ModelEntry) -> list[Edge]:
         out: list[Edge] = []
-        for relation in self.builder.relations():
+        for relation in self.builder.model_relations(entry):
             out.append(self.relation_edge(relation))
             accessor = self.accessor_edge(relation)
             if accessor is not None:
                 out.append(accessor)
+        return out
+
+    def produce(self) -> list[Edge]:
+        out: list[Edge] = []
+        for entry in self.builder.concrete_entries():
+            try:
+                out.extend(self.model_edges(entry))
+            except Exception as error:  # one unreadable model is unknown, the other models still count
+                site = Site(entry.path, entry.ref.module, entry.ref.name, entry.line)
+                out.append(failure_edge("relation", RELATION_PRODUCER, site, error))
         out.extend(self.label_edges())
         return out
