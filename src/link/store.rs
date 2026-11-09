@@ -2,7 +2,9 @@
 //! the link's own facts in a compact binary form, so a warm run never parses JSON in Rust.
 //!
 //! Layout: MAGIC, u32 JSON length, the JSON, then the binary part with a per-entry string table.
-//! An entry without the current MAGIC (an older format) is read from its JSON and rewritten.
+//! The [facts] id that names the cache directory covers this file, `facts.rs` and `intern.rs`, so
+//! a change to the binary part never meets an entry written by older code.
+//! An entry without MAGIC is a miss: the blob is extracted again and the entry rewritten.
 
 use super::facts::{
     Argument, Assign, CallRow, Def, DefKind, FileFacts, Import, Op, Param, RefRow, StrRow, V,
@@ -10,7 +12,7 @@ use super::facts::{
 use super::intern::{Interner, Sid};
 use rustc_hash::FxHashMap;
 
-/// Bump when the binary part changes.
+/// Marks a complete entry.
 pub const MAGIC: &[u8; 8] = b"HLFACTS1";
 
 struct Enc<'i> {

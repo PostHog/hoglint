@@ -1,7 +1,8 @@
 # The files that define hoglint, as glob patterns relative to tools/hoglint, in three sections.
 # Each section makes one id, and each one adds files to the section above it:
-#   [facts]   the extractor. Its id keys the per-blob fact cache, so a link or Python change
-#             never re-extracts.
+#   [facts]   the extractor and the link code that writes and reads a fact cache entry. Its id
+#             keys the per-blob fact cache, so other link or Python changes never re-extract.
+#             A new link file is in [facts] until it is excluded here.
 #   [native]  [facts] plus the link and the binding: the whole Rust side. The loaded extractor
 #             and native module must report this id, or the run stops with "rebuild" (exit 2).
 #   [engine]  [native] plus the Python engine and presets, and the protocol line. Its id keys run
@@ -19,7 +20,13 @@
 
 [facts]
 src/**/*.rs
-!src/link/**
+!src/link/groups.rs
+!src/link/index.rs
+!src/link/mod.rs
+!src/link/paths.rs
+!src/link/produce.rs
+!src/link/resolve.rs
+!src/link/scope.rs
 Cargo.toml
 Cargo.lock
 build.rs
