@@ -170,6 +170,46 @@ def test_conflicting_assignments_are_a_config_error(tmp_path: Path) -> None:
         Engine(config, graph, tmp_path).evaluate()
 
 
+UNREAD_CONFLICTS = """
+schema = 1
+
+[fields]
+silo = { type = "enum", values = ["cell", "control"], on = "symbol" }
+
+[kinds]
+model = { subclass_of = "django.db.models.Model" }
+"""
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        ('[kinds.cell]\ndecorated_by = "lib.cell_silo_model"\n', "posthog.models.team.Team: matches kinds"),
+        ('[kinds.base]\nsubclass_of = "django.db.models.Model"\n', "django.db.models.Model: matches kinds"),
+        (
+            '[[assign]]\nsymbols = { decorated_by = "lib.cell_silo_model" }\nset = { silo = "cell" }\n\n'
+            '[[assign]]\nmatch = "posthog/**"\nsymbols = { subclass_of = "django.db.models.Model" }\n'
+            'set = { silo = "control" }\n',
+            "posthog.models.team.Team: field 'silo' set differently",
+        ),
+    ],
+)
+def test_symbol_conflicts_are_a_config_error_when_no_rule_reads_the_symbol(
+    tmp_path: Path, extra: str, message: str
+) -> None:
+    config = config_from(tmp_path, UNREAD_CONFLICTS + extra)
+    graph = (
+        GraphBuilder()
+        .module("posthog.models.team")
+        .symbol("posthog.models.team.Team")
+        .edge("inherit", "posthog.models.team", "django.db.models.Model", attrs=(("class", "Team"),))
+        .edge("decorate", "posthog.models.team", "lib.cell_silo_model", attrs=(("decorated", "Team"),))
+        .graph
+    )
+    with pytest.raises(ConfigError, match=message):
+        Engine(config, graph, tmp_path).evaluate()
+
+
 def test_explain_names_each_source(labeler: Labeler) -> None:
     rows = {name: (value, source) for name, value, source in labeler.explain("posthog.egress.client")}
     assert rows["package"][0] == "egress"

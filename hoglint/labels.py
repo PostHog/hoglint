@@ -288,11 +288,18 @@ class Labeler:
                 collected.setdefault(name, []).append(Candidate(value, assignment.label(), assignment.override))
         return self.resolve_all(symbol, collected)
 
+    @staticmethod
+    def path_allows(assignment: Assignment, path: str | None) -> bool:
+        """Whether a symbol assignment's `match` globs let symbols at this path through."""
+        if not assignment.match:
+            return True
+        return path is not None and any(glob_match(p, path) is not None for p in assignment.match)
+
     def symbol_matches(self, assignment: Assignment, symbol: str, path: str | None) -> bool:
         match = assignment.symbols
         if match is None:
             return False
-        if assignment.match and (path is None or not any(glob_match(p, path) is not None for p in assignment.match)):
+        if not self.path_allows(assignment, path):
             return False
         if match.decorated_by and not set(match.decorated_by) & set(self.facts.decorators(symbol)):
             return False
@@ -524,12 +531,59 @@ class Labeler:
 
     # ── whole-repo pass ──
 
-    def label_modules(self) -> list[str]:
-        """Labels every module once, so path conflicts surface before rules run. Symbols are
-        labelled when a rule reads them; their conflicts surface after the rules."""
+    def find_conflicts(self) -> list[str]:
+        """Every config conflict of this graph, found before rules run, whatever the rules read.
+
+        Each module is labelled. Symbols are checked only where two specs could disagree: kinds
+        when two of them could match one symbol, symbol assignments where two that set a field
+        to different values both reach the symbol's path."""
         for module in self.graph.modules:
             self.module_labels(module)
+        self.find_kind_conflicts()
+        self.find_symbol_assignment_conflicts()
         return self.conflicts
+
+    def kinds_can_overlap(self) -> bool:
+        """Whether two [kinds] could match one symbol. Two that need different `decl`s never do."""
+        specs = list(self.config.kinds.values())
+        return any(
+            not (first.decl and second.decl and first.decl != second.decl)
+            for index, first in enumerate(specs)
+            for second in specs[index + 1 :]
+        )
+
+    def find_kind_conflicts(self) -> None:
+        """A symbol with facts can match several kinds; a name without facts only when two kinds
+        list it in `subclass_of`."""
+        if not self.kinds_can_overlap():
+            return
+        listed = {name for spec in self.config.kinds.values() for name in spec.subclass_of}
+        for symbol in (*self.graph.symbols, *sorted(listed)):
+            self.kind_match(symbol)
+
+    def rival_symbol_assigns(self) -> list[Assignment]:
+        """Symbol assignments that set a field another symbol assignment sets to a different value."""
+        values: dict[str, set[str]] = {}
+        for assignment in self.symbol_assigns:
+            for name, value in assignment.sets:
+                spec = self.config.fields.get(name)
+                if spec is None or spec.type is not FieldType.SET:
+                    values.setdefault(name, set()).add(repr(value))
+        contested = {name for name, seen in values.items() if len(seen) > 1}
+        return [a for a in self.symbol_assigns if any(name in contested for name, _ in a.sets)]
+
+    def find_symbol_assignment_conflicts(self) -> None:
+        rivals = self.rival_symbol_assigns()
+        if len(rivals) < 2:
+            return
+        contested: dict[str | None, bool] = {}
+        for symbol in self.graph.symbols:
+            module = self.module_of_symbol(symbol)
+            if module not in contested:
+                path = self.path_of(module) if module else None
+                contested[module] = sum(self.path_allows(rival, path) for rival in rivals) > 1
+            if contested[module]:
+                self.symbol_labels(symbol)
 
     def explain(self, module: str) -> list[tuple[str, str, str]]:
         """(field, value, source) for every declared field of a module, unassigned ones included."""

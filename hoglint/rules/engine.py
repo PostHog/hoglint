@@ -167,7 +167,7 @@ class Engine:
             raise ConfigError(sorted(set(self.labeler.conflicts)))
 
     def run_rules(self) -> dict[str, RuleRun]:
-        self.labeler.label_modules()
+        self.labeler.find_conflicts()
         self.raise_conflicts()
         ctx = RuleContext(self.config, self.graph, self.labeler, self.repo_root)
         empty = self.empty_expected_kinds()
@@ -211,6 +211,7 @@ class Engine:
             result.levels[name] = level
             for group in level.passing:
                 result.scan[level_line(name, group)] = 1
+        self.raise_conflicts()
         if rewrite_ledger and ledger is not None:
             ledger.lines = dict(result.scan)
             result.ledger = ledger
