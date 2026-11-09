@@ -720,7 +720,7 @@ class Deriver:
             reads.symbols.add(f"{ff.dotted}:{cur}")
             if b.client or b.calls & dispatchers:
                 return ("direct" if not chain else "via-helper"), chain, False, reads
-            for name in b.calls:
+            for name in sorted(b.calls):
                 if name in helpers:
                     pending.extend((h, [*chain, f"{ff.dotted}:{h}"]) for h in helpers[name])
                 else:
