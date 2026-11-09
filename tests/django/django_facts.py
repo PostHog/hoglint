@@ -7,7 +7,7 @@ from pathlib import Path
 from core.support import SITE, Repo, assign_row, class_def, func_def, import_row
 from hoglint.core.config import CoreConfig
 from hoglint.model import Graph
-from hoglint.packs.django.config import DjangoPackConfig
+from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
 
 FIRST_PARTY = ("shop", "billing", "proj")
@@ -75,9 +75,9 @@ class FactRepo(Repo):
     def __init__(self, *groups: dict[str, dict]) -> None:
         super().__init__(DJANGO, APPS, *groups)
 
-    def graph(self, hooks: tuple[str, ...] = ()) -> Graph:
+    def graph(self, hooks: tuple[str, ...] = (), routing: DatabaseRouting | None = None) -> Graph:
         build = self.build(CoreConfig(first_party=FIRST_PARTY))
         graph = build.graph()
-        config = DjangoPackConfig(settings_modules=("proj.settings",), hooks=hooks)
+        config = DjangoPackConfig(settings_modules=("proj.settings",), routing=routing, hooks=hooks)
         DjangoPack.run(build, config, graph, Path("."))
         return graph

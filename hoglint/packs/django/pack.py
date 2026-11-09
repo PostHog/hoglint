@@ -107,9 +107,10 @@ class DjangoRun:
         return AppLoads(self.build, self.apps).produce()
 
     def symbols(self) -> list[Edge]:
-        assert self.registry is not None and self.apps is not None
-        databases = self.migrations.aliases if self.migrations is not None else {}
-        self.graph.symbols.update(ModelFacts(self.registry, self.apps).symbols(databases))
+        """Model and app symbols. Rules on model edges read them through `dst.kind`, so a failure
+        here makes those edge kinds incomplete."""
+        assert self.registry is not None and self.apps is not None and self.migrations is not None
+        self.graph.symbols.update(ModelFacts(self.registry, self.apps).symbols(self.migrations.aliases))
         return []
 
     def plan(self) -> ProducerPlan:
@@ -131,7 +132,7 @@ class DjangoRun:
                 ProducerStep(SIGNALS_PRODUCER, frozenset({"signal"}), self.signal_edges, (MODELS_PRODUCER,)),
                 ProducerStep(INSTALLS_PRODUCER, frozenset({"installs"}), self.installs_edges),
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
-                ProducerStep(SYMBOLS_PRODUCER, frozenset(), self.symbols, (MODELS_PRODUCER,)),
+                ProducerStep(SYMBOLS_PRODUCER, MODEL_KINDS, self.symbols, (MODELS_PRODUCER, MIGRATION_PRODUCER)),
             ]
         )
 

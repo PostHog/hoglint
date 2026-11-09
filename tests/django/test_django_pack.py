@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.support import (
     assign_row as assign,
     class_def,
@@ -9,6 +11,8 @@ from core.support import (
 from django_facts import FactRepo
 from hoglint.core.symbols import FUNC
 from hoglint.model import Resolution
+from hoglint.packs.django.config import DatabaseRouting
+from hoglint.packs.django.pack import MODEL_KINDS
 
 RECEIVERS = {
     "shop/receivers.py": {
@@ -222,3 +226,13 @@ def test_finding_no_model_fails_the_model_producers_instead_of_reading_clean() -
     assert failed["django.models@1"] == "NoModels: no first-party model found"
     assert failed["django.relations@1"] == "django.models@1 failed"
     assert "django.migrations@1" not in failed
+
+
+def test_a_failed_migration_read_fails_the_symbols_that_carry_its_databases() -> None:
+    graph = FactRepo().graph(routing=DatabaseRouting(Path("missing/db_routing.yaml")))
+
+    failed = graph.failed_producers
+
+    assert failed["django.migrations@1"].reason.startswith("FileNotFoundError")
+    assert failed["django.symbols@1"].reason == "django.migrations@1 failed"
+    assert failed["django.symbols@1"].kinds == MODEL_KINDS
