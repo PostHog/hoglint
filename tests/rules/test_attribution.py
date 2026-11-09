@@ -341,7 +341,10 @@ def built_before_its_sources(section: str) -> bool:
     return any((CRATE / rel).stat().st_mtime > built for rel in sources.files(section))
 
 
-@pytest.mark.parametrize("section", SECTIONS)
+# Not [engine]: its sources include every Python file, so the id a binary embeds at build time is
+# stale after any Python edit. The vectors in test_each_id_is_the_one_engine_sources_txt_defines,
+# which src/sources.rs repeats, pin the [engine] algorithm in both languages.
+@pytest.mark.parametrize("section", (FACTS, NATIVE))
 def test_the_extractor_reports_the_ids_of_its_sources(section: str) -> None:
     if built_before_its_sources(section):
         pytest.skip(f"no extractor binary built after the last [{section}] source edit")
