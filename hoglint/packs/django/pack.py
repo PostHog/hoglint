@@ -12,6 +12,7 @@ from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.model import Edge, Graph
+from hoglint.native.queries import PackQueries
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
 from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsProducer
@@ -52,6 +53,7 @@ class DjangoRun:
         self.config = config
         self.repo_root = repo_root
         self.graph = graph
+        self.queries = PackQueries.of(build, graph)
         self.files: list[FileScope] = []
         self.apps: AppRegistry | None = None
         self.registry: ModelRegistry | None = None
@@ -101,19 +103,18 @@ class DjangoRun:
 
     def use_edges(self) -> list[Edge]:
         assert self.registry is not None
-        models = self.registry.models
-        return UseProducer(self.build, self.registry).produce(self.files, self.graph.edges_to("reference", models))
+        return UseProducer(self.build, self.registry, self.queries).produce(self.files)
 
     def get_model_edges(self) -> list[Edge]:
         assert self.registry is not None
-        return GetModelProducer(self.build, self.registry).produce(self.files)
+        return GetModelProducer(self.build, self.registry, self.queries).produce(self.files)
 
     def signal_edges(self) -> list[Edge]:
         assert self.registry is not None
-        return SignalProducer(self.build, self.registry, self.config).produce(self.files)
+        return SignalProducer(self.build, self.registry, self.config, self.queries).produce(self.files)
 
     def installs_edges(self) -> list[Edge]:
-        return InstallsProducer(self.build, self.config.hooks).produce(self.files)
+        return InstallsProducer(self.build, self.config.hooks, self.queries).produce(self.files)
 
     def load_edges(self) -> list[Edge]:
         assert self.apps is not None

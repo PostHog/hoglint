@@ -3,12 +3,15 @@
 Sources: `@receiver(<signal>, sender=X)` (and configured wrappers of it) on a def, and
 `<signal>.connect(fn, sender=X)`. A string sender resolves through the model label table.
 No sender, or a sender that is not a class, gives an unresolved edge: unknown is never clean.
+
+Candidates come from queries: decorators by their `decorate` edge (by origin) or by a spelled
+receiver name in the file, and `connect` calls by spelling. Each one then resolves here.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.harness import each_item, failure_edge
@@ -16,6 +19,7 @@ from hoglint.core.records import sequence_items, str_literal, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import Hit
 from hoglint.model import Edge, EntityId, Resolution, Site
+from hoglint.native.queries import PackQueries, Words, entities_named
 from hoglint.packs.django.config import DjangoPackConfig
 from hoglint.packs.django.models import ModelRegistry
 
@@ -34,10 +38,22 @@ class Sender:
     reason: str = ""
 
 
+@dataclass(frozen=False)
+class FileCandidates:
+    """One file's candidates: defs with a possible receiver decorator, and `connect` call rows."""
+
+    defs: set[tuple[int, int]] = field(default_factory=set)
+    calls: list[list] = field(default_factory=list)
+    callees: list[list] = field(default_factory=list)
+
+
 class SignalProducer:
-    def __init__(self, build: CoreBuild, registry: ModelRegistry, config: DjangoPackConfig) -> None:
+    def __init__(
+        self, build: CoreBuild, registry: ModelRegistry, config: DjangoPackConfig, queries: PackQueries
+    ) -> None:
         self.build = build
         self.registry = registry
+        self.queries = queries
         self.receivers = frozenset(config.receiver_decorators)
         self.signal_bases = config.signal_bases
         self.signal_cache: dict[EntityId, bool] = {}
@@ -155,9 +171,11 @@ class SignalProducer:
             out[opaque[0]] = listed
         return out
 
-    def decorator_edges(self, scope: FileScope) -> list[Edge]:
+    def decorator_edges(self, scope: FileScope, positions: set[tuple[int, int]]) -> list[Edge]:
         out: list[Edge] = []
         for idx, d in enumerate(scope.defs):
+            if (d["l"], d["c"]) not in positions:
+                continue
             receivers = []
             for dec in d.get("dec", ()):
                 if not isinstance(dec, dict) or not isinstance(dec.get("call"), str):
@@ -194,11 +212,11 @@ class SignalProducer:
         hit = self.lookup(scope, receiver_chain, at_scope, line)
         return hit if self.is_signal(hit) else None
 
-    def connect_edges(self, scope: FileScope) -> list[Edge]:
+    def connect_edges(self, scope: FileScope, calls: list[list], callees: list[list]) -> list[Edge]:
         """`<signal>.connect(fn, sender=X)`; without argument facts the edge stays unresolved."""
         out: list[Edge] = []
         with_args: set[tuple[int, str]] = set()
-        for at_scope, _, line, column, flags, callee, args, kws in scope.record.get("calls", ()):
+        for at_scope, _, line, column, flags, callee, args, kws in calls:
             signal = self.connected_signal(scope, callee, at_scope, line)
             if signal is None:
                 continue
@@ -207,7 +225,7 @@ class SignalProducer:
             site = scope.site(at_scope, line, column)
             sender = self.sender(scope, kws, at_scope, line)
             out.append(self.edge(scope, site, flags, sender, str(signal.origin), receiver, "connect"))
-        for at_scope, _, callee, count, line, column in scope.record.get("callees", ()):
+        for at_scope, _, callee, count, line, column in callees:
             if (at_scope, callee) in with_args:
                 continue
             signal = self.connected_signal(scope, callee, at_scope, line)
@@ -219,12 +237,36 @@ class SignalProducer:
             out.extend([edge] * count)
         return out
 
-    def file_edges(self, scope: FileScope) -> list[Edge]:
-        return self.decorator_edges(scope) + self.connect_edges(scope)
+    def candidates(self, files: list[FileScope]) -> dict[str, FileCandidates]:
+        """Defs whose decorator may resolve to a receiver: its `decorate` edge targets one, or the
+        file spells a receiver's name in a decorator or an import, where a target can be unknown.
+        And every `connect` call: its receiver decides."""
+        out: dict[str, FileCandidates] = {}
+        paths = {scope.path for scope in files}
+        targets = [entity for name in sorted(self.receivers) for entity in entities_named(name)]
+        for edge in self.queries.edges_to("decorate", targets):
+            if edge.site.path in paths:
+                out.setdefault(edge.site.path, FileCandidates()).defs.add((edge.site.line, edge.site.column))
+        spelled = Words.ending(name.rpartition(".")[2] for name in self.receivers)
+        for scope in files:
+            if self.queries.may_mention(scope, ("defs", "imports"), spelled):
+                decorated = {(d["l"], d["c"]) for d in scope.defs if d.get("dec")}
+                out.setdefault(scope.path, FileCandidates()).defs.update(decorated)
+        for scope, rows in self.queries.calls_named(files, "calls", (CONNECT,)):
+            out.setdefault(scope.path, FileCandidates()).calls = rows
+        for scope, rows in self.queries.calls_named(files, "callees", (CONNECT,)):
+            out.setdefault(scope.path, FileCandidates()).callees = rows
+        return out
 
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("signal", SIGNALS_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
     def produce(self, files: list[FileScope]) -> list[Edge]:
-        return each_item(files, self.file_edges, self.failure)
+        candidates = self.candidates(files)
+
+        def file_edges(scope: FileScope) -> list[Edge]:
+            found = candidates[scope.path]
+            return self.decorator_edges(scope, found.defs) + self.connect_edges(scope, found.calls, found.callees)
+
+        return each_item([scope for scope in files if scope.path in candidates], file_edges, self.failure)

@@ -1,22 +1,23 @@
 """Model uses with their ORM/DRF shape, and `apps.get_model` label edges.
 
-Core makes one `reference` edge per use site, with its use position. This pack keeps those
-whose target is a model, gives each a Django shape, and follows locals the use flows into
-(`qs = M.objects.filter(); qs.update()`), which only the extractor's derived rows show.
+Core makes one `reference` edge per use site, with its use position. This pack reads those
+whose target is a model (a query by target), gives each a Django shape, and follows locals the
+use flows into (`qs = M.objects.filter(); qs.update()`), which only the derived rows of those
+files show.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
-from dataclasses import replace
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.harness import each_item, failure_edge
 from hoglint.core.producers import chain_tokens, leading_attrs
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
+from hoglint.core.symbols import absolute_import
 from hoglint.model import Edge, Resolution
+from hoglint.native.queries import EdgeFields, PackQueries
 from hoglint.packs.django.models import ModelRegistry
 from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition
 
@@ -25,6 +26,13 @@ GET_MODEL_PRODUCER = "django.get-model@1"
 CORE_REFERENCE_PRODUCER = "core-reference@1"
 GET_MODEL = "get_model"
 NOT_A_REGISTRY = frozenset({"self", "cls"})
+
+
+def attr_of(attrs: tuple[tuple[str, str], ...], name: str) -> str:
+    for key, value in attrs:
+        if key == name:
+            return value
+    return ""
 
 
 class LocalSources:
@@ -46,26 +54,44 @@ class LocalSources:
 
 
 class UseProducer:
-    """Shaped `reference` edges onto first-party models, from core's reference edges."""
+    """Shaped `reference` edges onto first-party models, made from core's reference edges by
+    target. Each use gets one edge, made once: its shape and flow shape are known first."""
 
-    def __init__(self, build: CoreBuild, registry: ModelRegistry) -> None:
+    def __init__(self, build: CoreBuild, registry: ModelRegistry, queries: PackQueries) -> None:
         self.build = build
         self.registry = registry
+        self.queries = queries
         self.shapes = OrmShapes()
+        self.positions: dict[tuple[str, str], tuple[UsePosition, str | None]] = {}
+        self.position_shapes: dict[tuple[str, str], Shape] = {}
 
-    def is_model_edge(self, edge: Edge) -> bool:
-        target = edge.target
-        return edge.producer == CORE_REFERENCE_PRODUCER and target is not None and target in self.registry.models
+    def position(self, chain: str, up: str) -> tuple[UsePosition, str | None]:
+        """A use position and the local it is assigned to. Most uses repeat a few (chain, up)
+        pairs, so each one parses once."""
+        key = (chain, up)
+        found = self.positions.get(key)
+        if found is None:
+            position = UsePosition.of(chain, up)
+            found = self.positions[key] = (position, position.local_target())
+        return found
 
-    def by_file(self, references: Iterable[Edge]) -> dict[str, list[Edge]]:
-        out: dict[str, list[Edge]] = defaultdict(list)
-        for edge in references:
-            if self.is_model_edge(edge):
-                out[edge.site.path].append(edge)
+    def shape(self, chain: str, up: str, position: UsePosition) -> Shape:
+        key = (chain, up)
+        found = self.position_shapes.get(key)
+        if found is None:
+            found = self.position_shapes[key] = self.shapes.classify(position)
+        return found
+
+    def by_file(self) -> dict[str, list[EdgeFields]]:
+        out: dict[str, list[EdgeFields]] = defaultdict(list)
+        models = self.registry.models
+        for fields in self.queries.fields_to("reference", models):
+            if fields.producer == CORE_REFERENCE_PRODUCER and len(fields.targets) == 1 and fields.targets[0] in models:
+                out[fields.site.path].append(fields)
         return out
 
-    def produce(self, files: list[FileScope], references: Iterable[Edge]) -> list[Edge]:
-        uses = self.by_file(references)
+    def produce(self, files: list[FileScope]) -> list[Edge]:
+        uses = self.by_file()
 
         def edges_for(scope: FileScope) -> list[Edge]:
             return self.shaped(scope, uses.get(scope.path, [])) + self.aggregate_edges(scope)
@@ -76,42 +102,93 @@ class UseProducer:
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("reference", USES_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
-    def shaped(self, scope: FileScope, uses: list[Edge]) -> list[Edge]:
+    def shaped(self, scope: FileScope, uses: list[EdgeFields]) -> list[Edge]:
         if not uses:
             return []
-        out: list[Edge] = []
         sources = LocalSources()
         positions: list[UsePosition] = []
-        for edge in uses:
-            position = UsePosition.of(edge.attr("chain"), edge.attr("up"))
-            shape = self.shapes.classify(position)
-            local = position.local_target()
+        shapes: list[Shape] = []
+        locals_: set[str] = set()
+        for index, fields in enumerate(uses):
+            chain, up = attr_of(fields.attrs, "chain"), attr_of(fields.attrs, "up")
+            position, local = self.position(chain, up)
+            shape = self.shape(chain, up, position)
             if local is not None:
-                sources.assign(edge.site.scope, local, edge.site.line, edge.site.column, len(out))
+                site = fields.site
+                sources.assign(site.scope, local, site.line, site.column, index)
+                locals_.add(local)
             positions.append(position)
-            out.append(replace(edge, producer=USES_PRODUCER, shape=shape.kind, shape_detail=shape.detail))
+            shapes.append(shape)
         later: dict[int, list[UsePosition]] = defaultdict(list)
-        derived = sorted(scope.record.get("derived", ()), key=lambda r: (r[2], r[3]))
+        derived = sorted(scope.record.get("derived", ()), key=lambda r: (r[2], r[3])) if locals_ else []
         for at_scope, _, line, column, _, root, chain, up, origin in derived:
+            if root not in locals_:
+                continue
             index = sources.held(scope.scope_name(origin), root, line, column)
             if index is None:
                 continue
-            position = UsePosition.of(chain, up)
+            position, local = self.position(chain, up)
             later[index].append(position)
-            local = position.local_target()
             if local is not None:
                 sources.assign(scope.scope_name(at_scope), local, line, column, index)
+                locals_.add(local)
+        flow_shapes: dict[int, str] = {}
         for index, flows in later.items():
             refined = self.shapes.refine(positions[index], flows)
-            if refined is not None and refined != Shape(out[index].shape, out[index].shape_detail):
-                out[index] = replace(out[index], attrs=(*out[index].attrs, ("flow_shape", refined.text())))
+            if refined is not None and refined != shapes[index]:
+                flow_shapes[index] = refined.text()
+        out: list[Edge] = []
+        for index, fields in enumerate(uses):
+            attrs = fields.attrs
+            if index in flow_shapes:
+                attrs = (*attrs, ("flow_shape", flow_shapes[index]))
+            shape = shapes[index]
+            out.append(
+                Edge(
+                    "reference",
+                    fields.site,
+                    fields.surface,
+                    fields.targets,
+                    fields.resolution,
+                    fields.contexts,
+                    USES_PRODUCER,
+                    fields.via,
+                    fields.use,
+                    shape.kind,
+                    shape.detail,
+                    attrs,
+                )
+            )
+        return out
+
+    def first_party_roots(self, scope: FileScope, roots: set[str]) -> set[str]:
+        """Those of `roots` a first-party import binds anywhere in the file. A name that only
+        third-party imports bind cannot lead into first-party code, so its uses never reach a model."""
+        out: set[str] = set()
+        first_party = self.build.first_party
+        for _, _, _, _, target, level, name, asname in scope.record.get("imports", ()):
+            if name is None:
+                bound = asname or target.split(".")[0]
+                if bound in roots and first_party.contains(target):
+                    out.add(bound)
+                continue
+            bound = asname or name
+            if bound not in roots or name == "*":
+                continue
+            source = absolute_import(scope.module, scope.is_package, target, level)
+            if source is not None and first_party.contains(source):
+                out.add(bound)
         return out
 
     def aggregate_edges(self, scope: FileScope) -> list[Edge]:
         """`import a.b` then `a.b.Model`: L1 only counts these, so the shape stays unknown."""
         out: list[Edge] = []
-        for at_scope, _, root, attrs, count, line, column in scope.record.get("uses", ()):
-            if not attrs:
+        rows = [row for row in scope.record.get("uses", ()) if row[3]]
+        if not rows:
+            return out
+        roots = self.first_party_roots(scope, {row[2] for row in rows})
+        for at_scope, _, root, attrs, count, line, column in rows:
+            if root not in roots:
                 continue
             names = leading_attrs(chain_tokens(attrs))
             found, rest = self.build.context.chain_lookup(scope, ".".join([root, *names]), at_scope, line)
@@ -136,26 +213,25 @@ class UseProducer:
 
 
 class GetModelProducer:
-    """`apps.get_model("app", "Model")` and `get_model("app.Model")` with literal arguments."""
+    """`<receiver>.get_model("app", "Model")` with literal arguments, matched by spelling: the
+    receiver is often a parameter (`apps` in a migration), which has no origin."""
 
-    def __init__(self, build: CoreBuild, registry: ModelRegistry) -> None:
+    def __init__(self, build: CoreBuild, registry: ModelRegistry, queries: PackQueries) -> None:
         self.build = build
         self.registry = registry
+        self.queries = queries
 
     def produce(self, files: list[FileScope]) -> list[Edge]:
-        return each_item(files, self.file_edges, self.failure)
+        calls = {scope.path: rows for scope, rows in self.queries.calls_named(files, "calls", (GET_MODEL,))}
+
+        def file_edges(scope: FileScope) -> list[Edge]:
+            return [self.edge(scope, row) for row in calls[scope.path] if "." in row[5]]
+
+        return each_item([scope for scope in files if scope.path in calls], file_edges, self.failure)
 
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("model-label", GET_MODEL_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
-
-    def file_edges(self, scope: FileScope) -> list[Edge]:
-        out = []
-        for row in scope.record.get("calls", ()):
-            callee = row[5]
-            if "." in callee and callee.endswith(f".{GET_MODEL}"):
-                out.append(self.edge(scope, row))
-        return out
 
     @staticmethod
     def label_of(args: list, kws: list) -> tuple[str | None, str | None]:
