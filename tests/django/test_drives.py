@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from core.support import Repo, class_def, func_def, import_row
 from hoglint.core.config import CoreConfig
 from hoglint.model import Graph, Resolution
@@ -18,13 +20,23 @@ def name_row(scope: int, value: str, line: int) -> list:
     return [scope, -1, value, 1, line, 0]
 
 
+def calling_test(helper: str) -> dict:
+    """A test whose one method names the query kind and calls `helper`."""
+    return {
+        "imports": [import_row("common.helpers", helper, line=1)],
+        "defs": [class_def("TestTrends", [], 2), func_def("test_trends", 3, scope=0, flags=8)],
+        "names": [name_row(1, "TrendsQuery", 4)],
+        "callees": [callee_row(1, helper, 4)],
+    }
+
+
 def repo() -> Repo:
     """A query kind dispatched to the `charts` product, a chain of helpers that ends in the
-    dispatcher, and a test whose methods call into that chain from its start and its middle."""
+    dispatcher, and two tests that call into that chain: one from its start, past the depth
+    limit, and one from its middle, within it."""
     helpers = [func_def(f"h{i}", i) for i in range(1, HELPERS + 1)]
     calls = [callee_row(i - 1, f"h{i + 1}", i) for i in range(1, HELPERS)]
     calls.append(callee_row(HELPERS - 1, DISPATCH, HELPERS))
-    deep, shallow = 1, 2
     return Repo(
         {
             "posthog/schema_enums.py": {},
@@ -34,26 +46,19 @@ def repo() -> Repo:
             },
             "products/charts/backend/hogql_queries/trends.py": {"defs": [class_def("TrendsRunner", [], 1)]},
             "common/helpers.py": {"defs": helpers, "callees": calls},
-            "posthog/test/test_trends.py": {
-                "imports": [import_row("common.helpers", "h1", line=1), import_row("common.helpers", "h5", line=2)],
-                "defs": [
-                    class_def("TestTrends", [], 3),
-                    func_def("test_from_the_start", 4, scope=0, flags=8),
-                    func_def("test_from_the_middle", 6, scope=0, flags=8),
-                ],
-                "names": [name_row(deep, "TrendsQuery", 5), name_row(shallow, "TrendsQuery", 7)],
-                "callees": [callee_row(deep, "h1", 5), callee_row(shallow, "h5", 7)],
-            },
+            "posthog/test/test_from_the_start.py": calling_test("h1"),
+            "posthog/test/test_from_the_middle.py": calling_test("h5"),
         }
     )
 
 
-def test_a_walk_the_depth_limit_stops_is_unknown_and_never_hides_a_shorter_walk() -> None:
+@pytest.mark.parametrize("shuffle_seed", [0, 1])
+def test_a_walk_the_depth_limit_stops_is_unknown_whichever_test_walks_first(shuffle_seed: int) -> None:
     build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
 
-    edges = DrivesProducer(build, PackQueries.of(build, Graph())).produce()
+    edges = DrivesProducer(build, PackQueries.of(build, Graph()), shuffle_seed).produce()
 
-    assert {(e.site.scope, e.attr("execution"), e.resolution) for e in edges} == {
-        ("TestTrends.test_from_the_start", "unknown", Resolution.UNRESOLVED),
-        ("TestTrends.test_from_the_middle", "via-helper", Resolution.RESOLVED),
-    }
+    assert [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges] == [
+        ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, 4),
+        ("posthog.test.test_from_the_start", "unknown", Resolution.UNRESOLVED, 0),
+    ]

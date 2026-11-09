@@ -15,6 +15,7 @@ A file's facts are read on first use, so a run reads only what a drive can come 
 from __future__ import annotations
 
 import re
+import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from functools import cached_property
@@ -598,38 +599,36 @@ class TestFilter:
         )
 
 
-# --- call view (spike) -------------------------------------------------------------------------
+# --- call view ----------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Reach:
     """What the call view finds from one called name: a chain of hops to a dispatcher, or a miss.
 
-    `cut`: a patched name stopped a path. `exhausted`: the depth limit stopped a path, so a miss
-    is unknown, not none. `open`: the miss met a name that is still being walked (a cycle), so
-    it may change once that walk ends."""
+    `cut`: a patched name stopped a call on the way. `exhausted`: names were left to walk when the
+    depth limit stopped the walk, so a miss is unknown, not none."""
 
     ok: bool
     chain: tuple[str, ...] = ()
     cut: bool = False
     exhausted: bool = False
-    open: bool = False
-
-    @property
-    def final(self) -> bool:
-        """Whether the answer holds at any depth: a hit, or a miss that saw the whole call graph."""
-        return self.ok or not (self.exhausted or self.open)
 
 
 MISS = Reach(False)
 PATCHED = Reach(False, cut=True)
-TOO_DEEP = Reach(False, exhausted=True)
-IN_PROGRESS = Reach(False, open=True)
+
+Node = tuple[str, str, bool]  # (module, called name, whether the module's own defs count)
 
 
 class CallView:
+    """Follows a test's outward calls into helper modules, one call level at a time, at most
+    MAX_CALL_DEPTH levels deep. Each name is walked once per query, at the first level that
+    reaches it, so a query's answer (and its memo) depends only on the call graph and the limit,
+    never on which queries ran before it."""
+
     def __init__(self, facts: dict[str, FileFacts]) -> None:
         self.facts = facts
-        self.memo: dict[tuple[str, str, frozenset[str], bool], Reach] = {}
-        self.walking: set[tuple[str, str, frozenset[str], bool]] = set()
+        self.memo: dict[tuple[str, str, frozenset[str]], Reach] = {}
+        self.found_targets: dict[Node, list[tuple[str, Body]]] = {}
         self.imports_by_bound: dict[str, dict[str, list[ImportEdge]]] = {}
 
     def imports_named(self, ff: FileFacts, name: str) -> list[ImportEdge]:
@@ -645,8 +644,14 @@ class CallView:
     def body_executes(body: Body, dispatchers: frozenset[str]) -> bool:
         return body.client or bool(body.calls & dispatchers)
 
-    def targets(self, module: str, name: str, local: bool) -> list[tuple[str, Body]]:
-        found: list[tuple[str, Body]] = []
+    def targets(self, node: Node) -> list[tuple[str, Body]]:
+        """The bodies a call of `name` in `module` may run: the module's own top functions and
+        methods of that name (for a call inside a helper), and top functions it imports by it."""
+        found = self.found_targets.get(node)
+        if found is not None:
+            return found
+        module, name, local = node
+        found = self.found_targets[node] = []
         ff = self.facts.get(module)
         if ff is None:
             return found
@@ -661,42 +666,42 @@ class CallView:
                 found.append((edge.module, target.bodies[fid]))
         return found
 
-    def executes(self, module: str, name: str, patched: frozenset[str], depth: int = 0, local: bool = False) -> Reach:
-        """Only a final answer is memoized: a miss the depth limit or a cycle cut short may be a
-        hit from another depth or once the cycle's walk ends."""
+    def executes(self, module: str, name: str, patched: frozenset[str]) -> Reach:
         if name in patched:
             return PATCHED
         if module not in self.facts:
             return MISS
-        if depth >= MAX_CALL_DEPTH:
-            return TOO_DEEP
-        key = (module, name, patched, local)
+        key = (module, name, patched)
         found = self.memo.get(key)
-        if found is not None:
-            return found
-        if key in self.walking:
-            return IN_PROGRESS
-        self.walking.add(key)
-        found = self.walk(module, name, patched, depth, local)
-        self.walking.discard(key)
-        if found.final:
-            self.memo[key] = found
+        if found is None:
+            found = self.memo[key] = self.walk((module, name, False), patched)
         return found
 
-    def walk(self, module: str, name: str, patched: frozenset[str], depth: int, local: bool) -> Reach:
-        cut = exhausted = open_ = False
-        for target_module, body in self.targets(module, name, local):
-            hop = f"{target_module}:{body.fid}"
-            if self.body_executes(body, DISPATCH_CALLS - patched):
-                return Reach(True, (hop,), cut)
-            for call in sorted(body.calls):
-                found = self.executes(target_module, call, patched, depth + 1, local=True)
-                cut = cut or found.cut
-                exhausted = exhausted or found.exhausted
-                open_ = open_ or found.open
-                if found.ok:
-                    return Reach(True, (hop, *found.chain), cut)
-        return Reach(False, (), cut, exhausted, open_)
+    def walk(self, start: Node, patched: frozenset[str]) -> Reach:
+        """The first body, in level order, that runs a dispatcher, with the hops that reach it."""
+        dispatchers = DISPATCH_CALLS - patched
+        seen = {start}
+        level: list[tuple[Node, tuple[str, ...]]] = [(start, ())]
+        cut = False
+        for _ in range(MAX_CALL_DEPTH):
+            following: list[tuple[Node, tuple[str, ...]]] = []
+            for node, chain in level:
+                for target_module, body in self.targets(node):
+                    hops = (*chain, f"{target_module}:{body.fid}")
+                    if self.body_executes(body, dispatchers):
+                        return Reach(True, hops, cut)
+                    for call in sorted(body.calls):
+                        if call in patched:
+                            cut = True
+                            continue
+                        callee = (target_module, call, True)
+                        if callee not in seen:
+                            seen.add(callee)
+                            following.append((callee, hops))
+            if not following:
+                return Reach(False, (), cut)
+            level = following
+        return Reach(False, (), cut, exhausted=True)
 
 
 @dataclass(frozen=True)
@@ -968,11 +973,15 @@ class Deriver:
 
 class DrivesProducer:
     """Runs the deriver over the test files that may drive a wiring location, and turns each
-    drive into an edge."""
+    drive into an edge.
 
-    def __init__(self, build: CoreBuild, queries: PackQueries) -> None:
+    `shuffle_seed` derives the tests in a shuffled order (edges still come out in file order):
+    tests use it to show that no answer depends on which tests ran first."""
+
+    def __init__(self, build: CoreBuild, queries: PackQueries, shuffle_seed: int | None = None) -> None:
         self.build = build
         self.queries = queries
+        self.shuffle_seed = shuffle_seed
 
     def facts(self) -> dict[str, FileFacts]:
         facts: dict[str, FileFacts] = {}
@@ -1021,11 +1030,13 @@ class DrivesProducer:
         deriver = Deriver(facts, self.queries)
         deriver.read_registry()
         deriver.grow_origins()
-        out: list[Edge] = []
-        for ff in facts.values():
-            if not ff.is_test or not deriver.may_drive(ff):
-                continue
+        tests = [ff for ff in facts.values() if ff.is_test and deriver.may_drive(ff)]
+        order = list(tests)
+        if self.shuffle_seed is not None:
+            random.Random(self.shuffle_seed).shuffle(order)
+        drives: dict[str, list[DriveEdge]] = {}
+        for ff in order:
             test = ff.test
             assert test is not None
-            out.extend(self.edge(drive, ff.rel) for drive in deriver.derive_file(ff, test))
-        return out
+            drives[ff.dotted] = deriver.derive_file(ff, test)
+        return [self.edge(drive, ff.rel) for ff in tests for drive in drives[ff.dotted]]
