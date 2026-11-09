@@ -31,6 +31,7 @@ from hoglint.model import (
     Owners,
     Remedy,
     Resolution,
+    Shown,
     Site,
 )
 from hoglint.selectors import (
@@ -715,6 +716,19 @@ class EdgeRule:
             out.append(env.dst.module)
         return tuple(m for m in out if m)
 
+    def finding_of(self, env: EdgeEnv, detail: Shown, ledgerable: bool, unknown: bool) -> Finding:
+        """The finding of one environment. Its identity, owner and subjects name the entity, so
+        they come from the environment, whatever made the decision."""
+        return Finding(
+            rule=self.spec.id,
+            identity=project(self.spec.identity, env.resolve),
+            detail=detail,
+            owner=self.ctx.owner(env.src.module),
+            subjects=self.subjects(env),
+            ledgerable=ledgerable and self.spec.ledger,
+            unknown=unknown,
+        )
+
     def emit(
         self,
         env: EdgeEnv,
@@ -724,17 +738,9 @@ class EdgeRule:
         witnesses: tuple[Edge, ...] = (),
         unknown: bool = False,
     ) -> Finding:
-        finding = self.ctx.finding(
-            self.spec,
-            project(self.spec.identity, env.resolve),
-            message,
-            env.src.module,
-            self.subjects(env),
-            witnesses or (env.edge,),
-            ledgerable=ledgerable,
-            unknown=unknown,
-            remedies=remedies or self.remedies(),
-        )
+        shown = witnesses or (env.edge,)
+        detail = FindingDetail(message, shown[0].site, shown, remedies or self.remedies())
+        finding = self.finding_of(env, detail, ledgerable, unknown)
         self.run.findings.append(finding)
         return finding
 

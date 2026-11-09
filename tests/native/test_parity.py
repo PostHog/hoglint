@@ -188,3 +188,40 @@ def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(
         ["products.billing.presentation.views.Plain"],
         ["products.billing.presentation.views.render"],
     ]
+
+
+# Two core modules import a product name that resolves and one that does not, with equal labels,
+# so each pair is one group: a grouped finding keeps the flags its judgment sets.
+BLOCK_REPO = {
+    **OWNERS_REPO,
+    "hoglint.toml": OWNERS_REPO["hoglint.toml"].replace(
+        "[rules.core-to-product]",
+        """[rules.core-imports]
+primitive = "edge"
+kinds = ["import"]
+from = "src.tier == 'core'"
+identity = ["src.module", "edge.surface"]
+growth_key = ["edge.surface"]
+on_unresolved = "block"
+
+[rules.core-to-product]""",
+    ),
+    "core/a.py": "from products.billing.models import Invoice\nfrom products.billing.gone import Lost\n",
+    "core/b.py": "from products.billing.logic import charge\nfrom products.billing.gone import Lost\n",
+}
+
+
+def test_grouped_findings_keep_the_flags_their_judgment_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out = dumps(tmp_path, BLOCK_REPO, monkeypatch)
+    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    flags = {
+        (row[1][0], row[1][1]): (row[9], row[10])
+        for row in read_lines(out["native"] / "findings.jsonl")
+        if row[0] == "core-imports"
+    }
+    assert flags == {
+        ("core.a", "products.billing.models.Invoice"): (True, False),
+        ("core.b", "products.billing.logic.charge"): (True, False),
+        ("core.a", "products.billing.gone.Lost"): (False, True),
+        ("core.b", "products.billing.gone.Lost"): (False, True),
+    }
