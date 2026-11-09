@@ -128,6 +128,15 @@ class Snapshots:
     def clean(self) -> bool:
         return not git(self.repo, "status", "--porcelain", "-z", "--untracked-files=all").strip("\0")
 
+    def side_input_drift(self, tree: str) -> list[str]:
+        """Files other than Python sources where the working tree differs from `tree`, untracked
+        ones included. hoglint still reads such files (owners, turbo.json, layout checks) from the
+        working tree, whatever snapshot the code comes from."""
+        others = ("--", ":!*.py", ":!*.pyi")
+        changed = git(self.repo, "diff", "--name-only", "-z", tree, *others).split("\0")
+        untracked = git(self.repo, "ls-files", "--others", "--exclude-standard", "-z", *others).split("\0")
+        return sorted({path for path in changed + untracked if path})
+
     def head_tree_in_worktree(self, ledger_path: str) -> str:
         """HEAD's tree when the working tree holds HEAD's sources and ledger, the files a run reads
         as code; empty otherwise."""
@@ -469,6 +478,30 @@ class BaseEngines:
         return summary
 
 
+class TreeSummaries:
+    """Stores summaries of runs whose code is a git tree but whose other inputs hoglint still reads
+    from the working tree. One is stored only when the working tree holds the tree's other files
+    too, so the stored summary is what a clean run of the tree makes."""
+
+    def __init__(self, snapshots: Snapshots, store: SummaryStore) -> None:
+        self.snapshots = snapshots
+        self.store = store
+
+    def put(self, summary: ScanSummary) -> None:
+        tree = summary.envelope.tree
+        if not tree:
+            return
+        drift = self.snapshots.side_input_drift(tree)
+        if drift:
+            more = f" and {len(drift) - 1} more" if len(drift) > 1 else ""
+            sys.stderr.write(
+                f"summary of tree {tree[:12]} not stored: {drift[0]}{more} differs from the tree, "
+                "and this run read it from the working tree\n"
+            )
+            return
+        self.store.put(summary.envelope, summary)
+
+
 @dataclass(frozen=True, slots=True)
 class Baseline:
     """What one check run attributes its incomplete results against.
@@ -490,12 +523,13 @@ class Baselines:
     once by blob id, with no checkout, and stored. A staged run stores its own summary under the
     index tree, so the next commit finds its baseline in the cache."""
 
-    def __init__(self, snapshots: Snapshots, engine: LocalEngine, store: SummaryStore) -> None:
+    def __init__(self, snapshots: Snapshots, engine: LocalEngine, store: SummaryStore, trees: TreeSummaries) -> None:
         self.snapshots = snapshots
         self.repo = snapshots.repo
         self.work_dir = snapshots.work_dir
         self.engine = engine
         self.store = store
+        self.trees = trees
 
     def prepare(self, policy_root: Path, staged: bool) -> Baseline:
         head_tree = self.snapshots.tree_of("HEAD")
@@ -511,7 +545,7 @@ class Baselines:
         if own_tree == head_tree or (not staged and self.snapshots.head_tree_in_worktree(config.ledger.file)):
             return Baseline(wanted, f"HEAD (tree {short}, this run)", is_self=True)
         summary = self.evaluate(policy_root, config.ledger.file, wanted)
-        self.store.put(wanted, summary)
+        self.trees.put(summary)
         return Baseline(envelope, f"HEAD (tree {short}, computed and stored)", summary.obligations())
 
     def evaluate(self, policy_root: Path, ledger_path: str, envelope: Envelope) -> ScanSummary:
@@ -530,7 +564,7 @@ class Baselines:
         head = obligations_of(run.result.incomplete(), portable_of(run))
         if store and baseline.envelope.tree:
             summary = summary_of(run, baseline.envelope, with_triples=False)
-            self.store.put(baseline.envelope, summary)
+            self.trees.put(summary)
         reference = head if baseline.is_self else baseline.reference
         return Attributed(attribute(head, reference), baseline.against, portable_of(run))
 
@@ -564,7 +598,8 @@ class Commands:
         self.snapshots = Snapshots(repo, work_dir)
         self.engine = LocalEngine()
         self.summaries = SummaryStore()
-        self.baselines = Baselines(self.snapshots, self.engine, self.summaries)
+        self.trees = TreeSummaries(self.snapshots, self.summaries)
+        self.baselines = Baselines(self.snapshots, self.engine, self.summaries, self.trees)
         self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore())
 
     def check(self, index: bool, write_ledger: bool, changed: bool) -> int:
@@ -683,7 +718,7 @@ class Commands:
             return stored, config
         run = self.runner.run(self.repo)
         summary = summary_of(run, self.engine.envelope(run, key.tree), with_triples=False)
-        self.summaries.put(summary.envelope, summary)
+        self.trees.put(summary)
         return summary, run.config
 
     @staticmethod
@@ -709,7 +744,7 @@ class Commands:
         head_tree = self.snapshots.head_tree_in_worktree(head.config.ledger.file)
         head_key = self.engine.envelope(head, head_tree)
         scans = Scans(head=summary_of(head, head_key, renames.modules()))
-        self.summaries.put(head_key, scans.head)
+        self.trees.put(scans.head)
         base_config = load_config(base_root, base_root / CONFIG_FILE) if (base_root / CONFIG_FILE).is_file() else None
         base_exceptions = ExceptionsFile()
         same_policy = False
@@ -804,7 +839,7 @@ class Commands:
                 head_base = summary_of(run, head_base_key, scope, with_triples=False)
             else:
                 head_base = self.base_engines.scan(engine, base_root, self.repo, head.envelope.tree, scope)
-            self.summaries.put(head_base.envelope, head_base)
+            self.trees.put(head_base)
         return base, head_base, source
 
     def scan(self, code_root: Path, out: Path, tree: str, scope_file: Path | None) -> int:

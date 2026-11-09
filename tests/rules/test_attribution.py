@@ -337,3 +337,16 @@ def test_query_reads_owners_from_the_owners_files_not_from_the_summary(tmp_path:
     (repo / "CODEOWNERS").write_text("*.py @team-b\n")
     owned = hoglint(repo, "query", "--by", "owners").stdout
     assert "@team-b  " in owned and "@team-a" not in owned
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_a_side_input_the_tree_does_not_hold_keeps_the_summary_out_of_the_cache(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {**FILES, "turbo.json": '{"tasks": {}}\n'})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    (repo / "turbo.json").write_text('{"tasks": {"contract-check": {}}}\n')
+    staged = hoglint(repo, "check", "--index")
+    assert "not stored: turbo.json differs from the tree" in staged.stderr
+    assert not list((tmp_path / "repo-cache" / "hoglint" / "summaries").rglob("*.json.gz"))
