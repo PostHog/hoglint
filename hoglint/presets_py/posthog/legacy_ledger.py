@@ -23,6 +23,7 @@ from hoglint.core.records import sequence_items, str_literal
 from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.packs.django.config import SECTION, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
+from hoglint.presets_py.posthog.drives import UNKNOWN_EXECUTION
 from hoglint.presets_py.posthog.facade import FACADE_PRODUCER
 from hoglint.presets_py.posthog.layout import CORE, backend_product, backend_rel, product_of_module, product_of_path
 from hoglint.presets_py.posthog.pack import POSTHOG_PACK
@@ -184,9 +185,11 @@ class LegacyLedger:
         return counts
 
     def drives(self) -> Counter[tuple[str, str, str]]:
+        """Drives that execute. Today's scanner reads a walk its depth limit stops as none; hoglint
+        keeps it as an unknown drive, which is no line here."""
         counts: Counter[tuple[str, str, str]] = Counter()
         for edge in self.graph.by_kind("drives"):
-            if edge.attr("execution") == "none":
+            if edge.attr("execution") in ("none", UNKNOWN_EXECUTION):
                 continue
             counts[(edge.attr("location"), edge.site.module, f"drives({edge.shape_detail})")] += 1
         return counts
