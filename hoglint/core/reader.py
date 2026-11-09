@@ -77,6 +77,12 @@ class BuildReader:
     def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
         return self.queries.importing(names)
 
+    def imported_modules(self, scope: FileScope) -> list[str]:
+        return self.queries.imported_modules(scope)
+
+    def subclasses(self, qualified: str) -> list[EntityId]:
+        return self.queries.subclasses(qualified)
+
 
 def python_pack_io(build: CoreBuild, graph: Graph) -> tuple[BuildReader, GraphSink]:
     """The reader and sink packs get on the Python engine."""

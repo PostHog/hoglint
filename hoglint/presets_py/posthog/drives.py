@@ -535,19 +535,6 @@ def is_client_call(callee: str) -> bool:
     return method in TEST_CLIENT_METHODS and receiver.endswith("client")
 
 
-def alias_modules(scope: FileScope) -> list[str]:
-    """The module each import of a file names: `import a.b` names a.b, `from a import b` a.b."""
-    out = []
-    for _, _, _, _, target, level, name, _ in scope.record.get("imports", []):
-        if name is None:
-            out.append(target)
-            continue
-        module = absolute_import(scope.module, scope.is_package, target, level)
-        if module is not None:
-            out.append(f"{module}.{name}")
-    return out
-
-
 class ImportIndex:
     """The `from` imports of every file by imported name, each file's rows in reverse source order
     (the spike's walk). A name's rows come from the reader's import query the first time the
@@ -826,7 +813,7 @@ class Deriver:
         if self.may_count_kind(ff) or self.test_filter.names_a_kind(ff, owner):
             return True
         prefixes = tuple(prefix for prefix, _, product in self.prefixes if product != owner)
-        for module in alias_modules(ff.reader.scope):
+        for module in self.snapshot.imported_modules(ff.reader.scope):
             if module.startswith(prefixes) or self.origin_products.get(module, set()) - {owner}:
                 return True
         return False

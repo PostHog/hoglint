@@ -125,4 +125,27 @@ impl Link {
         }
         out
     }
+
+    /// The module each import of a file names, in row order: `import a.b` names a.b, `from a
+    /// import b` names a.b. A relative import that climbs out of the repo names nothing.
+    pub fn imported_modules(&mut self, file: usize) -> Vec<Sid> {
+        let facts = self.core.facts.clone();
+        let Some(&scope) = self.scope_of_file.get(&(file as u32)) else {
+            return Vec::new();
+        };
+        let scope = &self.scopes[scope as usize];
+        let (module, is_package) = (scope.module, scope.is_package);
+        let it = &mut self.core.it;
+        let mut out = Vec::new();
+        for row in &facts.files[file].imports {
+            let Some(name) = row.name else {
+                out.extend(row.target);
+                continue;
+            };
+            if let Some(source) = absolute_import(it, module, is_package, row.target, row.level) {
+                out.push(it.join(source, name));
+            }
+        }
+        out
+    }
 }

@@ -142,6 +142,33 @@ impl Link {
             .collect()
     }
 
+    /// The qualified name and the flags of every def of the analyzed file with this scope
+    /// index, by def index: what `FileScope.qualnames`, `in_function` and `is_function_scope`
+    /// read from the defs. Flags: bit 0, the def sits inside a function body; bit 1, it is a
+    /// class.
+    fn def_scopes<'py>(
+        &self,
+        py: Python<'py>,
+        scope: u32,
+    ) -> PyResult<(Vec<String>, Bound<'py, PyBytes>)> {
+        self.rows()?;
+        let found = &self.inner.scopes[self.scope_index(scope)?];
+        let defs = &self.inner.core.facts.files[found.file as usize].defs;
+        let it = &self.inner.core.it;
+        let names = found
+            .qualnames
+            .iter()
+            .map(|&s| it.s(s).to_string())
+            .collect();
+        let flags: Vec<u8> = found
+            .in_function
+            .iter()
+            .zip(defs)
+            .map(|(&inside, def)| u8::from(inside) | (u8::from(def.is_class()) << 1))
+            .collect();
+        Ok((names, PyBytes::new(py, &flags)))
+    }
+
     fn file_id(&self, path: &str) -> Option<u32> {
         self.file_of.get(path).copied()
     }

@@ -26,6 +26,9 @@ Hits = tuple[str, list[tuple[str, str]]]
 
 
 ABSENT = object()
+# Bits of a def's flags in `Link.def_scopes`.
+IN_FUNCTION = 1
+IS_CLASS = 2
 
 
 class NativeRecord(dict[str, Any]):
@@ -169,12 +172,25 @@ class NativeFileScope(FileScope):
         return self.record.get("defs", [])
 
     @cached_property
+    def def_scopes(self) -> tuple[list[str], bytes]:
+        """The link's qualified names and flags of the defs (`Link.def_scopes`), so no def
+        decodes for a site's scope name or contexts."""
+        record: Any = self.record
+        return record.link.def_scopes(self.scope)
+
+    @cached_property
     def qualnames(self) -> list[str]:  # type: ignore[override]
-        return self.build_qualnames()
+        return self.def_scopes[0]
 
     @cached_property
     def in_function(self) -> list[bool]:  # type: ignore[override]
-        return self.build_in_function()
+        return [bool(flags & IN_FUNCTION) for flags in self.def_scopes[1]]
+
+    def is_function_scope(self, scope: int) -> bool:
+        if scope == -1:
+            return False
+        flags = self.def_scopes[1][scope]
+        return not flags & IS_CLASS or bool(flags & IN_FUNCTION)
 
     def site(self, scope: int, line: int, column: int) -> Site:
         return Site(self.path, self.module, self.scope_name(scope), line, column)

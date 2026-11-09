@@ -314,6 +314,17 @@ impl Link {
             .collect())
     }
 
+    /// The module each import of a file names (`Link::imported_modules`), in row order.
+    fn imported_modules(&mut self, file: usize) -> PyResult<Vec<String>> {
+        self.rows()?;
+        if file >= self.inner.core.facts.files.len() {
+            return Err(PyKeyError::new_err(file));
+        }
+        let found = self.inner.imported_modules(file);
+        let it = &self.inner.core.it;
+        Ok(found.into_iter().map(|s| it.s(s).to_string()).collect())
+    }
+
     /// `uses` rows with attributes whose root a first-party import binds and whose chain
     /// resolves to a class among `targets` (`Link::uses_to`): (scope, at scope, line, column,
     /// count, (surface, hit, local)) in scope order.

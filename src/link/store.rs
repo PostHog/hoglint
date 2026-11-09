@@ -359,7 +359,12 @@ impl<'b> Dec<'b, '_> {
     }
     fn values(&mut self) -> Result<Vec<V>, String> {
         let n = self.u32()? as usize;
-        (0..n).map(|_| self.v()).collect()
+        // Sized up front: collecting results grows the vector by doubling.
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(self.v()?);
+        }
+        Ok(out)
     }
     fn counts(&mut self) -> Result<Vec<CountRow>, String> {
         let n = self.u32()? as usize;

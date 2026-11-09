@@ -77,6 +77,9 @@ class Link:
     def paths(self) -> list[str]: ...
     def scope_files(self) -> list[int]: ...
     def scopes(self) -> list[tuple[int, str, bool, int]]: ...
+    def def_scopes(self, scope: int) -> tuple[list[str], bytes]:
+        """Each def's qualified name and flags (bit 0: inside a function body; bit 1: a class),
+        by def index, for the analyzed file with this scope index."""
     def file_id(self, path: str) -> int | None: ...
     def raw(self, file: int, key: str) -> bytes | None:
         """One key of a record as the extractor's JSON text, read from that record alone."""
@@ -99,6 +102,9 @@ class Link:
     def import_rows_named(self, names: list[str]) -> list[tuple[int, ImportRow]]:
         """`imports` rows in the analyzed files that import one of `names` by name (`from x
         import name`), as (file id, row) in fact order, then row order."""
+    def imported_modules(self, file: int) -> list[str]:
+        """The module each import of an analyzed file names, in row order: `import a.b` names
+        a.b, `from a import b` names a.b."""
     def uses_to(self, targets: list[Pair]) -> list[tuple[int, int, int, int, int, LookupResult]]:
         """`uses` rows with attributes whose root a first-party import binds and whose chain
         resolves to a class among `targets` with an attribute resolved past the root: (scope,

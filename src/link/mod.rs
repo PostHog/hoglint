@@ -69,47 +69,75 @@ pub mod heap {
         vec(items) + items.iter().map(value).sum::<usize>()
     }
 
-    /// (rows and values, row text) of one record.
-    pub fn record(f: &FileFacts) -> (usize, usize) {
-        let mut rows = vec(&f.imports) + vec(&f.defs) + vec(&f.assigns) + vec(&f.refs);
-        rows += vec(&f.strs) + vec(&f.calls) + vec(&f.keys);
-        rows += vec(&f.uses) + vec(&f.callees) + vec(&f.names) + vec(&f.tags);
-        let mut texts = text(&f.path) + text(&f.status);
-        texts += f.keys.iter().map(|(k, _)| text(k)).sum::<usize>();
+    /// The kinds `record` splits a record's heap into.
+    pub const KINDS: [&str; 10] = [
+        "facts.imports",
+        "facts.defs",
+        "facts.assigns",
+        "facts.refs",
+        "facts.strs",
+        "facts.calls",
+        "facts.uses",
+        "facts.counts",
+        "facts.tags",
+        "facts.keys",
+    ];
+
+    /// Heap bytes of one record per kind (`KINDS`), its rows, values and text together.
+    pub fn record(f: &FileFacts) -> [usize; 10] {
+        let mut defs = vec(&f.defs);
         for d in &f.defs {
-            rows += values(&d.bases) + values(&d.dec) + vec(&d.params);
-            rows += d
+            defs += values(&d.bases) + values(&d.dec) + vec(&d.params);
+            defs += d
                 .params
                 .iter()
                 .map(|p| p.annotation.as_ref().map_or(0, value))
                 .sum::<usize>();
-            rows += d.ret.as_ref().map_or(0, value);
+            defs += d.ret.as_ref().map_or(0, value);
         }
+        let mut assigns = vec(&f.assigns);
         for a in &f.assigns {
-            rows += values(&a.targets);
-            rows += a.value.as_ref().map_or(0, value) + a.ann.as_ref().map_or(0, value);
+            assigns += values(&a.targets);
+            assigns += a.value.as_ref().map_or(0, value) + a.ann.as_ref().map_or(0, value);
         }
-        for r in &f.refs {
-            texts += text(&r.chain) + text(&r.up);
-        }
+        let refs = vec(&f.refs)
+            + f.refs
+                .iter()
+                .map(|r| text(&r.chain) + text(&r.up))
+                .sum::<usize>();
+        let mut strs = vec(&f.strs);
         for r in &f.strs {
-            texts += r.value.as_deref().map_or(0, text) + text(&r.up);
+            strs += r.value.as_deref().map_or(0, text) + text(&r.up);
             if let Some(parts) = &r.parts {
-                rows += vec(parts);
-                texts += parts
+                strs += vec(parts);
+                strs += parts
                     .iter()
                     .map(|p| p.as_deref().map_or(0, text))
                     .sum::<usize>();
             }
         }
+        let mut calls = vec(&f.calls);
         for c in &f.calls {
-            texts += text(&c.callee);
-            texts += match &c.argument {
+            calls += text(&c.callee);
+            calls += match &c.argument {
                 Argument::Literal(s) | Argument::Name(s) | Argument::Opaque(s) => text(s),
                 Argument::Missing | Argument::Expr => 0,
             };
         }
-        (rows, texts)
+        let mut keys = vec(&f.keys) + text(&f.path) + text(&f.status);
+        keys += f.keys.iter().map(|(k, _)| text(k)).sum::<usize>();
+        [
+            vec(&f.imports),
+            defs,
+            assigns,
+            refs,
+            strs,
+            calls,
+            vec(&f.uses),
+            vec(&f.callees) + vec(&f.names),
+            vec(&f.tags),
+            keys,
+        ]
     }
 }
 
@@ -603,13 +631,14 @@ impl Link {
 
     pub fn heap(&self) -> Vec<(&'static str, usize)> {
         let facts = &self.core.facts;
-        let (mut rows, mut texts) = (heap::vec(&facts.files), 0);
+        let mut kinds = [0usize; 10];
+        kinds[9] = heap::vec(&facts.files);
         for f in &facts.files {
-            let (r, t) = heap::record(f);
-            rows += r;
-            texts += t;
+            for (total, size) in kinds.iter_mut().zip(heap::record(f)) {
+                *total += size;
+            }
         }
-        let mut out = vec![("facts.rows", rows), ("facts.row_text", texts)];
+        let mut out: Vec<(&'static str, usize)> = heap::KINDS.into_iter().zip(kinds).collect();
         out.extend(self.core.heap());
         let scopes = heap::vec(&self.scopes) + self.scopes.iter().map(|s| s.heap()).sum::<usize>();
         out.push(("scopes", scopes + heap::map(&self.scope_of_file)));

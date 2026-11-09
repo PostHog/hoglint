@@ -110,6 +110,10 @@ class PackReader(Protocol):
 
     def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]: ...
 
+    def imported_modules(self, scope: FileScope) -> list[str]: ...
+
+    def subclasses(self, qualified: str) -> list[EntityId]: ...
+
 
 class PackSink(Protocol):
     """Where a pack puts what it makes. Each call carries one producer's batch."""
@@ -134,33 +138,60 @@ def fields_of(refinement: Refinement) -> list[tuple[str, str]]:
     return out
 
 
+def first_set(before: Refinement, after: Refinement) -> Refinement:
+    """Two refinements of one edge by one producer as one: the first value set of each field wins."""
+    attrs = dict(after.attrs)
+    attrs.update(before.attrs)
+    return Refinement(
+        before.handle,
+        before.shape if before.shape is not None else after.shape,
+        before.shape_detail if before.shape_detail is not None else after.shape_detail,
+        tuple(attrs.items()),
+    )
+
+
 @dataclass(frozen=False, slots=True)
 class RefinedFields:
-    """Which producer set which field of each refined edge, so a sink finds two producers that
-    set one field apart."""
+    """What each producer set on each edge it refined, so a sink finds two producers that set
+    one field apart. A field's owner is the first producer that set it."""
 
-    owners: dict[int, dict[str, tuple[str, str]]] = field(default_factory=dict)
+    made: dict[str, dict[int, Refinement]] = field(default_factory=dict)
+
+    def owner(self, handle: int, name: str) -> tuple[str, str] | None:
+        """(producer, value) of the first producer that set field `name` of edge `handle`."""
+        for producer, refined in self.made.items():
+            found = refined.get(handle)
+            if found is None:
+                continue
+            for field_name, value in fields_of(found):
+                if field_name == name:
+                    return producer, value
+        return None
 
     def conflicts(self, producer: str, refinements: Sequence[Refinement], own_attrs: Any) -> list[str]:
         """The fields of `refinements` another producer set to another value, or an edge's own
-        attr a refinement would change; `own_attrs(handle)` gives an edge's own attrs."""
+        attr a refinement would change; `own_attrs(handle)` gives an edge's own attrs, asked only
+        for a refinement that sets attrs."""
         out = []
         for refinement in refinements:
-            set_before = self.owners.get(refinement.handle, {})
-            mine = own_attrs(refinement.handle)
+            mine: dict[str, str] | None = None
             for name, value in fields_of(refinement):
-                found = set_before.get(name)
+                found = self.owner(refinement.handle, name) if self.made else None
                 if found is not None and found[0] != producer and found[1] != value:
                     out.append(f"{name} of edge {refinement.handle} ({found[0]} set {found[1]!r})")
-                if name.startswith("attr:") and mine.get(name[5:], value) != value:
+                if not name.startswith("attr:"):
+                    continue
+                if mine is None:
+                    mine = own_attrs(refinement.handle)
+                if mine.get(name[5:], value) != value:
                     out.append(f"{name} of edge {refinement.handle} (the edge has {mine[name[5:]]!r})")
         return out
 
     def record(self, producer: str, refinements: Sequence[Refinement]) -> None:
+        refined = self.made.setdefault(producer, {})
         for refinement in refinements:
-            owned = self.owners.setdefault(refinement.handle, {})
-            for name, value in fields_of(refinement):
-                owned.setdefault(name, (producer, value))
+            before = refined.get(refinement.handle)
+            refined[refinement.handle] = refinement if before is None else first_set(before, refinement)
 
 
 class Pack(Protocol):

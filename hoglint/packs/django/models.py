@@ -12,7 +12,6 @@ from typing import cast
 
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import entity
 from hoglint.model import Context, EntityId
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DjangoPackConfig
@@ -272,9 +271,16 @@ class ModelRegistry:
         self.failures: list[str] = []
 
     def discover(self, files: Iterable[FileScope]) -> None:
-        """Models in the given prod files: classes whose MRO reaches Django's Model."""
+        """Models in the given prod files: classes whose MRO reaches Django's Model. The reader
+        finds them all at once, so only a module with a model builds its table here."""
+        by_module: dict[str, list[EntityId]] = {}
+        for ref in self.reader.subclasses(MODEL_BASE):
+            if str(ref) != MODEL_BASE:
+                by_module.setdefault(ref.module, []).append(ref)
         index = self.reader.index
         for scope in files:
+            if scope.module not in by_module:
+                continue
             if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
                 continue
             if index.path_of.get(scope.module) != scope.path:
@@ -282,11 +288,11 @@ class ModelRegistry:
             table = self.reader.tables.get(scope.module)
             if table is None:
                 continue
-            for name, idx in table.classes().items():
-                ref = entity(scope.module, name)
+            classes = table.classes()
+            for ref in by_module[scope.module]:
+                self.index.model_cache[ref] = True
                 try:
-                    if self.index.is_model(ref):
-                        self.register(ref, scope.path, scope.defs[idx]["l"])
+                    self.register(ref, scope.path, scope.defs[classes[ref.symbol]]["l"])
                 except Exception as error:  # noqa: BLE001 - one unreadable class is a gap, the other models still count
                     self.failures.append(f"{ref}: {type(error).__name__}: {error}")
 

@@ -555,32 +555,40 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
     for (file, facts) in decoded {
         files[file] = Some(facts?);
     }
+    // The binary facts are decoded: free them before the link allocates its tables.
+    for slot in slots.iter_mut() {
+        slot.stored = None;
+    }
     let files: Vec<FileFacts> = files
         .into_iter()
         .map(|f| f.expect("every file has facts"))
         .collect();
     mark("facts.decode");
-    if let Some(db) = &db {
-        save(db, it, &slots, &files, (&full, &lite));
-    }
+    let saved = db
+        .as_ref()
+        .is_some_and(|db| save(db, it, &slots, &files, (&full, &lite)));
     mark("facts.save");
     let records: Vec<Json> = slots
         .iter_mut()
-        .map(|slot| match (slot.fresh.take(), slot.found, &slot.key) {
-            (Some(json), _, _) => Json::Fresh(json),
-            (None, Some(row), Some(key)) => Json::Stored(Stored {
-                path: slot.path.to_string(),
-                config: if slot.lite {
-                    lite.id.clone()
-                } else {
-                    full.id.clone()
-                },
-                oid: key.clone(),
-                lite: slot.lite,
-                source: slot.source.clone(),
-                json_len: row.json_len,
-            }),
-            _ => Json::Fresh(String::new()),
+        .map(|slot| {
+            let config = if slot.lite { &lite.id } else { &full.id };
+            let stored = |key: &String, json_len: usize| {
+                Json::Stored(Stored {
+                    path: slot.path.to_string(),
+                    config: config.clone(),
+                    oid: key.clone(),
+                    lite: slot.lite,
+                    source: slot.source.clone(),
+                    json_len,
+                })
+            };
+            match (slot.fresh.take(), slot.found, &slot.key) {
+                // A saved record is read back from the database, so no fresh text stays.
+                (Some(json), _, Some(key)) if saved => stored(key, json.len()),
+                (Some(json), _, _) => Json::Fresh(json),
+                (None, Some(row), Some(key)) => stored(key, row.json_len),
+                _ => Json::Fresh(String::new()),
+            }
         })
         .collect();
     let text = Box::new(StoredRecords {
@@ -606,13 +614,15 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
 /// Stores the new entries whose key is the id of the bytes they were extracted from, and marks
 /// the read ones as used today. A failed write only costs a later re-extraction or an early
 /// prune, so it never fails the run.
+/// Stores the new entries and marks the found ones used today. True when the new entries
+/// are stored.
 fn save(
     db: &FactDb,
     it: &Interner,
     slots: &[Slot],
     files: &[FileFacts],
     profiles: (&Profile, &Profile),
-) {
+) -> bool {
     let profile_id = |slot: &Slot| -> &str {
         if slot.lite {
             &profiles.1.id
@@ -630,11 +640,12 @@ fn save(
             Some((profile_id(slot), key, body, json.as_bytes()))
         })
         .collect();
-    let _ = db.store(&entries);
+    let stored = db.store(&entries).is_ok();
     let stale: Vec<(&str, &str)> = slots
         .iter()
         .filter(|slot| slot.found.is_some_and(|row| row.used < db.today))
         .filter_map(|slot| Some((profile_id(slot), slot.key.as_deref()?)))
         .collect();
     let _ = db.touch(&stale);
+    stored
 }

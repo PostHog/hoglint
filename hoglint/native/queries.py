@@ -169,6 +169,37 @@ class PackQueries:
         found = sorted(entry for name in set(names) for entry in self.imports_by_name.get(name, ()))
         return [(scope, row) for _, _, scope, row in found]
 
+    def imported_modules(self, scope: FileScope) -> list[str]:
+        """The module each import of a file names, in row order: `import a.b` names a.b, `from a
+        import b` names a.b. A relative import that climbs out of the repo names nothing."""
+        out = []
+        for _, _, _, _, target, level, name, _ in scope.record.get("imports", ()):
+            if name is None:
+                out.append(target)
+                continue
+            module = absolute_import(scope.module, scope.is_package, target, level)
+            if module is not None:
+                out.append(f"{module}.{name}")
+        return out
+
+    def subclasses(self, qualified: str) -> list[EntityId]:
+        """Module-level classes the analyzed modules' own source defines whose MRO holds
+        `qualified`, the class itself included: by module in file order, then table order."""
+        out: list[EntityId] = []
+        seen: set[str] = set()
+        for scope in self.build.files:
+            if scope.module in seen:
+                continue
+            seen.add(scope.module)
+            table = self.build.tables.get(scope.module)
+            if table is None:
+                continue
+            for name in table.classes():
+                ref = EntityId(LANGUAGE_PYTHON, scope.module, name)
+                if self.build.classes.is_subclass(ref, qualified):
+                    out.append(ref)
+        return out
+
     def edges_to(self, kind: str, targets: Collection[EntityId]) -> list[Edge]:
         """Edges of `kind` whose target is one of `targets` (by resolved origin), in graph order."""
         return self.graph.edges_to(kind, targets)
@@ -235,6 +266,15 @@ class NativePackQueries(PackQueries):
 
     def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
         return [(self.scope_at(file), row) for file, row in self.link.import_rows_named(sorted(set(names)))]
+
+    def imported_modules(self, scope: FileScope) -> list[str]:
+        record: Any = scope.record
+        return self.link.imported_modules(record.file)
+
+    def subclasses(self, qualified: str) -> list[EntityId]:
+        graph: Any = self.graph
+        maker = graph.core.maker
+        return [maker.entity(module, symbol) for module, symbol in self.link.subclasses(qualified)]
 
     def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
         """A record's facts are what the extractor made of the file's bytes, so for a file with
