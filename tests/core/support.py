@@ -7,6 +7,42 @@ from hoglint.core.config import CoreConfig
 from hoglint.facts import FactStore
 from hoglint.model import Edge, Graph
 
+SITE = ".venv/lib/python3.14/site-packages/"
+
+
+def import_row(module: str, name: str | None, scope: int = -1, flags: int = 0, line: int = 1) -> list:
+    """An `imports` row: `from module import name`, or `import module` when name is None."""
+    return [scope, line, 0, flags, module, 0, name, None]
+
+
+def class_def(name: str, bases: list, line: int, scope: int = -1, flags: int = 0, **extra: object) -> dict:
+    return {"k": "class", "n": name, "s": scope, "l": line, "c": 0, "e": line, "f": flags, "bases": bases, **extra}
+
+
+def func_def(name: str, line: int, scope: int = -1, flags: int = 0, **extra: object) -> dict:
+    return {"k": "def", "n": name, "s": scope, "l": line, "c": 0, "e": line, "f": flags, **extra}
+
+
+def assign_row(target: str, value: object, line: int, scope: int = -1, flags: int = 0) -> dict:
+    return {"s": scope, "l": line, "c": 0, "op": "=", "t": [target], "v": value, "f": flags}
+
+
+class Repo:
+    """Records keyed by path, completed with the envelope the store expects. Paths under SITE are
+    third-party files: they resolve, and make no edges."""
+
+    def __init__(self, *groups: dict[str, dict]) -> None:
+        self.records: dict[str, dict] = {}
+        for group in groups:
+            for path, record in group.items():
+                self.records[path] = {"path": path, "status": "ok", **record}
+
+    def build(self, config: CoreConfig | None = None) -> CoreBuild:
+        store = FactStore()
+        store.records = dict(self.records)
+        external = {path: path.removeprefix(SITE) for path in self.records if path.startswith(SITE)}
+        return CoreBuild(config or CoreConfig(), store, external=external)
+
 
 class FileFacts:
     """One file's record. Rows follow schema v1: positions are (line, column)."""

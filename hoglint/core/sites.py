@@ -9,6 +9,7 @@ from hoglint.core.modules import ModuleIndex
 from hoglint.core.symbols import (
     FUNC,
     IF,
+    TC_ELSE,
     TRY,
     TYPE_ONLY,
     Binding,
@@ -145,6 +146,7 @@ class FileScope:
             name for scope, name in self.local_bindings if scope != -1
         }
         self.module_lookups: dict[str, Lookup | None] = {}
+        self.context_sets: dict[tuple[int, bool], frozenset[Context]] = {}
         self.site_flags = {(line, column): flags for line, column, flags in record.get("site_flags", ())}
 
     def scope_name(self, scope: int) -> str:
@@ -164,17 +166,23 @@ class FileScope:
 
     def contexts(self, flags: int = 0, scope: int = -1) -> frozenset[Context]:
         """Path contexts plus syntax contexts. The else branch of `if TYPE_CHECKING:` runs at
-        runtime, so only the body is type-only."""
+        runtime, so only the body is type-only; the else branch gets its own context."""
+        key = (flags, self.is_function_scope(scope))
+        found = self.context_sets.get(key)
+        if found is not None:
+            return found
         extra: set[Context] = set()
         if flags & TYPE_ONLY:
             extra.add(Context.TYPE_ONLY)
-        if flags & FUNC or self.is_function_scope(scope):
+        if flags & TC_ELSE:
+            extra.add(Context.TYPE_CHECKING_ELSE)
+        if flags & FUNC or key[1]:
             extra.add(Context.FUNCTION_LOCAL)
         if flags & (TRY | IF):
             extra.add(Context.CONDITIONAL)
-        if not extra:
-            return self.base_contexts
-        return self.base_contexts | extra
+        found = self.base_contexts | extra if extra else self.base_contexts
+        self.context_sets[key] = found
+        return found
 
     def ancestry(self, scope: int) -> list[int]:
         out = [scope]

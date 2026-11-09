@@ -2,44 +2,73 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+
 from hoglint.core.config import CoreConfig
-from hoglint.core.modules import ModuleIndex, ModuleNamer
-from hoglint.core.producers import PRODUCERS, BuildContext, DeclarationProducer, producer_id
+from hoglint.core.harness import ProducerPlan, ProducerStep
+from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
+from hoglint.core.producers import PRODUCERS, BuildContext, Producer
+from hoglint.core.records import RecordBodies
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import ClassIndex, Resolver, Tables
-from hoglint.facts import SITE_ROOTS, FactStore
-from hoglint.model import Graph
+from hoglint.facts import FactStore
+from hoglint.model import Edge, Graph
 
 
 class CoreBuild:
-    """Everything producers and packs share for one snapshot: index, resolver, classes, files."""
+    """Everything producers and packs share for one snapshot: index, resolver, classes, files.
+
+    `external` maps each third-party file to its path inside its site-packages root; those files
+    resolve as import targets and never produce edges.
+    """
+
+    def __init__(
+        self,
+        config: CoreConfig,
+        store: FactStore,
+        analyzed: list[str] | None = None,
+        external: Mapping[str, str] | None = None,
+    ) -> None:
+        self.config = config
+        self.store = store
+        self.external = dict(external or {})
+        self.namer = ModuleNamer(config.source_roots, self.external)
+        self.index = ModuleIndex(list(store.records), self.namer, config.first_party)
+        self.first_party = FirstParty(config.first_party or self.index.repo_heads)
+        self.tables = Tables(store, self.index)
+        self.resolver = Resolver(self.tables)
+        self.classes = ClassIndex(self.resolver)
+        paths = analyzed if analyzed is not None else sorted(p for p in store.records if p not in self.external)
+        self.files = [self.file_scope(path) for path in paths if path in store.records and path not in self.external]
+        self.scope_of = {scope.path: scope for scope in self.files}
+        self.context = BuildContext(config, store, self.index, self.resolver, self.files)
+        self.bodies_cache: dict[str, RecordBodies] = {}
 
     def file_scope(self, path: str) -> FileScope:
         module, is_package = self.namer.module_of(path)
         return FileScope(path, module, is_package, self.store.records[path], self.config)
 
-    def __init__(self, config: CoreConfig, store: FactStore, analyzed: list[str] | None = None) -> None:
-        self.config = config
-        self.store = store
-        self.namer = ModuleNamer(config.source_roots)
-        self.index = ModuleIndex(list(store.records), self.namer, config.first_party)
-        self.tables = Tables(store, self.index)
-        self.resolver = Resolver(self.tables)
-        self.classes = ClassIndex(self.resolver)
-        paths = analyzed if analyzed is not None else store.repo_paths()
-        self.files = [
-            self.file_scope(path) for path in paths if path in store.records and not SITE_ROOTS.contains(path)
-        ]
-        self.context = BuildContext(config, store, self.index, self.resolver, self.files)
+    def bodies(self, record: dict) -> RecordBodies:
+        """Direct body statements of each def of a record, indexed once per file."""
+        path = record["path"]
+        found = self.bodies_cache.get(path)
+        if found is None:
+            found = RecordBodies(record)
+            self.bodies_cache[path] = found
+        return found
 
-    def graph(self) -> Graph:
+    def step(self, producer: Producer, graph: Graph) -> ProducerStep:
+        def run() -> list[Edge]:
+            scratch = Graph()
+            producer.run(self.context, scratch)
+            graph.symbols.update(scratch.symbols)
+            return scratch.edges
+
+        return ProducerStep(producer.name, producer.edge_kinds, run)
+
+    def graph(self, producers: Iterable[type[Producer]] = PRODUCERS) -> Graph:
+        """The core edges of the given producers. A consumer that needs only some kinds asks for
+        only their producers, so an unrelated failure never makes it incomplete."""
         graph = Graph(modules=self.index.repo_modules())
-        for producer_class in PRODUCERS:
-            producer = producer_class()
-            try:
-                producer.run(self.context, graph)
-            except Exception as error:  # noqa: BLE001 - a failed producer makes its rules incomplete, never clean
-                kinds = DeclarationProducer.kinds if producer_class is DeclarationProducer else (producer.kind,)
-                for kind in kinds:
-                    graph.failed_producers[producer_id(kind)] = f"{type(error).__name__}: {error}"
+        ProducerPlan(self.step(producer_class(), graph) for producer_class in producers).run(graph)
         return graph

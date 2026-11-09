@@ -112,6 +112,11 @@ class ModuleTable:
     names: dict[str, Binding] = field(default_factory=dict)
     star_imports: list[str] = field(default_factory=list)
     lazy: dict[str, str] = field(default_factory=dict)  # name -> module, from a PEP 562 lazy map
+    values: dict[str, object] = field(default_factory=dict)  # name -> V value of its last module-level assign
+
+    def classes(self) -> dict[str, int]:
+        """Classes the module's own source defines at module level: name -> def index."""
+        return {name: binding[1] for name, binding in self.names.items() if binding[0] == "class" and not binding[2]}
 
 
 class Tables:
@@ -157,6 +162,8 @@ class Tables:
             value = row.get("v")
             for target in row["t"]:
                 if isinstance(target, str) and "." not in target:
+                    if marker == "" and "v" in row:
+                        table.values[target] = value
                     assigned: Binding = ("alias", value) if isinstance(value, str) else ("variable",)
                     events.append((row["l"], row["c"], 2, flags, assigned, target, None))
                     continue
@@ -357,6 +364,11 @@ class Resolver:
                 return self.resolve_name(base.origin.module, value["a"])
         return None
 
+    def resolve_class(self, module: str, value: object) -> EntityId | None:
+        """The class a value tree names, seen from `module`."""
+        hit = self.resolve_value(module, value)
+        return hit.origin if hit is not None and hit.kind == "class" else None
+
     def resolve_dotted(self, dotted: str) -> tuple[Hit | None, list[str]]:
         """A dotted path with no local scope: the longest module prefix, then names inside it."""
         module = self.index.longest_module(dotted)
@@ -375,7 +387,8 @@ class ClassIndex:
         self.mro_cache: dict[EntityId, list[EntityId]] = {}
         self.bases_cache: dict[EntityId, list[EntityId]] = {}
 
-    def node(self, ref: EntityId) -> dict | None:
+    def located(self, ref: EntityId) -> tuple[dict, int] | None:
+        """The record that defines a class and the class's def index in it."""
         table = self.tables.get(ref.module)
         if table is None:
             return None
@@ -383,7 +396,14 @@ class ClassIndex:
         if binding is None or binding[0] != "class":
             return None
         record = self.tables.stub_record(ref.module) if binding[2] == "stub" else self.tables.record(ref.module)
-        return record["defs"][binding[1]] if record is not None else None
+        return (record, binding[1]) if record is not None else None
+
+    def node(self, ref: EntityId) -> dict | None:
+        found = self.located(ref)
+        return found[0]["defs"][found[1]] if found is not None else None
+
+    def is_subclass(self, ref: EntityId, qualified: str) -> bool:
+        return any(str(cls) == qualified for cls in self.mro(ref))
 
     def bases(self, ref: EntityId) -> list[EntityId]:
         if ref in self.bases_cache:

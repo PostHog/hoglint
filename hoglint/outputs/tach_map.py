@@ -23,11 +23,16 @@ from pathlib import Path
 
 from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
 from hoglint.core.config import CoreConfig
-from hoglint.core.producers import TYPE_CHECKING_ELSE
+from hoglint.core.modules import normalize_root
+from hoglint.core.producers import ImportProducer, ParseFailureProducer, StringProducer
+from hoglint.facts import FactNeeds, default_cache_dir
 from hoglint.model import Context, Edge, Graph
 from hoglint.views import RefsView, reverse_dependents
 
 STRING_LITERALS = frozenset({"whole", "part"})
+TYPE_CHECKING_BRANCHES = frozenset({Context.TYPE_ONLY, Context.TYPE_CHECKING_ELSE})
+# The map needs import and dotted-path edges, and parse failures so a broken file is never silent.
+PRODUCERS = (ImportProducer, StringProducer, ParseFailureProducer)
 
 
 def is_potential_module_path(value: str) -> bool:
@@ -49,7 +54,7 @@ class TachResolver:
     def __init__(self, files: Iterable[str], source_roots: tuple[str, ...], case_insensitive: bool) -> None:
         self.files = set(files)
         self.lower = {path.lower() for path in self.files} if case_insensitive else None
-        self.prefixes = ["" if root.strip("/") in ("", ".") else root.strip("/") + "/" for root in source_roots]
+        self.prefixes = [normalize_root(root) + "/" if normalize_root(root) else "" for root in source_roots]
         self.cache: dict[str, str | None] = {}
 
     def exists(self, candidate: str) -> bool:
@@ -90,8 +95,7 @@ class TachMap:
         if edge.site.path.endswith(".pyi"):
             return False
         if edge.kind == "import":
-            type_checking = Context.TYPE_ONLY in edge.contexts or edge.attr("guard") == TYPE_CHECKING_ELSE
-            return not type_checking and not edge.surface.startswith(".")
+            return not (TYPE_CHECKING_BRANCHES & edge.contexts) and not edge.surface.startswith(".")
         return edge.attr("literal") in STRING_LITERALS and edge.surface.count(".") >= 2
 
     def pairs(self) -> Iterator[tuple[str, str]]:
@@ -149,9 +153,15 @@ def main() -> None:
     repo = args.repo.resolve()
     config = config_from_tach_toml(args.tach_toml or repo / "tach.toml")
     with tempfile.TemporaryDirectory(prefix="hoglint-tach-map-") as work:
-        options = AnalysisOptions(repo=repo, config=config, work_dir=Path(work), staged=args.index)
-        if args.no_cache:
-            options = AnalysisOptions(repo=repo, config=config, work_dir=Path(work), staged=args.index, cache_dir=None)
+        options = AnalysisOptions(
+            repo=repo,
+            config=config,
+            work_dir=Path(work),
+            staged=args.index,
+            producers=PRODUCERS,
+            needs=FactNeeds(),
+            cache_dir=None if args.no_cache else default_cache_dir(),
+        )
         result = CoreAnalysis(options).run()
     output = TachMap(result.graph, result.inventory.files, config.source_roots, args.case_insensitive)
     mapping = output.write(args.out)

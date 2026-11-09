@@ -89,7 +89,7 @@ def test_dotted_path_strings(surface: str, resolution: Resolution, role: str) ->
     [
         ("web/a.py", 0, {Context.PROD}),
         ("web/a.py", TYPE_ONLY, {Context.PROD, Context.TYPE_ONLY}),
-        ("web/a.py", TC_ELSE, {Context.PROD}),
+        ("web/a.py", TC_ELSE, {Context.PROD, Context.TYPE_CHECKING_ELSE}),
         ("web/a.py", FUNC, {Context.PROD, Context.FUNCTION_LOCAL}),
         ("web/a.py", TRY, {Context.PROD, Context.CONDITIONAL}),
         ("web/tests/test_a.py", 0, {Context.TEST}),

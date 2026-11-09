@@ -13,19 +13,20 @@ from dataclasses import dataclass
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import ModuleIndex
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
-from hoglint.core.symbols import TC_ELSE, Hit, Resolver, absolute_import, entity
+from hoglint.core.symbols import Hit, Resolver, absolute_import, entity
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
 PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
 BUILTIN_NAMES = frozenset(dir(builtins))
-CHAIN_TOKEN = re.compile(r"\.(\w+)|\(\)|\[\]")
-WRAPPER_STEPS = ("await", "ifexp:body", "ifexp:else", "star", "bool:and", "bool:or", "walrus:")
+CHAIN_TOKEN = re.compile(r"\.\w+|\(\)|\[\]")
+# Escape steps that pass a value through unchanged, as the extractor's local derivation reads them.
+ESCAPE_WRAPPERS = ("await", "ifexp:body", "ifexp:else", "star")
+WRAPPER_STEPS = (*ESCAPE_WRAPPERS, "bool:and", "bool:or", "walrus:")
 
-# The `guard` attribute of an import in the else branch of `if TYPE_CHECKING:`. It runs at
-# runtime, but some consumers (tach) skip that whole `if`.
-TYPE_CHECKING_ELSE = "type-checking-else"
+# Fact kinds every producer needs, because the resolver builds module tables from them.
+TABLE_KINDS = frozenset({"imports", "defs", "assigns"})
 
 # First step of the escape path above a name -> neutral use position. Checked as prefixes, in
 # order, so a longer step comes before any step it starts with.
@@ -83,16 +84,17 @@ def producer_id(kind: str) -> str:
 
 
 def chain_tokens(chain: str) -> list[str]:
-    """`.a.b()[]` -> ['a', 'b', '()', '[]']; attribute names are bare."""
-    return [match.group(1) or match.group(0) for match in CHAIN_TOKEN.finditer(chain)]
+    """`.a.b()[]` -> ['.a', '.b', '()', '[]']."""
+    return CHAIN_TOKEN.findall(chain)
 
 
 def leading_attrs(tokens: list[str]) -> list[str]:
+    """Attribute names before the first call or subscript, without their dots."""
     out = []
     for token in tokens:
-        if token in ("()", "[]"):
+        if not token.startswith("."):
             break
-        out.append(token)
+        out.append(token[1:])
     return out
 
 
@@ -122,7 +124,7 @@ def use_position(next_token: str | None, up: str) -> str:
 
 
 def chain_text(tokens: list[str]) -> str:
-    return "".join(token if token in ("()", "[]") else f".{token}" for token in tokens)
+    return "".join(tokens)
 
 
 @dataclass(frozen=False)
@@ -189,10 +191,15 @@ class BuildContext:
 
 class Producer:
     kind = ""
+    reads: frozenset[str] = frozenset()  # fact kinds it reads besides TABLE_KINDS
 
     @property
     def name(self) -> str:
         return producer_id(self.kind)
+
+    @property
+    def edge_kinds(self) -> frozenset[str]:
+        return frozenset((self.kind,))
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         raise NotImplementedError
@@ -258,8 +265,6 @@ class ImportProducer(Producer):
                         loaded = surface if index.exists(surface) else source
                         binds = asname or name
                 attrs = [("binds", binds)]
-                if flags & TC_ELSE:
-                    attrs.append(("guard", TYPE_CHECKING_ELSE))
                 if index.exists(loaded):
                     attrs.append(("module", loaded))
                 resolved = classifier.classify(surface, hit)
@@ -275,6 +280,7 @@ class ReferenceProducer(Producer):
     """
 
     kind = "reference"
+    reads = frozenset({"refs"})
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
@@ -311,6 +317,10 @@ class DeclarationProducer(Producer):
 
     kind = "declaration"
     kinds = ("inherit", "decorate", "exposes", "declares")
+
+    @property
+    def edge_kinds(self) -> frozenset[str]:
+        return frozenset(self.kinds)
 
     @staticmethod
     def fields_by_class(scope: FileScope) -> dict[int, list[dict]]:
@@ -475,6 +485,7 @@ class StringProducer(Producer):
     """
 
     kind = "dotted-path"
+    reads = frozenset({"strs"})
 
     @staticmethod
     def path_like(text: str, role: str) -> bool:
@@ -544,6 +555,7 @@ class DynamicImportProducer(Producer):
     """Calls to declared loaders. A literal module name resolves; anything else is unresolved."""
 
     kind = "dynamic-import"
+    reads = frozenset({"calls"})
 
     @staticmethod
     def module_argument(args: list, kws: list) -> object:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 
-from hoglint.facts import SITE_ROOTS
+from hoglint.model import Resolution
 
 
 def longest_prefix(dotted: str, exists: Callable[[str], bool]) -> str | None:
@@ -17,15 +17,38 @@ def longest_prefix(dotted: str, exists: Callable[[str], bool]) -> str | None:
     return None
 
 
-class ModuleNamer:
-    """Dotted module name of a path. The longest matching source root wins."""
+class FirstParty:
+    """Top-level module names that are the repo's own code."""
 
-    def __init__(self, source_roots: tuple[str, ...]) -> None:
-        roots = [root.strip("/") for root in source_roots]
-        self.roots = sorted(("" if root in ("", ".") else root for root in roots), key=len, reverse=True)
+    def __init__(self, roots: Iterable[str]) -> None:
+        self.roots = frozenset(roots)
+
+    def contains(self, module: str) -> bool:
+        return module.partition(".")[0] in self.roots
+
+    def resolution(self, module: str) -> Resolution:
+        """A found target: resolved when it is first-party code, external otherwise."""
+        return Resolution.RESOLVED if self.contains(module) else Resolution.EXTERNAL
+
+
+def normalize_root(root: str) -> str:
+    """A source root as a path prefix without slashes; the repo root is ""."""
+    stripped = root.strip("/")
+    return "" if stripped in ("", ".") else stripped
+
+
+class ModuleNamer:
+    """Dotted module name of a path. The longest matching source root wins.
+
+    `external` maps a third-party file to its path inside its site-packages root.
+    """
+
+    def __init__(self, source_roots: tuple[str, ...], external: Mapping[str, str] | None = None) -> None:
+        self.roots = sorted((normalize_root(root) for root in source_roots), key=len, reverse=True)
+        self.external = external or {}
 
     def relative(self, path: str) -> str:
-        inside_site = SITE_ROOTS.relative(path)
+        inside_site = self.external.get(path)
         if inside_site is not None:
             return inside_site
         for root in self.roots:
@@ -61,7 +84,7 @@ class ModuleIndex:
         self.dirs: set[str] = set()
         self.stub_of: dict[str, str] = {}
         self.repo_heads: set[str] = set(first_party)
-        self.site_paths = {path for path in paths if SITE_ROOTS.contains(path)}
+        self.site_paths = frozenset(path for path in paths if path in namer.external)
         for path in sorted(paths, key=lambda p: (p in self.site_paths, p.endswith(".pyi"), p)):
             module, is_package = namer.module_of(path)
             if not module:
@@ -82,11 +105,11 @@ class ModuleIndex:
     def exists(self, module: str) -> bool:
         return module in self.path_of or module in self.dirs
 
+    def is_file_module(self, module: str) -> bool:
+        return module in self.path_of
+
     def is_package(self, module: str) -> bool:
         return self.package.get(module, module in self.dirs)
-
-    def is_namespace(self, module: str) -> bool:
-        return module in self.dirs and module not in self.path_of
 
     def is_external(self, module: str) -> bool:
         """Third-party: loaded from site-packages, or named under a head that no repo file has."""
@@ -101,8 +124,3 @@ class ModuleIndex:
 
     def repo_modules(self) -> dict[str, str]:
         return {module: path for module, path in self.path_of.items() if path not in self.site_paths}
-
-    def namespaces(self) -> set[str]:
-        return {
-            module for module in self.dirs if module not in self.path_of and module.split(".")[0] in self.repo_heads
-        }
