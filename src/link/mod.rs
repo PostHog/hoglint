@@ -617,16 +617,19 @@ impl Link {
 
 impl Link {
     /// Estimated heap bytes per part, in a fixed order.
-    /// Drops every record's fact rows (`FactSet::release_rows`). False when another holder
-    /// shares the fact set, so nothing is dropped.
+    /// Drops every record's fact rows (`FactSet::release_rows`), and with them what only
+    /// resolution reads: the module tables, the resolver caches and the scopes' bindings. False
+    /// when another holder shares the fact set, so nothing is dropped.
     pub fn release_facts(&mut self) -> bool {
-        match Arc::get_mut(&mut self.core.facts) {
-            Some(facts) => {
-                facts.release_rows();
-                true
-            }
-            None => false,
+        let Some(facts) = Arc::get_mut(&mut self.core.facts) else {
+            return false;
+        };
+        facts.release_rows();
+        self.core.release();
+        for scope in &mut self.scopes {
+            scope.release();
         }
+        true
     }
 
     pub fn heap(&self) -> Vec<(&'static str, usize)> {

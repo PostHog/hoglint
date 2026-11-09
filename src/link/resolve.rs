@@ -256,6 +256,22 @@ impl<V> OrderedMap<V> {
 }
 
 impl Core {
+    /// Drops the module tables, the hits and every resolver cache: once the fact rows are gone
+    /// nothing resolves again (`Link::release_facts`).
+    pub fn release(&mut self) {
+        self.tables = Vec::new();
+        self.table_of = FxHashMap::default();
+        self.hits = Vec::new();
+        self.chains = Vec::new();
+        self.module_hits = FxHashMap::default();
+        self.name_cache = FxHashMap::default();
+        self.in_progress = FxHashSet::default();
+        self.from_cache = FxHashMap::default();
+        self.mro_cache = FxHashMap::default();
+        self.bases_cache = FxHashMap::default();
+        self.ancestor_cache = FxHashMap::default();
+    }
+
     /// Estimated heap bytes of the interner, the module index, the tables and the resolver
     /// caches (`Link::heap`).
     pub fn heap(&self) -> Vec<(&'static str, usize)> {

@@ -104,6 +104,16 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// Drops the bindings and lookup caches; the def names and flags stay for site names
+    /// (`Link::release_facts`).
+    pub fn release(&mut self) {
+        self.local_bindings = FxHashMap::default();
+        self.members = FxHashMap::default();
+        self.scoped_names = FxHashSet::default();
+        self.module_lookups = FxHashMap::default();
+        self.ctx_cache = FxHashMap::default();
+    }
+
     /// Estimated heap bytes (`Link::heap`).
     pub fn heap(&self) -> usize {
         let mut out = heap::vec(&self.qualnames) + heap::vec(&self.in_function);
