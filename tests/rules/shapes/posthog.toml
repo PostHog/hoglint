@@ -14,7 +14,6 @@ db_routing           = "products/db_routing.yaml"
 db_alias_template    = "{database}_db_writer"
 settings_proxies     = { oauth2_settings = "OAUTH2_PROVIDER_" }
 setting_name_helpers = { setting_name = "SOCIAL_AUTH_" }
-hooks                = ["**.register_*"]
 receiver_decorators  = ["django.dispatch.dispatcher.receiver", "posthog.models.signals.mutable_receiver"]
 oracles              = ["registry", "migration-loader"]
 

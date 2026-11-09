@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hoglint.config.schema import as_tuple
+
 SECTION = "django"
 ALLOWED_KEYS = frozenset(
     {
@@ -23,12 +25,6 @@ ALLOWED_KEYS = frozenset(
 )
 DEFAULT_RECEIVER_DECORATORS = ("django.dispatch.dispatcher.receiver",)
 DEFAULT_SIGNAL_BASES = ("django.dispatch.dispatcher.Signal",)
-
-
-def as_tuple(value: Any) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    return (value,) if isinstance(value, str) else tuple(value)
 
 
 @dataclass(frozen=True)
