@@ -23,6 +23,7 @@ zone = { type = "zone" }
 stage = { type = "enum", values = ["proto-product"] }
 silo = { type = "enum", values = ["cell", "control"], on = "symbol", required_on = "kind == 'model'" }
 owners = { type = "set" }
+legacy = { type = "bool", required_on = "name == 'team'" }
 
 [providers.codeowners]
 use = "codeowners"
@@ -138,6 +139,11 @@ def test_symbol_labels_kinds_and_domains(labeler: Labeler) -> None:
     # that order, the first answer must not stick to the second question
     assert render(labeler.kind("posthog.models.team.Ghost", first_party=False)[0]) == "none"
     assert render(labeler.kind("posthog.models.team.Ghost")[0]) == "unknown"
+
+
+def test_a_module_field_domain_is_the_modules_whichever_symbol_asks_first(labeler: Labeler) -> None:
+    value, _ = labeler.field_value("posthog.models.team", "posthog.models.team.Team", "legacy")
+    assert render(value) == "unknown"
 
 
 @pytest.mark.parametrize(

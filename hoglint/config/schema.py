@@ -77,6 +77,8 @@ ENDPOINTS = ("surface", "origin", "via")
 ON_UNRESOLVED = ("finding", "block", "incomplete")
 LIFECYCLES = ("setup", "first-request", "worker-start", "on-demand")
 SELECTOR_MARKERS = ("==", "!=", " in ", "startswith", "subset_of", " and ", " or ", "not ")
+# Entity attributes that only a symbol has: a module field's domain cannot read them.
+SYMBOL_ATTRIBUTES = frozenset({"symbol", "decl", "kind"})
 
 NAMED_IDENTITIES: dict[str, tuple[str, ...]] = {
     "site": ("src.module", "src.scope", "edge.kind", "edge.surface", "edge.ordinal"),
@@ -342,6 +344,18 @@ class SchemaBuilder:
             return Domain(selector=self.parse(key, value, self.entity_catalog()))
         return Domain(globs=tuple(part.strip() for part in value.split("|") if part.strip()))
 
+    def check_module_domain(self, key: str, selector: Selector) -> None:
+        """A module field's domain is the module's own: its selector cannot read a symbol."""
+        symbol_reads = [
+            str(ref)
+            for ref in selector.refs()
+            if ref.path[-1] in SYMBOL_ATTRIBUTES
+            or (ref.path[-1] in self.fields and self.fields[ref.path[-1]].on == "symbol")
+        ]
+        if symbol_reads:
+            names = ", ".join(dict.fromkeys(symbol_reads))
+            self.fail(key, f"a module field's domain reads the module alone, not a symbol's {names}")
+
     def read_fields(self) -> dict[str, FieldSpec]:
         out: dict[str, FieldSpec] = {}
         for name, table in self.raw.get("fields", {}).items():
@@ -361,7 +375,10 @@ class SchemaBuilder:
         for name, table in self.raw.get("fields", {}).items():
             if name not in out:
                 continue
-            domain = self.read_domain(f"fields.{name}.required_on", table.get("required_on"))
+            key = f"fields.{name}.required_on"
+            domain = self.read_domain(key, table.get("required_on"))
+            if domain is not None and domain.selector is not None and out[name].on == "module":
+                self.check_module_domain(key, domain.selector)
             out[name] = dataclasses.replace(out[name], domain=domain)
         return out
 

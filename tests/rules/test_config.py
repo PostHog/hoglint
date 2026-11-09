@@ -93,6 +93,11 @@ ledger = false
             "[rules.other]\nprimitive = 'reach'\nview = 'file-imports'\nfrom = \"edge.kind == 'import'\"\nledger = false\n",
             "unknown field 'edge.kind'",
         ),
+        # a module field's domain belongs to the module, whichever symbol asks
+        (
+            "[fields]\nlegacy = { type = 'bool', required_on = \"decl == 'class'\" }\n",
+            "a module field's domain reads the module alone, not a symbol's decl",
+        ),
         ("[[assign]]\nmatch = 'x/**'\nset = { tier = 'leaf' }\n", "'leaf' is not a value of field 'tier'"),
         ("[[assign]]\nmatch = 'x/**'\nset = { package = '{pkg}' }\n", "`{pkg}` is not captured"),
         (

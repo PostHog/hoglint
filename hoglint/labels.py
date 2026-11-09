@@ -419,7 +419,8 @@ class Labeler:
         if name in self.providers.failed_fields:
             return UNKNOWN, "provider failed"
         path = self.path_of(module) if module else None
-        if self.in_domain(spec.domain, path, self.label_resolver(module, symbol)):
+        owner = symbol if spec.on == "symbol" else None
+        if self.in_domain(spec.domain, path, self.label_resolver(module, owner)):
             return UNKNOWN, "inside the field's domain, but nothing sets it"
         return NONE, "outside the field's domain"
 
