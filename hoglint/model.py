@@ -8,8 +8,13 @@ is a ledger or exception match.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hoglint.plugins import ProducerFailure
 
 # Bump when the meaning or shape of any fact, edge or identity changes. The ledger header
 # stores it; a changed value makes the growth check compare under both schemas.
@@ -32,6 +37,7 @@ class Context(StrEnum):
     TYPE_ONLY = "type_only"
     FUNCTION_LOCAL = "function_local"
     CONDITIONAL = "conditional"
+    TYPE_CHECKING_ELSE = "type_checking_else"  # the else branch of `if TYPE_CHECKING:`; runs at runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +61,11 @@ class Site:
     scope: str
     line: int
     column: int = 0
+
+
+def flag(value: bool) -> str:
+    """A boolean edge attr or symbol fact."""
+    return "true" if value else "false"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +148,11 @@ class Finding:
     ledgerable: bool = True  # False for on_unresolved = "block": the ledger may not accept it
     unknown: bool = False  # exists because something did not resolve; forbids levels even when ledgered
 
+    @property
+    def ledger_key(self) -> tuple[str, tuple[str, ...]]:
+        """The ledger line this finding counts towards: (rule, identity)."""
+        return self.rule, self.identity
+
 
 @dataclass(frozen=False, slots=True)
 class RuleResult:
@@ -148,13 +164,39 @@ class RuleResult:
 
 @dataclass(frozen=False, slots=True)
 class Graph:
-    """Everything producers made from one snapshot. Rules and views read only this."""
+    """Everything producers made from one snapshot. Rules and views read only this.
+
+    Add edges with `add` or `extend`. Edges appended to `edges` directly are indexed on the
+    next `by_kind` call, because nothing removes an edge.
+    """
 
     edges: list[Edge] = field(default_factory=list)
     modules: dict[str, str] = field(default_factory=dict)  # module -> path
-    failed_producers: dict[str, str] = field(default_factory=dict)  # producer -> reason
+    failed_producers: dict[str, ProducerFailure] = field(default_factory=dict)
     symbols: dict[str, dict[str, str]] = field(default_factory=dict)  # "module.qualname" -> facts (kind, bases, ...)
+    kind_index: dict[str, list[Edge]] = field(default_factory=dict, repr=False, compare=False)
+    indexed: int = field(default=0, repr=False, compare=False)
+    indexed_list: list[Edge] | None = field(default=None, repr=False, compare=False)
+
+    def add(self, edge: Edge) -> None:
+        self.extend((edge,))
+
+    def extend(self, edges: Iterable[Edge]) -> None:
+        self.edges.extend(edges)
+        self.catch_up()
+
+    def catch_up(self) -> None:
+        if self.indexed_list is not self.edges or self.indexed > len(self.edges):
+            self.kind_index = {}
+            self.indexed = 0
+            self.indexed_list = self.edges
+        for edge in self.edges[self.indexed :]:
+            self.kind_index.setdefault(edge.kind, []).append(edge)
+        self.indexed = len(self.edges)
 
     def by_kind(self, *kinds: str) -> list[Edge]:
+        self.catch_up()
+        if len(kinds) == 1:
+            return list(self.kind_index.get(kinds[0], ()))
         wanted = set(kinds)
         return [edge for edge in self.edges if edge.kind in wanted]
