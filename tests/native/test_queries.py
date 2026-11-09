@@ -61,9 +61,9 @@ def test_pack_queries_answer_from_the_link(tmp_path: Path) -> None:
         if row[6] in ("Base", "signals")
     ]
     wiring = link.paths().index("app/wiring.py")
-    assert link.mentions(wiring, ["callees"], ["saved.connect"], []) is True
-    assert link.mentions(wiring, ["uses"], [], [".disconnect"]) is True
-    assert link.mentions(wiring, ["imports", "callees"], ["Base"], [".delete"]) is False
+    assert link.mentions(wiring, ["callees"], link.words(["saved.connect"], [])) is True
+    assert link.mentions(wiring, ["uses"], link.words([], [".disconnect"])) is True
+    assert link.mentions(wiring, ["imports", "callees"], link.words(["Base"], [".delete"])) is False
     scopes = link.scope_files()
     uses = [
         (link.paths()[scopes[scope]], line, hit)

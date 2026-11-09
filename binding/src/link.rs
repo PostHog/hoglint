@@ -28,13 +28,21 @@ pub(crate) struct Link {
     pub(crate) drifted: Vec<String>,
     /// `from` import rows by imported name, built on the first `import_rows_named`.
     pub(crate) import_names: Option<FxHashMap<Sid, Vec<(u32, u32)>>>,
+    /// The patterns of the registered mention words (`words`), by id; None for no words.
+    pub(crate) patterns: Vec<Option<regex::Regex>>,
 }
 
 impl Link {
+    /// One key of a record as JSON text. The path and the status come from the link's own
+    /// record, so the many reads of a file's status read no record text.
     pub(crate) fn raw_value(&self, file: usize, key: &str) -> PyResult<Option<Vec<u8>>> {
         let facts = &self.inner.core.facts;
+        let record = &facts.files[file];
         if key == "path" {
-            return Ok(serde_json::to_vec(&*facts.files[file].path).ok());
+            return Ok(serde_json::to_vec(&*record.path).ok());
+        }
+        if key == "status" && record.keys.iter().any(|(name, _)| &**name == "status") {
+            return Ok(serde_json::to_vec(&*record.status).ok());
         }
         facts.raw(file, key).map_err(PyValueError::new_err)
     }
@@ -533,6 +541,7 @@ pub(crate) fn link_jsonl(
         keys,
         drifted: Vec::new(),
         import_names: None,
+        patterns: Vec::new(),
     })
 }
 
@@ -637,6 +646,7 @@ pub(crate) fn link_blobs(
             keys,
             drifted,
             import_names: None,
+            patterns: Vec::new(),
         },
         stats,
     ))

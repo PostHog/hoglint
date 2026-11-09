@@ -109,9 +109,12 @@ class Link:
         """`uses` rows with attributes whose root a first-party import binds and whose chain
         resolves to a class among `targets` with an attribute resolved past the root: (scope,
         at scope, line, column, count, lookup) in scope order, then row order."""
-    def mentions(self, file: int, kinds: list[str], ending: list[str], inside: list[str]) -> bool:
-        """Whether a record's rows of any of `kinds` hold a string that ends in one of `ending` or
-        holds one of `inside`, read off the link's own rows. A kind the link does not read raises."""
+    def words(self, ending: list[str], inside: list[str]) -> int:
+        """Registers mention words: a string that ends in one of `ending` or holds one of
+        `inside`. Returns the id `mentions` takes."""
+    def mentions(self, file: int, kinds: list[str], words: int) -> bool:
+        """Whether a record's rows of any of `kinds` hold a string the registered `words` match,
+        read off the link's own rows. A kind the link does not read raises."""
     def blob_keys(self) -> list[str | None]:
         """The fact cache key of each record in fact order: blob oid, or the content hash of a
         third-party file; None for an unreadable file, a file that changed during the run or a

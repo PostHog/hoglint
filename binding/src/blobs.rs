@@ -28,6 +28,7 @@ use rayon::prelude::*;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -225,8 +226,8 @@ struct Slot<'r> {
     lite: bool,
     source: Source,
     found: Option<Row>,
-    /// The binary facts of a found entry.
-    stored: Option<Vec<u8>>,
+    /// Where the binary facts of a found entry sit in the load's body buffer.
+    stored: Option<Range<usize>>,
     /// The record JSON of a file extracted in this run.
     fresh: Option<String>,
 }
@@ -283,12 +284,14 @@ fn find(db: &FactDb, slots: &mut [Slot], profiles: (&Profile, &Profile)) -> Resu
     db.end_read()
 }
 
-/// The binary facts of every found entry, in one read transaction. An entry that went away since
-/// `find` is a miss.
+/// The binary facts of every found entry, in one read transaction, appended to `bodies`. An
+/// entry that went away since `find` is a miss. One buffer, not one per entry: freed after the
+/// decode, it goes back whole instead of leaving a heap of small free blocks.
 fn read_found(
     db: &FactDb,
     slots: &mut [Slot],
     profiles: (&Profile, &Profile),
+    bodies: &mut Vec<u8>,
 ) -> Result<(), DbError> {
     db.begin_read()?;
     for slot in slots.iter_mut() {
@@ -296,7 +299,11 @@ fn read_found(
             continue;
         };
         let profile = if slot.lite { profiles.1 } else { profiles.0 };
-        slot.stored = db.read_facts(&profile.id, key)?;
+        slot.stored = db.read_facts(&profile.id, key)?.map(|body| {
+            let start = bodies.len();
+            bodies.extend_from_slice(&body);
+            start..bodies.len()
+        });
         if slot.stored.is_none() {
             slot.found = None;
         }
@@ -432,9 +439,32 @@ struct StoredRecords {
     db: Mutex<Option<FactDb>>,
     records: Vec<Json>,
     again: Again,
+    /// The last record read: a pack reads several keys of one record in a row.
+    last: Mutex<Option<(usize, Vec<u8>)>>,
 }
 
 impl StoredRecords {
+    /// Bytes `range` of a stored record's JSON, read in place; None when the database cannot
+    /// give them.
+    fn read_range(&self, stored: &Stored, range: Range<usize>) -> Option<Vec<u8>> {
+        let path = self.db_path.as_deref()?;
+        let mut db = self.db.lock().ok()?;
+        if db.is_none() {
+            *db = open_cache(path);
+        }
+        match db
+            .as_ref()?
+            .read_json_range(&stored.config, &stored.oid, stored.json_len, range)
+        {
+            Ok(found) => found,
+            Err(error) => {
+                give_up(path, &error);
+                *db = None;
+                None
+            }
+        }
+    }
+
     fn read(&self, stored: &Stored) -> Option<Vec<u8>> {
         let path = self.db_path.as_deref()?;
         let mut db = self.db.lock().ok()?;
@@ -454,13 +484,36 @@ impl StoredRecords {
 
 impl RecordText for StoredRecords {
     fn record(&self, file: usize) -> Result<Vec<u8>, String> {
-        match &self.records[file] {
-            Json::Fresh(json) => Ok(json.as_bytes().to_vec()),
-            Json::Stored(stored) => match self.read(stored) {
-                Some(json) => Ok(json),
-                None => extract_again(&self.again, stored).map(String::into_bytes),
-            },
+        let stored = match &self.records[file] {
+            Json::Fresh(json) => return Ok(json.as_bytes().to_vec()),
+            Json::Stored(stored) => stored,
+        };
+        let mut last = self.last.lock().map_err(|e| e.to_string())?;
+        if let Some((at, json)) = last.as_ref()
+            && *at == file
+        {
+            return Ok(json.clone());
         }
+        let json = match self.read(stored) {
+            Some(json) => json,
+            None => extract_again(&self.again, stored)?.into_bytes(),
+        };
+        *last = Some((file, json.clone()));
+        Ok(json)
+    }
+
+    /// Reads only `range` of a stored record. A record whose entry went away is made again
+    /// whole, and kept for the next key of it.
+    fn slice(&self, file: usize, range: Range<usize>) -> Result<Vec<u8>, String> {
+        if let Json::Stored(stored) = &self.records[file]
+            && let Some(found) = self.read_range(stored, range.clone())
+        {
+            return Ok(found);
+        }
+        let text = self.record(file)?;
+        text.get(range)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| "a record is shorter than its keys say".to_string())
     }
 }
 
@@ -484,14 +537,17 @@ fn read_cache(
     path: Option<&Path>,
     slots: &mut [Slot],
     profiles: (&Profile, &Profile),
+    bodies: &mut Vec<u8>,
 ) {
     let Some(found) = db.as_ref() else {
         return;
     };
-    let read = find(found, slots, profiles).and_then(|()| read_found(found, slots, profiles));
+    let read =
+        find(found, slots, profiles).and_then(|()| read_found(found, slots, profiles, bodies));
     if let (Err(error), Some(path)) = (read, path) {
         give_up(path, &error);
         *db = None;
+        bodies.clear();
         for slot in slots.iter_mut() {
             slot.found = None;
             slot.stored = None;
@@ -510,7 +566,14 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
     let lite = Profile::new(&request.lite);
     let mut db = request.db.as_deref().and_then(open_cache);
     let (mut slots, external) = slots(request);
-    read_cache(&mut db, request.db.as_deref(), &mut slots, (&full, &lite));
+    let mut bodies: Vec<u8> = Vec::new();
+    read_cache(
+        &mut db,
+        request.db.as_deref(),
+        &mut slots,
+        (&full, &lite),
+        &mut bodies,
+    );
     mark("facts.read");
     let (extracted, drifted) = extract_missing(request, (&full, &lite), &mut slots, external)?;
     mark("facts.extract");
@@ -525,8 +588,8 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
                 files.push(Some(facts));
                 start += json.len();
             }
-            (None, Some(blob), Some(row)) => {
-                let (map, at) = facts_strings(it, blob)?;
+            (None, Some(range), Some(row)) => {
+                let (map, at) = facts_strings(it, &bodies[range.clone()])?;
                 pending.push(Pending {
                     file,
                     map,
@@ -545,7 +608,8 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         .into_par_iter()
         .map(|p| {
             let slot = &slots[p.file];
-            let body = &slot.stored.as_deref().unwrap_or_default()[p.at..];
+            let range = slot.stored.clone().unwrap_or_default();
+            let body = &bodies[range][p.at..];
             (
                 p.file,
                 decode_body(&p.map, body, p.start, p.json_len, slot.path),
@@ -556,9 +620,7 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         files[file] = Some(facts?);
     }
     // The binary facts are decoded: free them before the link allocates its tables.
-    for slot in slots.iter_mut() {
-        slot.stored = None;
-    }
+    drop(bodies);
     let files: Vec<FileFacts> = files
         .into_iter()
         .map(|f| f.expect("every file has facts"))
@@ -595,6 +657,7 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         db_path: request.db.clone(),
         db: Mutex::new(None),
         records,
+        last: Mutex::new(None),
         again: Again {
             repo: request.repo.clone(),
             full: request.full.clone(),

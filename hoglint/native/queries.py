@@ -226,14 +226,18 @@ class NativePackQueries(PackQueries):
         self.link = link
         self.paths: list[str] = link.paths()
         self.keys: list[str | None] | None = None
+        self.patterns: dict[Words, int] = {}
 
     def scope_at(self, file: int) -> FileScope:
         scope_of: Any = self.build.scope_of
         return scope_of[self.paths[file]]
 
     def may_mention(self, scope: FileScope, kinds: Iterable[str], words: Words) -> bool:
+        pattern = self.patterns.get(words)
+        if pattern is None:
+            pattern = self.patterns[words] = self.link.words(list(words.suffixes), list(words.parts))
         record: Any = scope.record
-        return self.link.mentions(record.file, list(kinds), list(words.suffixes), list(words.parts))
+        return self.link.mentions(record.file, list(kinds), pattern)
 
     def has_rows(self, scope: FileScope, kind: str) -> bool:
         record: Any = scope.record

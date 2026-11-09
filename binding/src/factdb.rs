@@ -16,7 +16,8 @@
 //! The database is a cache. An entry that is gone is a miss, and an error is the caller's to
 //! log and run past (`blobs.rs`).
 
-use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, params};
+use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -177,6 +178,48 @@ impl FactDb {
             config,
             oid,
         )
+    }
+
+    /// Bytes `range` of an entry's record JSON, read in place in one read transaction; None when
+    /// the entry is gone or its record is not `json_len` bytes long.
+    pub fn read_json_range(
+        &self,
+        config: &str,
+        oid: &str,
+        json_len: usize,
+        range: Range<usize>,
+    ) -> Result<Option<Vec<u8>>> {
+        self.begin_read()?;
+        let found = self.json_range(config, oid, json_len, range);
+        self.end_read()?;
+        found
+    }
+
+    fn json_range(
+        &self,
+        config: &str,
+        oid: &str,
+        json_len: usize,
+        range: Range<usize>,
+    ) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id FROM keys WHERE config = ?1 AND oid = ?2")?;
+        let Some(id) = stmt
+            .query_row(params![config, oid], |r| r.get::<_, i64>(0))
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let blob = self
+            .conn
+            .blob_open(MAIN_DB, c"records", c"json", id, true)?;
+        if blob.len() != json_len || range.end > json_len {
+            return Ok(None);
+        }
+        let mut out = vec![0; range.len()];
+        blob.read_at_exact(&mut out, range.start)?;
+        Ok(Some(out))
     }
 
     /// The record JSON of an entry, or None when it is gone.

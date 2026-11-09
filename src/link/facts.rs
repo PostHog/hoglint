@@ -218,6 +218,15 @@ impl FileFacts {
 /// the link itself never reads it, and no reader holds the whole snapshot's text.
 pub trait RecordText: Send + Sync {
     fn record(&self, file: usize) -> Result<Vec<u8>, String>;
+
+    /// Bytes `range` of one record's JSON text. A source that can read part of a record in
+    /// place overrides it.
+    fn slice(&self, file: usize, range: Range<usize>) -> Result<Vec<u8>, String> {
+        let text = self.record(file)?;
+        text.get(range)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| "a record is shorter than its keys say".to_string())
+    }
 }
 
 /// The JSON text of every record held in memory, one per line: a JSONL input.
@@ -289,11 +298,11 @@ impl FactSet {
         let Some((_, range)) = facts.keys.iter().find(|(name, _)| &**name == key) else {
             return Ok(None);
         };
-        let text = self.record(file)?;
         let start = facts.line.start;
-        text.get(range.start - start..range.end - start)
-            .map(|slice| Some(slice.to_vec()))
-            .ok_or_else(|| format!("the record of {} is shorter than its keys say", facts.path))
+        self.source
+            .slice(file, range.start - start..range.end - start)
+            .map(Some)
+            .map_err(|e| format!("{}: {e}", facts.path))
     }
 
     /// Whether a record's list under `key` has rows: its JSON text is longer than `[]`.

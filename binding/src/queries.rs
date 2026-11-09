@@ -4,11 +4,12 @@
 use crate::link::Link;
 use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::{FileFacts, V};
-use hoglint_facts::link::intern::{EMPTY, Sid};
+use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
 use hoglint_facts::link::resolve::{Binding, Ent};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyString};
+use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::value::RawValue;
 
@@ -87,90 +88,98 @@ impl Link {
     }
 }
 
-/// Every string a value tree holds: chains, string texts, attribute names, callees.
-fn value_strings(value: &V, out: &mut Vec<Sid>) {
+/// Whether a value tree holds a string `found` accepts: a chain, a string's text, an
+/// attribute name or a callee.
+fn value_mentions(value: &V, found: &impl Fn(Sid) -> bool) -> bool {
     match value {
-        V::Null | V::Other => {}
-        V::Chain(s) | V::Opaque(s) => out.push(*s),
+        V::Null | V::Other => false,
+        V::Chain(s) | V::Opaque(s) => found(*s),
         V::Str(s, parsed) => {
-            out.push(*s);
-            if let Some(parsed) = parsed {
-                value_strings(parsed, out);
-            }
+            found(*s) || parsed.as_deref().is_some_and(|p| value_mentions(p, found))
         }
-        V::Call(inner, _) | V::Star(inner) => value_strings(inner, out),
-        V::Attr(inner, name) => {
-            value_strings(inner, out);
-            out.push(*name);
-        }
-        V::Sub(a, b) | V::Bin(_, a, b) => {
-            value_strings(a, out);
-            value_strings(b, out);
-        }
+        V::Call(inner, _) | V::Star(inner) => value_mentions(inner, found),
+        V::Attr(inner, name) => value_mentions(inner, found) || found(*name),
+        V::Sub(a, b) | V::Bin(_, a, b) => value_mentions(a, found) || value_mentions(b, found),
         V::Tuple(items) | V::List(items) | V::Set(items) => {
-            items.iter().for_each(|item| value_strings(item, out))
+            items.iter().any(|item| value_mentions(item, found))
         }
-        V::Dict(pairs) => {
-            for (key, value) in pairs {
-                if let Some(key) = key {
-                    value_strings(key, out);
-                }
-                value_strings(value, out);
-            }
-        }
+        V::Dict(pairs) => pairs.iter().any(|(key, value)| {
+            key.as_ref().is_some_and(|key| value_mentions(key, found))
+                || value_mentions(value, found)
+        }),
     }
 }
 
-/// Pushes the strings a record's rows of `kind` hold: interned ids into `sids`, and the fields
-/// the link keeps as plain text into `texts`. False for a kind the link does not decode.
-fn kind_strings<'f>(
-    facts: &'f FileFacts,
+/// Whether a record's rows of `kind` hold a string `matches` accepts; None for a kind the
+/// link does not decode.
+fn kind_mentions(
+    facts: &FileFacts,
     kind: &str,
-    sids: &mut Vec<Sid>,
-    texts: &mut Vec<&'f str>,
-) -> bool {
-    match kind {
-        "imports" => {
-            for row in &facts.imports {
-                sids.extend(row.target.iter().chain(&row.name).chain(&row.asname));
-            }
-        }
-        "defs" => {
-            for def in &facts.defs {
-                sids.push(def.n);
-                def.bases
+    it: &Interner,
+    matches: &impl Fn(&str) -> bool,
+) -> Option<bool> {
+    let sid = |s: Sid| matches(it.s(s));
+    let found = match kind {
+        "imports" => facts.imports.iter().any(|row| {
+            row.target
+                .into_iter()
+                .chain(row.name)
+                .chain(row.asname)
+                .any(sid)
+        }),
+        "defs" => facts.defs.iter().any(|def| {
+            sid(def.n)
+                || def
+                    .bases
                     .iter()
                     .chain(&def.dec)
-                    .for_each(|v| value_strings(v, sids));
-                for param in &def.params {
-                    sids.push(param.name);
-                    if let Some(annotation) = &param.annotation {
-                        value_strings(annotation, sids);
-                    }
-                }
-                if let Some(ret) = &def.ret {
-                    value_strings(ret, sids);
-                }
-            }
-        }
-        "refs" => {
-            for row in &facts.refs {
-                sids.push(row.name);
-                texts.push(&row.chain);
-                texts.push(&row.up);
-            }
-        }
-        "uses" => facts
-            .uses
+                    .any(|v| value_mentions(v, &sid))
+                || def.params.iter().any(|param| {
+                    sid(param.name)
+                        || param
+                            .annotation
+                            .as_ref()
+                            .is_some_and(|a| value_mentions(a, &sid))
+                })
+                || def
+                    .ret
+                    .as_ref()
+                    .is_some_and(|ret| value_mentions(ret, &sid))
+        }),
+        "refs" => facts
+            .refs
             .iter()
-            .for_each(|row| sids.extend([row.root, row.attrs])),
-        "callees" => sids.extend(facts.callees.iter().map(|row| row.text)),
-        "names" => sids.extend(facts.names.iter().map(|row| row.text)),
-        "tags" => sids.extend(facts.tags.iter().map(|row| row.name)),
-        "calls" => texts.extend(facts.calls.iter().map(|row| &*row.callee)),
-        _ => return false,
+            .any(|row| sid(row.name) || matches(&row.chain) || matches(&row.up)),
+        "uses" => facts.uses.iter().any(|row| sid(row.root) || sid(row.attrs)),
+        "callees" => facts.callees.iter().any(|row| sid(row.text)),
+        "names" => facts.names.iter().any(|row| sid(row.text)),
+        "tags" => facts.tags.iter().any(|row| sid(row.name)),
+        "calls" => facts.calls.iter().any(|row| matches(&row.callee)),
+        _ => return None,
+    };
+    Some(found)
+}
+
+/// One pattern for the words of a mention query: a string that ends in one of `ending`, or
+/// holds one of `inside`. None when there are no words, which nothing matches.
+fn words_pattern(ending: &[String], inside: &[String]) -> PyResult<Option<Regex>> {
+    let alternation = |words: &[String]| {
+        let escaped: Vec<String> = words.iter().map(|word| regex::escape(word)).collect();
+        escaped.join("|")
+    };
+    let mut parts = Vec::new();
+    if !ending.is_empty() {
+        parts.push(format!("(?:{})\\z", alternation(ending)));
     }
-    true
+    if !inside.is_empty() {
+        parts.push(format!("(?:{})", alternation(inside)));
+    }
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    Regex::new(&parts.join("|"))
+        .map(Some)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 impl Link {
@@ -345,16 +354,18 @@ impl Link {
             .collect())
     }
 
-    /// Whether a record's rows of any of `kinds` hold a string that ends in one of `ending` or
-    /// contains one of `inside`, read off the link's own rows: what a pack's text prefilter asks.
-    /// Kinds the link does not decode raise.
-    fn mentions(
-        &self,
-        file: usize,
-        kinds: Vec<String>,
-        ending: Vec<String>,
-        inside: Vec<String>,
-    ) -> PyResult<bool> {
+    /// Registers the words of a mention query: a string that ends in one of `ending`, or holds
+    /// one of `inside`. Returns the id `mentions` takes, so a pack that asks with the same
+    /// words file after file compiles them once.
+    fn words(&mut self, ending: Vec<String>, inside: Vec<String>) -> PyResult<usize> {
+        self.patterns.push(words_pattern(&ending, &inside)?);
+        Ok(self.patterns.len() - 1)
+    }
+
+    /// Whether a record's rows of any of `kinds` hold a string the registered `words` match,
+    /// read off the link's own rows: what a pack's text prefilter asks. Kinds the link does not
+    /// decode raise.
+    fn mentions(&self, file: usize, kinds: Vec<String>, words: usize) -> PyResult<bool> {
         self.rows()?;
         let facts = self
             .inner
@@ -363,27 +374,24 @@ impl Link {
             .files
             .get(file)
             .ok_or_else(|| PyKeyError::new_err(file))?;
-        let it = &self.inner.core.it;
-        let matches = |text: &str| {
-            ending.iter().any(|word| text.ends_with(word.as_str()))
-                || inside.iter().any(|word| text.contains(word.as_str()))
+        let pattern = self
+            .patterns
+            .get(words)
+            .ok_or_else(|| PyKeyError::new_err(words))?;
+        let Some(pattern) = pattern else {
+            return Ok(false);
         };
+        let it = &self.inner.core.it;
+        let matches = |text: &str| pattern.is_match(text);
         for kind in &kinds {
-            let (mut sids, mut texts) = (Vec::new(), Vec::new());
-            if !kind_strings(facts, kind, &mut sids, &mut texts) {
-                return Err(PyValueError::new_err(format!(
-                    "the link does not read {kind} rows"
-                )));
-            }
-            let mut seen: FxHashSet<Sid> = FxHashSet::default();
-            if sids
-                .into_iter()
-                .any(|sid| seen.insert(sid) && matches(it.s(sid)))
-            {
-                return Ok(true);
-            }
-            if texts.into_iter().any(matches) {
-                return Ok(true);
+            match kind_mentions(facts, kind, it, &matches) {
+                Some(true) => return Ok(true),
+                Some(false) => {}
+                None => {
+                    return Err(PyValueError::new_err(format!(
+                        "the link does not read {kind} rows"
+                    )));
+                }
             }
         }
         Ok(false)
