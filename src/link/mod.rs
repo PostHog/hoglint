@@ -272,13 +272,19 @@ impl Link {
     }
 
     /// What `SymbolFacts` reads of the core's inherit or decorate edges, in graph order:
-    /// (owner symbol, surface, names) where the owner is "module.<class or decorated attr>" and
-    /// the names are the targets, `?<surface>` when unresolved, else the surface.
-    pub fn class_facts(&self, kind: u8, owner_attr: &str) -> Vec<(String, String, Vec<String>)> {
+    /// (owner symbol, surface, names, frozen) where the owner is "module.<class or decorated
+    /// attr>", the names are the targets, `?<surface>` when unresolved, else the surface, and
+    /// frozen says a decorator call passed `frozen=True`.
+    pub fn class_facts(
+        &self,
+        kind: u8,
+        owner_attr: &str,
+    ) -> Vec<(String, String, Vec<String>, bool)> {
         let core = &self.core;
         let Some(owner_key) = core.it.get(owner_attr) else {
             return Vec::new();
         };
+        let frozen = (core.it.get("frozen"), core.it.get("1"));
         let mut out = Vec::new();
         for row in self.edges.rows.iter().filter(|row| row.kind == kind) {
             let Some(&(_, owner)) = self
@@ -303,10 +309,15 @@ impl Link {
             } else {
                 vec![surface.clone()]
             };
+            let is_frozen = match frozen {
+                (Some(key), Some(one)) => self.edges.attrs_of(row).contains(&(key, one)),
+                _ => false,
+            };
             out.push((
                 format!("{}.{}", core.it.s(module), core.it.s(owner)),
                 surface,
                 names,
+                is_frozen,
             ));
         }
         out

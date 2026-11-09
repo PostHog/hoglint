@@ -6,7 +6,22 @@ use crate::{HitTuple, Pair};
 use hoglint_facts::link::facts::V;
 use hoglint_facts::link::intern::Interner;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::types::{PyBool, PyDict, PyString};
+
+/// Whether call keywords (`[[name, value], ...]`) pass `frozen=True`.
+fn frozen_keyword(keywords: &Bound<'_, PyAny>) -> PyResult<bool> {
+    for pair in keywords.try_iter()? {
+        let pair = pair?;
+        if pair.len()? == 2
+            && pair.get_item(0)?.eq("frozen")?
+            && pair.get_item(1)?.is_truthy()?
+            && pair.get_item(1)?.is_instance_of::<PyBool>()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// A JSON-like Python value tree (what `orjson` makes of a fact) as the link's V.
 fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
@@ -43,7 +58,11 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
         return Ok(V::Str(it.intern(&text), parsed));
     }
     if let Some(callee) = get("call")? {
-        return Ok(V::Call(Box::new(py_value(it, &callee)?)));
+        let frozen = match get("kw")? {
+            Some(keywords) => frozen_keyword(&keywords)?,
+            None => false,
+        };
+        return Ok(V::Call(Box::new(py_value(it, &callee)?), frozen));
     }
     if let (Some(a), Some(v)) = (get("a")?, get("v")?) {
         let attr: String = a.extract().unwrap_or_default();

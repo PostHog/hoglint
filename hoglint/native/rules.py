@@ -89,10 +89,12 @@ class NativeSymbolFacts(SymbolFacts):
 
     def __init__(self, graph: NativeGraph, inherits: list[Edge], decorates: list[Edge]) -> None:
         super().__init__(graph, [], [])
-        for owner, _, names in graph.link.class_facts("inherit", "class"):
+        for owner, _, names, _ in graph.link.class_facts("inherit", "class"):
             self.add_base(owner, names)
-        for owner, surface, names in graph.link.class_facts("decorate", "decorated"):
+        for owner, surface, names, frozen in graph.link.class_facts("decorate", "decorated"):
             self.add_decorator(owner, surface, names)
+            if frozen:
+                self.frozen.add(owner)
         self.add_edges(inherits, decorates)
 
 

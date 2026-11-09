@@ -105,6 +105,7 @@ struct Keys {
     body: Sid,
     decorated: Sid,
     called: Sid,
+    frozen: Sid,
     class: Sid,
     index: Sid,
     callable: Sid,
@@ -158,6 +159,7 @@ impl Producing {
             body: it.intern("body"),
             decorated: it.intern("decorated"),
             called: it.intern("called"),
+            frozen: it.intern("frozen"),
             class: it.intern("class"),
             index: it.intern("index"),
             callable: it.intern("callable"),
@@ -689,12 +691,15 @@ impl Producers<'_> {
             for dec in &node.dec {
                 let (surface, resolved) = self.lookup_value(owner, dec, enclosing, node.l);
                 let k = &self.settings.k;
-                let called = if matches!(dec, V::Call(_)) {
+                let called = if matches!(dec, V::Call(..)) {
                     k.one
                 } else {
                     k.zero
                 };
-                let attrs = [(k.decorated, qualname), (k.called, called)];
+                let mut attrs = vec![(k.decorated, qualname), (k.called, called)];
+                if matches!(dec, V::Call(_, true)) {
+                    attrs.push((k.frozen, k.one));
+                }
                 let use_ = k.use_decorator;
                 self.push(
                     DECORATE, owner, enclosing, node.l, node.c, ctx, surface, resolved, use_,

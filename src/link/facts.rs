@@ -17,8 +17,9 @@ pub enum V {
     Chain(Sid),
     /// `{"s": text}`, with `sa` (the parsed text of a string annotation) when the key is there.
     Str(Sid, Option<Box<V>>),
-    /// `{"call": callee, ...}`, also the over-budget form `{"call": callee, "o": "big"}`.
-    Call(Box<V>),
+    /// `{"call": callee, ...}`, also the over-budget form `{"call": callee, "o": "big"}`; true
+    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example).
+    Call(Box<V>, bool),
     Attr(Box<V>, Sid),
     Sub(Box<V>, Box<V>),
     Tuple(Vec<V>),
@@ -255,6 +256,17 @@ fn row(value: &J, index: usize) -> &J {
         .unwrap_or(&J::Null)
 }
 
+/// Whether call keywords (`[[name, value], ...]`) pass `frozen=True`.
+fn frozen_keyword(keywords: Option<&J>) -> bool {
+    let Some(J::Array(pairs)) = keywords else {
+        return false;
+    };
+    pairs.iter().any(|pair| match pair {
+        J::Array(items) => items.len() == 2 && items[0] == "frozen" && items[1] == J::Bool(true),
+        _ => false,
+    })
+}
+
 pub fn value(it: &mut Interner, json: &J) -> V {
     match json {
         J::Null => V::Null,
@@ -269,7 +281,7 @@ pub fn value(it: &mut Interner, json: &J) -> V {
                 return V::Str(it.intern(text(s)), parsed);
             }
             if let Some(callee) = map.get("call") {
-                return V::Call(Box::new(value(it, callee)));
+                return V::Call(Box::new(value(it, callee)), frozen_keyword(map.get("kw")));
             }
             if let (Some(a), Some(v)) = (map.get("a"), map.get("v")) {
                 let attr = it.intern(text(a));

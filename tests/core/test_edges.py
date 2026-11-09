@@ -202,3 +202,13 @@ def test_names_that_meet_a_re_export_cycle_answer_the_same_in_every_order() -> N
     answers = [cycle_answers(order) for order in itertools.permutations(CYCLE_KEYS)]
     assert all(found == answers[0] for found in answers)
     assert answers[0][("app.pkg", "sub")] == ("module", ("app.pkg.sub", "app.pkg.sub"))
+
+
+def test_a_decorator_call_passing_frozen_true_marks_its_decorate_edge_frozen() -> None:
+    frozen = {"call": "dataclass", "kw": [["frozen", True]]}
+    plain = {"call": "dataclass", "kw": [["frozen", False]]}
+    facts = (
+        FileFacts("app/shapes.py").define("Point", kind="class", dec=[frozen]).define("Box", kind="class", dec=[plain])
+    )
+    edges = edges_of(build([facts]), "decorate", "app/shapes.py")
+    assert [(edge.attr("decorated"), edge.attr("frozen")) for edge in edges] == [("Point", "1"), ("Box", "")]

@@ -291,7 +291,11 @@ impl Link {
 
     /// The core's inherit (`owner_attr` "class") or decorate ("decorated") facts for SymbolFacts:
     /// [(owner symbol, surface, names)] in graph order.
-    fn class_facts(&self, kind: &str, owner_attr: &str) -> Vec<(String, String, Vec<String>)> {
+    fn class_facts(
+        &self,
+        kind: &str,
+        owner_attr: &str,
+    ) -> Vec<(String, String, Vec<String>, bool)> {
         match kind_code(kind) {
             Some(code) => self.inner.class_facts(code, owner_attr),
             None => Vec::new(),

@@ -127,6 +127,11 @@ def chain_text(tokens: list[str]) -> str:
     return "".join(tokens)
 
 
+def frozen_keyword(call: dict) -> bool:
+    """Whether a call value's keywords pass `frozen=True` (a frozen dataclass decorator)."""
+    return any(pair == ["frozen", True] for pair in call.get("kw", ()))
+
+
 @dataclass(frozen=False)
 class BuildContext:
     """What every producer reads. Built once per run."""
@@ -425,7 +430,9 @@ class DeclarationProducer(Producer):
             surface = found.surface if found else ""
             resolved = context.classifier.classify_lookup(found) if found else UNRESOLVED
             called = "1" if isinstance(dec, dict) and "call" in dec else "0"
-            attrs = (("decorated", qualname), ("called", called))
+            attrs: tuple[tuple[str, str], ...] = (("decorated", qualname), ("called", called))
+            if called == "1" and frozen_keyword(dec):
+                attrs = (*attrs, ("frozen", "1"))
             graph.edges.append(
                 self.edge(
                     "decorate",
