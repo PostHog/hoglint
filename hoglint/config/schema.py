@@ -125,7 +125,9 @@ PROVIDER_OPTIONS: dict[str, frozenset[str]] = {
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "unknown"})
 LEDGER_KEYS = frozenset({"file", "exceptions", "equality", "growth", "report"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
-DISCOVERY_KEYS = frozenset({"source_roots", "first_party", "exclude", "include", "scripts", "external"})
+DISCOVERY_KEYS = frozenset(
+    {"source_roots", "first_party", "exclude", "include", "scripts", "external", "tests", "migrations", "plugins"}
+)
 VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections"})
 BUILTIN_NAMES = frozenset(
     {
