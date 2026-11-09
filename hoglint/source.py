@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from hoglint.config import Config
 from hoglint.config.schema import as_tuple, canonical
+from hoglint.facts import FACT_KINDS, FactNeeds
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Pack, ProducerFailure
 
@@ -68,15 +69,16 @@ class GraphSource:
         return CoreConfig(**fields)
 
     @staticmethod
-    def fact_needs(packs: list[tuple[Pack, Mapping[str, Any]]]) -> Any:
-        """The union of what the active packs need extracted; None (everything) when none says."""
-        needs = None
+    def fact_needs(packs: list[tuple[Pack, Mapping[str, Any]]]) -> FactNeeds:
+        """The union of what the active packs need extracted. A pack that does not say needs every
+        fact kind and every watch list a registered pack declares."""
+        from hoglint.core.analysis import registered_needs  # noqa: PLC0415 - see core_config
+
+        needs = FactNeeds()
         for pack, section in packs:
             declare = getattr(pack, "fact_needs", None)
-            if declare is None:
-                continue
-            wanted = declare(section)
-            needs = wanted if needs is None else needs | wanted
+            wanted = declare(section) if declare is not None else FactNeeds(kinds=FACT_KINDS) | registered_needs()
+            needs = needs | wanted
         return needs
 
     def build_fresh(self, code_root: Path, config: Config, staged: bool) -> Graph:
@@ -84,11 +86,14 @@ class GraphSource:
 
         packs = active_packs(config)
         work = Path(tempfile.mkdtemp(dir=self.work_dir))
-        options: dict[str, Any] = {"repo": code_root, "config": self.core_config(config), "work_dir": work}
-        needs = self.fact_needs(packs)
-        if needs is not None:
-            options["needs"] = needs
-        analysis = CoreAnalysis(AnalysisOptions(staged=staged, **options)).run()
+        options = AnalysisOptions(
+            repo=code_root,
+            config=self.core_config(config),
+            work_dir=work,
+            staged=staged,
+            needs=self.fact_needs(packs),
+        )
+        analysis = CoreAnalysis(options).run()
         graph = analysis.graph
         for pack, section in packs:
             try:
