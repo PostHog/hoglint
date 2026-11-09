@@ -13,6 +13,7 @@ checked whatever its audience.
 from __future__ import annotations
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
+from hoglint.globs import compile_label_glob
 from hoglint.model import Context, Edge, Resolution
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_ok, project
 from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
@@ -38,6 +39,9 @@ class ExportPrimitive:
         self.module_imports = index.module_imports
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
+        self.shapes: dict[str, tuple[frozenset[str], bool]] = {}
+        self.members: dict[tuple[str, bool], list[Edge]] = {}
+        self.exposes_by_name: dict[str, dict[str, list[Edge]]] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
 
@@ -45,13 +49,25 @@ class ExportPrimitive:
         names = self.spec.exports or tuple(self.ctx.config.exports)
         return [self.ctx.config.exports[name] for name in names]
 
+    def covered_modules(self) -> dict[str, list[tuple[str, str]]]:
+        """(module, path) of every module each export covers, in module order: one pass over the
+        modules for every export, and only paths that start with an export's `within` are asked."""
+        exports = self.ctx.config.exports.values()
+        prefixes = tuple(compile_label_glob(f"{spec.within}/**").prefix if spec.within else "" for spec in exports)
+        out: dict[str, list[tuple[str, str]]] = {}
+        for module, path in self.ctx.labeler.index.sorted_modules:
+            if not path.startswith(prefixes):
+                continue
+            for name in self.ctx.labeler.path_exports(path):
+                out.setdefault(name, []).append((module, path))
+        return out
+
     def evaluate(self) -> RuleRun:
         labeler = self.ctx.labeler
+        covered = self.covered_modules()
         for export in self.selected_exports():
             policy = self.ctx.config.shapes[export.shape]
-            for module, path in self.ctx.labeler.index.sorted_modules:
-                if not labeler.export_covers(export, path):
-                    continue
+            for module, path in covered.get(export.name, []):
                 for symbol, edge in self.exported_symbols(module):
                     member = labeler.export_member((export.name, path, symbol))
                     if member is Truth.FALSE:
@@ -78,14 +94,20 @@ class ExportPrimitive:
 
     # ── shapes ──
 
-    def recognize(self, symbol: str) -> tuple[set[str], bool]:
+    def recognize(self, symbol: str) -> tuple[frozenset[str], bool]:
         """Shape names of a symbol, and whether hoglint saw enough facts to be sure."""
+        found = self.shapes.get(symbol)
+        if found is None:
+            found = self.shapes[symbol] = self.find_shapes(symbol)
+        return found
+
+    def find_shapes(self, symbol: str) -> tuple[frozenset[str], bool]:
         names: set[str] = set()
         kind, _ = self.ctx.labeler.kind(symbol, first_party=self.facts.has(symbol))
         if kind.state is State.KNOWN:
             names.add(str(kind.data))
         if not self.facts.has(symbol):
-            return names, kind.state is not State.UNKNOWN
+            return frozenset(names), kind.state is not State.UNKNOWN
         ancestors, complete = self.facts.ancestors(symbol)
         lineage = ancestors | {symbol}
         decl = self.facts.decl(symbol)
@@ -105,7 +127,7 @@ class ExportPrimitive:
             names.add("enum")
         if lineage & PROTOCOL_BASES:
             names.add("protocol")
-        return names, complete and kind.state is not State.UNKNOWN
+        return frozenset(names), complete and kind.state is not State.UNKNOWN
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
@@ -158,8 +180,27 @@ class ExportPrimitive:
         if "function" in shapes:
             self.check_members(symbol, module, policy, trail)
 
+    def exposes_under(self, module: str) -> dict[str, list[Edge]]:
+        """A module's exposes edges under every qualname their callable lies in: `A` holds the
+        edges of `A`, `A.f` and `A.B.g`, in the module's order."""
+        found = self.exposes_by_name.get(module)
+        if found is None:
+            found = self.exposes_by_name[module] = {}
+            for callable_name, edge in self.exposes.get(module, []):
+                parts = callable_name.split(".")
+                for end in range(1, len(parts) + 1):
+                    found.setdefault(".".join(parts[:end]), []).append(edge)
+        return found
+
     def member_edges(self, symbol: str, include_bases: bool) -> list[Edge]:
         """Exposes edges of a callable, or of a class's fields and methods (and its bases')."""
+        key = (symbol, include_bases)
+        found = self.members.get(key)
+        if found is None:
+            found = self.members[key] = self.find_member_edges(symbol, include_bases)
+        return found
+
+    def find_member_edges(self, symbol: str, include_bases: bool) -> list[Edge]:
         lineage = [symbol]
         if include_bases:
             ancestors, _ = self.facts.ancestors(symbol)
@@ -169,10 +210,7 @@ class ExportPrimitive:
             owner = self.ctx.labeler.module_of_symbol(target)
             if owner is None or owner == target:
                 continue
-            qualname = target[len(owner) + 1 :]
-            for callable_name, edge in self.exposes.get(owner, []):
-                if callable_name == qualname or callable_name.startswith(qualname + "."):
-                    out.append(edge)
+            out.extend(self.exposes_under(owner).get(target[len(owner) + 1 :], ()))
         return out
 
     def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
