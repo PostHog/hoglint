@@ -13,8 +13,11 @@ refuses any other protocol instead of guessing. It holds:
 - triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;
 - couplings and witnesses: what move admission reads, cut to `scope`, the modules a rename touches;
 - levels: the groups that pass each level, and why the others fail;
-- what else `check` prints: ledger equality, exception problems, advisory rules, and the module
-  of each path for `--changed`.
+- what else `check` prints: ledger equality, stale exceptions with every review date, exception
+  problems, advisory rules, and the module of each path for `--changed`.
+
+A summary holds no absolute path and nothing that depends on the day or the machine, so one
+built on Linux CI serves a Mac.
 """
 
 from __future__ import annotations
@@ -39,12 +42,14 @@ from hoglint.ledger.records import (
     ExceptionsRecord,
     FindingRecord,
     IncompleteRecord,
+    Portable,
     equality_from_json,
     equality_to_json,
 )
 from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.engine import RunResult
+from hoglint.rules.exceptions import ExceptionsFile
 
 GZIP_LEVEL = 1  # a whole-repo summary shrinks about 16 times at level 1, in a tenth of a second
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
@@ -64,14 +69,14 @@ def fingerprint(edge: Edge | None) -> str:
     return short_digest([edge.site.scope, edge.kind, edge.surface, edge.use, edge.shape, edge.shape_detail, attrs])
 
 
-def obligation_of(item: IncompleteItem) -> tuple[Obligation, str]:
-    return (item.rule, item.key, item.reason), fingerprint(item.edge)
+def obligation_of(item: IncompleteItem, portable: Portable) -> tuple[Obligation, str]:
+    return (item.rule, item.key, portable.text(item.reason)), fingerprint(item.edge)
 
 
-def obligations_of(items: list[IncompleteItem]) -> dict[Obligation, list[str]]:
+def obligations_of(items: list[IncompleteItem], portable: Portable) -> dict[Obligation, list[str]]:
     out: dict[Obligation, list[str]] = {}
     for item in items:
-        obligation, mark = obligation_of(item)
+        obligation, mark = obligation_of(item, portable)
         out.setdefault(obligation, []).append(mark)
     return {obligation: sorted(marks) for obligation, marks in out.items()}
 
@@ -103,19 +108,29 @@ class ScanSummary:
         envelope: Envelope,
         scope: frozenset[str] = frozenset(),
         with_triples: bool = True,
+        roots: tuple[Path, ...] = (),
+        exceptions: ExceptionsFile | None = None,
     ) -> ScanSummary:
-        """`scope` names the modules whose couplings and witnesses move admission reads."""
+        """`scope` names the modules whose couplings and witnesses move admission reads. `roots`
+        are the run's policy and code roots, which text in the summary names relative to the repo;
+        `exceptions` gives the review dates of the run's exception entries."""
         config = result.config
+        portable = Portable.of(*roots)
         summary = ScanSummary(envelope=envelope, schema=SCHEMA_VERSION, lines=dict(result.scan), scope=scope)
         for rule in config.rules.values():
             if rule.ledger and rule.identity:
                 summary.growth[rule.id] = tuple(rule.identity.index(column) for column in rule.growth_key)
-        summary.findings = [FindingRecord.of(finding) for finding in result.findings()]
-        summary.incomplete = [IncompleteRecord.of(item, fingerprint(item.edge)) for item in result.incomplete()]
+        summary.findings = [FindingRecord.of(finding, portable) for finding in result.findings()]
+        summary.incomplete = [
+            IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
+        ]
         summary.levels = {name: list(level.passing) for name, level in result.levels.items()}
-        summary.level_failures = {name: dict(level.failing) for name, level in result.levels.items()}
+        summary.level_failures = {
+            name: {group: [portable.text(why) for why in reasons] for group, reasons in level.failing.items()}
+            for name, level in result.levels.items()
+        }
         summary.equality = result.equality
-        summary.exceptions = ExceptionsRecord.of(result.exceptions)
+        summary.exceptions = ExceptionsRecord.of(result.exceptions, exceptions)
         summary.advisory = frozenset(rule for rule in config.rules if result.advisory(rule))
         summary.modules = dict(graph.modules)
         if with_triples:

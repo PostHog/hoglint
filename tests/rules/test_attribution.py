@@ -4,6 +4,7 @@ import os
 import gzip
 import json
 import hashlib
+import datetime
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from hoglint.ledger.scan import ScanSummary
 from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import IncompleteCause
 from hoglint.rules.engine import Engine
+from hoglint.rules.exceptions import ExceptionsFile
 
 from rules.support import GraphBuilder, config_from
 from rules.test_compare import CONFIG, git_in, has_extractor, hoglint, write_files
@@ -119,6 +121,22 @@ def test_a_policy_data_file_belongs_to_the_policy(tmp_path: Path, code_text: str
     before = policy_digest(config, [], [], policy_root)
     (policy_root / "policy/flags.toml").write_text("a = 3")
     assert policy_digest(config, [], [], policy_root) != before
+
+
+def test_a_summary_holds_no_absolute_path_and_no_day(tmp_path: Path) -> None:
+    policy_root, code_root = tmp_path / "policy", tmp_path / "code"
+    config = config_from(policy_root, CLASSIFY, {"policy/flags.toml": "entry = []"})
+    write_files(code_root, {"policy/flags.toml": "entry = [{ identity = ['x'] }]"})
+    anchored = PolicyFiles(config).anchored(policy_root, code_root)
+    graph = GraphBuilder().module("app.a", "app.b").edge("import", "app.a", "app.b").graph
+    entry = {"rule": "flags", "match": {"src.module": "gone"}, "reason": "r", "owners": ["t"], "scope": "prod"}
+    exceptions = ExceptionsFile.parse({"schema": 1, "exception": [{**entry, "review_by": "2026-01-01"}]}, config)
+    result = Engine(anchored, graph, code_root, today=datetime.date(2026, 11, 9)).evaluate(None, exceptions)
+    summary = ScanSummary.from_run(result, graph, Envelope(), roots=(policy_root, code_root), exceptions=exceptions)
+    assert str(tmp_path) not in json.dumps(summary.to_json())
+    assert [f.message for f in summary.findings] == ["app.a app.b has no classification in policy/flags.toml"]
+    assert summary.exceptions.expired(datetime.date(2025, 12, 31)) == []
+    assert summary.exceptions.expired(datetime.date(2026, 1, 2)) == [("2026-01-01", "exception #0 (flags)")]
 
 
 DAY = 86_400.0

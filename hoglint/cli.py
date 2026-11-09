@@ -41,7 +41,7 @@ from hoglint.ledger.envelope import (
 from hoglint.ledger.file import LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
-from hoglint.ledger.records import FindingRecord
+from hoglint.ledger.records import FindingRecord, Portable
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, obligation_of, obligations_of
 from hoglint.ledger.store import ExtractorStore, SummaryStore
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
@@ -205,6 +205,17 @@ class Runner:
         return Run(code_root, config, graph, result, result.ledger or ledger, exceptions, policy_root)
 
 
+def portable_of(run: Run) -> Portable:
+    return Portable.of(run.policy_root or run.root, run.root)
+
+
+def summary_of(
+    run: Run, envelope: Envelope, scope: frozenset[str] = frozenset(), with_triples: bool = True
+) -> ScanSummary:
+    roots = (run.policy_root or run.root, run.root)
+    return ScanSummary.from_run(run.result, run.graph, envelope, scope, with_triples, roots, run.exceptions)
+
+
 # ── rendering ─────────────────────────────────────────────────────
 
 
@@ -225,6 +236,7 @@ class Attributed:
 
     labels: Labels
     against: str
+    portable: Portable = Portable()
 
     @property
     def blocking(self) -> bool:
@@ -235,7 +247,7 @@ class Attributed:
         left = {key: list(labels) for key, labels in self.labels.items()}
         out = []
         for item in items:
-            labels = left.get(obligation_of(item), [])
+            labels = left.get(obligation_of(item, self.portable), [])
             if item.cause is not IncompleteCause.INHERITED or not labels:
                 out.append(item.cause.value)
                 continue
@@ -511,16 +523,16 @@ class Baselines:
             ledger = LedgerFile()
         runner = Runner(GraphSource(Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))))
         run = runner.run(policy_root, self.repo, tree=envelope.tree, ledger=ledger)
-        return ScanSummary.from_run(run.result, run.graph, envelope, with_triples=False)
+        return summary_of(run, envelope, with_triples=False)
 
     def attribute(self, baseline: Baseline, run: Run, store: bool) -> Attributed:
         """`store` keeps the run's summary under its tree; a run that rewrote the ledger has none."""
-        head = obligations_of(run.result.incomplete())
+        head = obligations_of(run.result.incomplete(), portable_of(run))
         if store and baseline.envelope.tree:
-            summary = ScanSummary.from_run(run.result, run.graph, baseline.envelope, with_triples=False)
+            summary = summary_of(run, baseline.envelope, with_triples=False)
             self.store.put(baseline.envelope, summary)
         reference = head if baseline.is_self else baseline.reference
-        return Attributed(attribute(head, reference), baseline.against)
+        return Attributed(attribute(head, reference), baseline.against, portable_of(run))
 
 
 # ── commands ──────────────────────────────────────────────────────
@@ -651,7 +663,7 @@ class Commands:
         if stored is not None:
             return stored.findings
         run = self.runner.run(self.repo)
-        summary = ScanSummary.from_run(run.result, run.graph, self.engine.envelope(run, key.tree), with_triples=False)
+        summary = summary_of(run, self.engine.envelope(run, key.tree), with_triples=False)
         self.summaries.put(summary.envelope, summary)
         return summary.findings
 
@@ -677,7 +689,7 @@ class Commands:
         renames = self.module_renames(base_sha, head.config)
         head_tree = self.snapshots.head_tree_in_worktree(head.config.ledger.file)
         head_key = self.engine.envelope(head, head_tree)
-        scans = Scans(head=ScanSummary.from_run(head.result, head.graph, head_key, renames.modules()))
+        scans = Scans(head=summary_of(head, head_key, renames.modules()))
         self.summaries.put(head_key, scans.head)
         base_config = load_config(base_root, base_root / CONFIG_FILE) if (base_root / CONFIG_FILE).is_file() else None
         base_exceptions = ExceptionsFile()
@@ -697,7 +709,7 @@ class Commands:
             # that labels each policy change.
             base_graph, base_head = self.runner.evaluate(head.config, base_root, self.repo)
             envelope = Envelope("", self.engine.id, scans.head.envelope.policy, scans.head.envelope.framework)
-            scans.base_head = ScanSummary.from_run(base_head, base_graph, envelope)
+            scans.base_head = ScanSummary.from_run(base_head, base_graph, envelope, roots=(self.repo, base_root))
         touched_paths = set(self.snapshots.changed_paths(base_sha, staged=False))
         touched = {module for module, path in head.graph.modules.items() if path in touched_paths}
         base_files = PolicyFiles(base_config).digests(base_root) if base_config is not None else {}
@@ -710,7 +722,9 @@ class Commands:
             touched,
             renames,
         ).report()
-        sys.stdout.write(CheckReport(head.result, attributed=Attributed(report.labels, "the base")).render())
+        sys.stdout.write(
+            CheckReport(head.result, attributed=Attributed(report.labels, "the base", portable_of(head))).render()
+        )
         sys.stdout.write(report.render())
         return report.exit_code(head.result.failed(), bool(head.result.blocking_incomplete()))
 
@@ -757,7 +771,7 @@ class Commands:
                 source = f"{missing} for {base_key.key()}, so the full base scan ran"
             if engine.binary is None:
                 run = self.runner.run(base_root)
-                base = ScanSummary.from_run(run.result, run.graph, base_key, scope)
+                base = summary_of(run, base_key, scope)
             else:
                 base = self.base_engines.scan(engine, base_root, base_root, base_tree, scope)
             self.summaries.put(base.envelope, base)
@@ -768,7 +782,7 @@ class Commands:
         if head_base is None:
             if engine.binary is None:
                 run = self.runner.run(base_root, code_root=self.repo)
-                head_base = ScanSummary.from_run(run.result, run.graph, head_base_key, scope, with_triples=False)
+                head_base = summary_of(run, head_base_key, scope, with_triples=False)
             else:
                 head_base = self.base_engines.scan(engine, base_root, self.repo, head.envelope.tree, scope)
             self.summaries.put(head_base.envelope, head_base)
@@ -779,7 +793,7 @@ class Commands:
         of a base engine (see `BaseEngines.scan`). `tree` is the code's git tree id, if it is one."""
         scope = frozenset(json.loads(scope_file.read_text())) if scope_file is not None else frozenset()
         run = self.runner.run(self.repo, code_root=code_root)
-        ScanSummary.from_run(run.result, run.graph, self.engine.envelope(run, tree), scope).write(out)
+        summary_of(run, self.engine.envelope(run, tree), scope).write(out)
         return 0
 
     # ── the summary cache, for CI steps ──
@@ -828,7 +842,7 @@ class Commands:
             raise EngineError("the commit has no hoglint engine")
         if engine.binary is None:
             run = self.runner.run(root)
-            summary = ScanSummary.from_run(run.result, run.graph, key)
+            summary = summary_of(run, key)
         else:
             summary = self.base_engines.scan(engine, root, root, key.tree, frozenset())
         self.summaries.put(summary.envelope, summary)
