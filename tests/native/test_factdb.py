@@ -12,9 +12,10 @@ from typing import Any
 import pytest
 
 from hoglint.core.config import CoreConfig
+from hoglint.ledger.store import Walk
 from hoglint.native.analysis import LITE_KINDS
 from hoglint.native.config import link_config
-from hoglint.native.factdb import EPOCH, MAX_AGE_DAYS, FactDatabase, files_under
+from hoglint.native.factdb import EPOCH, MAX_AGE_DAYS, FactDatabase
 from hoglint.native.snapshot import BlobSnapshot
 
 from native.require import native_module
@@ -184,7 +185,7 @@ def test_the_daily_prune_drops_unread_entries_then_other_files_then_entries_not_
     assert not database.prune_daily(TODAY)
     assert (stored_ids(database), other.exists()) == (ids[1:], True)
 
-    root_bytes = sum(size for _, size, _ in files_under(database.directory.parent))
+    root_bytes = sum(size for _, size, _ in Walk.of(database.directory.parent).files)
     monkeypatch.setattr("hoglint.native.factdb.MAX_BYTES", root_bytes - 1)
     database.prune(TODAY)
     assert (stored_ids(database), other.exists()) == (ids[1:], False)
@@ -255,8 +256,8 @@ def test_a_database_opened_after_the_prune_listed_it_stays(tmp_path: Path, monke
     older = other_database(database.directory, "older-l9.sqlite", 3)
     listed = FactDatabase.others
 
-    def others_then_opened(self: FactDatabase) -> Any:
-        found = listed(self)
+    def others_then_opened(self: FactDatabase, files: list[tuple[float, int, Path]]) -> Any:
+        found = listed(self, files)
         older[-1].touch()  # a run of the older build opens it right after the listing
         return found
 

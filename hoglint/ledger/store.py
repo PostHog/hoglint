@@ -39,6 +39,7 @@ import shutil
 import hashlib
 import datetime
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,52 @@ class CacheWarning:
             return
         CacheWarning.warned = True
         sys.stderr.write(f"hoglint: cannot use the cache ({what}: {error}), so this run goes on without it\n")
+
+
+@dataclass(frozen=True)
+class Walk:
+    """Every file, as (modified time, size, path), and every directory under `top`, from one walk:
+    a prune reads sizes, ages and empty directories from it instead of walking again."""
+
+    top: Path
+    files: list[tuple[float, int, Path]]
+    directories: list[Path]
+
+    @staticmethod
+    def of(top: Path, skipped: Path | None = None) -> Walk:
+        """The walk of `top`, without `skipped` and everything under it."""
+        files = []
+        directories = []
+        for parent, subdirectories, names in os.walk(top):
+            here = Path(parent)
+            directories.append(here)
+            subdirectories[:] = [name for name in subdirectories if here / name != skipped]
+            for name in names:
+                path = here / name
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                files.append((stat.st_mtime, stat.st_size, path))
+        return Walk(top, files, directories)
+
+    def remove_empty_directories(self, cutoff: float, emptied: set[Path] | None = None) -> None:
+        """Removes the empty directories under `top`, deepest first, that nothing changed since
+        `cutoff`: a run about to write into a new one keeps it. With `emptied` (the directories a
+        prune emptied), those go whatever their age, and so does each parent a removal empties."""
+        for directory in sorted(self.directories, key=lambda path: len(path.parts), reverse=True):
+            if directory == self.top:
+                continue
+            try:
+                if any(directory.iterdir()):
+                    continue
+                if (emptied is None or directory not in emptied) and directory.stat().st_mtime >= cutoff:
+                    continue
+                directory.rmdir()
+            except OSError:
+                continue
+            if emptied is not None:
+                emptied.add(directory.parent)
 
 
 class CacheRoot:
@@ -108,27 +155,15 @@ class CacheRoot:
         self.prune()
         return True
 
-    def files(self) -> list[tuple[float, int, Path]]:
-        """(modified time, size, path) of every file under the root but the mark."""
-        out = []
-        for directory, subdirectories, names in os.walk(self.root):
-            if Path(directory) == self.root and FACTS in subdirectories:
-                subdirectories.remove(FACTS)
-            for name in names:
-                path = Path(directory) / name
-                if path.parent == self.root and name.startswith(PRUNED_MARK):
-                    continue
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                out.append((stat.st_mtime, stat.st_size, path))
-        return out
-
     def prune(self, now: float | None = None) -> None:
+        """Deletes the files older than the age bound, then the oldest until the root is within
+        the size bound, then the empty directories made before the age bound. The marks stay."""
         cutoff = (now or time.time()) - self.max_age.total_seconds()
+        walk = Walk.of(self.root, skipped=self.root / FACTS)
         kept = []
-        for modified, size, path in self.files():
+        for modified, size, path in walk.files:
+            if path.parent == self.root and path.name.startswith(PRUNED_MARK):
+                continue
             if modified < cutoff:
                 path.unlink(missing_ok=True)
             else:
@@ -139,21 +174,7 @@ class CacheRoot:
                 break
             path.unlink(missing_ok=True)
             total -= size
-        self.remove_old_empty_directories(cutoff)
-
-    def remove_old_empty_directories(self, cutoff: float) -> None:
-        """A directory made within the age bound stays, so a run about to write into it never loses it."""
-        facts = self.root / FACTS
-        walked = (Path(d) for d, _, _ in os.walk(self.root))
-        directories = sorted(
-            (d for d in walked if not d.is_relative_to(facts)), key=lambda d: len(d.parts), reverse=True
-        )
-        for directory in directories:
-            try:
-                if directory != self.root and directory.stat().st_mtime < cutoff and not any(directory.iterdir()):
-                    directory.rmdir()
-            except OSError:
-                continue
+        walk.remove_empty_directories(cutoff)
 
 
 class SummaryStore:

@@ -32,7 +32,6 @@ The cache root's own prune (`hoglint/ledger/store.py`) leaves `facts/` to this o
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 import time
@@ -42,6 +41,8 @@ import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
+from hoglint.ledger.store import Walk
+
 MAX_BYTES = 1024**3
 MAX_AGE_DAYS = 30
 IN_USE_DAYS = 1
@@ -50,25 +51,11 @@ UNIT_SUFFIXES = ("", "-wal", "-shm", ".opened", ".pruned")
 EPOCH = datetime.date(1970, 1, 1)
 CORRUPT = (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
 # A directory of the Python engine's per-file records: schema version and facts id, then the
-# extract config id (`ExtractConfig::cache_namespace` in src/config.rs).
+# extract config id.
 NAMESPACE = re.compile(r"(v\d+-b[0-9a-f]+)-.+")
 # Other databases and namespaces the prune keeps however old they are.
 KEPT_UNITS = 1
 KEPT_NAMESPACES = 2
-
-
-def files_under(directory: Path) -> list[tuple[float, int, Path]]:
-    """(modified time, size, path) of every file under `directory`."""
-    out = []
-    for parent, _, names in os.walk(directory):
-        for name in names:
-            path = Path(parent) / name
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            out.append((stat.st_mtime, stat.st_size, path))
-    return out
 
 
 def modified_time(path: Path) -> float:
@@ -92,6 +79,20 @@ def database_of(path: Path) -> Path | None:
     return None
 
 
+def namespace_name(directory: Path) -> str | None:
+    """The namespace of a directory of the Python engine's records, from its name; None for any
+    other directory. It must read the names `ExtractConfig::cache_namespace` in src/config.rs makes."""
+    match = NAMESPACE.fullmatch(directory.name)
+    return match.group(1) if match is not None else None
+
+
+def opened_time(files: list[tuple[float, Path]]) -> float:
+    """When a run last opened a unit, from the (modified time, path) of its files: its `.opened`
+    mark's time, else its newest file's."""
+    marks = [modified for modified, path in files if path.name.endswith(".opened")]
+    return max(marks) if marks else max((modified for modified, _ in files), default=0.0)
+
+
 def is_corrupt(error: Exception) -> bool:
     return isinstance(error, sqlite3.DatabaseError) and getattr(error, "sqlite_errorcode", None) in CORRUPT
 
@@ -105,10 +106,9 @@ class Unit:
     size: int
 
     def last_opened(self) -> float:
-        """When a run last opened the unit, read again now as `others` reads it: its `.opened`
-        mark, else its newest file."""
-        mark = modified_time(Path(f"{self.database}.opened"))
-        return mark or max(modified_time(path) for path in unit_files(self.database))
+        """When a run last opened the unit, read again now from the files there are."""
+        files = [(modified_time(path), path) for path in unit_files(self.database)]
+        return opened_time([(modified, path) for modified, path in files if modified])
 
     def delete(self) -> None:
         for path in unit_files(self.database):
@@ -192,32 +192,17 @@ class FactDatabase:
                 out.append(item)
         return out
 
-    def remove_empty_directories(self, emptied: set[Path], in_use: float) -> None:
-        """Removes the empty directories under `facts/` that the prune emptied, or that no run
-        changed since yesterday, deepest first: a run about to write into a new one keeps it."""
-        walked = [Path(directory) for directory, _, _ in os.walk(self.directory)]
-        for directory in sorted(walked, key=lambda path: len(path.parts), reverse=True):
-            if directory == self.directory:
-                continue
-            try:
-                if any(directory.iterdir()):
-                    continue
-                if directory in emptied or modified_time(directory) < in_use:
-                    directory.rmdir()
-                    emptied.add(directory.parent)
-            except OSError:
-                continue
-
-    def others(self) -> tuple[list[Unit], list[Namespace], list[tuple[float, int, Path]]]:
-        """The other databases under `facts/` as units, the Python engine's record directories as
-        namespaces, and the files of neither. A unit was last opened when its `.opened` mark was
-        touched, else when its newest file changed; a namespace was last used when its newest
-        file or directory changed."""
+    def others(
+        self, files: list[tuple[float, int, Path]]
+    ) -> tuple[list[Unit], list[Namespace], list[tuple[float, int, Path]]]:
+        """The other databases among `files` (those under `facts/`) as units, the Python engine's
+        record directories as namespaces, and the files of neither. A namespace was last used
+        when its newest file or directory changed."""
         own = set(unit_files(self.path))
         members: dict[Path, list[tuple[float, int, Path]]] = {}
         spaces: dict[str, list[tuple[float, int, Path]]] = {}
         loose = []
-        for entry in files_under(self.directory):
+        for entry in files:
             if entry[2] in own:
                 continue
             database = database_of(entry[2])
@@ -230,14 +215,13 @@ class FactDatabase:
                 loose.append(entry)
         units = []
         for database, entries in members.items():
-            marks = [modified for modified, _, path in entries if path.name.endswith(".opened")]
-            opened = max(marks) if marks else max(modified for modified, _, _ in entries)
+            opened = opened_time([(modified, path) for modified, _, path in entries])
             units.append(Unit(database, opened, sum(size for _, size, _ in entries)))
         directories: dict[str, list[Path]] = {}
         for child in self.directory.iterdir() if self.directory.is_dir() else ():
-            match = NAMESPACE.fullmatch(child.name)
-            if match is not None and child.is_dir():
-                directories.setdefault(match.group(1), []).append(child)
+            name = namespace_name(child)
+            if name is not None and child.is_dir():
+                directories.setdefault(name, []).append(child)
         namespaces = []
         for name, found in directories.items():
             entries = spaces.get(name, [])
@@ -249,8 +233,7 @@ class FactDatabase:
         """The namespace a file of the Python engine's records belongs to, by its directory."""
         if path.parent.parent != self.directory:
             return None
-        match = NAMESPACE.fullmatch(path.parent.name)
-        return match.group(1) if match is not None else None
+        return namespace_name(path.parent)
 
     def connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=10)
@@ -282,6 +265,22 @@ class FactDatabase:
             conn.execute("PRAGMA incremental_vacuum").fetchall()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
 
+    def root_bytes(
+        self,
+        walk: Walk,
+        units: list[Unit],
+        namespaces: list[Namespace],
+        files: list[tuple[float, int, Path]],
+    ) -> int:
+        """The bytes under the cache root: this database's unit and the `units`, `namespaces` and
+        `files` the prune kept, as `walk` of `facts/` found them, and the rest of the root."""
+        own = set(unit_files(self.path))
+        kept = sum(size for _, size, path in walk.files if path in own)
+        kept += sum(unit.size for unit in units) + sum(space.size for space in namespaces)
+        kept += sum(size for _, size, _ in files)
+        rest = Walk.of(self.directory.parent, skipped=self.directory)
+        return kept + sum(size for _, size, _ in rest.files)
+
     def prune(self, day: datetime.date, now: float | None = None) -> None:
         now = now or time.time()
         cutoff_day = (day - EPOCH).days - MAX_AGE_DAYS
@@ -291,7 +290,8 @@ class FactDatabase:
                 self.delete(conn, old)
         old_age = now - MAX_AGE_DAYS * 86_400
         in_use = now - IN_USE_DAYS * 86_400
-        units, namespaces, files = self.others()
+        walk = Walk.of(self.directory)
+        units, namespaces, files = self.others(walk.files)
         emptied: set[Path] = set()
         units = self.drop_all_but_newest(units, KEPT_UNITS, old_age, in_use)
         namespaces = self.drop_all_but_newest(namespaces, KEPT_NAMESPACES, old_age, in_use)
@@ -302,7 +302,7 @@ class FactDatabase:
                 emptied.add(path.parent)
             else:
                 kept_files.append((modified, size, path))
-        excess = sum(size for _, size, _ in files_under(self.directory.parent)) - MAX_BYTES
+        excess = self.root_bytes(walk, units, namespaces, kept_files) - MAX_BYTES
         idle: list[tuple[float, int, Unit | Namespace | Path]] = [
             (unit.opened, unit.size, unit) for unit in units if unit.opened < in_use
         ]
@@ -319,7 +319,7 @@ class FactDatabase:
             excess -= size
         if excess > 0 and self.path.exists():
             self.remove_rows(excess, (day - EPOCH).days - IN_USE_DAYS)
-        self.remove_empty_directories(emptied, in_use)
+        walk.remove_empty_directories(in_use, emptied)
 
     def prune_daily(self, today: datetime.date | None = None) -> bool:
         """Prunes when no run pruned this database today. The mark goes first, so concurrent runs
