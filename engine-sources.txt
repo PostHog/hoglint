@@ -26,7 +26,6 @@ src/**/*.rs
 !src/link/paths.rs
 !src/link/produce.rs
 !src/link/queries.rs
-!src/link/reach.rs
 !src/link/resolve.rs
 !src/link/rules/**
 !src/link/scope.rs

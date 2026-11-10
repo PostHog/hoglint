@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import has_endpoint_attrs
@@ -29,10 +28,9 @@ from hoglint.selectors import UNKNOWN, ClassSelection, Ref, Selector, State, Tru
 
 @dataclass(frozen=True, slots=True)
 class Hop:
-    """One edge a reach search may follow: an Edge, or a core edge id the context makes into an
-    Edge only when a finding or an incomplete needs it."""
+    """One edge a reach search may follow, and the destination it follows."""
 
-    edge: Edge | int
+    edge: Edge
     dst: Endpoint
     selected: Truth
     surface: str
@@ -40,22 +38,18 @@ class Hop:
 
 @dataclass(frozen=True, slots=True)
 class Found:
-    """What a search run outside Python found from start module `source`: a hop whose
-    destination did not resolve (`verdict` None, `path` the hop alone), or a denied target with
-    the path to it, the hop that reaches it last. `dst` is that hop's destination."""
+    """What a search a rule context ran found (`RuleContext.reach_found`), in order:
+    - "start": a start module (`source`) whose `from` is unknown; no path;
+    - "unresolved": a hop from `source` whose destination did not resolve; `path` is the hop;
+    - "unknown": a hop the rule cannot tell whether to follow; `path` is the hop;
+    - "denied": a denied target, `path` the edges to it from `source`, `verdict` its truth.
+    `dst` is the destination of the path's last hop."""
 
+    what: str
     source: str
     path: tuple[Edge, ...]
-    dst: Endpoint
+    dst: Endpoint | None
     verdict: Truth | None
-
-
-class ReachSearch(Protocol):
-    """A reach rule's search that a rule context runs itself (`RuleContext.reach_search`)."""
-
-    def has_hops(self, module: str) -> bool: ...
-
-    def run(self, sources: list[str]) -> list[Found]: ...
 
 
 class ReachPrimitive(EdgeRule):
@@ -90,9 +84,7 @@ class ReachPrimitive(EdgeRule):
         cached = self.hop_cache.get(module)
         if cached is not None:
             return cached
-        out = self.ctx.reach_hops(self, module)
-        if out is None:
-            out = self.build_hops(module)
+        out = self.build_hops(module)
         out.sort(key=lambda hop: (hop.dst.module or "", hop.dst.symbol or "", hop.surface))
         self.hop_cache[module] = out
         return out
@@ -122,27 +114,40 @@ class ReachPrimitive(EdgeRule):
         return out
 
     def evaluate(self) -> RuleRun:
-        search = self.ctx.reach_search(self)
-        if search is None:
+        found = self.ctx.reach_found(self)
+        if found is None:
             for source in self.sources(lambda module: bool(self.hops(module))):
                 self.search(source)
             return self.run
-        for found in search.run(self.sources(search.has_hops)):
-            env = EdgeEnv(self.ctx, found.path[-1], self.ctx.module_endpoint(found.source), found.dst)
-            if found.verdict is None:
-                self.on_unresolved(env)
-            else:
-                self.report(env, list(found.path), found.verdict)
+        for item in found:
+            self.report_found(item)
         return self.run
 
+    def report_found(self, found: Found) -> None:
+        """What the search reports for one thing a rule context found, as `sources` and `search`
+        report it."""
+        if found.what == "start":
+            reason = f"cannot tell whether {found.source} is selected"
+            self.run.incomplete.append(IncompleteItem(self.spec.id, found.source, reason, (found.source,)))
+            return
+        assert found.dst is not None
+        env = EdgeEnv(self.ctx, found.path[-1], self.ctx.module_endpoint(found.source), found.dst)
+        if found.what == "unresolved":
+            self.on_unresolved(env)
+        elif found.what == "unknown":
+            self.incomplete(env, f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
+        else:
+            assert found.verdict is not None
+            self.report(env, list(found.path), found.verdict)
+
     def hop_env(self, hop: Hop, origin: Endpoint) -> EdgeEnv:
-        return EdgeEnv(self.ctx, self.ctx.edge_of(hop.edge), origin, hop.dst)
+        return EdgeEnv(self.ctx, hop.edge, origin, hop.dst)
 
     def verdict(self, hop: Hop, origin: Endpoint) -> tuple[Truth, bool]:
         """(`deny`, `unless` excuses) for one hop seen from `origin`. When neither reads the edge,
         the answer depends on the two endpoints alone and is kept."""
         edge = hop.edge
-        if not self.endpoint_verdicts or (isinstance(edge, Edge) and has_endpoint_attrs(edge)):
+        if not self.endpoint_verdicts or has_endpoint_attrs(edge):
             return self.judge_hop(self.hop_env(hop, origin))
         key = (origin, hop.dst)
         found = self.verdicts.get(key)
@@ -189,7 +194,7 @@ class ReachPrimitive(EdgeRule):
                 if verdict is not Truth.FALSE and not excused and target not in reported:
                     reported.add(target)
                     path = [*self.path_to(parents, module), hop]
-                    self.report(self.hop_env(hop, origin), [self.ctx.edge_of(step.edge) for step in path], verdict)
+                    self.report(self.hop_env(hop, origin), [step.edge for step in path], verdict)
                     continue
                 if dst.external is not None or dst.module is None or dst.module in parents:
                     continue

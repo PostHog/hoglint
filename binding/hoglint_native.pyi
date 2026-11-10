@@ -162,12 +162,6 @@ class Link:
     def ids_seen_from(self, kind: str, module: str, include: int, exclude: int) -> bytes: ...
     @staticmethod
     def keep_classes(ids: bytes, key_of: bytes, class_of: bytes, keep: bytes) -> bytes: ...
-    def reach(
-        self, ids: bytes, classes: bytes, role: str, sources: list[tuple[str, int]], verdicts: bytes, width: int
-    ) -> list[tuple[str, int, bytes, int]]:
-        """A reach rule's search from each source (module, class of its verdicts) over the hops
-        `ids` with the verdict class of each: ("unresolved", source index, the hop's edge id, 0)
-        or ("denied", source index, the path's edge ids, verdict code), in the order found."""
     @staticmethod
     def key_classes(keys: bytes, size: int, columns: list[bytes]) -> tuple[bytes, bytes]:
         """The label class of each key in `keys` over code columns (one u32 code per key in
@@ -207,6 +201,11 @@ Codes: 1 unresolved, 2 unknown selection, 3 unknown violation, 4 violation."""
 PairRow = tuple[int, int, int, tuple[str, str] | None]
 """(edge id, destination index, judgment code, the pair's (source, destination) groups or None)."""
 
+Found = tuple[str, str, list[tuple[int, int]], int]
+"""(what, start module, path of (edge id, destination index), verdict code). What: "start" (a start
+whose `from` is unknown; no path), "unresolved", "unknown" (a hop the rule cannot tell whether to
+follow) or "denied". Verdict codes: 1 true, 2 unknown, 0 for anything not denied."""
+
 class Rules:
     """The labels and compiled rules of one run over a link (src/link/rules), from a plan
     (`hoglint.native.plan`). Evaluation runs on the threads the link was built with."""
@@ -216,6 +215,9 @@ class Rules:
         """Every destination an edge or entrypoint rule does not judge clean, in judging order."""
     def pairs(self, rule: int) -> list[PairRow]:
         """What a cycle rule makes of each destination it cannot leave alone, in judging order."""
+    def reach(self, rule: int) -> list[Found]:
+        """The search of a reach rule from every start its `from` selects, in the order the Python
+        search finds things."""
     def select(self, rule: int) -> bytes:
         """The candidate edges of a rule judged in Python that its selection does not rule out."""
     def column(self, field: str) -> list[str]:

@@ -5,7 +5,6 @@ use crate::{ids_bytes, ids_from};
 use hoglint_facts::link::Link as CoreLink;
 use hoglint_facts::link::groups::{End, Role, Stable};
 use hoglint_facts::link::intern::{EMPTY, Sid};
-use hoglint_facts::link::reach::Found;
 use hoglint_facts::link::scope::Res;
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
@@ -359,50 +358,6 @@ impl Link {
         let out = CoreLink::unread(&ids_from(keys)?, &ids_from(codes)?)
             .ok_or_else(|| PyValueError::new_err("a key past the codes' end"))?;
         Ok(ids_bytes(py, &out))
-    }
-
-    /// A reach rule's search from each source (module, class of its verdicts) over the hops
-    /// `ids` (kind by kind, graph order) with the verdict class of each: what it found, in
-    /// order, as ("unresolved", source index, the hop's edge id, 0) or ("denied", source index,
-    /// the path's edge ids, verdict code). `verdicts` holds a code per (source class, hop class),
-    /// `width` hop classes per source class.
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    fn reach<'py>(
-        &mut self,
-        py: Python<'py>,
-        ids: &[u8],
-        classes: &[u8],
-        role: &str,
-        sources: Vec<(String, u32)>,
-        verdicts: &[u8],
-        width: usize,
-    ) -> PyResult<Vec<(&'static str, u32, Bound<'py, PyBytes>, u8)>> {
-        let ids = ids_from(ids)?;
-        let classes = ids_from(classes)?;
-        let role = role_of(role)?;
-        let sources: Vec<(Sid, u32)> = sources
-            .iter()
-            .map(|(module, class)| (self.sid(module), *class))
-            .collect();
-        let found = self
-            .inner
-            .reach(&ids, &classes, role, &sources, verdicts, width)
-            .ok_or_else(|| {
-                PyValueError::new_err("a class per hop, and a verdict per class pair")
-            })?;
-        Ok(found
-            .into_iter()
-            .map(|found| match found {
-                Found::Unresolved { source, edge } => {
-                    ("unresolved", source, ids_bytes(py, &[edge]), 0)
-                }
-                Found::Denied {
-                    source,
-                    path,
-                    verdict,
-                } => ("denied", source, ids_bytes(py, &path), verdict),
-            })
-            .collect())
     }
 
     /// The ids whose key's class keeps: `class_of` holds a class per key, `keep` a byte per

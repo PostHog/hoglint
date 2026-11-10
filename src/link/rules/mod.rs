@@ -10,6 +10,7 @@ pub mod env;
 pub mod glob;
 pub mod labels;
 pub mod plan;
+pub mod reach;
 pub mod selector;
 pub mod symbols;
 pub mod value;
@@ -68,6 +69,8 @@ pub struct Rule {
     identity: Vec<Ref>,
     /// A cycle rule's group field on each end.
     group: Option<(Ref, Ref)>,
+    /// A reach rule's `from`.
+    start: Option<Node>,
 }
 
 /// One destination a cycle rule cannot leave alone: its edge and place, its judgment
@@ -309,6 +312,7 @@ impl Rules {
                 .iter()
                 .map(|path| compiler.reference(path))
                 .collect(),
+            start: optional(&plan.start)?,
             group: plan.group.as_ref().map(|name| {
                 let path = |root: &str| [root.to_string(), name.clone()];
                 (

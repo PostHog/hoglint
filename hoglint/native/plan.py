@@ -137,6 +137,7 @@ class RulePlan:
             "identity": [column.split(".") for column in spec.identity],
             "redefines": list(self.redefines[spec.id]),
             "group": CyclePrimitive.group_of(self.config, spec) if spec.primitive == "cycle" else None,
+            "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
         }
 
     def selectors(self) -> Iterable[Selector]:

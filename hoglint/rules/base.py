@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
@@ -36,7 +36,7 @@ from hoglint.model import (
 )
 
 if TYPE_CHECKING:
-    from hoglint.rules.graphs import CyclePrimitive, CycleRow, ReachPrimitive, ReachSearch
+    from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
 from hoglint.selectors import (
     NONE,
@@ -185,12 +185,8 @@ class RuleContext:
                 out.append(group)
         return out
 
-    def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
-        """A reach rule's hops out of `module` when this context builds them itself, else None."""
-        return None
-
-    def reach_search(self, rule: ReachPrimitive) -> ReachSearch | None:
-        """A reach rule's whole search when this context runs it itself, else None."""
+    def reach_found(self, rule: ReachPrimitive) -> list[Found] | None:
+        """What a reach rule's search finds when this context runs it itself, else None."""
         return None
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow] | None:
@@ -200,11 +196,6 @@ class RuleContext:
     def grouped_survivors(self, rule: EdgeRule) -> GroupedSurvivors | None:
         """The rule's survivors as handle arrays when this context groups edges, else None."""
         return None
-
-    def edge_of(self, edge: Edge | int) -> Edge:
-        """The Edge a hop names; this context's hops always hold Edges."""
-        assert isinstance(edge, Edge)
-        return edge
 
     def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun | None]]:
         """Each edge the rule judges, in order, with what it reports when this context judged it

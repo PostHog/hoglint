@@ -168,6 +168,8 @@ pub struct RulePlan {
     pub redefines: Vec<String>,
     /// A cycle rule's group field (`CyclePrimitive.group_field`).
     pub group: Option<String>,
+    /// A reach rule's `from`: which modules it searches from, read of the module alone.
+    pub start: Option<NodePlan>,
 }
 
 #[derive(Deserialize, Clone)]

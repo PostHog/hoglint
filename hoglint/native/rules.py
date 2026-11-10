@@ -44,7 +44,7 @@ from hoglint.rules.base import (
     read_endpoint,
 )
 from hoglint.rules.engine import primitive_of
-from hoglint.rules.graphs import CyclePrimitive, CycleRow, EndpointsEnv, Found, Hop, ReachPrimitive
+from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 from hoglint.rules.reads import Reads, granularity
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
 
@@ -666,99 +666,8 @@ class FindingClasses:
         )
 
 
-VERDICT_CODES = {Truth.FALSE: 0, Truth.TRUE: 1, Truth.UNKNOWN: 2}
-VERDICT_TRUTHS = {code: truth for truth, code in VERDICT_CODES.items()}
-EXCUSED = 4
-
-
-class NativeReach:
-    """A reach rule's search in the link (D25, `Link.reach`). Python says what a hop means: the
-    class of what `deny` and `unless` read of its destination, and the verdict of each start
-    module's class against each class. The link walks the hops in the order the Python search
-    takes them, so the findings, incompletes and witness paths are the same.
-
-    Only for a rule whose verdicts read the endpoints alone, with no `select` (every edge it
-    sees is followed) and no irregular edge; any other rule searches in Python."""
-
-    def __init__(self, ctx: NativeRuleContext, rule: ReachPrimitive, ids: array[int]) -> None:
-        self.ctx = ctx
-        self.rule = rule
-        self.ids = ids
-        self.link = ctx.native.native.link
-        self.grouper = Grouper(ctx, rule)
-        self.modules = frozenset(self.link.columns(ids.tobytes(), ["module"])[0])
-        refs_read = [
-            ref for selector in (rule.spec.deny, rule.spec.unless) if selector is not None for ref in selector.refs()
-        ]
-        found = Reads.of(refs_read, ctx.config)
-        assert found is not None
-        self.reads = found
-
-    @staticmethod
-    def of(ctx: NativeRuleContext, rule: ReachPrimitive) -> NativeReach | None:
-        if rule.spec.select is not None or rule.spec.endpoint not in GROUPED_ROLES or not rule.endpoint_verdicts:
-            return None
-        link = ctx.native.native.link
-        include, exclude = context_bits(rule.include), context_bits(rule.exclude)
-        ids = array("I")
-        for kind in ctx.kinds_or_all(rule.kinds()):
-            ids.extend(array("I", link.candidates([kind], include, exclude)))
-        _, irregular = link.split_irregular(ids.tobytes())
-        return NativeReach(ctx, rule, ids) if not irregular else None
-
-    def has_hops(self, module: str) -> bool:
-        return module in self.modules
-
-    def hop_classes(self) -> tuple[bytes, list[Endpoint]]:
-        """The verdict class of each hop, and a destination of each class."""
-        keys = self.grouper.dst_keys(self.ids, self.reads)
-        names = tuple(sorted(self.reads.dst - {"unresolved"}))
-        classes = self.ctx.endpoint_classes.of(keys, self.grouper.dst_columns(names, False))
-        class_of, reps = type(self.link).group(self.ids.tobytes(), [(keys.key_of, classes.class_of)])
-        role = self.rule.spec.endpoint
-        dsts = [self.ctx.dst_endpoints(edge, role)[0] for edge in self.ctx.native.native.core.get(array("I", reps))]
-        return class_of, dsts
-
-    def origin_classes(self, sources: list[str]) -> tuple[list[int], list[Endpoint]]:
-        """The verdict class of each start module (what `deny` and `unless` read of it), and a
-        start of each class."""
-        names = sorted(self.reads.src)
-        index: dict[tuple[Any, ...], int] = {}
-        reps: list[Endpoint] = []
-        out = []
-        for source in sources:
-            origin = self.ctx.module_endpoint(source)
-            values = tuple(read_endpoint(self.ctx, origin, name, None, "src") for name in names)
-            found = index.get(values)
-            if found is None:
-                found = index[values] = len(reps)
-                reps.append(origin)
-            out.append(found)
-        return out, reps
-
-    def verdicts(self, origins: list[Endpoint], dsts: list[Endpoint]) -> bytes:
-        out = bytearray()
-        for origin in origins:
-            for dst in dsts:
-                verdict, excused = self.rule.judge_hop(EndpointsEnv(self.ctx, origin, dst))
-                out.append(VERDICT_CODES[verdict] | (EXCUSED if excused else 0))
-        return bytes(out)
-
-    def run(self, sources: list[str]) -> list[Found]:
-        class_of, dsts = self.hop_classes()
-        origin_of, origins = self.origin_classes(sources)
-        role = self.rule.spec.endpoint
-        found = self.link.reach(
-            self.ids.tobytes(), class_of, role, list(zip(sources, origin_of)), self.verdicts(origins, dsts), len(dsts)
-        )
-        paths = [array("I", path) for _, _, path, _ in found]
-        edges = iter(self.ctx.native.native.core.get(array("I", [edge for path in paths for edge in path])))
-        out = []
-        for (kind, source, _, verdict), path in zip(found, paths):
-            walked = tuple(next(edges) for _ in path)
-            dst = self.ctx.dst_endpoints(walked[-1], role)[0]
-            out.append(Found(sources[source], walked, dst, VERDICT_TRUTHS[verdict] if kind == "denied" else None))
-        return out
+# The evaluator's verdict codes of a denied target (`Rules.reach`).
+VERDICT_TRUTHS = {1: Truth.TRUE, 2: Truth.UNKNOWN}
 
 
 class NativeRuleContext(RuleContext):
@@ -774,10 +683,6 @@ class NativeRuleContext(RuleContext):
         assert isinstance(index, NativeGraphIndex)
         self.native = index
         self.endpoint_classes = EndpointClasses(self)
-        self.reach_tables: dict[EdgeRule, dict[str, list[Hop]]] = {}
-
-    def edge_of(self, edge: Edge | int) -> Edge:
-        return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
 
     @cached_property
     def plan(self) -> RulePlan:
@@ -839,51 +744,16 @@ class NativeRuleContext(RuleContext):
             )
         return rule.recorded([env])
 
-    def reach_search(self, rule: ReachPrimitive) -> NativeReach | None:
-        return NativeReach.of(self, rule)
-
-    def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
-        """Core hops as edge ids with endpoints from the link, then pack edges as Edges, judged
-        one by one as before they lived in the link. Only for a rule with no `select`: every core
-        edge it sees is followed, so no core edge is judged here. Every module's hops are made at
-        once, the first time the rule asks for one."""
-        if rule.spec.select is not None or rule.spec.endpoint not in GROUPED_ROLES:
-            return None
-        found = self.reach_tables.get(rule)
-        if found is None:
-            found = self.reach_tables[rule] = self.all_reach_hops(rule)
-        return list(found.get(module, ()))
-
-    def all_reach_hops(self, rule: EdgeRule) -> dict[str, list[Hop]]:
-        """`reach_hops` of every module: per kind, each module's core hops, then its pack hops."""
-        link = self.native.native.link
-        core_count = self.native.core_count
-        tables = self.endpoint_classes
-        end = f"dst-{rule.spec.endpoint}"
-        include, exclude = context_bits(rule.include), context_bits(rule.exclude)
-        out: dict[str, list[Hop]] = {}
-        for kind in self.kinds_or_all(rule.kinds()):
-            by_module: dict[str, list[Hop]] = {}
-            core = array("I", (i for i in array("I", link.candidates([kind], include, exclude)) if i < core_count))
-            if core:
-                keys = tables.entities(core, end, tables.bases(core, end), False)
-                endpoints = tables.endpoints[keys.level]
-                modules = link.columns(core.tobytes(), ["module"])[0]
-                surfaces = [surface for _, surface, _, _ in link.dst_parts(core.tobytes())]
-                for edge_id, key, module, surface in zip(core, array("I", keys.key_of), modules, surfaces):
-                    by_module.setdefault(module, []).append(Hop(edge_id, endpoints[key], Truth.TRUE, surface))
-            pack: dict[str, list[Edge]] = {}
-            pack_ids = array("I", (i for i in array("I", link.ids_of_kind(kind)) if i >= core_count))
-            for edge in self.native.native.core.get(pack_ids):
-                pack.setdefault(edge.site.module, []).append(edge)
-            for module, edges in pack.items():
-                group = EdgeGroup(edges, [edge for edge in edges if self.native.is_irregular(edge)])
-                for env in rule.group_envs(module, group):
-                    selected = rule.selection(env)
-                    if selected is not Truth.FALSE:
-                        by_module.setdefault(module, []).append(Hop(env.edge, env.dst, selected, env.edge.surface))
-            for module, hops in by_module.items():
-                out.setdefault(module, []).extend(hops)
+    def reach_found(self, rule: ReachPrimitive) -> list[Found]:
+        """The evaluator's search of a reach rule, its paths made into Edges."""
+        found = self.evaluator.reach(self.plan.index[rule.spec.id])
+        ids = array("I", dict.fromkeys(edge for _, _, path, _ in found for edge, _ in path))
+        edges = dict(zip(ids, self.native.native.core.get(ids)))
+        out = []
+        for what, source, path, code in found:
+            walked = tuple(edges[edge] for edge, _ in path)
+            dst = rule.envs_of(walked[-1])[path[-1][1]].dst if walked else None
+            out.append(Found(what, source, walked, dst, VERDICT_TRUTHS.get(code)))
         return out
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:

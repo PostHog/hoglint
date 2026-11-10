@@ -3,6 +3,8 @@
 use crate::ids_bytes;
 use crate::link::Link;
 use hoglint_facts::link::rules::Rules as CoreRules;
+use hoglint_facts::link::rules::reach::Found;
+use hoglint_facts::link::rules::value::Truth;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -13,6 +15,11 @@ type RowTuple = (u32, u32, u8, Vec<String>, String, Option<String>);
 
 /// A cycle row: (edge id, destination index, judgment code, the pair's groups or None).
 type PairTuple = (u32, u32, u8, Option<(String, String)>);
+
+/// A reach finding: (what, start module, path of (edge id, destination index), verdict code).
+/// What: "start" (path empty), "unresolved", "unknown" or "denied". Verdict codes: 1 true,
+/// 2 unknown; 0 for anything but "denied".
+type FoundTuple = (&'static str, String, Vec<(u32, u32)>, u8);
 
 /// The run's labels and compiled rules over one link.
 #[pyclass(module = "hoglint_native", unsendable)]
@@ -72,6 +79,41 @@ impl Rules {
         Ok(rows
             .into_iter()
             .map(|row| (row.edge, row.target, row.judgment as u8, row.pair))
+            .collect())
+    }
+
+    /// The search of reach rule `rule`, from every start module its `from` selects, in the order
+    /// the Python search finds things.
+    fn reach(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<FoundTuple>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        let found = self
+            .inner
+            .reach(&mut bound.inner, rule)
+            .map_err(PyValueError::new_err)?;
+        let it = &bound.inner.core.it;
+        let verdict = |truth: Truth| match truth {
+            Truth::True => 1,
+            Truth::Unknown => 2,
+            Truth::False => 0,
+        };
+        Ok(found
+            .into_iter()
+            .map(|found| match found {
+                Found::UnknownStart { module } => {
+                    ("start", it.s(module).to_string(), Vec::new(), 0)
+                }
+                Found::Unresolved { source, step } => {
+                    ("unresolved", it.s(source).to_string(), vec![step], 0)
+                }
+                Found::Unknown { source, step } => {
+                    ("unknown", it.s(source).to_string(), vec![step], 0)
+                }
+                Found::Denied {
+                    source,
+                    path,
+                    verdict: truth,
+                } => ("denied", it.s(source).to_string(), path, verdict(truth)),
+            })
             .collect())
     }
 
