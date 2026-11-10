@@ -166,16 +166,23 @@ class Engine:
             for kind in sorted(self.kinds_read(spec) & empty)
         ]
 
-    def raise_conflicts(self) -> None:
+    def raise_conflicts(self, ctx: RuleContext) -> None:
+        """Stops the run with every label set two ways that it met so far: what the labeler met,
+        and what the rule context met outside it, worded by the labeler (D44). The Python engine
+        meets a conflict where it reads the label, in a rule or a level, and stops after each."""
+        ctx.met_conflicts()
         if self.labeler.conflicts:
             raise ConfigError(sorted(set(self.labeler.conflicts)))
 
-    def run_rules(self, confirm: bool = False) -> dict[str, RuleRun]:
+    def rule_context(self) -> RuleContext:
+        return context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
+
+    def run_rules(self, confirm: bool = False, ctx: RuleContext | None = None) -> dict[str, RuleRun]:
         """Every rule's run. With `confirm` (a run that writes a ledger), every finding a judge
         outside its rule's code made is judged again by that code first."""
-        ctx = context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
+        ctx = ctx or self.rule_context()
         ctx.find_conflicts()
-        self.raise_conflicts()
+        self.raise_conflicts(ctx)
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
         for spec in ordered:
@@ -188,7 +195,7 @@ class Engine:
                 ctx.results[spec.id] = run
                 continue
             ctx.results[spec.id] = primitive_of(spec)(ctx, spec).evaluate()
-        ctx.met_conflicts()
+        self.raise_conflicts(ctx)
         if confirm:
             ctx.confirm_findings()
         for name in sorted(self.labeler.providers.failures):
@@ -203,7 +210,7 @@ class Engine:
                 reason = f"{path} could not be read, so its facts are missing"
                 run.incomplete.append(IncompleteItem(UNREADABLE, path, reason, (), IncompleteCause.EXTRACTOR))
             ctx.results[UNREADABLE] = run
-        self.raise_conflicts()
+        self.raise_conflicts(ctx)
         return ctx.results
 
     def evaluate(
@@ -214,7 +221,8 @@ class Engine:
     ) -> RunResult:
         """One run. With `rewrite_ledger`, findings and levels are judged against the ledger this
         run writes (its own scan), so the next check over the same code finds that ledger equal."""
-        result = RunResult(self.config, self.labeler, self.run_rules(confirm=rewrite_ledger))
+        ctx = self.rule_context()
+        result = RunResult(self.config, self.labeler, self.run_rules(rewrite_ledger, ctx))
         if exceptions is not None:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)
@@ -227,7 +235,7 @@ class Engine:
             result.levels[name] = level
             for group in level.passing:
                 result.scan[level_line(name, group)] = 1
-        self.raise_conflicts()
+        self.raise_conflicts(ctx)
         if rewrite_ledger and ledger is not None:
             ledger.lines = dict(result.scan)
             result.ledger = ledger

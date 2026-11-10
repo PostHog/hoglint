@@ -149,8 +149,8 @@ class RuleContext:
         a run that writes a ledger asks for it. The Python engine's rules judge their own edges."""
 
     def met_conflicts(self) -> None:
-        """Records the labels set two ways that the rules met while they ran. The labeler records
-        them as it reads them, so there is nothing left to do here."""
+        """Records the labels set two ways that the run met so far, outside the labeler. The
+        labeler records them as it reads them, so there is nothing left to do here."""
 
     def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
         """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""

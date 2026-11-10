@@ -307,8 +307,8 @@ class NativeRuleContext(RuleContext):
             self.labeler.read_from(self.evaluator)
 
     def met_conflicts(self) -> None:
-        """The labels set two ways that the evaluator met while rules ran: what the Python engine
-        meets lazily, where a rule reads them."""
+        """The labels set two ways that the evaluator met so far, in rules and levels: what the
+        Python engine meets lazily, where it reads them."""
         with engine_errors():
             met = self.evaluator.met()
         self.word(met)

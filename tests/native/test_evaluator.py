@@ -1241,6 +1241,39 @@ def test_a_level_judges_the_groups_the_python_level_judges(world: World, monkeyp
     assert all(passing or failing for passing, failing in native.values())
 
 
+def problems(world: World, config: Config) -> list[str]:
+    """The problems of the config error a whole evaluation stops with, or none."""
+    try:
+        Engine(config, world.graph, world.repo).evaluate()
+    except ConfigError as error:
+        return sorted(error.problems)
+    return []
+
+
+# A string field a provider sets and an assignment sets apart on `core/**`, which no rule reads.
+LEAD_SET_TWO_WAYS = (
+    CONFIG.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
+    + '\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["lead"]\n'
+    + '\n[[assign]]\nmatch = "core/**"\nset = { lead = "someone" }\n'
+)
+
+
+@pytest.mark.parametrize(
+    "level",
+    ['group_by = "lead"', 'group_by = "package"\nselect = "lead != \'nobody\'"'],
+    ids=["group-by", "select"],
+)
+def test_a_conflict_only_a_level_meets_stops_both_engines_alike(
+    world: World, monkeypatch: pytest.MonkeyPatch, level: str
+) -> None:
+    rules = LEVELS.replace('group_by = "zone"', level)
+    config = world.config(rules, LEAD_SET_TWO_WAYS)
+    native = problems(world, config)
+    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
+    assert native == problems(world, config)
+    assert native and all("field 'lead' set differently" in problem for problem in native)
+
+
 EXPECTED_KINDS = CONFIG.replace(
     'model = { subclass_of = "products.billing.backend.models.Base" }',
     'model = { subclass_of = "products.billing.backend.models.Base", expected = true }\n'
