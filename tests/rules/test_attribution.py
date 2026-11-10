@@ -122,8 +122,9 @@ def test_a_stored_summary_serves_only_its_exact_envelope(
         ["r", ["a"], "new", None, [], "", []],
         ["r", ["a"], "forgotten", None, [], "", [], True, False],
         ["r", ["a"], "new", None, [["import", "a.py", 1]], "", [], True, False],
+        ["r", ["a"], "new", None, [["import", "a.py", 1, 0, "a", 5]], "", [], True, False],
     ],
-    ids=["short row", "unknown status", "short witness"],
+    ids=["short row", "unknown status", "short witness", "witness targets not a list"],
 )
 def test_a_malformed_findings_row_is_a_miss_not_a_crash(tmp_path: Path, row: list[Any]) -> None:
     summary = ScanSummary(envelope=STORED, findings=StoredFindings([row]))

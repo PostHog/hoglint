@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import repeat
 from pathlib import Path
@@ -56,6 +57,7 @@ from hoglint.ledger.records import (
 from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph, WitnessRow
 from hoglint.rules.engine import UNREADABLE, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
+from hoglint.rules.findings import FindingTable
 
 ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a few hundredths of a second
 # The parts a reader loads on their own (see store.py), and the fields each part holds.
@@ -93,7 +95,28 @@ def is_shown(
         return True
     if touched is None or status is not FindingStatus.ACCEPTED:
         return False
-    return touches(touched, (witness[1] for witness in witnesses), subjects)
+    return touches(touched, (witness[StoredFindings.WITNESS_PATH] for witness in witnesses), subjects)
+
+
+def shown_column(
+    table: FindingTable,
+    statuses: list[FindingStatus],
+    witnesses: list[tuple[WitnessRow, ...]],
+    subjects: list[tuple[str, ...]],
+    portable: Portable,
+    touched: set[str] | None,
+) -> list[Any]:
+    """The stored message, site and remedies of each row `check` prints (`is_shown`), None for any
+    other. With no `touched` set `check` prints only new rows, so only they are asked."""
+    shown: list[Any] = [None] * len(statuses)
+    if touched is None:
+        asked: Iterable[int] = [row for row, status in enumerate(statuses) if status is FindingStatus.NEW]
+    else:
+        asked = range(len(statuses))
+    for row in asked:
+        if is_shown(statuses[row], witnesses[row], subjects[row], touched):
+            shown[row] = ShownRecord.of(table.finding(row), portable).to_json()
+    return shown
 
 
 def finding_rows(result: RunResult, portable: Portable, touched: set[str] | None) -> list[Any]:
@@ -102,30 +125,19 @@ def finding_rows(result: RunResult, portable: Portable, touched: set[str] | None
     out: list[Any] = []
     for rule, run in result.runs.items():
         table = run.findings
-        if not len(table):
-            continue
         statuses = table.statuses()
         witnesses, owners, subjects = table.stored_parts()
-        identities = table.identities
-        start = len(out)
-        out.extend(
-            zip(
-                repeat(rule),
-                [identities[place] for place in table.identity_at],
-                [status.value for status in statuses],
-                repeat(None),
-                witnesses,
-                owners,
-                subjects,
-                map(bool, table.ledgerable),
-                map(bool, table.unknown),
-            )
-        )
-        for row, status in enumerate(statuses):
-            if is_shown(status, witnesses[row], subjects[row], touched):
-                stored = out[start + row]
-                shown = ShownRecord.of(table.finding(row), portable).to_json()
-                out[start + row] = (*stored[:3], shown, *stored[4:])
+        columns: list[Iterable[Any]] = [()] * StoredFindings.FIELDS
+        columns[StoredFindings.RULE] = repeat(rule)
+        columns[StoredFindings.IDENTITY] = [table.identities[place] for place in table.identity_at]
+        columns[StoredFindings.STATUS] = [status.value for status in statuses]
+        columns[StoredFindings.SHOWN] = shown_column(table, statuses, witnesses, subjects, portable, touched)
+        columns[StoredFindings.WITNESSES] = witnesses
+        columns[StoredFindings.OWNER] = owners
+        columns[StoredFindings.SUBJECTS] = subjects
+        columns[StoredFindings.LEDGERABLE] = map(bool, table.ledgerable)
+        columns[StoredFindings.UNKNOWN] = map(bool, table.unknown)
+        out.extend(zip(*columns))
     return out
 
 

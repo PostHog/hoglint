@@ -133,36 +133,35 @@ class FindingRecord:
         )
 
     def to_json(self) -> list[Any]:
-        return [
-            self.rule,
-            list(self.identity),
-            self.status.value,
-            self.shown.to_json() if self.shown is not None else None,
-            [witness.to_json() for witness in self.witnesses],
-            self.owner,
-            list(self.subjects),
-            self.ledgerable,
-            self.unknown,
-        ]
+        row: list[Any] = [None] * StoredFindings.FIELDS
+        row[StoredFindings.RULE] = self.rule
+        row[StoredFindings.IDENTITY] = list(self.identity)
+        row[StoredFindings.STATUS] = self.status.value
+        row[StoredFindings.SHOWN] = self.shown.to_json() if self.shown is not None else None
+        row[StoredFindings.WITNESSES] = [witness.to_json() for witness in self.witnesses]
+        row[StoredFindings.OWNER] = self.owner
+        row[StoredFindings.SUBJECTS] = list(self.subjects)
+        row[StoredFindings.LEDGERABLE] = self.ledgerable
+        row[StoredFindings.UNKNOWN] = self.unknown
+        return row
 
     @staticmethod
     def from_json(data: list[Any]) -> FindingRecord:
-        rule, identity, status, shown, witnesses, owner, subjects, ledgerable, unknown = data
+        shown = data[StoredFindings.SHOWN]
         return FindingRecord(
-            rule,
-            tuple(identity),
-            FindingStatus(status),
+            data[StoredFindings.RULE],
+            tuple(data[StoredFindings.IDENTITY]),
+            FindingStatus(data[StoredFindings.STATUS]),
             ShownRecord.from_json(shown) if shown is not None else None,
-            tuple(WitnessRecord.from_json(witness) for witness in witnesses),
-            owner,
-            tuple(subjects),
-            bool(ledgerable),
-            bool(unknown),
+            tuple(WitnessRecord.from_json(witness) for witness in data[StoredFindings.WITNESSES]),
+            data[StoredFindings.OWNER],
+            tuple(data[StoredFindings.SUBJECTS]),
+            bool(data[StoredFindings.LEDGERABLE]),
+            bool(data[StoredFindings.UNKNOWN]),
         )
 
 
-# The lengths of the stored lists `FindingRecord`, `ShownRecord` and `WitnessRecord` write.
-FINDING_FIELDS = 9
+# The lengths of the stored lists `ShownRecord` and `WitnessRecord` write.
 SHOWN_FIELDS = 4
 WITNESS_FIELDS = 6
 STATUS_VALUES = frozenset(status.value for status in FindingStatus)
@@ -173,7 +172,20 @@ class StoredFindings:
     form, a list or a tuple. A row becomes a `FindingRecord` when a reader asks for it, so a
     check that prints a few findings decodes a few."""
 
-    STATUS = 2  # a row's place of the status value
+    # The place of each field in a stored row: every writer and reader of a row uses these.
+    RULE = 0
+    IDENTITY = 1
+    STATUS = 2
+    SHOWN = 3
+    WITNESSES = 4
+    OWNER = 5
+    SUBJECTS = 6
+    LEDGERABLE = 7
+    UNKNOWN = 8
+    FIELDS = 9
+    # The places a reader reads in a stored witness (`WitnessRecord.to_json`).
+    WITNESS_PATH = 1
+    WITNESS_TARGETS = 5
 
     def __init__(self, rows: list[Any] | None = None) -> None:
         self.rows: list[Any] = rows if rows is not None else []
@@ -195,21 +207,28 @@ class StoredFindings:
 
     @staticmethod
     def check(row: Any) -> None:
-        if not isinstance(row, list) or len(row) != FINDING_FIELDS:
-            raise ValueError(f"a findings row has {FINDING_FIELDS} fields: {row!r}")
-        rule, identity, status, shown, witnesses, owner, subjects, _, _ = row
+        if not isinstance(row, list) or len(row) != StoredFindings.FIELDS:
+            raise ValueError(f"a findings row has {StoredFindings.FIELDS} fields: {row!r}")
+        status = row[StoredFindings.STATUS]
         if status not in STATUS_VALUES:
             raise ValueError(f"a findings row has an unknown status {status!r}")
-        if not isinstance(rule, str) or not isinstance(owner, str):
+        if not isinstance(row[StoredFindings.RULE], str) or not isinstance(row[StoredFindings.OWNER], str):
             raise ValueError(f"a findings row names its rule and owner as text: {row!r}")
-        if not isinstance(identity, list) or not isinstance(subjects, list):
+        if not isinstance(row[StoredFindings.IDENTITY], list) or not isinstance(row[StoredFindings.SUBJECTS], list):
             raise ValueError(f"a findings row holds its identity and subjects as lists: {row!r}")
+        shown = row[StoredFindings.SHOWN]
         if shown is not None and (not isinstance(shown, list) or len(shown) != SHOWN_FIELDS):
             raise ValueError(f"a findings row's message has {SHOWN_FIELDS} fields: {shown!r}")
+        witnesses = row[StoredFindings.WITNESSES]
         if not isinstance(witnesses, list) or any(
-            not isinstance(witness, list) or len(witness) != WITNESS_FIELDS for witness in witnesses
+            not isinstance(witness, list)
+            or len(witness) != WITNESS_FIELDS
+            or not isinstance(witness[StoredFindings.WITNESS_TARGETS], list)
+            for witness in witnesses
         ):
-            raise ValueError(f"a findings row's witnesses have {WITNESS_FIELDS} fields each: {witnesses!r}")
+            raise ValueError(
+                f"a findings row's witnesses have {WITNESS_FIELDS} fields each, the targets a list: {witnesses!r}"
+            )
 
     def __iter__(self) -> Iterator[FindingRecord]:
         for row in self.rows:
@@ -229,18 +248,22 @@ class StoredFindings:
     def keys(self) -> set[LineKey]:
         """The ledger key (rule, identity) of every row no exception allows."""
         allowed = FindingStatus.ALLOWED.value
-        return {(row[0], tuple(row[1])) for row in self.rows if row[self.STATUS] != allowed}
+        return {(row[self.RULE], tuple(row[self.IDENTITY])) for row in self.rows if row[self.STATUS] != allowed}
 
     def open_rows(self) -> Iterator[tuple[FindingStatus, str, str, str]]:
         """(status, rule, owner module, target) of every row no exception allows: what `query`
         groups by. The target is the first witness's first target, else the identity's first
         column, else "?"."""
         allowed = FindingStatus.ALLOWED.value
-        for rule, identity, status, _, witnesses, owner, _, _, _ in self.rows:
+        targets = self.WITNESS_TARGETS
+        for row in self.rows:
+            status = row[self.STATUS]
             if status == allowed:
                 continue
-            target = next((witness[5][0] for witness in witnesses if witness[5]), identity[0] if identity else "?")
-            yield FindingStatus(status), rule, owner, target
+            identity = row[self.IDENTITY]
+            first = identity[0] if identity else "?"
+            target = next((witness[targets][0] for witness in row[self.WITNESSES] if witness[targets]), first)
+            yield FindingStatus(status), row[self.RULE], row[self.OWNER], target
 
     def to_json(self) -> list[Any]:
         return self.rows
