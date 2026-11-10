@@ -55,7 +55,6 @@ from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles, TreeListin
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
-from hoglint.ledger.slots import EvaluationSlots
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
@@ -218,20 +217,13 @@ class Run:
 
 class Runner:
     """Runs policy over code. One GraphIndex per graph serves every run that reads that graph, and
-    one CandidateCache every run. With `slots`, a run waits for an evaluation slot first."""
+    one CandidateCache every run."""
 
-    def __init__(
-        self, source: GraphSource, today: datetime.date | None = None, slots: EvaluationSlots | None = None
-    ) -> None:
+    def __init__(self, source: GraphSource, today: datetime.date | None = None) -> None:
         self.source = source
         self.today = today
-        self.slots = slots
         self.indexes: dict[int, tuple[Graph, GraphIndex]] = {}
         self.candidates = CandidateCache()
-
-    def take_slot(self) -> None:
-        if self.slots is not None:
-            self.slots.take()
 
     def index_of(self, graph: Graph) -> GraphIndex:
         held = self.indexes.get(id(graph))
@@ -241,7 +233,6 @@ class Runner:
 
     def evaluate(self, config: Config, code_root: Path, policy_root: Path) -> tuple[Graph, RunResult]:
         """One policy over one code root, with no ledger and no exceptions."""
-        self.take_slot()
         judged = PolicyFiles(config).anchored(policy_root, code_root)
         graph = self.source.build(code_root, judged)
         engine = Engine(judged, graph, code_root, self.today, self.index_of(graph), self.candidates)
@@ -267,7 +258,6 @@ class Runner:
         reads the code and every side input from that git tree by blob id, with `files_root` its
         root when the caller made one; `ledger` replaces the policy root's ledger. With
         `rewrite_ledger` the run is judged against the ledger it would write, not the file."""
-        self.take_slot()
         code_root = code_root or policy_root
         if tree and files_root is None:
             files_root = self.tree_root(code_root, tree)
@@ -681,9 +671,7 @@ class Baselines:
         engine: LocalEngine,
         store: SummaryStore,
         trees: TreeSummaries,
-        slots: EvaluationSlots | None = None,
     ) -> None:
-        self.slots = slots
         self.snapshots = snapshots
         self.repo = snapshots.repo
         self.work_dir = snapshots.work_dir
@@ -728,7 +716,7 @@ class Baselines:
         except subprocess.CalledProcessError:
             ledger = LedgerFile(source=ABSENT)
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
-        runner = Runner(graph_source(self.engine.name, work), slots=self.slots)
+        runner = Runner(graph_source(self.engine.name, work))
         run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
@@ -808,13 +796,12 @@ class Commands:
         self.repo = repo
         self.work_dir = work_dir
         self.source: GraphSource = graph_source(engine, work_dir)
-        self.slots = EvaluationSlots(cache_root())
-        self.runner = Runner(self.source, today, self.slots)
+        self.runner = Runner(self.source, today)
         self.snapshots = Snapshots(repo, work_dir)
         self.engine = LocalEngine(engine)
         self.summaries = SummaryStore()
         self.trees = TreeSummaries(self.snapshots, self.summaries)
-        self.baselines = Baselines(self.snapshots, self.engine, self.summaries, self.trees, self.slots)
+        self.baselines = Baselines(self.snapshots, self.engine, self.summaries, self.trees)
         self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore())
         self.memo = RunMemo(self.snapshots, self.summaries) if memo else None
 
@@ -1226,5 +1213,4 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"engine error: {error}\n")
             return 2
         finally:
-            commands.slots.release()
             commands.snapshots.close()

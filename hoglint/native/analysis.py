@@ -26,8 +26,7 @@ from hoglint.native.snapshot import BlobSnapshot
 from hoglint.plugins import REGISTRY, ProducerFailure
 
 SNAPSHOT_PRODUCER = "snapshot"
-# The threads a staged run (pre-commit) takes: it runs beside other hooks, and the slots in the
-# cache root (ledger/slots.py) bound how many runs go at once (D6, D36).
+# The threads a staged run (pre-commit) takes: it runs beside other hooks (D6).
 STAGED_THREADS = 1
 # What the extractor's `--lite-kinds` defaults to: what module tables and class ancestry read.
 LITE_KINDS = ("imports", "defs", "assigns")
