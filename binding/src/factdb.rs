@@ -2,17 +2,19 @@
 //! the machine.
 //!
 //! - `keys`: (extract config id, blob oid) to the entry id, the day a run last read it
-//!   (`used`), the length of its JSON text and the bytes it holds.
+//!   (`used`), the length of its JSON text (a run checks it against the body's key ranges,
+//!   `blobs.rs`) and the bytes it holds.
 //! - `facts`: the binary facts the link reads (`hoglint_facts::link::store`).
 //! - `records`: the record JSON text that packs read, compressed in frames (`pack`): a pack
 //!   that reads one key decompresses that key alone. Apart from the facts, so a run that never
 //!   reads it never touches its pages.
 //!
-//! WAL mode lets runs read while another run writes. Writes skip keys already stored and run in
-//! short transactions, so runs that extract the same blob at once store it once and hold the
-//! write lock briefly. Reads go through `pread`, not a memory map: ten runs that map one file
-//! at once wait on each other's page faults. Every read is by natural key (config, oid): an
-//! entry id can be reused after a prune. The daily prune lives in `hoglint/native/factdb.py`.
+//! WAL mode lets runs read while another run writes. A write replaces an entry already stored
+//! under its key (a run stores only what it could not read) and runs in short transactions, so
+//! runs that extract the same blob at once leave one entry and hold the write lock briefly.
+//! Reads go through `pread`, not a memory map: ten runs that map one file at once wait on each
+//! other's page faults. Every read is by natural key (config, oid): an entry id can be reused
+//! after a prune. The daily prune lives in `hoglint/native/factdb.py`.
 //!
 //! The database is a cache. An entry that is gone is a miss, and an error is the caller's to
 //! log and run past (`blobs.rs`).

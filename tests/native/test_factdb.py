@@ -128,14 +128,14 @@ def stored_record(database: FactDatabase, oid: str) -> bytes:
         return bytes(conn.execute(query, (oid,)).fetchone()[0])
 
 
-@pytest.mark.parametrize("json_len", [-1, 1 << 62])
-def test_a_stored_length_no_record_can_have_is_a_miss(tmp_path: Path, json_len: int) -> None:
+@pytest.mark.parametrize("json_len", ["-1", str(1 << 62), "json_len + 1", "json_len - 1", "json_len / 2"])
+def test_a_stored_length_that_is_not_the_records_is_a_miss(tmp_path: Path, json_len: str) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
     database = fact_database(native, tmp_path)
     link(native, BlobSnapshot.index(repo), database)
     with sqlite3.connect(database.path) as conn:
-        conn.execute("UPDATE keys SET json_len = ? WHERE id = (SELECT max(id) FROM keys)", (json_len,))
+        conn.execute(f"UPDATE keys SET json_len = {json_len} WHERE id = (SELECT max(id) FROM keys)")
     run, counts = link(native, BlobSnapshot.index(repo), database)
     fresh, _ = link(native, BlobSnapshot.index(repo), None)
     assert counts == (2, 1)

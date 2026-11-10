@@ -20,7 +20,7 @@
 use crate::factdb::{DbError, FactDb, NewEntry, Row, move_aside, pack};
 use hoglint_facts::link::facts::{FactSet, FileFacts, RecordText, decode_record};
 use hoglint_facts::link::intern::{Interner, Sid};
-use hoglint_facts::link::store::{decode_body, encode_facts, facts_strings};
+use hoglint_facts::link::store::{MAGIC, decode_body, encode_facts, facts_strings};
 use hoglint_facts::{
     ExtractConfig, Facts, FileRecord, Kinds, Status, extract, record_line, sha256_hex,
 };
@@ -287,9 +287,37 @@ fn find(db: &FactDb, slots: &mut [Slot], profiles: (&Profile, &Profile)) -> Resu
     db.end_read()
 }
 
+/// The u32 at `bytes[*at..]`, moving `at` past it; None when it runs off the end.
+fn next_u32(bytes: &[u8], at: &mut usize) -> Option<usize> {
+    let raw = bytes.get(*at..)?.get(..4)?;
+    *at += 4;
+    Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize)
+}
+
+/// The length of the JSON text that a stored body's key ranges imply: the text is compact JSON,
+/// so it ends one byte after the value of its last key. Reads the layout of `link::store` with
+/// no interning: MAGIC, the string table, then the body, which starts with the key ranges.
+fn implied_json_len(body: &[u8]) -> Option<usize> {
+    let mut at = MAGIC.len();
+    for _ in 0..next_u32(body, &mut at)? {
+        let len = next_u32(body, &mut at)?;
+        at = at.checked_add(len)?;
+    }
+    let mut end = 0;
+    for _ in 0..next_u32(body, &mut at)? {
+        let len = next_u32(body, &mut at)?;
+        at = at.checked_add(len)?;
+        next_u32(body, &mut at)?;
+        end = end.max(next_u32(body, &mut at)?);
+    }
+    Some(end + 1)
+}
+
 /// The binary facts of every found entry, in one read transaction, appended to `bodies`. An
-/// entry that went away since `find` is a miss. One buffer, not one per entry: freed after the
-/// decode, it goes back whole instead of leaving a heap of small free blocks.
+/// entry that went away since `find`, or whose body does not imply its stored text length, is a
+/// miss: the length lays out the record's text before any record is read. One buffer, not one
+/// per entry: freed after the decode, it goes back whole instead of leaving a heap of small free
+/// blocks.
 fn read_found(
     db: &FactDb,
     slots: &mut [Slot],
@@ -298,11 +326,14 @@ fn read_found(
 ) -> Result<(), DbError> {
     db.begin_read()?;
     for slot in slots.iter_mut() {
-        let (Some(_), Some(key)) = (slot.found, &slot.key) else {
+        let (Some(row), Some(key)) = (slot.found, &slot.key) else {
             continue;
         };
         let profile = if slot.lite { profiles.1 } else { profiles.0 };
-        slot.stored = db.read_facts(&profile.id, key)?.map(|body| {
+        let body = db
+            .read_facts(&profile.id, key)?
+            .filter(|body| implied_json_len(body) == Some(row.json_len));
+        slot.stored = body.map(|body| {
             let start = bodies.len();
             bodies.extend_from_slice(&body);
             start..bodies.len()
