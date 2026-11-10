@@ -326,6 +326,7 @@ class JudgedRows:
         "ledgerable",
         "modules",
         "no_place",
+        "reported",
         "row_edges",
         "rule",
         "src_at",
@@ -354,6 +355,8 @@ class JudgedRows:
         self.ledgerable = bytes([flags[at][0] and ledger for at in self.judgment_at])
         self.unknown = bytes([flags[at][1] for at in self.judgment_at])
         self.row_edges: RowEdges | None = None
+        # What the rule's own code reported for each row it judged, kept for a ledger write.
+        self.reported: dict[int, RuleRun] = {}
         # The rows whose judgment goes to the rule's own code, in order: few or none.
         places = {at for at, judgment in enumerate(self.judgments) if judgment not in self.found}
         self.alone = [row for row, at in enumerate(self.judgment_at) if at in places] if places else []
@@ -434,12 +437,29 @@ class JudgedRows:
             witness=handle,
         )
 
+    def alone_edges(self) -> dict[int, Edge]:
+        """The edges of the rows the rule's own code reports, by id."""
+        ids = distinct_ids(self.edges[at] for at in self.alone)
+        return dict(zip(ids, self.ctx.native.native.core.get(ids)))
+
     def confirm(self, judge: EdgeRule) -> None:
-        """Every row the rule takes as a finding, judged again by `judge` (D50, D55)."""
+        """Every row judged again by `judge` (D50, D55): a row the rule takes as a finding must
+        give its judgment and identity, and a row the rule's own code reported must give what
+        that code reported over the evaluator's labels."""
         alone = set(self.alone)
         for at in range(len(self.edges)):
             if at not in alone:
                 self.rejudged(at, self.identities[self.identity_at[at]]).confirmed(judge)
+        edges = self.alone_edges()
+        for at in self.alone:
+            edge = edges[self.edges[at]]
+            theirs = judge.recorded([decided(judge, edge, self.targets[at], self.judgment(at))])
+            if confirmed_rows(self.reported[at]) != confirmed_rows(theirs):
+                site = edge.site
+                raise EngineError(
+                    f"rule {judge.spec.id} reports {edge.kind} {site.path}:{site.line} as {confirmed_rows(theirs)} "
+                    f"with its own labels, apart from {confirmed_rows(self.reported[at])} with the evaluator's"
+                )
 
 
 class NativeRuleContext(RuleContext):
@@ -512,11 +532,12 @@ class NativeRuleContext(RuleContext):
     def alone_reports(self, rule: EdgeRule, rows: JudgedRows) -> Iterator[tuple[int, RuleRun]]:
         """Each row whose judgment the rule does not take as a finding, with what the rule's own
         code reports for it; that code must judge as the evaluator did."""
-        alone = rows.alone
-        alone_ids = distinct_ids(rows.edges[at] for at in alone)
-        edges = dict(zip(alone_ids, self.native.native.core.get(alone_ids)))
-        for at in alone:
-            yield at, self.judged_alone(rule, edges[rows.edges[at]], rows.targets[at], rows.judgment(at))
+        edges = rows.alone_edges()
+        for at in rows.alone:
+            reported = rows.reported[at] = self.judged_alone(
+                rule, edges[rows.edges[at]], rows.targets[at], rows.judgment(at)
+            )
+            yield at, reported
 
     def judged(self, rule: EdgeRule) -> bool:
         """The evaluator's rows of an edge, entrypoint, signature or use-shape rule, into the

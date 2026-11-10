@@ -1531,6 +1531,12 @@ def made_up(text: str) -> str:
     return "made-up" if text == "billing" else text
 
 
+def swapped(text: str) -> str:
+    """`core` and `billing` the other way round: a label column with the same values, on the
+    wrong modules."""
+    return {"core": "billing", "billing": "core"}.get(text, text)
+
+
 def made_up_label(changes: dict[str, Any]) -> dict[str, Any]:
     """A `package` column that says `made-up` where it says `billing`, and judge rows whose
     identities say the same: labels the evaluator computed, wrong on both sides."""
@@ -1558,6 +1564,22 @@ LEDGER_LIES: dict[str, tuple[str, Any]] = {
     "identity": (
         rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
         lambda world: {"judge": lambda rows: [(*rows[0][:3], ["made", "up"], *rows[0][4:]), *rows[1:]]},
+    ),
+    "label column on an unresolved row": (
+        rule_table(
+            "lied",
+            {
+                **EDGE,
+                "kinds": ["uses"],
+                "on_unresolved": "finding",
+                "identity": ["src.package", "dst.symbol"],
+                "ledger": True,
+                "growth_key": ["src.package"],
+            },
+        ),
+        lambda world: {
+            "values": lambda found: [[(kind, [swapped(item) for item in items]) for kind, items in found[0]], found[1]]
+        },
     ),
     "label column": (
         rule_table(
