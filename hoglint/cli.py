@@ -382,7 +382,7 @@ class CheckReport:
         if shown is None:
             raise ValueError(f"the summary keeps no message for {finding.rule} {' '.join(finding.identity)}")
         site = f"{shown.path}:{shown.line}" if shown.path else ""
-        owners = self.owners.of(finding)
+        owners = self.owners.of_module(finding.owner)
         listed = f"  [{', '.join(owners)}]" if owners else ""
         return f"{finding.rule}  {' '.join(finding.identity)}\n    {shown.message}  {site}{listed}"
 
@@ -728,9 +728,6 @@ class ReadTimeOwners:
     def __init__(self, config: Config, modules: dict[str, str], root: Path) -> None:
         self.field = config.roles.owner
         self.labeler = Labeler(config, Graph(modules=dict(modules)), root)
-
-    def of(self, finding: FindingRecord) -> tuple[str, ...]:
-        return self.of_module(finding.owner)
 
     def of_module(self, owner: str) -> tuple[str, ...]:
         """The owners of a finding whose owner module is `owner` (empty for none)."""
