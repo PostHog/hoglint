@@ -27,6 +27,11 @@ from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, ReachPrimitive
 from hoglint.rules.levels import LevelEvaluator, LevelResult
 
+# Every source the run could not read is an incomplete item of this rule, keyed on its path: the
+# result holds none of the file's facts. The `unparsed` edge with a read error stands for the file.
+UNREADABLE = "source:unreadable"
+READ_ERROR = ("status", "read_error")
+
 
 class Primitive(Protocol):
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None: ...
@@ -185,6 +190,13 @@ class Engine:
             run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))
             run.incomplete.append(IncompleteItem(run.spec.id, reason, reason, (), IncompleteCause.EXTRACTOR))
             ctx.results[run.spec.id] = run
+        unread = sorted({edge.site.path for edge in self.graph.by_kind("unparsed") if READ_ERROR in edge.attrs})
+        if unread:
+            run = RuleRun(RuleSpec(UNREADABLE, "layout", ledger=False))
+            for path in unread:
+                reason = f"{path} could not be read, so its facts are missing"
+                run.incomplete.append(IncompleteItem(UNREADABLE, path, reason, (), IncompleteCause.EXTRACTOR))
+            ctx.results[UNREADABLE] = run
         self.raise_conflicts()
         return ctx.results
 

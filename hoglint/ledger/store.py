@@ -174,12 +174,13 @@ class SummaryStore:
         return part
 
     def put(self, key: Envelope, summary: ScanSummary) -> Path | None:
-        """Stores a summary under its own envelope; a summary of no tree is not stored. Only the
-        sections no stored summary holds yet are written."""
+        """Stores a summary under its own envelope. A summary of no tree is not stored, and nor is
+        one of a run that could not read a source: it holds less than the tree. Only the sections
+        no stored summary holds yet are written."""
         if summary.envelope != key:
             raise ValueError(f"a summary of {summary.envelope} cannot be stored under {key}")
         self.prune_once()
-        if not key.tree:
+        if not key.tree or summary.unread:
             return None
         parts = summary.to_sections()
         manifest: dict[str, Any] = {ENVELOPE_SECTION: parts.pop(ENVELOPE_SECTION)}

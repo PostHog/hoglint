@@ -275,7 +275,7 @@ def test_a_stored_summary_stands_in_for_a_check_of_its_tree_only_when_the_output
         assert shows in printed and shows not in first
 
 
-def test_a_source_the_run_could_not_read_is_printed_and_its_summary_never_answers_a_check(
+def test_a_source_the_run_could_not_read_blocks_and_its_summary_is_never_stored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     reads_fail = [True]
@@ -287,10 +287,12 @@ def test_a_source_the_run_could_not_read_is_printed_and_its_summary_never_answer
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
     memo_repo(repo)
-    check_once(repo, tmp_path / "work", DAY, memo=True, staged=False)
-    unread = "unreadable sources, so their facts are missing (1)\n  products/search/logic.py\n"
-    assert unread in capsys.readouterr().out
+    assert check_once(repo, tmp_path / "work", DAY, memo=True, staged=False) == 2
+    printed = capsys.readouterr().out
+    assert "  source:unreadable [extractor]  products/search/logic.py could not be read" in printed
+    assert "unreadable sources, so their facts are missing (1)\n  products/search/logic.py\n" in printed
+    stored = tmp_path / "cache" / "hoglint" / "summaries"
+    assert not list(stored.rglob("*.json"))
     reads_fail.clear()
-    runs = count_runs(monkeypatch)
     check_once(repo, tmp_path / "work", DAY, memo=True, staged=False)
-    assert runs and "unreadable" not in capsys.readouterr().out
+    assert "unreadable" not in capsys.readouterr().out and list(stored.rglob("*.json"))
