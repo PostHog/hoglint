@@ -6,8 +6,8 @@ use super::Rules;
 use super::env::{Cx, EntityEnv};
 use super::glob::{Glob, fill};
 use super::plan::EntitiesPlan;
-use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
-use super::staged::touch;
+use super::selector::{Compiler, Ref, Resolve, evaluate};
+use super::staged::class_truth;
 use super::value::{Truth, Value, render};
 use crate::link::Link;
 use crate::link::intern::Sid;
@@ -50,23 +50,6 @@ type Entity = (Option<Sid>, Option<u32>, Option<String>, String);
 /// "unknown-selection" (whether the entity is selected), or "unknown-value" (an inventory's
 /// field); the count of an inventory's values, else 0; the identity of a finding, else empty.
 pub type EntityRow = (&'static str, String, Option<String>, u32, Vec<String>);
-
-/// `ClassSelection.truth` over any environment: the `and` parts in order, false at the first
-/// false one; where labels conflict only where read, every field a part names is read first.
-fn class_truth<'a>(parts: &'a [Node], env: &impl Resolve<'a>, touching: bool) -> Truth {
-    let mut out = Truth::True;
-    for part in parts {
-        if touching {
-            touch(part, env);
-        }
-        match evaluate(part, env) {
-            Truth::False => return Truth::False,
-            Truth::Unknown => out = Truth::Unknown,
-            Truth::True => {}
-        }
-    }
-    out
-}
 
 impl Rules {
     /// `EntityRule.entities`: (module, its place, symbol, subject) of every entity the rule

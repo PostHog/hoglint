@@ -263,14 +263,7 @@ impl<'a> Cx<'a> {
     }
 
     pub fn attr(&self, id: u32, name: Option<Sid>) -> &'a str {
-        let Some(name) = name else {
-            return "";
-        };
-        self.link
-            .edges
-            .attrs_with(id)
-            .find(|(key, _)| *key == name)
-            .map_or("", |(_, value)| self.text(*value))
+        attr_sid(self.link, id, name).map_or("", |value| self.text(value))
     }
 
     pub fn cell(&self, cell: &'a Cell) -> Value<'a> {
@@ -758,4 +751,13 @@ impl<'a> Resolve<'a> for EntityEnv<'a, '_> {
             other => label.resolve(Ref::Entity(other)),
         }
     }
+}
+
+/// The interned value of attr `name` of edge `id`, if it has one.
+pub fn attr_sid(link: &Link, id: u32, name: Option<Sid>) -> Option<Sid> {
+    let name = name?;
+    link.edges
+        .attrs_with(id)
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| *value)
 }

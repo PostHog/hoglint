@@ -38,7 +38,7 @@ use super::Link;
 use super::intern::Sid;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -199,6 +199,8 @@ pub struct Rules {
     tainted: FxHashSet<(usize, u32)>,
     /// The conflicts rules met while they ran.
     met: Mutex<FxHashSet<Conflict>>,
+    /// The link's edges every export rule reads, gathered for the first one.
+    export_inputs: OnceLock<ExportInputs>,
 }
 
 fn role_of(name: &str) -> Result<Role, String> {
@@ -387,6 +389,7 @@ impl Rules {
             touch: false,
             tainted: FxHashSet::default(),
             met: Mutex::new(FxHashSet::default()),
+            export_inputs: OnceLock::new(),
         };
         out.tainted = out.provider_reads();
         out.values = out.module_values(link);
@@ -893,9 +896,11 @@ impl Rules {
         let Some(export) = &rule.export else {
             return Err(format!("export rule {} has no exports planned", rule.id));
         };
-        let inputs = ExportInputs::read(self, link);
+        let inputs = self
+            .export_inputs
+            .get_or_init(|| ExportInputs::read(self, link));
         let cx = Cx { link, rules: self };
-        Ok(Walk::new(cx, export, &inputs).run())
+        Ok(Walk::new(cx, export, inputs).run())
     }
 
     /// Every name kind `name` holds (`Labeler.kind_members`), sorted.

@@ -6,6 +6,7 @@ use super::Rules;
 use super::env::{Cx, EntityEnv};
 use super::plan::{ExportRulePlan, ShapePlan};
 use super::selector::{Compiler, EntityField, Node, Ref, evaluate};
+use super::signature::callable_of;
 use super::value::{Truth, Value, render};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
@@ -216,18 +217,7 @@ impl ExportInputs {
                 let ids = link.ids_from(kind, module);
                 let named = ids
                     .into_iter()
-                    .map(|id| {
-                        let attr = callable.and_then(|key| {
-                            link.edges
-                                .attrs_with(id)
-                                .find(|(k, _)| *k == key)
-                                .map(|(_, value)| *value)
-                        });
-                        let name = attr
-                            .filter(|value| *value != EMPTY)
-                            .unwrap_or_else(|| link.site_of(id).1);
-                        (name, id)
-                    })
+                    .map(|id| (callable_of(link, id, callable), id))
                     .collect();
                 exposes.insert(module, named);
             }

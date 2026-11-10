@@ -74,13 +74,17 @@ pub fn touch<'a>(node: &Node, env: &impl Resolve<'a>) {
     }
 }
 
-/// `ClassSelection.truth`: the parts in order, false at the first false one, else unknown when
-/// one is unknown.
-pub fn parts_truth<'n, 'a>(parts: impl IntoIterator<Item = &'n Node>, env: &Env<'a>) -> Truth
+/// `ClassSelection.truth` over any environment: the parts in order, false at the first false one,
+/// else unknown when one is unknown. With `touching` (`Rules::touch`), every field a part names is
+/// read first.
+pub fn class_truth<'n, 'a>(
+    parts: impl IntoIterator<Item = &'n Node>,
+    env: &impl Resolve<'a>,
+    touching: bool,
+) -> Truth
 where
     'n: 'a,
 {
-    let touching = env.cx.rules.touch;
     let mut out = Truth::True;
     for part in parts {
         if touching {
@@ -93,6 +97,14 @@ where
         }
     }
     out
+}
+
+/// `class_truth` over an edge's environment.
+pub fn parts_truth<'n, 'a>(parts: impl IntoIterator<Item = &'n Node>, env: &Env<'a>) -> Truth
+where
+    'n: 'a,
+{
+    class_truth(parts, env, env.cx.rules.touch)
 }
 
 /// A predicate (`deny`, `allow`, `require`, `unless`, a reach rule's `from`) as `ClassSelection`

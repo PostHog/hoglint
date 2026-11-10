@@ -275,21 +275,25 @@ class EdgeInventory(EdgeRule):
         data = read_table(repo / self.spec.classify)
         return {tuple(str(v) for v in entry.get("identity", ())) for entry in data.get("entry", [])}
 
+    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
+        """What a selected edge reports when it cannot be classified: one that did not resolve,
+        or whose selection reads an unknown value. A classifiable one is compared with the
+        classification file instead."""
+        if judgment is Judgment.UNKNOWN_SELECTION:
+            self.incomplete(env, "selection reads an unknown value")
+            return
+        super().report(env, judgment, describe)
+
     def evaluate(self) -> RuleRun:
         if self.ctx.inventory_judged(self):
             return self.run
         seen: dict[tuple[str, ...], EdgeEnv] = {}
         for env in self.envs():
-            selected = self.selection(env)
-            if selected is Truth.FALSE:
-                continue
-            if env.dst.unresolved:
-                self.on_unresolved(env)
-                continue
-            if selected is Truth.UNKNOWN:
-                self.incomplete(env, "selection reads an unknown value")
-                continue
-            seen.setdefault(project(self.spec.identity, env.resolve), env)
+            judgment = self.decide(env)
+            if judgment is Judgment.VIOLATION:
+                seen.setdefault(project(self.spec.identity, env.resolve), env)
+            elif judgment is not Judgment.CLEAN:
+                self.report(env, judgment, self.describe(env))
         classified = self.classifications()
         for identity in sorted(seen):
             if identity not in classified:

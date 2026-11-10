@@ -1,7 +1,7 @@
 //! What a signature rule adds to an edge rule (hoglint/rules/edges.py `SignaturePrimitive`): the
 //! edges it sees, and the destinations whose type it cannot use.
 
-use super::env::{Cx, Endpoint};
+use super::env::{Cx, Endpoint, attr_sid};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::resolve::Ent;
@@ -35,26 +35,22 @@ fn is_core(link: &Link, id: u32) -> bool {
         .starts_with(CORE_PRODUCER_PREFIX)
 }
 
-/// The interned value of attr `name` of edge `id`, if it has one.
-fn attr_sid(link: &Link, id: u32, name: Option<Sid>) -> Option<Sid> {
-    let name = name?;
-    link.edges
-        .attrs_with(id)
-        .find(|(key, _)| *key == name)
-        .map(|(_, value)| *value)
+/// The callable an `exposes` edge names: its `callable` attr, else its site's scope, as a pack
+/// names it (`attr` is the interned name `callable`).
+pub fn callable_of(link: &Link, id: u32, attr: Option<Sid>) -> Sid {
+    attr_sid(link, id, attr)
+        .filter(|value| !link.core.it.s(*value).is_empty())
+        .unwrap_or_else(|| link.site_of(id).1)
 }
 
-/// The value of attr `name` of edge `id`; empty when it has none.
-fn attr(link: &Link, id: u32, name: Option<Sid>) -> &str {
-    attr_sid(link, id, name).map_or("", |value| link.core.it.s(value))
-}
-
-/// The edge's slot key: a pack names the callable by its site's scope.
+/// The edge's slot key.
 fn slot_key(link: &Link, id: u32, callable: Option<Sid>, slot: Option<Sid>) -> SlotKey {
-    let named = attr_sid(link, id, callable).filter(|value| !link.core.it.s(*value).is_empty());
-    let callable = named.unwrap_or_else(|| link.site_of(id).1);
     let slot = attr_sid(link, id, slot).unwrap_or(EMPTY);
-    (callable, slot, link.edges.targets_of(id).to_vec())
+    (
+        callable_of(link, id, callable),
+        slot,
+        link.edges.targets_of(id).to_vec(),
+    )
 }
 
 impl Signature {
@@ -68,7 +64,8 @@ impl Signature {
         let mut core_slots: FxHashMap<Sid, FxHashSet<SlotKey>> = FxHashMap::default();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            if is_private(attr(link, id, callable)) {
+            let named = attr_sid(link, id, callable).map_or("", |value| link.core.it.s(value));
+            if is_private(named) {
                 continue;
             }
             if is_core(link, id) {
