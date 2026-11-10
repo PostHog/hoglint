@@ -7,6 +7,7 @@ every edge kind it may emit goes incomplete in the rules that read it.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -32,14 +33,46 @@ def active_packs(config: Config) -> list[tuple[Pack, Mapping[str, Any]]]:
     return out
 
 
+class PackRoot:
+    """A directory of one pack's own: it holds exactly the policy files the pack's
+    `policy_file_keys` name, copied from where the policy holds them (an absolute path, or a
+    path under the code root), and the pack's section names those copies. A pack that reads any
+    other file finds nothing there, so it fails instead of reading the working tree."""
+
+    def __init__(self, pack: Pack, section: Mapping[str, Any], code_root: Path, directory: Path) -> None:
+        self.pack = pack
+        self.section = section
+        self.code_root = code_root
+        self.directory = directory
+
+    def section_of_copies(self) -> dict[str, Any]:
+        """The section with each policy file key naming the file's copy, relative to the directory."""
+        out = dict(self.section)
+        for key in getattr(self.pack, "policy_file_keys", ()):
+            value = self.section.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            source = self.code_root / value  # an absolute value stays as it is
+            copy = Path(key) / source.name
+            (self.directory / key).mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, self.directory / copy)
+            out[key] = copy.as_posix()
+        return out
+
+
 def run_packs(packs: list[tuple[Pack, Mapping[str, Any]]], reader: PackReader, sink: PackSink, root: Path) -> None:
-    """Each active pack in order, into one sink. A pack that raises is a failed producer."""
+    """Each active pack in order, into one sink, each reading through a root of its own (see
+    `PackRoot`); `root` is the code root the policy's relative paths start from. A pack that
+    raises, or whose policy file is missing, is a failed producer."""
     for pack, section in packs:
-        try:
-            pack.produce(section, reader, sink, root)
-        except Exception as error:  # noqa: BLE001 - a failed pack makes its rules incomplete, never clean
-            reason = f"{type(error).__name__}: {error}"
-            sink.fail(pack.name, ProducerFailure(reason, frozenset(pack.edge_kinds)))
+        with tempfile.TemporaryDirectory(prefix=f"pack-{pack.name}-") as scratch:
+            directory = Path(scratch)
+            try:
+                own = PackRoot(pack, section, root, directory).section_of_copies()
+                pack.produce(own, reader, sink, directory)
+            except Exception as error:  # noqa: BLE001 - a failed pack makes its rules incomplete, never clean
+                reason = f"{type(error).__name__}: {error}"
+                sink.fail(pack.name, ProducerFailure(reason, frozenset(pack.edge_kinds)))
 
 
 class GraphSource:

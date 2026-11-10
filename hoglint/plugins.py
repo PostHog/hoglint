@@ -246,8 +246,8 @@ class Pack(Protocol):
     `[discovery] external` packages (see `Framework` in ledger/envelope.py).
 
     A pack reads no file but the policy files its `policy_file_keys` name (the section keys that
-    hold a path). In a run of a git tree those paths are absolute, into the policy written from
-    that tree."""
+    hold a path). `produce` gets a root of its own that holds exactly those files, and the
+    section it gets names each one relative to that root, so a read of any other file fails."""
 
     name: str  # the config section it owns, e.g. "django"
     allowed_keys: frozenset[str]
