@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Config
-from hoglint.model import Finding
 from hoglint.rules.base import RuleRun, contexts_of
 from hoglint.selectors import render_data
 
@@ -156,15 +155,12 @@ class ExceptionsFile:
         return tuple(owners)
 
 
-def in_scope(entry: ExceptionEntry, finding: Finding) -> bool:
-    in_test = any("test" in contexts_of(edge) for edge in finding.witnesses)
+def identity_matches(entry: ExceptionEntry, identity: tuple[str, ...]) -> bool:
+    return all(index < len(identity) and identity[index] == value for index, value in entry.match)
+
+
+def in_scope(entry: ExceptionEntry, in_test: bool) -> bool:
     return in_test if entry.scope == "test" else not in_test
-
-
-def matches(entry: ExceptionEntry, finding: Finding) -> bool:
-    if entry.rule != finding.rule or not in_scope(entry, finding):
-        return False
-    return all(index < len(finding.identity) and finding.identity[index] == value for index, value in entry.match)
 
 
 @dataclass(frozen=False, slots=True)
@@ -175,7 +171,7 @@ class ExceptionReport:
 
 
 def apply_exceptions(runs: dict[str, RuleRun], exceptions: ExceptionsFile, today: datetime.date) -> ExceptionReport:
-    """Marks allowed findings in place and reports entries that are stale or past review."""
+    """Marks the rows an exception allows and reports entries that are stale or past review."""
     used: set[int] = set()
     by_rule: dict[str, list[ExceptionEntry]] = {}
     for entry in exceptions.entries:
@@ -185,8 +181,14 @@ def apply_exceptions(runs: dict[str, RuleRun], exceptions: ExceptionsFile, today
         if not entries:
             continue
         table = run.findings
-        for row, finding in enumerate(list(table)):
-            entry = next((e for e in entries if matches(e, finding)), None)
+        # An entry matches a row by its identity first: only rows it could allow read their edges.
+        candidates = [[e for e in entries if identity_matches(e, identity)] for identity in table.identities]
+        for row, place in enumerate(table.identity_at):
+            matching = candidates[place]
+            if not matching:
+                continue
+            in_test = any("test" in contexts_of(edge) for edge in table.witnesses(row))
+            entry = next((e for e in matching if in_scope(e, in_test)), None)
             if entry is None:
                 continue
             used.add(entry.index)
