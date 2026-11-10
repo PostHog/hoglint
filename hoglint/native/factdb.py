@@ -153,80 +153,12 @@ class FactDatabase:
     def pruned_mark(self) -> Path:
         return Path(f"{self.path}.pruned")
 
-    def open_for_run(self, today: datetime.date | None = None) -> bool:
-        """Marks the database opened and prunes once a day. False when the cache is not usable:
-        the error is logged once, a damaged database is moved aside, and the run goes on
-        without the cache."""
-        try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            self.opened_mark.touch()
-            self.prune_daily(today)
-        except (OSError, sqlite3.Error) as error:
-            CacheWarning.log(error)
-            if is_corrupt(error):
-                self.move_aside()
-            return False
-        return True
-
     def move_aside(self) -> None:
         stamp = int(time.time())
         for suffix in ("", "-wal", "-shm"):
             source = Path(f"{self.path}{suffix}")
             if source.exists():
                 source.rename(Path(f"{self.path}.corrupt-{stamp}{suffix}"))
-
-    def prune_daily(self, today: datetime.date | None = None) -> bool:
-        """Prunes when no run pruned this database today. The mark goes first, so concurrent runs
-        prune once."""
-        day = today or datetime.datetime.now(datetime.UTC).date()
-        try:
-            if self.pruned_mark.read_text() == day.isoformat():
-                return False
-        except OSError:
-            pass
-        self.directory.mkdir(parents=True, exist_ok=True)
-        self.pruned_mark.write_text(day.isoformat())
-        self.prune(day)
-        return True
-
-    def prune(self, day: datetime.date, now: float | None = None) -> None:
-        now = now or time.time()
-        cutoff_day = (day - EPOCH).days - MAX_AGE_DAYS
-        if self.path.exists():
-            with self.connect() as conn:
-                old = [entry_id for (entry_id,) in conn.execute("SELECT id FROM keys WHERE used < ?", (cutoff_day,))]
-                self.delete(conn, old)
-        old_age = now - MAX_AGE_DAYS * 86_400
-        in_use = now - IN_USE_DAYS * 86_400
-        units, namespaces, files = self.others()
-        emptied: set[Path] = set()
-        units = self.drop_all_but_newest(units, KEPT_UNITS, old_age, in_use)
-        namespaces = self.drop_all_but_newest(namespaces, KEPT_NAMESPACES, old_age, in_use)
-        kept_files = []
-        for modified, size, path in files:
-            if modified < old_age:
-                path.unlink(missing_ok=True)
-                emptied.add(path.parent)
-            else:
-                kept_files.append((modified, size, path))
-        excess = sum(size for _, size, _ in files_under(self.directory.parent)) - MAX_BYTES
-        idle: list[tuple[float, int, Unit | Namespace | Path]] = [
-            (unit.opened, unit.size, unit) for unit in units if unit.opened < in_use
-        ]
-        idle.extend((space.opened, space.size, space) for space in namespaces if space.opened < in_use)
-        idle.extend(kept_files)
-        for _, size, item in sorted(idle, key=lambda entry: entry[0]):
-            if excess <= 0:
-                break
-            if isinstance(item, Path):
-                item.unlink(missing_ok=True)
-                emptied.add(item.parent)
-            else:
-                item.delete()
-            excess -= size
-        if excess > 0 and self.path.exists():
-            self.remove_rows(excess, (day - EPOCH).days - IN_USE_DAYS)
-        self.remove_empty_directories(emptied, in_use)
 
     @staticmethod
     def drop_all_but_newest[T: (Unit, Namespace)](items: list[T], kept: int, old_age: float, in_use: float) -> list[T]:
@@ -329,3 +261,71 @@ class FactDatabase:
         with self.connect() as conn:
             conn.execute("PRAGMA incremental_vacuum").fetchall()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+
+    def prune(self, day: datetime.date, now: float | None = None) -> None:
+        now = now or time.time()
+        cutoff_day = (day - EPOCH).days - MAX_AGE_DAYS
+        if self.path.exists():
+            with self.connect() as conn:
+                old = [entry_id for (entry_id,) in conn.execute("SELECT id FROM keys WHERE used < ?", (cutoff_day,))]
+                self.delete(conn, old)
+        old_age = now - MAX_AGE_DAYS * 86_400
+        in_use = now - IN_USE_DAYS * 86_400
+        units, namespaces, files = self.others()
+        emptied: set[Path] = set()
+        units = self.drop_all_but_newest(units, KEPT_UNITS, old_age, in_use)
+        namespaces = self.drop_all_but_newest(namespaces, KEPT_NAMESPACES, old_age, in_use)
+        kept_files = []
+        for modified, size, path in files:
+            if modified < old_age:
+                path.unlink(missing_ok=True)
+                emptied.add(path.parent)
+            else:
+                kept_files.append((modified, size, path))
+        excess = sum(size for _, size, _ in files_under(self.directory.parent)) - MAX_BYTES
+        idle: list[tuple[float, int, Unit | Namespace | Path]] = [
+            (unit.opened, unit.size, unit) for unit in units if unit.opened < in_use
+        ]
+        idle.extend((space.opened, space.size, space) for space in namespaces if space.opened < in_use)
+        idle.extend(kept_files)
+        for _, size, item in sorted(idle, key=lambda entry: entry[0]):
+            if excess <= 0:
+                break
+            if isinstance(item, Path):
+                item.unlink(missing_ok=True)
+                emptied.add(item.parent)
+            else:
+                item.delete()
+            excess -= size
+        if excess > 0 and self.path.exists():
+            self.remove_rows(excess, (day - EPOCH).days - IN_USE_DAYS)
+        self.remove_empty_directories(emptied, in_use)
+
+    def prune_daily(self, today: datetime.date | None = None) -> bool:
+        """Prunes when no run pruned this database today. The mark goes first, so concurrent runs
+        prune once."""
+        day = today or datetime.datetime.now(datetime.UTC).date()
+        try:
+            if self.pruned_mark.read_text() == day.isoformat():
+                return False
+        except OSError:
+            pass
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.pruned_mark.write_text(day.isoformat())
+        self.prune(day)
+        return True
+
+    def open_for_run(self, today: datetime.date | None = None) -> bool:
+        """Marks the database opened and prunes once a day. False when the cache is not usable:
+        the error is logged once, a damaged database is moved aside, and the run goes on
+        without the cache."""
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            self.opened_mark.touch()
+            self.prune_daily(today)
+        except (OSError, sqlite3.Error) as error:
+            CacheWarning.log(error)
+            if is_corrupt(error):
+                self.move_aside()
+            return False
+        return True
