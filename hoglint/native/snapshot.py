@@ -5,7 +5,8 @@
 - A commit's tree: `git ls-tree -r`.
 - The working tree: the index, then `git status --porcelain=v2 -uall` for what differs; a dirty
   or untracked file is hashed from its raw bytes (`git hash-object --no-filters`), as the
-  extractor reads them, and its bytes come from the working tree.
+  extractor reads them, and its bytes come from the working tree. A file git cannot read gets
+  the null id, so the extractor reads it, fails, and records a read error for it.
 
 Paths come only from git, never from listing or stat-ing the file system, so a case-insensitive
 file system cannot change a result.
@@ -21,6 +22,7 @@ from hoglint.ledger.status import WorktreeStatus
 
 SOURCE_SUFFIXES = (".py", ".pyi")
 SUBMODULE_MODE = "160000"
+NULL_OID = "0" * 40  # no blob has it, so no stored facts answer for it
 
 
 def git(repo: Path, *args: str, stdin: str | None = None) -> str:
@@ -35,6 +37,23 @@ def records(output: str) -> list[str]:
 
 def is_source(path: str) -> bool:
     return path.endswith(SOURCE_SUFFIXES)
+
+
+def hash_one(repo: Path, path: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "--no-filters", "--", path], capture_output=True, text=True
+    )
+    return done.stdout.strip() if done.returncode == 0 else NULL_OID
+
+
+def hash_worktree_files(repo: Path, paths: list[str]) -> list[str]:
+    """The blob ids of working tree files, from their raw bytes. One unreadable file fails the
+    whole batch, so then each file is hashed alone, and the ones git cannot read get the null id."""
+    listed = "".join(f"{path}\n" for path in paths)
+    try:
+        return git(repo, "hash-object", "--no-filters", "--stdin-paths", stdin=listed).split()
+    except subprocess.CalledProcessError:
+        return [hash_one(repo, path) for path in paths]
 
 
 @dataclass(frozen=False)
@@ -108,8 +127,6 @@ class BlobSnapshot:
             if kind == "u" or change != ".":
                 dirty.append(path)
         if dirty:
-            paths = "".join(f"{path}\n" for path in dirty)
-            oids = git(repo, "hash-object", "--no-filters", "--stdin-paths", stdin=paths).split()
-            for path, oid in zip(dirty, oids):
+            for path, oid in zip(dirty, hash_worktree_files(repo, dirty), strict=True):
                 snapshot.blobs[path] = (oid, True)
         return snapshot

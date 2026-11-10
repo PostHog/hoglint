@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import subprocess
 from pathlib import Path
 
@@ -122,7 +123,9 @@ ledger = false
 }
 
 
-def dumps(tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+def dumps(
+    tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPatch, unreadable: tuple[str, ...] = ()
+) -> dict[str, Path]:
     try:
         bridge.load()
     except ImportError:
@@ -134,6 +137,10 @@ def dumps(tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPat
         (repo / path).write_text(text)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    for path in unreadable:
+        (repo / path).chmod(0)
+        if os.access(repo / path, os.R_OK):
+            pytest.skip("this user reads files whatever their mode (root)")
     out = {}
     try:
         for engine in ENGINES:
@@ -143,6 +150,8 @@ def dumps(tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPat
             Dump(repo, engine, out[engine], work).run()
     finally:
         gc.enable()
+        for path in unreadable:
+            (repo / path).chmod(0o644)
     return out
 
 
@@ -157,6 +166,15 @@ def test_grouped_findings_take_owners_and_subjects_from_their_own_edge(
         "core.a": (["team-a"], ["core.a", "products.billing.models"]),
         "core.b": (["team-b"], ["core.b", "products.billing.logic"]),
     }
+
+
+def test_a_source_no_engine_can_read_is_the_same_incomplete_item_in_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = dumps(tmp_path, OWNERS_REPO, monkeypatch, unreadable=("core/a.py",))
+    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    reason = "core/a.py could not be read, so its facts are missing"
+    assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out["native"] / "incomplete.jsonl")
 
 
 def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path: Path) -> None:
