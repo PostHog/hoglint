@@ -3,9 +3,9 @@
 //!
 //! An entry is stored under (extract config id, blob oid) in the database of the facts id
 //! (`factdb`): the link's facts in binary (`link::store`), so a hit parses no JSON, and the
-//! record's JSON text, which packs read and which is read only when they do. A miss reads the
-//! blob with one `git cat-file --batch` for the whole snapshot (or the working tree file, for a
-//! file git has no blob of yet), extracts it, and stores the entry. Site-packages files are not
+//! record's JSON text, compressed, which packs read and which is read only when they do. A miss
+//! reads the blob with one `git cat-file --batch` for the whole snapshot (or the working tree
+//! file, for a file git has no blob of yet), extracts it, and stores the entry. Site-packages files are not
 //! in git; they are read and keyed by content hash.
 //!
 //! The database is a cache, never an input:
@@ -17,7 +17,7 @@
 //!   damaged database is moved aside;
 //! - no read transaction is held while files are extracted.
 
-use crate::factdb::{DbError, FactDb, NewEntry, Row, move_aside};
+use crate::factdb::{DbError, FactDb, NewEntry, Row, move_aside, pack};
 use hoglint_facts::link::facts::{FactSet, FileFacts, RecordText, decode_record};
 use hoglint_facts::link::intern::{Interner, Sid};
 use hoglint_facts::link::store::{decode_body, encode_facts, facts_strings};
@@ -444,9 +444,7 @@ struct StoredRecords {
 }
 
 impl StoredRecords {
-    /// Bytes `range` of a stored record's JSON, read in place; None when the database cannot
-    /// give them.
-    fn read_range(&self, stored: &Stored, range: Range<usize>) -> Option<Vec<u8>> {
+    fn read(&self, stored: &Stored) -> Option<Vec<u8>> {
         let path = self.db_path.as_deref()?;
         let mut db = self.db.lock().ok()?;
         if db.is_none() {
@@ -454,9 +452,9 @@ impl StoredRecords {
         }
         match db
             .as_ref()?
-            .read_json_range(&stored.config, &stored.oid, stored.json_len, range)
+            .read_json(&stored.config, &stored.oid, stored.json_len)
         {
-            Ok(found) => found,
+            Ok(json) => json,
             Err(error) => {
                 give_up(path, &error);
                 *db = None;
@@ -465,55 +463,44 @@ impl StoredRecords {
         }
     }
 
-    fn read(&self, stored: &Stored) -> Option<Vec<u8>> {
-        let path = self.db_path.as_deref()?;
-        let mut db = self.db.lock().ok()?;
-        if db.is_none() {
-            *db = open_cache(path);
-        }
-        match db.as_ref()?.read_json(&stored.config, &stored.oid) {
-            Ok(json) => json.filter(|json| json.len() == stored.json_len),
-            Err(error) => {
-                give_up(path, &error);
-                *db = None;
-                None
-            }
-        }
-    }
-}
-
-impl RecordText for StoredRecords {
-    fn record(&self, file: usize) -> Result<Vec<u8>, String> {
+    /// Calls `use_text` with one record's JSON text. A stored record is read and decompressed
+    /// whole once, and kept for the next key of it.
+    fn with_record<T>(
+        &self,
+        file: usize,
+        use_text: impl FnOnce(&[u8]) -> Result<T, String>,
+    ) -> Result<T, String> {
         let stored = match &self.records[file] {
-            Json::Fresh(json) => return Ok(json.as_bytes().to_vec()),
+            Json::Fresh(json) => return use_text(json.as_bytes()),
             Json::Stored(stored) => stored,
         };
         let mut last = self.last.lock().map_err(|e| e.to_string())?;
         if let Some((at, json)) = last.as_ref()
             && *at == file
         {
-            return Ok(json.clone());
+            return use_text(json);
         }
         let json = match self.read(stored) {
             Some(json) => json,
             None => extract_again(&self.again, stored)?.into_bytes(),
         };
-        *last = Some((file, json.clone()));
-        Ok(json)
+        let found = use_text(&json);
+        *last = Some((file, json));
+        found
+    }
+}
+
+impl RecordText for StoredRecords {
+    fn record(&self, file: usize) -> Result<Vec<u8>, String> {
+        self.with_record(file, |json| Ok(json.to_vec()))
     }
 
-    /// Reads only `range` of a stored record. A record whose entry went away is made again
-    /// whole, and kept for the next key of it.
     fn slice(&self, file: usize, range: Range<usize>) -> Result<Vec<u8>, String> {
-        if let Json::Stored(stored) = &self.records[file]
-            && let Some(found) = self.read_range(stored, range.clone())
-        {
-            return Ok(found);
-        }
-        let text = self.record(file)?;
-        text.get(range)
-            .map(<[u8]>::to_vec)
-            .ok_or_else(|| "a record is shorter than its keys say".to_string())
+        self.with_record(file, |json| {
+            json.get(range)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "a record is shorter than its keys say".to_string())
+        })
     }
 }
 
@@ -676,9 +663,7 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
 
 /// Stores the new entries whose key is the id of the bytes they were extracted from, and marks
 /// the read ones as used today. A failed write only costs a later re-extraction or an early
-/// prune, so it never fails the run.
-/// Stores the new entries and marks the found ones used today. True when the new entries
-/// are stored.
+/// prune, so it never fails the run. True when the new entries are stored.
 fn save(
     db: &FactDb,
     it: &Interner,
@@ -699,8 +684,13 @@ fn save(
         .filter_map(|(slot, facts)| {
             let json = slot.fresh.as_ref()?;
             let key = slot.key.as_deref()?;
-            let body = encode_facts(it, facts, facts.line.start);
-            Some((profile_id(slot), key, body, json.as_bytes()))
+            Some(NewEntry {
+                config: profile_id(slot),
+                oid: key,
+                body: encode_facts(it, facts, facts.line.start),
+                record: pack(json.as_bytes()),
+                json_len: json.len(),
+            })
         })
         .collect();
     let stored = db.store(&entries).is_ok();

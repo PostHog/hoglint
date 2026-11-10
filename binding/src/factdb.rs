@@ -4,8 +4,8 @@
 //! - `keys`: (extract config id, blob oid) to the entry id, the day a run last read it
 //!   (`used`), the length of its JSON text and the bytes it holds.
 //! - `facts`: the binary facts the link reads (`hoglint_facts::link::store`).
-//! - `records`: the record JSON text that packs read, apart from the facts so a run that never
-//!   reads it never touches its pages.
+//! - `records`: the record JSON text that packs read, compressed one entry at a time
+//!   (`pack`), apart from the facts so a run that never reads it never touches its pages.
 //!
 //! WAL mode lets runs read while another run writes. Writes skip keys already stored and run in
 //! short transactions, so runs that extract the same blob at once store it once and hold the
@@ -16,15 +16,14 @@
 //! The database is a cache. An entry that is gone is a miss, and an error is the caller's to
 //! log and run past (`blobs.rs`).
 
-use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, params};
-use std::ops::Range;
+use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The table layout. It is part of the database file name (`hoglint/native/factdb.py`), so two
 /// builds with different layouts never share a file; a file with another `user_version` is
 /// emptied and set up again.
-pub const LAYOUT: i64 = 2;
+pub const LAYOUT: i64 = 3;
 /// Entries per write transaction.
 const ROWS_PER_WRITE: usize = 256;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,8 +75,29 @@ pub struct Row {
     pub json_len: usize,
 }
 
-/// An entry to store: (config id, oid, binary facts, JSON text).
-pub type NewEntry<'a> = (&'a str, &'a str, Vec<u8>, &'a [u8]);
+/// An entry to store.
+pub struct NewEntry<'a> {
+    pub config: &'a str,
+    pub oid: &'a str,
+    /// The binary facts.
+    pub body: Vec<u8>,
+    /// The record's JSON text, compressed (`pack`).
+    pub record: Vec<u8>,
+    /// The length of the JSON text.
+    pub json_len: usize,
+}
+
+/// A record's JSON text, compressed for the `records` table.
+pub fn pack(json: &[u8]) -> Vec<u8> {
+    lz4_flex::block::compress(json)
+}
+
+/// The JSON text of a compressed record; None when it does not decompress to `json_len` bytes.
+fn unpack(packed: &[u8], json_len: usize) -> Option<Vec<u8>> {
+    lz4_flex::block::decompress(packed, json_len)
+        .ok()
+        .filter(|json| json.len() == json_len)
+}
 
 pub struct FactDb {
     conn: Connection,
@@ -180,55 +200,15 @@ impl FactDb {
         )
     }
 
-    /// Bytes `range` of an entry's record JSON, read in place in one read transaction; None when
-    /// the entry is gone or its record is not `json_len` bytes long.
-    pub fn read_json_range(
-        &self,
-        config: &str,
-        oid: &str,
-        json_len: usize,
-        range: Range<usize>,
-    ) -> Result<Option<Vec<u8>>> {
-        self.begin_read()?;
-        let found = self.json_range(config, oid, json_len, range);
-        self.end_read()?;
-        found
-    }
-
-    fn json_range(
-        &self,
-        config: &str,
-        oid: &str,
-        json_len: usize,
-        range: Range<usize>,
-    ) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT id FROM keys WHERE config = ?1 AND oid = ?2")?;
-        let Some(id) = stmt
-            .query_row(params![config, oid], |r| r.get::<_, i64>(0))
-            .optional()?
-        else {
-            return Ok(None);
-        };
-        let blob = self
-            .conn
-            .blob_open(MAIN_DB, c"records", c"json", id, true)?;
-        if blob.len() != json_len || range.end > json_len {
-            return Ok(None);
-        }
-        let mut out = vec![0; range.len()];
-        blob.read_at_exact(&mut out, range.start)?;
-        Ok(Some(out))
-    }
-
-    /// The record JSON of an entry, or None when it is gone.
-    pub fn read_json(&self, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
-        self.read(
+    /// The record JSON of an entry; None when the entry is gone, or when its record does not
+    /// decompress to `json_len` bytes: a miss, never a wrong answer.
+    pub fn read_json(&self, config: &str, oid: &str, json_len: usize) -> Result<Option<Vec<u8>>> {
+        let packed = self.read(
             "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.config = ?1 AND k.oid = ?2",
             config,
             oid,
-        )
+        )?;
+        Ok(packed.and_then(|packed| unpack(&packed, json_len)))
     }
 
     /// Stores new entries; a key already stored, or met before in `entries`, keeps its entry.
@@ -247,23 +227,25 @@ impl FactDb {
                 )?;
                 let mut new: Vec<&NewEntry> = Vec::new();
                 for entry in chunk {
-                    let (config, oid, _, _) = entry;
-                    let repeated = new.iter().any(|(c, o, _, _)| c == config && o == oid);
-                    if repeated || exists.exists(params![config, oid])? {
+                    let repeated = new
+                        .iter()
+                        .any(|other| other.config == entry.config && other.oid == entry.oid);
+                    if repeated || exists.exists(params![entry.config, entry.oid])? {
                         continue;
                     }
                     new.push(entry);
                 }
                 let mut ids = Vec::with_capacity(new.len());
-                for (_, _, body, _) in &new {
-                    ids.push(facts.insert([body])?);
+                for entry in &new {
+                    ids.push(facts.insert([&entry.body])?);
                 }
-                for ((_, _, _, json), id) in new.iter().zip(&ids) {
-                    records.execute(params![id, json])?;
+                for (entry, id) in new.iter().zip(&ids) {
+                    records.execute(params![id, entry.record])?;
                 }
-                for ((config, oid, body, json), id) in new.iter().zip(&ids) {
-                    let bytes = (body.len() + json.len()) as i64;
-                    keys.execute(params![config, oid, id, self.today, json.len() as i64, bytes])?;
+                for (entry, id) in new.iter().zip(&ids) {
+                    let bytes = (entry.body.len() + entry.record.len()) as i64;
+                    let json_len = entry.json_len as i64;
+                    keys.execute(params![entry.config, entry.oid, id, self.today, json_len, bytes])?;
                 }
                 Ok(())
             })?;

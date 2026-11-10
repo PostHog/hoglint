@@ -85,7 +85,8 @@ def test_a_working_tree_file_that_changes_during_the_run_is_never_stored(tmp_pat
     assert (imports(again), again.drifted(), counts) == (["Thing"], [], (2, 1))
 
 
-def test_a_record_whose_entry_went_away_is_extracted_again(tmp_path: Path) -> None:
+@pytest.mark.parametrize("damage", ["entry gone, id reused", "record does not decompress"])
+def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, damage: str) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
     database = fact_database(native, tmp_path)
@@ -94,13 +95,16 @@ def test_a_record_whose_entry_went_away_is_extracted_again(tmp_path: Path) -> No
     fresh, _ = link(native, BlobSnapshot.index(repo), None)
     with sqlite3.connect(database.path) as conn:
         newest, length = conn.execute("SELECT id, json_len FROM keys ORDER BY id DESC LIMIT 1").fetchone()
-        record = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
-        FactDatabase.delete(conn, [newest])
-        # Another blob's entry takes the freed id and has a record of the same length.
-        body = conn.execute("SELECT body FROM facts LIMIT 1").fetchone()[0]
-        reused = conn.execute("INSERT INTO facts (body) VALUES (?)", (body,)).lastrowid
-        conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record.replace(b"Thing", b"Other")))
-        conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
+        if damage == "record does not decompress":
+            conn.execute("UPDATE records SET json = ? WHERE id = ?", (b"\xff" * 64, newest))
+        else:
+            record = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
+            FactDatabase.delete(conn, [newest])
+            # Another blob's entry takes the freed id and has a record of the same length.
+            body = conn.execute("SELECT body FROM facts LIMIT 1").fetchone()[0]
+            reused = conn.execute("INSERT INTO facts (body) VALUES (?)", (body,)).lastrowid
+            conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record))
+            conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
     assert counts == (3, 0)
     assert records(run) == records(fresh)
 
