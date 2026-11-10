@@ -699,14 +699,23 @@ scope = "prod"
 
 
 def test_exceptions_allow_and_stale_or_expired_entries_are_reported(tmp_path: Path) -> None:
-    graph = (
-        base_graph()
-        .edge("reference", "core.api", "products.billing.models.Invoice", shape="write", detail="save")
-        .graph
-    )
-    result = run(tmp_path, USE_SHAPE, graph, LedgerFile(), EXCEPTIONS)
-    assert [f.status for f in result.runs["model-crossings"].findings] == [FindingStatus.ALLOWED]
-    assert result.scan == {}
+    builder = base_graph()
+    for module in ("core.api", "core.views", "products.alerts.logic"):
+        builder.edge("reference", module, "products.billing.models.Invoice", shape="write", detail="save")
+    accepted = ("model-crossings", ("products.billing.models.Invoice", "core.views", "write(save)"))
+    ledger = LedgerFile(schema=1, policy="", lines={accepted: 1}, exists=True)
+    result = run(tmp_path, USE_SHAPE, builder.graph, ledger, EXCEPTIONS)
+    table = result.runs["model-crossings"].findings
+    # Each reader of a row's status (a row made, all rows, the rows of one status) agrees.
+    made = [table[row].status for row in range(len(table))]
+    assert sorted(made) == sorted(FindingStatus)
+    assert table.statuses() == made
+    assert {status: table.rows_with(status) for status in FindingStatus} == {
+        status: [row for row, found in enumerate(made) if found is status] for status in FindingStatus
+    }
+    allowed = [f for f in table if f.status is FindingStatus.ALLOWED]
+    assert [f.identity[1] for f in allowed] == ["core.api"]
+    assert accepted in result.scan and not any(key[1][1] == "core.api" for key in result.scan)
     assert [e.index for e in result.exceptions.stale] == [1]
     assert [e.index for e in result.exceptions.expired] == [0]
     assert result.exit_code() == 1  # the stale entry fails; the expired one only reports

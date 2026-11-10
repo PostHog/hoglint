@@ -138,6 +138,7 @@ class FindingTable:
         return self.identities[self.identity_at[row]]
 
     def status(self, row: int) -> FindingStatus:
+        """A row's status, from the marks and its own flags: the one place that decides it."""
         if self.allowed[row]:
             return FindingStatus.ALLOWED
         if self.ledgerable[row] and self.identity_at[row] in self.accepted:
@@ -161,13 +162,7 @@ class FindingTable:
 
     def rows_with(self, status: FindingStatus) -> list[int]:
         """The rows with `status`, read from the marks and flags, with no row made."""
-        at, ledgerable, allowed, accepted = self.identity_at, self.ledgerable, self.allowed, self.accepted
-        rows = range(len(at))
-        if status is FindingStatus.ALLOWED:
-            return [row for row in rows if allowed[row]]
-        if status is FindingStatus.ACCEPTED:
-            return [row for row in rows if not allowed[row] and ledgerable[row] and at[row] in accepted]
-        return [row for row in rows if not allowed[row] and not (ledgerable[row] and at[row] in accepted)]
+        return [row for row in range(len(self.identity_at)) if self.status(row) is status]
 
     def allow(self, row: int) -> None:
         self.allowed[row] = 1
@@ -212,11 +207,7 @@ class FindingTable:
 
     def statuses(self) -> list[FindingStatus]:
         """Every row's status, in order."""
-        at, ledgerable, allowed, accepted = self.identity_at, self.ledgerable, self.allowed, self.accepted
-        new, done, kept = FindingStatus.NEW, FindingStatus.ACCEPTED, FindingStatus.ALLOWED
-        return [
-            kept if allowed[row] else done if ledgerable[row] and at[row] in accepted else new for row in range(len(at))
-        ]
+        return [self.status(row) for row in range(len(self.identity_at))]
 
     def stored_parts(self) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
         """Every row's witness rows, owner module and subjects, in order: what a stored summary
