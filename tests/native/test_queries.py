@@ -10,6 +10,7 @@ import pytest
 import orjson
 from hoglint.core.config import CoreConfig
 from hoglint.native.analysis import LITE_KINDS
+from hoglint.native.build import NativeStore
 from hoglint.native.config import link_config
 from hoglint.native.snapshot import BlobSnapshot
 
@@ -70,6 +71,12 @@ def test_pack_queries_answer_from_the_link(tmp_path: Path) -> None:
     assert uses == [("app/use.py", 4, ("class", [("app.models", "Child")]))]
     oids = dict(zip(link.paths(), link.blob_keys()))
     assert oids == {path: oid for path, (oid, _) in BlobSnapshot.index(tmp_path / "repo").blobs.items()}
+    store = NativeStore(link, link.paths())
+    record = store.records["app/models.py"]
+    decoded = (record["path"], record["status"], record["defs"])
+    store.forget_decoded()
+    assert sorted(dict.keys(record)) == ["path", "status"]
+    assert (record["path"], record["status"], record["defs"]) == decoded
     calls = link.raw(wiring, "calls")
     assert link.release_facts() is True
     assert link.raw(wiring, "calls") == calls

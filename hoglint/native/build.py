@@ -83,6 +83,17 @@ class NativeStore:
             status = statuses[record.file]
             dict.__setitem__(record, "status", ABSENT if status is None else status)
 
+    def forget_decoded(self) -> None:
+        """Drops every record's decoded keys but its path and status. A later read decodes the
+        key again from the record's text, to an equal value."""
+        for record in self.records.values():
+            if dict.__len__(record) <= 2:
+                continue
+            path, status = dict.get(record, "path"), dict.get(record, "status")
+            dict.clear(record)
+            dict.__setitem__(record, "path", path)
+            dict.__setitem__(record, "status", status)
+
 
 def module_values(record: Mapping[str, Any]) -> dict[str, object]:
     """name -> value of its last module-level assignment, as Tables.collect records them."""
@@ -329,15 +340,8 @@ class NativeBuild:
         return found
 
     def forget_decoded(self) -> None:
-        """Drops every record's decoded keys but its path and status, and the bodies over them.
-        A later read decodes the key again from the record's text, to an equal value."""
-        for record in self.store.records.values():
-            if dict.__len__(record) <= 2:
-                continue
-            path, status = dict.get(record, "path"), dict.get(record, "status")
-            dict.clear(record)
-            dict.__setitem__(record, "path", path)
-            dict.__setitem__(record, "status", status)
+        """Drops the decoded records and the bodies over them (`NativeStore.forget_decoded`)."""
+        self.store.forget_decoded()
         self.bodies_cache.clear()
 
     def release(self) -> None:
