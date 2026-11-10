@@ -14,7 +14,6 @@ from hoglint.rules.base import (
     EdgeEnv,
     EdgeRule,
     Endpoint,
-    GroupedSurvivors,
     IncompleteItem,
     Judgment,
     ModuleEnv,
@@ -276,19 +275,6 @@ class CyclePrimitive(EdgeRule):
         """The field whose values are the nodes of the rule's graph."""
         return config.roles.group if spec.view == "packages" else "module"
 
-    def own_reads(self) -> list[Ref]:
-        return [Ref(("src", self.group_field)), Ref(("dst", self.group_field))]
-
-    def droppable(self, env: EdgeEnv) -> bool:
-        """True when `evaluate` neither pairs this environment nor reports it."""
-        selected = self.selection(env)
-        if selected is Truth.FALSE:
-            return True
-        if env.dst.unresolved or selected is Truth.UNKNOWN:
-            return False
-        src, dst = self.group(env, "src"), self.group(env, "dst")
-        return src is None or dst is None or src == dst
-
     def group(self, env: EdgeEnv, root: str) -> str | None:
         """The endpoint's group; cached per endpoint unless the edge's own attributes override labels."""
         endpoint = env.src if root == "src" else env.dst
@@ -316,55 +302,6 @@ class CyclePrimitive(EdgeRule):
         if src is None or dst is None or src == dst:
             return
         pairs.setdefault((src, dst), Pair()).add(env)
-
-    def action(self, env: EdgeEnv) -> tuple[str, str] | str | None:
-        """What `consider` does with an environment, as one value a group of them shares: its
-        pair, "unresolved", "unknown", or None to drop it."""
-        selected = self.selection(env)
-        if selected is Truth.FALSE:
-            return None
-        if env.dst.unresolved:
-            return "unresolved"
-        if selected is Truth.UNKNOWN:
-            return "unknown"
-        src, dst = self.group(env, "src"), self.group(env, "dst")
-        return None if src is None or dst is None or src == dst else (src, dst)
-
-    def env_of(self, edge: Edge) -> EdgeEnv:
-        return self.env(edge, self.ctx.src_endpoint(edge.site), self.ctx.dst_endpoints(edge, self.spec.endpoint)[0])
-
-    def grouped_pairs(self, grouped: GroupedSurvivors) -> dict[tuple[str, str], Pair]:
-        """`consider` over handle arrays: each group decides once from its representative, and
-        an Edge is made only for an edge reported on its own or among a pair's first witnesses."""
-        actions = [self.action(self.env_of(rep)) for rep in grouped.reps]
-        wanted: list[int] = []
-        seen: dict[tuple[str, str], int] = {}
-        for edge_id, group in zip(grouped.ids, grouped.groups):
-            action = actions[group] if group is not None else "alone"
-            if isinstance(action, tuple):
-                if seen.get(action, 0) < WITNESSES:
-                    wanted.append(edge_id)
-                seen[action] = seen.get(action, 0) + 1
-            elif action is not None:
-                wanted.append(edge_id)
-        edges = dict(zip(wanted, grouped.edges(wanted)))
-        pairs: dict[tuple[str, str], Pair] = {}
-        for edge_id, group in zip(grouped.ids, grouped.groups):
-            if group is None:
-                for env in self.edge_envs(edges[edge_id]):
-                    self.consider(env, pairs)
-                continue
-            action = actions[group]
-            if isinstance(action, tuple):
-                pair = pairs.setdefault(action, Pair())
-                pair.count += 1
-                if len(pair.envs) < WITNESSES:
-                    pair.envs.append(self.env_of(edges[edge_id]))
-            elif action == "unresolved":
-                self.on_unresolved(self.env_of(edges[edge_id]))
-            elif action == "unknown":
-                self.incomplete(self.env_of(edges[edge_id]), "selection reads an unknown value")
-        return pairs
 
     def pairs_of(self, rows: list[CycleRow]) -> dict[tuple[str, str], Pair]:
         """`consider` over the rows a rule context found: an Edge is made only for a destination

@@ -6,7 +6,7 @@ from hoglint.config.model import RuleSpec
 from hoglint.index import is_core
 from hoglint.model import Edge, EntityId, Remedy
 from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext
-from hoglint.selectors import Ref, Selector, Truth
+from hoglint.selectors import Selector, Truth
 
 EXPORTED = Selector.parse("dst.exported")
 
@@ -26,9 +26,6 @@ class EntrypointPrimitive(EdgeRule):
         if self.default_allow:
             return EXPORTED.evaluate(env.resolve).negate()
         return super().violation(env)
-
-    def own_reads(self) -> list[Ref]:
-        return EXPORTED.refs() if self.default_allow else []
 
     def remedies(self) -> tuple[Remedy, ...]:
         return super().remedies() or (Remedy("needs-public-api"),)
@@ -57,9 +54,6 @@ class UseShapePrimitive(EdgeRule):
             return EdgeEnv(self.ctx, edge, src, dst)
         shape, _, detail = refined.partition("(")
         return EdgeEnv(self.ctx, edge, src, dst, shape, detail.removesuffix(")"))
-
-    def own_reads(self) -> list[Ref]:
-        return [Ref(("edge", name)) for name in ("shape", "shape_detail", "use", "flow_shape")]
 
     def shape_names(self, env: EdgeEnv) -> set[str]:
         shape = env.shape or env.edge.use or "other"
@@ -117,9 +111,6 @@ class SignaturePrimitive(EdgeRule):
             exposes = self.ctx.index.exposes.get(module, [])
             slots = self.core_slots[module] = {slot_key(other) for _, other in exposes if is_core(other)}
         return slot_key(edge) in slots
-
-    def own_reads(self) -> list[Ref]:
-        return [Ref(("edge", "annotation")), Ref(("dst", "symbol"))]
 
     def decide(self, env: EdgeEnv) -> Judgment:
         if self.selection(env) is Truth.FALSE:

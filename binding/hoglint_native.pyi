@@ -137,43 +137,6 @@ class Link:
         whatever was written for it before, as `NativeSymbols.update` does."""
     def kind_order(self) -> list[str]: ...
     def candidates(self, kinds: list[str], include: int, exclude: int) -> bytes: ...
-    def split_irregular(self, ids: bytes) -> tuple[bytes, bytes]:
-        """(the ids a group may speak for, the irregular ones: several targets, or attrs that
-        override endpoint labels)."""
-    def endpoint_keys(
-        self, ids: bytes, role: str, src_scope: bool, dst_entity: bool
-    ) -> tuple[bytes, bytes, bytes, bytes]: ...
-    def edge_keys(self, ids: bytes, fields: list[str]) -> tuple[bytes, bytes]: ...
-    @staticmethod
-    def group(ids: bytes, layers: list[tuple[bytes, bytes]]) -> tuple[bytes, bytes]: ...
-    @staticmethod
-    def keep_keys(ids: bytes, key_of: bytes, keep: bytes) -> tuple[bytes, bytes]: ...
-    def src_sites(self, ids: bytes) -> list[tuple[str, str, str]]: ...
-    def dst_parts(self, ids: bytes) -> list[tuple[str, str, str | None, str]]: ...
-    def end_bases(self, ids: bytes, end: str) -> tuple[bytes, int, bytes, bytes]:
-        """The stable basis of each id at `end` ("src" or "dst-<role>"): (basis of each id, bases
-        known before the call, representative ids of the bases it added, distinct bases)."""
-    def end_entities(
-        self, ids: bytes, end: str, basis_of: bytes, mask: bytes | None
-    ) -> tuple[tuple[bytes, int, bytes, bytes], bytes]:
-        """The stable entity key of each id at `end` given its basis, as `end_bases` returns
-        keys, and the basis of each key the call added. With `mask`, one byte per basis, a basis
-        whose byte is zero keeps no entity."""
-    def ids_seen_from(self, kind: str, module: str, include: int, exclude: int) -> bytes: ...
-    @staticmethod
-    def keep_classes(ids: bytes, key_of: bytes, class_of: bytes, keep: bytes) -> bytes: ...
-    @staticmethod
-    def key_classes(keys: bytes, size: int, columns: list[bytes]) -> tuple[bytes, bytes]:
-        """The label class of each key in `keys` over code columns (one u32 code per key in
-        each): (class of each key in `size` slots, u32::MAX for a key not in `keys`; each class's
-        codes, column by column)."""
-    @staticmethod
-    def unread(keys: bytes, codes: bytes) -> bytes:
-        """The keys in `keys` whose code is u32::MAX: the values not read yet."""
-    def rule_order(self, ids: bytes, kinds: list[str]) -> bytes:
-        """Positions into `ids` in the order a rule judges its edges: kind by kind as `kinds`
-        lists them, then source module by source module in the order each module's first edge of
-        that kind appears, then graph order."""
     def edges(self, ids: bytes) -> list[EdgeTuple]: ...
     def refine(
         self, ids: bytes, shapes: list[str | None], details: list[str | None], attrs: list[list[tuple[str, str]]]
@@ -220,6 +183,9 @@ class Rules:
         search finds things."""
     def select(self, rule: int) -> bytes:
         """The candidate edges of a rule judged in Python that its selection does not rule out."""
+    def passing(self, kinds: list[str], selector: str) -> bytes:
+        """The edges of `kinds`, kind by kind in graph order, that a selector (its plan tree as
+        JSON) does not make false, each read with its source as both ends."""
     def column(self, field: str) -> list[str]:
         """One field's value (or `registry`, `lifecycle`) on every graph module, rendered."""
 

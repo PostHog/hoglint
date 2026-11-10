@@ -81,9 +81,6 @@ pub struct PackRow {
     pub shape: Sid,
     pub shape_detail: Sid,
     pub attrs: (u32, u32),
-    /// Several targets, or `src.*`/`dst.*` attrs that override its endpoints' labels: no
-    /// group can speak for it.
-    pub irregular: bool,
 }
 
 /// Every edge of a snapshot: core rows (ids 0..rows.len()), then pack rows.
@@ -222,10 +219,6 @@ impl EdgeStore {
             [one] => Some(*one),
             _ => None,
         }
-    }
-
-    pub fn is_irregular(&self, id: u32) -> bool {
-        self.pack_row(id).is_some_and(|pack| pack.irregular)
     }
 
     /// Sets the fields a refinement names (`shape`, `shape_detail` when Some) and appends its

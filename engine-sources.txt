@@ -20,7 +20,6 @@
 
 [facts]
 src/**/*.rs
-!src/link/groups.rs
 !src/link/index.rs
 !src/link/mod.rs
 !src/link/paths.rs

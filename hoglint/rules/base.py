@@ -10,7 +10,7 @@ Unknown semantics per position:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -120,18 +120,6 @@ class Endpoint:
         return f"{self.module}.{head}"
 
 
-@dataclass(frozen=True, slots=True)
-class GroupedSurvivors:
-    """A rule's survivors in judging order as a rule context grouped them
-    (`RuleContext.grouped_survivors`): each one's edge id and group (None for an edge judged
-    alone), a representative edge per group, and the Edges of the ids asked for."""
-
-    ids: list[int]
-    groups: list[int | None]
-    reps: list[Edge]
-    edges: Callable[[list[int]], list[Edge]]
-
-
 class RuleContext:
     """Shared state of one evaluation: config, graph, labels, per-edge ordinals and endpoint caches."""
 
@@ -191,10 +179,6 @@ class RuleContext:
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow] | None:
         """A cycle rule's rows when this context finds them itself, else None."""
-        return None
-
-    def grouped_survivors(self, rule: EdgeRule) -> GroupedSurvivors | None:
-        """The rule's survivors as handle arrays when this context groups edges, else None."""
         return None
 
     def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun | None]]:
@@ -678,26 +662,6 @@ class EdgeRule:
         for edge, _ in self.ctx.judged_edges(self):
             yield from self.edge_envs(edge)
 
-    def read_refs(self) -> list[Ref]:
-        """Every field the rule's decision reads besides the edge's identity: the fields its parsed
-        selectors name, then the ones its primitive's code reads (`own_reads`). Grouped evaluation
-        keys on them; the read audit (`hoglint.rules.audit`) fails a decision that reads more."""
-        out: list[Ref] = []
-        spec = self.spec
-        for selector in (spec.from_, spec.select, spec.deny, spec.allow, spec.require, spec.unless):
-            if selector is not None:
-                out.extend(selector.refs())
-        return out + self.own_reads()
-
-    def own_reads(self) -> list[Ref]:
-        """The fields this primitive's Python code reads in a decision, besides its selectors.
-        `sees` is applied to each edge on its own, so its reads need no declaration."""
-        return []
-
-    def droppable(self, env: EdgeEnv) -> bool:
-        """True when `judge` makes no finding and no incomplete for this environment."""
-        return self.decide(env) is Judgment.CLEAN
-
     def decide(self, env: EdgeEnv) -> Judgment:
         """The rule's judgment of one environment: the decision, and nothing that names the edge."""
         selected = self.selection(env)
@@ -831,16 +795,6 @@ class EdgeRule:
             for env in self.edge_envs(edge):
                 self.judge(env, self.describe(env))
         return self.run
-
-    def reported(self, env: EdgeEnv, judgment: Judgment) -> RuleRun:
-        """What `judgment` reports for `env` with no message, kept out of this rule's run: a
-        group's judgment applied to one of its edges."""
-        saved, self.run = self.run, RuleRun(self.spec)
-        try:
-            self.report(env, judgment, "")
-            return self.run
-        finally:
-            self.run = saved
 
     def recorded(self, envs: Iterable[EdgeEnv]) -> RuleRun:
         """What judging `envs` makes, kept out of this rule's run."""

@@ -127,6 +127,22 @@ impl Rules {
         Ok(ids_bytes(py, &ids))
     }
 
+    /// The edges of `kinds`, kind by kind in graph order, that a selector (its plan tree as JSON)
+    /// does not make false, each read with its source as both ends.
+    fn passing<'py>(
+        &self,
+        py: Python<'py>,
+        kinds: Vec<String>,
+        selector: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        let ids = self
+            .inner
+            .passing(&mut bound.inner, &kinds, selector)
+            .map_err(PyValueError::new_err)?;
+        Ok(ids_bytes(py, &ids))
+    }
+
     /// One field's value (or `registry`, `lifecycle`) on every graph module, rendered as an
     /// identity column, a zone as `name|chain`.
     fn column(&self, py: Python<'_>, field: &str) -> PyResult<Vec<String>> {

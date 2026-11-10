@@ -11,7 +11,7 @@ import pytest
 
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.model import Context, Edge
-from hoglint.native.parity import audit, compare_dumps, read_lines
+from hoglint.native.parity import compare_dumps, read_lines
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 
 from native.test_parity import dumps
@@ -194,8 +194,6 @@ def test_grouped_members_that_differ_outside_their_group_key_judge_alike(
         ["core.a", "products.billing.models.Invoice", "write"],
         ["core.b", "products.billing.models.Invoice", "write"],
     ]
-    (tmp_path / "audit").mkdir()
-    assert audit(tmp_path / "repo", tmp_path / "audit")
 
 
 LABEL_DECISION = """
@@ -224,5 +222,3 @@ def test_a_decision_on_the_label_keeps_two_labels_of_one_kind_apart(
         ["core.a", "products.billing.models.Invoice"],
         ["core.b", "products.billing.models.Invoice"],
     ]
-    (tmp_path / "audit").mkdir()
-    assert audit(tmp_path / "repo", tmp_path / "audit")

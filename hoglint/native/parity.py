@@ -15,9 +15,6 @@ Usage:
       run the native engine N times, each with its own hash seed, thread count and empty fact
       cache (so extraction runs at that thread count too), and compare each to the first
   python -m hoglint.native.parity dump --engine native|python --out <dir> [--repo <root>]
-  python -m hoglint.native.parity audit [--repo <root>]
-      run the native rules with the read audit on every grouped decision; exit 1 when a
-      decision reads a field its rule does not declare
 """
 
 from __future__ import annotations
@@ -42,9 +39,7 @@ from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import Finding, Graph
 from hoglint.native.normal import FIELDS, Row, edge_row
-from hoglint.native.rules import NativeRuleContext
 from hoglint.native.source import ENGINES, batch_mode, graph_source
-from hoglint.rules.audit import ReadAudit
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
@@ -274,27 +269,6 @@ def determinism_env(work: Path, run: int) -> dict[str, str]:
     }
 
 
-def audit(repo: Path, work: Path) -> bool:
-    """The native rules over `repo` with every grouped decision audited for undeclared reads."""
-    batch_mode("native")
-    config = load_config(repo, repo / CONFIG_FILE)
-    graph = graph_source("native", work).build(repo, config)
-    read_audit = ReadAudit()
-    NativeRuleContext.audit = read_audit
-    try:
-        with read_audit.installed():
-            Engine(config, graph, repo).run_rules()
-    finally:
-        NativeRuleContext.audit = None
-    for failure in read_audit.failures[:20]:
-        sys.stdout.write(failure.render() + "\n")
-    rules = sorted({failure.rule for failure in read_audit.failures})
-    sys.stdout.write(
-        f"read audit: {read_audit.checked} decisions, {len(read_audit.failures)} undeclared reads in {len(rules)} rules {rules}\n"
-    )
-    return not read_audit.failures
-
-
 def report(title: str, diffs: list[RowDiff], left: Path, right: Path) -> bool:
     sys.stdout.write(f"{title}\n")
     sys.stdout.write("\n".join(diff.render() for diff in diffs) + "\n")
@@ -305,7 +279,7 @@ def report(title: str, diffs: list[RowDiff], left: Path, right: Path) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", nargs="?", choices=("compare", "dump", "audit"), default="compare")
+    parser.add_argument("command", nargs="?", choices=("compare", "dump"), default="compare")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--work", type=Path)
     parser.add_argument("--engine", choices=ENGINES, default="native")
@@ -315,8 +289,6 @@ def main() -> None:
     repo = args.repo.resolve()
     work = args.work or Path(tempfile.mkdtemp(prefix="hoglint-native-parity-"))
     work.mkdir(parents=True, exist_ok=True)
-    if args.command == "audit":
-        sys.exit(0 if audit(repo, work) else 1)
     if args.command == "dump":
         Dump(repo, args.engine, args.out or work / args.engine, work).run()
         return

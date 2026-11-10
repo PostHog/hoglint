@@ -6,7 +6,6 @@
 //! fact cache keyed on it stay valid when only the link changes.
 
 pub mod facts;
-pub mod groups;
 pub mod index;
 pub mod intern;
 pub mod paths;
@@ -232,7 +231,6 @@ pub struct Link {
     pub settings: Producing,
     pub edges: EdgeStore,
     pub index: EdgeIndex,
-    pub endpoints: groups::EndpointTables,
     pub symbols: Symbols,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
@@ -345,7 +343,6 @@ impl Link {
             settings,
             edges,
             index: EdgeIndex::default(),
-            endpoints: groups::EndpointTables::default(),
             symbols,
             first_party,
             timings,
@@ -434,10 +431,6 @@ impl Link {
             self.edges.via.extend(new.via.iter().copied());
             let attrs = (self.edges.attrs.len() as u32, new.attrs.len() as u32);
             self.edges.attrs.extend(new.attrs.iter().copied());
-            let overrides = new.attrs.iter().any(|&(key, _)| {
-                let key = self.core.it.s(key);
-                key.starts_with("src.") || key.starts_with("dst.")
-            });
             self.edges.pack.push(PackRow {
                 kind: new.kind,
                 producer: new.producer,
@@ -456,7 +449,6 @@ impl Link {
                 shape: new.shape,
                 shape_detail: new.shape_detail,
                 attrs,
-                irregular: overrides || new.targets.len() > 1,
             });
         }
         self.index.forget();
@@ -663,7 +655,6 @@ impl Link {
             heap::vec(&edges.via) + heap::vec(&edges.attrs),
         ));
         out.push(("edges.index", self.index.heap()));
-        out.push(("edges.endpoint_tables", self.endpoints.heap()));
         let symbols = heap::vec(&self.symbols.order) + heap::map(&self.symbols.at);
         out.push(("symbols", symbols));
         out

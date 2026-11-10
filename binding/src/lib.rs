@@ -8,7 +8,7 @@
 //! Each concern adds its own `#[pymethods] impl Link` block in its own module:
 //! - `link`: building a link, the snapshot's records and the edges as tuples;
 //! - `queries`: edge ids by kind, origin, source module and spelling, for packs;
-//! - `rules`: candidate selection and grouping, for rule evaluation;
+//! - `rules`: candidate selection, for the proofs and tools that list a rule's edges;
 //! - `evaluator`: the `Rules` of one run: labels, and edge rules judged per edge;
 //! - `resolver`: name resolution and class ancestry, for packs.
 

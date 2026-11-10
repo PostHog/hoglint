@@ -6,6 +6,7 @@
 //! edges in parallel chunks; the output is the same at any thread count. The Python engine stays
 //! the meaning: each function here names the Python code it follows.
 
+pub mod edges;
 pub mod env;
 pub mod glob;
 pub mod labels;
@@ -684,6 +685,47 @@ impl Rules {
             ));
         }
         Ok(rule)
+    }
+
+    /// The edges of `kinds`, kind by kind in graph order, that `selector` does not make false,
+    /// each read with its source as both ends (`RuleContext.edges_passing`).
+    pub fn passing(
+        &self,
+        link: &mut Link,
+        kinds: &[String],
+        selector: &str,
+    ) -> Result<Vec<u32>, String> {
+        let tree: plan::NodePlan = serde_json::from_str(selector)
+            .map_err(|error| format!("a selector that does not parse: {error}"))?;
+        let names: Vec<String> = self
+            .labels
+            .fields
+            .iter()
+            .map(|field| field.name.clone())
+            .collect();
+        let node = Compiler {
+            fields: &names,
+            it: &link.core.it,
+            reading: Reading::Edge,
+        }
+        .node(&tree)?;
+        let mut sids: Vec<Sid> = Vec::new();
+        for kind in kinds.iter().filter_map(|kind| link.kind_sid(kind)) {
+            if !sids.contains(&kind) {
+                sids.push(kind);
+            }
+        }
+        let mut out = Vec::new();
+        for kind in sids {
+            let ids = link.ids_of_kind(kind);
+            out.extend(self.over_candidates(link, &ids, |cx, id, _, kept| {
+                let src = cx.src_endpoint(id);
+                if evaluate(&node, &Env::new(*cx, Some(id), src, src)) != Truth::False {
+                    kept.push(id);
+                }
+            }));
+        }
+        Ok(out)
     }
 
     /// One field's value on every graph module, rendered as `render_value` does, with zones as
