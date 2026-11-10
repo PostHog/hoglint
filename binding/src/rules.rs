@@ -311,6 +311,55 @@ impl Link {
         Ok((stable_bytes(py, &stable), ids_bytes(py, &bases)))
     }
 
+    /// Positions into `ids` in the order a rule judges its edges: kind by kind as `kinds` lists
+    /// them, then source module by source module in the order each module's first edge of that
+    /// kind appears, then graph order.
+    fn rule_order<'py>(
+        &mut self,
+        py: Python<'py>,
+        ids: &[u8],
+        kinds: Vec<String>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let ids = ids_from(ids)?;
+        let codes: Vec<Sid> = kinds
+            .iter()
+            .filter_map(|kind| self.inner.kind_sid(kind))
+            .collect();
+        let order = self
+            .inner
+            .rule_order(&ids, &codes)
+            .ok_or_else(|| PyValueError::new_err("an edge whose kind is not among the kinds"))?;
+        Ok(ids_bytes(py, &order))
+    }
+
+    /// The label class of each key in `keys` over code columns, one u32 code per key in each:
+    /// (class of each key in `size` slots, u32::MAX for a key not in `keys`; each class's
+    /// codes, column by column).
+    #[staticmethod]
+    fn key_classes<'py>(
+        py: Python<'py>,
+        keys: &[u8],
+        size: usize,
+        columns: Vec<Bound<'py, PyBytes>>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        let keys = ids_from(keys)?;
+        let columns: Vec<Vec<u32>> = columns
+            .iter()
+            .map(|column| ids_from(column.as_bytes()))
+            .collect::<PyResult<_>>()?;
+        let (class_of, rows) = CoreLink::key_classes(&keys, size, &columns)
+            .ok_or_else(|| PyValueError::new_err("a key past a column's end or `size`"))?;
+        Ok((ids_bytes(py, &class_of), ids_bytes(py, &rows)))
+    }
+
+    /// The keys in `keys` whose code in `codes` is u32::MAX: the values not read yet.
+    #[staticmethod]
+    fn unread<'py>(py: Python<'py>, keys: &[u8], codes: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+        let out = CoreLink::unread(&ids_from(keys)?, &ids_from(codes)?)
+            .ok_or_else(|| PyValueError::new_err("a key past the codes' end"))?;
+        Ok(ids_bytes(py, &out))
+    }
+
     /// The ids whose key's class keeps: `class_of` holds a class per key, `keep` a byte per
     /// class.
     #[staticmethod]

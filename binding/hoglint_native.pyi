@@ -157,6 +157,18 @@ class Link:
     def ids_seen_from(self, kind: str, module: str, include: int, exclude: int) -> bytes: ...
     @staticmethod
     def keep_classes(ids: bytes, key_of: bytes, class_of: bytes, keep: bytes) -> bytes: ...
+    @staticmethod
+    def key_classes(keys: bytes, size: int, columns: list[bytes]) -> tuple[bytes, bytes]:
+        """The label class of each key in `keys` over code columns (one u32 code per key in
+        each): (class of each key in `size` slots, u32::MAX for a key not in `keys`; each class's
+        codes, column by column)."""
+    @staticmethod
+    def unread(keys: bytes, codes: bytes) -> bytes:
+        """The keys in `keys` whose code is u32::MAX: the values not read yet."""
+    def rule_order(self, ids: bytes, kinds: list[str]) -> bytes:
+        """Positions into `ids` in the order a rule judges its edges: kind by kind as `kinds`
+        lists them, then source module by source module in the order each module's first edge of
+        that kind appears, then graph order."""
     def edges(self, ids: bytes) -> list[EdgeTuple]: ...
     def refine(
         self, ids: bytes, shapes: list[str | None], details: list[str | None], attrs: list[list[tuple[str, str]]]

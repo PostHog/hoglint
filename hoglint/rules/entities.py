@@ -291,7 +291,7 @@ class CoveragePrimitive(EntityRule):
             self.ctx, (Selector(selector.source, rest),) if selector is not None and rest is not None else ()
         )
         truths: dict[tuple[str, frozenset[str]], Truth] = {}
-        for edge in self.ctx.edges_of(tuple(sorted(kinds or ()))):
+        for edge in self.ctx.edges_passing(tuple(sorted(kinds or ())), by_edge):
             edge_truth = self.kind_and_context_truth(by_edge, edge, truths) if by_edge is not None else Truth.TRUE
             if edge_truth is Truth.FALSE:
                 continue

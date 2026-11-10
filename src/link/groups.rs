@@ -118,6 +118,8 @@ const DST_INTERNAL: u32 = u32::MAX;
 const DST_EXTERNAL: u32 = u32::MAX - 1;
 /// The entity slot of a masked entity key: no interned string has this id.
 const NO_ENTITY: Sid = u32::MAX;
+/// A key with no class, or a value not read yet.
+pub const NO_CLASS: u32 = u32::MAX;
 
 /// The dst endpoint of an edge at module or entity granularity: (module or a marker for an
 /// unresolved endpoint, external flag, entity or EMPTY).
@@ -328,6 +330,71 @@ impl Link {
         keys.iter()
             .map(|&key| table.keys.get(key as usize).map(|k| k[0]))
             .collect()
+    }
+
+    /// Positions into `ids` in the order a rule judges its edges: kind by kind as `kinds` lists
+    /// them, then source module by source module in the order each module's first edge of that
+    /// kind appears, then graph order. None when an id's kind is not in `kinds`.
+    pub fn rule_order(&mut self, ids: &[u32], kinds: &[Sid]) -> Option<Vec<u32>> {
+        let rank: FxHashMap<Sid, u32> = kinds
+            .iter()
+            .enumerate()
+            .map(|(at, &kind)| (kind, at as u32))
+            .collect();
+        let mut first: FxHashMap<(Sid, Sid), u32> = FxHashMap::default();
+        let mut keyed = Vec::with_capacity(ids.len());
+        for (at, &id) in ids.iter().enumerate() {
+            let kind = self.edges.kind_of(id);
+            let module = self.module_of_edge(id);
+            let start = match first.get(&(kind, module)) {
+                Some(&start) => start,
+                None => {
+                    let start = self.ids_from(kind, module).first().copied().unwrap_or(id);
+                    first.insert((kind, module), start);
+                    start
+                }
+            };
+            keyed.push((*rank.get(&kind)?, start, id, at as u32));
+        }
+        keyed.sort_unstable();
+        Some(keyed.into_iter().map(|(_, _, _, at)| at).collect())
+    }
+
+    /// The label class of each key in `keys` over code columns (one code per key in each, a
+    /// code naming a value): (class of each key, `size` slots, NO_CLASS for a key not in
+    /// `keys`; each class's codes, column by column). None when a column is short.
+    pub fn key_classes(
+        keys: &[u32],
+        size: usize,
+        columns: &[Vec<u32>],
+    ) -> Option<(Vec<u32>, Vec<u32>)> {
+        let mut class_of = vec![NO_CLASS; size];
+        let mut index: FxHashMap<Vec<u32>, u32> = FxHashMap::default();
+        let mut rows = Vec::new();
+        for &key in keys {
+            let codes: Vec<u32> = columns
+                .iter()
+                .map(|column| column.get(key as usize).copied())
+                .collect::<Option<_>>()?;
+            let next = index.len() as u32;
+            let class = *index.entry(codes).or_insert_with_key(|codes| {
+                rows.extend_from_slice(codes);
+                next
+            });
+            *class_of.get_mut(key as usize)? = class;
+        }
+        Some((class_of, rows))
+    }
+
+    /// The keys in `keys` whose code in `codes` is NO_CLASS: the values Python has not read.
+    pub fn unread(keys: &[u32], codes: &[u32]) -> Option<Vec<u32>> {
+        let mut out = Vec::new();
+        for &key in keys {
+            if *codes.get(key as usize)? == NO_CLASS {
+                out.push(key);
+            }
+        }
+        Some(out)
     }
 
     /// The ids whose key's class keeps: `class_of` maps a key to its class, `keep` holds one

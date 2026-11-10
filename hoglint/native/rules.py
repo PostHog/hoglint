@@ -35,6 +35,7 @@ from hoglint.rules.base import (
     Judgment,
     RuleContext,
     RuleRun,
+    column_ref,
     conjuncts,
     joined,
     read_endpoint,
@@ -175,28 +176,27 @@ class Rejudged:
 
 
 @dataclass(frozen=False, slots=True)
+class Codes:
+    """The values of one column, each named by a code: what the link groups keys by."""
+
+    values: list[Any] = field(default_factory=list)
+    index: dict[Any, int] = field(default_factory=dict)
+
+    def code(self, value: Any) -> int:
+        found = self.index.get(value)
+        if found is None:
+            found = self.index[value] = len(self.values)
+            self.values.append(value)
+        return found
+
+
+@dataclass(frozen=True, slots=True)
 class Classes:
-    """The label class of the keys of one endpoint table that rules met, for one list of columns:
-    `rows` holds each class's values, `class_of` each key's class (NO_CLASS until a rule meets
-    the key)."""
+    """The label classes of some keys over some columns: `class_of` holds each key slot's class
+    as u32 bytes (NO_CLASS for a key not asked about), `rows` each class's values."""
 
-    class_of: array[int] = field(default_factory=lambda: array("I"))
-    rows: list[tuple[Any, ...]] = field(default_factory=list)
-    index: dict[tuple[Any, ...], int] = field(default_factory=dict)
-
-    def fill(self, keys: array[int], size: int, columns: list[list[Any]]) -> None:
-        if len(self.class_of) < size:
-            self.class_of.extend(array("I", [NO_CLASS]) * (size - len(self.class_of)))
-        class_of = self.class_of
-        for key in keys:
-            if class_of[key] != NO_CLASS:
-                continue
-            values = tuple(column[key] for column in columns)
-            found = self.index.get(values)
-            if found is None:
-                found = self.index[values] = len(self.rows)
-                self.rows.append(values)
-            class_of[key] = found
+    class_of: bytes
+    rows: list[tuple[Any, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,8 +219,27 @@ class EndKeys:
     distinct: array[int]
 
 
-UNREAD = object()
 BASIS = "basis"
+NO_GROUP = 0xFFFFFFFF
+
+
+@dataclass(frozen=True, slots=True)
+class Survivors:
+    """A rule's edges that can make output: `ids`, and for each the group it was judged in
+    (`group_of`, NO_GROUP for an edge judged alone). `judgments` holds each group's shared
+    judgment, None when its edges are judged one by one."""
+
+    ids: array[int]
+    group_of: array[int]
+    judgments: list[Judgment | None]
+
+    @staticmethod
+    def alone(ids: array[int]) -> Survivors:
+        return Survivors(ids, array("I", [NO_GROUP]) * len(ids), [])
+
+    def judgment(self, at: int) -> Judgment | None:
+        group = self.group_of[at]
+        return None if group == NO_GROUP else self.judgments[group]
 
 
 class EndpointClasses:
@@ -242,8 +261,8 @@ class EndpointClasses:
         self.core = ctx.native.native.core
         self.endpoints: dict[str, list[Endpoint]] = {BASIS: []}
         self.entity_bases: dict[str, array[int]] = {}
-        self.columns: dict[tuple[str, str], list[Any]] = {}
-        self.classes: dict[tuple[str, tuple[str, ...]], Classes] = {}
+        self.codes: dict[tuple[str, str], array[int]] = {}
+        self.values: dict[str, Codes] = {}
         self.labeler = ctx.labeler
         self.exports = list(ctx.config.exports)
         self.by_class = any(spec.subclass_of for spec in ctx.config.exports.values())
@@ -289,8 +308,10 @@ class EndpointClasses:
 
     def export_mask(self, bases: EndKeys) -> bytes:
         """One byte per basis: 1 where the destination's entity decides its export membership."""
-        column = self.column(BASIS, bases.distinct, Column("dst.reads-symbol", self.reads_symbol, False))
-        return bytes(value is True for value in column)
+        spec = Column("dst.reads-symbol", self.reads_symbol, False)
+        codes = self.column(BASIS, bases.distinct, spec)
+        values = self.values[spec.name].values
+        return bytes(code != NO_CLASS and values[code] is True for code in codes)
 
     def exports_of(self, endpoint: Endpoint) -> tuple[Any, ...]:
         """What `dst.exported` reads of the destination: whether it is external or outside the
@@ -301,39 +322,46 @@ class EndpointClasses:
             values.extend(self.labeler.export_member((name, path, endpoint.symbol)) for name in self.exports)
         return tuple(values)
 
-    def column(self, level: str, keys: array[int], spec: Column) -> list[Any]:
-        """Column `spec` at `level`, with every key in `keys` filled. A module-level column at an
-        entity level takes each key's value from its basis."""
-        column = self.columns.setdefault((level, spec.name), [])
+    def column(self, level: str, keys: array[int], spec: Column) -> array[int]:
+        """The codes of column `spec` at `level`, one per key (NO_CLASS for a key not read yet),
+        with every key in `keys` read. A module-level column at an entity level takes each key's
+        value from its basis."""
+        codes = self.codes.setdefault((level, spec.name), array("I"))
         size = len(self.endpoints[level])
-        if len(column) < size:
-            column.extend([UNREAD] * (size - len(column)))
-        missing = [key for key in keys if column[key] is UNREAD]
+        if len(codes) < size:
+            codes.extend(array("I", [NO_CLASS]) * (size - len(codes)))
+        missing = array("I", type(self.link).unread(keys.tobytes(), codes.tobytes()))
         if not missing:
-            return column
+            return codes
+        table = self.values.setdefault(spec.name, Codes())
         if level == BASIS or spec.entity:
             endpoints, read = self.endpoints[level], spec.read
             for key in missing:
-                column[key] = read(endpoints[key])
-            return column
+                codes[key] = table.code(read(endpoints[key]))
+            return codes
         bases = self.entity_bases[level]
-        values = self.column(BASIS, array("I", sorted({bases[key] for key in missing})), spec)
+        basis_codes = self.column(BASIS, array("I", sorted({bases[key] for key in missing})), spec)
         for key in missing:
-            column[key] = values[bases[key]]
-        return column
+            codes[key] = basis_codes[bases[key]]
+        return codes
 
     def of(self, keys: EndKeys, specs: list[Column]) -> Classes:
-        """Classes of the keys at `keys.level` over the columns `specs`, with every key in
-        `keys` filled."""
+        """Classes of `keys` over the columns `specs`: the link groups the keys by their codes."""
         if keys.level == BASIS and any(spec.entity for spec in specs):
             raise RuntimeError(f"an entity column among {[spec.name for spec in specs]} at the basis level")
-        names = tuple(spec.name for spec in specs)
-        classes = self.classes.get((keys.level, names))
-        if classes is None:
-            classes = self.classes[(keys.level, names)] = Classes()
-        columns = [self.column(keys.level, keys.distinct, spec) for spec in specs]
-        classes.fill(keys.distinct, len(self.endpoints[keys.level]), columns)
-        return classes
+        columns = [self.column(keys.level, keys.distinct, spec).tobytes() for spec in specs]
+        size = len(self.endpoints[keys.level])
+        class_of, raw = type(self.link).key_classes(keys.distinct.tobytes(), size, columns)
+        if not specs:
+            return Classes(class_of, [()] if keys.distinct else [])
+        codes = array("I", raw)
+        tables = [self.values[spec.name].values for spec in specs]
+        width = len(specs)
+        rows = [
+            tuple(table[codes[at + offset]] for offset, table in enumerate(tables))
+            for at in range(0, len(codes), width)
+        ]
+        return Classes(class_of, rows)
 
 
 class Grouper:
@@ -347,7 +375,6 @@ class Grouper:
         self.core = ctx.native.native.core
         self.tables = ctx.endpoint_classes
         self.role = rule.spec.endpoint
-        self.judgments: dict[int, Judgment] = {}
 
     def env(self, edge: Edge) -> EdgeEnv:
         dst = self.ctx.dst_endpoints(edge, self.role)[0]
@@ -375,7 +402,7 @@ class Grouper:
         return array("I", kept)
 
     def keep_classes(self, ids: array[int], key_of: bytes, classes: Classes, keep: list[bool]) -> array[int]:
-        kept = type(self.link).keep_classes(ids.tobytes(), key_of, classes.class_of.tobytes(), bytes(keep))
+        kept = type(self.link).keep_classes(ids.tobytes(), key_of, classes.class_of, bytes(keep))
         return array("I", kept)
 
     def field_column(self, root: str, name: str) -> Column:
@@ -445,8 +472,8 @@ class Grouper:
         edge_key, edge_reps = self.link.edge_keys(raw, sorted(reads.edge))
         edge_classes = array("I", range(len(array("I", edge_reps)))).tobytes()
         layers = [
-            (src.key_of, src_classes.class_of.tobytes()),
-            (dst.key_of, dst_classes.class_of.tobytes()),
+            (src.key_of, src_classes.class_of),
+            (dst.key_of, dst_classes.class_of),
             (edge_key, edge_classes),
         ]
         return type(self.link).group(raw, layers)
@@ -460,7 +487,7 @@ class Grouper:
         run = self.rule.reported(env, judgment)
         return True, judgment if len(run.findings) == 1 and not run.incomplete else None
 
-    def decide(self, ids: array[int], reads: Reads, record: bool) -> array[int]:
+    def decide(self, ids: array[int], reads: Reads, record: bool) -> Survivors:
         """Drops the edges whose group the rule's whole decision drops. With `record`, a group
         whose judgment makes one finding gives that judgment to every edge left in it."""
         group_of, reps = self.layers(ids, reads)
@@ -474,11 +501,7 @@ class Grouper:
             keep.append(kept)
             judgments.append(judgment)
         kept_ids, groups = type(self.link).keep_keys(ids.tobytes(), group_of, bytes(keep))
-        for edge_id, group in zip(array("I", kept_ids), array("I", groups)):
-            judgment = judgments[group]
-            if judgment is not None:
-                self.judgments[edge_id] = judgment
-        return array("I", kept_ids)
+        return Survivors(array("I", kept_ids), array("I", groups), judgments)
 
     def audit(self, edges: list[Edge]) -> None:
         """In audit mode, checks the decision of each representative for undeclared reads."""
@@ -486,7 +509,7 @@ class Grouper:
         if audit is not None:
             audit_rule(audit, self.rule, edges)
 
-    def survivors(self) -> array[int]:
+    def survivors(self) -> Survivors:
         """The edges, core and pack alike, that can make output for the rule. An irregular pack
         edge (several targets, or attrs that override its endpoints' labels) is never grouped:
         it survives, and the rule judges it alone."""
@@ -496,12 +519,13 @@ class Grouper:
         ids = array("I", self.link.candidates(list(rule.kinds()), include, exclude))
         reads = Reads.of(rule.read_refs(), self.ctx.config)
         if reads is None or self.role not in GROUPED_ROLES or not ids:
-            return ids
+            return Survivors.alone(ids)
         regular, irregular = self.link.split_irregular(ids.tobytes())
         kept = self.grouped(array("I", regular), reads)
-        return array("I", sorted([*kept, *array("I", irregular)]))
+        alone = array("I", irregular)
+        return Survivors(kept.ids + alone, kept.group_of + array("I", [NO_GROUP]) * len(alone), kept.judgments)
 
-    def grouped(self, ids: array[int], reads: Reads) -> array[int]:
+    def grouped(self, ids: array[int], reads: Reads) -> Survivors:
         """The edges of `ids` whose group can make output; see the module doc."""
         rule = self.rule
         parts = conjuncts(rule.selectors())
@@ -513,12 +537,102 @@ class Grouper:
                 if part_reads is not None:
                     ids = self.stage(ids, node, part_reads)
         if not ids:
-            return ids
+            return Survivors.alone(ids)
         return self.decide(ids, reads, type(rule).evaluate is EdgeRule.evaluate)
 
     def part_roots(self, node: Node) -> set[str]:
         reads = Reads.of(refs(node), self.ctx.config)
         return reads.roots() if reads is not None else {"edge", "src", "dst"}
+
+
+JUDGMENTS = list(Judgment)
+
+
+class FindingClasses:
+    """The findings of a rule's grouped edges, made once per class of everything a finding
+    names besides its detail: identity, owner, subjects and flags. A class holds the edges with
+    the same source and destination keys at the level the identity reads, the same identity edge
+    fields, and the same judgment; the link groups them. Each edge's finding is its class's, with
+    the edge's own detail and witness."""
+
+    def __init__(self, ctx: NativeRuleContext, grouper: Grouper, survivors: Survivors) -> None:
+        self.ctx = ctx
+        self.rule = grouper.rule
+        self.made: dict[int, Finding] = {}
+        self.class_of = self.classes(grouper, survivors)
+
+    def edge_fields(self) -> list[str] | None:
+        """The edge fields a finding's identity reads, with the ones the primitive's environment
+        reads to refine the shape; None when one has no key."""
+        names: set[str] = set()
+        for column in self.rule.spec.identity:
+            ref = column_ref(column)
+            if len(ref.path) != 2:
+                continue
+            root, name = ref.path
+            if name == "ordinal" or (root == "src" and name == "exported"):
+                return None
+            if root == "edge":
+                names.add(name)
+            elif name == "context":
+                names.add("context")
+        if names & {"label", "shape", "shape_detail"}:
+            names.update({"label", "shape", "shape_detail"})
+            names.update(ref.path[1] for ref in self.rule.own_reads() if len(ref.path) == 2 and ref.path[0] == "edge")
+        return sorted(names)
+
+    def classes(self, grouper: Grouper, survivors: Survivors) -> array[int] | None:
+        ids = survivors.ids
+        fields = self.edge_fields()
+        if fields is None or all(judgment is None for judgment in survivors.judgments) or not ids:
+            return None
+        refs_read = [column_ref(column) for column in self.rule.spec.identity]
+        reads = Reads.of(refs_read, self.ctx.config)
+        if reads is None:
+            return None
+        labeler = self.ctx.labeler
+        tables = self.ctx.endpoint_classes
+        src = tables.bases(ids, "src")
+        if not all(labeler.module_level(Ref(("src", name))) for name in reads.src):
+            src = tables.entities(ids, "src", src, False)
+        end = f"dst-{grouper.role}"
+        dst = tables.bases(ids, end)
+        symbol_level = not all(labeler.module_level(Ref(("dst", name))) for name in reads.dst if name != "unresolved")
+        if symbol_level or reads.exported:
+            dst = tables.entities(ids, end, dst, False)
+        edge_key, edge_reps = self.ctx.native.native.link.edge_keys(ids.tobytes(), fields)
+        codes = [JUDGMENTS.index(j) if j is not None else len(JUDGMENTS) for j in survivors.judgments]
+        groups = array("I", (len(codes) if group == NO_GROUP else group for group in survivors.group_of))
+        layers = [
+            (src.key_of, array("I", range(len(tables.endpoints[src.level]))).tobytes()),
+            (dst.key_of, array("I", range(len(tables.endpoints[dst.level]))).tobytes()),
+            (edge_key, array("I", range(len(edge_reps) // 4)).tobytes()),
+            (groups.tobytes(), array("I", [*codes, len(JUDGMENTS)]).tobytes()),
+        ]
+        class_of, _ = type(self.ctx.native.native.link).group(ids.tobytes(), layers)
+        return array("I", class_of)
+
+    def finding(self, at: int, edge: Edge, judgment: Judgment) -> Finding:
+        """The finding of the `at`-th survivor, `edge`, whose group's judgment is `judgment`."""
+        rule = self.rule
+        detail = Rejudged(rule, edge, judgment)
+        made = self.made.get(self.class_of[at]) if self.class_of is not None else None
+        if made is None:
+            env = rule.env(edge, self.ctx.src_endpoint(edge.site), self.ctx.dst_endpoints(edge, rule.spec.endpoint)[0])
+            made = rule.finding_of(env, judgment, detail)
+            if self.class_of is not None:
+                self.made[self.class_of[at]] = made
+            return made
+        return Finding(
+            rule=made.rule,
+            identity=made.identity,
+            detail=detail,
+            owner=made.owner,
+            subjects=made.subjects,
+            ledgerable=made.ledgerable,
+            unknown=made.unknown,
+            witness=edge if made.witness is not None else None,
+        )
 
 
 class NativeRuleContext(RuleContext):
@@ -534,7 +648,6 @@ class NativeRuleContext(RuleContext):
         assert isinstance(index, NativeGraphIndex)
         self.native = index
         self.endpoint_classes = EndpointClasses(self)
-        self.judgments: dict[EdgeRule, dict[int, Judgment]] = {}
         self.reach_tables: dict[EdgeRule, dict[str, list[Hop]]] = {}
 
     def edge_of(self, edge: Edge | int) -> Edge:
@@ -584,35 +697,53 @@ class NativeRuleContext(RuleContext):
                 out.setdefault(module, []).extend(hops)
         return out
 
-    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
-        """The finding of a grouped edge: its group's judgment, with the identity, owner and
-        subjects of the edge's own env. The detail (message, site, witnesses, remedies) is made
-        when something reads it."""
-        judgment = self.judgments.get(rule, {}).get(edge.handle)
-        if judgment is None:
-            return None
-        env = rule.env(edge, self.src_endpoint(edge.site), self.dst_endpoints(edge, rule.spec.endpoint)[0])
-        return rule.finding_of(env, judgment, Rejudged(rule, edge, judgment))
-
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
         return list(dict.fromkeys(kinds)) if kinds else self.native.kind_order()
+
+    def edges_passing(self, kinds: tuple[str, ...], node: Node | None) -> list[Edge]:
+        """`node`, which reads only an edge's kind and contexts, judged once per kind and context
+        bits in the link; only the edges it does not make false become Edges."""
+        if node is None or not kinds:
+            return super().edges_passing(kinds, node)
+        link = self.native.native.link
+        core = self.native.native.core
+        out: list[Edge] = []
+        for kind in dict.fromkeys(kinds):
+            ids = link.ids_of_kind(kind)
+            if not ids:
+                continue
+            key_of, reps = link.edge_keys(ids, ["context"])
+            keep = []
+            for edge in core.get(array("I", reps)):
+                src = self.src_endpoint(edge.site)
+                keep.append(evaluate(node, EdgeEnv(self, edge, src, src).resolve) is not Truth.FALSE)
+            kept, _ = type(link).keep_keys(ids, key_of, bytes(keep))
+            out.extend(core.get(array("I", kept)))
+        return out
 
     def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
         return sorted({module for kind in self.kinds_or_all(kinds) for module in self.native.modules_of(kind)})
 
-    def rule_groups(self, rule: EdgeRule) -> Iterator[tuple[str, EdgeGroup]]:
+    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, Finding | None]]:
+        """The rule's survivors as handle arrays, in the order the rule judges edges. A grouped
+        edge comes with its finding, made from its class; any other comes alone, to be judged.
+        Edges are made once, as the findings' witnesses."""
         grouper = Grouper(self, rule)
-        ids = grouper.survivors()
-        survivors = self.native.native.core.get(ids)
-        self.judgments[rule] = grouper.judgments
-        by_place: dict[tuple[str, str], list[Edge]] = {}
-        for edge in survivors:
-            by_place.setdefault((edge.kind, edge.site.module), []).append(edge)
-        for kind in self.kinds_or_all(rule.kinds()):
-            for module in self.native.modules_of(kind):
-                edges = by_place.get((kind, module))
-                if edges:
-                    yield module, self.native.group(kind, module, edges)
+        survivors = grouper.survivors()
+        link = self.native.native.link
+        order = array("I", link.rule_order(survivors.ids.tobytes(), self.kinds_or_all(rule.kinds())))
+        edges = self.native.native.core.get(array("I", (survivors.ids[at] for at in order)))
+        findings = FindingClasses(self, grouper, survivors)
+        sees = type(rule).sees is not EdgeRule.sees
+        for at, edge in zip(order, edges):
+            judgment = survivors.judgment(at)
+            if judgment is None:
+                if rule.sees(edge):
+                    yield edge, None
+                continue
+            if sees and not rule.sees(edge):
+                continue
+            yield edge, findings.finding(at, edge, judgment)
 
 
 class NativeGraphIndex(GraphIndex):
@@ -653,10 +784,13 @@ class NativeGraphIndex(GraphIndex):
             return True
         return bool(site.path) and site.path != self.graph.modules.get(site.module)
 
-    def group(self, kind: str, module: str, edges: list[Edge] | None = None) -> EdgeGroup:
-        """One module's edges of one kind, core then pack: all of them, or the ones given."""
-        if edges is None:
-            edges = self.native.core.get(array("I", self.native.link.ids_from(kind, module)))
+    def module_edges(self, kind: str, module: str) -> list[Edge]:
+        """One module's edges of one kind, core then pack, with no irregular edges sorted out."""
+        return self.native.core.get(array("I", self.native.link.ids_from(kind, module)))
+
+    def group(self, kind: str, module: str) -> EdgeGroup:
+        """One module's edges of one kind, core then pack."""
+        edges = self.module_edges(kind, module)
         return EdgeGroup(edges, [edge for edge in edges if self.is_irregular(edge)])
 
     def group_maker(self, kind: str) -> Any:
@@ -675,11 +809,6 @@ class NativeGraphIndex(GraphIndex):
         for row, last in self.native.repeats.items():
             out[row] = out[last]
         return out
-
-    def module_edges(self, kind: str, module: str) -> list[Edge]:
-        if module not in self.groups.get(kind, {}):
-            return []
-        return self.groups[kind][module].edges
 
     @cached_property
     def module_imports(self) -> Mapping[str, list[Edge]]:  # type: ignore[override]

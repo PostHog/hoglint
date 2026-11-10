@@ -139,6 +139,11 @@ class RuleContext:
             return self.graph.edges
         return [edge for kind in dict.fromkeys(kinds) for edge in self.by_kind.get(kind, [])]
 
+    def edges_passing(self, kinds: tuple[str, ...], node: Node | None) -> list[Edge]:
+        """`edges_of(kinds)`, less edges whose kind and contexts make `node` false. `node` reads
+        only an edge's kind and contexts; callers still judge it per edge."""
+        return self.edges_of(kinds)
+
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
         return list(dict.fromkeys(kinds)) if kinds else list(self.groups)
 
@@ -173,10 +178,13 @@ class RuleContext:
         assert isinstance(edge, Edge)
         return edge
 
-    def replica(self, rule: EdgeRule, edge: Edge) -> Finding | None:
-        """The finding of an edge whose group's judgment grouped evaluation already decided, or
-        None to judge it."""
-        return None
+    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, Finding | None]]:
+        """Each edge the rule judges, in order, with its finding when grouped evaluation already
+        made it from its group's judgment; None to judge the edge."""
+        for module, group in self.rule_groups(rule):
+            for edge in rule.group_edges(module, group):
+                if rule.sees(edge):
+                    yield edge, None
 
     def ordinal(self, edge: Edge) -> int:
         """The edge's place among edges with the same module, scope, kind and surface."""
@@ -642,8 +650,8 @@ class EdgeRule:
             yield self.env(edge, src, dst)
 
     def envs(self) -> Iterator[EdgeEnv]:
-        for module, group in self.ctx.rule_groups(self):
-            yield from self.group_envs(module, group)
+        for edge, _ in self.ctx.judged_edges(self):
+            yield from self.edge_envs(edge)
 
     def read_refs(self) -> list[Ref]:
         """Every field the rule's decision reads besides the edge's identity: the fields its parsed
@@ -790,16 +798,12 @@ class EdgeRule:
         self.report(env, self.decide(env), describe)
 
     def evaluate(self) -> RuleRun:
-        for module, group in self.ctx.rule_groups(self):
-            for edge in self.group_edges(module, group):
-                if not self.sees(edge):
-                    continue
-                replica = self.ctx.replica(self, edge)
-                if replica is not None:
-                    self.run.findings.append(replica)
-                    continue
-                for env in self.edge_envs(edge):
-                    self.judge(env, self.describe(env))
+        for edge, finding in self.ctx.judged_edges(self):
+            if finding is not None:
+                self.run.findings.append(finding)
+                continue
+            for env in self.edge_envs(edge):
+                self.judge(env, self.describe(env))
         return self.run
 
     def reported(self, env: EdgeEnv, judgment: Judgment) -> RuleRun:
