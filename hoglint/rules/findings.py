@@ -36,11 +36,7 @@ class RowSource(Protocol):
 
     def edge(self, at: int) -> Edge: ...
 
-    def witness_row(self, at: int) -> WitnessRow: ...
-
     def subjects(self, at: int) -> tuple[str, ...]: ...
-
-    def owner_module(self, at: int) -> str | None: ...
 
     def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
         """The witness rows, owner module and subjects of rows `ats`, read in bulk."""
@@ -195,13 +191,6 @@ class FindingTable:
         assert self.source is not None
         return (self.source.edge(self.source_at[row]),)
 
-    def witness_rows(self, row: int) -> tuple[WitnessRow, ...]:
-        made = self.objects.get(row)
-        if made is not None:
-            return made.witness_rows
-        assert self.source is not None
-        return (self.source.witness_row(self.source_at[row]),)
-
     def witness_ids(self) -> array[int]:
         """The witnesses' edge ids, row by row."""
         out = array("I")
@@ -220,13 +209,6 @@ class FindingTable:
             return made.subjects
         assert self.source is not None
         return self.source.subjects(self.source_at[row])
-
-    def owner_module(self, row: int) -> str | None:
-        made = self.objects.get(row)
-        if made is not None:
-            return made.owner.module if made.owner is not None else None
-        assert self.source is not None
-        return self.source.owner_module(self.source_at[row])
 
     def statuses(self) -> list[FindingStatus]:
         """Every row's status, in order."""

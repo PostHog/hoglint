@@ -381,9 +381,6 @@ class JudgedRows:
     def edge(self, at: int) -> Edge:
         return self.handle(at).get()
 
-    def witness_row(self, at: int) -> WitnessRow:
-        return self.handle(at).row()
-
     def src(self, at: int) -> str:
         return self.modules[self.src_at[at]]
 
@@ -397,9 +394,6 @@ class JudgedRows:
     def owner_module_of(self, module: str) -> str | None:
         owner = self.ctx.owner(module)
         return owner.module if owner is not None else None
-
-    def owner_module(self, at: int) -> str | None:
-        return self.owner_module_of(self.src(at))
 
     def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
         """The witness rows, owner module and subjects of rows `ats`: the witness rows from the
