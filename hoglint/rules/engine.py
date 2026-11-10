@@ -83,10 +83,12 @@ class RunResult:
         return spec is not None and spec.report == "advisory"
 
     def violations(self) -> list[Finding]:
+        """New findings of rules that are not advisory: the few rows a check prints."""
         return [
-            finding
-            for finding in self.findings()
-            if finding.status is FindingStatus.NEW and not self.advisory(finding.rule)
+            run.findings.finding(row)
+            for rule, run in self.runs.items()
+            if not self.advisory(rule)
+            for row in run.findings.rows_with(FindingStatus.NEW)
         ]
 
     def incomplete(self) -> list[IncompleteItem]:

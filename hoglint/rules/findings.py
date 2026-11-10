@@ -160,12 +160,14 @@ class FindingTable:
         return made
 
     def rows_with(self, status: FindingStatus) -> list[int]:
-        """The rows with `status`. The marks name few rows and few identities, so this reads the
-        columns, not the rows."""
-        rows = range(len(self.identity_at))
+        """The rows with `status`, read from the marks and flags, with no row made."""
+        at, ledgerable, allowed, accepted = self.identity_at, self.ledgerable, self.allowed, self.accepted
+        rows = range(len(at))
         if status is FindingStatus.ALLOWED:
-            return [row for row in rows if self.allowed[row]]
-        return [row for row in rows if self.status(row) is status]
+            return [row for row in rows if allowed[row]]
+        if status is FindingStatus.ACCEPTED:
+            return [row for row in rows if not allowed[row] and ledgerable[row] and at[row] in accepted]
+        return [row for row in rows if not allowed[row] and not (ledgerable[row] and at[row] in accepted)]
 
     def allow(self, row: int) -> None:
         self.allowed[row] = 1
