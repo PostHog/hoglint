@@ -12,8 +12,7 @@ from typing import Any
 
 from hoglint.config.model import KindSpec, LevelSpec
 from hoglint.labels import Labeler
-from hoglint.ledger.envelope import EngineError
-from hoglint.native.bridge import import_module
+from hoglint.native.bridge import engine_errors, import_module
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
 # The source a value read from a column names: only `explain` shows sources, and it asks the
@@ -100,10 +99,8 @@ class NativeLabeler(Labeler):
         """The evaluator's members of a kind: the Python labeler would classify every symbol."""
         if self.evaluator is None:
             return super().kind_members(spec)
-        try:
+        with engine_errors():
             return frozenset(self.evaluator.kind_members(spec.name))
-        except ValueError as error:
-            raise EngineError(f"the native evaluator failed: {error}") from error
 
     def level_groups(self, spec: LevelSpec) -> list[str] | None:
         """The evaluator's groups of a level, when its group field is not a set: `known_text` of
@@ -111,7 +108,5 @@ class NativeLabeler(Labeler):
         field = self.config.fields.get(spec.group_by)
         if self.evaluator is None or field is None or field.type is FieldType.SET:
             return None
-        try:
+        with engine_errors():
             return self.evaluator.level_groups(list(self.config.levels).index(spec.name))
-        except ValueError as error:
-            raise EngineError(f"the native evaluator failed: {error}") from error

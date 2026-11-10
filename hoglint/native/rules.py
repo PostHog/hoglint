@@ -11,22 +11,31 @@ from __future__ import annotations
 
 import json
 from array import array
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
 from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow
-from hoglint.native.bridge import import_module
+from hoglint.native.bridge import engine_errors, import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import RulePlan
-from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, project
+from hoglint.rules.base import (
+    EdgeEnv,
+    EdgeRule,
+    IncompleteItem,
+    Judgment,
+    RuleContext,
+    RuleRun,
+    RuleType,
+    project,
+    subjects_of,
+)
 from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
@@ -34,6 +43,8 @@ from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 from hoglint.rules.levels import LevelEvaluator
 from hoglint.rules.plan import tree
 from hoglint.selectors import Node, Truth
+
+T = TypeVar("T")
 
 
 class LazyKinds(Mapping[str, list[Edge]]):
@@ -276,14 +287,9 @@ class Rejudged:
         return self.made
 
 
-@contextmanager
-def engine_errors() -> Iterator[None]:
-    """An error the native evaluator returns is the engine's, never the config's: the config
-    loaded, so a refusal here is a bug or a stale build (exit 2)."""
-    try:
-        yield
-    except ValueError as error:
-        raise EngineError(f"the native evaluator failed: {error}") from error
+def distinct_ids(ids: Iterable[int]) -> array[int]:
+    """Edge ids, each once, in the order first seen, as the link reads them."""
+    return array("I", dict.fromkeys(ids))
 
 
 def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
@@ -322,6 +328,11 @@ class NativeRuleContext(RuleContext):
         link = self.native.native.link
         with engine_errors():
             return native.Rules(link, self.plan.text(lambda plan: native.Rules.reads(link, plan)))
+
+    def run_rule(self, call: Callable[..., T], rule: RuleType, *args: Any) -> T:
+        """`call`, one of the evaluator's calls on one rule, on `rule`'s place in the plan."""
+        with engine_errors():
+            return call(self.plan.index[rule.spec.id], *args)
 
     def find_conflicts(self) -> None:
         """The evaluator labels every module before any rule runs and finds each label set two
@@ -370,9 +381,9 @@ class NativeRuleContext(RuleContext):
                 (edge, target, Judgment(name), identity, src, dst) for edge, target, name, identity, src, dst in rows
             ]
         core = self.native.native.core
-        alone_ids = array("I", dict.fromkeys(row[0] for row in judged if row[2] not in found))
+        alone_ids = distinct_ids(row[0] for row in judged if row[2] not in found)
         alone = dict(zip(alone_ids, core.get(alone_ids)))
-        edges = RowEdges(core, array("I", dict.fromkeys(row[0] for row in judged if row[2] in found)))
+        edges = RowEdges(core, distinct_ids(row[0] for row in judged if row[2] in found))
         for edge_id, target, judgment, identity, src, dst in judged:
             if judgment in found:
                 yield EdgeHandle(edges, edge_id), target, judgment, tuple(identity), src, dst
@@ -387,8 +398,7 @@ class NativeRuleContext(RuleContext):
         reports as a finding) becomes its finding here, its edge kept as a handle."""
         if rule.CONFIRM != "row":
             return False
-        with engine_errors():
-            rows = self.evaluator.judge(self.plan.index[rule.spec.id])
+        rows = self.run_rule(self.evaluator.judge, rule)
         found = rule.found()
         spec = rule.spec
         flags = {judgment: rule.flags(judgment) for judgment in found}
@@ -401,7 +411,7 @@ class NativeRuleContext(RuleContext):
                 identity=identity,
                 detail=detail,
                 owner=self.owner(src),
-                subjects=(src, dst) if dst and dst != src else (src,),
+                subjects=subjects_of(src, dst),
                 ledgerable=ledgerable and spec.ledger,
                 unknown=unknown,
                 witness=handle,
@@ -412,10 +422,9 @@ class NativeRuleContext(RuleContext):
     def export_run(self, rule: ExportPrimitive) -> RuleRun:
         """The evaluator's check of an export rule, its rows made into findings and incomplete
         items in order; a witness edge is kept as a handle."""
-        with engine_errors():
-            rows = self.evaluator.export(self.plan.index[rule.spec.id])
+        rows = self.run_rule(self.evaluator.export, rule)
         core = self.native.native.core
-        edges = RowEdges(core, array("I", dict.fromkeys(row[5] for row in rows if row[5] is not None)))
+        edges = RowEdges(core, distinct_ids(row[5] for row in rows if row[5] is not None))
         spec = rule.spec
         run = rule.run
         for what, name, module, label, trail, edge_id, ledgerable, unknown, identity, subject in rows:
@@ -445,8 +454,7 @@ class NativeRuleContext(RuleContext):
         """The evaluator's rows of an inventory over edges: the first destination with each
         identity, kept as a handle, and the ones it cannot place, which the rule reports itself;
         then the classification file's entries, as `EdgeInventory.evaluate` compares them."""
-        with engine_errors():
-            rows = self.evaluator.judge(self.plan.index[rule.spec.id])
+        rows = self.run_rule(self.evaluator.judge, rule)
         seen: dict[tuple[str, ...], tuple[EdgeHandle, str, str | None]] = {}
         for handle, _, _, identity, src, dst in self.found_rows(rule, rows, frozenset({Judgment.VIOLATION})):
             seen[identity] = (handle, src, dst)
@@ -461,7 +469,7 @@ class NativeRuleContext(RuleContext):
                 identity=identity,
                 detail=RowDetail(rule.unclassified(identity), handle, rule.remedies()),
                 owner=self.owner(src),
-                subjects=(src, dst) if dst and dst != src else (src,),
+                subjects=subjects_of(src, dst),
                 ledgerable=spec.ledger,
                 witness=handle,
             )
@@ -473,8 +481,7 @@ class NativeRuleContext(RuleContext):
     def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
         if rule.NATIVE_MODE != "entities":
             return None
-        with engine_errors():
-            return self.evaluator.entities(self.plan.index[rule.spec.id])
+        return self.run_rule(self.evaluator.entities, rule)
 
     def layout_roots(self, within: str) -> list[str]:
         with engine_errors():
@@ -495,8 +502,7 @@ class NativeRuleContext(RuleContext):
                 witnesses.append(None)
                 continue
             witnesses.append(array("I", (at for finding in run.findings for at in finding.witness_ids)).tobytes())
-        with engine_errors():
-            paths, incomplete = self.evaluator.coverage(self.plan.index[rule.spec.id], witnesses)
+        paths, incomplete = self.run_rule(self.evaluator.coverage, rule, witnesses)
         covers = rule.spec.covers
         for what, at, module, surface in incomplete:
             if what == "not-run":
@@ -571,15 +577,13 @@ class NativeRuleContext(RuleContext):
                 raise EngineError(f"level {spec.name}: the evaluator and the Python labeler group apart on {wrong}")
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
-        with engine_errors():
-            rows = self.evaluator.pairs(self.plan.index[rule.spec.id])
+        rows = self.run_rule(self.evaluator.pairs, rule)
         return [CycleRow(edge, target, Judgment(name), pair) for edge, target, name, pair in rows]
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found]:
         """The evaluator's search of a reach rule, its paths made into Edges."""
-        with engine_errors():
-            found = self.evaluator.reach(self.plan.index[rule.spec.id])
-        ids = array("I", dict.fromkeys(edge for _, _, path, _ in found for edge, _ in path))
+        found = self.run_rule(self.evaluator.reach, rule)
+        ids = distinct_ids(edge for _, _, path, _ in found for edge, _ in path)
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         out = []
         for what, source, path, verdict in found:
@@ -659,12 +663,7 @@ class NativeGraphIndex(GraphIndex):
     def ordinals(self) -> dict[int, int]:  # type: ignore[override]
         """Each edge's place among edges with the same module, scope, kind and surface. Reads
         every edge: only explain asks for it."""
-        out: dict[int, int] = {}
-        counters: dict[tuple[str, str, str, str], int] = {}
-        for edge in self.graph.edges:
-            key = (edge.site.module, edge.site.scope, edge.kind, edge.surface)
-            out[edge.handle] = counters.get(key, 0)
-            counters[key] = counters.get(key, 0) + 1
+        out = self.count_ordinals()
         for row, last in self.native.repeats.items():
             out[row] = out[last]
         return out

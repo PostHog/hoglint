@@ -159,10 +159,8 @@ pub fn cover_edges(link: &mut Link, cover: &Cover) -> Vec<u32> {
         None => (0..link.edges.len() as u32).collect(),
         Some(kinds) => {
             let mut out = Vec::new();
-            for kind in kinds {
-                if let Some(sid) = link.kind_sid(kind) {
-                    out.extend(link.ids_of_kind(sid));
-                }
+            for kind in super::known_kinds(link, kinds).unwrap_or_default() {
+                out.extend(link.ids_of_kind(kind));
             }
             out
         }

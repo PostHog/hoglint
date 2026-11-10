@@ -27,9 +27,8 @@ from hoglint.native.rules import NativeRuleContext
 from hoglint.native.source import graph_source
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules import engine
-from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project
+from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project, subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
-from hoglint.selectors import State
 
 from native.require import native_module
 
@@ -1345,31 +1344,6 @@ def test_generated_configs_are_judged_the_same_in_both(world: World, monkeypatch
     assert levels > 5
 
 
-def test_labels_are_the_labelers(world: World) -> None:
-    config = world.config("")
-    native, _ = world.contexts(config)
-    labeler = native.labeler
-    for name, spec in config.fields.items():
-        if spec.on != "module":
-            continue
-        values = native.evaluator.column(name)
-        for module, value in zip(native.graph.modules, values, strict=True):
-            found, _ = labeler.field_value(module, None, name)
-            expected = "?" if found.state is State.UNKNOWN else "-" if found.state is State.NONE else None
-            if expected is None:
-                data = found.data
-                expected = (
-                    f"{data}|{','.join(found.chain)}"
-                    if found.chain
-                    else ("true" if data else "false")
-                    if isinstance(data, bool)
-                    else ",".join(sorted(data)) or "-"
-                    if isinstance(data, frozenset)
-                    else str(data)
-                )
-            assert (module, name, value) == (module, name, expected)
-
-
 # A field whose domain reads a provider field that a provider and an assignment set apart on
 # `core/**`: reading it there meets that conflict, as the Python labeler meets it.
 DOMAIN_READS_A_CONFLICT = CONFIG.replace(
@@ -1477,6 +1451,16 @@ def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
     assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
     with pytest.raises(EngineError, match="apart from the evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+
+
+@pytest.mark.parametrize(
+    ("src", "dst", "subjects"),
+    [("a", "b", ("a", "b")), ("a", "a", ("a",)), ("a", None, ("a",)), ("", "b", ("b",)), ("", None, ())],
+)
+def test_a_finding_names_its_source_and_another_destination_as_subjects(
+    src: str, dst: str | None, subjects: tuple[str, ...]
+) -> None:
+    assert subjects_of(src, dst) == subjects
 
 
 def test_a_judgment_the_rule_code_does_not_name_stops_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:

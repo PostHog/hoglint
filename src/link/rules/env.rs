@@ -64,6 +64,11 @@ fn head(name: &str) -> &str {
     name.split('.').next().unwrap_or(name)
 }
 
+/// The last dotted part of a name (`str.rpartition(".")[2]`).
+pub fn last_part(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
 /// The first dotted part of a symbol's name: an external endpoint's package.
 fn head_owned<'a>(cx: &Cx<'a>, name: Symbol) -> &'a str {
     match name {
@@ -94,15 +99,18 @@ impl<'a> Cx<'a> {
         self.rules.module_at.get(&module).copied()
     }
 
+    /// The graph module named `name` and its place, if it is one.
+    pub fn module_named(&self, name: &str) -> Option<(Sid, u32)> {
+        let sid = self.link.core.it.get(name)?;
+        self.module_at(sid).map(|at| (sid, at))
+    }
+
     /// The longest dotted prefix of `name` that is a graph module (`GraphIndex.find_module`).
     pub fn module_of_symbol(&self, name: &str) -> Option<(Sid, u32)> {
-        let it = &self.link.core.it;
         let mut head = name;
         loop {
-            if let Some(sid) = it.get(head)
-                && let Some(at) = self.module_at(sid)
-            {
-                return Some((sid, at));
+            if let Some(found) = self.module_named(head) {
+                return Some(found);
             }
             head = head.rsplit_once('.')?.0;
         }
@@ -527,9 +535,7 @@ impl<'a> Env<'a> {
             EndField::Name => match cx.symbol_text(endpoint.symbol) {
                 Some(symbol) if !symbol.is_empty() => Value::Text(last_name(symbol)),
                 _ => match module {
-                    Some(module) if !module.is_empty() => {
-                        Value::text(module.rsplit('.').next().unwrap_or(""))
-                    }
+                    Some(module) if !module.is_empty() => Value::text(last_part(module)),
                     _ => Value::None,
                 },
             },
@@ -632,8 +638,8 @@ impl<'a> Env<'a> {
 
 fn last_name(text: Cow<'_, str>) -> Cow<'_, str> {
     match text {
-        Cow::Borrowed(text) => Cow::Borrowed(text.rsplit('.').next().unwrap_or("")),
-        Cow::Owned(text) => Cow::Owned(text.rsplit('.').next().unwrap_or("").to_string()),
+        Cow::Borrowed(text) => Cow::Borrowed(last_part(text)),
+        Cow::Owned(text) => Cow::Owned(last_part(&text).to_string()),
     }
 }
 
@@ -669,9 +675,7 @@ impl<'a> Resolve<'a> for LabelEnv<'a, '_> {
             }),
             EntityField::Path => cx.path_at(self.at).map_or(Value::None, Value::text_or_none),
             EntityField::Name => match self.symbol.filter(|symbol| !symbol.is_empty()).or(module) {
-                Some(target) if !target.is_empty() => {
-                    owned(target.rsplit('.').next().unwrap_or(""))
-                }
+                Some(target) if !target.is_empty() => owned(last_part(target)),
                 _ => Value::None,
             },
             EntityField::Decl => match self.symbol {
@@ -726,6 +730,25 @@ pub struct EntityEnv<'a, 's> {
     pub symbol: Option<&'s str>,
     /// What a bare `subject` reads, when an entity rule names one (`EntityRule.resolver`).
     pub subject: Option<&'s str>,
+}
+
+impl<'a, 's> EntityEnv<'a, 's> {
+    /// The environment of a symbol (or of a module, with no symbol) owned by graph module
+    /// `owner`, its name and place, when it has one.
+    pub fn of(
+        cx: Cx<'a>,
+        owner: Option<(Sid, u32)>,
+        symbol: Option<&'s str>,
+        subject: Option<&'s str>,
+    ) -> EntityEnv<'a, 's> {
+        EntityEnv {
+            cx,
+            module: owner.map(|(module, _)| module),
+            at: owner.map(|(_, at)| at),
+            symbol,
+            subject,
+        }
+    }
 }
 
 impl<'a> Resolve<'a> for EntityEnv<'a, '_> {

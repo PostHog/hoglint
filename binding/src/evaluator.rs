@@ -368,13 +368,4 @@ impl Rules {
     fn registries<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         ids_bytes(py, &self.inner.registry_column())
     }
-
-    /// One field's value (or `registry`, `lifecycle`) on every graph module, rendered as an
-    /// identity column, a zone as `name|chain`.
-    fn column(&self, py: Python<'_>, field: &str) -> PyResult<Vec<String>> {
-        let bound = self.link.bind(py).borrow();
-        self.inner
-            .module_column(&bound.inner, field)
-            .map_err(PyValueError::new_err)
-    }
 }

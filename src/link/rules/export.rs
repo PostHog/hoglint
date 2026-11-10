@@ -448,13 +448,7 @@ impl<'a> Walk<'a> {
                 return true;
             };
             let owner = self.cx.module_of_symbol(&candidate);
-            let env = EntityEnv {
-                cx: self.cx,
-                module: owner.map(|(module, _)| module),
-                at: owner.map(|(_, at)| at),
-                symbol: Some(&candidate),
-                subject: None,
-            };
+            let env = EntityEnv::of(self.cx, owner, Some(&candidate), None);
             if evaluate(node, &env) == Truth::True {
                 return true;
             }
@@ -624,13 +618,7 @@ impl<'a> Walk<'a> {
     fn column(&self, column: Column, symbol: &str, module: &str, label: &str) -> String {
         let cx = self.cx;
         let entity = |field: EntityField, owner: Option<(Sid, u32)>, symbol: Option<&str>| {
-            let env = EntityEnv {
-                cx,
-                module: owner.map(|(found, _)| found),
-                at: owner.map(|(_, at)| at),
-                symbol,
-                subject: None,
-            };
+            let env = EntityEnv::of(cx, owner, symbol, None);
             render(&super::selector::Resolve::resolve(&env, Ref::Entity(field)))
         };
         match column {
@@ -640,15 +628,7 @@ impl<'a> Walk<'a> {
             Column::Symbol => symbol.to_string(),
             Column::Dst(field) => entity(field, cx.module_of_symbol(symbol), Some(symbol)),
             Column::Module => module.to_string(),
-            Column::Src(field) => {
-                let owner = cx
-                    .link
-                    .core
-                    .it
-                    .get(module)
-                    .and_then(|sid| cx.module_at(sid).map(|at| (sid, at)));
-                entity(field, owner, None)
-            }
+            Column::Src(field) => entity(field, cx.module_named(module), None),
         }
     }
 

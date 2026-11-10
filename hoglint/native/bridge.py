@@ -13,6 +13,8 @@ import os
 import sys
 import importlib
 import importlib.util
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 
@@ -21,6 +23,16 @@ from hoglint.ledger.envelope import NATIVE, EngineError, EngineSources
 
 MODULE = "hoglint_native"
 CRATE = Path(__file__).resolve().parents[2]
+
+
+@contextmanager
+def engine_errors() -> Iterator[None]:
+    """An error the native evaluator returns is the engine's, never the config's: the config
+    loaded, so a refusal here is a bug or a stale build (exit 2)."""
+    try:
+        yield
+    except ValueError as error:
+        raise EngineError(f"the native evaluator failed: {error}") from error
 
 
 def built_module_dir() -> Path:

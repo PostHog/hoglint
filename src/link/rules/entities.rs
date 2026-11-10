@@ -143,13 +143,7 @@ impl Rules {
         let cx = Cx { link, rules: self };
         let mut out = Vec::new();
         for (module, at, symbol, subject) in self.entities(link, entities) {
-            let env = EntityEnv {
-                cx,
-                module,
-                at,
-                symbol: symbol.as_deref(),
-                subject: Some(&subject),
-            };
+            let env = EntityEnv::of(cx, module.zip(at), symbol.as_deref(), Some(&subject));
             let module_name = module.map(|module| cx.text(module).to_string());
             let selected = class_truth(&entities.selection, &env, self.touch);
             if selected == Truth::Unknown {
@@ -206,13 +200,7 @@ impl Rules {
         let cx = Cx { link, rules: self };
         let mut out: Vec<String> = Vec::new();
         for (at, module) in self.modules.iter().enumerate() {
-            let env = EntityEnv {
-                cx,
-                module: Some(*module),
-                at: Some(at as u32),
-                symbol: None,
-                subject: None,
-            };
+            let env = EntityEnv::of(cx, Some((*module, at as u32)), None, None);
             let group = match env.resolve(field) {
                 Value::Text(text) => text.into_owned(),
                 Value::Zone(zone) => zone.name.clone(),

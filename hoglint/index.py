@@ -259,6 +259,10 @@ class GraphIndex:
     def ordinals(self) -> dict[int, int]:
         """Each edge's place among edges with the same module, scope, kind and surface, by its
         handle. An edge object a producer repeats has one handle, so it keeps its last place."""
+        return self.count_ordinals()
+
+    def count_ordinals(self) -> dict[int, int]:
+        """`ordinals`, counted over every edge in graph order."""
         out: dict[int, int] = {}
         counters: dict[tuple[str, str, str, str], int] = {}
         for edge in self.graph.edges:

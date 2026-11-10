@@ -5,6 +5,7 @@
 //! Text is split and matched as Python does it: `str.split()` whitespace, `re`'s `\w`, and
 //! `str.isidentifier`, so an unusual character gives the same answer in both engines.
 
+use crate::link::rules::env::last_part;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -125,7 +126,7 @@ fn last_name(callee: &str) -> Option<&str> {
     if callee == "?" {
         return None;
     }
-    callee.rsplit('.').next()
+    Some(last_part(callee))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -345,7 +346,7 @@ impl Vocabulary {
             let name = if callee.starts_with('?') {
                 "?"
             } else {
-                callee.rsplit('.').next().unwrap_or(callee)
+                last_part(callee)
             };
             if name == "isinstance" {
                 return Ok(Shape::of("isinstance"));

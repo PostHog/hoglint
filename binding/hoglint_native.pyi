@@ -150,7 +150,6 @@ class Link:
         """Records the facts packs wrote for some symbols: each symbol's (key, value) pairs replace
         whatever was written for it before, as `NativeSymbols.update` does."""
     def kind_order(self) -> list[str]: ...
-    def candidates(self, kinds: list[str], include: int, exclude: int) -> bytes: ...
     def edges(self, ids: bytes) -> list[EdgeTuple]: ...
     def refine(
         self,
@@ -253,8 +252,6 @@ class Rules:
         one of module, zones, kind, symbol, provided."""
     def met(self) -> list[tuple[str, str, str]]:
         """The labels set two ways that the rules met while they ran, as `conflicts` gives them."""
-    def column(self, field: str) -> list[str]:
-        """One field's value (or `registry`, `lifecycle`) on every graph module, rendered."""
     def values(self, field: str) -> tuple[list[tuple[str, list[str]]], bytes]:
         """A module field's value on every graph module: its distinct values as (type, items),
         and each module's place among them as u32s, 0xFFFFFFFF where Python reads it itself."""

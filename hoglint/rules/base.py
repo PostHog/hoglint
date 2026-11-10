@@ -400,6 +400,15 @@ class RuleContext:
         return ()
 
 
+def subjects_of(src: str | None, dst: str | None) -> tuple[str, ...]:
+    """A finding's subjects on an edge: its source module, and its destination module when that
+    is another; a module with no name is none."""
+    out = [src]
+    if dst and dst != src:
+        out.append(dst)
+    return tuple(module for module in out if module)
+
+
 def context_class(index: GraphIndex) -> type[RuleContext]:
     """The rule context for an index: an index over edges kept outside Python brings its own."""
     return getattr(index, "context_class", RuleContext)
@@ -803,10 +812,7 @@ class EdgeRule(RuleType):
         self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(env), edge=env.edge))
 
     def subjects(self, env: EdgeEnv) -> tuple[str, ...]:
-        out = [env.src.module]
-        if env.dst.module and env.dst.module != env.src.module:
-            out.append(env.dst.module)
-        return tuple(m for m in out if m)
+        return subjects_of(env.src.module, env.dst.module)
 
     # Whether `report` names the edge as a finding's only witness. Then a finding whose detail is
     # made when read still has its witness and site without making it.

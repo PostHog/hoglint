@@ -255,6 +255,8 @@ pub struct Rules {
     symbol_assigns: Vec<usize>,
     pub rules: Vec<Rule>,
     levels: Vec<Level>,
+    /// The declared fields' names, for a selector compiled at run time.
+    field_names: Vec<String>,
     /// Each edge's ordinal, when something reads `edge.ordinal`.
     ordinals: Vec<u32>,
     pool: rayon::ThreadPool,
@@ -296,6 +298,8 @@ pub struct Level {
 
 /// The plan's selectors compiled, before any label is read.
 struct Compiled {
+    /// The declared fields' names, which a compiled ref reads by place.
+    names: Vec<String>,
     fields: Vec<Field>,
     exports: Vec<Export>,
     rules: Vec<Rule>,
@@ -381,6 +385,7 @@ impl Compiled {
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(Compiled {
+            names,
             fields,
             exports,
             rules,
@@ -436,6 +441,7 @@ impl Rules {
         let compiled = Compiled::new(link, &plan)?;
         let read = compiled.provider_reads();
         let Compiled {
+            names: field_names,
             fields,
             exports,
             rules,
@@ -516,6 +522,7 @@ impl Rules {
             symbol_assigns,
             rules,
             levels,
+            field_names,
             ordinals: Vec::new(),
             pool,
             touch: false,
@@ -880,23 +887,15 @@ impl Rules {
         if rule.kinds.is_empty() {
             return link.kind_order();
         }
-        rule.kinds
-            .iter()
-            .filter_map(|kind| link.kind_sid(kind))
-            .collect()
+        known_kinds(link, &rule.kinds).unwrap_or_default()
     }
 
     /// The edges a rule sees (`EdgeRule.sees`), in id order.
     fn candidates(&self, link: &mut Link, rule: &Edges) -> Vec<u32> {
-        let kinds: Vec<Sid> = rule
-            .kinds
-            .iter()
-            .filter_map(|kind| link.kind_sid(kind))
-            .collect();
-        if kinds.is_empty() && !rule.kinds.is_empty() {
-            return Vec::new();
+        match known_kinds(link, &rule.kinds) {
+            Some(kinds) => link.candidates(&kinds, rule.include, rule.exclude),
+            None => Vec::new(),
         }
-        link.candidates(&kinds, rule.include, rule.exclude)
     }
 
     /// Runs `judge` over every candidate of a rule, chunk by chunk on the pool, and returns what
@@ -925,17 +924,23 @@ impl Rules {
         found.into_iter().flatten().collect()
     }
 
-    /// Positions into `edges` (distinct ids) in the order rule `id` judges its edges.
-    fn order(
+    /// `rows`, which come grouped by edge in id order, with the edges in the order rule `id`
+    /// judges them; an edge's rows keep their order.
+    fn in_rule_order<T>(
         &self,
         link: &mut Link,
         id: &str,
         rule: &Edges,
-        edges: &[u32],
-    ) -> Result<Vec<u32>, String> {
+        rows: Vec<T>,
+        edge_of: impl Fn(&T) -> u32,
+    ) -> Result<Vec<T>, String> {
+        let mut edges: Vec<u32> = rows.iter().map(&edge_of).collect();
+        edges.dedup();
         let kinds = self.kind_sids(link, rule);
-        link.rule_order(edges, &kinds)
-            .ok_or_else(|| format!("rule {id}: an edge whose kind is not among its kinds"))
+        let order = link
+            .rule_order(&edges, &kinds)
+            .ok_or_else(|| format!("rule {id}: an edge whose kind is not among its kinds"))?;
+        Ok(in_order(rows, &edges, &order, edge_of))
     }
 
     /// Every destination of every candidate edge that rule `index` does not judge clean, in the
@@ -982,10 +987,7 @@ impl Rules {
                 });
             }
         });
-        let mut seen_edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
-        seen_edges.dedup();
-        let order = self.order(link, rule_id, edges, &seen_edges)?;
-        let rows = in_order(rows, &seen_edges, &order, |row| row.edge);
+        let rows = self.in_rule_order(link, rule_id, edges, rows, |row| row.edge)?;
         if !matches!(rule.verdict, Verdict::Inventory) {
             return Ok(rows);
         }
@@ -1048,10 +1050,7 @@ impl Rules {
                 });
             }
         });
-        let mut seen_edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
-        seen_edges.dedup();
-        let order = self.order(link, rule_id, edges, &seen_edges)?;
-        Ok(in_order(rows, &seen_edges, &order, |row| row.edge))
+        self.in_rule_order(link, rule_id, edges, rows, |row| row.edge)
     }
 
     /// What export rule `index` reports, in the order `ExportPrimitive.evaluate` reports it.
@@ -1171,6 +1170,25 @@ impl Rules {
         Ok((&rule.id, found))
     }
 
+    /// A selector Python hands over at run time (its plan tree as JSON), compiled to read an
+    /// edge. It may read no field a provider sets: the plan holds no column for it.
+    fn selector(&self, link: &Link, text: &str) -> Result<Node, String> {
+        let tree: NodePlan = serde_json::from_str(text)
+            .map_err(|error| format!("a selector that does not parse: {error}"))?;
+        let node = Compiler {
+            fields: &self.field_names,
+            it: &link.core.it,
+            reading: Reading::Edge,
+        }
+        .node(&tree)?;
+        check_columns(
+            &self.labels,
+            "a selector given at run time",
+            &refs_of(&node),
+        )?;
+        Ok(node)
+    }
+
     /// The edges of `kinds`, kind by kind in graph order, that `selector` does not make false,
     /// each read with its source as both ends (`RuleContext.edges_passing`).
     pub fn passing(
@@ -1179,29 +1197,9 @@ impl Rules {
         kinds: &[String],
         selector: &str,
     ) -> Result<Vec<u32>, String> {
-        let tree: plan::NodePlan = serde_json::from_str(selector)
-            .map_err(|error| format!("a selector that does not parse: {error}"))?;
-        let names: Vec<String> = self
-            .labels
-            .fields
-            .iter()
-            .map(|field| field.name.clone())
-            .collect();
-        let node = Compiler {
-            fields: &names,
-            it: &link.core.it,
-            reading: Reading::Edge,
-        }
-        .node(&tree)?;
-        check_columns(&self.labels, "a coverage prefilter", &refs_of(&node))?;
-        let mut sids: Vec<Sid> = Vec::new();
-        for kind in kinds.iter().filter_map(|kind| link.kind_sid(kind)) {
-            if !sids.contains(&kind) {
-                sids.push(kind);
-            }
-        }
+        let node = self.selector(link, selector)?;
         let mut out = Vec::new();
-        for kind in sids {
+        for kind in known_kinds(link, kinds).unwrap_or_default() {
             let ids = link.ids_of_kind(kind);
             out.extend(self.over_candidates(link, &ids, |cx, id, _, kept| {
                 let src = cx.src_endpoint(id);
@@ -1249,45 +1247,6 @@ impl Rules {
             .iter()
             .map(|found| found.map_or(NO_PLACE, u32::from))
             .collect()
-    }
-
-    /// One field's value on every graph module, rendered as `render_value` does, with zones as
-    /// `name|chain`: what the label proof compares.
-    pub fn module_column(&self, link: &Link, name: &str) -> Result<Vec<String>, String> {
-        let cx = Cx { link, rules: self };
-        if name == "registry" || name == "lifecycle" {
-            let lifecycle = name == "lifecycle";
-            return Ok((0..self.modules.len() as u32)
-                .map(|at| {
-                    let found = self.labels.registry_of[at as usize];
-                    match found {
-                        None => "-".to_string(),
-                        Some(registry) if lifecycle => {
-                            let text = &self.labels.registries[registry as usize].lifecycle;
-                            if text.is_empty() {
-                                "-".to_string()
-                            } else {
-                                text.clone()
-                            }
-                        }
-                        Some(registry) => self.labels.registries[registry as usize].name.clone(),
-                    }
-                })
-                .collect());
-        }
-        let field = self
-            .labels
-            .fields
-            .iter()
-            .position(|field| field.name == name)
-            .ok_or_else(|| format!("no field {name}"))?;
-        Ok(self.values[field]
-            .iter()
-            .map(|cell| match cx.cell(cell) {
-                Value::Zone(zone) => format!("{}|{}", zone.name, zone.chain.join(",")),
-                value => render(&value),
-            })
-            .collect())
     }
 }
 
@@ -1371,6 +1330,19 @@ pub(crate) fn check_columns(labels: &Labels, reader: &str, refs: &[Ref]) -> Resu
         }
     }
     Ok(())
+}
+
+/// The kinds `names` lists that the link has, as interned names, each once, in order. None when
+/// it names kinds and the link has none of them, so a reader of them reads no edge; empty when it
+/// names none.
+fn known_kinds(link: &Link, names: &[String]) -> Option<Vec<Sid>> {
+    let mut out: Vec<Sid> = Vec::new();
+    for kind in names.iter().filter_map(|name| link.kind_sid(name)) {
+        if !out.contains(&kind) {
+            out.push(kind);
+        }
+    }
+    (!out.is_empty() || names.is_empty()).then_some(out)
 }
 
 /// `rows`, grouped by edge in id order (`edges` lists each edge once), with the edges put in
