@@ -7,6 +7,7 @@ import sys
 import shutil
 import sysconfig
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,16 +59,28 @@ class FactNeeds:
         )
 
 
+# The record path of a third-party file starts here instead of at one machine's site-packages,
+# so a fact, an edge site or a witness reads the same on every machine.
+SITE_PACKAGES = "<site-packages>"
+
+
+def site_packages() -> Path:
+    """This interpreter's site-packages directory."""
+    return Path(sysconfig.get_paths()["purelib"])
+
+
 def site_packages_files(packages: tuple[str, ...]) -> dict[str, str]:
-    """Sources of the named distributions in this interpreter's site-packages: path -> path
-    inside site-packages, which names the module."""
-    site = Path(sysconfig.get_paths()["purelib"])
+    """Sources of the named distributions in this interpreter's site-packages: record path ->
+    path inside site-packages, which names the module. The record path is
+    `<site-packages>/<path inside>`; the file is `site_packages() / <path inside>`."""
+    site = site_packages()
     out: dict[str, str] = {}
     for package in packages:
         root = site / package
         if root.is_dir():
             for path in sorted(root.rglob("*.py")):
-                out[str(path)] = str(path.relative_to(site))
+                inside = path.relative_to(site).as_posix()
+                out[f"{SITE_PACKAGES}/{inside}"] = inside
     return out
 
 
@@ -156,11 +169,15 @@ class FactStore:
         self.records: dict[str, dict] = {}
 
     @classmethod
-    def from_jsonl(cls, path: Path) -> FactStore:
+    def from_jsonl(cls, path: Path, renamed: Mapping[str, str] | None = None) -> FactStore:
+        """The records of an extractor's output; `renamed` gives a file read under another path
+        its record path."""
         store = cls()
         with open(path, "rb") as handle:
             for line in handle:
                 record = orjson.loads(line)
+                if renamed is not None and record["path"] in renamed:
+                    record["path"] = renamed[record["path"]]
                 store.records[record["path"]] = record
         return store
 

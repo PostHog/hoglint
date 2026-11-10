@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from hoglint.core.analysis import CoreAnalysis
 from hoglint.core.discovery import Discovery, Inventory
 from hoglint.core.producers import PRODUCERS
-from hoglint.facts import site_packages_files
+from hoglint.facts import site_packages, site_packages_files
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
@@ -103,7 +103,7 @@ class NativeAnalysis(CoreAnalysis):
         link, (hits, extracted) = native.link_blobs(
             str(self.options.repo),
             blobs,
-            [(path, path) for path in external],
+            [(record, str(site_packages() / inside)) for record, inside in external.items()],
             options,
             json.dumps(link_config(config, inventory.analyzed, external)),
             str(database.path) if database is not None else None,

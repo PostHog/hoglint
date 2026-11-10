@@ -11,7 +11,15 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.discovery import Discovery, GitTree, Inventory, Snapshot, StagedIndex, WorkingTree
 from hoglint.core.modules import ModuleNamer
 from hoglint.core.producers import PRODUCERS, TABLE_KINDS, Producer
-from hoglint.facts import Extractor, ExtractRequest, FactNeeds, FactStore, default_cache_dir, site_packages_files
+from hoglint.facts import (
+    Extractor,
+    ExtractRequest,
+    FactNeeds,
+    FactStore,
+    default_cache_dir,
+    site_packages,
+    site_packages_files,
+)
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY
 
@@ -80,16 +88,18 @@ class CoreAnalysis:
         return core | (options.needs if options.needs is not None else registered_needs())
 
     def extract(self, inventory: Inventory, external: dict[str, str]) -> FactStore:
+        site = site_packages()
+        records = {str(site / inside): record for record, inside in external.items()}
         request = ExtractRequest(
             root=inventory.root,
-            files=(*inventory.files, *external),
+            files=(*inventory.files, *records),
             first_party=self.first_party(inventory),
             out_path=self.options.work_dir / "facts.jsonl",
             cache_dir=self.options.cache_dir,
             needs=self.needs(),
-            lite=tuple(external),
+            lite=tuple(records),
         )
-        return FactStore.from_jsonl(self.extractor.extract(request))
+        return FactStore.from_jsonl(self.extractor.extract(request), records)
 
     def run(self) -> AnalysisResult:
         timings: dict[str, float] = {}
