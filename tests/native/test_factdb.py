@@ -59,10 +59,13 @@ def records(linked: Any) -> list[list[bytes | None]]:
 def test_a_second_run_reads_every_record_from_the_database(tmp_path: Path) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
+    # Two files with one blob: the first run stores the entry once.
+    (repo / "app" / "copy.py").write_text((repo / "app" / "models.py").read_text())
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     database = fact_database(native, tmp_path)
     first, first_counts = link(native, BlobSnapshot.index(repo), database)
     second, second_counts = link(native, BlobSnapshot.index(repo), database)
-    assert (first_counts, second_counts) == ((0, 3), (3, 0))
+    assert (first_counts, second_counts) == ((0, 4), (4, 0))
     assert records(second) == records(first)
     assert second.edges(second.ids_of_kind("import")) == first.edges(first.ids_of_kind("import"))
 

@@ -231,7 +231,11 @@ impl FactDb {
         )
     }
 
-    /// Stores new entries; a key already stored keeps its entry.
+    /// Stores new entries; a key already stored, or met before in `entries`, keeps its entry.
+    ///
+    /// A chunk's bodies go in before its records. A run reads every body and few records, so
+    /// the bodies lie in long runs of pages: a run whose pages left the page cache reads them
+    /// back in a few large reads, and does not read the records between them.
     pub fn store(&self, entries: &[NewEntry]) -> Result<()> {
         for chunk in entries.chunks(ROWS_PER_WRITE) {
             self.write(|conn| {
@@ -241,12 +245,23 @@ impl FactDb {
                 let mut keys = conn.prepare_cached(
                     "INSERT INTO keys (config, oid, id, used, json_len, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 )?;
-                for (config, oid, body, json) in chunk {
-                    if exists.exists(params![config, oid])? {
+                let mut new: Vec<&NewEntry> = Vec::new();
+                for entry in chunk {
+                    let (config, oid, _, _) = entry;
+                    let repeated = new.iter().any(|(c, o, _, _)| c == config && o == oid);
+                    if repeated || exists.exists(params![config, oid])? {
                         continue;
                     }
-                    let id = facts.insert([body])?;
+                    new.push(entry);
+                }
+                let mut ids = Vec::with_capacity(new.len());
+                for (_, _, body, _) in &new {
+                    ids.push(facts.insert([body])?);
+                }
+                for ((_, _, _, json), id) in new.iter().zip(&ids) {
                     records.execute(params![id, json])?;
+                }
+                for ((config, oid, body, json), id) in new.iter().zip(&ids) {
                     let bytes = (body.len() + json.len()) as i64;
                     keys.execute(params![config, oid, id, self.today, json.len() as i64, bytes])?;
                 }
