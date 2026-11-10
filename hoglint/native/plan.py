@@ -9,6 +9,7 @@ provider sets, and only when something the plan holds reads that field.
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Iterable
 from typing import Any
 
@@ -162,7 +163,11 @@ class RulePlan:
         out.update(CyclePrimitive.group_of(self.config, spec) for spec in self.specs if spec.primitive == "cycle")
         return out
 
-    def provided(self) -> list[dict[str, Any]]:
+    def modules(self) -> list[str]:
+        """The graph's modules in the order of every per-module column of the plan."""
+        return list(self.graph.modules)
+
+    def provided(self, modules: list[str]) -> list[dict[str, Any]]:
         """The label column of each provider-set field the plan reads, module by module."""
         read = self.names_read()
         labeler = self.labeler
@@ -170,7 +175,7 @@ class RulePlan:
         for name in sorted(labeler.provider_fields & read):
             if name not in self.config.fields:
                 continue
-            labels = [label_value(labeler.label_only(module, None, name)) for module in self.graph.modules]
+            labels = [label_value(labeler.label_only(module, None, name)) for module in modules]
             out.append({"field": name, "labels": labels})
         return out
 
@@ -215,8 +220,10 @@ class RulePlan:
     def data(self) -> dict[str, Any]:
         config = self.config
         zones = config.zones
+        modules = self.modules()
         return {
-            "module_count": len(self.graph.modules),
+            "module_count": len(modules),
+            "modules": hashlib.sha256("\n".join(modules).encode()).hexdigest(),
             "fields": self.fields(),
             "assigns": self.assigns(),
             "zones": {
@@ -250,7 +257,7 @@ class RulePlan:
                 }
                 for spec in config.kinds.values()
             ],
-            "provided": self.provided(),
+            "provided": self.provided(modules),
             "failed": sorted(self.labeler.providers.failed_fields),
             "rules": [self.rule(spec) for spec in self.specs],
             "repeats": sorted(self.graph.repeats.items()),

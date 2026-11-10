@@ -467,6 +467,16 @@ def test_a_provider_field_read_without_its_column_stops_the_evaluator(
         assert native.evaluator
 
 
+def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
+    native, _ = world.contexts(config)
+    monkeypatch.setattr(RulePlan, "modules", lambda self: list(reversed(self.graph.modules)))
+    with pytest.raises(Exception, match="modules in another order"):
+        assert native.evaluator
+
+
 def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:
     config = world.config(rule_table("flows", CORNERS["flow-shape-use-shape"]))
     native, _ = world.contexts(config)

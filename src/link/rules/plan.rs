@@ -7,6 +7,9 @@ use serde::Deserialize;
 pub struct Plan {
     /// `len(graph.modules)`: the evaluator finds the same modules in the link.
     pub module_count: usize,
+    /// The sha256, in hex, of `graph.modules` joined by newlines: provider columns hold one
+    /// label per module in this order.
+    pub modules: String,
     pub fields: Vec<FieldPlan>,
     pub assigns: Vec<AssignPlan>,
     pub zones: ZonesPlan,

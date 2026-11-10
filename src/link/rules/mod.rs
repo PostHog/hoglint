@@ -213,6 +213,11 @@ impl Rules {
             .collect::<Result<Vec<_>, String>>()?;
         let it = &link.core.it;
         let module_names: Vec<&str> = modules.iter().map(|module| it.s(*module)).collect();
+        if crate::sha256_hex(module_names.join("\n").as_bytes()) != plan.modules {
+            return Err(
+                "the rule plan lists the graph's modules in another order than the link".into(),
+            );
+        }
         let paths: Vec<&str> = module_files
             .iter()
             .map(|file| &*link.core.facts.files[*file as usize].path)
