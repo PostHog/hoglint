@@ -51,14 +51,14 @@ from hoglint.ledger.envelope import (
     PolicyFiles,
     policy_digest,
 )
+from hoglint.ledger.errors import RepoRootError
 from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles, WorktreeFiles
-from hoglint.ledger.listing import TreeListing
+from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
-from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
 from hoglint.native.source import ENGINES, batch_mode, graph_source
@@ -86,17 +86,6 @@ class Snapshots:
         self.repo = repo
         self.work_dir = work_dir
         self.worktrees: list[Path] = []
-
-    @staticmethod
-    def check_root(repo: Path) -> None:
-        """The repo root must be the top of a git working tree: `git status` names paths from the
-        top, `git ls-files` from where it runs, and the run mixes the two."""
-        done = subprocess.run(["git", "-C", str(repo), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-        top = done.stdout.strip()
-        if done.returncode != 0 or not top:
-            raise ConfigError([f"{repo} is not in a git working tree; hoglint needs the top of one as its repo root"])
-        if Path(top).resolve() != repo.resolve():
-            raise ConfigError([f"{repo} is not the top of its git working tree {top}; run hoglint with --repo {top}"])
 
     def write_tree(self) -> str:
         """The index as a git tree: the one read of the index a staged run makes. Empty when the
@@ -199,7 +188,7 @@ class Snapshots:
             return ""
 
     def clean(self) -> bool:
-        return not git(self.repo, "status", "--porcelain", "-z", "--untracked-files=all").strip("\0")
+        return not WorktreeStatus.of(self.repo).records
 
     def head_tree_in_worktree(self, config: Config) -> str:
         """HEAD's tree when git status shows no change to a run input under `config` (a source,
@@ -1200,9 +1189,9 @@ def command(argv: list[str] | None) -> int:
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
         commands = Commands(repo, Path(work), args.engine)
         try:
-            Snapshots.check_root(repo)
+            check_root(repo)
             return args.handler(commands, args)
-        except ConfigError as error:
+        except (ConfigError, RepoRootError) as error:
             sys.stderr.write("config error:\n" + "".join(f"  {problem}\n" for problem in error.problems))
             return 2
         except EngineError as error:

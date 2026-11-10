@@ -34,11 +34,10 @@ from hoglint.ledger.envelope import (
 )
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
-from hoglint.ledger.listing import TreeListing, WorktreeListing, read_blobs
+from hoglint.ledger.listing import TreeListing, WorktreeListing, WorktreeStatus, read_blobs
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
-from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import CacheRoot, CacheWarning, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause
 from hoglint.presets_py.posthog.owners import OWNERS_YAML
@@ -914,9 +913,9 @@ INPUTS = InputPatterns((*SOURCE_INPUTS, "**/turbo.json", "hoglint.ledger"))
     ],
 )
 def test_a_working_tree_holds_heads_inputs_unless_a_declared_input_differs(
-    records: list[str], drift: list[str]
+    tmp_path: Path, records: list[str], drift: list[str]
 ) -> None:
-    assert WorktreeStatus(records).drift(INPUTS.matches) == drift
+    assert WorktreeStatus(tmp_path, records).drift(INPUTS.matches) == drift
 
 
 LINES = "a = 1\nb = 2\nc = 3\nd = 4\n"

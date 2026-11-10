@@ -9,7 +9,7 @@ import pytest
 from hoglint.cli import Commands, Run, Runner, main
 from hoglint.config import Config, load_config
 from hoglint.ledger.envelope import EngineError
-from hoglint.ledger.status import WorktreeStatus
+from hoglint.ledger.listing import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
 from hoglint.plugins import PLUGIN_ROOTS
 from hoglint.rules.base import RuleContext
@@ -282,9 +282,6 @@ def count_runs(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 def check_once(repo: Path, work: Path, today: datetime.date, memo: bool, staged: bool) -> int:
     key = repo.resolve()
     WorktreeStatus.taken.pop(key, None)
-    started = WorktreeStatus.started.pop(key, None)
-    if started is not None:
-        started.communicate()
     work.mkdir(exist_ok=True)
     commands = Commands(repo, work, today=today, memo=memo)
     try:
