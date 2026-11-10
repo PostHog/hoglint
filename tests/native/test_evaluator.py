@@ -333,7 +333,7 @@ def run_rows(run: Any) -> list[tuple[Any, ...]]:
     return [*findings, *incomplete]
 
 
-JudgedRow = tuple[int, int, str, list[str], str, str | None]
+JudgedRow = tuple[int, int, str, list[str] | None, str, str | None]
 # The judgments whose rows carry the rule's identity (`Judgment::has_identity`).
 IDENTIFIED = (Judgment.VIOLATION.value, Judgment.UNKNOWN_TYPE.value)
 
@@ -376,7 +376,7 @@ def judged_columns(rows: list[JudgedRow]) -> tuple[Any, ...]:
         columns[0].append(edge)
         columns[1].append(target)
         columns[2].append(at(names, name))
-        columns[3].append(at(identities, list(identity)) if name in IDENTIFIED else place)
+        columns[3].append(at(identities, list(identity)) if name in IDENTIFIED and identity is not None else place)
         columns[4].append(at(modules, src))
         columns[5].append(at(modules, dst) if dst is not None else place)
     edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns)
@@ -1504,6 +1504,13 @@ def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
     assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
     with pytest.raises(EngineError, match="apart from the evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+
+
+def test_a_found_row_with_no_identity_is_an_engine_error(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}))
+    lie(monkeypatch, judge=lambda rows: [(*rows[0][:3], None, *rows[0][4:]), *rows[1:]])
+    with pytest.raises(EngineError, match="no identity"):
+        Engine(config, world.graph, world.repo).evaluate()
 
 
 @pytest.mark.parametrize(

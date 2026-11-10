@@ -362,6 +362,15 @@ class JudgedRows:
         places = {at for at, judgment in enumerate(self.judgments) if judgment not in self.found}
         self.alone = [row for row, at in enumerate(self.judgment_at) if at in places] if places else []
         self.alone_set = frozenset(self.alone)
+        # Rust gives only some judgments an identity (`Judgment::has_identity`); Python decides
+        # which judgments are findings, and a finding needs one.
+        if self.no_place in self.identity_at:
+            for at, place in enumerate(self.identity_at):
+                if place == self.no_place and at not in self.alone_set:
+                    raise EngineError(
+                        f"rule {rule.spec.id}: the evaluator gives a {self.judgment(at)} row no identity, "
+                        "but the rule takes it as a finding"
+                    )
         # The edges of the rows the rule's own code reports, by id.
         ids = distinct_ids(self.edges[at] for at in self.alone)
         self.alone_edges: dict[int, Edge] = dict(zip(ids, ctx.native.native.core.get(ids)))
