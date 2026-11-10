@@ -162,8 +162,8 @@ ledger = false
             "`remedy` is not read by layout rules",
         ),
         (
-            "[rules.other]\nprimitive = 'cycle'\nremedy = 'cut it'\nledger = false\n",
-            "`remedy` is not read by cycle rules",
+            "[rules.other]\nprimitive = 'export'\nremedy = 'narrow it'\nledger = false\n",
+            "`remedy` is not read by export rules",
         ),
         (
             "[rules.other]\nprimitive = 'use-shape'\nview = 'refs'\nledger = false\n",

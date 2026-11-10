@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
 from hoglint.model import Context, Edge, Resolution
-from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_ok, project
+from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project
 from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
 
 ABC_BASES = frozenset({"abc.ABC"})
@@ -39,7 +39,12 @@ UNKNOWN_WHY = {
 }
 
 
-class ExportPrimitive:
+class ExportPrimitive(RuleType):
+    PRIMITIVE = MODE = "export"
+    NATIVE_MODE = "export"
+    CONFIRM = "whole"
+    READS = frozenset({"exports", "contexts", "on_unknown", "unknown_types", "on_unresolved"})
+
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
         self.spec = spec

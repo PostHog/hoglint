@@ -59,6 +59,11 @@ class ReachPrimitive(EdgeRule):
     start module as `src`, so a condition on the start holds along the whole chain.
     """
 
+    PRIMITIVE = MODE = "reach"
+    NATIVE_MODE = "reach"
+    CONFIRM = ""
+    READS = frozenset({"kinds", "contexts", "view", "from", "select", "deny", "unless", "remedy", "on_unresolved"})
+
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
         self.from_classes = ClassSelection(spec.from_.node) if spec.from_ is not None else None
@@ -264,6 +269,11 @@ class CycleRow:
 
 class CyclePrimitive(EdgeRule):
     """Strongly connected parts of a grouped view: every pair inside one is a finding."""
+
+    PRIMITIVE = MODE = "cycle"
+    NATIVE_MODE = "cycle"
+    CONFIRM = ""
+    READS = frozenset({"kinds", "contexts", "view", "from", "select", "remedy", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)

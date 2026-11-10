@@ -11,12 +11,41 @@ from hoglint.selectors import Selector, Truth
 EXPORTED = Selector.parse("dst.exported")
 
 
+# What an edge rule reads; an entrypoint rule reads the same.
+EDGE_READS = frozenset(
+    {
+        "kinds",
+        "contexts",
+        "view",
+        "endpoint",
+        "from",
+        "select",
+        "deny",
+        "allow",
+        "require",
+        "unless",
+        "remedy",
+        "on_unresolved",
+    }
+)
+
+
 class EdgePrimitive(EdgeRule):
     """Is this edge allowed?"""
+
+    PRIMITIVE = MODE = "edge"
+    NATIVE_MODE = "judge"
+    CONFIRM = "row"
+    READS = EDGE_READS
 
 
 class EntrypointPrimitive(EdgeRule):
     """Did a cross-package edge name a public surface? Judges the surface the caller wrote."""
+
+    PRIMITIVE = MODE = "entrypoint"
+    NATIVE_MODE = "judge"
+    CONFIRM = "row"
+    READS = EDGE_READS
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
@@ -41,6 +70,25 @@ class UseShapePrimitive(EdgeRule):
     `kind` or `kind(detail)`) replaces the syntax-only shape. The environment carries the refined
     shape; the edge stays the graph's own, so its ordinal and its witness identity hold.
     """
+
+    PRIMITIVE = MODE = "use-shape"
+    NATIVE_MODE = "judge"
+    CONFIRM = "row"
+    READS = frozenset(
+        {
+            "kinds",
+            "contexts",
+            "endpoint",
+            "from",
+            "select",
+            "unless",
+            "allow_shapes",
+            "deny_shapes",
+            "flow",
+            "remedy",
+            "on_unresolved",
+        }
+    )
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
@@ -91,6 +139,24 @@ class SignaturePrimitive(EdgeRule):
     Only public callables count: a private function or method is no part of the signature.
     """
 
+    PRIMITIVE = MODE = "signature"
+    NATIVE_MODE = "judge"
+    CONFIRM = "row"
+    READS = frozenset(
+        {
+            "kinds",
+            "contexts",
+            "from",
+            "select",
+            "deny",
+            "unless",
+            "on_unknown",
+            "unknown_types",
+            "remedy",
+            "on_unresolved",
+        }
+    )
+
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
         self.core_slots: dict[str, set[SlotKey]] = {}
@@ -131,6 +197,12 @@ class SignaturePrimitive(EdgeRule):
             self.incomplete(env, message)
             return
         self.emit(env, judgment, message)
+
+    def found(self) -> frozenset[Judgment]:
+        """A slot of unknown type is a finding too, unless the rule reports it as incomplete."""
+        if self.spec.on_unknown == "incomplete":
+            return super().found()
+        return frozenset({Judgment.VIOLATION, Judgment.UNKNOWN_TYPE})
 
     def flags(self, judgment: Judgment) -> tuple[bool, bool]:
         if judgment is Judgment.UNKNOWN_TYPE:

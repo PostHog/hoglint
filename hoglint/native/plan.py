@@ -16,8 +16,8 @@ from typing import Any
 from hoglint.config.model import Config, FieldSpec, RuleSpec
 from hoglint.labels import Labeler
 from hoglint.native.graph import CONTEXT_BITS, NativeGraph
-from hoglint.rules.base import conjuncts, rule_kinds
-from hoglint.rules.entities import CoveragePrimitive
+from hoglint.rules.base import RuleType, conjuncts, rule_kinds
+from hoglint.rules.entities import CoveragePrimitive, EdgeInventory
 from hoglint.rules.exports import DEFAULT_EXCLUDED
 from hoglint.rules.graphs import CyclePrimitive
 from hoglint.selectors import (
@@ -35,9 +35,6 @@ from hoglint.selectors import (
     Value,
     refs,
 )
-
-# How the evaluator treats each primitive's rules: judged in Rust, or selected for Python.
-JUDGED = frozenset({"edge", "entrypoint", "signature", "use-shape"})
 
 
 def context_bits(names: frozenset[str]) -> int:
@@ -98,11 +95,12 @@ def label_value(value: Value) -> Any:
 class RulePlan:
     """The plan of one run over a native graph, and each rule's place in it."""
 
-    def __init__(self, config: Config, graph: NativeGraph, labeler: Labeler, rules: dict[str, type[Any]]) -> None:
+    def __init__(self, config: Config, graph: NativeGraph, labeler: Labeler, rules: list[RuleType]) -> None:
         self.config = config
         self.graph = graph
         self.labeler = labeler
-        self.specs = [spec for spec in config.rules.values() if spec.id in rules]
+        self.rules = rules
+        self.specs = [rule.spec for rule in rules]
         self.index = {spec.id: at for at, spec in enumerate(self.specs)}
         self.export_at = {name: at for at, name in enumerate(config.exports)}
         self.shape_at = {name: at for at, name in enumerate(config.shapes)}
@@ -129,10 +127,9 @@ class RulePlan:
             )
         return out
 
-    def entities(self, spec: RuleSpec) -> dict[str, Any] | None:
+    @staticmethod
+    def entities(spec: RuleSpec) -> dict[str, Any]:
         """What a rule over entities adds (`EntityRule`)."""
-        if self.mode(spec) != "entities":
-            return None
         wanted = spec.select.restricts(("kind",)) if spec.select is not None and spec.on == "symbol" else None
         return {
             "on_symbol": spec.on == "symbol",
@@ -154,28 +151,20 @@ class RulePlan:
             "on_unresolved": spec.on_unresolved,
         }
 
-    @staticmethod
-    def mode(spec: RuleSpec) -> str | None:
-        if spec.primitive in JUDGED:
-            return "judge"
-        if spec.primitive == "layout" or (spec.primitive == "inventory" and not spec.classify):
-            return "entities"
-        if spec.primitive == "inventory":
-            return "judge"
-        if spec.primitive in ("reach", "cycle", "export", "coverage"):
-            return spec.primitive
-        return None
-
-    def rule(self, spec: RuleSpec) -> dict[str, Any]:
-        # A reach rule's `from` is its start; a rule over entities reads its `select` alone.
-        alone = spec.primitive == "reach" or self.mode(spec) == "entities"
+    def rule(self, rule: RuleType) -> dict[str, Any]:
+        spec = rule.spec
+        mode = rule.NATIVE_MODE
+        entities = mode == "entities"
+        # A reach rule's `from` is its start; a rule over entities reads its `select` alone and
+        # never an edge's kinds or contexts.
+        alone = spec.primitive == "reach" or entities
         selectors = (spec.select,) if alone else (spec.from_, spec.select)
         return {
             "id": spec.id,
-            "mode": self.mode(spec),
-            "kinds": list(dict.fromkeys(rule_kinds(spec, self.config.views))),
-            "include": context_bits(frozenset(spec.contexts_include)),
-            "exclude": context_bits(frozenset(spec.contexts_exclude or ())),
+            "mode": mode,
+            "kinds": [] if entities else list(dict.fromkeys(rule_kinds(spec, self.config.views))),
+            "include": 0 if entities else context_bits(frozenset(spec.contexts_include)),
+            "exclude": 0 if entities else context_bits(frozenset(spec.contexts_exclude or ())),
             "endpoint": spec.endpoint,
             "selection": [tree(part) for part in conjuncts(selectors)],
             "deny": selector_tree(spec.deny),
@@ -191,8 +180,8 @@ class RulePlan:
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
             "export": self.export_rule(spec),
             "covers": self.covers(spec),
-            "entities": self.entities(spec),
-            "inventory": spec.primitive == "inventory" and bool(spec.classify),
+            "entities": self.entities(spec) if entities else None,
+            "inventory": isinstance(rule, EdgeInventory),
             "use_shape": {
                 "allow": list(spec.allow_shapes),
                 "deny": list(spec.deny_shapes),
@@ -368,7 +357,7 @@ class RulePlan:
             "provided": provided,
             "provider_conflicts": provider_conflicts,
             "failed": sorted(self.labeler.providers.failed_fields),
-            "rules": [self.rule(spec) for spec in self.specs],
+            "rules": [self.rule(rule) for rule in self.rules],
             "repeats": sorted(self.graph.repeats.items()),
         }
 

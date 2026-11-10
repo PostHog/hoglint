@@ -10,7 +10,6 @@ import datetime
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
 from hoglint.config.loader import ConfigError
 from hoglint.config.model import Config, RuleSpec
@@ -19,7 +18,7 @@ from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
 from hoglint.ledger.file import LedgerFile, LineKey, level_line
 from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph, IncompleteCause, Outcome, RuleResult
-from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_class, labeler_class, rule_kinds
+from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_class, labeler_class, rule_kinds
 from hoglint.rules.edges import EdgePrimitive, EntrypointPrimitive, SignaturePrimitive, UseShapePrimitive
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityInventory, LayoutPrimitive
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile, apply_exceptions
@@ -33,31 +32,36 @@ UNREADABLE = "source:unreadable"
 READ_ERROR = ("status", "read_error")
 
 
-class Primitive(Protocol):
-    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None: ...
-
-    def evaluate(self) -> RuleRun: ...
-
-
-PRIMITIVES: dict[str, type[Primitive]] = {
-    "edge": EdgePrimitive,
-    "entrypoint": EntrypointPrimitive,
-    "use-shape": UseShapePrimitive,
-    "signature": SignaturePrimitive,
-    "export": ExportPrimitive,
-    "reach": ReachPrimitive,
-    "cycle": CyclePrimitive,
-    "layout": LayoutPrimitive,
-    "coverage": CoveragePrimitive,
-}
+# Every rule type, one per mode, in the order the test generator draws them.
+RULE_TYPES: tuple[type[RuleType], ...] = (
+    EdgePrimitive,
+    EntrypointPrimitive,
+    UseShapePrimitive,
+    SignaturePrimitive,
+    ExportPrimitive,
+    ReachPrimitive,
+    CyclePrimitive,
+    LayoutPrimitive,
+    CoveragePrimitive,
+    EdgeInventory,
+    EntityInventory,
+)
+PRIMITIVES: dict[str, type[RuleType]] = {cls.PRIMITIVE: cls for cls in RULE_TYPES if not cls.MODE_KEY}
 
 
-def primitive_of(spec: RuleSpec) -> type[Primitive]:
-    """The class that runs a rule. An inventory over edges (`classify`) and one over entities
-    (`exactly_one`) share a name in config but not a shape."""
-    if spec.primitive == "inventory":
-        return EdgeInventory if spec.classify else EntityInventory
-    return PRIMITIVES[spec.primitive]
+def rule_type(primitive: str, classify: bool) -> type[RuleType] | None:
+    """The class that runs a rule of `primitive`, None for no primitive. An inventory over edges
+    (`classify`) and one over entities (`exactly_one`) share a name in config but not a shape."""
+    if primitive == "inventory":
+        return EdgeInventory if classify else EntityInventory
+    return PRIMITIVES.get(primitive)
+
+
+def primitive_of(spec: RuleSpec) -> type[RuleType]:
+    """The class that runs a rule."""
+    found = rule_type(spec.primitive, bool(spec.classify))
+    assert found is not None, spec.primitive
+    return found
 
 
 @dataclass(frozen=False, slots=True)

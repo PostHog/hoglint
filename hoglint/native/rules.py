@@ -25,7 +25,7 @@ from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, 
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
-from hoglint.native.plan import JUDGED, RulePlan, tree
+from hoglint.native.plan import RulePlan, tree
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, project
 from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
@@ -281,10 +281,6 @@ def engine_errors() -> Iterator[None]:
         raise EngineError(f"the native evaluator failed: {error}") from error
 
 
-# The rule types that have no Python judge per row: a ledger write runs them whole again.
-RUN_WHOLE = frozenset({"export", "layout", "inventory"})
-
-
 def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
     """What a ledger write holds the evaluator to: each finding's identity, subjects and flags,
     and each incomplete item, in order."""
@@ -298,7 +294,6 @@ FoundRow = tuple[EdgeHandle, int, int, tuple[str, ...], str, str | None]
 
 JUDGMENTS = list(Judgment)
 VIOLATION = JUDGMENTS.index(Judgment.VIOLATION)
-UNKNOWN_TYPE = JUDGMENTS.index(Judgment.UNKNOWN_TYPE)
 # The evaluator's verdict codes of a denied target (`Rules.reach`).
 VERDICT_TRUTHS = {1: Truth.TRUE, 2: Truth.UNKNOWN}
 
@@ -317,10 +312,8 @@ class NativeRuleContext(RuleContext):
 
     @cached_property
     def plan(self) -> RulePlan:
-        planned = {
-            spec.id: primitive_of(spec) for spec in self.config.rules.values() if RulePlan.mode(spec) is not None
-        }
-        return RulePlan(self.config, self.native.native, self.labeler, planned)
+        rules = [primitive_of(spec)(self, spec) for spec in self.config.rules.values()]
+        return RulePlan(self.config, self.native.native, self.labeler, rules)
 
     @cached_property
     def evaluator(self) -> Any:
@@ -361,15 +354,6 @@ class NativeRuleContext(RuleContext):
                 labeler.provider_labels(entity)
 
     @staticmethod
-    def found_codes(rule: EdgeRule) -> frozenset[int]:
-        """The judgment codes whose rows become findings here: a violation, and for a signature
-        rule a slot of unknown type it reports as a finding."""
-        spec = rule.spec
-        if spec.primitive == "signature" and spec.on_unknown != "incomplete":
-            return frozenset({VIOLATION, UNKNOWN_TYPE})
-        return frozenset({VIOLATION})
-
-    @staticmethod
     def judged_alone(rule: EdgeRule, edge: Edge, target: int, judgment: Judgment) -> RuleRun:
         """What the rule's own code reports for one destination the evaluator judged neither
         clean nor a finding of its own."""
@@ -395,11 +379,11 @@ class NativeRuleContext(RuleContext):
         """The evaluator's rows of an edge, entrypoint, signature or use-shape rule, into the
         rule's run in the order the rule judges: a violation (or a slot of unknown type the rule
         reports as a finding) becomes its finding here, its edge kept as a handle."""
-        if rule.spec.primitive not in JUDGED:
+        if rule.CONFIRM != "row":
             return False
         with engine_errors():
             rows = self.evaluator.judge(self.plan.index[rule.spec.id])
-        found = self.found_codes(rule)
+        found = frozenset(JUDGMENTS.index(judgment) for judgment in rule.found())
         spec = rule.spec
         flags = {code: rule.flags(JUDGMENTS[code]) for code in found}
         for handle, target, code, identity, src, dst in self.found_rows(rule, rows, found):
@@ -481,7 +465,7 @@ class NativeRuleContext(RuleContext):
         return True
 
     def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
-        if self.plan.mode(rule.spec) != "entities":
+        if rule.NATIVE_MODE != "entities":
             return None
         with engine_errors():
             return self.evaluator.entities(self.plan.index[rule.spec.id])
@@ -535,7 +519,7 @@ class NativeRuleContext(RuleContext):
         the evaluator's findings and incomplete items, in order."""
         for detail in self.rejudged:
             detail.confirmed()
-        whole = [spec for spec in ran if spec.primitive in RUN_WHOLE]
+        whole = [spec for spec in ran if primitive_of(spec).CONFIRM == "whole"]
         if not whole:
             return
         labeler = Labeler(self.config, self.graph, self.repo_root, self.index)

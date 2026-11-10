@@ -16,6 +16,7 @@ from hoglint.rules.base import (
     Judgment,
     RuleContext,
     RuleRun,
+    RuleType,
     StagedSelection,
     conjuncts,
     contexts_of,
@@ -42,8 +43,10 @@ KIND_AND_CONTEXT = frozenset({("edge", "kind"), ("edge", "context")})
 UNKNOWN_SELECTION = "cannot tell whether this entity is selected"
 
 
-class EntityRule:
+class EntityRule(RuleType):
     """Shared emit and selection for rules whose subject is a module, symbol or path."""
+
+    ENTITIES = True
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
@@ -108,6 +111,11 @@ class EntityRule:
 
 class LayoutPrimitive(EntityRule):
     """Required files and zones exist, moved files are gone, selected entities meet `require`."""
+
+    PRIMITIVE = MODE = "layout"
+    NATIVE_MODE = "entities"
+    CONFIRM = "whole"
+    READS = frozenset({"on", "select", "require", "within", "files", "absent", "registry"})
 
     def evaluate(self) -> RuleRun:
         if self.spec.select is not None or self.spec.require is not None:
@@ -226,6 +234,13 @@ class LayoutPrimitive(EntityRule):
 class EntityInventory(EntityRule):
     """`exactly_one`: every selected entity has exactly one value of a set field."""
 
+    PRIMITIVE = "inventory"
+    MODE = "inventory-exactly-one"
+    MODE_KEY = "exactly_one"
+    NATIVE_MODE = "entities"
+    CONFIRM = "whole"
+    READS = frozenset({"on", "select", "exactly_one"})
+
     def message(self, subject: str, count: int) -> str:
         return f"{subject} has {count} {self.spec.exactly_one} values, needs exactly one"
 
@@ -258,6 +273,13 @@ class EntityInventory(EntityRule):
 
 class EdgeInventory(EdgeRule):
     """`classify`: every selected edge carries a classification, and every classification still matches one."""
+
+    PRIMITIVE = "inventory"
+    MODE = "inventory-classify"
+    MODE_KEY = "classify"
+    NATIVE_MODE = "judge"
+    CONFIRM = "whole"
+    READS = frozenset({"kinds", "contexts", "from", "select", "classify", "remedy", "on_unresolved"})
 
     def unclassified(self, identity: tuple[str, ...]) -> str:
         """The message of an identity the classification file lacks: the words of both engines."""
@@ -306,7 +328,16 @@ class EdgeInventory(EdgeRule):
 
 
 class CoveragePrimitive(EntityRule):
-    """Does an outside input list (a coverage adapter, such as turbo task inputs) cover every path the rule names?"""
+    """Does an outside input list (a coverage adapter, such as turbo task inputs) cover every path the rule names?
+
+    The schema reads its identity as an entity rule's; the evaluator finds its paths in a mode of
+    its own and never reads the identity.
+    """
+
+    PRIMITIVE = MODE = "coverage"
+    NATIVE_MODE = "coverage"
+    CONFIRM = ""
+    READS = frozenset({"covers", "inputs"})
 
     def required(self) -> dict[str, tuple[str, str | None]]:
         """path -> (why, module) for every path that must be covered."""

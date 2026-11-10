@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
@@ -66,6 +66,43 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
 EDGE_DEPENDENT_FIELDS = frozenset({"context", "exported"})
+
+
+class RuleType:
+    """What a rule type is, stated once on its class (D53). The schema's unread keys, the native
+    plan's mode, the rules a ledger write runs whole again and the test generator's modes are
+    all derived from these statements."""
+
+    # The config's name of the primitive, and of this mode of it: an inventory has two modes,
+    # one per class, and `MODE_KEY` is the key whose presence names the mode.
+    PRIMITIVE: ClassVar[str]
+    MODE: ClassVar[str]
+    MODE_KEY: ClassVar[str] = ""
+    # How the native evaluator runs the rule: "judge" (per edge), "entities", "reach", "cycle",
+    # "export" or "coverage".
+    NATIVE_MODE: ClassVar[str]
+    # Whether its selectors and identity read entities (a module, a symbol or a path) rather than
+    # an edge's two ends.
+    ENTITIES: ClassVar[bool] = False
+    # How a ledger write confirms what the evaluator found: "row" (the rule's own code judges each
+    # row again), "whole" (the rule runs whole again in Python) or "" (not confirmed).
+    CONFIRM: ClassVar[str]
+    # The config keys the rule's code reads, besides the ones every rule has
+    # (`config.schema.EVERY_RULE_READS`).
+    READS: ClassVar[frozenset[str]]
+
+    spec: RuleSpec
+
+    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
+        raise NotImplementedError
+
+    def evaluate(self) -> RuleRun:
+        raise NotImplementedError
+
+    @classmethod
+    def mode_text(cls) -> str:
+        """The mode as a config error names it."""
+        return f"{cls.PRIMITIVE} rules with `{cls.MODE_KEY}`" if cls.MODE_KEY else f"{cls.PRIMITIVE} rules"
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,7 +683,7 @@ class StagedSelection:
         return all_of(parts)
 
 
-class EdgeRule:
+class EdgeRule(RuleType):
     """Selection and the predicate step for every primitive that judges single edges."""
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
@@ -765,6 +802,11 @@ class EdgeRule:
     # Whether `report` names the edge as a finding's only witness. Then a finding whose detail is
     # made when read still has its witness and site without making it.
     witness_is_edge = True
+
+    def found(self) -> frozenset[Judgment]:
+        """The judgments whose evaluator rows become findings as they are; a row of any other
+        judgment goes to the rule's own `report`."""
+        return frozenset({Judgment.VIOLATION})
 
     def flags(self, judgment: Judgment) -> tuple[bool, bool]:
         """(ledgerable, unknown) of the finding `judgment` makes. They come from the rule and the

@@ -15,7 +15,8 @@ from typing import Any
 import pytest
 
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
-from hoglint.config.schema import RULE_KEYS, UNREAD_KEYS, SchemaBuilder
+from hoglint.config.model import RuleSpec
+from hoglint.config.schema import EVERY_RULE_READS, RULE_KEYS, unread_keys
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
@@ -26,7 +27,7 @@ from hoglint.native.source import graph_source
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules import engine
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project
-from hoglint.rules.engine import Engine, primitive_of
+from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
 from hoglint.selectors import State
 
 from native.require import native_module
@@ -339,7 +340,7 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
     native, python = world.contexts(config)
     out = []
     for spec in config.rules.values():
-        mode = native.plan.mode(spec)
+        mode = primitive_of(spec).NATIVE_MODE
         rule = primitive_of(spec)(native, spec)
         index = native.plan.index[spec.id]
         # An inventory's rows keep the first destination of each identity; its run is compared.
@@ -784,36 +785,18 @@ def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
     return f"not {text}" if rng.random() < 0.2 else text
 
 
-# A rule mode: a primitive, or an inventory over edges or over entities. Each draws its keys from
-# the schema's list for its primitive (`RULE_KEYS`).
-MODES = {
-    "edge": "edge",
-    "entrypoint": "entrypoint",
-    "use-shape": "use-shape",
-    "signature": "signature",
-    "export": "export",
-    "reach": "reach",
-    "cycle": "cycle",
-    "layout": "layout",
-    "coverage": "coverage",
-    "inventory-classify": "inventory",
-    "inventory-exactly-one": "inventory",
-}
-ENTITY_MODES = frozenset({"layout", "coverage", "inventory-exactly-one"})
+# A rule mode: a primitive, or an inventory over edges or over entities, as its class states it
+# (`RULE_TYPES`). Each draws its keys from the schema's list for its primitive (`RULE_KEYS`).
+TYPES = {cls.MODE: cls for cls in RULE_TYPES}
+MODES = {mode: cls.PRIMITIVE for mode, cls in TYPES.items()}
+ENTITY_MODES = frozenset(mode for mode, cls in TYPES.items() if cls.ENTITIES)
 # The key that makes a mode what it is, and keys a mode cannot load without.
-MODE_KEYS = {"inventory-classify": "classify", "inventory-exactly-one": "exactly_one"}
+MODE_KEYS = {mode: cls.MODE_KEY for mode, cls in TYPES.items() if cls.MODE_KEY}
 NEEDED = {"coverage": frozenset({"covers", "inputs"})}
 # Modes whose findings a coverage rule's `rules.<id>.<column>` cover may name.
 NAMED_MODES = ["reach", "cycle", "export", "inventory-classify", "inventory-exactly-one", "edge"]
 UNKNOWN_TYPES = ["typing.Any", "builtins.dict", "products.billing.backend.models.Loose"]
 CONTEXT_PARTS = [{"exclude": ["test"]}, {"include": ["prod"]}, {"exclude": []}, {"include": ["test", "prod"]}]
-
-
-def unread_keys(mode: str) -> frozenset[str]:
-    """The keys the schema refuses for a mode: it accepts them for the primitive, but the
-    mode's rule code never reads them."""
-    table = {"classify": "c"} if mode == "inventory-classify" else {}
-    return UNREAD_KEYS.get(SchemaBuilder.rule_mode(table, MODES[mode]), frozenset())
 
 
 class Tables:
@@ -917,7 +900,7 @@ class Tables:
     def chance(self, mode: str, key: str) -> float:
         if key == MODE_KEYS.get(mode) or key in NEEDED.get(mode, ()):
             return 1.0 if key in MODE_KEYS.values() else 0.95
-        if key in unread_keys(mode):
+        if key in unread_keys(TYPES[mode]):
             return 0.08
         return 0.85 if key == "identity" else 0.5
 
@@ -970,7 +953,7 @@ def schema_gaps(drawn: list[tuple[str, frozenset[str], bool]]) -> list[str]:
     out = []
     for mode, primitive in MODES.items():
         tables = [(keys, loaded) for drawn_mode, keys, loaded in drawn if drawn_mode == mode]
-        unread = unread_keys(mode)
+        unread = unread_keys(TYPES[mode])
         for key in sorted(RULE_KEYS[primitive] - {"primitive"}):
             held = [loaded for keys, loaded in tables if key in keys]
             # The key that picks an inventory's mode is left out only in the other mode.
@@ -1002,7 +985,7 @@ def level_differences(world: World, config: Config, monkeypatch: pytest.MonkeyPa
 
 
 def test_generated_rules_are_judged_the_same_in_both(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    tables = Tables(random.Random(20261110))
+    tables = Tables(random.Random(20261111))
     drawn: list[tuple[str, frozenset[str], bool]] = []
     failures = []
     # Every mode in turn, until a table of it loads: each mode gets as many judged configs.
@@ -1022,6 +1005,83 @@ def test_generated_rules_are_judged_the_same_in_both(world: World, monkeypatch: 
             failures.extend(f"{found}\n{rules}" for found in level_differences(world, config, monkeypatch))
     assert failures == []
     assert schema_gaps(drawn) == []
+
+
+# A `RuleSpec` attribute and the config key it holds, where the two names differ.
+SPEC_KEYS = {
+    "from_": "from",
+    "contexts_include": "contexts",
+    "contexts_exclude": "contexts",
+    "identity_name": "identity",
+    "producer_options": "flow",
+    "input": "inputs",
+}
+
+
+class Recording:
+    """A `RuleSpec` that records the config key of every attribute read from it."""
+
+    def __init__(self, spec: RuleSpec) -> None:
+        self.spec = spec
+        self.keys: set[str] = set()
+
+    def __getattr__(self, name: str) -> Any:
+        self.keys.add(SPEC_KEYS.get(name, name))
+        return getattr(self.spec, name)
+
+
+class KeysRead:
+    """Per mode, the keys its rule class read in a run of the Python engine, and the keys the
+    native plan read to plan it; both among the keys its primitive accepts and some rules do not
+    read (`EVERY_RULE_READS` aside)."""
+
+    def __init__(self) -> None:
+        self.by_class: dict[str, set[str]] = {mode: set() for mode in TYPES}
+        self.by_plan: dict[str, set[str]] = {mode: set() for mode in TYPES}
+
+    def record(self, world: World, config: Config) -> None:
+        native, python = world.contexts(config)
+        for spec in config.rules.values():
+            cls = primitive_of(spec)
+            accepted = RULE_KEYS[cls.PRIMITIVE] - EVERY_RULE_READS
+            recording: Any = Recording(spec)
+            python.results[spec.id] = cls(python, recording).evaluate()
+            self.by_class[cls.MODE] |= recording.keys & accepted
+            planned: Any = Recording(spec)
+            rule = cls(native, planned)
+            self.by_class[cls.MODE] |= planned.keys & accepted
+            planned.keys.clear()
+            native.plan.rule(rule)
+            self.by_plan[cls.MODE] |= planned.keys & accepted
+
+    def problems(self) -> list[str]:
+        out = []
+        for mode, cls in TYPES.items():
+            read = self.by_class[mode]
+            if read != cls.READS:
+                out.append(
+                    f"{mode}: reads {sorted(read - cls.READS)} undeclared, never reads {sorted(cls.READS - read)}"
+                )
+            if not self.by_plan[mode] <= read:
+                out.append(f"{mode}: the plan reads {sorted(self.by_plan[mode] - read)}, which the rule does not")
+            if not cls.READS <= RULE_KEYS[cls.PRIMITIVE]:
+                out.append(f"{mode}: declares {sorted(cls.READS - RULE_KEYS[cls.PRIMITIVE])}, which the schema refuses")
+        return out
+
+
+def test_each_rule_type_reads_exactly_the_keys_it_declares(world: World) -> None:
+    tables = Tables(random.Random(20261112))
+    read = KeysRead()
+    for mode in list(TYPES) * 24:
+        while True:
+            rules = tables.rules("generated", mode)
+            try:
+                config = world.config(rules)
+            except ConfigError:
+                continue
+            break
+        read.record(world, config)
+    assert read.problems() == []
 
 
 TIERS = ["core", "product", "leaf"]

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import hashlib
 import dataclasses
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hoglint import adapters  # noqa: F401 - registers the builtin coverage adapters and providers
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
@@ -38,6 +38,9 @@ from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
 from hoglint.selectors import Catalog, FieldInfo, FieldType, Selector, SelectorError, suggest
+
+if TYPE_CHECKING:
+    from hoglint.rules.base import RuleType
 
 CORE_EDGE_KINDS = (
     "import",
@@ -96,6 +99,8 @@ NAMED_IDENTITIES: dict[str, tuple[str, ...]] = {
 COMMON_RULE_KEYS = frozenset(
     {"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "remedy", "requires", "on_unresolved"}
 )
+# The keys the engine and the ledger read for every rule, whatever its type.
+EVERY_RULE_READS = frozenset({"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "requires"})
 EDGE_SELECT_KEYS = frozenset({"kinds", "contexts", "view", "from", "select", "endpoint", "unless"})
 PRODUCER_OPTION_KEYS = {"flow": ("syntax", "def-use"), "resolve_calls": ("bare-name", "import")}
 RULE_KEYS: dict[str, frozenset[str]] = {
@@ -111,20 +116,9 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "coverage": COMMON_RULE_KEYS | {"covers", "inputs"},
     "inventory": COMMON_RULE_KEYS | {"kinds", "contexts", "select", "from", "classify", "on", "exactly_one"},
 }
-# Keys a rule type accepts that one of its modes never reads: a key no rule code reads has no
-# meaning, so each engine would give it one of its own (D52). A mode is a primitive, or an
-# inventory over edges (`classify`) or over entities (`exactly_one`).
-UNREAD_KEYS: dict[str, frozenset[str]] = {
-    "inventory rules with `exactly_one`": frozenset(
-        {"from", "kinds", "contexts", "classify", "remedy", "on_unresolved"}
-    ),
-    "inventory rules with `classify`": frozenset({"on", "exactly_one"}),
-    "layout rules": frozenset({"remedy", "on_unresolved"}),
-    "coverage rules": frozenset({"remedy", "on_unresolved"}),
-    "export rules": frozenset({"remedy"}),
-    "cycle rules": frozenset({"remedy"}),
-    "use-shape rules": frozenset({"view"}),
-}
+# Keys an edge rule accepts that no code reads: the preset's `drives` rule states its producer's
+# call resolution with `resolve_calls`. They go when the preset drops them.
+UNREAD_ACCEPTED: dict[str, frozenset[str]] = {"edge": frozenset(PRODUCER_OPTION_KEYS)}
 DEFAULT_UNKNOWN_TYPES = ("typing.Any", "builtins.dict", "typing.Dict", "builtins.object")
 
 FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
@@ -161,6 +155,22 @@ ENDPOINT_FIELDS: dict[str, FieldInfo] = {
 }
 BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
 CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles")
+
+
+def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
+    """The class that runs a rule of a known `primitive` (`rules.engine.rule_type`)."""
+    from hoglint.rules.engine import rule_type  # noqa: PLC0415 - the rule classes import this module's package
+
+    found = rule_type(primitive, classify)
+    assert found is not None, primitive
+    return found
+
+
+def unread_keys(rule: type[RuleType]) -> frozenset[str]:
+    """The keys a rule's primitive accepts that its mode never reads: a key no rule code reads has
+    no meaning, so each engine would give it one of its own (D52)."""
+    unread = RULE_KEYS[rule.PRIMITIVE] - rule.READS - EVERY_RULE_READS
+    return unread - UNREAD_ACCEPTED.get(rule.MODE, frozenset())
 
 
 def as_tuple(value: Any) -> tuple[str, ...]:
@@ -729,17 +739,10 @@ class SchemaBuilder:
         self.check_keys(key, inputs, adapter.allowed_options | {"adapter"})
         return inputs
 
-    @staticmethod
-    def rule_mode(table: dict[str, Any], primitive: str) -> str:
-        if primitive == "inventory":
-            return f"inventory rules with `{'classify' if table.get('classify') else 'exactly_one'}`"
-        return f"{primitive} rules"
-
-    def check_read_keys(self, key: str, table: dict[str, Any], primitive: str) -> None:
+    def check_read_keys(self, key: str, table: dict[str, Any], rule: type[RuleType]) -> None:
         """A key the rule's mode accepts in the schema but never reads is a config error (D52)."""
-        mode = self.rule_mode(table, primitive)
-        for name in sorted(UNREAD_KEYS.get(mode, frozenset()) & table.keys()):
-            self.fail(key, f"`{name}` is not read by {mode}; remove it")
+        for name in sorted(unread_keys(rule) & table.keys()):
+            self.fail(key, f"`{name}` is not read by {rule.mode_text()}; remove it")
 
     def read_rules(self, registries: dict[str, RegistrySpec], exports: dict[str, ExportSpec]) -> dict[str, RuleSpec]:
         out: dict[str, RuleSpec] = {}
@@ -767,8 +770,9 @@ class SchemaBuilder:
             self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), RULE_KEYS)}")
             return None
         self.check_keys(key, table, RULE_KEYS[primitive])
-        self.check_read_keys(key, table, primitive)
-        entity_rule = primitive in ("layout", "coverage") or (primitive == "inventory" and not table.get("classify"))
+        rule = rule_type_of(primitive, bool(table.get("classify")))
+        self.check_read_keys(key, table, rule)
+        entity_rule = rule.ENTITIES
         edge_catalog = self.edge_catalog()
         entity_catalog = self.entity_catalog()
         predicate_catalog = entity_catalog if entity_rule else edge_catalog
