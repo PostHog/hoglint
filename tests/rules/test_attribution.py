@@ -126,8 +126,6 @@ def test_a_stored_summary_serves_only_its_exact_envelope(
     ids=["short row", "unknown status", "short witness"],
 )
 def test_a_malformed_findings_row_is_a_miss_not_a_crash(tmp_path: Path, row: list[Any]) -> None:
-    """Findings rows decode when read; a bad one must still fail where the store and the reader
-    guard, as the rest of the summary does."""
     summary = ScanSummary(envelope=STORED, findings=StoredFindings([row]))
     assert SummaryStore(tmp_path).put(STORED, summary) is not None
     assert SummaryStore(tmp_path).get(STORED) is None

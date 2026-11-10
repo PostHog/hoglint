@@ -757,7 +757,6 @@ growth_key = ["src.module"]
 
 
 def test_the_rule_classes_need_no_native_shell() -> None:
-    """What a rule means lives in `hoglint.rules`; the native engine depends on it, not back."""
     code = "import sys, hoglint.rules.engine; print(sorted(m for m in sys.modules if m.startswith('hoglint.native')))"
     found = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert found.stdout.strip() == "[]"
