@@ -898,6 +898,24 @@ impl Rules {
         Ok(Walk::new(cx, export, &inputs).run())
     }
 
+    /// Every name kind `name` holds (`Labeler.kind_members`), sorted.
+    pub fn kind_members(&self, name: &str) -> Result<Vec<String>, String> {
+        let kind = self
+            .kind_names
+            .iter()
+            .position(|known| known == name)
+            .ok_or_else(|| format!("no kind {name}"))?;
+        let mut out: Vec<String> = self
+            .kind_sets
+            .kinds_of
+            .iter()
+            .filter(|(_, kinds)| kinds.contains(&kind))
+            .map(|(member, _)| member.clone())
+            .collect();
+        out.sort();
+        Ok(out)
+    }
+
     /// The paths coverage rule `index` needs covered, from the witnesses Python gathered for its
     /// rule covers (`CoverInputs`; an edge cover's entry is ignored).
     pub fn coverage(

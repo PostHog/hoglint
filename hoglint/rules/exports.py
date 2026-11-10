@@ -12,6 +12,8 @@ checked whatever its audience.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
 from hoglint.model import Context, Edge, Resolution
@@ -33,11 +35,7 @@ class ExportPrimitive:
         self.spec = spec
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
-        index = ctx.labeler.index
-        self.index = index
-        self.exposes = index.exposed_handles
-        self.top_level = index.top_level
-        self.module_imports = index.module_imports
+        self.index = ctx.labeler.index
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
         self.shapes: dict[str, tuple[frozenset[str], bool]] = {}
@@ -46,6 +44,18 @@ class ExportPrimitive:
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
+
+    @property
+    def exposes(self) -> Mapping[str, list[tuple[str, int]]]:
+        return self.index.exposed_handles
+
+    @property
+    def top_level(self) -> Mapping[str, list[str]]:
+        return self.index.top_level
+
+    @property
+    def module_imports(self) -> Mapping[str, list[Edge]]:
+        return self.index.module_imports
 
     def selected_exports(self) -> list[ExportSpec]:
         names = self.spec.exports or tuple(self.ctx.config.exports)

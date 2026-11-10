@@ -261,6 +261,11 @@ impl Rules {
             .map_err(PyValueError::new_err)
     }
 
+    /// Every name a kind holds, sorted.
+    fn kind_members(&self, name: &str) -> PyResult<Vec<String>> {
+        self.inner.kind_members(name).map_err(PyValueError::new_err)
+    }
+
     /// The roots a layout rule's `within` names among the graph's module paths, sorted.
     fn layout_roots(&self, py: Python<'_>, within: &str) -> PyResult<Vec<String>> {
         let bound = self.link.bind(py).borrow();

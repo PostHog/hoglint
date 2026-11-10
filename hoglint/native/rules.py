@@ -21,7 +21,7 @@ from hoglint.config.model import Config
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Remedy, Shown, WitnessRow
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
@@ -138,7 +138,11 @@ class NativeSymbolFacts(SymbolFacts):
         return [name for name in self.columns if name in core or name in added]
 
     def find_decl(self, decl: str) -> bool:
-        return bool(self.with_decl(decl))
+        """Whether any symbol has the declaration, with no list of them made."""
+        kinds = [kind for kind in SYMBOL_KINDS if DECL_NAMES.get(kind, kind) == decl]
+        if self.columns.core_with_kinds(kinds):
+            return True
+        return any(self.decl(name) == decl for name in self.columns.added)
 
 
 class RowEdges:
@@ -275,6 +279,7 @@ class NativeRuleContext(RuleContext):
         assert isinstance(index, NativeGraphIndex)
         self.native = index
         self.rejudged: list[Rejudged] = []
+        self.owners: dict[str, Owners | None] = {}
 
     @cached_property
     def plan(self) -> RulePlan:
@@ -470,6 +475,16 @@ class NativeRuleContext(RuleContext):
         for subject, module, reason in incomplete:
             rule.incomplete(subject, module, reason)
         return {path: (why, module) for path, why, module in paths}
+
+    def owner(self, module: str | None) -> Owners | None:
+        """A finding's owners, one lookup per module: the evaluator's rows name few modules many
+        times."""
+        if module is None:
+            return None
+        found = self.owners.get(module)
+        if found is None:
+            found = self.owners[module] = super().owner(module)
+        return found
 
     def confirm_findings(self) -> None:
         """Every finding the evaluator made is judged again by its rule's own code: a run that

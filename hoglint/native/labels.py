@@ -11,7 +11,7 @@ import json
 from array import array
 from typing import Any
 
-from hoglint.config.model import LevelSpec
+from hoglint.config.model import KindSpec, LevelSpec
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
 from hoglint.native.plan import tree
@@ -94,6 +94,15 @@ class NativeLabeler(Labeler):
         if name == "registry":
             return Value.known(spec.name)
         return Value.known(spec.lifecycle) if spec.lifecycle else NONE
+
+    def kind_members(self, spec: KindSpec) -> frozenset[str]:
+        """The evaluator's members of a kind: the Python labeler would classify every symbol."""
+        if self.evaluator is None:
+            return super().kind_members(spec)
+        try:
+            return frozenset(self.evaluator.kind_members(spec.name))
+        except ValueError as error:
+            raise EngineError(f"the native evaluator failed: {error}") from error
 
     def level_groups(self, spec: LevelSpec) -> list[str] | None:
         """The evaluator's groups of a level, when its group field is not a set: `known_text` of
