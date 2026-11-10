@@ -87,6 +87,17 @@ class Snapshots:
         self.work_dir = work_dir
         self.worktrees: list[Path] = []
 
+    @staticmethod
+    def check_root(repo: Path) -> None:
+        """The repo root must be the top of a git working tree: `git status` names paths from the
+        top, `git ls-files` from where it runs, and the run mixes the two."""
+        done = subprocess.run(["git", "-C", str(repo), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        top = done.stdout.strip()
+        if done.returncode != 0 or not top:
+            raise ConfigError([f"{repo} is not in a git working tree; hoglint needs the top of one as its repo root"])
+        if Path(top).resolve() != repo.resolve():
+            raise ConfigError([f"{repo} is not the top of its git working tree {top}; run hoglint with --repo {top}"])
+
     def write_tree(self) -> str:
         """The index as a git tree: the one read of the index a staged run makes. Empty when the
         index holds conflicts, which no tree can hold.
@@ -1188,6 +1199,7 @@ def command(argv: list[str] | None) -> int:
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
         commands = Commands(repo, Path(work), args.engine)
         try:
+            Snapshots.check_root(repo)
             return args.handler(commands, args)
         except ConfigError as error:
             sys.stderr.write("config error:\n" + "".join(f"  {problem}\n" for problem in error.problems))

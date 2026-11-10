@@ -88,6 +88,27 @@ def test_a_crash_is_an_internal_error_with_exit_2_never_1(
     assert printed.startswith("internal error:\nTraceback") and "KeyError: 'boom'" in printed
 
 
+@pytest.mark.parametrize(
+    "git_dir, error",
+    [
+        (None, "is not in a git working tree"),
+        (".", "is not the top of its git working tree"),
+    ],
+    ids=["no git repo", "below the git top-level"],
+)
+def test_the_repo_root_is_the_top_of_a_git_working_tree_or_a_config_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], git_dir: str | None, error: str
+) -> None:
+    repo = tmp_path / "outer" / "sub"
+    write_config(repo, CONFIG)
+    if git_dir is not None:
+        git_in(tmp_path / "outer", "init", "-q")
+    assert main(["--repo", str(repo), "explain-config"]) == 2
+    printed = capsys.readouterr().err
+    assert printed.startswith(f"config error:\n  {repo.resolve()} {error}"), printed
+    assert git_dir is None or str((tmp_path / "outer").resolve()) in printed
+
+
 def test_explain_edge_lists_rules_that_read_every_edge_kind(
     commands: Commands, capsys: pytest.CaptureFixture[str]
 ) -> None:
