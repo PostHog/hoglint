@@ -85,14 +85,19 @@ class CacheRoot:
         self.max_age = max_age
 
     def claim(self, stamp: str) -> bool:
-        """Creates the day's mark; False when another run created it first. Older marks go."""
+        """Creates the day's mark; False when another run created it first, or when a run of a
+        later day pruned already (a run started before midnight that ends after it). Only marks
+        of earlier days go."""
         self.root.mkdir(parents=True, exist_ok=True)
+        mark = f"{PRUNED_MARK}{stamp}"
+        if any(other.name > mark for other in self.root.glob(f"{PRUNED_MARK}*")):
+            return False
         try:
-            os.close(os.open(self.root / f"{PRUNED_MARK}{stamp}", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            os.close(os.open(self.root / mark, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
         except FileExistsError:
             return False
         for old in self.root.glob(f"{PRUNED_MARK}*"):
-            if old.name != f"{PRUNED_MARK}{stamp}":
+            if old.name < mark:
                 old.unlink(missing_ok=True)
         return True
 

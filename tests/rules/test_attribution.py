@@ -282,6 +282,9 @@ def test_of_processes_that_start_the_day_together_one_prunes(tmp_path: Path) -> 
     assert sorted(pruned) == [False] * (PRUNERS - 1) + [True]
     assert not CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 10))
     assert CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 11))
+    # Runs either side of midnight: the later day's prune stands for the earlier day too.
+    assert not CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 10))
+    assert not CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 11))
 
 
 def test_a_staged_check_needs_no_index_lock(tmp_path: Path) -> None:
