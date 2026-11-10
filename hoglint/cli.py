@@ -55,7 +55,7 @@ from hoglint.ledger.errors import RepoRootError
 from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
-from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git
+from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
@@ -162,11 +162,11 @@ class Snapshots:
             head = self.tree_of("HEAD")
             if not head:
                 return sorted(TreeListing.of(self.repo, tree).paths)
-            return git(self.repo, "diff-tree", "-r", "--name-only", head, tree).splitlines()
+            return records(git(self.repo, "diff-tree", "-r", "-z", "--name-only", head, tree))
         if ref is not None:
-            return git(self.repo, "diff", "--name-only", ref).split()
-        tracked = git(self.repo, "diff", "--name-only", "HEAD").split()
-        untracked = git(self.repo, "ls-files", "--others", "--exclude-standard").split()
+            return records(git(self.repo, "diff", "-z", "--name-only", ref))
+        tracked = records(git(self.repo, "diff", "-z", "--name-only", "HEAD"))
+        untracked = records(git(self.repo, "ls-files", "-z", "--others", "--exclude-standard"))
         return tracked + untracked
 
     def renames(self, ref: str) -> list[tuple[str, str]]:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.cli import Commands, Run, Runner, main
+from hoglint.cli import Commands, Run, Runner, Snapshots, main
 from hoglint.config import Config, load_config
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import WorktreeStatus
@@ -75,6 +75,22 @@ def test_write_ledger_converges_in_one_run(commands: Commands) -> None:
     # the run that writes the ledger must already count the level lines that ledger makes pass
     assert commands.check(index=False, write_ledger=True, changed=False) == 0
     assert commands.check(index=False, write_ledger=False, changed=False) == 0
+
+
+@pytest.mark.parametrize(
+    "ref, changed",
+    [(None, ["dir x/b.py", "new file.py"]), ("HEAD", ["dir x/b.py"])],
+    ids=["working tree", "against a ref"],
+)
+def test_changed_paths_keep_a_space_in_a_file_name(tmp_path: Path, ref: str | None, changed: list[str]) -> None:
+    (tmp_path / "dir x").mkdir()
+    (tmp_path / "dir x" / "b.py").write_text("b = 1\n")
+    git_in(tmp_path, "init", "-q")
+    git_in(tmp_path, "add", "-A")
+    git_in(tmp_path, "commit", "-qm", "base")
+    (tmp_path / "dir x" / "b.py").write_text("b = 2\n")
+    (tmp_path / "new file.py").write_text("c = 1\n")
+    assert sorted(Snapshots(tmp_path, tmp_path).changed_paths(ref)) == changed
 
 
 def test_a_crash_is_an_internal_error_with_exit_2_never_1(
