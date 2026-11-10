@@ -211,9 +211,9 @@ class TreeListing(Listing):
 class WorktreeListing(Listing):
     """The working tree as a snapshot: the index's blobs (`git ls-files -s`, which honours
     GIT_INDEX_FILE), then each file `git status` reports as modified, untracked or in conflict,
-    read from disk, and without each file it reports deleted. A link the index holds is read by
-    its blob, one git status reports by `readlink`. One per repo per process, read with the
-    status the rest of the run reads."""
+    read from disk, and without each file it reports deleted or renamed away in the working
+    tree. A link the index holds is read by its blob, one git status reports by `readlink`. One
+    per repo per process, read with the status the rest of the run reads."""
 
     taken: ClassVar[dict[Path, WorktreeListing]] = {}
 
@@ -271,6 +271,9 @@ class WorktreeListing(Listing):
         entries = WorktreeListing.index_entries(repo)
         dirty: dict[str, str] = {}
         for entry in WorktreeStatus.of(repo).entries:
+            if entry.left_worktree:
+                entries.pop(entry.path, None)
+                continue
             if entry.renamed_from or not entry.unstaged or entry.mode == SUBMODULE_MODE:
                 continue
             entries.pop(entry.path, None)

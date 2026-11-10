@@ -26,7 +26,10 @@ class StatusEntry:
     staged: bool  # HEAD and the index differ
     unstaged: bool  # the index and the working tree differ, or the file is untracked
     mode: str = ""  # the working tree's file mode; "000000" when deleted there, "" when untracked
-    renamed_from: bool = False  # the old path of a rename, which the index no longer holds
+    renamed_from: bool = False  # the old path of a rename or a copy
+    # The old path of a rename in the working tree: the index still holds it, the working tree no
+    # longer does. A rename in the index needs no such mark, and a copy keeps its old path.
+    left_worktree: bool = False
 
 
 def parse(records: list[str]) -> list[StatusEntry]:
@@ -47,7 +50,8 @@ def parse(records: list[str]) -> list[StatusEntry]:
         entry = StatusEntry(fields[-1], staged, unstaged, fields[WORKTREE_MODE_FIELD[kind]])
         out.append(entry)
         if kind == "2":
-            out.append(StatusEntry(records[at], staged, unstaged, renamed_from=True))
+            left = change[1] == "R"
+            out.append(StatusEntry(records[at], staged, unstaged, renamed_from=True, left_worktree=left))
             at += 1
     return out
 

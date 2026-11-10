@@ -34,7 +34,7 @@ from hoglint.ledger.envelope import (
 )
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
-from hoglint.ledger.listing import TreeListing
+from hoglint.ledger.listing import TreeListing, WorktreeListing
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
@@ -917,3 +917,37 @@ def test_a_working_tree_holds_heads_inputs_unless_a_declared_input_differs(
     records: list[str], drift: list[str]
 ) -> None:
     assert WorktreeStatus(records).drift(INPUTS.matches) == drift
+
+
+LINES = "a = 1\nb = 2\nc = 3\nd = 4\n"
+
+
+@pytest.mark.parametrize(
+    "steps, paths",
+    [
+        # old file deleted, new one known by intent-to-add: status says `.R`, the index holds the old path
+        ([("mv", "a.py", "b.py"), ("git", "add", "-N", "b.py")], ["b.py"]),
+        ([("git", "mv", "a.py", "b.py")], ["b.py"]),
+        # a copy (`.C`) keeps the path it was copied from
+        ([("edit", "a.py"), ("cp", "a.py", "c.py"), ("git", "add", "-N", "c.py")], ["a.py", "c.py"]),
+    ],
+    ids=["rename in the working tree", "rename in the index", "copy in the working tree"],
+)
+def test_the_working_tree_listing_follows_what_a_rename_or_copy_record_says(
+    tmp_path: Path, steps: list[tuple[str, ...]], paths: list[str]
+) -> None:
+    write_files(tmp_path, {"a.py": LINES})
+    git_in(tmp_path, "init", "-q")
+    git_in(tmp_path, "config", "status.renames", "copies")
+    git_in(tmp_path, "add", "-A")
+    git_in(tmp_path, "commit", "-qm", "base")
+    for step in steps:
+        if step[0] == "git":
+            git_in(tmp_path, *step[1:])
+        elif step[0] == "mv":
+            (tmp_path / step[1]).rename(tmp_path / step[2])
+        elif step[0] == "cp":
+            shutil.copyfile(tmp_path / step[1], tmp_path / step[2])
+        else:
+            (tmp_path / step[1]).write_text(LINES + "e = 5\n")
+    assert sorted(WorktreeListing.of(tmp_path).paths) == paths
