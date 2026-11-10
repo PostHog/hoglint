@@ -190,13 +190,17 @@ class RuleContext:
         """A cycle rule's rows when this context finds them itself, else None."""
         return None
 
-    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun | None]]:
-        """Each edge the rule judges, in order, with what it reports when this context judged it
-        already; None to judge the edge."""
+    def judged(self, rule: EdgeRule) -> bool:
+        """Whether this context judged every edge of the rule itself, into the rule's run. When it
+        did not, the rule judges the edges `judged_edges` gives it."""
+        return False
+
+    def judged_edges(self, rule: EdgeRule) -> Iterator[Edge]:
+        """Each edge the rule judges, in order."""
         for module, group in self.rule_groups(rule):
             for edge in rule.group_edges(module, group):
                 if rule.sees(edge):
-                    yield edge, None
+                    yield edge
 
     def ordinal(self, edge: Edge) -> int:
         """The edge's place among edges with the same module, scope, kind and surface."""
@@ -673,7 +677,7 @@ class EdgeRule:
             yield self.env(edge, src, dst)
 
     def envs(self) -> Iterator[EdgeEnv]:
-        for edge, _ in self.ctx.judged_edges(self):
+        for edge in self.ctx.judged_edges(self):
             yield from self.edge_envs(edge)
 
     def decide(self, env: EdgeEnv) -> Judgment:
@@ -801,11 +805,9 @@ class EdgeRule:
         self.report(env, self.decide(env), describe)
 
     def evaluate(self) -> RuleRun:
-        for edge, reported in self.ctx.judged_edges(self):
-            if reported is not None:
-                self.run.findings.extend(reported.findings)
-                self.run.incomplete.extend(reported.incomplete)
-                continue
+        if self.ctx.judged(self):
+            return self.run
+        for edge in self.ctx.judged_edges(self):
             for env in self.edge_envs(edge):
                 self.judge(env, self.describe(env))
         return self.run

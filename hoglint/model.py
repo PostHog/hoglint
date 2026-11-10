@@ -185,6 +185,12 @@ class FindingDetail:
         return self
 
 
+class EdgeRef(Protocol):
+    """A finding's edge, made when something reads it: the native engine keeps an edge id."""
+
+    def get(self) -> Edge: ...
+
+
 class Shown(Protocol):
     """A finding's detail, made when something reads it. Ledger equality needs only a finding's
     identity, so a run makes the detail of the findings it prints."""
@@ -204,22 +210,31 @@ class Finding:
     unknown: bool = False  # exists because something did not resolve; forbids levels even when ledgered
     # The finding's own edge when it is the only witness, so the witnesses and the site are known
     # without making a detail that is made when read.
-    witness: Edge | None = field(default=None, compare=False, repr=False)
+    witness: Edge | EdgeRef | None = field(default=None, compare=False, repr=False)
 
     @property
     def message(self) -> str:
         return self.detail.get().message
 
     @property
+    def witness_edge(self) -> Edge | None:
+        witness = self.witness
+        if witness is None or isinstance(witness, Edge):
+            return witness
+        return witness.get()
+
+    @property
     def site(self) -> Site | None:
-        if self.witness is not None:
-            return self.witness.site
+        witness = self.witness_edge
+        if witness is not None:
+            return witness.site
         return self.detail.get().site
 
     @property
     def witnesses(self) -> tuple[Edge, ...]:
-        if self.witness is not None:
-            return (self.witness,)
+        witness = self.witness_edge
+        if witness is not None:
+            return (witness,)
         return self.detail.get().witnesses
 
     @property

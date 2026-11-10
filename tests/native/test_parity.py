@@ -5,11 +5,13 @@ from __future__ import annotations
 import gc
 import os
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from hoglint.ledger.envelope import EngineError
+from hoglint.model import Edge
 from hoglint.native.parity import Dump, compare_dumps, read_lines
 from hoglint.native.rules import Rejudged
 from hoglint.native.source import ENGINES
@@ -175,6 +177,16 @@ def test_a_source_no_engine_can_read_is_the_same_incomplete_item_in_both(
     assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out["native"] / "incomplete.jsonl")
 
 
+@dataclass(frozen=True, slots=True)
+class Held:
+    """A finding's edge, already made."""
+
+    edge: Edge
+
+    def get(self) -> Edge:
+        return self.edge
+
+
 def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path: Path) -> None:
     config = config_from(tmp_path, OWNERS_REPO["hoglint.toml"])
     built = (
@@ -188,7 +200,7 @@ def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path
     spec = config.rules["core-to-product"]
     rule = primitive_of(spec)(ctx, spec)
     assert isinstance(rule, EdgeRule)
-    edge = built.edges[0]
+    edge = Held(built.edges[0])
     assert Rejudged(rule, edge, Judgment.VIOLATION).get().message
     with pytest.raises(EngineError):
         Rejudged(rule, edge, Judgment.UNKNOWN_VIOLATION).get()
