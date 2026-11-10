@@ -128,8 +128,11 @@ class IncompleteItem:
 @dataclass(frozen=False, slots=True)
 class RuleRun:
     spec: RuleSpec
-    findings: FindingTable = field(default_factory=FindingTable)
+    findings: FindingTable = field(init=False)
     incomplete: list[IncompleteItem] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.findings = FindingTable(self.spec.ledger)
 
 
 class Judgment(StrEnum):
@@ -385,7 +388,7 @@ class RuleContext:
             ),
             owner=self.owner(owner),
             subjects=subjects,
-            ledgerable=ledgerable and spec.ledger,
+            ledgerable=ledgerable,
             unknown=unknown,
         )
 
@@ -844,7 +847,7 @@ class EdgeRule(RuleType):
             detail=detail,
             owner=self.ctx.owner(env.src.module),
             subjects=self.subjects(env),
-            ledgerable=ledgerable and self.spec.ledger,
+            ledgerable=ledgerable,
             unknown=unknown,
             witness=env.edge if later else None,
         )

@@ -116,10 +116,10 @@ class LevelEvaluator:
         strict = rule_id in self.spec.strict
         table = run.findings
         unknown = table.unknown
-        new = set(table.rows_with(FindingStatus.NEW))
         # A ledgered finding blocks only when it is unknown or its rule is strict.
         for row in range(len(table)):
-            if table.allowed[row] or not (unknown[row] or strict or row in new):
+            status = table.status(row)
+            if status is FindingStatus.ALLOWED or not (unknown[row] or strict or status is FindingStatus.NEW):
                 continue
             why = "unknown" if unknown[row] else "strict, so the ledger does not excuse it" if strict else "new finding"
             identity = table.identity(row)

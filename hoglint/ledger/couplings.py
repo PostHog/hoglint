@@ -83,7 +83,7 @@ class CouplingScan:
             table = run.findings
             positions = [i for i, column in enumerate(spec.identity) if column.startswith(EDGE_ROOT)]
             for row in range(len(table)):
-                if not table.ledgerable[row] or table.allowed[row]:
+                if not table.counts(row):
                     continue
                 witnesses = table.witnesses(row)
                 if not any(self.touches(edge) for edge in witnesses):

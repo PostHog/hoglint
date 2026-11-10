@@ -8,7 +8,8 @@ of every row (exceptions, scan lines, accepted marks, levels, the stored summary
 columns.
 
 Status is kept as marks: the rows an exception allows, and the identities the ledger accepts. No
-row is copied to change it.
+row is copied to change it. A table knows its rule's `ledger` switch: a row of a rule that keeps no
+ledger is never ledgerable, whatever its source says.
 """
 
 from __future__ import annotations
@@ -91,6 +92,7 @@ class FindingTable:
         "allowed",
         "identities",
         "identity_at",
+        "ledger",
         "ledgerable",
         "made",
         "objects",
@@ -102,7 +104,8 @@ class FindingTable:
         "unknown",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, ledger: bool) -> None:
+        self.ledger = ledger
         self.identities: list[tuple[str, ...]] = []
         self.places: dict[tuple[str, ...], int] = {}
         self.identity_at = array("I")
@@ -131,7 +134,7 @@ class FindingTable:
     def append(self, finding: Finding) -> None:
         """A row the rule's own code made."""
         self.identity_at.append(self.place(finding.identity))
-        self.ledgerable.append(finding.ledgerable)
+        self.ledgerable.append(finding.ledgerable and self.ledger)
         self.unknown.append(finding.unknown)
         self.allowed.append(0)
         self.source_of.append(OBJECTS)
@@ -152,7 +155,7 @@ class FindingTable:
         """Rows `start` to `stop` of the columns of source `number`, in order."""
         source, places = self.taken[number]
         self.identity_at.extend([places[at] for at in source.identity_at[start:stop]])
-        self.ledgerable.extend(source.ledgerable[start:stop])
+        self.ledgerable.extend(source.ledgerable[start:stop] if self.ledger else bytes(stop - start))
         self.unknown.extend(source.unknown[start:stop])
         self.allowed.extend(bytes(stop - start))
         self.source_of.extend(bytes([number]) * (stop - start))
@@ -188,9 +191,15 @@ class FindingTable:
         message made once is not made again."""
         made = self.made.get(row)
         if made is None:
-            made = self.made[row] = self.sources[self.source_of[row]].finding(self.source_at[row], self.identity(row))
+            made = self.made[row] = self.make(row)
         status = self.status(row)
         return made if made.status is status else dataclasses.replace(made, status=status)
+
+    def make(self, row: int) -> Finding:
+        """The row as its source makes it, ledgerable as the table holds it."""
+        made = self.sources[self.source_of[row]].finding(self.source_at[row], self.identity(row))
+        ledgerable = bool(self.ledgerable[row])
+        return made if made.ledgerable is ledgerable else dataclasses.replace(made, ledgerable=ledgerable)
 
     def rows_with(self, status: FindingStatus) -> list[int]:
         """The rows with `status`, read from the marks and flags, with no row made."""
@@ -202,12 +211,16 @@ class FindingTable:
     def accept(self, places: Iterable[int]) -> None:
         self.accepted.update(places)
 
+    def counts(self, row: int) -> bool:
+        """Whether a ledger counts the row: it is ledgerable and no exception allows it."""
+        return bool(self.ledgerable[row]) and not self.allowed[row]
+
     def counted_places(self) -> list[int] | array[int]:
-        """The identity place of each row a ledger counts (ledgerable, not allowed), in order."""
+        """The identity place of each row a ledger counts, in order."""
         if all(self.ledgerable) and not any(self.allowed):
             return self.identity_at
         at = self.identity_at
-        return [at[row] for row in range(len(at)) if self.ledgerable[row] and not self.allowed[row]]
+        return [at[row] for row in range(len(at)) if self.counts(row)]
 
     def witnesses(self, row: int) -> tuple[Edge, ...]:
         return self.sources[self.source_of[row]].witnesses(self.source_at[row])

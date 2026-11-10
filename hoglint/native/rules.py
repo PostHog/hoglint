@@ -351,8 +351,7 @@ class JudgedRows:
         self.no_place: int = import_module().NO_PLACE
         self.found = rule.found()
         flags = [rule.flags(judgment) if judgment in self.found else (False, False) for judgment in self.judgments]
-        ledger = rule.spec.ledger
-        self.ledgerable = bytes([flags[at][0] and ledger for at in self.judgment_at])
+        self.ledgerable = bytes([flags[at][0] for at in self.judgment_at])
         self.unknown = bytes([flags[at][1] for at in self.judgment_at])
         self.row_edges: RowEdges | None = None
         # What the rule's own code reported for each row it judged, kept for a ledger write.
@@ -584,7 +583,7 @@ class NativeRuleContext(RuleContext):
                 detail=detail,
                 owner=self.owner(module),
                 subjects=(module, subject),
-                ledgerable=ledgerable and spec.ledger,
+                ledgerable=ledgerable,
                 unknown=unknown,
                 witness=handle,
             )
@@ -616,7 +615,6 @@ class NativeRuleContext(RuleContext):
                 detail=RowDetail(rule.unclassified(identity), handle, rule.remedies()),
                 owner=self.owner(src),
                 subjects=subjects_of(src, dst),
-                ledgerable=spec.ledger,
                 witness=handle,
             )
             rule.run.findings.append(finding)
