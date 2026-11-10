@@ -18,7 +18,7 @@ from typing import Any
 
 from hoglint.ledger.equality import EqualityResult, LineDiff
 from hoglint.ledger.file import LineKey, parse_key, render_key
-from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause, witness_row
+from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause, owner_module, witness_row
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile
 from hoglint.rules.levels import Block
@@ -126,7 +126,7 @@ class FindingRecord:
             finding.status,
             ShownRecord.of(finding, portable) if shown else None,
             tuple(WitnessRecord(*row) for row in finding.witness_rows),
-            finding.owner.module if finding.owner is not None else "",
+            owner_module(finding.owner),
             finding.subjects,
             finding.ledgerable,
             finding.unknown,

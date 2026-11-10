@@ -115,7 +115,7 @@ def finding_rows(result: RunResult, portable: Portable, touched: set[str] | None
                 [status.value for status in statuses],
                 repeat(None),
                 witnesses,
-                [owner or "" for owner in owners],
+                owners,
                 subjects,
                 map(bool, table.ledgerable),
                 map(bool, table.unknown),

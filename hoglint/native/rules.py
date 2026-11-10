@@ -20,7 +20,7 @@ from hoglint.config.model import Config, RuleSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow, owner_module
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
@@ -396,18 +396,14 @@ class JudgedRows:
     def subjects(self, at: int) -> tuple[str, ...]:
         return subjects_of(self.src(at), self.dst(at))
 
-    def owner_module_of(self, module: str) -> str | None:
-        owner = self.ctx.owner(module)
-        return owner.module if owner is not None else None
-
-    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str], list[tuple[str, ...]]]:
         """The witness rows, owner module and subjects of rows `ats`: the witness rows from the
         link in one call, owners and subjects once per module and pair of modules."""
         if not ats:
             return [], [], []
         by_edge, edges = self.edge_rows().witness_rows(), self.edges
         witnesses: list[tuple[WitnessRow, ...]] = [(by_edge[edges[at]],) for at in ats]
-        owners = [self.owner_module_of(module) for module in self.modules]
+        owners = [owner_module(self.ctx.owner(module)) for module in self.modules]
         src_at, dst_at = self.src_at, self.dst_at
         subjects_by_pair: dict[tuple[int, int], tuple[str, ...]] = {}
         subjects = []

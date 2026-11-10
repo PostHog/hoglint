@@ -299,6 +299,11 @@ class Finding:
         return self.rule, self.identity
 
 
+def owner_module(owner: Owners | None) -> str:
+    """The module whose owners a finding takes, as a stored summary keeps it: empty for none."""
+    return owner.module if owner is not None else ""
+
+
 @dataclass(frozen=False, slots=True)
 class RuleResult:
     rule: str

@@ -19,7 +19,7 @@ from array import array
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Protocol
 
-from hoglint.model import Edge, Finding, FindingStatus, WitnessRow
+from hoglint.model import Edge, Finding, FindingStatus, WitnessRow, owner_module
 
 # The place of a table's own `ObjectRows` among its sources.
 OBJECTS = 0
@@ -39,7 +39,7 @@ class RowSource(Protocol):
 
     def subjects(self, at: int) -> tuple[str, ...]: ...
 
-    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str], list[tuple[str, ...]]]:
         """The witness rows, owner module and subjects of rows `ats`, read in bulk."""
         ...
 
@@ -77,9 +77,9 @@ class ObjectRows:
     def subjects(self, at: int) -> tuple[str, ...]:
         return self.objects[at].subjects
 
-    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str], list[tuple[str, ...]]]:
         found = [self.objects[at] for at in ats]
-        owners = [finding.owner.module if finding.owner is not None else None for finding in found]
+        owners = [owner_module(finding.owner) for finding in found]
         return [finding.witness_rows for finding in found], owners, [finding.subjects for finding in found]
 
 
@@ -238,12 +238,12 @@ class FindingTable:
         """Every row's status, in order."""
         return [self.status(row) for row in range(len(self.identity_at))]
 
-    def stored_parts(self) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+    def stored_parts(self) -> tuple[list[tuple[WitnessRow, ...]], list[str], list[tuple[str, ...]]]:
         """Every row's witness rows, owner module and subjects, in order: what a stored summary
         keeps of a row besides its identity, status and flags. Each source reads its rows in bulk."""
         count = len(self.identity_at)
         witnesses: list[tuple[WitnessRow, ...]] = [()] * count
-        owners: list[str | None] = [None] * count
+        owners: list[str] = [""] * count
         subjects: list[tuple[str, ...]] = [()] * count
         for number, source in enumerate(self.sources):
             rows = [row for row in range(count) if self.source_of[row] == number]
