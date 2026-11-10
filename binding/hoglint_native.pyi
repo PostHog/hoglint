@@ -118,6 +118,8 @@ class Link:
     def mentions(self, file: int, kinds: list[str], words: int) -> bool:
         """Whether a record's rows of any of `kinds` hold a string the registered `words` match,
         read off the link's own rows. A kind the link does not read raises."""
+    def statuses(self) -> list[str | None]:
+        """Each record's status in fact order, None for a record with no status."""
     def blob_keys(self) -> list[str | None]:
         """The fact cache key of each record in fact order: blob oid, or the content hash of a
         third-party file; None for an unreadable file, a file that changed during the run or a

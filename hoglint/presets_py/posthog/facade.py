@@ -220,6 +220,7 @@ class FacadeFacts:
         self.signatures: Counter[tuple[str, str]] = Counter()
         self.views: dict[str, ModuleView | None] = {}
         self.origins: dict[str, Origin] = {}
+        self.entities: dict[str, EntityId] = {}
 
     def view(self, module: str) -> ModuleView | None:
         if module not in self.views:
@@ -279,12 +280,18 @@ class FacadeFacts:
                 out.append(scope.module)
         return out
 
-    def entity(self, qualified: str) -> EntityId:
+    def find_entity(self, qualified: str) -> EntityId:
         module = self.index.longest_module(qualified) if self.is_module(qualified.partition(".")[0]) else None
         if module is None:
             module, _, name = qualified.rpartition(".")
             return EntityId(LANGUAGE_PYTHON, module, name)
         return EntityId(LANGUAGE_PYTHON, module, qualified[len(module) + 1 :])
+
+    def entity(self, qualified: str) -> EntityId:
+        found = self.entities.get(qualified)
+        if found is None:
+            found = self.entities[qualified] = self.find_entity(qualified)
+        return found
 
     def target(self, origin: Origin) -> tuple[tuple[EntityId, ...], Resolution]:
         if origin.kind == "unresolved":

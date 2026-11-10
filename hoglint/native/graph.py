@@ -283,12 +283,13 @@ class NativeGraph(Graph):
         if not batch:
             return
         first = self.link.add_edges(*edge_columns(batch))
-        last: dict[int, int] = {}
-        for at, edge in enumerate(batch):
-            last[id(edge)] = first + at
-        for at, edge in enumerate(batch):
-            if last[id(edge)] != first + at:
-                self.repeats[first + at] = last[id(edge)]
+        objects = [id(edge) for edge in batch]
+        last = {object_id: first + at for at, object_id in enumerate(objects)}
+        if len(last) == len(objects):
+            return
+        for at, object_id in enumerate(objects):
+            if last[object_id] != first + at:
+                self.repeats[first + at] = last[object_id]
 
     def catch_up(self) -> None:
         return None

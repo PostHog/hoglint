@@ -30,15 +30,32 @@ NOT_A_REGISTRY = frozenset({"self", "cls"})
 USE_COLUMNS = ("producer", "path", "scope", "line", "column", "target", "attr:chain", "attr:up")
 
 
-class Use(NamedTuple):
-    """A core `reference` edge onto a model, as much of it as the shape needs."""
+class Uses(NamedTuple):
+    """The core `reference` edges onto models, as columns, as much of them as the shape needs,
+    and each file's rows."""
 
-    handle: int
-    scope: str
-    line: int
-    column: int
-    chain: str
-    up: str
+    handles: list[int]
+    scopes: list[str]
+    lines: list[int]
+    columns: list[int]
+    chains: list[str]
+    ups: list[str]
+    by_file: dict[str, list[int]]
+
+
+class Position(NamedTuple):
+    """A use position and the local it is assigned to."""
+
+    position: UsePosition
+    local: str | None
+
+
+class Shaped(NamedTuple):
+    """A use position, the local it is assigned to, and its shape."""
+
+    position: UsePosition
+    local: str | None
+    shape: Shape
 
 
 class LocalSources:
@@ -70,43 +87,54 @@ class UseProducer:
         self.reader = reader
         self.registry = registry
         self.shapes = OrmShapes()
-        self.positions: dict[tuple[str, str], tuple[UsePosition, str | None]] = {}
-        self.position_shapes: dict[tuple[str, str], Shape] = {}
+        self.positions: dict[tuple[str, str], Position] = {}
+        self.shaped_positions: dict[tuple[str, str], Shaped] = {}
 
-    def position(self, chain: str, up: str) -> tuple[UsePosition, str | None]:
+    def position(self, chain: str, up: str) -> Position:
         """A use position and the local it is assigned to. Most uses repeat a few (chain, up)
         pairs, so each one parses once."""
         key = (chain, up)
         found = self.positions.get(key)
         if found is None:
             position = UsePosition.of(chain, up)
-            found = self.positions[key] = (position, position.local_target())
+            found = self.positions[key] = Position(position, position.local_target())
         return found
 
-    def shape(self, chain: str, up: str, position: UsePosition) -> Shape:
+    def shaped_position(self, chain: str, up: str) -> Shaped:
+        """`position` with the use's shape, classified once per (chain, up)."""
         key = (chain, up)
-        found = self.position_shapes.get(key)
+        found = self.shaped_positions.get(key)
         if found is None:
-            found = self.position_shapes[key] = self.shapes.classify(position)
+            position, local = self.position(chain, up)
+            found = self.shaped_positions[key] = Shaped(position, local, self.shapes.classify(position))
         return found
 
-    def by_file(self) -> dict[str, list[Use]]:
-        out: dict[str, list[Use]] = defaultdict(list)
+    def uses(self) -> Uses:
         models = self.registry.models
         batch = self.reader.batch_to("reference", models, USE_COLUMNS)
-        rows = zip(batch.handles, *(batch.columns[name] for name in USE_COLUMNS))
-        for handle, producer, path, scope, line, column, target, chain, up in rows:
+        columns = batch.columns
+        by_file: dict[str, list[int]] = defaultdict(list)
+        rows = zip(columns["producer"], columns["path"], columns["target"])
+        for at, (producer, path, target) in enumerate(rows):
             if producer == CORE_REFERENCE_PRODUCER and target in models:
-                out[path].append(Use(handle, scope, line, column, chain, up))
-        return out
+                by_file[path].append(at)
+        return Uses(
+            batch.handles,
+            columns["scope"],
+            columns["line"],
+            columns["column"],
+            columns["attr:chain"],
+            columns["attr:up"],
+            by_file,
+        )
 
     def produce(self, files: list[FileScope]) -> list[Output]:
-        uses = self.by_file()
+        uses = self.uses()
         aggregates = {scope.path: found for scope, found in self.reader.uses_to(files, self.registry.models)}
         refined = Refinements()
 
         def output_for(scope: FileScope) -> list[Output]:
-            self.shaped(scope, uses.get(scope.path, []), refined)
+            self.shaped(scope, uses, uses.by_file.get(scope.path, []), refined)
             return list(self.aggregate_edges(scope, aggregates.get(scope.path, [])))
 
         return [*each_item(files, output_for, self.failure), refined]
@@ -115,23 +143,18 @@ class UseProducer:
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("reference", USES_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
-    def shaped(self, scope: FileScope, uses: list[Use], out: Refinements) -> None:
-        """Adds one row per use to `out`, once every shape of the file is known: a file that
-        fails adds nothing."""
-        if not uses:
+    def shaped(self, scope: FileScope, uses: Uses, rows: list[int], out: Refinements) -> None:
+        """Adds one row per use (`rows` of `uses`) to `out`, once every shape of the file is
+        known: a file that fails adds nothing."""
+        if not rows:
             return
         sources = LocalSources()
-        positions: list[UsePosition] = []
-        shapes: list[Shape] = []
+        positions = [self.shaped_position(uses.chains[row], uses.ups[row]) for row in rows]
         locals_: set[str] = set()
-        for index, use in enumerate(uses):
-            position, local = self.position(use.chain, use.up)
-            shape = self.shape(use.chain, use.up, position)
-            if local is not None:
-                sources.assign(use.scope, local, use.line, use.column, index)
-                locals_.add(local)
-            positions.append(position)
-            shapes.append(shape)
+        for index, (row, found) in enumerate(zip(rows, positions)):
+            if found.local is not None:
+                sources.assign(uses.scopes[row], found.local, uses.lines[row], uses.columns[row], index)
+                locals_.add(found.local)
         later: dict[int, list[UsePosition]] = defaultdict(list)
         derived = sorted(self.reader.rows(scope, "derived"), key=lambda r: (r[2], r[3])) if locals_ else []
         for at_scope, _, line, column, _, root, chain, up, origin in derived:
@@ -140,20 +163,19 @@ class UseProducer:
             index = sources.held(scope.scope_name(origin), root, line, column)
             if index is None:
                 continue
-            position, local = self.position(chain, up)
-            later[index].append(position)
-            if local is not None:
-                sources.assign(scope.scope_name(at_scope), local, line, column, index)
-                locals_.add(local)
+            found = self.position(chain, up)
+            later[index].append(found.position)
+            if found.local is not None:
+                sources.assign(scope.scope_name(at_scope), found.local, line, column, index)
+                locals_.add(found.local)
         flow_shapes: dict[int, str] = {}
         for index, flows in later.items():
-            refined = self.shapes.refine(positions[index], flows)
-            if refined is not None and refined != shapes[index]:
+            refined = self.shapes.refine(positions[index].position, flows)
+            if refined is not None and refined != positions[index].shape:
                 flow_shapes[index] = refined.text()
-        for index, use in enumerate(uses):
+        for index, (row, found) in enumerate(zip(rows, positions)):
             flow = (("flow_shape", flow_shapes[index]),) if index in flow_shapes else ()
-            shape = shapes[index]
-            out.add(use.handle, shape.kind, shape.detail, flow)
+            out.add(uses.handles[row], found.shape.kind, found.shape.detail, flow)
 
     @staticmethod
     def aggregate_edges(scope: FileScope, found: list[AttributeUse]) -> list[Edge]:

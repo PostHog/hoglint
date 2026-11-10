@@ -4,7 +4,7 @@
 use crate::link::Link;
 use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::{FileFacts, V};
-use hoglint_facts::link::intern::{EMPTY, Interner, Sid};
+use hoglint_facts::link::intern::{EMPTY, Sid};
 use hoglint_facts::link::resolve::{Binding, Ent};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
@@ -12,6 +12,7 @@ use pyo3::types::{PyBytes, PyList, PyString};
 use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::value::RawValue;
+use std::cell::RefCell;
 
 /// Where a call kind's rows hold the callee (`CALLEE_FIELD` in hoglint/native/queries.py).
 fn callee_position(kind: &str) -> PyResult<usize> {
@@ -110,15 +111,14 @@ fn value_mentions(value: &V, found: &impl Fn(Sid) -> bool) -> bool {
     }
 }
 
-/// Whether a record's rows of `kind` hold a string `matches` accepts; None for a kind the
-/// link does not decode.
+/// Whether a record's rows of `kind` hold a string `matches` accepts, an interned one through
+/// `sid`; None for a kind the link does not decode.
 fn kind_mentions(
     facts: &FileFacts,
     kind: &str,
-    it: &Interner,
+    sid: &impl Fn(Sid) -> bool,
     matches: &impl Fn(&str) -> bool,
 ) -> Option<bool> {
-    let sid = |s: Sid| matches(it.s(s));
     let found = match kind {
         "imports" => facts.imports.iter().any(|row| {
             row.target
@@ -183,6 +183,49 @@ fn words_pattern(ending: &[String], inside: &[String]) -> PyResult<Option<Regex>
 }
 
 impl Link {
+    /// `mentions` with `seen`, the answer for each interned string the pattern met before:
+    /// names repeat across files, so each one is matched once.
+    fn mentions_with(
+        &self,
+        file: usize,
+        kinds: &[String],
+        words: usize,
+        seen: &mut FxHashMap<Sid, bool>,
+    ) -> PyResult<bool> {
+        let facts = self
+            .inner
+            .core
+            .facts
+            .files
+            .get(file)
+            .ok_or_else(|| PyKeyError::new_err(file))?;
+        let Some(pattern) = &self.patterns[words] else {
+            return Ok(false);
+        };
+        let it = &self.inner.core.it;
+        let seen = RefCell::new(seen);
+        let sid = |s: Sid| {
+            *seen
+                .borrow_mut()
+                .entry(s)
+                .or_insert_with(|| pattern.is_match(it.s(s)))
+        };
+        let matches = |text: &str| pattern.is_match(text);
+        for kind in kinds {
+            self.rows_of(kind)?;
+            match kind_mentions(facts, kind, &sid, &matches) {
+                Some(true) => return Ok(true),
+                Some(false) => {}
+                None => {
+                    return Err(PyValueError::new_err(format!(
+                        "the link does not read {kind} rows"
+                    )));
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// The analyzed files' ids, in fact order.
     fn analyzed_files(&self) -> Vec<usize> {
         (0..self.inner.core.facts.files.len())
@@ -360,43 +403,23 @@ impl Link {
     /// words file after file compiles them once.
     fn words(&mut self, ending: Vec<String>, inside: Vec<String>) -> PyResult<usize> {
         self.patterns.push(words_pattern(&ending, &inside)?);
+        self.matched.push(FxHashMap::default());
         Ok(self.patterns.len() - 1)
     }
 
     /// Whether a record's rows of any of `kinds` hold a string the registered `words` match,
     /// read off the link's own rows: what a pack's text prefilter asks. Kinds the link does not
     /// decode raise.
-    fn mentions(&self, file: usize, kinds: Vec<String>, words: usize) -> PyResult<bool> {
+    fn mentions(&mut self, file: usize, kinds: Vec<String>, words: usize) -> PyResult<bool> {
         self.rows()?;
-        let facts = self
-            .inner
-            .core
-            .facts
-            .files
-            .get(file)
-            .ok_or_else(|| PyKeyError::new_err(file))?;
-        let pattern = self
-            .patterns
-            .get(words)
-            .ok_or_else(|| PyKeyError::new_err(words))?;
-        let Some(pattern) = pattern else {
-            return Ok(false);
-        };
-        let it = &self.inner.core.it;
-        let matches = |text: &str| pattern.is_match(text);
-        for kind in &kinds {
-            self.rows_of(kind)?;
-            match kind_mentions(facts, kind, it, &matches) {
-                Some(true) => return Ok(true),
-                Some(false) => {}
-                None => {
-                    return Err(PyValueError::new_err(format!(
-                        "the link does not read {kind} rows"
-                    )));
-                }
-            }
-        }
-        Ok(false)
+        let mut seen = std::mem::take(
+            self.matched
+                .get_mut(words)
+                .ok_or_else(|| PyKeyError::new_err(words))?,
+        );
+        let found = self.mentions_with(file, &kinds, words, &mut seen);
+        self.matched[words] = seen;
+        found
     }
 
     /// The fact cache key of each record in fact order: the blob oid of a repo file, the content

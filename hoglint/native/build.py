@@ -78,6 +78,10 @@ class NativeStore:
 
     def __init__(self, link: Any, paths: list[str]) -> None:
         self.records: dict[str, NativeRecord] = {path: NativeRecord(link, i, path) for i, path in enumerate(paths)}
+        statuses = link.statuses()
+        for record in self.records.values():
+            status = statuses[record.file]
+            dict.__setitem__(record, "status", ABSENT if status is None else status)
 
 
 def module_values(record: Mapping[str, Any]) -> dict[str, object]:

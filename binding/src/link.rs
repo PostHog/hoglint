@@ -30,6 +30,8 @@ pub(crate) struct Link {
     pub(crate) import_names: Option<FxHashMap<Sid, Vec<(u32, u32)>>>,
     /// The patterns of the registered mention words (`words`), by id; None for no words.
     pub(crate) patterns: Vec<Option<regex::Regex>>,
+    /// Per pattern, whether it matched each interned string it met (`mentions`).
+    pub(crate) matched: Vec<FxHashMap<Sid, bool>>,
 }
 
 impl Link {
@@ -210,6 +212,24 @@ impl Link {
             return Err(PyKeyError::new_err(file));
         }
         Ok(self.raw_value(file, key)?.map(|raw| PyBytes::new(py, &raw)))
+    }
+
+    /// Each record's status in fact order, None for a record with no status: what `raw`
+    /// gives for "status", for every record in one call.
+    fn statuses(&self) -> Vec<Option<String>> {
+        self.inner
+            .core
+            .facts
+            .files
+            .iter()
+            .map(|record| {
+                record
+                    .keys
+                    .iter()
+                    .any(|(name, _)| &**name == "status")
+                    .then(|| record.status.to_string())
+            })
+            .collect()
     }
 
     /// Whether a record has rows under `key`, read off its key ranges with no JSON text.
@@ -559,6 +579,7 @@ pub(crate) fn link_jsonl(
         drifted: Vec::new(),
         import_names: None,
         patterns: Vec::new(),
+        matched: Vec::new(),
     })
 }
 
@@ -664,6 +685,7 @@ pub(crate) fn link_blobs(
             drifted,
             import_names: None,
             patterns: Vec::new(),
+            matched: Vec::new(),
         },
         stats,
     ))
