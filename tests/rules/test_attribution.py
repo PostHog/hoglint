@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import sys
 import json
 import base64
 import hashlib
 import datetime
+import subprocess
 import dataclasses
 import multiprocessing
 from pathlib import Path
@@ -36,6 +38,7 @@ from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, Ru
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
+from hoglint.ledger.slots import EvaluationSlots
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import CacheRoot, CacheWarning, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause
@@ -319,6 +322,36 @@ def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
     printed = capfd.readouterr()
     assert printed.out == expected
     assert printed.err.count("cannot use the cache") == 1, printed.err
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_a_run_waits_while_other_runs_hold_every_evaluation_slot(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, FILES)
+    git_in(repo, "init", "-q")
+    held = [EvaluationSlots(tmp_path / "repo-cache" / "hoglint", 2) for _ in range(2)]
+    for slots in held:
+        slots.take()
+    root = Path(__file__).resolve().parents[2]
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(root),
+        "XDG_CACHE_HOME": str(tmp_path / "repo-cache"),
+        "HOGLINT_MAX_RUNS": "2",
+    }
+    command = [sys.executable, "-m", "hoglint", "--repo", str(repo), "check"]
+    waiting = subprocess.Popen(
+        command, env=env, cwd=tmp_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            waiting.wait(timeout=3)
+    finally:
+        for slots in held:
+            slots.release()
+    out, err = waiting.communicate(timeout=60)
+    assert "waiting for one of 2 evaluation slots" in err
+    assert waiting.returncode == 1 and "violations (1)" in out
 
 
 ENGINE_LIST = """# a test engine
