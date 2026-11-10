@@ -184,8 +184,8 @@ def audit_rule(audit: ReadAudit, rule: EdgeRule, edges: Iterable[Edge]) -> None:
     reads = decision_reads(rule)
     if reads is None:
         return
-    src_scope, dst_entity = granularity(reads, rule.ctx.labeler)
-    granted = reads.granted(src_scope, dst_entity)
+    level = granularity(reads, rule.ctx.labeler)
+    granted = reads.granted(level.src_scope, level.dst_entity)
     for edge in edges:
         src = rule.ctx.src_endpoint(edge.site)
         for dst in rule.ctx.dst_endpoints(edge, rule.spec.endpoint):

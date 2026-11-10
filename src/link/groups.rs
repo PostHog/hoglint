@@ -44,28 +44,80 @@ impl Keyed {
     }
 }
 
-/// Which endpoint table a key lives in: the end, and its granularity.
+/// Which end of an edge a key names: the source, or the destination as a rule role reads it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Endpoint {
-    SrcModule,
-    SrcScope,
-    Dst(Role, bool),
+pub enum End {
+    Src,
+    Dst(Role),
 }
 
-/// Stable ids for endpoints: an endpoint keeps its id for the life of the link, so Python works
-/// out an endpoint's label class once for every rule, and rules pass classes by id.
+/// Stable ids for rule endpoints at two levels (D30), kept for the life of the link so Python
+/// works out each key's label values once for every rule.
+/// - A basis is what an endpoint's module-level values depend on: its module (or the marker of
+///   an unresolved endpoint), whether it is external, and for a source its record. Every end
+///   shares one basis table.
+/// - An entity key is a basis plus the entity (a source's scope, a destination's symbol), for
+///   the values that depend on the entity. Each end has its own table.
 #[derive(Default)]
 pub struct EndpointTables {
-    tables: FxHashMap<Endpoint, Table>,
+    bases: Table,
+    entities: FxHashMap<End, Table>,
     /// `repo_module_of` per dotted name: surfaces repeat across edges and rules.
     module_of: FxHashMap<Sid, Option<Sid>>,
 }
 
 #[derive(Default)]
 struct Table {
-    ids: FxHashMap<[u32; 3], u32>,
-    reps: Vec<u32>,
+    ids: FxHashMap<[u32; 2], u32>,
+    keys: Vec<[u32; 2]>,
 }
+
+/// Stable keys of some ids: the key of each id, the table size before the call, the
+/// representative id of each key the call added, and the distinct keys in first-seen order.
+pub struct Stable {
+    pub key_of: Vec<u32>,
+    pub known: u32,
+    pub added: Vec<u32>,
+    pub distinct: Vec<u32>,
+}
+
+impl Table {
+    fn heap(&self) -> usize {
+        heap::map(&self.ids) + heap::vec(&self.keys)
+    }
+
+    fn stable(&mut self, ids: &[u32], keys: Vec<[u32; 2]>) -> Stable {
+        let known = self.keys.len() as u32;
+        let mut out = Stable {
+            key_of: Vec::with_capacity(ids.len()),
+            known,
+            added: Vec::new(),
+            distinct: Vec::new(),
+        };
+        let mut seen = FxHashSet::default();
+        for (&id, key) in ids.iter().zip(keys) {
+            let next = self.keys.len() as u32;
+            let found = *self.ids.entry(key).or_insert(next);
+            if found == next {
+                self.keys.push(key);
+                out.added.push(id);
+            }
+            if seen.insert(found) {
+                out.distinct.push(found);
+            }
+            out.key_of.push(found);
+        }
+        out
+    }
+}
+
+/// The record slot of a destination basis: a destination's module values never depend on the
+/// edge's own file, only on whether it is external. No record key reaches these
+/// (`Link::file_key`).
+const DST_INTERNAL: u32 = u32::MAX;
+const DST_EXTERNAL: u32 = u32::MAX - 1;
+/// The entity slot of a masked entity key: no interned string has this id.
+const NO_ENTITY: Sid = u32::MAX;
 
 /// The dst endpoint of an edge at module or entity granularity: (module or a marker for an
 /// unresolved endpoint, external flag, entity or EMPTY).
@@ -75,12 +127,8 @@ const UNRESOLVED_MODULE: Sid = u32::MAX;
 impl EndpointTables {
     /// Estimated heap bytes (`Link::heap`).
     pub fn heap(&self) -> usize {
-        let tables: usize = self
-            .tables
-            .values()
-            .map(|t| heap::map(&t.ids) + heap::vec(&t.reps))
-            .sum();
-        heap::map(&self.tables) + tables + heap::map(&self.module_of)
+        let entities: usize = self.entities.values().map(Table::heap).sum();
+        self.bases.heap() + heap::map(&self.entities) + entities + heap::map(&self.module_of)
     }
 }
 
@@ -211,43 +259,75 @@ impl Link {
         (src, dst)
     }
 
-    /// The stable key of each id in table `which`, the representative edges of the keys this
-    /// call added (keys `known..`, where `known` is the table size before the call), and the
-    /// distinct keys of `ids` in the order they first appear.
-    pub fn stable_keys(
+    /// The basis of edge `id` at `end` (see `EndpointTables`) as a table key.
+    fn basis_key(&mut self, id: u32, end: End) -> [u32; 2] {
+        match end {
+            End::Src => {
+                let (module, _) = self.site_of(id);
+                [module, self.file_key(id)]
+            }
+            End::Dst(role) => {
+                let (module, external, _) = self.dst_key(id, role, false);
+                [module, if external { DST_EXTERNAL } else { DST_INTERNAL }]
+            }
+        }
+    }
+
+    /// The entity of edge `id` at `end`: a source's scope name, a destination's symbol.
+    fn entity_of(&mut self, id: u32, end: End) -> Sid {
+        match end {
+            End::Src => self.site_of(id).1,
+            End::Dst(role) => self.dst_key(id, role, true).2,
+        }
+    }
+
+    /// The stable basis of each id at `end`.
+    pub fn end_bases(&mut self, ids: &[u32], end: End) -> Stable {
+        let keys: Vec<[u32; 2]> = ids.iter().map(|&id| self.basis_key(id, end)).collect();
+        self.endpoints.bases.stable(ids, keys)
+    }
+
+    /// The stable entity key of each id at `end`, given its basis. With `mask` (one byte per
+    /// basis), a basis whose byte is zero keeps no entity: its endpoints share one key, which no
+    /// key with an entity meets. None when `basis_of` or `mask` is short.
+    pub fn end_entities(
         &mut self,
         ids: &[u32],
-        which: Endpoint,
-    ) -> (Vec<u32>, u32, Vec<u32>, Vec<u32>) {
-        let keys: Vec<[u32; 3]> = ids
-            .iter()
-            .map(|&id| match which {
-                Endpoint::SrcModule => self.src_key(id, false),
-                Endpoint::SrcScope => self.src_key(id, true),
-                Endpoint::Dst(role, entity) => {
-                    let (module, external, symbol) = self.dst_key(id, role, entity);
-                    [module, external as u32, symbol]
-                }
-            })
-            .collect();
-        let table = self.endpoints.tables.entry(which).or_default();
-        let known = table.reps.len() as u32;
-        let mut key_of = Vec::with_capacity(ids.len());
-        let mut seen = FxHashSet::default();
-        let mut distinct = Vec::new();
-        for (&id, key) in ids.iter().zip(keys) {
-            let next = table.reps.len() as u32;
-            let found = *table.ids.entry(key).or_insert(next);
-            if found == next {
-                table.reps.push(id);
-            }
-            if seen.insert(found) {
-                distinct.push(found);
-            }
-            key_of.push(found);
+        end: End,
+        basis_of: &[u32],
+        mask: Option<&[u8]>,
+    ) -> Option<Stable> {
+        if basis_of.len() != ids.len() {
+            return None;
         }
-        let added = table.reps[known as usize..].to_vec();
-        (key_of, known, added, distinct)
+        let mut keys = Vec::with_capacity(ids.len());
+        for (&id, &basis) in ids.iter().zip(basis_of) {
+            let keep = match mask {
+                Some(mask) => *mask.get(basis as usize)? != 0,
+                None => true,
+            };
+            let entity = if keep {
+                self.entity_of(id, end)
+            } else {
+                NO_ENTITY
+            };
+            keys.push([basis, entity]);
+        }
+        Some(
+            self.endpoints
+                .entities
+                .entry(end)
+                .or_default()
+                .stable(ids, keys),
+        )
+    }
+
+    /// The basis of each entity key of `end` in `keys`; None for a key the table does not hold.
+    pub fn entity_bases(&self, end: End, keys: &[u32]) -> Option<Vec<u32>> {
+        let table = self.endpoints.entities.get(&end)?;
+        keys.iter()
+            .map(|&key| table.keys.get(key as usize).map(|k| k[0]))
+            .collect()
     }
 
     /// The ids whose key's class keeps: `class_of` maps a key to its class, `keep` holds one

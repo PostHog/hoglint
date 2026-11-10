@@ -94,14 +94,23 @@ class Reads:
         return frozenset(out)
 
 
-def granularity(reads: Reads, labeler: Labeler) -> tuple[bool, bool]:
-    """(src keyed by scope, dst keyed by entity): what a grouping key over `reads` holds. An
-    export with `subclass_of` decides by class, so `dst.exported` needs the entity."""
+@dataclass(frozen=True, slots=True)
+class Granularity:
+    """What a grouping key over some reads holds of each end besides its module: a source's
+    scope, a destination's entity, or a destination's entity only where an export that decides
+    by class (`subclass_of`) covers its path (`dst_by_export`), since only there does
+    `dst.exported` depend on the symbol."""
+
+    src_scope: bool
+    dst_entity: bool
+    dst_by_export: bool
+
+
+def granularity(reads: Reads, labeler: Labeler) -> Granularity:
     src_scope = not all(labeler.module_level(Ref(("src", name))) for name in reads.src)
     dst_entity = not all(labeler.module_level(Ref(("dst", name))) for name in reads.dst if name != "unresolved")
-    if reads.exported and any(spec.subclass_of for spec in labeler.config.exports.values()):
-        dst_entity = True
-    return src_scope, dst_entity
+    by_class = reads.exported and any(spec.subclass_of for spec in labeler.config.exports.values())
+    return Granularity(src_scope, dst_entity, by_class and not dst_entity)
 
 
 def decision_reads(rule: EdgeRule) -> Reads | None:

@@ -14,7 +14,7 @@ false for a group makes the selection false for every edge in it.
 from __future__ import annotations
 
 from array import array
-from collections.abc import Callable, Hashable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from operator import attrgetter
@@ -136,15 +136,6 @@ class NativeSymbolFacts(SymbolFacts):
 NO_CLASS = 0xFFFFFFFF
 
 
-def module_parts(endpoint: Endpoint) -> Hashable:
-    """The parts of an endpoint that its module-level fields depend on."""
-    return (endpoint.unresolved, endpoint.module, endpoint.path, endpoint.external)
-
-
-def same_endpoint(endpoint: Endpoint) -> Hashable:
-    return endpoint
-
-
 class Rejudged:
     """The detail of a finding made from its group's judgment: the rule judges the edge again
     when something reads the message, site, witnesses or remedies. An edge judged apart from its
@@ -210,69 +201,96 @@ class Classes:
 
 @dataclass(frozen=True, slots=True)
 class Column:
-    """One value an endpoint has for rules: `read` makes it, and endpoints with the same `basis`
-    share it."""
+    """One value an endpoint has for rules: `read` makes it. A module-level column is read once
+    per basis; an entity-level one (`entity`) once per entity key."""
 
     name: str
     read: Callable[[Endpoint], Any]
-    basis: Callable[[Endpoint], Hashable]
+    entity: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EndKeys:
+    """The stable keys of some ids at one end: the level the keys live at (`BASIS`, or an end's
+    entity table), the key of each id, and the distinct keys."""
+
+    level: str
+    key_of: bytes
+    distinct: array[int]
 
 
 UNREAD = object()
+BASIS = "basis"
 
 
 class EndpointClasses:
-    """Label classes of rule endpoints, shared by every rule of a run.
+    """Label classes of rule endpoints, shared by every rule of a run (D30).
 
-    The link gives each endpoint a stable key per table (`Link.stable_keys`): a source module or
-    scope, a destination module or entity. Each key becomes an Endpoint once. Every value rules
-    read of an endpoint is a column of its table, one slot per key, filled once per run; keys
-    whose endpoints share a basis (the same module parts, for a module-level value) share the
-    value, so it is read once per module. A rule's class of a key is the tuple of the columns
-    it reads. Core edges carry no endpoint attributes, so a class depends on the endpoint alone.
+    The link keys each end of an edge at two levels (`Link.end_bases`, `Link.end_entities`). A
+    basis is what an endpoint's module-level values depend on (its module, whether it is
+    external, a source's record); every end shares one basis table. An entity key adds the
+    entity (a source's scope, a destination's symbol). Python reads each module-level column
+    once per basis and each entity-level column once per entity key, each from one endpoint made
+    from a representative edge; the link maps every edge to its key. A rule's class of a key is
+    the tuple of the columns it reads. Core edges carry no endpoint attributes, so a class
+    depends on the endpoint alone.
     """
 
     def __init__(self, ctx: NativeRuleContext) -> None:
         self.ctx = ctx
         self.link = ctx.native.native.link
         self.core = ctx.native.native.core
-        self.endpoints: dict[str, list[Endpoint]] = {}
+        self.endpoints: dict[str, list[Endpoint]] = {BASIS: []}
+        self.entity_bases: dict[str, array[int]] = {}
         self.columns: dict[tuple[str, str], list[Any]] = {}
-        self.shared: dict[tuple[str, Callable[[Endpoint], Hashable]], dict[Hashable, Any]] = {}
         self.classes: dict[tuple[str, tuple[str, ...]], Classes] = {}
         self.labeler = ctx.labeler
         self.exports = list(ctx.config.exports)
-        self.symbol_exports: dict[str | None, bool] = {}
+        self.by_class = any(spec.subclass_of for spec in ctx.config.exports.values())
 
-    def keys(self, ids: array[int], which: str) -> tuple[bytes, array[int]]:
-        """The stable key of each id in table `which`, and the distinct keys among them."""
-        key_of, known, added, distinct = self.link.stable_keys(ids.tobytes(), which)
-        endpoints = self.endpoints.setdefault(which, [])
+    def add_endpoints(self, level: str, known: int, end: str, added: bytes) -> None:
+        """An endpoint for each key the link added at `level`, made from its representative."""
+        endpoints = self.endpoints.setdefault(level, [])
         if len(endpoints) != known:
-            raise RuntimeError(f"endpoint table {which} has {len(endpoints)} keys, the link {known}")
-        endpoints.extend(self.make_endpoints(which, added))
-        return key_of, array("I", distinct)
+            raise RuntimeError(f"endpoint table {level} has {len(endpoints)} keys, the link {known}")
+        endpoints.extend(self.make_endpoints(end, added))
 
-    def make_endpoints(self, which: str, reps: bytes) -> list[Endpoint]:
-        if which.startswith("src"):
+    def bases(self, ids: array[int], end: str) -> EndKeys:
+        """The basis of each id at `end` ("src" or "dst-<role>")."""
+        key_of, known, added, distinct = self.link.end_bases(ids.tobytes(), end)
+        self.add_endpoints(BASIS, known, end, added)
+        return EndKeys(BASIS, key_of, array("I", distinct))
+
+    def entities(self, ids: array[int], end: str, bases: EndKeys, by_export: bool) -> EndKeys:
+        """The entity key of each id at `end`. With `by_export`, only a basis that an export
+        deciding by class covers keeps its entity."""
+        level = f"{end}-entity"
+        mask = self.export_mask(bases) if by_export else None
+        (key_of, known, added, distinct), added_bases = self.link.end_entities(ids.tobytes(), end, bases.key_of, mask)
+        self.add_endpoints(level, known, end, added)
+        self.entity_bases.setdefault(level, array("I")).frombytes(added_bases)
+        return EndKeys(level, key_of, array("I", distinct))
+
+    def make_endpoints(self, end: str, reps: bytes) -> list[Endpoint]:
+        if end == "src":
             return [self.ctx.src_endpoint_at(module, scope, path) for module, scope, path in self.link.src_sites(reps)]
-        role = which.removeprefix("dst-").removesuffix("-entity")
+        role = end.removeprefix("dst-")
         out = []
         for resolution, surface, module, symbol in self.link.dst_parts(reps):
             targets = (self.core.maker.entity(module, symbol),) if module is not None else ()
             out.append(self.ctx.dst_endpoints_of(role, RESOLUTIONS[resolution], surface, targets)[0])
         return out
 
-    def export_basis(self, endpoint: Endpoint) -> Hashable:
-        """What an endpoint's export membership depends on: its module parts, and its symbol where
-        an export that decides by class covers the module's path."""
-        reads_symbol = self.symbol_exports.get(endpoint.module)
-        if reads_symbol is None:
-            path = self.labeler.path_of(endpoint.module) if endpoint.module else None
-            reads_symbol = path is not None and self.labeler.export_reads_symbol(path)
-            self.symbol_exports[endpoint.module] = reads_symbol
-        symbol = endpoint.symbol if reads_symbol else None
-        return (endpoint.unresolved, endpoint.module, endpoint.path, endpoint.external, symbol)
+    def reads_symbol(self, endpoint: Endpoint) -> bool:
+        """Whether an export that decides by class covers the endpoint's module: only there does
+        its export membership depend on its symbol."""
+        path = self.labeler.path_of(endpoint.module) if endpoint.module else None
+        return path is not None and self.labeler.export_reads_symbol(path)
+
+    def export_mask(self, bases: EndKeys) -> bytes:
+        """One byte per basis: 1 where the destination's entity decides its export membership."""
+        column = self.column(BASIS, bases.distinct, Column("dst.reads-symbol", self.reads_symbol, False))
+        return bytes(value is True for value in column)
 
     def exports_of(self, endpoint: Endpoint) -> tuple[Any, ...]:
         """What `dst.exported` reads of the destination: whether it is external or outside the
@@ -283,32 +301,38 @@ class EndpointClasses:
             values.extend(self.labeler.export_member((name, path, endpoint.symbol)) for name in self.exports)
         return tuple(values)
 
-    def column(self, which: str, keys: array[int], spec: Column) -> list[Any]:
-        """Column `spec` of table `which`, with every key in `keys` filled."""
-        endpoints = self.endpoints.get(which, [])
-        column = self.columns.setdefault((which, spec.name), [])
-        if len(column) < len(endpoints):
-            column.extend([UNREAD] * (len(endpoints) - len(column)))
-        shared = self.shared.setdefault((spec.name, spec.basis), {})
-        for key in keys:
-            if column[key] is not UNREAD:
-                continue
-            endpoint = endpoints[key]
-            base = spec.basis(endpoint)
-            value = shared.get(base, UNREAD)
-            if value is UNREAD:
-                value = shared[base] = spec.read(endpoint)
-            column[key] = value
+    def column(self, level: str, keys: array[int], spec: Column) -> list[Any]:
+        """Column `spec` at `level`, with every key in `keys` filled. A module-level column at an
+        entity level takes each key's value from its basis."""
+        column = self.columns.setdefault((level, spec.name), [])
+        size = len(self.endpoints[level])
+        if len(column) < size:
+            column.extend([UNREAD] * (size - len(column)))
+        missing = [key for key in keys if column[key] is UNREAD]
+        if not missing:
+            return column
+        if level == BASIS or spec.entity:
+            endpoints, read = self.endpoints[level], spec.read
+            for key in missing:
+                column[key] = read(endpoints[key])
+            return column
+        bases = self.entity_bases[level]
+        values = self.column(BASIS, array("I", sorted({bases[key] for key in missing})), spec)
+        for key in missing:
+            column[key] = values[bases[key]]
         return column
 
-    def of(self, which: str, keys: array[int], specs: list[Column]) -> Classes:
-        """Classes of table `which` over the columns `specs`, with every key in `keys` filled."""
+    def of(self, keys: EndKeys, specs: list[Column]) -> Classes:
+        """Classes of the keys at `keys.level` over the columns `specs`, with every key in
+        `keys` filled."""
+        if keys.level == BASIS and any(spec.entity for spec in specs):
+            raise RuntimeError(f"an entity column among {[spec.name for spec in specs]} at the basis level")
         names = tuple(spec.name for spec in specs)
-        classes = self.classes.get((which, names))
+        classes = self.classes.get((keys.level, names))
         if classes is None:
-            classes = self.classes[(which, names)] = Classes()
-        columns = [self.column(which, keys, spec) for spec in specs]
-        classes.fill(keys, len(self.endpoints.get(which, [])), columns)
+            classes = self.classes[(keys.level, names)] = Classes()
+        columns = [self.column(keys.level, keys.distinct, spec) for spec in specs]
+        classes.fill(keys.distinct, len(self.endpoints[keys.level]), columns)
         return classes
 
 
@@ -329,14 +353,22 @@ class Grouper:
         dst = self.ctx.dst_endpoints(edge, self.role)[0]
         return self.rule.env(edge, self.ctx.src_endpoint(edge.site), dst)
 
-    def dst_entity(self, reads: Reads) -> bool:
-        return granularity(reads, self.labeler)[1]
+    def src_keys(self, ids: array[int], reads: Reads) -> EndKeys:
+        """The source key of each id at the level `reads` need: its basis, or its scope too."""
+        bases = self.tables.bases(ids, "src")
+        if not granularity(reads, self.labeler).src_scope:
+            return bases
+        return self.tables.entities(ids, "src", bases, False)
 
-    def src_table(self, reads: Reads) -> str:
-        return "src-scope" if granularity(reads, self.labeler)[0] else "src"
-
-    def dst_table(self, reads: Reads) -> str:
-        return f"dst-{self.role}-entity" if self.dst_entity(reads) else f"dst-{self.role}"
+    def dst_keys(self, ids: array[int], reads: Reads) -> EndKeys:
+        """The destination key of each id at the level `reads` need: its basis, its entity, or
+        its entity only where an export that decides by class covers it."""
+        end = f"dst-{self.role}"
+        bases = self.tables.bases(ids, end)
+        level = granularity(reads, self.labeler)
+        if not level.dst_entity and not level.dst_by_export:
+            return bases
+        return self.tables.entities(ids, end, bases, level.dst_by_export)
 
     def keep(self, ids: array[int], key_of: bytes, keep: list[bool]) -> array[int]:
         kept, _ = type(self.link).keep_keys(ids.tobytes(), key_of, bytes(keep))
@@ -347,13 +379,11 @@ class Grouper:
         return array("I", kept)
 
     def field_column(self, root: str, name: str) -> Column:
-        """`root.name` of an endpoint: a module-level value is shared by endpoints with the same
-        module parts."""
-        module_level = self.labeler.module_level(Ref((root, name)))
+        """`root.name` of an endpoint: a module-level value is read once per basis."""
         return Column(
             f"{root}.{name}",
             lambda endpoint: read_endpoint(self.ctx, endpoint, name, None, root),
-            module_parts if module_level else same_endpoint,
+            not self.labeler.module_level(Ref((root, name))),
         )
 
     def field_columns(self, root: str, names: tuple[str, ...]) -> list[Column]:
@@ -362,9 +392,9 @@ class Grouper:
     def dst_columns(self, names: tuple[str, ...], exported: bool) -> list[Column]:
         """The columns of a destination's class: whether it resolved, the fields `names`, and with
         `exported` what export membership reads."""
-        out = [Column("dst.unresolved", attrgetter("unresolved"), module_parts), *self.field_columns("dst", names)]
+        out = [Column("dst.unresolved", attrgetter("unresolved"), False), *self.field_columns("dst", names)]
         if exported:
-            out.append(Column("dst.exports", self.tables.exports_of, self.tables.export_basis))
+            out.append(Column("dst.exports", self.tables.exports_of, self.tables.by_class))
         return out
 
     @staticmethod
@@ -390,33 +420,33 @@ class Grouper:
             if roots == {"edge"}:
                 key_of, reps = self.link.edge_keys(ids.tobytes(), sorted(reads.edge))
             else:
-                _, _, key_of, reps = self.link.endpoint_keys(ids.tobytes(), self.role, False, self.dst_entity(reads))
+                level = granularity(reads, self.labeler)
+                entity = level.dst_entity or level.dst_by_export
+                _, _, key_of, reps = self.link.endpoint_keys(ids.tobytes(), self.role, False, entity)
             rep_edges = self.core.get(array("I", reps))
             return self.keep(
                 ids, key_of, [evaluate(node, self.env(edge).resolve) is not Truth.FALSE for edge in rep_edges]
             )
         root = "src" if roots == {"src"} else "dst"
-        which = self.src_table(reads) if root == "src" else self.dst_table(reads)
+        keys = self.src_keys(ids, reads) if root == "src" else self.dst_keys(ids, reads)
         names = tuple(sorted(reads.src if root == "src" else reads.dst))
-        key_of, keys = self.tables.keys(ids, which)
-        classes = self.tables.of(which, keys, self.field_columns(root, names))
-        return self.keep_classes(ids, key_of, classes, self.class_keep(node, root, names, classes.rows))
+        classes = self.tables.of(keys, self.field_columns(root, names))
+        return self.keep_classes(ids, keys.key_of, classes, self.class_keep(node, root, names, classes.rows))
 
     def layers(self, ids: array[int], reads: Reads) -> tuple[bytes, bytes]:
         """Groups `ids` by the classes of what `reads` names: (group of each id, representatives)."""
         raw = ids.tobytes()
-        src_which, dst_which = self.src_table(reads), self.dst_table(reads)
         src_names = tuple(sorted(reads.src))
         dst_names = tuple(sorted(reads.dst - {"unresolved"}))
-        src_key, src_keys = self.tables.keys(ids, src_which)
-        dst_key, dst_keys = self.tables.keys(ids, dst_which)
-        src_classes = self.tables.of(src_which, src_keys, self.field_columns("src", src_names))
-        dst_classes = self.tables.of(dst_which, dst_keys, self.dst_columns(dst_names, reads.exported))
+        src = self.src_keys(ids, reads)
+        dst = self.dst_keys(ids, reads)
+        src_classes = self.tables.of(src, self.field_columns("src", src_names))
+        dst_classes = self.tables.of(dst, self.dst_columns(dst_names, reads.exported))
         edge_key, edge_reps = self.link.edge_keys(raw, sorted(reads.edge))
         edge_classes = array("I", range(len(array("I", edge_reps)))).tobytes()
         layers = [
-            (src_key, src_classes.class_of.tobytes()),
-            (dst_key, dst_classes.class_of.tobytes()),
+            (src.key_of, src_classes.class_of.tobytes()),
+            (dst.key_of, dst_classes.class_of.tobytes()),
             (edge_key, edge_classes),
         ]
         return type(self.link).group(raw, layers)
@@ -527,18 +557,18 @@ class NativeRuleContext(RuleContext):
         link = self.native.native.link
         core_count = self.native.core_count
         tables = self.endpoint_classes
-        which = f"dst-{rule.spec.endpoint}-entity"
+        end = f"dst-{rule.spec.endpoint}"
         include, exclude = context_bits(rule.include), context_bits(rule.exclude)
         out: dict[str, list[Hop]] = {}
         for kind in self.kinds_or_all(rule.kinds()):
             by_module: dict[str, list[Hop]] = {}
             core = array("I", (i for i in array("I", link.candidates([kind], include, exclude)) if i < core_count))
             if core:
-                key_of, _ = tables.keys(core, which)
-                endpoints = tables.endpoints[which]
+                keys = tables.entities(core, end, tables.bases(core, end), False)
+                endpoints = tables.endpoints[keys.level]
                 modules = link.columns(core.tobytes(), ["module"])[0]
                 surfaces = [surface for _, surface, _, _ in link.dst_parts(core.tobytes())]
-                for edge_id, key, module, surface in zip(core, array("I", key_of), modules, surfaces):
+                for edge_id, key, module, surface in zip(core, array("I", keys.key_of), modules, surfaces):
                     by_module.setdefault(module, []).append(Hop(edge_id, endpoints[key], Truth.TRUE, surface))
             pack: dict[str, list[Edge]] = {}
             pack_ids = array("I", (i for i in array("I", link.ids_of_kind(kind)) if i >= core_count))

@@ -3,7 +3,7 @@
 use crate::link::Link;
 use crate::{ids_bytes, ids_from};
 use hoglint_facts::link::Link as CoreLink;
-use hoglint_facts::link::groups::{Endpoint, Role};
+use hoglint_facts::link::groups::{End, Role, Stable};
 use hoglint_facts::link::intern::{EMPTY, Sid};
 use hoglint_facts::link::scope::Res;
 use pyo3::exceptions::{PyKeyError, PyValueError};
@@ -19,23 +19,35 @@ fn role_of(role: &str) -> PyResult<Role> {
     }
 }
 
-/// An endpoint table by name: `src`, `src-scope`, or `dst-<role>` with `-entity` for entity
-/// granularity.
-fn endpoint_table(which: &str) -> PyResult<Endpoint> {
-    match which {
-        "src" => Ok(Endpoint::SrcModule),
-        "src-scope" => Ok(Endpoint::SrcScope),
+/// An end by name: `src`, or `dst-<role>`.
+fn end_of(end: &str) -> PyResult<End> {
+    match end {
+        "src" => Ok(End::Src),
         _ => {
-            let rest = which
+            let role = end
                 .strip_prefix("dst-")
-                .ok_or_else(|| PyValueError::new_err(format!("no endpoint table {which}")))?;
-            let (role, entity) = match rest.strip_suffix("-entity") {
-                Some(role) => (role, true),
-                None => (rest, false),
-            };
-            Ok(Endpoint::Dst(role_of(role)?, entity))
+                .ok_or_else(|| PyValueError::new_err(format!("no end {end}")))?;
+            Ok(End::Dst(role_of(role)?))
         }
     }
+}
+
+/// A stable-key lookup as Python reads it: (key of each id, keys known before the call,
+/// representative ids of the keys it added, distinct keys of the ids).
+type StableBytes<'py> = (
+    Bound<'py, PyBytes>,
+    u32,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+);
+
+fn stable_bytes<'py>(py: Python<'py>, stable: &Stable) -> StableBytes<'py> {
+    (
+        ids_bytes(py, &stable.key_of),
+        stable.known,
+        ids_bytes(py, &stable.added),
+        ids_bytes(py, &stable.distinct),
+    )
 }
 
 /// Python strings of interned ids, made once per call.
@@ -259,30 +271,44 @@ impl Link {
         Ok(out)
     }
 
-    /// Stable endpoint keys of `ids` in table `which` (see `endpoint_table`): (key of each id,
-    /// keys known before this call, representative ids of the keys it added, distinct keys of
-    /// `ids`). A key keeps its id for the life of the link.
-    #[allow(clippy::type_complexity)]
-    fn stable_keys<'py>(
+    /// The stable basis of each id at `end` ("src" or "dst-<role>"): what its module-level
+    /// label values depend on. A basis keeps its id for the life of the link.
+    fn end_bases<'py>(
         &mut self,
         py: Python<'py>,
         ids: &[u8],
-        which: &str,
-    ) -> PyResult<(
-        Bound<'py, PyBytes>,
-        u32,
-        Bound<'py, PyBytes>,
-        Bound<'py, PyBytes>,
-    )> {
+        end: &str,
+    ) -> PyResult<StableBytes<'py>> {
         let ids = ids_from(ids)?;
-        let which = endpoint_table(which)?;
-        let (key_of, known, added, distinct) = self.inner.stable_keys(&ids, which);
-        Ok((
-            ids_bytes(py, &key_of),
-            known,
-            ids_bytes(py, &added),
-            ids_bytes(py, &distinct),
-        ))
+        let end = end_of(end)?;
+        Ok(stable_bytes(py, &self.inner.end_bases(&ids, end)))
+    }
+
+    /// The stable entity key of each id at `end`, given the basis of each (`end_bases`). With
+    /// `mask`, one byte per basis, a basis whose byte is zero keeps no entity. Also returns the
+    /// basis of each key the call added.
+    #[allow(clippy::type_complexity)]
+    fn end_entities<'py>(
+        &mut self,
+        py: Python<'py>,
+        ids: &[u8],
+        end: &str,
+        basis_of: &[u8],
+        mask: Option<&[u8]>,
+    ) -> PyResult<(StableBytes<'py>, Bound<'py, PyBytes>)> {
+        let ids = ids_from(ids)?;
+        let end = end_of(end)?;
+        let basis_of = ids_from(basis_of)?;
+        let stable = self
+            .inner
+            .end_entities(&ids, end, &basis_of, mask)
+            .ok_or_else(|| PyValueError::new_err("a basis per id, and a mask byte per basis"))?;
+        let added: Vec<u32> = (stable.known..stable.known + stable.added.len() as u32).collect();
+        let bases = self
+            .inner
+            .entity_bases(end, &added)
+            .ok_or_else(|| PyValueError::new_err("an entity key the table does not hold"))?;
+        Ok((stable_bytes(py, &stable), ids_bytes(py, &bases)))
     }
 
     /// The ids whose key's class keeps: `class_of` holds a class per key, `keep` a byte per
