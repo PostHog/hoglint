@@ -242,7 +242,11 @@ class Pack(Protocol):
 
     A pack, a provider or an adapter that imports an installed distribution declares
     `distributions: tuple[str, ...]` (import names). The run summary key covers their code like
-    `[discovery] external` packages (see `Framework` in ledger/envelope.py)."""
+    `[discovery] external` packages (see `Framework` in ledger/envelope.py).
+
+    A pack reads no file but the policy files its `policy_file_keys` name (the section keys that
+    hold a path). In a run of a git tree those paths are absolute, into the policy written from
+    that tree."""
 
     name: str  # the config section it owns, e.g. "django"
     allowed_keys: frozenset[str]
@@ -266,10 +270,16 @@ class Provider(Protocol):
     `outputs: tuple[str, ...]`; one with a single output fills every field its `sets` lists, and
     otherwise each output fills the field of the same name unless `sets` renames it. It declares
     `distributions` as a pack does, and `open` fails when one of them is not installed.
+
+    `inputs` declares the files `open` reads, as path patterns relative to the repo root (`**`
+    spans directories, `*` and `?` stay in one segment). The run summary key covers those files.
+    In a run of a git tree, `root` holds exactly those files, so a read of any other file fails.
     """
 
     use: str  # the `use = "..."` name in a [[provider]] or [providers.*] entry
     allowed_options: frozenset[str]
+
+    def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]: ...
 
     def open(self, options: Mapping[str, Any], root: Path) -> Any: ...
 
@@ -277,14 +287,63 @@ class Provider(Protocol):
 
 
 class CoverageAdapter(Protocol):
-    """Answers whether an outside input list (for example a build tool's task inputs) watches a path."""
+    """Answers whether an outside input list (for example a build tool's task inputs) watches a
+    path. It declares `inputs` as a provider does; to ask whether the snapshot holds a file it
+    does not read, it calls `PLUGIN_ROOTS.holds`."""
 
     name: str
     allowed_options: frozenset[str]
 
+    def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]: ...
+
     def open(self, options: Mapping[str, Any], root: Path) -> Any: ...
 
     def covered(self, handle: Any, path: str) -> tuple[bool, str]: ...
+
+
+def declared_inputs(plugin: object, options: Mapping[str, Any]) -> tuple[str, ...]:
+    """The path patterns a provider or coverage adapter reads; none when it declares none."""
+    inputs = getattr(plugin, "inputs", None)
+    return tuple(inputs(options)) if inputs is not None else ()
+
+
+class TreeRoot(Protocol):
+    """The files of one git tree, for a run of that tree (see `PluginRoots`)."""
+
+    def plugin_root(self, patterns: tuple[str, ...]) -> Path: ...
+
+    def holds(self, path: str) -> bool: ...
+
+
+class PluginRoots:
+    """Which roots stand for a git tree rather than for the working tree.
+
+    A run of a git tree reads nothing from the working tree. Its root is an empty directory filed
+    here; each plugin it opens gets a directory of its own that holds exactly the files the
+    plugin declares, written from the tree. A question about a file that no plugin reads, such
+    as whether it exists, goes to `holds`. A root not filed here is a working tree."""
+
+    def __init__(self) -> None:
+        self.trees: dict[Path, TreeRoot] = {}
+
+    def add(self, root: Path, tree: TreeRoot) -> None:
+        self.trees[root.resolve()] = tree
+
+    def tree(self, root: Path) -> TreeRoot | None:
+        return self.trees.get(root.resolve())
+
+    def of(self, root: Path, plugin: object, options: Mapping[str, Any]) -> Path:
+        """The root `plugin` reads under `options`."""
+        tree = self.tree(root)
+        return root if tree is None else tree.plugin_root(declared_inputs(plugin, options))
+
+    def holds(self, root: Path, path: str) -> bool:
+        """Whether the snapshot behind `root` holds `path`, a file or a directory."""
+        tree = self.tree(root)
+        return (root / path).exists() if tree is None else tree.holds(path)
+
+
+PLUGIN_ROOTS = PluginRoots()
 
 
 class Registry:

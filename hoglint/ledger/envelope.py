@@ -359,12 +359,15 @@ class PolicyFiles:
     def digests(self, root: Path) -> dict[str, str]:
         return {path: file_digest(root / path) for path in self.paths()}
 
-    def anchored(self, policy_root: Path, code_root: Path) -> Config:
+    def anchored(self, policy_root: Path, code_root: Path, always: bool = False) -> Config:
         """The config with every data file that differs between the two roots read from the
-        policy root, so a run of one policy over other code reads that policy's files."""
+        policy root, so a run of one policy over other code reads that policy's files. With
+        `always`, every data file is: a run of a git tree reads no file of the working tree."""
         if policy_root.resolve() == code_root.resolve():
             return self.config
-        differs = {path for path in self.paths() if file_digest(policy_root / path) != file_digest(code_root / path)}
+        differs = {
+            path for path in self.paths() if always or file_digest(policy_root / path) != file_digest(code_root / path)
+        }
         if not differs:
             return self.config
         rules = {

@@ -18,7 +18,7 @@ from hoglint.config.schema import canonical
 from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
 from hoglint.model import Graph
-from hoglint.plugins import REGISTRY, Provided
+from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, Provided
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, any_of, refs
 
 REGISTRY_FIELD = "registry"
@@ -124,9 +124,12 @@ class ProviderRunner:
         self.failed_fields = {name for spec in self.specs if spec.name in self.failures for name in spec.sets}
 
     def open(self, spec: ProviderSpec) -> Any:
+        """In a run of a git tree the provider reads a root that holds only the files it declares."""
         if self.repo_root is None:
             raise FileNotFoundError("no repo root to read provider files from")
-        return REGISTRY.providers[spec.use].open(dict(spec.options), self.repo_root)
+        provider = REGISTRY.providers[spec.use]
+        options = dict(spec.options)
+        return provider.open(options, PLUGIN_ROOTS.of(self.repo_root, provider, options))
 
     def values(self, path: str) -> dict[str, Candidate]:
         out: dict[str, Candidate] = {}

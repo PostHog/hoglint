@@ -1,19 +1,18 @@
 """The working tree's git status, read once per process and shared.
 
-The native snapshot reads it for dirty and untracked sources. The summary store reads it for
-side inputs: files other than Python sources that hoglint reads from the working tree, which
-must equal the tree a summary is filed under. One `git status --porcelain=v2 -uall` answers both.
+The native snapshot reads it for dirty and untracked sources. A run of the working tree reads it
+to tell whether the working tree holds HEAD's inputs (sources, declared side inputs, the ledger),
+so that its summary may stand for HEAD's. One `git status --porcelain=v2 -uall` answers both.
 """
 
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-SOURCE_SUFFIXES = (".py", ".pyi")
 # Fields before the path in a porcelain v2 record, per record kind.
 FIELDS_BEFORE_PATH = {"1": 8, "2": 9, "u": 10}
 
@@ -88,14 +87,7 @@ class WorktreeStatus:
         status = WorktreeStatus.taken[key] = WorktreeStatus([record for record in output.split("\0") if record])
         return status
 
-    def side_input_drift(self, against_index: bool) -> list[str]:
-        """Files other than Python sources where the working tree differs from HEAD, or from the
-        index when `against_index`, and source files that changed while this process read them."""
-        return sorted(
-            {
-                entry.path
-                for entry in self.entries
-                if not entry.path.endswith(SOURCE_SUFFIXES) and (entry.unstaged or (entry.staged and not against_index))
-            }
-            | self.drifted
-        )
+    def drift(self, is_input: Callable[[str], bool]) -> list[str]:
+        """Run inputs where the working tree differs from HEAD, staged or not, and source files
+        that changed while this process read them."""
+        return sorted({entry.path for entry in self.entries if is_input(entry.path)} | self.drifted)

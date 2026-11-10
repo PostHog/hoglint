@@ -8,7 +8,7 @@ from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.globs import fill, glob_match
 from hoglint.model import Edge
-from hoglint.plugins import REGISTRY
+from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 from hoglint.rules.base import (
     EdgeEnv,
     EdgeRule,
@@ -118,6 +118,8 @@ class LayoutPrimitive(EntityRule):
         return sorted(roots)
 
     def check_files(self) -> None:
+        """Whether a file exists is a question about the snapshot: in a run of a git tree the
+        tree's path list answers it, never the working tree."""
         repo = self.ctx.repo_root
         for root in self.roots():
             module = self.ctx.labeler.path_to_module.get(f"{root}/__init__.py")
@@ -128,7 +130,7 @@ class LayoutPrimitive(EntityRule):
                 if repo is None:
                     self.incomplete(root, module, "no repo root to check files against")
                     break
-                if not (repo / root / required).exists():
+                if not PLUGIN_ROOTS.holds(repo, f"{root}/{required.strip('/')}"):
                     self.emit(
                         f"{root}/{required}",
                         module,
@@ -136,7 +138,7 @@ class LayoutPrimitive(EntityRule):
                         self.resolver(module, None, f"{root}/{required}"),
                     )
             for forbidden in self.spec.absent:
-                if repo is not None and (repo / root / forbidden).exists():
+                if repo is not None and PLUGIN_ROOTS.holds(repo, f"{root}/{forbidden.strip('/')}"):
                     self.emit(
                         f"{root}/{forbidden}",
                         module,
@@ -324,7 +326,7 @@ class CoveragePrimitive(EntityRule):
             return self.run
         options = {key: value for key, value in self.spec.inputs if key != "adapter"}
         try:
-            handle = adapter.open(options, repo)
+            handle = adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
             self.incomplete("inputs", None, f"cannot read the {name} inputs: {error}")
             return self.run

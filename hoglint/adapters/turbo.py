@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.globs import Braces, compile_glob
-from hoglint.plugins import REGISTRY
+from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 
 DEFAULT_MARKER = "$TURBO_DEFAULT$"
 EXTENDS_MARKER = "$TURBO_EXTENDS$"
@@ -98,6 +98,7 @@ class TurboInputs:
     def __init__(self, repo_root: Path, task: str) -> None:
         self.repo_root = repo_root
         self.task = task
+        self.tree = PLUGIN_ROOTS.tree(repo_root)
         self.root_config = self.read_config(repo_root / "turbo.json")
         self.tracked_cache: dict[str, frozenset[str] | None] = {}
         self.directories = self.package_dirs()
@@ -117,7 +118,10 @@ class TurboInputs:
         return read_json(path) if path.is_file() else {}
 
     def git(self, *args: str) -> list[str] | None:
-        """git output lines, or None when the root is not a git work tree (an index snapshot)."""
+        """git output lines, or None when the root is not a git work tree: a root written from a
+        git tree, which holds only the declared files."""
+        if self.tree is not None:
+            return None
         completed = subprocess.run(["git", "-C", str(self.repo_root), *args], capture_output=True, text=True)
         if completed.returncode != 0:
             return None
@@ -200,7 +204,10 @@ class TurboInputs:
         return posixpath.normpath(posixpath.join(directory, glob))
 
     def tracked(self, directory: str, path: str) -> bool:
-        """Whether git tracks the path inside the package (on disk when there is no git)."""
+        """Whether git tracks the path inside the package: in a root written from a git tree,
+        whether the tree holds it; on disk when there is no git."""
+        if self.tree is not None:
+            return self.tree.holds(path)
         if directory not in self.tracked_cache:
             listed = self.git("ls-files", "--", directory or ".")
             self.tracked_cache[directory] = frozenset(listed) if listed is not None else None
@@ -257,6 +264,9 @@ class TurboAdapter:
 
     name = "turbo"
     allowed_options = frozenset({"task"})
+
+    def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]:
+        return ("**/turbo.json", "**/package.json")
 
     def open(self, options: Mapping[str, Any], root: Path) -> TurboInputs:
         return turbo_inputs(root.resolve(), str(options.get("task", "")))

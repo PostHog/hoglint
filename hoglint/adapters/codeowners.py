@@ -61,8 +61,15 @@ class CodeownersProvider:
     allowed_options = frozenset({"file"})
     outputs = ("owners",)
 
+    @staticmethod
+    def file(options: Mapping[str, Any]) -> str:
+        return str(options.get("file", ".github/CODEOWNERS"))
+
+    def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]:
+        return (self.file(options),)
+
     def open(self, options: Mapping[str, Any], root: Path) -> CodeownersFile:
-        return CodeownersFile((root / str(options.get("file", ".github/CODEOWNERS"))).read_text())
+        return CodeownersFile((root / self.file(options)).read_text())
 
     def values(self, handle: CodeownersFile, path: str) -> Mapping[str, Any]:
         owners = handle.owners(path)

@@ -29,12 +29,14 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.file import LedgerFile
+from hoglint.ledger.inputs import SOURCE_INPUTS, InputPatterns
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause
+from hoglint.presets_py.posthog.owners import OWNERS_YAML
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
 
@@ -521,16 +523,64 @@ def test_query_reads_owners_from_the_owners_files_not_from_the_summary(tmp_path:
 
 
 @pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
-def test_a_side_input_the_tree_does_not_hold_keeps_the_summary_out_of_the_cache(tmp_path: Path) -> None:
+def test_a_file_no_rule_reads_never_keeps_a_staged_summary_from_the_next_commit(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    write_files(repo, {**FILES, "turbo.json": '{"tasks": {}}\n'})
+    write_files(repo, FILES)
     git_in(repo, "init", "-q")
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "base")
-    (repo / "turbo.json").write_text('{"tasks": {"contract-check": {}}}\n')
-    staged = hoglint(repo, "check", "--index")
-    assert "not stored: turbo.json differs from the tree" in staged.stderr
-    assert not list((tmp_path / "repo-cache" / "hoglint" / "summaries").rglob("*.json"))
+    (repo / "scratch-note.md").write_text("todo\n")
+    (repo / "core/api.py").write_text("from products.billing.facade import charge\n\nX = 1\n")
+    git_in(repo, "add", "core/api.py")
+    hoglint(repo, "check", "--index")
+    git_in(repo, "commit", "-qm", "one")
+    (repo / "core/__init__.py").write_text("Y = 2\n")
+    git_in(repo, "add", "core/__init__.py")
+    assert "(tree " in (after := hoglint(repo, "check", "--index")).stdout
+    assert "stored summary)" in after.stdout, after.stdout + after.stderr
+
+
+COVERED = (
+    CONFIG
+    + """
+[rules.wiring-watched]
+primitive = "coverage"
+covers = ["edge.kind == 'import' and src.package != dst.package: dst"]
+inputs = { adapter = "turbo", task = "contract-check" }
+identity = "entity"
+growth_key = ["subject"]
+
+[rules.readme]
+primitive = "layout"
+within = "products/{product}"
+files = ["README.md"]
+identity = "entity"
+growth_key = ["subject"]
+"""
+)
+WATCHED_PACKAGE = {
+    "products/billing/package.json": '{"name": "billing", "scripts": {"contract-check": "true"}}',
+    "products/billing/README.md": "billing\n",
+}
+
+
+def turbo_inputs(inputs: str) -> str:
+    return json.dumps({"tasks": {"contract-check": {"inputs": [inputs]}}})
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_a_staged_check_reads_side_inputs_from_the_index_not_the_working_tree(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {**FILES, **WATCHED_PACKAGE, "hoglint.toml": COVERED})
+    (repo / "products/billing/turbo.json").write_text(turbo_inputs("**"))
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    (repo / "products/billing/turbo.json").write_text(turbo_inputs("facade.py"))
+    (repo / "products/billing/README.md").unlink()
+    differs = ("wiring-watched  products/billing/logic.py", "readme  products/billing/README.md")
+    staged, working = hoglint(repo, "check", "--index").stdout, hoglint(repo, "check").stdout
+    assert [line in staged for line in differs] == [False, False], staged
+    assert [line in working for line in differs] == [True, True], working
 
 
 SITE = {
@@ -622,27 +672,40 @@ def test_a_provider_declares_the_distributions_it_imports_and_fails_without_them
     assert failures == {"owners": "ModuleNotFoundError: no installed distribution ships owners_yaml"}
 
 
+@pytest.mark.parametrize("files, fails", [(None, True), (["owners.yaml", "team.yaml"], False)])
+def test_the_owners_provider_reads_only_the_ownership_files_it_declares(
+    tmp_path: Path, files: list[str] | None, fails: bool
+) -> None:
+    write_files(tmp_path, {"owners.yaml": "version: 1\nowners: [team-a]\nalias_files: [team.yaml]\n"})
+    options = {} if files is None else {"files": files}
+    assert OWNERS_YAML.inputs(options) == tuple(f"**/{name}" for name in files or ("owners.yaml", "product.yaml"))
+    if fails:
+        with pytest.raises(ValueError, match="names ownership files team.yaml"):
+            OWNERS_YAML.open(options, tmp_path)
+        return
+    assert OWNERS_YAML.values(OWNERS_YAML.open(options, tmp_path), "app/a.py")["owners"].value == {"team-a"}
+
+
 ENTRY = "N... 100644 100644 100644 1111111 2222222"
+INPUTS = InputPatterns((*SOURCE_INPUTS, "**/turbo.json", "hoglint.ledger"))
 
 
 @pytest.mark.parametrize(
-    "records, against_head, against_index",
+    "records, drift",
     [
-        (["? notes/todo.md"], ["notes/todo.md"], ["notes/todo.md"]),
-        ([f"1 .M {ENTRY} turbo.json"], ["turbo.json"], ["turbo.json"]),
-        # staged only: the index tree holds it, HEAD's does not
-        ([f"1 M. {ENTRY} owners.yaml"], ["owners.yaml"], []),
-        ([f"2 R. {ENTRY} R100 conf/new.toml", "conf/old.toml"], ["conf/new.toml", "conf/old.toml"], []),
-        # sources come from the snapshot itself, never from the working tree
-        ([f"1 .M {ENTRY} app/a.py", "? app/b.pyi"], [], []),
+        # no rule reads it
+        (["? notes/todo.md", f"1 .M {ENTRY} conf/settings.toml"], []),
+        ([f"1 .M {ENTRY} products/turbo.json"], ["products/turbo.json"]),
+        # staged only: still not HEAD's
+        ([f"1 M. {ENTRY} hoglint.ledger"], ["hoglint.ledger"]),
+        ([f"2 R. {ENTRY} R100 conf/new.py", "conf/old.py"], ["conf/new.py", "conf/old.py"]),
+        ([f"1 .M {ENTRY} app/a.py", "? app/b.pyi"], ["app/a.py", "app/b.pyi"]),
     ],
 )
-def test_side_input_drift_is_read_from_one_git_status(
-    records: list[str], against_head: list[str], against_index: list[str]
+def test_a_working_tree_holds_heads_inputs_unless_a_declared_input_differs(
+    records: list[str], drift: list[str]
 ) -> None:
-    status = WorktreeStatus(records)
-    assert status.side_input_drift(against_index=False) == against_head
-    assert status.side_input_drift(against_index=True) == against_index
+    assert WorktreeStatus(records).drift(INPUTS.matches) == drift
 
 
 def test_a_source_file_that_changed_while_the_run_read_it_keeps_the_summary_out(tmp_path: Path) -> None:
@@ -653,7 +716,8 @@ def test_a_source_file_that_changed_while_the_run_read_it_keeps_the_summary_out(
     try:
         WorktreeStatus.of(repo).mark_drifted(["app/views.py"])
         store = SummaryStore(tmp_path / "cache")
-        TreeSummaries(Snapshots(repo, tmp_path / "work"), store).put(ScanSummary(Envelope(tree="abc", engine="e")))
+        summary = ScanSummary(Envelope(tree="abc", engine="e"))
+        TreeSummaries(Snapshots(repo, tmp_path / "work"), store).put(summary, from_worktree=True)
     finally:
         WorktreeStatus.taken.pop(repo.resolve())
     assert not list((tmp_path / "cache" / "summaries").rglob("*"))

@@ -33,8 +33,15 @@ class ProvenanceProvider:
     allowed_options = frozenset({"file", "sources"})
     outputs = ("generated", "producer")
 
+    @staticmethod
+    def file(options: Mapping[str, Any]) -> str:
+        return str(options.get("file", "hoglint.provenance.toml"))
+
+    def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]:
+        return (self.file(options),)
+
     def open(self, options: Mapping[str, Any], root: Path) -> ProvenanceFile:
-        return ProvenanceFile.read(root / str(options.get("file", "hoglint.provenance.toml")))
+        return ProvenanceFile.read(root / self.file(options))
 
     def values(self, handle: ProvenanceFile, path: str) -> Mapping[str, Any]:
         producers = handle.producers(path)
