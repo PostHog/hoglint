@@ -103,6 +103,20 @@ STEP_PARENT = {
 ANNOTATION_TERMINALS = ("param-ann:", "returns", "annotation")
 LOCAL_ASSIGN_STEPS = ("assign:", "annassign:", "walrus:")
 
+# The names the link's shape code reads (src/link/packs/django/shapes.rs `Vocabulary`), handed
+# over with each run of the producer: one list for both engines.
+VOCABULARY: dict[str, list[str]] = {
+    "managers": sorted(MANAGERS),
+    "scalar_terminals": sorted(SCALAR_TERMINALS),
+    "single_terminals": sorted(SINGLE_TERMINALS),
+    "meta_managers": sorted(META_MANAGERS),
+    "meta_class_attrs": sorted(META_CLASS_ATTRS),
+    "write_methods": sorted(WRITE_METHODS),
+    "subquery_calls": sorted(SUBQUERY_CALLS),
+    "annotation_terminals": list(ANNOTATION_TERMINALS),
+    "local_assign_steps": list(LOCAL_ASSIGN_STEPS),
+}
+
 
 @dataclass(frozen=True)
 class Shape:

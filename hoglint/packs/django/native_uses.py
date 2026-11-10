@@ -13,6 +13,7 @@ from typing import Any
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge
 from hoglint.native.graph import NativeSink
+from hoglint.packs.django.shapes import VOCABULARY
 from hoglint.packs.django.uses import USES_PRODUCER, UseProducer, Uses
 from hoglint.plugins import Refinements
 
@@ -36,7 +37,9 @@ class NativeUses:
         models = self.producer.registry.models
         aggregates = {scope.path: found for scope, found in self.producer.reader.uses_to(files, models)}
         link = self.sink.graph.link
-        staged = link.django_uses([file_id(scope) for scope in files], [(m.module, m.symbol) for m in models])
+        staged = link.django_uses(
+            [file_id(scope) for scope in files], [(m.module, m.symbol) for m in models], VOCABULARY
+        )
         failed = set(staged.failed())
         out: list[Edge] = []
         for scope in files:

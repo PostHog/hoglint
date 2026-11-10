@@ -13,12 +13,11 @@ from typing import Any
 from hoglint.config.model import KindSpec, LevelSpec
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
+from hoglint.native.bridge import import_module
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
-# A module's place in a column where the evaluator has no value for Python to take.
-NO_PLACE = 0xFFFFFFFF
-# The source a value read from a column names: only `explain` shows sources, and it reads them
-# from the Python label pass.
+# The source a value read from a column names: only `explain` shows sources, and it asks the
+# Python label pass for them (`sourced`).
 COLUMN_SOURCE = "evaluator"
 REGISTRY_NAMES = frozenset({"registry", "lifecycle"})
 
@@ -33,6 +32,8 @@ class NativeLabeler(Labeler):
 
     def read_from(self, evaluator: Any) -> None:
         self.evaluator = evaluator
+        # A module's place in a column where the evaluator has no value for Python to take.
+        self.no_place: int = import_module().NO_PLACE
         self.value_columns: dict[str, tuple[list[Value], array[int]]] = {}
         self.registry_places: array[int] | None = None
         self.registry_specs = list(self.config.registries.values())
@@ -69,24 +70,26 @@ class NativeLabeler(Labeler):
             return None
         return self.module_ordinal.get(module)
 
-    def field_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
-        at = self.column_place(module, name)
+    def field_value(
+        self, module: str | None, symbol: str | None, name: str, sourced: bool = False
+    ) -> tuple[Value, str]:
+        at = None if sourced else self.column_place(module, name)
         if at is None:
             return super().field_value(module, symbol, name)
         values, places = self.value_column(name)
         place = places[at]
-        if place == NO_PLACE:
+        if place == self.no_place:
             return super().field_value(module, symbol, name)
         return values[place], COLUMN_SOURCE
 
-    def builtin(self, module: str | None, symbol: str | None, name: str) -> Value:
+    def builtin(self, module: str | None, symbol: str | None, name: str, sourced: bool = False) -> Value:
         at = self.module_ordinal.get(module) if module is not None else None
-        if name not in REGISTRY_NAMES or at is None or self.evaluator is None:
+        if name not in REGISTRY_NAMES or at is None or self.evaluator is None or sourced:
             return super().builtin(module, symbol, name)
         if self.registry_places is None:
             self.registry_places = array("I", self.evaluator.registries())
         place = self.registry_places[at]
-        if place == NO_PLACE:
+        if place == self.no_place:
             return NONE
         spec = self.registry_specs[place]
         if name == "registry":
@@ -112,11 +115,3 @@ class NativeLabeler(Labeler):
             return self.evaluator.level_groups(list(self.config.levels).index(spec.name))
         except ValueError as error:
             raise EngineError(f"the native evaluator failed: {error}") from error
-
-    def explain(self, module: str) -> list[tuple[str, str, str]]:
-        """Every field with the source that set it: the sources are the Python label pass's."""
-        evaluator, self.evaluator = self.evaluator, None
-        try:
-            return super().explain(module)
-        finally:
-            self.evaluator = evaluator

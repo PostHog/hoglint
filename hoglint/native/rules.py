@@ -292,15 +292,10 @@ def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
     return [*((f.identity, f.subjects, f.ledgerable, f.unknown) for f in run.findings), *run.incomplete]
 
 
-# A row of `Rules.judge`: (edge id, destination, judgment code, identity, source module,
-# destination module), and one `found_rows` gives with its edge as a handle.
-JudgedRow = tuple[int, int, int, list[str], str, str | None]
-FoundRow = tuple[EdgeHandle, int, int, tuple[str, ...], str, str | None]
-
-JUDGMENTS = list(Judgment)
-VIOLATION = JUDGMENTS.index(Judgment.VIOLATION)
-# The evaluator's verdict codes of a denied target (`Rules.reach`).
-VERDICT_TRUTHS = {1: Truth.TRUE, 2: Truth.UNKNOWN}
+# A row of `Rules.judge`: (edge id, destination, judgment name, identity, source module,
+# destination module), and one `found_rows` gives with its judgment and its edge as a handle.
+JudgedRow = tuple[int, int, str, list[str], str, str | None]
+FoundRow = tuple[EdgeHandle, int, Judgment, tuple[str, ...], str, str | None]
 
 
 class NativeRuleContext(RuleContext):
@@ -365,19 +360,24 @@ class NativeRuleContext(RuleContext):
         clean nor a finding of its own."""
         return rule.recorded([decided(rule, edge, target, judgment)])
 
-    def found_rows(self, rule: EdgeRule, rows: list[JudgedRow], found: frozenset[int]) -> Iterator[FoundRow]:
+    def found_rows(self, rule: EdgeRule, rows: list[JudgedRow], found: frozenset[Judgment]) -> Iterator[FoundRow]:
         """The evaluator's rows of a rule, in the order the rule judges. A row whose judgment
         is not in `found` goes to the rule's own code, which reports it into the rule's run and
-        must judge the same; every other row is given here with its edge as a handle."""
+        must judge the same; every other row is given here with its edge as a handle. A judgment
+        name the rule code does not know stops the run."""
+        with engine_errors():
+            judged = [
+                (edge, target, Judgment(name), identity, src, dst) for edge, target, name, identity, src, dst in rows
+            ]
         core = self.native.native.core
-        alone_ids = array("I", dict.fromkeys(row[0] for row in rows if row[2] not in found))
+        alone_ids = array("I", dict.fromkeys(row[0] for row in judged if row[2] not in found))
         alone = dict(zip(alone_ids, core.get(alone_ids)))
-        edges = RowEdges(core, array("I", dict.fromkeys(row[0] for row in rows if row[2] in found)))
-        for edge_id, target, code, identity, src, dst in rows:
-            if code in found:
-                yield EdgeHandle(edges, edge_id), target, code, tuple(identity), src, dst
+        edges = RowEdges(core, array("I", dict.fromkeys(row[0] for row in judged if row[2] in found)))
+        for edge_id, target, judgment, identity, src, dst in judged:
+            if judgment in found:
+                yield EdgeHandle(edges, edge_id), target, judgment, tuple(identity), src, dst
                 continue
-            reported = self.judged_alone(rule, alone[edge_id], target, JUDGMENTS[code])
+            reported = self.judged_alone(rule, alone[edge_id], target, judgment)
             rule.run.findings.extend(reported.findings)
             rule.run.incomplete.extend(reported.incomplete)
 
@@ -389,12 +389,12 @@ class NativeRuleContext(RuleContext):
             return False
         with engine_errors():
             rows = self.evaluator.judge(self.plan.index[rule.spec.id])
-        found = frozenset(JUDGMENTS.index(judgment) for judgment in rule.found())
+        found = rule.found()
         spec = rule.spec
-        flags = {code: rule.flags(JUDGMENTS[code]) for code in found}
-        for handle, target, code, identity, src, dst in self.found_rows(rule, rows, found):
-            ledgerable, unknown = flags[code]
-            detail = Rejudged(rule, handle, JUDGMENTS[code], identity, target)
+        flags = {judgment: rule.flags(judgment) for judgment in found}
+        for handle, target, judgment, identity, src, dst in self.found_rows(rule, rows, found):
+            ledgerable, unknown = flags[judgment]
+            detail = Rejudged(rule, handle, judgment, identity, target)
             self.rejudged.append(detail)
             finding = Finding(
                 rule=spec.id,
@@ -448,7 +448,7 @@ class NativeRuleContext(RuleContext):
         with engine_errors():
             rows = self.evaluator.judge(self.plan.index[rule.spec.id])
         seen: dict[tuple[str, ...], tuple[EdgeHandle, str, str | None]] = {}
-        for handle, _, _, identity, src, dst in self.found_rows(rule, rows, frozenset({VIOLATION})):
+        for handle, _, _, identity, src, dst in self.found_rows(rule, rows, frozenset({Judgment.VIOLATION})):
             seen[identity] = (handle, src, dst)
         spec = rule.spec
         classified = rule.classifications()
@@ -573,7 +573,7 @@ class NativeRuleContext(RuleContext):
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         with engine_errors():
             rows = self.evaluator.pairs(self.plan.index[rule.spec.id])
-        return [CycleRow(edge, target, JUDGMENTS[code], pair) for edge, target, code, pair in rows]
+        return [CycleRow(edge, target, Judgment(name), pair) for edge, target, name, pair in rows]
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found]:
         """The evaluator's search of a reach rule, its paths made into Edges."""
@@ -582,10 +582,10 @@ class NativeRuleContext(RuleContext):
         ids = array("I", dict.fromkeys(edge for _, _, path, _ in found for edge, _ in path))
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         out = []
-        for what, source, path, code in found:
+        for what, source, path, verdict in found:
             walked = tuple(edges[edge] for edge, _ in path)
             dst = rule.envs_of(walked[-1])[path[-1][1]].dst if walked else None
-            out.append(Found(what, source, walked, dst, VERDICT_TRUTHS.get(code)))
+            out.append(Found(what, source, walked, dst, Truth(verdict) if verdict is not None else None))
         return out
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:

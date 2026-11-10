@@ -5,18 +5,30 @@ from __future__ import annotations
 import gc
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from hoglint.config import Config
 from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.reader import BuildReader
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
-from hoglint.native.graph import NativeSink
+from hoglint.native.build import NativeBuild
+from hoglint.native.graph import NativeGraph, NativeSink
 from hoglint.native.queries import NativePackQueries
 from hoglint.source import GraphSource, active_packs, run_packs
 
 ENGINES = ("python", "native")
+
+
+class StepReleasingSink(NativeSink):
+    """A NativeSink that drops the records each producer step decoded once the step ends, so
+    the decoded records of every step are not held at once."""
+
+    def __init__(self, graph: NativeGraph, build: NativeBuild) -> None:
+        super().__init__(graph)
+        self.build = build
+
+    def step_ended(self) -> None:
+        self.build.forget_decoded()
 
 
 class NativeGraphSource(GraphSource):
@@ -33,9 +45,9 @@ class NativeGraphSource(GraphSource):
         )
         analysis = NativeAnalysis(options).run()
         graph = analysis.graph
-        build: Any = analysis.build
+        build = analysis.build
         reader = BuildReader(build, NativePackQueries(build, graph, graph.link))
-        run_packs(packs, reader, NativeSink(graph), self.listing_of(code_root, tree))
+        run_packs(packs, reader, StepReleasingSink(graph, build), self.listing_of(code_root, tree))
         build.release()
         return graph
 

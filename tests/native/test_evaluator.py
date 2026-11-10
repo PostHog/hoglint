@@ -269,8 +269,6 @@ SOURCES = {
     "products/é/jobs.py": "from products.é.backend.models import Café\nfrom products.billing.backend import facade\n",
 }
 
-JUDGMENTS = list(Judgment)
-
 
 class World:
     """The fixture repo linked once, and a context per rule config over it."""
@@ -348,8 +346,8 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
         if mode == "judge" and spec.primitive != "inventory":
             assert isinstance(rule, EdgeRule)
             ours = Counter(
-                (edge, target, JUDGMENTS[code].value, tuple(identity))
-                for edge, target, code, identity, _, _ in native.evaluator.judge(index)
+                (edge, target, name, tuple(identity))
+                for edge, target, name, identity, _, _ in native.evaluator.judge(index)
             )
             theirs = python_rows(python, rule)
             if ours != theirs:
@@ -1474,11 +1472,18 @@ def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
 ) -> None:
     config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'nowhere'"}))
     edge = next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
-    row = (edge.handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ["a", "b"], edge.site.module, None)
+    row = (edge.handle, 0, Judgment.VIOLATION.value, ["a", "b"], edge.site.module, None)
     lie(monkeypatch, judge=lambda rows: [*rows, row])
     assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
     with pytest.raises(EngineError, match="apart from the evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+
+
+def test_a_judgment_the_rule_code_does_not_name_stops_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}))
+    lie(monkeypatch, judge=lambda rows: [(*rows[0][:2], "violated", *rows[0][3:]), *rows[1:]])
+    with pytest.raises(EngineError, match="'violated' is not a valid Judgment"):
+        Engine(config, world.graph, world.repo).evaluate()
 
 
 def an_import(world: World) -> Edge:
@@ -1532,15 +1537,15 @@ LEDGER_LIES: dict[str, tuple[str, Any]] = {
     "inventory": (rule_table("lied", CORNERS["inventory-classify"]), lambda world: {"judge": lambda rows: rows[1:]}),
     "reach path": (
         rule_table("lied", CORNERS["reach-from-contracts"]),
-        lambda world: {"reach": lambda rows: [*rows, ("denied", "core.a", [(an_import(world).handle, 0)], 1)]},
+        lambda world: {"reach": lambda rows: [*rows, ("denied", "core.a", [(an_import(world).handle, 0)], "true")]},
     ),
     "cycle pair": (
         rule_table("lied", CORNERS["cycle-between-packages"]),
         lambda world: {
             "pairs": lambda rows: [
                 *rows,
-                (an_import(world).handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ("made", "up")),
-                (an_import(world).handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ("up", "made")),
+                (an_import(world).handle, 0, Judgment.VIOLATION.value, ("made", "up")),
+                (an_import(world).handle, 0, Judgment.VIOLATION.value, ("up", "made")),
             ]
         },
     ),

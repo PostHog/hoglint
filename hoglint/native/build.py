@@ -328,6 +328,18 @@ class NativeBuild:
             found = self.bodies_cache[path] = RecordBodies(record)  # type: ignore[arg-type]
         return found
 
+    def forget_decoded(self) -> None:
+        """Drops every record's decoded keys but its path and status, and the bodies over them.
+        A later read decodes the key again from the record's text, to an equal value."""
+        for record in self.store.records.values():
+            if dict.__len__(record) <= 2:
+                continue
+            path, status = dict.get(record, "path"), dict.get(record, "status")
+            dict.clear(record)
+            dict.__setitem__(record, "path", path)
+            dict.__setitem__(record, "status", status)
+        self.bodies_cache.clear()
+
     def release(self) -> None:
         """Drops what packs read, once the pack phase ends (D23): the decoded records, the
         tables and file scopes over them, and the link's fact rows. Rules read edges, symbols

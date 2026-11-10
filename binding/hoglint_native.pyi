@@ -13,6 +13,9 @@ PROTOCOL: int
 """The binding's call protocol."""
 FACT_LAYOUT: int
 """The fact database's table layout: part of the database file name."""
+NO_PLACE: int
+"""A module's place in an evaluator column (`Rules.values`, `Rules.registries`) where the
+evaluator has no value for Python to take."""
 
 Pair = tuple[str, str]
 Hit = tuple[str, list[Pair]]
@@ -161,7 +164,7 @@ class Link:
         keeps the edge's) and attrs to add after its own. Applies none of them when a field is set
         apart from what another producer set, or an attr apart from the edge's own, and then
         returns the first conflict."""
-    def django_uses(self, files: list[int], models: list[Pair]) -> Staged:
+    def django_uses(self, files: list[int], models: list[Pair], vocabulary: dict[str, list[str]]) -> Staged:
         """Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
         producer's order) onto `models` in the link, with no Python object per use. Nothing is
         applied until `refine_staged`."""
@@ -188,17 +191,18 @@ class Link:
     def value_lookup(self, scope: int, value: object, at: int, line: int) -> LookupResult | None: ...
     def chain_lookup(self, scope: int, chain: str, at: int, line: int) -> tuple[LookupResult, list[str]]: ...
 
-Row = tuple[int, int, int, list[str], str, str | None]
-"""(edge id, destination index, judgment code, identity, source module, destination module or None).
-Codes: 1 unresolved, 2 unknown selection, 3 unknown violation, 4 violation."""
+Row = tuple[int, int, str, list[str], str, str | None]
+"""(edge id, destination index, judgment name, identity, source module, destination module or None).
+A judgment's name is its value in `rules.base.Judgment`."""
 
-PairRow = tuple[int, int, int, tuple[str, str] | None]
-"""(edge id, destination index, judgment code, the pair's (source, destination) groups or None)."""
+PairRow = tuple[int, int, str, tuple[str, str] | None]
+"""(edge id, destination index, judgment name, the pair's (source, destination) groups or None)."""
 
-Found = tuple[str, str, list[tuple[int, int]], int]
-"""(what, start module, path of (edge id, destination index), verdict code). What: "start" (a start
+Found = tuple[str, str, list[tuple[int, int]], str | None]
+"""(what, start module, path of (edge id, destination index), verdict). What: "start" (a start
 whose `from` is unknown; no path), "unresolved", "unknown" (a hop the rule cannot tell whether to
-follow) or "denied". Verdict codes: 1 true, 2 unknown, 0 for anything not denied."""
+follow) or "denied". The verdict of a denied target is a truth's name ("true" or "unknown"),
+None for anything else."""
 
 class Rules:
     """The labels and compiled rules of one run over a link (src/link/rules), from a plan

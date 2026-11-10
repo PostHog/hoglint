@@ -7,27 +7,26 @@ use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::export::ExportRow;
 use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
-use hoglint_facts::link::rules::value::Truth;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-/// A finding row: (edge id, destination index, judgment code, identity, source module,
+/// A finding row: (edge id, destination index, judgment name, identity, source module,
 /// destination module or None).
-type RowTuple = (u32, u32, u8, Vec<String>, String, Option<String>);
+type RowTuple = (u32, u32, &'static str, Vec<String>, String, Option<String>);
 
-/// A cycle row: (edge id, destination index, judgment code, the pair's groups or None).
-type PairTuple = (u32, u32, u8, Option<(String, String)>);
+/// A cycle row: (edge id, destination index, judgment name, the pair's groups or None).
+type PairTuple = (u32, u32, &'static str, Option<(String, String)>);
 
 /// A label set two ways: (what, entity, field). What: "module" (a module's field), "zones" (leaf
 /// zones that claim a module's path), "kind" (a name two kinds hold), "symbol" (a symbol's field),
 /// "provided" (a module's provider labels). The field is empty where it names none.
 type ConflictTuple = (&'static str, String, String);
 
-/// A reach finding: (what, start module, path of (edge id, destination index), verdict code).
-/// What: "start" (path empty), "unresolved", "unknown" or "denied". Verdict codes: 1 true,
-/// 2 unknown; 0 for anything but "denied".
-type FoundTuple = (&'static str, String, Vec<(u32, u32)>, u8);
+/// A reach finding: (what, start module, path of (edge id, destination index), verdict).
+/// What: "start" (path empty), "unresolved", "unknown" or "denied". The verdict of a denied
+/// target is a truth's name, "true" or "unknown"; None for anything else.
+type FoundTuple = (&'static str, String, Vec<(u32, u32)>, Option<&'static str>);
 
 /// A module field's column: its distinct values as (type, items), and each module's place.
 type ValueColumn<'py> = (Vec<(&'static str, Vec<String>)>, Bound<'py, PyBytes>);
@@ -98,8 +97,7 @@ impl Rules {
     }
 
     /// Every destination of every candidate edge rule `rule` does not judge clean, in the order
-    /// the Python engine judges them. Judgment codes: 1 unresolved, 2 unknown selection, 3 unknown
-    /// violation, 4 violation, 5 unknown type (a signature rule's).
+    /// the Python engine judges them, each with its judgment's name (`rules.base.Judgment`).
     fn judge(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<RowTuple>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let rows = self
@@ -113,7 +111,7 @@ impl Rules {
                 (
                     row.edge,
                     row.target,
-                    row.judgment as u8,
+                    row.judgment.name(),
                     row.identity,
                     it.s(row.src_module).to_string(),
                     row.dst_module.map(|module| it.s(module).to_string()),
@@ -123,8 +121,8 @@ impl Rules {
     }
 
     /// What cycle rule `rule` makes of each destination it cannot leave alone, in judging order:
-    /// (edge id, destination index, judgment code, (source group, destination group) of a pair or
-    /// None). Codes: 1 unresolved, 2 unknown selection, 4 a pair.
+    /// (edge id, destination index, judgment name, (source group, destination group) of a pair or
+    /// None). Judgments: unresolved, unknown selection, a violation for a pair.
     fn pairs(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<PairTuple>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let rows = self
@@ -133,7 +131,7 @@ impl Rules {
             .map_err(PyValueError::new_err)?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.edge, row.target, row.judgment as u8, row.pair))
+            .map(|row| (row.edge, row.target, row.judgment.name(), row.pair))
             .collect())
     }
 
@@ -146,28 +144,28 @@ impl Rules {
             .reach(&mut bound.inner, rule)
             .map_err(PyValueError::new_err)?;
         let it = &bound.inner.core.it;
-        let verdict = |truth: Truth| match truth {
-            Truth::True => 1,
-            Truth::Unknown => 2,
-            Truth::False => 0,
-        };
         Ok(found
             .into_iter()
             .map(|found| match found {
                 Found::UnknownStart { module } => {
-                    ("start", it.s(module).to_string(), Vec::new(), 0)
+                    ("start", it.s(module).to_string(), Vec::new(), None)
                 }
                 Found::Unresolved { source, step } => {
-                    ("unresolved", it.s(source).to_string(), vec![step], 0)
+                    ("unresolved", it.s(source).to_string(), vec![step], None)
                 }
                 Found::Unknown { source, step } => {
-                    ("unknown", it.s(source).to_string(), vec![step], 0)
+                    ("unknown", it.s(source).to_string(), vec![step], None)
                 }
                 Found::Denied {
                     source,
                     path,
-                    verdict: truth,
-                } => ("denied", it.s(source).to_string(), path, verdict(truth)),
+                    verdict,
+                } => (
+                    "denied",
+                    it.s(source).to_string(),
+                    path,
+                    Some(verdict.name()),
+                ),
             })
             .collect())
     }

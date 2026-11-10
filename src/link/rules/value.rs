@@ -23,6 +23,15 @@ impl Truth {
             Truth::Unknown => Truth::Unknown,
         }
     }
+
+    /// The truth's name, its value in `selectors.Truth`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Truth::False => "false",
+            Truth::True => "true",
+            Truth::Unknown => "unknown",
+        }
+    }
 }
 
 /// Kleene `and`: false wins, then unknown.

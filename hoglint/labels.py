@@ -516,9 +516,13 @@ class Labeler:
             found = self.columns[name] = [None] * len(self.module_ordinal)
         return found
 
-    def field_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
+    def field_value(
+        self, module: str | None, symbol: str | None, name: str, sourced: bool = False
+    ) -> tuple[Value, str]:
         """A declared field on a module (and the symbol inside it, for symbol fields). A module
-        field of a graph module is read from its column; symbol fields stay sparse."""
+        field of a graph module is read from its column; symbol fields stay sparse. `sourced`
+        asks for the label pass's own value and source, as `explain` shows them: this labeler's
+        are always its own."""
         on_module = self.config.fields[name].on == "module"
         at = self.module_ordinal.get(module) if on_module and module is not None else None
         if at is not None:
@@ -555,8 +559,9 @@ class Labeler:
         label = self.label_of(module, symbol, name)
         return self.to_value(self.config.fields[name], label) if label is not None else NONE
 
-    def builtin(self, module: str | None, symbol: str | None, name: str) -> Value:
-        """An entity attribute the labeler answers itself (see BUILTIN_ENTITY_NAMES)."""
+    def builtin(self, module: str | None, symbol: str | None, name: str, sourced: bool = False) -> Value:
+        """An entity attribute the labeler answers itself (see BUILTIN_ENTITY_NAMES); `sourced`
+        as for `field_value`."""
         if name in ("module", "subject"):
             return Value.known(module) if module else NONE
         if name == "symbol":
@@ -750,12 +755,12 @@ class Labeler:
         for name, spec in self.config.fields.items():
             if spec.on == "symbol":
                 continue
-            value, source = self.field_value(module, None, name)
+            value, source = self.field_value(module, None, name, sourced=True)
             rows.append((name, render(value), source))
         registry = self.module_labels(module).get(REGISTRY_FIELD)
         if registry is not None:
             rows.append(("registry", str(registry.value), registry.source))
-            lifecycle = self.builtin(module, None, "lifecycle")
+            lifecycle = self.builtin(module, None, "lifecycle", sourced=True)
             rows.append(("lifecycle", render(lifecycle), f"registries.{registry.value}.lifecycle"))
         return rows
 

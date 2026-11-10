@@ -43,13 +43,27 @@ use std::sync::{Mutex, OnceLock};
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Judgment {
-    Clean = 0,
-    Unresolved = 1,
-    UnknownSelection = 2,
-    UnknownViolation = 3,
-    Violation = 4,
+    Clean,
+    Unresolved,
+    UnknownSelection,
+    UnknownViolation,
+    Violation,
     /// A signature slot with no usable type.
-    UnknownType = 5,
+    UnknownType,
+}
+
+impl Judgment {
+    /// The judgment's name, its value in `rules.base.Judgment`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Judgment::Clean => "clean",
+            Judgment::Unresolved => "unresolved",
+            Judgment::UnknownSelection => "unknown-selection",
+            Judgment::UnknownViolation => "unknown-violation",
+            Judgment::Violation => "violation",
+            Judgment::UnknownType => "unknown-type",
+        }
+    }
 }
 
 /// One destination of one edge a rule does not judge clean: what Python needs to make its

@@ -5,6 +5,7 @@ use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::decode_lines;
 use hoglint_facts::link::intern::{Interner, Sid};
 use hoglint_facts::link::packs::Refinements;
+use hoglint_facts::link::packs::django::shapes::Vocabulary;
 use hoglint_facts::link::packs::refined::{Field, RefinedFields};
 use hoglint_facts::link::produce::NO_FILE;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
@@ -14,6 +15,7 @@ use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyString, PyTuple};
 use rustc_hash::FxHashMap;
+use std::collections::HashMap;
 
 /// A linked snapshot, (cache hits, files extracted), each record's fact cache key, and the
 /// working tree files that changed during the run.
@@ -431,11 +433,33 @@ impl Link {
 
     /// Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
     /// producer's order) onto `models` in the link (hoglint/packs/django/uses.py), with no
-    /// Python object per use. Nothing is applied: `refine_staged` applies them.
-    fn django_uses(&mut self, files: Vec<u32>, models: Vec<Pair>) -> PyResult<Staged> {
+    /// Python object per use, reading the shape code's names from `vocabulary` (the tables of
+    /// hoglint/packs/django/shapes.py by name). Nothing is applied: `refine_staged` applies them.
+    fn django_uses(
+        &mut self,
+        files: Vec<u32>,
+        models: Vec<Pair>,
+        mut vocabulary: HashMap<String, Vec<String>>,
+    ) -> PyResult<Staged> {
         self.rows()?;
+        let mut names = |name: &str| {
+            vocabulary
+                .remove(name)
+                .ok_or_else(|| PyValueError::new_err(format!("the vocabulary has no {name}")))
+        };
+        let vocabulary = Vocabulary {
+            managers: names("managers")?,
+            scalar_terminals: names("scalar_terminals")?,
+            single_terminals: names("single_terminals")?,
+            meta_managers: names("meta_managers")?,
+            meta_class_attrs: names("meta_class_attrs")?,
+            write_methods: names("write_methods")?,
+            subquery_calls: names("subquery_calls")?,
+            annotation_terminals: names("annotation_terminals")?,
+            local_assign_steps: names("local_assign_steps")?,
+        };
         let models: Vec<Ent> = models.iter().map(|(m, s)| self.ent(m, s)).collect();
-        let uses = self.inner.django_uses(&files, &models);
+        let uses = self.inner.django_uses(&files, &models, &vocabulary);
         Ok(Staged {
             refinements: uses.refinements,
             failed: uses.failed,

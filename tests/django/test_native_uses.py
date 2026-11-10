@@ -23,6 +23,7 @@ from hoglint.native.queries import NativePackQueries
 from hoglint.packs.django.config import DjangoPackConfig
 from hoglint.packs.django.native_uses import NativeUses, file_id
 from hoglint.packs.django.pack import USES_KINDS, DjangoPack, DjangoRun
+from hoglint.packs.django.shapes import VOCABULARY
 from hoglint.packs.django.uses import UseProducer
 from hoglint.plugins import PackSink, Refinement, Refinements
 from native.require import native_module
@@ -152,7 +153,7 @@ def test_the_link_judges_every_use_as_the_python_producer_does(tmp_path: Path) -
     assert run.registry is not None
     python = UseProducer(reader, run.registry).produce(run.files)
     staged = graph.link.django_uses(
-        [file_id(scope) for scope in run.files], [(m.module, m.symbol) for m in run.registry.models]
+        [file_id(scope) for scope in run.files], [(m.module, m.symbol) for m in run.registry.models], VOCABULARY
     )
     ids, shapes, details, attrs = graph.link.staged_columns(staged)
     native = Refinements(list(array("I", ids)), shapes, details, [tuple(pairs) for pairs in attrs])

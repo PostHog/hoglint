@@ -7,7 +7,7 @@
 //! uses the shape code cannot read fails whole, as an exception in the Python producer does: it
 //! adds no refinement, and the caller words its failure.
 
-use super::shapes::{self, Shape, Unreadable, UsePosition};
+use super::shapes::{Shape, Unreadable, UsePosition, Vocabulary};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::packs::Refinements;
@@ -63,13 +63,19 @@ struct Memo {
 }
 
 impl Memo {
-    fn shaped(&mut self, chain: &str, up: &str, key: (Sid, Sid)) -> Result<usize, Unreadable> {
+    fn shaped(
+        &mut self,
+        vocabulary: &Vocabulary,
+        chain: &str,
+        up: &str,
+        key: (Sid, Sid),
+    ) -> Result<usize, Unreadable> {
         if let Some(&found) = self.shaped_at.get(&key) {
             return found;
         }
         let position = UsePosition::of(chain, up);
-        let found = shapes::classify(&position).map(|shape| {
-            let local = position.local_target();
+        let found = vocabulary.classify(&position).map(|shape| {
+            let local = vocabulary.local_target(&position);
             self.shaped.push(Shaped {
                 position,
                 local,
@@ -90,7 +96,7 @@ impl Memo {
         id
     }
 
-    fn later(&mut self, chain: &str, up: &str) -> usize {
+    fn later(&mut self, vocabulary: &Vocabulary, chain: &str, up: &str) -> usize {
         let key = (self.text(chain), self.text(up));
         if let Some(&at) = self.later_at.get(&key) {
             return at;
@@ -104,7 +110,7 @@ impl Memo {
             .collect();
         self.later.push(Later {
             methods,
-            local: position.local_target(),
+            local: vocabulary.local_target(&position),
         });
         self.later_at.insert(key, self.later.len() - 1);
         self.later.len() - 1
@@ -154,16 +160,18 @@ type Judged = (u32, usize, Option<String>);
 
 struct Judge<'l> {
     link: &'l Link,
+    vocabulary: &'l Vocabulary,
     chain_key: Option<Sid>,
     up_key: Option<Sid>,
     memo: Memo,
 }
 
 impl<'l> Judge<'l> {
-    fn new(link: &'l Link) -> Judge<'l> {
+    fn new(link: &'l Link, vocabulary: &'l Vocabulary) -> Judge<'l> {
         let it = &link.core.it;
         Judge {
             link,
+            vocabulary,
             chain_key: it.get("chain"),
             up_key: it.get("up"),
             memo: Memo::default(),
@@ -206,7 +214,10 @@ impl<'l> Judge<'l> {
         let mut positions = Vec::with_capacity(rows.len());
         for &id in rows {
             let key = (self.attr(id, self.chain_key), self.attr(id, self.up_key));
-            positions.push(self.memo.shaped(it.s(key.0), it.s(key.1), key)?);
+            let found = self
+                .memo
+                .shaped(self.vocabulary, it.s(key.0), it.s(key.1), key)?;
+            positions.push(found);
         }
         let mut sources = LocalSources::default();
         let mut locals: FxHashSet<String> = FxHashSet::default();
@@ -238,7 +249,7 @@ impl<'l> Judge<'l> {
                 let Some(index) = sources.held(origin, root, *line, *column) else {
                     continue;
                 };
-                let found = self.memo.later(chain, up);
+                let found = self.memo.later(self.vocabulary, chain, up);
                 later.entry(index).or_default().push(found);
                 if let Some(local) = self.memo.later[found].local.clone() {
                     sources.assign(
@@ -260,7 +271,8 @@ impl<'l> Judge<'l> {
                     .iter()
                     .map(|&at| self.memo.later[at].methods.as_slice())
                     .collect();
-                shapes::refine(&shaped.position, &methods)
+                self.vocabulary
+                    .refine(&shaped.position, &methods)
                     .filter(|refined| *refined != shaped.shape)
                     .map(|refined| refined.text())
             });
@@ -272,8 +284,9 @@ impl<'l> Judge<'l> {
 
 impl Link {
     /// The `django.uses@1` refinements of the analyzed files `files` (file ids, in the
-    /// producer's order) onto `models`, and the files that failed. Nothing is applied.
-    pub fn django_uses(&mut self, files: &[u32], models: &[Ent]) -> Uses {
+    /// producer's order) onto `models`, and the files that failed, with the shape code's names
+    /// from `vocabulary`. Nothing is applied.
+    pub fn django_uses(&mut self, files: &[u32], models: &[Ent], vocabulary: &Vocabulary) -> Uses {
         let Some(kind) = self.kind_sid("reference") else {
             return Uses::default();
         };
@@ -294,7 +307,7 @@ impl Link {
             }
             by_file.entry(self.file_key(id)).or_default().push(id);
         }
-        let mut judge = Judge::new(self);
+        let mut judge = Judge::new(self, vocabulary);
         let mut judged: Vec<Judged> = Vec::new();
         let mut failed = Vec::new();
         for &file in files {

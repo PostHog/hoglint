@@ -74,6 +74,22 @@ class ProducerPlan:
     def __init__(self, steps: Iterable[ProducerStep]) -> None:
         self.steps = list(steps)
 
+    @staticmethod
+    def run_step(step: ProducerStep, sink: PackSink) -> bool:
+        """One step into the sink; False when it raised. Its output is freed on return."""
+        try:
+            output = list(step.run())
+        except Exception as error:  # noqa: BLE001 - a failed producer makes its rules incomplete, never clean
+            sink.fail(step.name, ProducerFailure(failure_text(error), step.kinds))
+            return False
+        edges = [item for item in output if isinstance(item, Edge)]
+        refinements = Refinements.of(output)
+        if edges:
+            sink.add_edges(step.name, edges)
+        if refinements:
+            sink.refine(step.name, step.kinds, refinements)
+        return True
+
     def run(self, sink: PackSink) -> None:
         broken: set[str] = set()
         for step in self.steps:
@@ -82,18 +98,13 @@ class ProducerPlan:
                 broken.add(step.name)
                 sink.fail(step.name, ProducerFailure(f"{missing} failed", step.kinds))
                 continue
-            try:
-                output = list(step.run())
-            except Exception as error:  # noqa: BLE001 - a failed producer makes its rules incomplete, never clean
+            if not self.run_step(step, sink):
                 broken.add(step.name)
-                sink.fail(step.name, ProducerFailure(failure_text(error), step.kinds))
-                continue
-            edges = [item for item in output if isinstance(item, Edge)]
-            refinements = Refinements.of(output)
-            if edges:
-                sink.add_edges(step.name, edges)
-            if refinements:
-                sink.refine(step.name, step.kinds, refinements)
+            # A sink may drop what the step read (the native engine's decoded records), so the
+            # next step does not start on top of it.
+            step_ended = getattr(sink, "step_ended", None)
+            if step_ended is not None:
+                step_ended()
 
 
 class GraphSink:
