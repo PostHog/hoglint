@@ -77,6 +77,9 @@ ENDPOINTS = ("surface", "origin", "via")
 ON_UNRESOLVED = ("finding", "block", "incomplete")
 LIFECYCLES = ("setup", "first-request", "worker-start", "on-demand")
 SELECTOR_MARKERS = ("==", "!=", " in ", "startswith", "subset_of", " and ", " or ", "not ")
+# The most exports a config declares: the native evaluator keeps a module's exports as the bits of
+# one 64-bit word, and a limit belongs to the config, not to one engine.
+MAX_EXPORTS = 64
 # Entity attributes that only a symbol has: a module field's domain cannot read them.
 SYMBOL_ATTRIBUTES = frozenset({"symbol", "decl", "kind"})
 
@@ -489,6 +492,8 @@ class SchemaBuilder:
                 as_tuple(table.get("subclass_of")),
                 self.source(key),
             )
+        if len(out) > MAX_EXPORTS:
+            self.fail("exports", f"{len(out)} exports; a config declares at most {MAX_EXPORTS}")
         return out
 
     def read_registries(self) -> dict[str, RegistrySpec]:

@@ -17,6 +17,7 @@ import pytest
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
+from hoglint.ledger.errors import EngineError
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution
 from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
@@ -471,7 +472,7 @@ def test_a_provider_field_read_without_its_column_stops_the_evaluator(
     config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
     native, _ = world.contexts(config)
     monkeypatch.setattr(RulePlan, "names_read", lambda self: set())
-    with pytest.raises(Exception, match="field team, which a provider sets"):
+    with pytest.raises(EngineError, match="field team, which a provider sets"):
         assert native.evaluator
 
 
@@ -481,7 +482,7 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
     config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
     native, _ = world.contexts(config)
     monkeypatch.setattr(RulePlan, "modules", lambda self: list(reversed(self.graph.modules)))
-    with pytest.raises(Exception, match="modules in another order"):
+    with pytest.raises(EngineError, match="modules in another order"):
         assert native.evaluator
 
 
@@ -492,6 +493,31 @@ def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World)
     found = run_rows(primitive_of(spec)(native, spec).evaluate())
     assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
     assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
+
+
+class Refusing:
+    """An evaluator that refuses every call, as one that meets a limit only it has would."""
+
+    def __getattr__(self, name: str) -> Any:
+        def refuse(*args: Any) -> Any:
+            raise ValueError(f"{name} refused")
+
+        return refuse
+
+
+@pytest.mark.parametrize("primitive", ["edge", "use-shape", "cycle", "reach", "conflicts"])
+def test_an_evaluator_error_is_an_engine_error(world: World, primitive: str) -> None:
+    spec = {**CORNERS["reach-from-contracts"], "primitive": primitive} if primitive == "reach" else EDGE
+    spec = CORNERS["flow-shape-use-shape"] if primitive == "use-shape" else spec
+    spec = CORNERS["cycle-between-packages"] if primitive == "cycle" else spec
+    config = world.config(rule_table("refused", spec))
+    native, _ = world.contexts(config)
+    native.__dict__["evaluator"] = Refusing()
+    with pytest.raises(EngineError, match="refused"):
+        if primitive == "conflicts":
+            native.find_conflicts()
+        else:
+            primitive_of(config.rules["refused"])(native, config.rules["refused"]).evaluate()
 
 
 def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:

@@ -114,6 +114,24 @@ ledger = false
             "needs a shape policy",
         ),
         ("[levels.isolated]\ngroup_by = 'package'\nrequires = ['crosss']\n", "requires unknown rule 'crosss'"),
+        # limits of the config, which both engines judge alike
+        (
+            "[shapes.c]\nallow = ['class']\n"
+            + "".join(f"[exports.e{at}]\npaths = ['x{at}/**']\nshape = 'c'\n" for at in range(65)),
+            "65 exports; a config declares at most 64",
+        ),
+        (
+            "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \"" + "not " * 33 + "src.module == 'a'\"\n",
+            "nested more than 32 deep",
+        ),
+        (
+            "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \""
+            + "(src.module == 'a' or src.module == 'b' and " * 20
+            + "true"
+            + ")" * 20
+            + '"\n',
+            "nested more than 32 deep",
+        ),
         ("[discovery]\nsource_root = ['.']\n", "unknown key 'source_root'"),
         ("[unknown_section]\nx = 1\n", "unknown section"),
     ],

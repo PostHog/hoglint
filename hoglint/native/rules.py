@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from array import array
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -176,6 +177,16 @@ class Rejudged:
             rule.run = saved
 
 
+@contextmanager
+def engine_errors() -> Iterator[None]:
+    """An error the native evaluator returns is the engine's, never the config's: the config
+    loaded, so a refusal here is a bug or a stale build (exit 2)."""
+    try:
+        yield
+    except ValueError as error:
+        raise EngineError(f"the native evaluator failed: {error}") from error
+
+
 JUDGMENTS = list(Judgment)
 # The evaluator's verdict codes of a denied target (`Rules.reach`).
 VERDICT_TRUTHS = {1: Truth.TRUE, 2: Truth.UNKNOWN}
@@ -205,12 +216,14 @@ class NativeRuleContext(RuleContext):
     def evaluator(self) -> Any:
         """The native evaluator of this run: labels, and every edge rule compiled."""
         native: Any = import_module()
-        return native.Rules(self.native.native.link, self.plan.text())
+        with engine_errors():
+            return native.Rules(self.native.native.link, self.plan.text())
 
     def find_conflicts(self) -> None:
         """The evaluator labels every module before any rule runs and finds each label set two
         ways; the labeler words each one with its sources (D44)."""
-        conflicts = self.evaluator.conflicts()
+        with engine_errors():
+            conflicts = self.evaluator.conflicts()
         self.word(conflicts)
         if conflicts and not self.labeler.conflicts:
             raise EngineError(f"the evaluator finds labels set two ways that the labeler does not: {conflicts[:3]}")
@@ -218,7 +231,9 @@ class NativeRuleContext(RuleContext):
     def met_conflicts(self) -> None:
         """The labels set two ways that the evaluator met while rules ran: what the Python engine
         meets lazily, where a rule reads them."""
-        self.word(self.evaluator.met())
+        with engine_errors():
+            met = self.evaluator.met()
+        self.word(met)
 
     def word(self, conflicts: list[tuple[str, str, str]]) -> None:
         """Has the labeler record each conflict, with its sources, as reading its entity does."""
@@ -237,7 +252,8 @@ class NativeRuleContext(RuleContext):
         """The evaluator's rows of an edge or entrypoint rule, in the order the rule judges: a
         violation becomes its finding here; any other judgment goes to the rule's own code, which
         must judge the same."""
-        rows = self.evaluator.judge(self.plan.index[rule.spec.id])
+        with engine_errors():
+            rows = self.evaluator.judge(self.plan.index[rule.spec.id])
         ids = array("I", dict.fromkeys(row[0] for row in rows))
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         spec = rule.spec
@@ -261,7 +277,8 @@ class NativeRuleContext(RuleContext):
             yield edge, RuleRun(spec, [finding])
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
-        rows = self.evaluator.pairs(self.plan.index[rule.spec.id])
+        with engine_errors():
+            rows = self.evaluator.pairs(self.plan.index[rule.spec.id])
         return [CycleRow(edge, target, JUDGMENTS[code], pair) for edge, target, code, pair in rows]
 
     @staticmethod
@@ -279,7 +296,8 @@ class NativeRuleContext(RuleContext):
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found]:
         """The evaluator's search of a reach rule, its paths made into Edges."""
-        found = self.evaluator.reach(self.plan.index[rule.spec.id])
+        with engine_errors():
+            found = self.evaluator.reach(self.plan.index[rule.spec.id])
         ids = array("I", dict.fromkeys(edge for _, _, path, _ in found for edge, _ in path))
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         out = []
@@ -297,7 +315,8 @@ class NativeRuleContext(RuleContext):
         edges it does not make false become Edges."""
         if node is None or not kinds:
             return super().edges_passing(kinds, node)
-        passing = array("I", self.evaluator.passing(list(kinds), json.dumps(tree(node))))
+        with engine_errors():
+            passing = array("I", self.evaluator.passing(list(kinds), json.dumps(tree(node))))
         return self.native.native.core.get(passing)
 
     def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
@@ -313,7 +332,8 @@ class NativeRuleContext(RuleContext):
         if self.plan.mode(rule.spec) != "select":
             yield from super().judged_edges(rule)
             return
-        selected = array("I", self.evaluator.select(self.plan.index[rule.spec.id]))
+        with engine_errors():
+            selected = array("I", self.evaluator.select(self.plan.index[rule.spec.id]))
         for edge in self.native.native.core.get(selected):
             yield edge, None
 

@@ -123,6 +123,9 @@ class Or:
 Node = Compare | Bare | Not | And | Or
 
 KEYWORDS = frozenset({"and", "or", "not", "in", "startswith", "subset_of", "true", "false", "none"})
+# The deepest a selector nests, in its text (parentheses, `not`) and in its tree: a limit of the
+# config, so both engines judge every selector that loads.
+MAX_DEPTH = 32
 
 TOKEN_RE = re.compile(
     r"""
@@ -165,6 +168,7 @@ class Parser:
         self.source = source
         self.tokens = tokenize(source)
         self.index = 0
+        self.depth = 0
 
     def fail(self, message: str) -> SelectorError:
         return SelectorError(f"{message} in selector {self.source.strip()!r}")
@@ -196,7 +200,15 @@ class Parser:
         node = self.parse_or()
         if self.peek() is not None:
             raise self.fail(f"unexpected {self.take().text!r}")
+        if depth(node) > MAX_DEPTH:
+            raise self.fail(f"nested more than {MAX_DEPTH} deep")
         return node
+
+    def nest(self) -> None:
+        """One level deeper in the text, failing before the recursion grows past the limit."""
+        self.depth += 1
+        if self.depth > MAX_DEPTH:
+            raise self.fail(f"nested more than {MAX_DEPTH} deep")
 
     def parse_or(self) -> Node:
         parts = [self.parse_and()]
@@ -215,15 +227,20 @@ class Parser:
     def parse_not(self) -> Node:
         if self.peek_word() == "not":
             self.take()
-            return Not(self.parse_not())
+            self.nest()
+            inner = self.parse_not()
+            self.depth -= 1
+            return Not(inner)
         return self.parse_comparison()
 
     def parse_comparison(self) -> Node:
         token = self.peek()
         if token is not None and token.text == "(":
             self.take()
+            self.nest()
             node = self.parse_or()
             self.expect(")")
+            self.depth -= 1
             return node
         left = self.parse_operand()
         op = self.parse_operator()
@@ -561,6 +578,15 @@ def evaluate(node: Node, resolve: Resolver) -> Truth:
     if node.op == "startswith":
         return starts(left, right)
     return subset(left, right)
+
+
+def depth(node: Node) -> int:
+    """The nodes on the longest path from the root to a leaf."""
+    if isinstance(node, (And, Or)):
+        return 1 + max(depth(part) for part in node.parts)
+    if isinstance(node, Not):
+        return 1 + depth(node.inner)
+    return 1
 
 
 def leaves(node: Node) -> Iterator[Compare | Bare]:
