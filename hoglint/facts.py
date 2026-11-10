@@ -13,8 +13,6 @@ from pathlib import Path
 
 import orjson
 
-from hoglint.ledger.envelope import Framework
-
 BINARY_NAME = "hoglint-facts"
 # Where tools/hoglint/bin/build puts the binary when CARGO_TARGET_DIR is not set.
 DEFAULT_TARGET_DIR = Path.home() / ".cache" / "hoglint-target"
@@ -71,34 +69,18 @@ def site_packages() -> Path:
     return Path(sysconfig.get_paths()["purelib"])
 
 
-def recorded_sources(record: Path, package: str) -> list[str]:
-    """The `.py` files under `package` that a distribution's RECORD lists, as paths inside
-    site-packages; empty when the RECORD cannot be read."""
-    try:
-        rows = Framework.sources(record.read_text(), package)
-    except OSError:
-        return []
-    return sorted(row.split(",", 1)[0] for row in rows)
-
-
 def site_packages_files(packages: tuple[str, ...]) -> dict[str, str]:
     """Sources of the named distributions in this interpreter's site-packages: record path ->
     path inside site-packages, which names the module. The record path is
-    `<site-packages>/<path inside>`; the file is `site_packages() / <path inside>`.
-
-    The list comes from each distribution's RECORD, the rows the framework digest (a key part)
-    holds, so no file walk runs. A package with no metadata, or whose RECORD lists no sources
-    (an editable install), is walked."""
+    `<site-packages>/<path inside>`; the file is `site_packages() / <path inside>`."""
     site = site_packages()
-    infos = Framework.dist_infos(site, packages)
     out: dict[str, str] = {}
     for package in packages:
-        info = infos.get(package)
-        inside = recorded_sources(info / "RECORD", package) if info is not None else []
-        if not inside and (site / package).is_dir():
-            inside = sorted(path.relative_to(site).as_posix() for path in (site / package).rglob("*.py"))
-        for path in inside:
-            out[f"{SITE_PACKAGES}/{path}"] = path
+        root = site / package
+        if root.is_dir():
+            for path in sorted(root.rglob("*.py")):
+                inside = path.relative_to(site).as_posix()
+                out[f"{SITE_PACKAGES}/{inside}"] = inside
     return out
 
 
