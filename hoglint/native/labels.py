@@ -7,14 +7,12 @@ from its columns, and the Python label pass runs only to word a conflict and for
 
 from __future__ import annotations
 
-import json
 from array import array
 from typing import Any
 
 from hoglint.config.model import KindSpec, LevelSpec
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.rules.plan import tree
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
 # A module's place in a column where the evaluator has no value for Python to take.
@@ -110,9 +108,8 @@ class NativeLabeler(Labeler):
         field = self.config.fields.get(spec.group_by)
         if self.evaluator is None or field is None or field.type is FieldType.SET:
             return None
-        select = json.dumps(tree(spec.select.node)) if spec.select is not None else None
         try:
-            return self.evaluator.level_groups(spec.group_by, select)
+            return self.evaluator.level_groups(list(self.config.levels).index(spec.name))
         except ValueError as error:
             raise EngineError(f"the native evaluator failed: {error}") from error
 

@@ -3,23 +3,22 @@
 Python loads and validates the config; the plan hands Rust its fields and domains, assignments,
 zones, registries, exports with their audiences, kinds, and each rule as its class plans itself.
 Nothing in it is computed per module or per symbol, except the label column of a field a Python
-provider sets, and only when something the plan holds reads that field.
+provider sets, and only when the evaluator says something the plan holds reads that field (D54).
 """
 
 from __future__ import annotations
 
 import json
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Callable
 from typing import Any
 
 from hoglint.config.model import Config, FieldSpec
 from hoglint.labels import Labeler
 from hoglint.native.graph import NativeGraph
 from hoglint.rules.base import RuleType
-from hoglint.rules.graphs import CyclePrimitive
 from hoglint.rules.plan import selector_tree
-from hoglint.selectors import FieldType, Selector, State, Value, refs
+from hoglint.selectors import FieldType, State, Value
 
 
 def set_value(spec: FieldSpec | None, value: Any) -> dict[str, Any]:
@@ -59,60 +58,16 @@ class RulePlan:
         self.index = {spec.id: at for at, spec in enumerate(self.specs)}
         self.shape_at = {name: at for at, name in enumerate(config.shapes)}
 
-    def selectors(self) -> Iterable[Selector]:
-        """Every selector the plan holds."""
-        for spec in self.specs:
-            for selector in (spec.from_, spec.select, spec.deny, spec.allow, spec.require, spec.unless):
-                if selector is not None:
-                    yield selector
-            for cover in spec.covers if spec.primitive == "coverage" else ():
-                if cover.selector is not None:
-                    yield cover.selector
-        for export in self.config.exports.values():
-            if export.audience is not None:
-                yield export.audience
-        for field in self.config.fields.values():
-            if field.domain is not None and field.domain.selector is not None:
-                yield field.domain.selector
-        for policy in self.config.shapes.values():
-            if policy.behavior is not None and policy.behavior.where is not None:
-                yield policy.behavior.where
-        for level in self.config.levels.values():
-            if level.select is not None:
-                yield level.select
-
-    def names_read(self) -> set[str]:
-        """The last name of every field the plan reads: selectors, identity columns and a cycle
-        rule's group. It only spares columns: a provider field read without one stops the run
-        in `Rules.new`."""
-        out = {ref.path[-1] for selector in self.selectors() for ref in refs(selector.node)}
-        out.update(column.rsplit(".", 1)[-1] for spec in self.specs for column in spec.identity)
-        out.update(CyclePrimitive.group_of(self.config, spec) for spec in self.specs if spec.primitive == "cycle")
-        out.update(spec.exactly_one for spec in self.specs if spec.exactly_one)
-        out.update(level.group_by for level in self.config.levels.values())
-        out.update(
-            cover.column.rsplit(".", 1)[-1]
-            for spec in self.specs
-            if spec.primitive == "coverage"
-            for cover in spec.covers
-            if cover.rule
-        )
-        return out
-
     def modules(self) -> list[str]:
         """The graph's modules in the order of every per-module column of the plan."""
         return list(self.graph.modules)
 
-    def provided(self, modules: list[str]) -> tuple[list[dict[str, Any]], list[int]]:
-        """The label column of each provider-set module field the plan reads, module by module,
+    def provided(self, names: list[str]) -> tuple[list[dict[str, Any]], list[int]]:
+        """The label column of each provider-set module field `names` lists, module by module,
         and the places of the modules whose provider labels two sources set apart."""
         labeler = self.labeler
         fields = self.config.fields
-        names = [
-            name
-            for name in sorted(labeler.provider_fields & self.names_read())
-            if name in fields and fields[name].on == "module"
-        ]
+        modules = self.modules()
         if not names:
             return [], []
         columns: dict[str, list[Any]] = {name: [] for name in names}
@@ -165,10 +120,10 @@ class RulePlan:
         ]
 
     def data(self) -> dict[str, Any]:
+        """The plan with no provider column: `text` adds the ones the evaluator reads."""
         config = self.config
         zones = config.zones
         modules = self.modules()
-        provided, provider_conflicts = self.provided(modules)
         return {
             "module_count": len(modules),
             "modules": hashlib.sha256("\n".join(modules).encode()).hexdigest(),
@@ -220,12 +175,19 @@ class RulePlan:
                 }
                 for spec in config.kinds.values()
             ],
-            "provided": provided,
-            "provider_conflicts": provider_conflicts,
+            "provided": [],
+            "provider_conflicts": [],
             "failed": sorted(self.labeler.providers.failed_fields),
             "rules": [rule.plan() for rule in self.rules],
+            "levels": [
+                {"group_by": level.group_by, "select": selector_tree(level.select)} for level in config.levels.values()
+            ],
             "repeats": sorted(self.graph.repeats.items()),
         }
 
-    def text(self) -> str:
-        return json.dumps(self.data())
+    def text(self, reads: Callable[[str], list[str]]) -> str:
+        """The plan as JSON, with the column of every provider-set field the evaluator says its
+        compiled plan reads (`reads`, D54)."""
+        data = self.data()
+        data["provided"], data["provider_conflicts"] = self.provided(reads(json.dumps(data)))
+        return json.dumps(data)

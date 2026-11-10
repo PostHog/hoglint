@@ -240,6 +240,7 @@ pub struct Rules {
     /// Per symbol assignment and field it sets, its candidate.
     symbol_assigns: Vec<usize>,
     pub rules: Vec<Rule>,
+    levels: Vec<Level>,
     /// Each edge's ordinal, when something reads `edge.ordinal`.
     ordinals: Vec<u32>,
     pool: rayon::ThreadPool,
@@ -273,19 +274,23 @@ fn field_kind(name: &str) -> FieldKind {
     }
 }
 
-impl Rules {
-    pub fn new(link: &mut Link, text: &str, threads: usize) -> Result<Rules, String> {
-        let plan = Plan::parse(text)?;
-        let (modules, module_files) = Self::graph_modules(link);
-        if modules.len() != plan.module_count {
-            return Err(format!(
-                "the link holds {} graph modules, the graph {}",
-                modules.len(),
-                plan.module_count
-            ));
-        }
-        let facts = SymbolFacts::new(link);
-        let kind_sets = facts.kind_sets(link, &plan.kinds);
+/// A level (`LevelSpec`): its group field and `select`, as entity reads.
+pub struct Level {
+    field: Ref,
+    select: Option<Node>,
+}
+
+/// The plan's selectors compiled, before any label is read.
+struct Compiled {
+    fields: Vec<Field>,
+    exports: Vec<Export>,
+    rules: Vec<Rule>,
+    shapes: Vec<Shape>,
+    levels: Vec<Level>,
+}
+
+impl Compiled {
+    fn new(link: &Link, plan: &Plan) -> Result<Compiled, String> {
         let names: Vec<String> = plan.fields.iter().map(|field| field.name.clone()).collect();
         let entity = Compiler {
             fields: &names,
@@ -340,13 +345,89 @@ impl Rules {
         let rules = plan
             .rules
             .iter()
-            .map(|rule| Self::compile(&edge, &entity, rule, &fields))
+            .map(|rule| Rules::compile(&edge, &entity, rule, &fields))
             .collect::<Result<Vec<_>, String>>()?;
         let shapes = plan
             .shapes
             .iter()
             .map(|shape| Shape::new(shape, &entity))
             .collect::<Result<Vec<_>, String>>()?;
+        let levels = plan
+            .levels
+            .iter()
+            .map(|level| {
+                Ok(Level {
+                    field: entity.reference(std::slice::from_ref(&level.group_by)),
+                    select: level
+                        .select
+                        .as_ref()
+                        .map(|node| entity.node(node))
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Compiled {
+            fields,
+            exports,
+            rules,
+            shapes,
+            levels,
+        })
+    }
+
+    /// The module fields a Python provider sets that anything compiled reads, sorted.
+    fn provider_reads(&self) -> Vec<usize> {
+        let mut refs = Vec::new();
+        for rule in &self.rules {
+            refs.extend(rule.refs());
+        }
+        let audiences = self
+            .exports
+            .iter()
+            .filter_map(|export| export.audience.as_ref());
+        let behaviors = self.shapes.iter().filter_map(Shape::reads);
+        let domains = self
+            .fields
+            .iter()
+            .filter_map(|field| field.domain.as_ref()?.selector.as_ref());
+        let selects = self.levels.iter().filter_map(|level| level.select.as_ref());
+        for node in audiences.chain(behaviors).chain(domains).chain(selects) {
+            node.refs(&mut refs);
+        }
+        refs.extend(self.levels.iter().map(|level| level.field));
+        let mut out: Vec<usize> = refs
+            .into_iter()
+            .filter_map(Ref::field)
+            .filter(|&field| self.fields[field].provided && !self.fields[field].on_symbol)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+impl Rules {
+    pub fn new(link: &mut Link, text: &str, threads: usize) -> Result<Rules, String> {
+        let plan = Plan::parse(text)?;
+        let (modules, module_files) = Self::graph_modules(link);
+        if modules.len() != plan.module_count {
+            return Err(format!(
+                "the link holds {} graph modules, the graph {}",
+                modules.len(),
+                plan.module_count
+            ));
+        }
+        let facts = SymbolFacts::new(link);
+        let kind_sets = facts.kind_sets(link, &plan.kinds);
+        let compiled = Compiled::new(link, &plan)?;
+        let read = compiled.provider_reads();
+        let Compiled {
+            fields,
+            exports,
+            rules,
+            shapes,
+            levels,
+        } = compiled;
         let it = &link.core.it;
         let module_names: Vec<&str> = modules.iter().map(|module| it.s(*module)).collect();
         if crate::sha256_hex(module_names.join("\n").as_bytes()) != plan.modules {
@@ -359,27 +440,12 @@ impl Rules {
             .map(|file| &*link.core.facts.files[*file as usize].path)
             .collect();
         let mut labels = Labels::new(&plan, fields, &paths, &module_names, &exports)?;
-        for rule in &rules {
-            check_columns(&labels, &format!("rule {}", rule.id), &rule.refs())?;
-        }
-        for audience in exports.iter().filter_map(|export| export.audience.as_ref()) {
-            check_columns(&labels, "an export audience", &refs_of(audience))?;
-        }
-        for (shape, plan) in shapes.iter().zip(&plan.shapes) {
-            if let Some(node) = shape.reads() {
-                check_columns(
-                    &labels,
-                    &format!("the behavior of shape {}", plan.name),
-                    &refs_of(node),
-                )?;
-            }
-        }
-        for field in &labels.fields {
-            let domain = field.domain.as_ref();
-            if let Some(selector) = domain.and_then(|domain| domain.selector.as_ref()) {
-                let reader = format!("the domain of field {}", field.name);
-                check_columns(&labels, &reader, &refs_of(selector))?;
-            }
+        // D43 and D54: Python sends the column of every field `reads` names, so this cannot fail.
+        if let Some(&field) = read.iter().find(|&&field| !labels.columns[field]) {
+            return Err(format!(
+                "the rule plan reads field {}, which a provider sets, but holds no column for it",
+                labels.fields[field].name
+            ));
         }
         let symbol_assigns: Vec<usize> = (0..labels.assigns.len())
             .filter(|at| labels.assigns[*at].symbols.is_some())
@@ -435,6 +501,7 @@ impl Rules {
             facts,
             symbol_assigns,
             rules,
+            levels,
             ordinals: Vec::new(),
             pool,
             touch: false,
@@ -449,6 +516,19 @@ impl Rules {
             out.ordinals = ordinals(link, &plan.repeats);
         }
         Ok(out)
+    }
+
+    /// The names of the module fields a Python provider sets that the plan's compiled selectors,
+    /// identities, groups, covers, audiences, shapes, domains and levels read (D54): the columns
+    /// the plan must then hold. The plan's own columns are not read.
+    pub fn reads(link: &Link, text: &str) -> Result<Vec<String>, String> {
+        let plan = Plan::parse(text)?;
+        let compiled = Compiled::new(link, &plan)?;
+        Ok(compiled
+            .provider_reads()
+            .into_iter()
+            .map(|field| compiled.fields[field].name.clone())
+            .collect())
     }
 
     /// Every attr name of any edge, refinements included, that starts with `src.` or `dst.`.

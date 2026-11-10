@@ -4,6 +4,7 @@ hand-written rules for the corners where the meaning is irregular, and seeded ge
 from __future__ import annotations
 
 import gc
+import json
 import random
 import subprocess
 import dataclasses
@@ -605,7 +606,7 @@ def test_a_provider_field_read_without_its_column_stops_the_evaluator(
 ) -> None:
     config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
     native, _ = world.contexts(config)
-    monkeypatch.setattr(RulePlan, "names_read", lambda self: set())
+    monkeypatch.setattr(RulePlan, "provided", lambda self, names: ([], []))
     with pytest.raises(EngineError, match="field team, which a provider sets"):
         assert native.evaluator
 
@@ -1582,20 +1583,58 @@ def test_an_expected_kind_no_symbol_holds_makes_a_rule_incomplete_in_both(
     assert native == ["kind ghost matched no symbol, but [kinds] marks it expected"]
 
 
-def test_a_provider_field_an_inventory_counts_or_a_level_groups_by_gets_its_column(
-    world: World, monkeypatch: pytest.MonkeyPatch
+# A provider-set field read in each role the evaluator compiles (D54), as (rules, config).
+LEAD = PROVIDED.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n').replace(
+    'sets = ["team"]', 'sets = ["team", "lead"]'
+)
+COLUMN_ROLES = {
+    "selector": (rule_table("read", {**EDGE, "select": "src.team == dst.team"}), PROVIDED),
+    "identity": (rule_table("read", {**EDGE, "identity": ["src.module", "dst.team"]}), PROVIDED),
+    "cycle group": (rule_table("read", TEAM_CYCLE), PROVIDED),
+    "exactly_one": (
+        rule_table("read", {"primitive": "inventory", "on": "module", "exactly_one": "team", "ledger": False}),
+        PROVIDED,
+    ),
+    "level group_by": (
+        LEVELS.replace('group_by = "zone"', 'group_by = "lead"').replace('group_by = "package"', 'group_by = "lead"'),
+        LEAD,
+    ),
+    "cover column": (
+        rule_table("crossing", {**EDGE, "kinds": ["import"]})
+        + rule_table(
+            "read",
+            {
+                "primitive": "coverage",
+                "covers": ["rules.crossing.dst.lead"],
+                "inputs": {"adapter": "globs", "paths": ["core/**"]},
+                "ledger": False,
+            },
+        ),
+        LEAD,
+    ),
+    "audience": (
+        rule_table("read", CORNERS["export-by-class-and-audience"]),
+        PROVIDED.replace("audience = \"src.tier == 'core'\"", "audience = \"src.team == '@team-core'\""),
+    ),
+    "domain": (
+        rule_table("read", {**EDGE, "deny": "src.probe == 'x'"}),
+        PROVIDED.replace(
+            "[fields]\n", '[fields]\nprobe = { type = "string", required_on = "team == \'@team-core\'" }\n'
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("role", sorted(COLUMN_ROLES))
+def test_a_provider_field_read_in_each_role_gets_its_column(
+    world: World, monkeypatch: pytest.MonkeyPatch, role: str
 ) -> None:
-    lead = PROVIDED.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n').replace(
-        'sets = ["team"]', 'sets = ["team", "lead"]'
-    )
-    counted = rule_table("teams", {"primitive": "inventory", "on": "module", "exactly_one": "team", "ledger": False})
-    assert differences(world, counted, lead) == []
-    config = world.config(LEVELS.replace('group_by = "zone"', 'group_by = "lead"'), lead)
-
-    def levels() -> dict[str, tuple[list[str], dict[str, list[str]]]]:
-        result = Engine(config, world.graph, world.repo).evaluate()
-        return {name: (level.passing, dict(level.failing)) for name, level in result.levels.items()}
-
-    native = levels()
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == levels()
+    rules, base = COLUMN_ROLES[role]
+    config = world.config(rules, base)
+    native, _ = world.contexts(config)
+    reads = native_module().Rules.reads(native.native.native.link, json.dumps(native.plan.data()))
+    assert set(reads) & {"team", "lead"}
+    if config.levels:
+        assert level_differences(world, config, monkeypatch) == []
+    else:
+        assert differences(world, rules, base) == []

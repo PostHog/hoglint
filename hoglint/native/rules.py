@@ -320,8 +320,9 @@ class NativeRuleContext(RuleContext):
     def evaluator(self) -> Any:
         """The native evaluator of this run: labels, and every edge rule compiled."""
         native: Any = import_module()
+        link = self.native.native.link
         with engine_errors():
-            return native.Rules(self.native.native.link, self.plan.text())
+            return native.Rules(link, self.plan.text(lambda plan: native.Rules.reads(link, plan)))
 
     def find_conflicts(self) -> None:
         """The evaluator labels every module before any rule runs and finds each label set two

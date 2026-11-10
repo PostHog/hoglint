@@ -77,6 +77,14 @@ impl Rules {
 
 #[pymethods]
 impl Rules {
+    /// The module fields a Python provider sets that a plan's compiled rules, audiences, shapes,
+    /// domains and levels read (D54): Python sends their columns in the plan it runs.
+    #[staticmethod]
+    fn reads(py: Python<'_>, link: Py<Link>, plan: &str) -> PyResult<Vec<String>> {
+        let bound = link.bind(py).borrow();
+        CoreRules::reads(&bound.inner, plan).map_err(PyValueError::new_err)
+    }
+
     /// Reads the plan (JSON), labels every graph module and compiles every rule. Evaluation runs
     /// on the threads the link was built with.
     #[new]
@@ -265,18 +273,12 @@ impl Rules {
             .map_err(PyValueError::new_err)
     }
 
-    /// The groups a level judges: field `group_by` on every graph module where it is known and
-    /// `select` (a plan tree as JSON) is true, sorted.
-    #[pyo3(signature = (group_by, select=None))]
-    fn level_groups(
-        &self,
-        py: Python<'_>,
-        group_by: &str,
-        select: Option<&str>,
-    ) -> PyResult<Vec<String>> {
+    /// The groups level `level` (its place in the plan) judges: its group field on every graph
+    /// module where it is known and its `select` is true, sorted.
+    fn level_groups(&self, py: Python<'_>, level: usize) -> PyResult<Vec<String>> {
         let bound = self.link.bind(py).borrow();
         self.inner
-            .level_groups(&bound.inner, group_by, select)
+            .level_groups(&bound.inner, level)
             .map_err(PyValueError::new_err)
     }
 

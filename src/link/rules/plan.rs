@@ -25,6 +25,7 @@ pub struct Plan {
     /// Fields whose provider failed: outside the graph's modules they read as unknown.
     pub failed: Vec<String>,
     pub rules: Vec<RulePlan>,
+    pub levels: Vec<LevelPlan>,
     /// (row, last row) of each edge a producer repeats: it takes its last row's ordinal.
     pub repeats: Vec<(u32, u32)>,
 }
@@ -188,6 +189,13 @@ pub struct ProvidedPlan {
     pub field: String,
     /// `Labeler.label_only` of each module in graph order: the label the provider gives it.
     pub labels: Vec<ValuePlan>,
+}
+
+/// A level (`LevelSpec`): the field it groups by and its `select`, both entity reads.
+#[derive(Deserialize)]
+pub struct LevelPlan {
+    pub group_by: String,
+    pub select: Option<NodePlan>,
 }
 
 /// One rule of the plan: its id, and its mode with what that mode reads.

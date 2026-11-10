@@ -205,6 +205,10 @@ class Rules:
     (`hoglint.native.plan`). Evaluation runs on the threads the link was built with."""
 
     def __init__(self, link: Link, plan: str) -> None: ...
+    @staticmethod
+    def reads(link: Link, plan: str) -> list[str]:
+        """The module fields a Python provider sets that the plan's compiled rules, audiences,
+        shapes, domains and levels read: the columns the plan given to `Rules` must hold."""
     def judge(self, rule: int) -> list[Row]:
         """Every destination an edge, entrypoint or signature rule does not judge clean, in judging
         order."""
@@ -228,8 +232,9 @@ class Rules:
         """What a layout rule or an entity inventory reports on its entities, in order, as data the
         rule words: (what, subject, module, count, identity), what "finding", "unknown-selection"
         or "unknown-value"."""
-    def level_groups(self, group_by: str, select: str | None = None) -> list[str]:
-        """The groups a level judges: `group_by` known on a graph module whose `select` is true."""
+    def level_groups(self, level: int) -> list[str]:
+        """The groups a level of the plan judges: its group field known on a graph module whose
+        `select` is true."""
     def kind_members(self, name: str) -> list[str]:
         """Every name a kind holds, sorted."""
     def layout_roots(self, within: str) -> list[str]:

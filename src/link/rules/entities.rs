@@ -195,39 +195,14 @@ impl Rules {
         Ok(out)
     }
 
-    /// `LevelEvaluator.groups`: the text of field `group_by` on every graph module where it is
-    /// known and the level's `select` (a plan tree as JSON, or none) is true, sorted.
-    pub fn level_groups(
-        &self,
-        link: &Link,
-        group_by: &str,
-        select: Option<&str>,
-    ) -> Result<Vec<String>, String> {
-        let names: Vec<String> = self
-            .labels
-            .fields
-            .iter()
-            .map(|field| field.name.clone())
-            .collect();
-        let entity = Compiler {
-            fields: &names,
-            it: &link.core.it,
-            reading: super::selector::Reading::Entity,
-        };
-        let node = match select {
-            None => None,
-            Some(text) => {
-                let tree: super::plan::NodePlan = serde_json::from_str(text)
-                    .map_err(|error| format!("a selector that does not parse: {error}"))?;
-                Some(entity.node(&tree)?)
-            }
-        };
-        let field = entity.reference(&[group_by.to_string()]);
-        let mut refs = vec![field];
-        if let Some(node) = &node {
-            node.refs(&mut refs);
-        }
-        super::check_columns(&self.labels, "a level", &refs)?;
+    /// `LevelEvaluator.groups`: the text of level `index`'s group field on every graph module
+    /// where it is known and the level's `select` is true, sorted.
+    pub fn level_groups(&self, link: &Link, index: usize) -> Result<Vec<String>, String> {
+        let level = self
+            .levels
+            .get(index)
+            .ok_or_else(|| format!("no level {index} in the plan"))?;
+        let (field, select) = (level.field, level.select.as_ref());
         let cx = Cx { link, rules: self };
         let mut out: Vec<String> = Vec::new();
         for (at, module) in self.modules.iter().enumerate() {
@@ -245,7 +220,7 @@ impl Rules {
                 Value::Unknown | Value::None => continue,
                 other => return Err(format!("a level groups by a field read as {other:?}")),
             };
-            if let Some(node) = &node
+            if let Some(node) = select
                 && evaluate(node, &env) != Truth::True
             {
                 continue;
