@@ -7,6 +7,7 @@ levels last (they read every result). Nothing here deletes an edge.
 from __future__ import annotations
 
 import datetime
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -256,11 +257,11 @@ class Engine:
             spec = self.config.rules.get(rule_id)
             if spec is None or not spec.ledger:
                 continue
-            for finding in run.findings:
-                if finding.status is FindingStatus.ALLOWED or not finding.ledgerable:
-                    continue
-                key = finding.ledger_key
-                lines[key] = lines.get(key, 0) + 1 if spec.counted else 1
+            identities = run.findings.identities
+            # Counted per identity place, in the order of each identity's first row.
+            for place, count in Counter(run.findings.counted_places()).items():
+                key = (rule_id, identities[place])
+                lines[key] = lines.get(key, 0) + count if spec.counted else 1
         return lines
 
     def mark_accepted(self, result: RunResult, recorded: dict[LineKey, int]) -> None:
