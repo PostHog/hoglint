@@ -1,10 +1,11 @@
 """A rule's findings as a table (D58).
 
-Every row has its identity (by place among the table's identities) and its flags. A row is either
-a `Finding` the rule's own code made, or a row of the native evaluator's columns (`RowSource`),
-from which a `Finding` is made only when a reader asks for that row. One check makes about 40,000
-findings and prints a few, so the readers of every row (exceptions, scan lines, accepted marks,
-levels, the stored summary) read the columns.
+Every row has its identity (by place among the table's identities) and its flags, and comes from
+one of the table's sources (`RowSource`): the `Finding` objects the rule's own code made
+(`ObjectRows`), or the native evaluator's columns, from which a `Finding` is made only when a
+reader asks for that row. One check makes about 40,000 findings and prints a few, so the readers
+of every row (exceptions, scan lines, accepted marks, levels, the stored summary) read the
+columns.
 
 Status is kept as marks: the rows an exception allows, and the identities the ledger accepts. No
 row is copied to change it.
@@ -19,28 +20,66 @@ from typing import Protocol
 
 from hoglint.model import Edge, Finding, FindingStatus, WitnessRow
 
-NO_ROW = -1
+# The place of a table's own `ObjectRows` among its sources.
+OBJECTS = 0
 
 
 class RowSource(Protocol):
-    """The evaluator's rows of one rule: what a table reads of a row it did not get as a Finding."""
+    """Where some rows of a table come from: what the table reads of a row besides its identity
+    and flags."""
 
-    identities: list[tuple[str, ...]]
-    identity_at: array[int]
-    ledgerable: bytes
-    unknown: bytes
+    def finding(self, at: int, identity: tuple[str, ...]) -> Finding:
+        """Row `at` as a Finding with status new."""
+        ...
 
-    def finding(self, at: int, identity: tuple[str, ...], status: FindingStatus) -> Finding: ...
+    def witnesses(self, at: int) -> tuple[Edge, ...]: ...
 
-    def edge_id(self, at: int) -> int: ...
-
-    def edge(self, at: int) -> Edge: ...
+    def witness_ids(self, at: int) -> tuple[int, ...]: ...
 
     def subjects(self, at: int) -> tuple[str, ...]: ...
 
     def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
         """The witness rows, owner module and subjects of rows `ats`, read in bulk."""
         ...
+
+
+class RowColumns(RowSource, Protocol):
+    """A source that gives its rows' identities and flags as columns, for a table to copy."""
+
+    identities: list[tuple[str, ...]]
+    identity_at: array[int]
+    ledgerable: bytes
+    unknown: bytes
+
+
+class ObjectRows:
+    """The rows a rule's own code made, as `Finding` objects."""
+
+    __slots__ = ("objects",)
+
+    def __init__(self) -> None:
+        self.objects: list[Finding] = []
+
+    def add(self, finding: Finding) -> int:
+        self.objects.append(finding)
+        return len(self.objects) - 1
+
+    def finding(self, at: int, identity: tuple[str, ...]) -> Finding:
+        return self.objects[at]
+
+    def witnesses(self, at: int) -> tuple[Edge, ...]:
+        return self.objects[at].witnesses
+
+    def witness_ids(self, at: int) -> tuple[int, ...]:
+        return self.objects[at].witness_ids
+
+    def subjects(self, at: int) -> tuple[str, ...]:
+        return self.objects[at].subjects
+
+    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+        found = [self.objects[at] for at in ats]
+        owners = [finding.owner.module if finding.owner is not None else None for finding in found]
+        return [finding.witness_rows for finding in found], owners, [finding.subjects for finding in found]
 
 
 class FindingTable:
@@ -56,30 +95,33 @@ class FindingTable:
         "made",
         "objects",
         "places",
-        "source",
         "source_at",
+        "source_of",
+        "sources",
+        "taken",
         "unknown",
     )
 
     def __init__(self) -> None:
         self.identities: list[tuple[str, ...]] = []
-        self.places: dict[tuple[str, ...], int] | None = None
+        self.places: dict[tuple[str, ...], int] = {}
         self.identity_at = array("I")
         self.ledgerable = bytearray()
         self.unknown = bytearray()
         self.allowed = bytearray()
         self.accepted: set[int] = set()
-        self.objects: dict[int, Finding] = {}
-        self.source: RowSource | None = None
-        self.source_at = array("i")
+        self.objects = ObjectRows()
+        self.sources: list[RowSource] = [self.objects]
+        # Each source `take` added, by its place among `sources`, with the table's place of each
+        # of its identities.
+        self.taken: dict[int, tuple[RowColumns, list[int]]] = {}
+        # Per row: its source's place among `sources`, and its place in that source.
+        self.source_of = array("B")
+        self.source_at = array("I")
         # Rows given as a Finding with their status, made when a reader asks; a mark empties it.
         self.made: dict[int, Finding] = {}
 
     def place(self, identity: tuple[str, ...]) -> int:
-        if self.places is None:
-            self.places = {}
-            for at, known in enumerate(self.identities):
-                self.places.setdefault(known, at)
         found = self.places.get(identity)
         if found is None:
             found = self.places[identity] = len(self.identities)
@@ -88,36 +130,32 @@ class FindingTable:
 
     def append(self, finding: Finding) -> None:
         """A row the rule's own code made."""
-        row = len(self.identity_at)
         self.identity_at.append(self.place(finding.identity))
         self.ledgerable.append(finding.ledgerable)
         self.unknown.append(finding.unknown)
         self.allowed.append(0)
-        self.source_at.append(NO_ROW)
-        self.objects[row] = finding
+        self.source_of.append(OBJECTS)
+        self.source_at.append(self.objects.add(finding))
 
     def extend(self, findings: Iterable[Finding]) -> None:
         for finding in findings:
             self.append(finding)
 
-    def take(self, source: RowSource) -> None:
-        """Makes `source` the table's evaluator rows; `add_rows` then adds them by place."""
-        assert self.source is None, "a table takes the evaluator's rows of one call"
-        self.source = source
-        if self.identities:
-            raise ValueError("the evaluator's rows come before any other row of their rule")
-        self.identities.extend(source.identities)
+    def take(self, source: RowColumns) -> int:
+        """Makes `source` one of the table's sources; returns its place, which `add_rows` takes."""
+        number = len(self.sources)
+        self.sources.append(source)
+        self.taken[number] = (source, [self.place(identity) for identity in source.identities])
+        return number
 
-    def add_rows(self, start: int, stop: int) -> None:
-        """Rows `start` to `stop` of the evaluator's columns, in order."""
-        source = self.source
-        assert source is not None
-        if start >= stop:
-            return
-        self.identity_at.extend(source.identity_at[start:stop])
+    def add_rows(self, number: int, start: int, stop: int) -> None:
+        """Rows `start` to `stop` of the columns of source `number`, in order."""
+        source, places = self.taken[number]
+        self.identity_at.extend([places[at] for at in source.identity_at[start:stop]])
         self.ledgerable.extend(source.ledgerable[start:stop])
         self.unknown.extend(source.unknown[start:stop])
         self.allowed.extend(bytes(stop - start))
+        self.source_of.extend(bytes([number]) * (stop - start))
         self.source_at.extend(range(start, stop))
 
     def __len__(self) -> int:
@@ -150,12 +188,9 @@ class FindingTable:
         found = self.made.get(row)
         if found is not None:
             return found
+        made = self.sources[self.source_of[row]].finding(self.source_at[row], self.identity(row))
         status = self.status(row)
-        made = self.objects.get(row)
-        if made is None:
-            assert self.source is not None
-            made = self.source.finding(self.source_at[row], self.identity(row), status)
-        elif made.status is not status:
+        if made.status is not status:
             made = dataclasses.replace(made, status=status)
         self.made[row] = made
         return made
@@ -180,30 +215,18 @@ class FindingTable:
         return [at[row] for row in range(len(at)) if self.ledgerable[row] and not self.allowed[row]]
 
     def witnesses(self, row: int) -> tuple[Edge, ...]:
-        made = self.objects.get(row)
-        if made is not None:
-            return made.witnesses
-        assert self.source is not None
-        return (self.source.edge(self.source_at[row]),)
+        return self.sources[self.source_of[row]].witnesses(self.source_at[row])
 
     def witness_ids(self) -> array[int]:
         """The witnesses' edge ids, row by row."""
         out = array("I")
+        sources, source_of, source_at = self.sources, self.source_of, self.source_at
         for row in range(len(self.identity_at)):
-            made = self.objects.get(row)
-            if made is not None:
-                out.extend(made.witness_ids)
-                continue
-            assert self.source is not None
-            out.append(self.source.edge_id(self.source_at[row]))
+            out.extend(sources[source_of[row]].witness_ids(source_at[row]))
         return out
 
     def subjects(self, row: int) -> tuple[str, ...]:
-        made = self.objects.get(row)
-        if made is not None:
-            return made.subjects
-        assert self.source is not None
-        return self.source.subjects(self.source_at[row])
+        return self.sources[self.source_of[row]].subjects(self.source_at[row])
 
     def statuses(self) -> list[FindingStatus]:
         """Every row's status, in order."""
@@ -211,22 +234,14 @@ class FindingTable:
 
     def stored_parts(self) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
         """Every row's witness rows, owner module and subjects, in order: what a stored summary
-        keeps of a row besides its identity, status and flags."""
-        source, objects = self.source, self.objects
-        if source is not None and not objects:
-            return source.parts(self.source_at)
+        keeps of a row besides its identity, status and flags. Each source reads its rows in bulk."""
         count = len(self.identity_at)
         witnesses: list[tuple[WitnessRow, ...]] = [()] * count
         owners: list[str | None] = [None] * count
         subjects: list[tuple[str, ...]] = [()] * count
-        for row, finding in objects.items():
-            witnesses[row] = finding.witness_rows
-            owners[row] = finding.owner.module if finding.owner is not None else None
-            subjects[row] = finding.subjects
-        if source is None:
-            return witnesses, owners, subjects
-        rows = [row for row in range(count) if row not in objects]
-        found = source.parts([self.source_at[row] for row in rows])
-        for row, witness, owner, subject in zip(rows, *found, strict=True):
-            witnesses[row], owners[row], subjects[row] = witness, owner, subject
+        for number, source in enumerate(self.sources):
+            rows = [row for row in range(count) if self.source_of[row] == number]
+            found = source.parts([self.source_at[row] for row in rows])
+            for row, witness, owner, subject in zip(rows, *found, strict=True):
+                witnesses[row], owners[row], subjects[row] = witness, owner, subject
         return witnesses, owners, subjects

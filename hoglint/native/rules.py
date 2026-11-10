@@ -20,7 +20,7 @@ from hoglint.config.model import Config, RuleSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, FindingStatus, Graph, Owners, Remedy, Shown, WitnessRow
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
@@ -310,7 +310,7 @@ def u32s(raw: bytes) -> array[int]:
 class JudgedRows:
     """A judged rule's rows as the evaluator gives them (`Rules.judge`): columns, with each
     judgment, identity and module once. The rows whose judgment the rule takes as a finding
-    (`EdgeRule.found`) are a `RowSource` of the rule's table: a `Finding` is made for one of them
+    (`EdgeRule.found`) are a `RowColumns` source of the rule's table: a `Finding` is made for one of them
     only when a reader asks for it."""
 
     __slots__ = (
@@ -364,9 +364,6 @@ class JudgedRows:
     def judgment(self, at: int) -> Judgment:
         return self.judgments[self.judgment_at[at]]
 
-    def edge_id(self, at: int) -> int:
-        return self.edges[at]
-
     def edge_rows(self) -> RowEdges:
         """The edges of the rows the rule takes as findings."""
         if self.row_edges is None:
@@ -378,8 +375,11 @@ class JudgedRows:
     def handle(self, at: int) -> EdgeHandle:
         return EdgeHandle(self.edge_rows(), self.edges[at])
 
-    def edge(self, at: int) -> Edge:
-        return self.handle(at).get()
+    def witnesses(self, at: int) -> tuple[Edge, ...]:
+        return (self.handle(at).get(),)
+
+    def witness_ids(self, at: int) -> tuple[int, ...]:
+        return (self.edges[at],)
 
     def src(self, at: int) -> str:
         return self.modules[self.src_at[at]]
@@ -417,14 +417,13 @@ class JudgedRows:
     def rejudged(self, at: int, identity: tuple[str, ...]) -> Rejudged:
         return Rejudged(self.rule, self.handle(at), self.judgment(at), identity, self.targets[at])
 
-    def finding(self, at: int, identity: tuple[str, ...], status: FindingStatus) -> Finding:
+    def finding(self, at: int, identity: tuple[str, ...]) -> Finding:
         handle = self.handle(at)
         return Finding(
             rule=self.rule.spec.id,
             identity=identity,
             detail=self.rejudged(at, identity),
             owner=self.ctx.owner(self.src(at)),
-            status=status,
             subjects=self.subjects(at),
             ledgerable=bool(self.ledgerable[at]),
             unknown=bool(self.unknown[at]),
@@ -550,15 +549,15 @@ class NativeRuleContext(RuleContext):
             return False
         rows = JudgedRows(self, rule, self.run_rule(self.evaluator.judge, rule))
         table = rule.run.findings
-        table.take(rows)
+        number = table.take(rows)
         self.judged_rows.append(rows)
         start = 0
         for at, reported in self.alone_reports(rule, rows):
-            table.add_rows(start, at)
+            table.add_rows(number, start, at)
             table.extend(reported.findings)
             rule.run.incomplete.extend(reported.incomplete)
             start = at + 1
-        table.add_rows(start, len(rows.edges))
+        table.add_rows(number, start, len(rows.edges))
         return True
 
     def export_run(self, rule: ExportPrimitive) -> RuleRun:
