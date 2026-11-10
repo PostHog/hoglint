@@ -295,10 +295,19 @@ def distinct_ids(ids: Iterable[int]) -> array[int]:
     return array("I", dict.fromkeys(ids))
 
 
+def confirmed_row(finding: Finding) -> tuple[object, ...]:
+    """What a ledger write holds the evaluator to of a finding: its identity, subjects and flags."""
+    return finding.identity, finding.subjects, finding.ledgerable, finding.unknown
+
+
 def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
-    """What a ledger write holds the evaluator to: each finding's identity, subjects and flags,
-    and each incomplete item, in order."""
-    return [*((f.identity, f.subjects, f.ledgerable, f.unknown) for f in run.findings), *run.incomplete]
+    """What a ledger write holds the evaluator to of a run: each finding (`confirmed_row`) and each
+    incomplete item, in order."""
+    return [*(confirmed_row(finding) for finding in run.findings), *run.incomplete]
+
+
+# The detail of a finding a ledger write makes only to compare it (`confirmed_row`).
+NO_DETAIL = FindingDetail("", None)
 
 
 def u32s(raw: bytes) -> array[int]:
@@ -441,28 +450,26 @@ class JudgedRows:
         )
 
     def confirm(self, judge: EdgeRule) -> None:
-        """Every row judged again by `judge` (D50, D55): a row the rule takes as a finding must
-        give its judgment, identity and subjects, and a row the rule's own code reported must give what
-        that code reported over the evaluator's labels."""
+        """Every row judged again by `judge` (D50, D55) over its own labels, and held to what a
+        ledger write keeps of it (`confirmed_row`): a row the rule takes as a finding must give
+        its judgment and identity, and then the finding the rule's own code makes of it; a row
+        that code reported must give what it reported over the evaluator's labels."""
         for at in range(len(self.edges)):
             if at in self.alone_set:
-                continue
-            env = self.rejudged(at, self.identities[self.identity_at[at]]).confirmed(judge)
-            subjects = judge.subjects(env)
-            if subjects != self.subjects(at):
-                site = env.edge.site
-                raise EngineError(
-                    f"rule {judge.spec.id} gives {env.edge.kind} {site.path}:{site.line} the subjects {subjects}, "
-                    f"apart from the evaluator's {self.subjects(at)}"
-                )
-        for at in self.alone:
-            edge = self.alone_edges[self.edges[at]]
-            theirs = judge.recorded([decided(judge, edge, self.targets[at], self.judgment(at))])
-            if confirmed_rows(self.reported[at]) != confirmed_rows(theirs):
+                edge = self.alone_edges[self.edges[at]]
+                ours = confirmed_rows(self.reported[at])
+                theirs = confirmed_rows(judge.recorded([decided(judge, edge, self.targets[at], self.judgment(at))]))
+            else:
+                identity = self.identities[self.identity_at[at]]
+                env = self.rejudged(at, identity).confirmed(judge)
+                edge = env.edge
+                ours = [confirmed_row(self.finding(at, identity))]
+                theirs = [confirmed_row(judge.finding_of(env, self.judgment(at), NO_DETAIL))]
+            if ours != theirs:
                 site = edge.site
                 raise EngineError(
-                    f"rule {judge.spec.id} reports {edge.kind} {site.path}:{site.line} as {confirmed_rows(theirs)} "
-                    f"with its own labels, apart from {confirmed_rows(self.reported[at])} with the evaluator's"
+                    f"rule {judge.spec.id} reports {edge.kind} {site.path}:{site.line} as {theirs} "
+                    f"with its own labels, apart from {ours} with the evaluator's"
                 )
 
 
