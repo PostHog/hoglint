@@ -13,7 +13,17 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from hoglint.config.model import Assignment, Config, Domain, ExportSpec, FieldSpec, KindSpec, ProviderSpec, RegistrySpec
+from hoglint.config.model import (
+    Assignment,
+    Config,
+    Domain,
+    ExportSpec,
+    FieldSpec,
+    KindSpec,
+    LevelSpec,
+    ProviderSpec,
+    RegistrySpec,
+)
 from hoglint.config.schema import canonical
 from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
@@ -679,6 +689,11 @@ class Labeler:
                 truth = spec.audience.evaluate(audience_resolver)
             results.append(truth)
         return any_of(results)
+
+    def level_groups(self, spec: LevelSpec) -> list[str] | None:
+        """The groups a level judges, when a labeler that holds every module's labels finds them
+        itself; else None, and the level reads module by module."""
+        return None
 
     # ── whole-repo pass ──
 

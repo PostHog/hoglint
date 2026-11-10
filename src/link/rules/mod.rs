@@ -1137,7 +1137,7 @@ fn refs_of(node: &Node) -> Vec<Ref> {
 
 /// D43: a reader of a module field a Python provider sets needs that field's column in the
 /// plan. Without it the evaluator would read no label at all, a clean answer nothing checks.
-fn check_columns(labels: &Labels, reader: &str, refs: &[Ref]) -> Result<(), String> {
+pub(crate) fn check_columns(labels: &Labels, reader: &str, refs: &[Ref]) -> Result<(), String> {
     for field in refs.iter().filter_map(|field| field.field()) {
         let spec = &labels.fields[field];
         if spec.provided && !spec.on_symbol && !labels.columns[field] {

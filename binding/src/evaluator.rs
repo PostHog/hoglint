@@ -246,6 +246,21 @@ impl Rules {
             .map_err(PyValueError::new_err)
     }
 
+    /// The groups a level judges: field `group_by` on every graph module where it is known and
+    /// `select` (a plan tree as JSON) is true, sorted.
+    #[pyo3(signature = (group_by, select=None))]
+    fn level_groups(
+        &self,
+        py: Python<'_>,
+        group_by: &str,
+        select: Option<&str>,
+    ) -> PyResult<Vec<String>> {
+        let bound = self.link.bind(py).borrow();
+        self.inner
+            .level_groups(&bound.inner, group_by, select)
+            .map_err(PyValueError::new_err)
+    }
+
     /// The roots a layout rule's `within` names among the graph's module paths, sorted.
     fn layout_roots(&self, py: Python<'_>, within: &str) -> PyResult<Vec<String>> {
         let bound = self.link.bind(py).borrow();

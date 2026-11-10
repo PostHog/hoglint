@@ -1220,3 +1220,22 @@ def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
     assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
     with pytest.raises(EngineError, match="apart from the evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+
+
+LEVELS = (
+    rule_table("crossing", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package"})
+    + '\n[levels.isolated]\ngroup_by = "package"\nselect = "tier != \'leaf\'"\nrequires = ["crossing"]\n'
+    + '\n[levels.zoned]\ngroup_by = "zone"\nrequires = ["crossing"]\nstrict = ["crossing"]\n'
+)
+
+
+def test_a_level_judges_the_groups_the_python_level_judges(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    def levels() -> dict[str, tuple[list[str], dict[str, list[str]]]]:
+        result = Engine(config, world.graph, world.repo).evaluate()
+        return {name: (level.passing, dict(level.failing)) for name, level in result.levels.items()}
+
+    config = world.config(LEVELS)
+    native = levels()
+    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
+    assert native == levels()
+    assert all(passing or failing for passing, failing in native.values())

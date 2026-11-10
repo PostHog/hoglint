@@ -7,11 +7,15 @@ from its columns, and the Python label pass runs only to word a conflict and for
 
 from __future__ import annotations
 
+import json
 from array import array
 from typing import Any
 
+from hoglint.config.model import LevelSpec
 from hoglint.labels import Labeler
-from hoglint.selectors import NONE, UNKNOWN, Value
+from hoglint.ledger.envelope import EngineError
+from hoglint.native.plan import tree
+from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
 # A module's place in a column where the evaluator has no value for Python to take.
 NO_PLACE = 0xFFFFFFFF
@@ -90,6 +94,18 @@ class NativeLabeler(Labeler):
         if name == "registry":
             return Value.known(spec.name)
         return Value.known(spec.lifecycle) if spec.lifecycle else NONE
+
+    def level_groups(self, spec: LevelSpec) -> list[str] | None:
+        """The evaluator's groups of a level, when its group field is not a set: `known_text` of
+        a set follows Python's `str()` of a frozenset, which only Python writes."""
+        field = self.config.fields.get(spec.group_by)
+        if self.evaluator is None or field is None or field.type is FieldType.SET:
+            return None
+        select = json.dumps(tree(spec.select.node)) if spec.select is not None else None
+        try:
+            return self.evaluator.level_groups(spec.group_by, select)
+        except ValueError as error:
+            raise EngineError(f"the native evaluator failed: {error}") from error
 
     def explain(self, module: str) -> list[tuple[str, str, str]]:
         """Every field with the source that set it: the sources are the Python label pass's."""

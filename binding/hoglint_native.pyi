@@ -197,6 +197,8 @@ class Rules:
     def entities(self, rule: int) -> list[tuple[bool, str, str | None, str, list[str]]]:
         """What a layout rule or an entity inventory reports on its entities, in order: (finding
         or not, subject, module, message or reason, identity)."""
+    def level_groups(self, group_by: str, select: str | None = None) -> list[str]:
+        """The groups a level judges: `group_by` known on a graph module whose `select` is true."""
     def layout_roots(self, within: str) -> list[str]:
         """The roots a layout rule's `within` names among the graph's module paths, sorted."""
     def registry_modules(self, pattern: str) -> list[tuple[str, str]]:

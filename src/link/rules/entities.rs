@@ -202,6 +202,68 @@ impl Rules {
         Ok(out)
     }
 
+    /// `LevelEvaluator.groups`: the text of field `group_by` on every graph module where it is
+    /// known and the level's `select` (a plan tree as JSON, or none) is true, sorted.
+    pub fn level_groups(
+        &self,
+        link: &Link,
+        group_by: &str,
+        select: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let names: Vec<String> = self
+            .labels
+            .fields
+            .iter()
+            .map(|field| field.name.clone())
+            .collect();
+        let entity = Compiler {
+            fields: &names,
+            it: &link.core.it,
+            reading: super::selector::Reading::Entity,
+        };
+        let node = match select {
+            None => None,
+            Some(text) => {
+                let tree: super::plan::NodePlan = serde_json::from_str(text)
+                    .map_err(|error| format!("a selector that does not parse: {error}"))?;
+                Some(entity.node(&tree)?)
+            }
+        };
+        let field = entity.reference(&[group_by.to_string()]);
+        let mut refs = vec![field];
+        if let Some(node) = &node {
+            node.refs(&mut refs);
+        }
+        super::check_columns(&self.labels, "a level", &refs)?;
+        let cx = Cx { link, rules: self };
+        let mut out: Vec<String> = Vec::new();
+        for (at, module) in self.modules.iter().enumerate() {
+            let env = EntityEnv {
+                cx,
+                module: Some(*module),
+                at: Some(at as u32),
+                symbol: None,
+                subject: None,
+            };
+            let group = match env.resolve(field) {
+                Value::Text(text) => text.into_owned(),
+                Value::Zone(zone) => zone.name.clone(),
+                Value::Bool(flag) => if flag { "True" } else { "False" }.to_string(),
+                Value::Unknown | Value::None => continue,
+                other => return Err(format!("a level groups by a field read as {other:?}")),
+            };
+            if let Some(node) = &node
+                && evaluate(node, &env) != Truth::True
+            {
+                continue;
+            }
+            out.push(group);
+        }
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
     /// `LayoutPrimitive.roots`: the roots `within` names among the graph's module paths, sorted.
     pub fn layout_roots(&self, link: &Link, within: &str) -> Result<Vec<String>, String> {
         let glob = Glob::new(&format!("{within}/**"))?;

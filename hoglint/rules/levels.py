@@ -77,6 +77,9 @@ class LevelEvaluator:
         return self.labeler.known_text(self.labeler.module_of_symbol(subject) or subject, self.spec.group_by)
 
     def groups(self) -> list[str]:
+        found = self.labeler.level_groups(self.spec)
+        if found is not None:
+            return found
         out: set[str] = set()
         for module in self.labeler.graph.modules:
             group = self.group_of(module)
