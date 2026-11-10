@@ -118,7 +118,7 @@ class FindingTable:
         # Per row: its source's place among `sources`, and its place in that source.
         self.source_of = array("B")
         self.source_at = array("I")
-        # Rows given as a Finding with their status, made when a reader asks; a mark empties it.
+        # Rows made as a Finding when a reader asks, with status new: a mark changes no made row.
         self.made: dict[int, Finding] = {}
 
     def place(self, identity: tuple[str, ...]) -> int:
@@ -184,16 +184,13 @@ class FindingTable:
         return FindingStatus.NEW
 
     def finding(self, row: int) -> Finding:
-        """The row as a Finding with its status."""
-        found = self.made.get(row)
-        if found is not None:
-            return found
-        made = self.sources[self.source_of[row]].finding(self.source_at[row], self.identity(row))
+        """The row as a Finding with its status. A copy shares the made row's detail, so a
+        message made once is not made again."""
+        made = self.made.get(row)
+        if made is None:
+            made = self.made[row] = self.sources[self.source_of[row]].finding(self.source_at[row], self.identity(row))
         status = self.status(row)
-        if made.status is not status:
-            made = dataclasses.replace(made, status=status)
-        self.made[row] = made
-        return made
+        return made if made.status is status else dataclasses.replace(made, status=status)
 
     def rows_with(self, status: FindingStatus) -> list[int]:
         """The rows with `status`, read from the marks and flags, with no row made."""
@@ -201,11 +198,9 @@ class FindingTable:
 
     def allow(self, row: int) -> None:
         self.allowed[row] = 1
-        self.made.clear()
 
     def accept(self, places: Iterable[int]) -> None:
         self.accepted.update(places)
-        self.made.clear()
 
     def counted_places(self) -> list[int] | array[int]:
         """The identity place of each row a ledger counts (ledgerable, not allowed), in order."""
