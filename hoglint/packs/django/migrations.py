@@ -10,7 +10,6 @@ migration body; the graph is then built from the summaries and the settings.
 
 from __future__ import annotations
 
-import os
 import sys
 import hashlib
 from collections import defaultdict
@@ -25,6 +24,7 @@ import orjson
 from hoglint.core import records as records_module
 from hoglint.core.harness import PRODUCER_ERROR, failure_text
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
+from hoglint.ledger.scan import write_atomic
 from hoglint.ledger.store import CacheWarning
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
@@ -193,11 +193,7 @@ class SummaryCache:
                 break
             entries.setdefault(digest, summary)
         try:
-            path = self.root / f"migrations-{summary_code()}.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-            temporary.write_bytes(orjson.dumps(entries))
-            os.replace(temporary, path)
+            write_atomic(self.root / f"migrations-{summary_code()}.json", orjson.dumps(entries))
         except OSError as error:
             self.fail("writing migration summaries", error)
 

@@ -13,7 +13,6 @@ known before a run.
 
 from __future__ import annotations
 
-import os
 import re
 import hashlib
 import tempfile
@@ -26,6 +25,7 @@ from hoglint.config.model import Config
 from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import SOURCE_SUFFIXES, Listing, TreeListing
+from hoglint.ledger.scan import write_atomic
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 
 SOURCE_INPUTS = tuple(f"**/*{suffix}" for suffix in SOURCE_SUFFIXES)
@@ -214,9 +214,6 @@ class InputDigests:
     @staticmethod
     def keep(path: Path, digest: str) -> None:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            written = path.with_name(f".{path.name}.{os.getpid()}")
-            written.write_text(digest)
-            written.replace(path)
+            write_atomic(path, digest.encode())
         except OSError:
             return
