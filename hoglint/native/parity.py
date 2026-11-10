@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hoglint.cli import Runner
 from hoglint.config import CONFIG_FILE, load_config
 from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.file import LedgerFile
@@ -144,10 +145,6 @@ def diff_lines(name: str, left: Iterable[str], right: Iterable[str], fields: Seq
     )
 
 
-def diff_rows(name: str, left: Sequence[Row], right: Sequence[Row], fields: Sequence[str] = ()) -> RowDiff:
-    return diff_lines(name, map(row_text, left), map(row_text, right), fields)
-
-
 def finding_row(finding: Finding) -> Row:
     site = finding.site
     return [
@@ -196,11 +193,11 @@ def summary_rows(sections: dict[str, dict[str, Any]]) -> list[Row]:
     return out
 
 
-def stored_summary(result: RunResult, graph: Graph, repo: Path, exceptions: ExceptionsFile) -> list[Row]:
+def stored_summary(result: RunResult, graph: Graph, roots: tuple[Path, ...], exceptions: ExceptionsFile) -> list[Row]:
     """The run summary as the store writes it (`ScanSummary.to_sections`), built by the code check
     and compare use: with triples, and the couplings and witnesses of a sample of modules."""
     scope = frozenset(sorted(graph.modules)[::SCOPE_STEP])
-    summary = ScanSummary.from_run(result, graph, DUMP_ENVELOPE, scope, True, (repo,), exceptions)
+    summary = ScanSummary.from_run(result, graph, DUMP_ENVELOPE, scope, True, roots, exceptions)
     return summary_rows(summary.to_sections())
 
 
@@ -219,19 +216,23 @@ class Dump:
         self.timings[name] = round(now - started, 3)
         return now
 
-    def check(self) -> tuple[Graph, RunResult, ExceptionsFile]:
+    def check(self) -> tuple[Graph, RunResult, ExceptionsFile, Path]:
         batch_mode(self.engine)
         started = time.perf_counter()
         config = load_config(self.repo, self.repo / CONFIG_FILE)
-        graph = graph_source(self.engine, self.work).build(self.repo, config)
+        source = graph_source(self.engine, self.work)
+        graph = source.build(self.repo, config)
         if not graph.modules:
             raise RuntimeError(f"the {self.engine} engine read no module under {self.repo}: nothing to compare")
         started = self.lap("graph", started)
         ledger = LedgerFile.read(self.repo / config.ledger.file)
         exceptions = ExceptionsFile.read(self.repo / config.ledger.exceptions, config)
-        result = Engine(config, graph, self.repo).evaluate(ledger, exceptions)
+        # The root `check` gives rules and providers: plugin directories of declared inputs, and
+        # existence questions answered from the snapshot's listing.
+        files_root = Runner(source).files_root(self.repo, "", config)
+        result = Engine(config, graph, files_root).evaluate(ledger, exceptions)
         self.lap("rules", started)
-        return graph, result, exceptions
+        return graph, result, exceptions, files_root
 
     def write_lines(self, name: str, rows: Sequence[Any]) -> None:
         with open(self.out / f"{name}.jsonl", "w") as handle:
@@ -241,9 +242,9 @@ class Dump:
 
     def run(self) -> None:
         self.out.mkdir(parents=True, exist_ok=True)
-        graph, result, exceptions = self.check()
+        graph, result, exceptions, files_root = self.check()
         started = time.perf_counter()
-        summary = stored_summary(result, graph, self.repo, exceptions)
+        summary = stored_summary(result, graph, (self.repo, files_root), exceptions)
         started = self.lap("summary", started)
         self.write_lines("findings", [finding_row(f) for f in result.findings()])
         self.write_lines("incomplete", [incomplete_row(item) for item in result.incomplete()])
@@ -262,16 +263,15 @@ class Dump:
         (self.out / "timings.json").write_text(json.dumps(self.timings))
 
 
-def read_lines(path: Path) -> list[Row]:
-    with open(path) as handle:
-        return [json.loads(line) for line in handle]
-
-
 def row_texts(path: Path) -> Iterator[str]:
     """The rows of a dump file as the JSON text `Dump.write_lines` wrote, one at a time."""
     with open(path) as handle:
         for line in handle:
             yield line.removesuffix("\n")
+
+
+def read_lines(path: Path) -> list[Row]:
+    return [json.loads(text) for text in row_texts(path)]
 
 
 def compare_dumps(left: Path, right: Path) -> list[RowDiff]:
@@ -283,7 +283,7 @@ def compare_dumps(left: Path, right: Path) -> list[RowDiff]:
     for name in VALUE_OUTPUTS:
         a = json.loads((left / f"{name}.json").read_text())
         b = json.loads((right / f"{name}.json").read_text())
-        diffs.append(diff_rows(name, [a], [b]))
+        diffs.append(diff_lines(name, [row_text(a)], [row_text(b)]))
     return diffs
 
 
