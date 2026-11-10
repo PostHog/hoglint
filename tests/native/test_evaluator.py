@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
+from hoglint.config.schema import RULE_KEYS, UNREAD_KEYS, SchemaBuilder
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
@@ -783,83 +784,244 @@ def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
     return f"not {text}" if rng.random() < 0.2 else text
 
 
-def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
-    primitive = rng.choice(
-        ["edge", "edge", "entrypoint", "use-shape", "cycle", "signature", "export", "coverage", "entities"]
-    )
-    if primitive == "entities":
-        table: dict[str, Any] = {
-            "primitive": rng.choice(["layout", "inventory"]),
-            "identity": rng.sample(ENTITY_REFS, rng.randint(1, 2)),
-            "ledger": False,
+# A rule mode: a primitive, or an inventory over edges or over entities. Each draws its keys from
+# the schema's list for its primitive (`RULE_KEYS`).
+MODES = {
+    "edge": "edge",
+    "entrypoint": "entrypoint",
+    "use-shape": "use-shape",
+    "signature": "signature",
+    "export": "export",
+    "reach": "reach",
+    "cycle": "cycle",
+    "layout": "layout",
+    "coverage": "coverage",
+    "inventory-classify": "inventory",
+    "inventory-exactly-one": "inventory",
+}
+ENTITY_MODES = frozenset({"layout", "coverage", "inventory-exactly-one"})
+# The key that makes a mode what it is, and keys a mode cannot load without.
+MODE_KEYS = {"inventory-classify": "classify", "inventory-exactly-one": "exactly_one"}
+NEEDED = {"coverage": frozenset({"covers", "inputs"})}
+# Modes whose findings a coverage rule's `rules.<id>.<column>` cover may name.
+NAMED_MODES = ["reach", "cycle", "export", "inventory-classify", "inventory-exactly-one", "edge"]
+UNKNOWN_TYPES = ["typing.Any", "builtins.dict", "products.billing.backend.models.Loose"]
+CONTEXT_PARTS = [{"exclude": ["test"]}, {"include": ["prod"]}, {"exclude": []}, {"include": ["test", "prod"]}]
+
+
+def unread_keys(mode: str) -> frozenset[str]:
+    """The keys the schema refuses for a mode: it accepts them for the primitive, but the
+    mode's rule code never reads them."""
+    table = {"classify": "c"} if mode == "inventory-classify" else {}
+    return UNREAD_KEYS.get(SchemaBuilder.rule_mode(table, MODES[mode]), frozenset())
+
+
+class Tables:
+    """Rule tables generated from the schema's key lists: in each mode, every key `RULE_KEYS`
+    accepts for its primitive is set in some tables and left out of others, a key the mode
+    never reads too (the load then refuses the table). A key with no value here stops the
+    generator, so the schema cannot outgrow it. `drawn` records (mode, keys) of each table."""
+
+    def __init__(self, rng: random.Random, refs: list[str] = REFS) -> None:
+        self.rng = rng
+        self.refs = refs
+        self.drawn: list[tuple[str, frozenset[str]]] = []
+
+    def selector(self, mode: str, key: str) -> str:
+        rng = self.rng
+        if mode in ENTITY_MODES and key != "from":
+            return selector(rng, ENTITY_REFS)
+        if key == "from" and mode == "reach":
+            module_refs = [
+                ref for ref in self.refs if ref.startswith("src.") and ref not in ("src.context", "src.exported")
+            ]
+            return selector(rng, module_refs)
+        if key == "from":
+            return selector(rng, [ref for ref in self.refs if not ref.startswith("dst.")])
+        return selector(rng, self.refs)
+
+    def identity(self, mode: str) -> list[str]:
+        rng = self.rng
+        if mode == "coverage":
+            return rng.sample(["subject", "package", "tier", "zone", "path"], rng.randint(1, 2))
+        if mode in ENTITY_MODES:
+            return rng.sample(ENTITY_REFS, rng.randint(1, 2))
+        if mode == "export":
+            return rng.sample([*self.refs, "edge.label", "edge.kind"], rng.randint(1, 3))
+        return rng.sample(self.refs, rng.randint(1, 3))
+
+    def kinds(self, mode: str) -> list[str]:
+        rng = self.rng
+        if mode == "use-shape":
+            return ["reference"] if rng.random() < 0.8 else ["reference", "uses"]
+        if mode == "signature":
+            return ["exposes"] if rng.random() < 0.8 else ["exposes", "import"]
+        return rng.sample(["import", "reference", "uses", "declares", "inherit"], rng.randint(1, 3))
+
+    def covers(self, named: str) -> list[str]:
+        """An edge selection with a kind pin, one with none, one on contexts only, and the
+        columns of the rule `named` (empty when there is none)."""
+        rng = self.rng
+        pool = [
+            f"edge.kind in ['import', 'uses'] and {selector(rng, self.refs, 1)}: {rng.choice(['src', 'dst'])}",
+            f"{selector(rng, self.refs, 1)}: {rng.choice(['src', 'dst'])}",
+            "edge.context == 'test': dst",
+        ]
+        if named:
+            pool += [f"rules.{named}.{column}" for column in ("dst.path", "src.path", "edge.surface", "dst.module")]
+        return rng.sample(pool, rng.randint(1, 3))
+
+    def value(self, mode: str, key: str, named: str) -> Any:
+        rng = self.rng
+        on_any = ["finding", "block", "incomplete"]
+        makers = {
+            "doc": lambda: "generated",
+            "report": lambda: rng.choice(["blocking", "advisory"]),
+            "ledger": lambda: rng.random() < 0.2,
+            "identity": lambda: self.identity(mode),
+            "counted": lambda: rng.random() < 0.5,
+            "remedy": lambda: "go through the facade",
+            "requires": lambda: ["flows.flow"],
+            "on_unresolved": lambda: rng.choice(on_any),
+            "on_unknown": lambda: rng.choice(on_any),
+            "kinds": lambda: self.kinds(mode),
+            "contexts": lambda: rng.choice(CONTEXT_PARTS),
+            "view": lambda: rng.choice(["refs", "file-imports", "zones", "packages"]),
+            "endpoint": lambda: rng.choice(["origin", "origin", "surface", "via"]),
+            "from": lambda: self.selector(mode, "from"),
+            "select": lambda: self.selector(mode, "select"),
+            "deny": lambda: self.selector(mode, "deny"),
+            "allow": lambda: self.selector(mode, "allow"),
+            "require": lambda: self.selector(mode, "require"),
+            "unless": lambda: self.selector(mode, "unless"),
+            "flow": lambda: rng.choice(["def-use", "def-use", "syntax"]),
+            "resolve_calls": lambda: rng.choice(["bare-name", "import"]),
+            "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
+            "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
+            "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
+            "exports": lambda: rng.sample(["facade", "adapter"], rng.randint(1, 2)),
+            "on": lambda: rng.choice(["module", "symbol"]),
+            "within": lambda: "products/{product}",
+            "files": lambda: rng.sample(["backend/__init__.py", "backend/nothing.py"], rng.randint(1, 2)),
+            "absent": lambda: rng.sample(["backend/models.py", "backend/legacy.py"], rng.randint(1, 2)),
+            "registry": lambda: ["routes"],
+            "covers": lambda: self.covers(named),
+            "inputs": lambda: {"adapter": "globs", "paths": [rng.choice(["core/**", "products/**"])]},
+            "classify": lambda: "policy/classified.toml",
+            "exactly_one": lambda: rng.choice(
+                [ref[4:] for ref in self.refs if ref in ("src.owners", "src.team")] + ["tier"]
+            ),
         }
-        if table["primitive"] == "inventory":
-            table["exactly_one"] = rng.choice(["owners", "tier"])
-        table["on"] = "symbol" if rng.random() < 0.4 else "module"
-        if rng.random() < 0.8:
-            table["select"] = selector(rng, ENTITY_REFS)
-        if table["primitive"] == "layout":
-            table["require"] = selector(rng, ENTITY_REFS)
+        return makers[key]()
+
+    def chance(self, mode: str, key: str) -> float:
+        if key == MODE_KEYS.get(mode) or key in NEEDED.get(mode, ()):
+            return 1.0 if key in MODE_KEYS.values() else 0.95
+        if key in unread_keys(mode):
+            return 0.08
+        return 0.85 if key == "identity" else 0.5
+
+    def table(self, mode: str, named: str = "") -> dict[str, Any]:
+        """A table of `mode`; a ledgered one mostly with the identity and growth key it needs."""
+        rng = self.rng
+        table: dict[str, Any] = {"primitive": MODES[mode]}
+        for key in sorted(RULE_KEYS[MODES[mode]] - {"primitive", "growth_key"}):
+            if rng.random() < self.chance(mode, key):
+                table[key] = self.value(mode, key, named)
+        if table.get("ledger", True) and "identity" not in table and rng.random() < 0.9:
+            table["identity"] = self.identity(mode)
+        if "identity" in table and rng.random() < 0.95:
+            table["growth_key"] = table["identity"][:1]
+        self.drawn.append((mode, frozenset(table)))
         return table
-    if primitive == "coverage":
-        return {
-            "primitive": "coverage",
-            "covers": [f"{selector(rng, refs)}: {rng.choice(['src', 'dst'])}" for _ in range(rng.randint(1, 2))],
-            "inputs": {"adapter": "globs", "paths": [rng.choice(["core/**", "products/**"])]},
-            "identity": rng.sample(["subject", "package", "tier", "zone", "path"], rng.randint(1, 2)),
-            "ledger": False,
-        }
-    if primitive == "export":
-        return {
-            "primitive": "export",
-            "exports": rng.sample(["facade", "adapter"], rng.randint(1, 2)),
-            "on_unknown": rng.choice(["finding", "block", "incomplete"]),
-            "on_unresolved": rng.choice(["finding", "block", "incomplete"]),
-            "unknown_types": rng.sample(["typing.Any", "builtins.dict", "products.billing.backend.models.Loose"], 1),
-            "identity": rng.sample([*refs, "edge.label", "edge.kind"], rng.randint(1, 3)),
-            "ledger": False,
-            **({"contexts": {"exclude": ["test"]}} if rng.random() < 0.3 else {}),
-        }
-    spec: dict[str, Any] = {
-        "primitive": primitive,
-        "kinds": rng.sample(["import", "reference", "uses", "declares", "inherit"], rng.randint(1, 3)),
-        "identity": rng.sample(refs, rng.randint(1, 3)),
-        "ledger": False,
-    }
-    if primitive in ("edge", "entrypoint"):
-        spec["endpoint"] = rng.choice(["origin", "origin", "surface", "via"])
-    if primitive in ("edge", "entrypoint", "signature"):
-        spec["on_unresolved"] = rng.choice(["finding", "block", "incomplete"])
-    if primitive == "signature":
-        spec["kinds"] = ["exposes"] if rng.random() < 0.8 else [*spec["kinds"], "exposes"]
-        spec["on_unknown"] = rng.choice(["finding", "block", "incomplete"])
-        spec["unknown_types"] = rng.sample(["typing.Any", "builtins.dict", "products.billing.backend.models.Loose"], 2)
-    predicates = ("deny", "allow", "unless") if primitive in ("edge", "entrypoint") else ("deny", "unless")
-    for key in ("from", "select", *predicates):
-        if rng.random() < 0.45 and (primitive in ("edge", "entrypoint", "signature") or key in ("from", "select")):
-            spec[key] = selector(rng, refs)
-    if primitive == "use-shape":
-        spec["deny_shapes"] = ["write"]
+
+    def level(self, name: str) -> str:
+        """A level that requires rule `name`, grouped by a field this config declares; a field a
+        provider sets when one does."""
+        rng = self.rng
+        fields = ["package", "tier", "zone", "testcode", "owners"]
+        fields += [ref[4:] for ref in self.refs if ref in ("src.team", "src.lead")] * 3
+        lines = [f"\n[levels.{name}-level]", f'group_by = "{rng.choice(fields)}"', f'requires = ["{name}"]']
         if rng.random() < 0.5:
-            spec["flow"] = "def-use"
-    if rng.random() < 0.3:
-        spec["contexts"] = {"exclude": ["test"]}
-    return spec
+            lines.append(f"select = {render_toml(selector(rng, ENTITY_REFS, 1))}")
+        if rng.random() < 0.3:
+            lines.append(f'strict = ["{name}"]')
+        return "\n".join(lines) + "\n"
+
+    def rules(self, name: str, mode: str = "") -> str:
+        """Rule `name` of `mode`, or of a mode drawn at random, as TOML: a coverage rule after
+        the rule its covers may name, and sometimes a level that requires the rule."""
+        rng = self.rng
+        mode = mode or rng.choice(list(MODES))
+        out = ""
+        named = ""
+        if mode == "coverage" and rng.random() < 0.7:
+            named = f"{name}-named"
+            out += rule_table(named, {**self.table(rng.choice(NAMED_MODES)), "ledger": False})
+        out += rule_table(name, self.table(mode, named))
+        if rng.random() < 0.3:
+            out += self.level(name)
+        return out
 
 
-def test_generated_rules_are_judged_the_same_in_both(world: World) -> None:
-    rng = random.Random(20261110)
-    judged = 0
-    failures = []
-    while judged < 60:
-        rules = rule_table("generated", generated(rng))
+def schema_gaps(drawn: list[tuple[str, frozenset[str], bool]]) -> list[str]:
+    """Each mode's keys a generated test left out of its reach: a key no table set, one every
+    table set, an accepted key no loaded table held, or a key the mode never reads that loaded."""
+    out = []
+    for mode, primitive in MODES.items():
+        tables = [(keys, loaded) for drawn_mode, keys, loaded in drawn if drawn_mode == mode]
+        unread = unread_keys(mode)
+        for key in sorted(RULE_KEYS[primitive] - {"primitive"}):
+            held = [loaded for keys, loaded in tables if key in keys]
+            # The key that picks an inventory's mode is left out only in the other mode.
+            if not held or (len(held) == len(tables) and key != MODE_KEYS.get(mode)):
+                out.append(f"{mode}: `{key}` is set in {len(held)} of {len(tables)} tables")
+            elif key in unread and any(held):
+                out.append(f"{mode}: `{key}` loaded, though the mode never reads it")
+            elif key not in unread and not any(held):
+                out.append(f"{mode}: no table with `{key}` loaded")
+    return out
+
+
+def level_differences(world: World, config: Config, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Where the two engines differ on a whole evaluation's levels, or on the config error it
+    stops with."""
+
+    def outcome() -> list[str]:
         try:
-            world.config(rules)
-        except ConfigError:
-            continue
-        judged += 1
+            result = Engine(config, world.graph, world.repo).evaluate()
+        except ConfigError as error:
+            return sorted(error.problems)
+        return [f"{name}: {level.passing} {dict(level.failing)}" for name, level in result.levels.items()]
+
+    native = outcome()
+    with monkeypatch.context() as patched:
+        patched.setattr(engine, "context_class", lambda index: RuleContext)
+        python = outcome()
+    return [] if native == python else [f"levels: native {native}, python {python}"]
+
+
+def test_generated_rules_are_judged_the_same_in_both(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    tables = Tables(random.Random(20261110))
+    drawn: list[tuple[str, frozenset[str], bool]] = []
+    failures = []
+    # Every mode in turn, until a table of it loads: each mode gets as many judged configs.
+    for mode in list(MODES) * 24:
+        while True:
+            before = len(tables.drawn)
+            rules = tables.rules("generated", mode)
+            try:
+                config = world.config(rules)
+            except ConfigError:
+                drawn.extend((drawn_mode, keys, False) for drawn_mode, keys in tables.drawn[before:])
+                continue
+            drawn.extend((drawn_mode, keys, True) for drawn_mode, keys in tables.drawn[before:])
+            break
         failures.extend(f"{found}\n{rules}" for found in differences(world, rules))
+        if config.levels:
+            failures.extend(f"{found}\n{rules}" for found in level_differences(world, config, monkeypatch))
     assert failures == []
+    assert schema_gaps(drawn) == []
 
 
 TIERS = ["core", "product", "leaf"]
@@ -959,7 +1121,7 @@ class Conflicting:
         made = 0
         wanted = self.rng.randint(1, 3)
         while made < wanted:
-            rule = rule_table(f"generated{made}", generated(self.rng, refs))
+            rule = Tables(self.rng, refs).rules(f"generated{made}")
             try:
                 world.config(out + rule, base)
             except ConfigError:
@@ -1091,7 +1253,7 @@ class Varied:
         made = 0
         wanted = self.rng.randint(1, 2)
         while made < wanted:
-            rule = rule_table(f"generated{made}", generated(self.rng, self.refs))
+            rule = Tables(self.rng, self.refs).rules(f"generated{made}")
             try:
                 world.config(out + rule, base)
             except ConfigError:
@@ -1101,9 +1263,9 @@ class Varied:
         return out
 
 
-def test_generated_configs_are_judged_the_same_in_both(world: World) -> None:
+def test_generated_configs_are_judged_the_same_in_both(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     rng = random.Random(1111)
-    judged = 0
+    judged = levels = 0
     failures = []
     while judged < 60:
         varied = Varied(rng)
@@ -1115,7 +1277,13 @@ def test_generated_configs_are_judged_the_same_in_both(world: World) -> None:
         judged += 1
         rules = varied.rules(world, base)
         failures.extend(f"{found}\n{base[len(CONFIG) :]}{rules}" for found in differences(world, rules, base))
+        config = world.config(rules, base)
+        if config.levels:
+            levels += 1
+            found = level_differences(world, config, monkeypatch)
+            failures.extend(f"{found}\n{base[len(CONFIG) :]}{rules}" for found in found)
     assert failures == []
+    assert levels > 5
 
 
 def test_labels_are_the_labelers(world: World) -> None:
