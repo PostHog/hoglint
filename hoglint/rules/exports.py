@@ -65,6 +65,9 @@ class ExportPrimitive:
         return out
 
     def evaluate(self) -> RuleRun:
+        found = self.ctx.export_run(self)
+        if found is not None:
+            return found
         labeler = self.ctx.labeler
         covered = self.covered_modules()
         for export in self.selected_exports():

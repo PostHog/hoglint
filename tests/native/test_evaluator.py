@@ -181,7 +181,9 @@ special = { paths = ["backend/shared.py"], override = true }
 model = { subclass_of = "products.billing.backend.models.Base" }
 
 [shapes.contract]
-allow = ["class"]
+data = ["frozen-dataclass", "enum"]
+behavior = { kind = "abc", where = "tier == 'core'" }
+deny = ["model"]
 
 [exports.facade]
 within = "products/{product}"
@@ -227,7 +229,11 @@ SOURCES = {
     "products/billing/backend/facade/api.py": "from products.alerts.backend.logic import run\n\n\ndef charge():\n    run()\n",
     "products/billing/backend/facade/contracts.py": "import django.db.models\n",
     "products/billing/backend/facade/slots.py": (
-        "from typing import Any\n\nfrom products.billing.backend.models import Invoice, Loose\n\n\n"
+        "import abc\nimport dataclasses\nimport enum\nfrom typing import Any\n\n"
+        "from products.billing.backend import nowhere\nfrom products.billing.backend.models import Invoice, Loose\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Note:\n    invoice: Invoice\n    text: str\n\n\n"
+        "@dataclasses.dataclass\nclass Draft:\n    note: Note\n\n\n"
+        "class Level(enum.Enum):\n    LOW = 1\n\n\nclass Port(abc.ABC):\n    pass\n\n\n"
         "def charge(invoice: Invoice, note: Any) -> dict[str, Loose]:\n    pass\n\n\n"
         "def _hidden(invoice: Invoice) -> None:\n    pass\n\n\n"
         "class Desk:\n    def __call__(self, invoice: Invoice) -> Invoice:\n        pass\n\n"
@@ -331,9 +337,9 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
     for spec in config.rules.values():
         mode = native.plan.mode(spec)
         rule = primitive_of(spec)(native, spec)
-        assert isinstance(rule, EdgeRule)
         index = native.plan.index[spec.id]
         if mode == "judge":
+            assert isinstance(rule, EdgeRule)
             ours = Counter(
                 (edge, target, JUDGMENTS[code].value, tuple(identity))
                 for edge, target, code, identity, _, _ in native.evaluator.judge(index)
@@ -342,6 +348,7 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
             if ours != theirs:
                 out.append(f"{spec.id}: rust only {sorted(ours - theirs)}, python only {sorted(theirs - ours)}")
         elif mode == "select":
+            assert isinstance(rule, EdgeRule)
             selected = set(array("I", native.evaluator.select(index)))
             kept = {edge for edge, _, _, _ in python_rows(python, rule)}
             if kept - selected:
@@ -466,6 +473,21 @@ CORNERS = {
         "on_unresolved": "finding",
         "ledger": True,
         "growth_key": ["dst.symbol"],
+    },
+    "export-shapes": {
+        "primitive": "export",
+        "identity": ["src.module", "dst.symbol", "edge.label", "dst.package", "src.tier", "edge.surface"],
+        "ledger": False,
+    },
+    "export-unknowns-as-incomplete": {
+        "primitive": "export",
+        "exports": ["facade"],
+        "on_unknown": "incomplete",
+        "on_unresolved": "incomplete",
+        "unknown_types": ["typing.Any"],
+        "contexts": {"exclude": []},
+        "identity": ["dst.symbol"],
+        "ledger": False,
     },
     "cycle-between-packages": {
         "primitive": "cycle",
@@ -706,7 +728,18 @@ def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
 
 
 def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
-    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle", "signature"])
+    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle", "signature", "export"])
+    if primitive == "export":
+        return {
+            "primitive": "export",
+            "exports": rng.sample(["facade", "adapter"], rng.randint(1, 2)),
+            "on_unknown": rng.choice(["finding", "block", "incomplete"]),
+            "on_unresolved": rng.choice(["finding", "block", "incomplete"]),
+            "unknown_types": rng.sample(["typing.Any", "builtins.dict", "products.billing.backend.models.Loose"], 1),
+            "identity": rng.sample([*refs, "edge.label", "edge.kind"], rng.randint(1, 3)),
+            "ledger": False,
+            **({"contexts": {"exclude": ["test"]}} if rng.random() < 0.3 else {}),
+        }
     spec: dict[str, Any] = {
         "primitive": primitive,
         "kinds": rng.sample(["import", "reference", "uses", "declares", "inherit"], rng.randint(1, 3)),

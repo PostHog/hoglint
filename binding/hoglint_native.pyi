@@ -185,6 +185,10 @@ class Rules:
     def reach(self, rule: int) -> list[Found]:
         """The search of a reach rule from every start its `from` selects, in the order the Python
         search finds things."""
+    def export(self, rule: int) -> list[tuple[str, str, str, str, list[str], int | None, bool, bool, list[str], str]]:
+        """What an export rule reports, in order: findings (what "finding", symbol, module, label,
+        trail, witness edge, ledgerable, unknown, identity, subject) and incomplete items (what
+        "incomplete", key, module, reason)."""
     def select(self, rule: int) -> bytes:
         """The candidate edges of a rule judged in Python that its selection does not rule out."""
     def passing(self, kinds: list[str], selector: str) -> bytes:

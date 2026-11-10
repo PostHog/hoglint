@@ -36,6 +36,7 @@ from hoglint.model import (
 )
 
 if TYPE_CHECKING:
+    from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
 from hoglint.selectors import (
@@ -188,6 +189,10 @@ class RuleContext:
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found] | None:
         """What a reach rule's search finds when this context runs it itself, else None."""
+        return None
+
+    def export_run(self, rule: ExportPrimitive) -> RuleRun | None:
+        """An export rule's run when this context checks it itself, else None."""
         return None
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow] | None:

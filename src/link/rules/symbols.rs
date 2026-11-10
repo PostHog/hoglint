@@ -24,6 +24,8 @@ pub struct SymbolFacts {
     bases: FxHashMap<String, Vec<String>>,
     decorators: FxHashMap<String, Vec<String>>,
     children: FxHashMap<String, Vec<String>>,
+    /// Classes a `decorate` edge marks frozen (`SymbolFacts.frozen`).
+    frozen: FxHashSet<String>,
 }
 
 /// (members of each kind in plan order, the kinds that hold each name, the names of unknown kind).
@@ -41,8 +43,12 @@ impl SymbolFacts {
                 bases.entry(owner).or_default().extend(names);
             }
         }
+        let mut frozen: FxHashSet<String> = FxHashSet::default();
         if let Some(decorate) = link.kind_sid("decorate") {
-            for (owner, surface, names, _) in link.class_facts(decorate, "decorated") {
+            for (owner, surface, names, is_frozen) in link.class_facts(decorate, "decorated") {
+                if is_frozen {
+                    frozen.insert(owner.clone());
+                }
                 let found = decorators.entry(owner).or_default();
                 found.push(surface);
                 found.extend(names);
@@ -76,6 +82,7 @@ impl SymbolFacts {
             bases,
             decorators,
             children,
+            frozen,
         }
     }
 
@@ -148,6 +155,18 @@ impl SymbolFacts {
         });
         out.extend(split_list(Self::fact(link, name, "decorators")));
         out
+    }
+
+    /// `SymbolFacts.is_dataclass`.
+    pub fn is_dataclass(&self, link: &Link, name: &str) -> bool {
+        self.decorators(link, name)
+            .contains(&"dataclasses.dataclass")
+            || Self::fact(link, name, "dataclass") == "true"
+    }
+
+    /// `SymbolFacts.is_frozen`.
+    pub fn is_frozen(&self, link: &Link, name: &str) -> bool {
+        self.frozen.contains(name) || Self::fact(link, name, "frozen") == "true"
     }
 
     /// Every base class reachable from `name`, and whether the walk saw every base

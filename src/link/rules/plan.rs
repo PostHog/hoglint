@@ -15,6 +15,7 @@ pub struct Plan {
     pub zones: ZonesPlan,
     pub registries: Vec<RegistryPlan>,
     pub exports: Vec<ExportPlan>,
+    pub shapes: Vec<ShapePlan>,
     pub kinds: Vec<KindPlan>,
     /// Per provider-set field a rule or a domain reads: its label on each module.
     pub provided: Vec<ProvidedPlan>,
@@ -104,10 +105,44 @@ pub struct RegistryPlan {
 
 #[derive(Deserialize)]
 pub struct ExportPlan {
+    pub name: String,
+    /// The export's `[shapes]` policy, by place.
+    pub shape: usize,
     pub within: String,
     pub paths: Vec<String>,
     pub subclass_of: Vec<String>,
     pub audience: Option<NodePlan>,
+}
+
+#[derive(Deserialize)]
+pub struct BehaviorPlan {
+    pub kind: String,
+    #[serde(rename = "where")]
+    pub r#where: Option<NodePlan>,
+}
+
+/// A `[shapes]` policy (`ShapePolicy`).
+#[derive(Deserialize)]
+pub struct ShapePlan {
+    pub name: String,
+    pub data: Vec<String>,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub behavior: Option<BehaviorPlan>,
+    /// `unknown = "incomplete"`.
+    pub incomplete: bool,
+}
+
+/// What an export rule adds (`ExportPrimitive`).
+#[derive(Deserialize)]
+pub struct ExportRulePlan {
+    /// The exports it checks, by place, in order.
+    pub exports: Vec<usize>,
+    /// The contexts it leaves out: type-only and test unless the rule names its own.
+    pub exclude: u8,
+    pub unknown_types: Vec<String>,
+    pub on_unknown: String,
+    pub on_unresolved: String,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +184,8 @@ pub enum Mode {
     Reach,
     /// The package pairs of a cycle rule: what `CyclePrimitive.consider` reads.
     Cycle,
+    /// The whole check of an export rule.
+    Export,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +218,7 @@ pub struct RulePlan {
     pub signature: bool,
     /// The destination symbols a signature rule reads as of unknown type.
     pub unknown_types: Vec<String>,
+    pub export: Option<ExportRulePlan>,
 }
 
 #[derive(Deserialize, Clone)]

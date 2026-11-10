@@ -9,6 +9,7 @@
 pub mod conflicts;
 pub mod edges;
 pub mod env;
+pub mod export;
 pub mod glob;
 pub mod labels;
 pub mod plan;
@@ -21,6 +22,7 @@ pub mod value;
 
 use self::conflicts::{Conflict, conflict_key};
 use self::env::{Cx, Endpoint, Env, Role};
+use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
 use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{Mode, Plan, RulePlan, SetValue};
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
@@ -83,6 +85,8 @@ pub struct Rule {
     start: Option<Node>,
     /// What a signature rule adds to an edge rule.
     signature: Option<Signature>,
+    /// What an export rule checks.
+    export: Option<ExportRule>,
 }
 
 /// One destination a cycle rule cannot leave alone: its edge and place, its judgment
@@ -117,6 +121,10 @@ pub struct Rules {
     /// `values[field][module]`: `Labeler.field_value` of each module field on each module.
     pub values: Vec<Vec<Cell>>,
     pub exports: Vec<Export>,
+    /// Each export's name and `[shapes]` policy, by place.
+    pub export_names: Vec<String>,
+    pub export_shapes: Vec<usize>,
+    pub shapes: Vec<Shape>,
     pub kind_names: Vec<String>,
     pub kind_sets: KindSets,
     facts: SymbolFacts,
@@ -231,7 +239,12 @@ impl Rules {
         let rules = plan
             .rules
             .iter()
-            .map(|rule| Self::compile(&edge, rule, &fields))
+            .map(|rule| Self::compile(&edge, &entity, rule, &fields))
+            .collect::<Result<Vec<_>, String>>()?;
+        let shapes = plan
+            .shapes
+            .iter()
+            .map(|shape| Shape::new(shape, &entity))
             .collect::<Result<Vec<_>, String>>()?;
         let it = &link.core.it;
         let module_names: Vec<&str> = modules.iter().map(|module| it.s(*module)).collect();
@@ -250,6 +263,15 @@ impl Rules {
         }
         for audience in exports.iter().filter_map(|export| export.audience.as_ref()) {
             check_columns(&labels, "an export audience", &refs_of(audience))?;
+        }
+        for (shape, plan) in shapes.iter().zip(&plan.shapes) {
+            if let Some(node) = shape.reads() {
+                check_columns(
+                    &labels,
+                    &format!("the behavior of shape {}", plan.name),
+                    &refs_of(node),
+                )?;
+            }
         }
         for field in &labels.fields {
             let domain = field.domain.as_ref();
@@ -300,6 +322,13 @@ impl Rules {
             labels,
             values: Vec::new(),
             exports,
+            export_names: plan
+                .exports
+                .iter()
+                .map(|export| export.name.clone())
+                .collect(),
+            export_shapes: plan.exports.iter().map(|export| export.shape).collect(),
+            shapes,
             kind_names: plan.kinds.iter().map(|kind| kind.name.clone()).collect(),
             kind_sets,
             facts,
@@ -357,7 +386,12 @@ impl Rules {
         (modules, files)
     }
 
-    fn compile(compiler: &Compiler, plan: &RulePlan, fields: &[Field]) -> Result<Rule, String> {
+    fn compile(
+        compiler: &Compiler,
+        entity: &Compiler,
+        plan: &RulePlan,
+        fields: &[Field],
+    ) -> Result<Rule, String> {
         let selection = compiler.nodes(&plan.selection)?;
         let redefined: Vec<bool> = selection
             .iter()
@@ -387,6 +421,10 @@ impl Rules {
                 .map(|path| compiler.reference(path))
                 .collect(),
             start: optional(&plan.start)?,
+            export: plan
+                .export
+                .as_ref()
+                .map(|found| ExportRule::new(found, plan.include, &plan.identity, entity)),
             signature: plan.signature.then(|| Signature {
                 unknown_types: plan.unknown_types.clone(),
                 annotation: compiler.it.get("annotation"),
@@ -798,6 +836,17 @@ impl Rules {
         edges.dedup();
         let order = self.order(link, rule, &edges)?;
         Ok(in_order(rows, &edges, &order, |row| row.edge))
+    }
+
+    /// What export rule `index` reports, in the order `ExportPrimitive.evaluate` reports it.
+    pub fn export(&self, link: &mut Link, index: usize) -> Result<Vec<ExportRow>, String> {
+        let rule = self.rule(index, Mode::Export)?;
+        let Some(export) = &rule.export else {
+            return Err(format!("export rule {} has no exports planned", rule.id));
+        };
+        let inputs = ExportInputs::read(self, link);
+        let cx = Cx { link, rules: self };
+        Ok(Walk::new(cx, export, &inputs).run())
     }
 
     /// In a config with labels that conflict only where read: the `src` parts of a rule that

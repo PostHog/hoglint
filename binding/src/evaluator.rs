@@ -4,6 +4,7 @@ use crate::ids_bytes;
 use crate::link::Link;
 use hoglint_facts::link::rules::Rules as CoreRules;
 use hoglint_facts::link::rules::conflicts::Conflict;
+use hoglint_facts::link::rules::export::ExportRow;
 use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
 use hoglint_facts::link::rules::value::Truth;
@@ -30,6 +31,22 @@ type FoundTuple = (&'static str, String, Vec<(u32, u32)>, u8);
 
 /// A module field's column: its distinct values as (type, items), and each module's place.
 type ValueColumn<'py> = (Vec<(&'static str, Vec<String>)>, Bound<'py, PyBytes>);
+
+/// An export rule's report: (what, symbol or key, module, label or reason, trail, witness edge,
+/// ledgerable, unknown, identity, subject). What: "finding" or "incomplete"; an incomplete item
+/// fills only the key, module and reason.
+type ExportTuple = (
+    &'static str,
+    String,
+    String,
+    String,
+    Vec<String>,
+    Option<u32>,
+    bool,
+    bool,
+    Vec<String>,
+    String,
+);
 
 /// The run's labels and compiled rules over one link.
 #[pyclass(module = "hoglint_native", unsendable)]
@@ -141,6 +158,50 @@ impl Rules {
                     path,
                     verdict: truth,
                 } => ("denied", it.s(source).to_string(), path, verdict(truth)),
+            })
+            .collect())
+    }
+
+    /// What export rule `rule` reports, in the order the Python primitive reports it.
+    fn export(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<ExportTuple>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        let rows = self
+            .inner
+            .export(&mut bound.inner, rule)
+            .map_err(PyValueError::new_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| match row {
+                ExportRow::Finding {
+                    symbol,
+                    module,
+                    label,
+                    trail,
+                    edge,
+                    ledgerable,
+                    unknown,
+                    identity,
+                    subject,
+                } => (
+                    "finding", symbol, module, label, trail, edge, ledgerable, unknown, identity,
+                    subject,
+                ),
+                ExportRow::Incomplete {
+                    key,
+                    reason,
+                    module,
+                } => (
+                    "incomplete",
+                    key,
+                    module,
+                    reason,
+                    Vec::new(),
+                    None,
+                    false,
+                    false,
+                    Vec::new(),
+                    String::new(),
+                ),
             })
             .collect())
     }

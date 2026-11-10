@@ -21,13 +21,14 @@ from hoglint.config.model import Config
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, WitnessRow
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Shown, WitnessRow
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import JUDGED, RulePlan, tree
-from hoglint.rules.base import EdgeEnv, EdgeRule, Judgment, RuleContext, RuleRun
+from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun
 from hoglint.rules.engine import primitive_of
+from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 from hoglint.selectors import Node, Truth
 
@@ -183,6 +184,24 @@ class EdgeHandle:
         return self.edges.row(self.edge_id)
 
 
+class RowDetail:
+    """The detail of a finding whose message the evaluator's row holds: the site and witness
+    are its edge's, made when something reads them."""
+
+    __slots__ = ("handle", "made", "message")
+
+    def __init__(self, message: str, handle: EdgeHandle) -> None:
+        self.message = message
+        self.handle = handle
+        self.made: FindingDetail | None = None
+
+    def get(self) -> FindingDetail:
+        if self.made is None:
+            edge = self.handle.get()
+            self.made = FindingDetail(self.message, edge.site, (edge,))
+        return self.made
+
+
 class Rejudged:
     """The detail of a finding made from a judgment made outside the rule's own code: the rule
     judges the edge's destination again when something reads the message, site, witnesses or
@@ -257,13 +276,10 @@ class NativeRuleContext(RuleContext):
 
     @cached_property
     def plan(self) -> RulePlan:
-        rules = {spec.id: primitive_of(spec) for spec in self.config.rules.values()}
-        edge_rules = {
-            name: made
-            for name, made in rules.items()
-            if issubclass(made, EdgeRule) and RulePlan.mode(self.config.rules[name])
+        planned = {
+            spec.id: primitive_of(spec) for spec in self.config.rules.values() if RulePlan.mode(spec) is not None
         }
-        return RulePlan(self.config, self.native.native, self.labeler, edge_rules)
+        return RulePlan(self.config, self.native.native, self.labeler, planned)
 
     @cached_property
     def evaluator(self) -> Any:
@@ -351,6 +367,35 @@ class NativeRuleContext(RuleContext):
             )
             run.findings.append(finding)
         return True
+
+    def export_run(self, rule: ExportPrimitive) -> RuleRun:
+        """The evaluator's check of an export rule, its rows made into findings and incomplete
+        items in order; a witness edge is kept as a handle."""
+        with engine_errors():
+            rows = self.evaluator.export(self.plan.index[rule.spec.id])
+        core = self.native.native.core
+        edges = RowEdges(core, array("I", dict.fromkeys(row[5] for row in rows if row[5] is not None)))
+        spec = rule.spec
+        run = rule.run
+        for what, name, module, text, trail, edge_id, ledgerable, unknown, identity, subject in rows:
+            if what == "incomplete":
+                run.incomplete.append(IncompleteItem(spec.id, name, text, (module,)))
+                continue
+            message = f"{module} exports {' -> '.join(trail)}: {text}"
+            handle = EdgeHandle(edges, edge_id) if edge_id is not None else None
+            detail: Shown = RowDetail(message, handle) if handle is not None else FindingDetail(message, None)
+            finding = Finding(
+                rule=spec.id,
+                identity=tuple(identity),
+                detail=detail,
+                owner=self.owner(module),
+                subjects=(module, subject),
+                ledgerable=ledgerable and spec.ledger,
+                unknown=unknown,
+                witness=handle,
+            )
+            run.findings.append(finding)
+        return run
 
     def confirm_findings(self) -> None:
         """Every finding the evaluator made is judged again by its rule's own code: a run that

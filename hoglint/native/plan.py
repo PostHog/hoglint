@@ -16,7 +16,8 @@ from typing import Any
 from hoglint.config.model import Config, FieldSpec, RuleSpec
 from hoglint.labels import Labeler
 from hoglint.native.graph import CONTEXT_BITS, NativeGraph
-from hoglint.rules.base import EdgeRule, conjuncts, rule_kinds
+from hoglint.rules.base import conjuncts, rule_kinds
+from hoglint.rules.exports import DEFAULT_EXCLUDED
 from hoglint.rules.graphs import CyclePrimitive
 from hoglint.selectors import (
     And,
@@ -97,13 +98,29 @@ def label_value(value: Value) -> Any:
 class RulePlan:
     """The plan of one run over a native graph, and each rule's place in it."""
 
-    def __init__(self, config: Config, graph: NativeGraph, labeler: Labeler, rules: dict[str, type[EdgeRule]]) -> None:
+    def __init__(self, config: Config, graph: NativeGraph, labeler: Labeler, rules: dict[str, type[Any]]) -> None:
         self.config = config
         self.graph = graph
         self.labeler = labeler
         self.specs = [spec for spec in config.rules.values() if spec.id in rules]
-        self.redefines = {spec.id: rules[spec.id].redefines for spec in self.specs}
+        self.redefines = {spec.id: getattr(rules[spec.id], "redefines", ()) for spec in self.specs}
         self.index = {spec.id: at for at, spec in enumerate(self.specs)}
+        self.export_at = {name: at for at, name in enumerate(config.exports)}
+        self.shape_at = {name: at for at, name in enumerate(config.shapes)}
+
+    def export_rule(self, spec: RuleSpec) -> dict[str, Any] | None:
+        """What an export rule adds: the exports it checks, their default contexts, and how it
+        reports what it cannot tell (`ExportPrimitive`)."""
+        if spec.primitive != "export":
+            return None
+        excluded = DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude
+        return {
+            "exports": [self.export_at[name] for name in spec.exports or tuple(self.config.exports)],
+            "exclude": context_bits(frozenset(excluded)),
+            "unknown_types": list(spec.unknown_types),
+            "on_unknown": spec.on_unknown,
+            "on_unresolved": spec.on_unresolved,
+        }
 
     @staticmethod
     def mode(spec: RuleSpec) -> str | None:
@@ -113,7 +130,7 @@ class RulePlan:
             return None
         if spec.primitive in SELECTED:
             return "select"
-        if spec.primitive in ("reach", "cycle"):
+        if spec.primitive in ("reach", "cycle", "export"):
             return spec.primitive
         return None
 
@@ -139,6 +156,7 @@ class RulePlan:
             "redefines": list(self.redefines[spec.id]),
             "group": CyclePrimitive.group_of(self.config, spec) if spec.primitive == "cycle" else None,
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
+            "export": self.export_rule(spec),
             "signature": spec.primitive == "signature",
             "unknown_types": list(spec.unknown_types) if spec.primitive == "signature" else [],
         }
@@ -155,6 +173,9 @@ class RulePlan:
         for field in self.config.fields.values():
             if field.domain is not None and field.domain.selector is not None:
                 yield field.domain.selector
+        for policy in self.config.shapes.values():
+            if policy.behavior is not None and policy.behavior.where is not None:
+                yield policy.behavior.where
 
     def names_read(self) -> set[str]:
         """The last name of every field the plan reads: selectors, identity columns and a cycle
@@ -254,12 +275,27 @@ class RulePlan:
             ],
             "exports": [
                 {
+                    "name": spec.name,
                     "within": spec.within,
                     "paths": list(spec.paths),
                     "subclass_of": list(spec.subclass_of),
                     "audience": selector_tree(spec.audience),
+                    "shape": self.shape_at[spec.shape],
                 }
                 for spec in config.exports.values()
+            ],
+            "shapes": [
+                {
+                    "name": policy.name,
+                    "data": list(policy.data),
+                    "allow": list(policy.allow),
+                    "deny": list(policy.deny),
+                    "behavior": None
+                    if policy.behavior is None
+                    else {"kind": policy.behavior.kind, "where": selector_tree(policy.behavior.where)},
+                    "incomplete": policy.unknown == "incomplete",
+                }
+                for policy in config.shapes.values()
             ],
             "kinds": [
                 {

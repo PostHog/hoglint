@@ -709,3 +709,34 @@ impl<'a> LabelEnv<'a, '_> {
         }
     }
 }
+
+/// What an entity selector reads (`Labeler.entity_resolver`): builtins of the entity, and
+/// declared fields with their domain, as `Labeler.field_value` reads them.
+pub struct EntityEnv<'a, 's> {
+    pub cx: Cx<'a>,
+    pub module: Option<Sid>,
+    pub at: Option<u32>,
+    pub symbol: Option<&'s str>,
+}
+
+impl<'a> Resolve<'a> for EntityEnv<'a, '_> {
+    fn resolve(&self, field: Ref) -> Value<'a> {
+        let Ref::Entity(field) = field else {
+            return Value::Unknown;
+        };
+        let label = LabelEnv {
+            cx: self.cx,
+            module: self.module,
+            at: self.at,
+            symbol: self.symbol,
+            read_conflict: Flag::new(false),
+        };
+        match field {
+            EntityField::Field(at) => {
+                let symbol = self.symbol.filter(|symbol| !symbol.is_empty());
+                self.cx.field_value(at, self.module, self.at, symbol)
+            }
+            other => label.resolve(Ref::Entity(other)),
+        }
+    }
+}
