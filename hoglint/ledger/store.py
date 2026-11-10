@@ -23,11 +23,17 @@ every finding the ledger does not count. A CI job may later publish summaries of
 Pruning: the first store use of each day removes every file under the root that is older than
 30 days, then the oldest files until the root holds 2 GB at most. A summary hit refreshes the
 file's time, so a summary in use stays. A fact cache entry that goes away is only a re-parse.
+The first process of the day to create that day's mark (`O_EXCL`) prunes; the others do not.
+
+The store is a cache, so it never fails a run (D28): an I/O error in a read, a write or the
+prune warns once on stderr, and the run goes on without the store. A file that is not there is
+a miss, not an error.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import time
 import shutil
 import hashlib
@@ -47,12 +53,25 @@ ENVELOPE_SECTION = "envelope"
 SECTION_DIGEST_CHARS = 32
 MAX_BYTES = 2 * 1024**3
 MAX_AGE = datetime.timedelta(days=30)
-PRUNED_MARK = ".pruned"
+PRUNED_MARK = ".pruned-"  # then the day, one mark per day
 FACTS = "facts"  # the fact cache, pruned by its own pruner
 
 
 def cache_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "hoglint"
+
+
+class CacheWarning:
+    """One stderr line per process for a cache that cannot be used."""
+
+    warned = False
+
+    @staticmethod
+    def warn(what: str, error: OSError) -> None:
+        if CacheWarning.warned:
+            return
+        CacheWarning.warned = True
+        sys.stderr.write(f"hoglint: cannot use the cache ({what}: {error}), so this run goes on without it\n")
 
 
 class CacheRoot:
@@ -65,17 +84,22 @@ class CacheRoot:
         self.max_bytes = max_bytes
         self.max_age = max_age
 
-    def prune_daily(self, today: datetime.date | None = None) -> bool:
-        """Prunes when no run pruned today. The mark goes first, so concurrent runs prune once."""
-        stamp = (today or datetime.date.today()).isoformat()
-        mark = self.root / PRUNED_MARK
-        try:
-            if mark.read_text() == stamp:
-                return False
-        except OSError:
-            pass
+    def claim(self, stamp: str) -> bool:
+        """Creates the day's mark; False when another run created it first. Older marks go."""
         self.root.mkdir(parents=True, exist_ok=True)
-        mark.write_text(stamp)
+        try:
+            os.close(os.open(self.root / f"{PRUNED_MARK}{stamp}", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            return False
+        for old in self.root.glob(f"{PRUNED_MARK}*"):
+            if old.name != f"{PRUNED_MARK}{stamp}":
+                old.unlink(missing_ok=True)
+        return True
+
+    def prune_daily(self, today: datetime.date | None = None) -> bool:
+        """Prunes when this run is the first of the day to claim the prune."""
+        if not self.claim((today or datetime.date.today()).isoformat()):
+            return False
         self.prune()
         return True
 
@@ -87,7 +111,7 @@ class CacheRoot:
                 subdirectories.remove(FACTS)
             for name in names:
                 path = Path(directory) / name
-                if path.parent == self.root and name == PRUNED_MARK:
+                if path.parent == self.root and name.startswith(PRUNED_MARK):
                     continue
                 try:
                     stat = path.stat()
@@ -128,15 +152,35 @@ class CacheRoot:
 
 
 class SummaryStore:
+    """`broken` is set by the first I/O error: from then on every read misses and nothing is
+    written."""
+
     def __init__(self, root: Path | None = None) -> None:
         self.cache = CacheRoot(root or cache_root())
         self.root = self.cache.root / "summaries"
         self.pruned = False
+        self.broken = False
+
+    def fail(self, what: str, error: OSError) -> None:
+        self.broken = True
+        CacheWarning.warn(what, error)
 
     def prune_once(self) -> None:
-        if not self.pruned:
-            self.pruned = True
+        if self.pruned or self.broken:
+            return
+        self.pruned = True
+        try:
             self.cache.prune_daily()
+        except OSError as error:
+            self.fail("pruning", error)
+
+    @staticmethod
+    def touch(path: Path) -> None:
+        """Refreshes a file's time, so the pruner keeps it. A file pruned meanwhile needs none."""
+        try:
+            os.utime(path)
+        except FileNotFoundError:
+            return
 
     def path(self, key: Envelope) -> Path:
         return self.root / key.engine / key.inputs / f"{key.policy}-{key.framework}.json"
@@ -147,7 +191,7 @@ class SummaryStore:
     def get(self, key: Envelope, sections: frozenset[str] = ALL_SECTIONS) -> ScanSummary | None:
         """The stored summary with exactly this key, holding `sections` and the envelope, else None."""
         self.prune_once()
-        if not key.inputs:
+        if not key.inputs or self.broken:
             return None
         path = self.path(key)
         try:
@@ -156,11 +200,16 @@ class SummaryStore:
             for name in sorted(sections - {ENVELOPE_SECTION}):
                 parts[name] = self.read_section(key, manifest["sections"][name])
             summary = ScanSummary.from_sections(parts)
-        except (OSError, KeyError, TypeError, ValueError, ProtocolError, zstd.ZstdError):
+            if summary.envelope != key:
+                return None
+            self.touch(path)
+        except FileNotFoundError:
             return None
-        if summary.envelope != key:
+        except OSError as error:
+            self.fail("reading a summary", error)
             return None
-        os.utime(path)
+        except (KeyError, TypeError, ValueError, ProtocolError, zstd.ZstdError):
+            return None
         return summary
 
     def read_section(self, key: Envelope, digest: str) -> dict[str, Any]:
@@ -168,21 +217,28 @@ class SummaryStore:
         raw = zstd.decompress(path.read_bytes())
         if hashlib.sha256(raw).hexdigest()[:SECTION_DIGEST_CHARS] != digest:
             raise ValueError(f"{path} does not hold the section its name says")
-        os.utime(path)
+        self.touch(path)
         part = orjson.loads(raw)
         if not isinstance(part, dict):
             raise ValueError(f"{path} is not a summary section")
         return part
 
     def put(self, key: Envelope, summary: ScanSummary) -> Path | None:
-        """Stores a summary under its own envelope. A summary with no inputs digest is not stored, and nor is
-        one of a run that could not read a source: it holds less than the tree. Only the sections
-        no stored summary holds yet are written."""
+        """Stores a summary under its own envelope. A summary with no inputs digest is not stored,
+        and nor is one of a run that could not read a source: it holds less than the tree. Only
+        the sections no stored summary holds yet are written."""
         if summary.envelope != key:
             raise ValueError(f"a summary of {summary.envelope} cannot be stored under {key}")
         self.prune_once()
-        if not key.inputs or summary.unread:
+        if not key.inputs or summary.unread or self.broken:
             return None
+        try:
+            return self.write(key, summary)
+        except OSError as error:
+            self.fail("writing a summary", error)
+            return None
+
+    def write(self, key: Envelope, summary: ScanSummary) -> Path:
         parts = summary.to_sections()
         manifest: dict[str, Any] = {ENVELOPE_SECTION: parts.pop(ENVELOPE_SECTION)}
         for name, part in parts.items():
@@ -190,7 +246,7 @@ class SummaryStore:
             digest = hashlib.sha256(raw).hexdigest()[:SECTION_DIGEST_CHARS]
             section = self.section_path(key, digest)
             if section.is_file():
-                os.utime(section)
+                self.touch(section)
             else:
                 write_atomic(section, zstd.compress(raw, ZSTD_LEVEL))
             manifest[name] = digest
@@ -215,16 +271,20 @@ class ExtractorStore:
                 return None
         except EngineError:
             return None
-        os.utime(path)
+        SummaryStore.touch(path)
         return path
 
     def keep(self, binary: Path, native_id: str) -> None:
-        """Copies a binary in under its native id, unless one is already there."""
+        """Copies a binary in under its native id, unless one is already there. A cache that
+        cannot take it only means a later base engine is not found there."""
         path = self.path(native_id)
         if path.is_file():
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".extractor-")
-        os.close(handle)
-        shutil.copy(binary, temporary)
-        Path(temporary).replace(path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".extractor-")
+            os.close(handle)
+            shutil.copy(binary, temporary)
+            Path(temporary).replace(path)
+        except OSError as error:
+            CacheWarning.warn("keeping the extractor", error)

@@ -6,13 +6,16 @@ import base64
 import hashlib
 import datetime
 import dataclasses
+import multiprocessing
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from hoglint.cli import Commands, Snapshots, TreeSummaries
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
+from hoglint.ledger import store as store_module
 from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
     ENGINE,
@@ -34,11 +37,12 @@ from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
 from hoglint.ledger.status import WorktreeStatus
-from hoglint.ledger.store import CacheRoot, SummaryStore
+from hoglint.ledger.store import CacheRoot, CacheWarning, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause
 from hoglint.presets_py.posthog.owners import OWNERS_YAML
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
+from hoglint.source import GraphSource
 
 from rules.support import GraphBuilder, config_from
 from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, write_files
@@ -257,6 +261,64 @@ def test_the_cache_root_stays_within_its_age_and_size(tmp_path: Path, files: dic
         os.utime(path, (NOW - age_days * DAY, NOW - age_days * DAY))
     CacheRoot(tmp_path, max_bytes=150).prune(now=NOW)
     assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == kept
+
+
+PRUNERS = 6
+
+
+def prune_after(start: Any, root: Path, today: datetime.date) -> bool:
+    start.wait()
+    return CacheRoot(root).prune_daily(today)
+
+
+def test_of_processes_that_start_the_day_together_one_prunes(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("spawn")
+    start = context.Manager().Barrier(PRUNERS)
+    with context.Pool(PRUNERS) as pool:
+        pruned = pool.starmap(prune_after, [(start, tmp_path, datetime.date(2026, 11, 10))] * PRUNERS)
+    assert sorted(pruned) == [False] * (PRUNERS - 1) + [True]
+    assert not CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 10))
+    assert CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 11))
+
+
+@pytest.mark.parametrize("fault", ["unwritable", "full"])
+def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], fault: str
+) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {"hoglint.toml": DYNAMIC_CONFIG, "core/__init__.py": "", "core/loader.py": LOADER})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "one computed import")
+    (repo / "core/loader.py").write_text(SECOND_LOADER)
+    git_in(repo, "add", "-A")
+    monkeypatch.setattr(GraphSource, "build", lambda *args, **kwargs: GraphBuilder().module("core.loader").graph)
+
+    def check(cache: Path) -> int:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        (tmp_path / "work").mkdir(exist_ok=True)
+        commands = Commands(repo, tmp_path / "work")
+        try:
+            return commands.check(index=True, write_ledger=False, changed=False)
+        finally:
+            commands.snapshots.close()
+
+    healthy = check(tmp_path / "healthy")
+    expected = capfd.readouterr().out
+    monkeypatch.setattr(CacheWarning, "warned", False)
+    broken = tmp_path / "broken"
+    (broken / "hoglint").mkdir(parents=True)
+    if fault == "unwritable":
+        (broken / "hoglint").chmod(0o500)
+    else:
+        monkeypatch.setattr(store_module, "write_atomic", lambda *_: (_ for _ in ()).throw(OSError(28, "No space")))
+    try:
+        assert check(broken) == healthy
+    finally:
+        (broken / "hoglint").chmod(0o700)
+    printed = capfd.readouterr()
+    assert printed.out == expected
+    assert printed.err.count("cannot use the cache") == 1, printed.err
 
 
 ENGINE_LIST = """# a test engine
