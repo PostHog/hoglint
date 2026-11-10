@@ -694,7 +694,9 @@ def test_a_run_asks_whether_a_path_exists_only_for_a_path_its_key_covers(
     git_in(repo, "init", "-q")
     git_in(repo, "add", "-A")
     tree = git_in(repo, "write-tree").strip()
-    files = TreeFiles(repo, tree, tmp_path, RunInputs(config_from(tmp_path / "policy", COVERED)).patterns())
+    files = TreeFiles(
+        TreeListing.of(repo, tree), tmp_path, RunInputs(config_from(tmp_path / "policy", COVERED)).patterns()
+    )
     if held is None:
         with pytest.raises(EngineError, match="no source or declared input pattern covers it"):
             files.holds(path)

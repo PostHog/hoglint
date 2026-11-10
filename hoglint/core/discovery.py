@@ -10,15 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hoglint.core.config import CoreConfig
-from hoglint.ledger.listing import (
-    SOURCE_SUFFIXES,
-    SUBMODULE_MODE,
-    Listing,
-    TreeListing,
-    WorktreeListing,
-    parse_index,
-    read_blobs,
-)
+from hoglint.ledger.listing import SOURCE_SUFFIXES, SUBMODULE_MODE, Listing, parse_index, read_blobs
 
 SOURCE_PATTERNS = tuple(f"*{suffix}" for suffix in SOURCE_SUFFIXES)
 
@@ -77,7 +69,9 @@ class StagedIndex:
 
 class ListedSnapshot:
     """The source files of one listed snapshot (listing.py), written into a temp tree on first
-    read. Never reads a file the listing does not name."""
+    read: a git tree's blobs, or the working tree as git sees it (D40), the index's blobs overlaid
+    with the files git status reports. Never reads a file the listing does not name, so never
+    the index of a tree run, an ignored file, or a file behind a skip-worktree bit."""
 
     def __init__(self, listing: Listing) -> None:
         self.listing = listing
@@ -100,22 +94,7 @@ class ListedSnapshot:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-class GitTree(ListedSnapshot):
-    """The blobs of one git tree. Never reads the index or the working tree."""
-
-    def __init__(self, repo: Path, tree: str) -> None:
-        super().__init__(TreeListing.of(repo, tree))
-
-
-class WorkingTree(ListedSnapshot):
-    """The working tree as git sees it (D40): the index's blobs, overlaid with the files git
-    status reports. An ignored file, or a file behind a skip-worktree bit, is never read."""
-
-    def __init__(self, repo: Path) -> None:
-        super().__init__(WorktreeListing.of(repo))
-
-
-Snapshot = WorkingTree | StagedIndex | GitTree
+Snapshot = ListedSnapshot | StagedIndex
 
 
 class Discovery:

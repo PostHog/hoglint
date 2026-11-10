@@ -8,7 +8,7 @@ from pathlib import Path
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
-from hoglint.core.discovery import Discovery, GitTree, Inventory, Snapshot, StagedIndex, WorkingTree
+from hoglint.core.discovery import Discovery, Inventory, ListedSnapshot, Snapshot, StagedIndex
 from hoglint.core.modules import ModuleNamer
 from hoglint.core.producers import PRODUCERS, TABLE_KINDS, Producer
 from hoglint.facts import (
@@ -20,6 +20,7 @@ from hoglint.facts import (
     site_packages,
     site_packages_files,
 )
+from hoglint.ledger.listing import TreeListing, WorktreeListing
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY
 
@@ -68,10 +69,10 @@ class CoreAnalysis:
 
     def snapshot(self) -> Snapshot:
         if self.options.tree:
-            return GitTree(self.options.repo, self.options.tree)
+            return ListedSnapshot(TreeListing.of(self.options.repo, self.options.tree))
         if self.options.staged:
             return StagedIndex(self.options.repo)
-        return WorkingTree(self.options.repo)
+        return ListedSnapshot(WorktreeListing.of(self.options.repo))
 
     def first_party(self, inventory: Inventory) -> tuple[str, ...]:
         config = self.options.config

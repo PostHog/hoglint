@@ -142,9 +142,9 @@ class Links:
 class Listing:
     """path -> mode for every file of a snapshot, in git's order, and where each file's bytes
     are: `blobs` holds the regular files read from git's object store by blob oid, `disk` the
-    regular files read from the working tree, and `link_oids` the links whose text a blob holds.
-    A link's bytes are those of the file it leads to; its text is read on the first question
-    about a link, for every link at once."""
+    files read from the working tree (a link there by `readlink`), and `link_oids` the links whose
+    text a blob holds. A link's bytes are those of the file it leads to; its text is read on the
+    first question about a link, for every link at once."""
 
     def __init__(
         self,
@@ -173,7 +173,15 @@ class Listing:
         return frozenset(out)
 
     def link_texts(self) -> dict[str, str]:
-        return {path: os.fsdecode(raw) for path, raw in read_blobs(self.repo, self.link_oids).items()}
+        texts = {path: os.fsdecode(raw) for path, raw in read_blobs(self.repo, self.link_oids).items()}
+        for path in self.disk:
+            if self.modes[path] != LINK_MODE:
+                continue
+            try:
+                texts[path] = os.readlink(self.repo / path)
+            except OSError:
+                texts[path] = "/"  # a link that cannot be read leads nowhere
+        return texts
 
     @cached_property
     def targets(self) -> dict[str, str | None]:
@@ -307,18 +315,6 @@ class WorktreeListing(Listing):
     tree. A link the index holds is read by its blob, one git status reports by `readlink`. One
     per repo per process: the listing of the status the rest of the run reads."""
 
-    def __init__(
-        self,
-        repo: Path,
-        modes: dict[str, str],
-        blobs: dict[str, str],
-        link_oids: dict[str, str],
-        disk: Iterable[str],
-        disk_links: Iterable[str],
-    ) -> None:
-        super().__init__(repo, modes, blobs, link_oids, disk)
-        self.disk_links = frozenset(disk_links)
-
     @staticmethod
     def index_entries(repo: Path) -> dict[str, tuple[str, str]]:
         """path -> (mode, blob oid) of stage 0 entries; a conflicted path is in the status as a
@@ -339,15 +335,6 @@ class WorktreeListing(Listing):
             return LINK_MODE
         return "100755" if found & stat.S_IXUSR else "100644"
 
-    def link_texts(self) -> dict[str, str]:
-        texts = super().link_texts()
-        for path in self.disk_links:
-            try:
-                texts[path] = os.readlink(self.repo / path)
-            except OSError:
-                texts[path] = "/"  # a link that cannot be read leads nowhere
-        return texts
-
     @staticmethod
     def build(repo: Path, status: list[StatusEntry]) -> WorktreeListing:
         entries = WorktreeListing.index_entries(repo)
@@ -364,9 +351,7 @@ class WorktreeListing(Listing):
         modes = {**{path: mode for path, (mode, _) in entries.items()}, **dirty}
         blobs = {path: oid for path, (mode, oid) in entries.items() if mode != LINK_MODE}
         links = {path: oid for path, (mode, oid) in entries.items() if mode == LINK_MODE}
-        disk = [path for path, mode in dirty.items() if mode != LINK_MODE]
-        disk_links = [path for path, mode in dirty.items() if mode == LINK_MODE]
-        return WorktreeListing(repo, modes, blobs, links, disk, disk_links)
+        return WorktreeListing(repo, modes, blobs, links, dirty)
 
     @staticmethod
     def of(repo: Path) -> WorktreeListing:

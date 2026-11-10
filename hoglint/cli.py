@@ -54,7 +54,7 @@ from hoglint.ledger.envelope import (
 from hoglint.ledger.errors import RepoRootError
 from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
-from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles, WorktreeFiles
+from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
@@ -126,7 +126,7 @@ class Snapshots:
         """The tree's policy, written alone into a scratch directory: the config and the files it
         extends, then the ledger, the exceptions and the data files the policy names. The code is
         read from the tree by blob id, so nothing else of the tree is written."""
-        files = TreeFiles(self.repo, tree)
+        files = TreeFiles(TreeListing.of(self.repo, tree))
         target = Path(tempfile.mkdtemp(prefix="policy-", dir=self.work_dir))
         self.write_config(files, target)
         if not (target / CONFIG_FILE).is_file():
@@ -236,9 +236,7 @@ class Runner:
         paths `config`'s input patterns cover. `config` is the policy as loaded, before its data
         files are anchored, as the run's key reads it."""
         asked = RunInputs(config).patterns()
-        if tree:
-            return TreeFiles(repo, tree, self.source.work_dir, asked).run_root()
-        return WorktreeFiles(repo, self.source.work_dir, asked).run_root()
+        return TreeFiles(GraphSource.listing_of(repo, tree), self.source.work_dir, asked).run_root()
 
     def evaluate(self, config: Config, code_root: Path, policy_root: Path) -> tuple[Graph, RunResult]:
         """One policy over the working tree of one code root, with no ledger and no exceptions."""

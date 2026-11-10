@@ -2,8 +2,8 @@
 tree, read by blob id with no checkout.
 
 A staged run captures the index once with `git write-tree`, and every later read uses that tree:
-the sources, the policy and the side inputs. `TreeFiles` writes chosen files of a tree's listing
-(listing.py) into directories, and `WorktreeFiles` those of the working tree.
+the sources, the policy and the side inputs. `TreeFiles` writes chosen files of a snapshot's
+listing (listing.py), a git tree's or the working tree's, into directories.
 
 Side inputs are the files a run reads besides its sources and its policy files: what providers
 and coverage adapters declare (`inputs` in plugins.py), the files layout rules ask about, and
@@ -23,7 +23,7 @@ from pathlib import Path
 from hoglint.config.model import Config
 from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
 from hoglint.ledger.envelope import EngineError
-from hoglint.ledger.listing import SOURCE_SUFFIXES, Listing, TreeListing, WorktreeListing
+from hoglint.ledger.listing import SOURCE_SUFFIXES, Listing, TreeListing
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 
 SOURCE_INPUTS = tuple(f"**/*{suffix}" for suffix in SOURCE_SUFFIXES)
@@ -84,21 +84,18 @@ class RunInputs:
 
 
 class TreeFiles:
-    """Files of one git tree, written into directories on request. As a `TreeRoot` (plugins.py)
-    it writes one directory per plugin, each holding exactly the files the plugin declares, into
-    `work_dir`, and answers whether a path exists only for a path `asked` matches: the run's
-    input patterns, so the answer is in the run's key."""
+    """Files of one snapshot, written into directories on request: a git tree, or the working
+    tree as git sees it (D40), so a plugin of a working tree run never reads an ignored file or a
+    file behind a skip-worktree bit. As a `TreeRoot` (plugins.py) it writes one directory per
+    plugin, each holding exactly the files the plugin declares, into `work_dir`, and answers
+    whether a path exists only for a path `asked` matches: the run's input patterns, so the
+    answer is in the run's key."""
 
-    def __init__(self, repo: Path, tree: str, work_dir: Path | None = None, asked: InputPatterns | None = None) -> None:
-        self.repo = repo
-        self.tree = tree
+    def __init__(self, listing: Listing, work_dir: Path | None = None, asked: InputPatterns | None = None) -> None:
+        self.listing = listing
         self.work_dir = work_dir
         self.asked = asked
         self.plugin_roots: dict[tuple[str, ...], Path] = {}
-
-    @property
-    def listing(self) -> Listing:
-        return TreeListing.of(self.repo, self.tree)
 
     def write(self, target: Path, paths: Iterable[str]) -> None:
         """Writes the paths the snapshot holds and can read under `target`; the others are left out."""
@@ -136,19 +133,6 @@ class TreeFiles:
         if self.asked is not None and not self.asked.matches(path):
             raise EngineError(f"the run asked whether {path} exists, but no source or declared input pattern covers it")
         return self.listing.holds(path)
-
-
-class WorktreeFiles(TreeFiles):
-    """Files of the working tree as git sees it (D40): the index's blobs overlaid with what git
-    status reports, so a plugin of a working tree run never reads an ignored file or a file
-    behind a skip-worktree bit."""
-
-    def __init__(self, repo: Path, work_dir: Path | None = None, asked: InputPatterns | None = None) -> None:
-        super().__init__(repo, "", work_dir, asked)
-
-    @property
-    def listing(self) -> Listing:
-        return WorktreeListing.of(self.repo)
 
 
 class InputDigests:

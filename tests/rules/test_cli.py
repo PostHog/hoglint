@@ -66,6 +66,7 @@ def commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Commands:
 
     monkeypatch.setattr(GraphSource, "build", build)
     write_config(tmp_path / "repo", CONFIG)
+    git_in(tmp_path / "repo", "init", "-q")
     (tmp_path / "work").mkdir()
     return Commands(tmp_path / "repo", tmp_path / "work")
 
