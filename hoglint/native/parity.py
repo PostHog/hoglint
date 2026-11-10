@@ -23,12 +23,14 @@ import os
 import sys
 import json
 import time
+import hashlib
 import argparse
 import resource
 import tempfile
+import itertools
 import subprocess
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -93,32 +95,57 @@ class RowDiff:
         return "\n".join(out)
 
 
-def diff_rows(name: str, left: Sequence[Row], right: Sequence[Row], fields: Sequence[str] = ()) -> RowDiff:
-    left_text = [json.dumps(row, ensure_ascii=False) for row in left]
-    right_text = [json.dumps(row, ensure_ascii=False) for row in right]
-    same = sum(1 for a, b in zip(left_text, right_text) if a == b)
-    missing = Counter(left_text) - Counter(right_text)
-    extra = Counter(right_text) - Counter(left_text)
+def row_text(row: Row) -> str:
+    return json.dumps(row, ensure_ascii=False)
+
+
+def row_key(text: str) -> bytes:
+    return hashlib.blake2b(text.encode(), digest_size=16).digest()
+
+
+def diff_lines(name: str, left: Iterable[str], right: Iterable[str], fields: Sequence[str] = ()) -> RowDiff:
+    """Two row lists, one JSON text per row, compared in order and as multisets, a row at a time.
+    A row equal to the row at its position on the other side is in both multisets, so it cancels
+    out; only the other rows are kept, by digest, to count what is missing and extra."""
+    left_count = right_count = same = 0
+    left_only: Counter[bytes] = Counter()
+    right_only: Counter[bytes] = Counter()
     counts: Counter[str] = Counter()
     examples: list[tuple[Row, Row]] = []
-    for a, b in zip(left, right):
+    for a, b in itertools.zip_longest(left, right):
+        left_count += a is not None
+        right_count += b is not None
         if a == b:
+            same += 1
+            continue
+        if a is not None:
+            left_only[row_key(a)] += 1
+        if b is not None:
+            right_only[row_key(b)] += 1
+        if a is None or b is None:
+            continue
+        a_row, b_row = json.loads(a), json.loads(b)
+        if a_row == b_row:
             continue
         if len(examples) < EXAMPLES:
-            examples.append((a, b))
-        for field, x, y in zip(fields, a, b):
+            examples.append((a_row, b_row))
+        for field, x, y in zip(fields, a_row, b_row):
             if x != y:
                 counts[field] += 1
     return RowDiff(
         name,
-        len(left),
-        len(right),
+        left_count,
+        right_count,
         same,
-        sum(missing.values()),
-        sum(extra.values()),
+        sum((left_only - right_only).values()),
+        sum((right_only - left_only).values()),
         tuple(counts.most_common()),
         tuple(examples),
     )
+
+
+def diff_rows(name: str, left: Sequence[Row], right: Sequence[Row], fields: Sequence[str] = ()) -> RowDiff:
+    return diff_lines(name, map(row_text, left), map(row_text, right), fields)
 
 
 def finding_row(finding: Finding) -> Row:
@@ -240,11 +267,19 @@ def read_lines(path: Path) -> list[Row]:
         return [json.loads(line) for line in handle]
 
 
+def row_texts(path: Path) -> Iterator[str]:
+    """The rows of a dump file as the JSON text `Dump.write_lines` wrote, one at a time."""
+    with open(path) as handle:
+        for line in handle:
+            yield line.removesuffix("\n")
+
+
 def compare_dumps(left: Path, right: Path) -> list[RowDiff]:
+    """Table by table and row by row: a dump is too large to hold two of in memory."""
     diffs = []
     for name in LIST_OUTPUTS:
         fields = FIELDS if name == "edges" else ()
-        diffs.append(diff_rows(name, read_lines(left / f"{name}.jsonl"), read_lines(right / f"{name}.jsonl"), fields))
+        diffs.append(diff_lines(name, row_texts(left / f"{name}.jsonl"), row_texts(right / f"{name}.jsonl"), fields))
     for name in VALUE_OUTPUTS:
         a = json.loads((left / f"{name}.json").read_text())
         b = json.loads((right / f"{name}.json").read_text())
