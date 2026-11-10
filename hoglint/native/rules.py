@@ -40,7 +40,7 @@ from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
-from hoglint.rules.levels import LevelEvaluator
+from hoglint.rules.levels import LevelEvaluator, LevelResult
 from hoglint.rules.plan import tree
 from hoglint.selectors import Node, Truth
 
@@ -444,12 +444,20 @@ class JudgedRows:
 
     def confirm(self, judge: EdgeRule) -> None:
         """Every row judged again by `judge` (D50, D55): a row the rule takes as a finding must
-        give its judgment and identity, and a row the rule's own code reported must give what
+        give its judgment, identity and subjects, and a row the rule's own code reported must give what
         that code reported over the evaluator's labels."""
         alone = set(self.alone)
         for at in range(len(self.edges)):
-            if at not in alone:
-                self.rejudged(at, self.identities[self.identity_at[at]]).confirmed(judge)
+            if at in alone:
+                continue
+            env = self.rejudged(at, self.identities[self.identity_at[at]]).confirmed(judge)
+            subjects = judge.subjects(env)
+            if subjects != self.subjects(at):
+                site = env.edge.site
+                raise EngineError(
+                    f"rule {judge.spec.id} gives {env.edge.kind} {site.path}:{site.line} the subjects {subjects}, "
+                    f"apart from the evaluator's {self.subjects(at)}"
+                )
         edges = self.alone_edges()
         for at in self.alone:
             edge = edges[self.edges[at]]
@@ -704,17 +712,17 @@ class NativeRuleContext(RuleContext):
             other = theirs[at] if at < len(theirs) else "nothing"
             raise EngineError(f"rule {spec.id}: the evaluator gives {mine} as row {at}, the rule's own code {other}")
 
-    def confirm_levels(self) -> None:
-        """Every level's groups, as the evaluator gives them, must be the groups a plain Python
-        labeler gives (D55): a ledger writes a line per passing group."""
-        for spec in self.config.levels.values():
-            ours = self.labeler.level_groups(spec)
-            if ours is None:
+    def confirm_levels(self, levels: dict[str, LevelResult], runs: dict[str, RuleRun]) -> None:
+        """Every level, as the run judged it, must pass and fail the groups it passes and fails
+        over a plain Python labeler (D55): a ledger writes a line per passing group, and a group's
+        label decides which findings block it."""
+        for name, spec in self.config.levels.items():
+            ours = levels[name]
+            theirs = LevelEvaluator(spec, self.plain.labeler, runs).evaluate()
+            if ours.passing == theirs.passing and set(ours.blocks) == set(theirs.blocks):
                 continue
-            theirs = LevelEvaluator(spec, self.plain.labeler, {}).groups()
-            if ours != theirs:
-                wrong = sorted(set(ours) ^ set(theirs))[:3]
-                raise EngineError(f"level {spec.name}: the evaluator and the Python labeler group apart on {wrong}")
+            wrong = sorted(set(ours.passing) ^ set(theirs.passing)) or sorted(set(ours.blocks) ^ set(theirs.blocks))
+            raise EngineError(f"level {name}: the evaluator and the Python labeler pass groups apart on {wrong[:3]}")
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         rows = self.run_rule(self.evaluator.pairs, rule)

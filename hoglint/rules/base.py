@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
+    from hoglint.rules.levels import LevelResult
 
 from hoglint.rules.findings import FindingTable
 from hoglint.rules.plan import context_bits, identity_paths, selector_tree, tree
@@ -196,8 +197,8 @@ class RuleContext:
         """Records the labels set two ways that the run met so far, outside the labeler. The
         labeler records them as it reads them, so there is nothing left to do here."""
 
-    def confirm_levels(self) -> None:
-        """Groups every level again with labels its labeler did not compute, for a run that
+    def confirm_levels(self, levels: dict[str, LevelResult], runs: dict[str, RuleRun]) -> None:
+        """Judges every level again with labels its labeler did not compute, for a run that
         writes a ledger. The Python engine's labeler computes its own."""
 
     def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:

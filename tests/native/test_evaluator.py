@@ -1531,10 +1531,11 @@ def made_up(text: str) -> str:
     return "made-up" if text == "billing" else text
 
 
-def swapped(text: str) -> str:
-    """`core` and `billing` the other way round: a label column with the same values, on the
+def swapped(text: str, pair: tuple[str, str] = ("core", "billing")) -> str:
+    """Two values of a label column the other way round: a column with the same values, on the
     wrong modules."""
-    return {"core": "billing", "billing": "core"}.get(text, text)
+    first, second = pair
+    return second if text == first else first if text == second else text
 
 
 def made_up_label(changes: dict[str, Any]) -> dict[str, Any]:
@@ -1580,6 +1581,10 @@ LEDGER_LIES: dict[str, tuple[str, Any]] = {
         lambda world: {
             "values": lambda found: [[(kind, [swapped(item) for item in items]) for kind, items in found[0]], found[1]]
         },
+    ),
+    "source module": (
+        rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
+        lambda world: {"judge": lambda rows: [(*rows[0][:4], "made.up", *rows[0][5:]), *rows[1:]]},
     ),
     "label column": (
         rule_table(
@@ -1656,6 +1661,31 @@ def test_a_ledger_write_holds_a_level_to_the_groups_a_python_labeler_gives(
     assert any(
         "made-up" in level.passing for level in Engine(config, world.graph, world.repo).evaluate().levels.values()
     )
+    with pytest.raises(EngineError, match="evaluator"):
+        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+
+
+def test_a_ledger_write_holds_a_level_to_the_groups_a_python_labeler_blocks(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def levels() -> dict[str, tuple[list[str], list[str]]]:
+        result = Engine(config, world.graph, world.repo).evaluate()
+        return {name: (level.passing, sorted(level.failing)) for name, level in result.levels.items()}
+
+    rules = rule_table("crossing", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'alerts'"})
+    config = world.config(rules + '\n[levels.isolated]\ngroup_by = "package"\nrequires = ["crossing"]\n')
+    Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+    honest = levels()
+    # `billing` fails the level and `leaf` passes it.
+    pair = ("billing", "leaf")
+    lie(
+        monkeypatch,
+        values=lambda found: [[(kind, [swapped(item, pair) for item in items]) for kind, items in found[0]], found[1]],
+    )
+    lied = levels()
+    assert lied != honest and {name: set(sum(groups, [])) for name, groups in lied.items()} == {
+        name: set(sum(groups, [])) for name, groups in honest.items()
+    }
     with pytest.raises(EngineError, match="evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
 
