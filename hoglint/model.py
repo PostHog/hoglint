@@ -185,10 +185,23 @@ class FindingDetail:
         return self
 
 
+# What a stored summary keeps of a witness edge: kind, path, line, column, surface, targets.
+WitnessRow = tuple[str, str, int, int, str, tuple[str, ...]]
+
+
+def witness_row(edge: Edge) -> WitnessRow:
+    site = edge.site
+    return edge.kind, site.path, site.line, site.column, edge.surface, tuple(map(str, edge.targets))
+
+
 class EdgeRef(Protocol):
     """A finding's edge, made when something reads it: the native engine keeps an edge id."""
 
     def get(self) -> Edge: ...
+
+    def row(self) -> WitnessRow:
+        """What a stored summary keeps of the edge, read with no Edge made."""
+        ...
 
 
 class Shown(Protocol):
@@ -222,6 +235,14 @@ class Finding:
         if witness is None or isinstance(witness, Edge):
             return witness
         return witness.get()
+
+    @property
+    def witness_rows(self) -> tuple[WitnessRow, ...]:
+        """What a stored summary keeps of the witnesses; a witness kept by id makes no Edge."""
+        witness = self.witness
+        if witness is not None and not isinstance(witness, Edge):
+            return (witness.row(),)
+        return tuple(witness_row(edge) for edge in self.witnesses)
 
     @property
     def site(self) -> Site | None:

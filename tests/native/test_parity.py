@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge
+from hoglint.model import Edge, WitnessRow, witness_row
 from hoglint.native.parity import Dump, compare_dumps, read_lines
 from hoglint.native.rules import Rejudged
 from hoglint.native.source import ENGINES
@@ -185,6 +185,9 @@ class Held:
 
     def get(self) -> Edge:
         return self.edge
+
+    def row(self) -> WitnessRow:
+        return witness_row(self.edge)
 
 
 def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path: Path) -> None:

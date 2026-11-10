@@ -17,7 +17,7 @@ from typing import Any
 
 from hoglint.ledger.equality import EqualityResult, LineDiff
 from hoglint.ledger.file import LineKey, parse_key, render_key
-from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause
+from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause, witness_row
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile
 from hoglint.rules.levels import Block
@@ -53,8 +53,7 @@ class WitnessRecord:
 
     @staticmethod
     def of(edge: Edge) -> WitnessRecord:
-        site = edge.site
-        return WitnessRecord(edge.kind, site.path, site.line, site.column, edge.surface, tuple(map(str, edge.targets)))
+        return WitnessRecord(*witness_row(edge))
 
     def to_json(self) -> list[Any]:
         return [self.kind, self.path, self.line, self.column, self.surface, list(self.targets)]
@@ -121,7 +120,7 @@ class FindingRecord:
             finding.identity,
             finding.status,
             ShownRecord.of(finding, portable) if shown else None,
-            tuple(WitnessRecord.of(edge) for edge in finding.witnesses),
+            tuple(WitnessRecord(*row) for row in finding.witness_rows),
             finding.owner.module if finding.owner is not None else "",
             finding.subjects,
             finding.ledgerable,

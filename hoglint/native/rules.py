@@ -21,7 +21,7 @@ from hoglint.config.model import Config
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, WitnessRow
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
@@ -140,20 +140,31 @@ class NativeSymbolFacts(SymbolFacts):
 
 
 class RowEdges:
-    """The edges of a rule's rows, by id, all made on the first read of any: a run that reads one
-    finding's witness reads most of them (a stored summary keeps every witness)."""
+    """The edges of a rule's rows, by id, all made on the first read of any, and what a stored
+    summary keeps of them, all read on the first read of any: a reader of one finding's witness
+    reads most of them."""
 
-    __slots__ = ("core", "ids", "made")
+    __slots__ = ("core", "ids", "made", "rows")
 
     def __init__(self, core: Any, ids: array[int]) -> None:
         self.core = core
         self.ids = ids
         self.made: dict[int, Edge] | None = None
+        self.rows: dict[int, WitnessRow] | None = None
 
     def edge(self, edge_id: int) -> Edge:
         if self.made is None:
             self.made = dict(zip(self.ids, self.core.get(self.ids)))
         return self.made[edge_id]
+
+    def row(self, edge_id: int) -> WitnessRow:
+        if self.rows is None:
+            found = self.core.link.witness_rows(self.ids.tobytes())
+            self.rows = {
+                at: (kind, path, line, column, surface, tuple(targets))
+                for at, (kind, path, line, column, surface, targets) in zip(self.ids, found)
+            }
+        return self.rows[edge_id]
 
 
 class EdgeHandle:
@@ -167,6 +178,9 @@ class EdgeHandle:
 
     def get(self) -> Edge:
         return self.edges.edge(self.edge_id)
+
+    def row(self) -> WitnessRow:
+        return self.edges.row(self.edge_id)
 
 
 class Rejudged:

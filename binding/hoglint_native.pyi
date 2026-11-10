@@ -143,6 +143,9 @@ class Link:
     ) -> None:
         """Refines core edges (D22): per edge, the shape and shape detail to set (None keeps the
         edge's) and attrs to add after its own."""
+    def witness_rows(self, ids: bytes) -> list[tuple[str, str, int, int, str, list[str]]]:
+        """(kind, path, line, column, surface, targets) of each edge, as a stored summary keeps a
+        finding's witness, with no Edge made."""
     def columns(self, ids: bytes, names: list[str]) -> list[list[object]]:
         """Projected columns of edges: one list per name (path, module, scope, line, column,
         surface, target_module, target_symbol, producer, attr:<name>), one value per edge."""

@@ -14,6 +14,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::value::RawValue;
 use std::cell::RefCell;
 
+/// (kind, path, line, column, surface, targets) of a finding's witness edge.
+type WitnessRow<'py> = (
+    Bound<'py, PyString>,
+    Bound<'py, PyString>,
+    u32,
+    u32,
+    Bound<'py, PyString>,
+    Vec<String>,
+);
+
 /// Where a call kind's rows hold the callee (`CALLEE_FIELD` in hoglint/native/queries.py).
 fn callee_position(kind: &str) -> PyResult<usize> {
     match kind {
@@ -491,6 +501,57 @@ impl Link {
                 values.push(value);
             }
             out.push(PyList::new(py, values)?);
+        }
+        Ok(out)
+    }
+
+    /// What a stored summary keeps of each edge `ids` names as a finding's witness
+    /// (`ledger.records.WitnessRecord`): (kind, path, line, column, surface, targets written as
+    /// `EntityId` writes them), with no Edge made.
+    #[allow(clippy::type_complexity)]
+    fn witness_rows<'py>(
+        &self,
+        py: Python<'py>,
+        ids: &[u8],
+    ) -> PyResult<Vec<WitnessRow<'py>>> {
+        let ids = ids_from(ids)?;
+        let link = &self.inner;
+        let it = &link.core.it;
+        if let Some(&bad) = ids.iter().find(|&&id| id as usize >= link.edges.len()) {
+            return Err(PyKeyError::new_err(bad));
+        }
+        let mut strings: FxHashMap<Sid, Bound<'py, PyString>> = FxHashMap::default();
+        let mut text = |sid: Sid| {
+            strings
+                .entry(sid)
+                .or_insert_with(|| PyString::new(py, it.s(sid)))
+                .clone()
+        };
+        let mut paths: FxHashMap<u32, Bound<'py, PyString>> = FxHashMap::default();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let edges = &link.edges;
+            let path = paths
+                .entry(link.file_key(id))
+                .or_insert_with(|| PyString::new(py, link.path_of_edge(id)))
+                .clone();
+            let (line, column) = link.line_col(id);
+            let targets = edges
+                .targets_of(id)
+                .iter()
+                .map(|target| match target.s {
+                    EMPTY => it.s(target.m).to_string(),
+                    symbol => format!("{}.{}", it.s(target.m), it.s(symbol)),
+                })
+                .collect();
+            out.push((
+                text(edges.kind_of(id)),
+                path,
+                line,
+                column,
+                text(edges.surface_of(id)),
+                targets,
+            ));
         }
         Ok(out)
     }
