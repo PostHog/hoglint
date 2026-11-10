@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Protocol
 
 from hoglint.config.model import RuleSpec
 from hoglint.index import has_endpoint_attrs
@@ -13,6 +15,7 @@ from hoglint.rules.base import (
     EdgeEnv,
     EdgeRule,
     Endpoint,
+    GroupedSurvivors,
     IncompleteItem,
     Judgment,
     ModuleEnv,
@@ -33,6 +36,26 @@ class Hop:
     dst: Endpoint
     selected: Truth
     surface: str
+
+
+@dataclass(frozen=True, slots=True)
+class Found:
+    """What a search run outside Python found from start module `source`: a hop whose
+    destination did not resolve (`verdict` None, `path` the hop alone), or a denied target with
+    the path to it, the hop that reaches it last. `dst` is that hop's destination."""
+
+    source: str
+    path: tuple[Edge, ...]
+    dst: Endpoint
+    verdict: Truth | None
+
+
+class ReachSearch(Protocol):
+    """A reach rule's search that a rule context runs itself (`RuleContext.reach_search`)."""
+
+    def has_hops(self, module: str) -> bool: ...
+
+    def run(self, sources: list[str]) -> list[Found]: ...
 
 
 class ReachPrimitive(EdgeRule):
@@ -83,13 +106,13 @@ class ReachPrimitive(EdgeRule):
                     out.append(Hop(env.edge, env.dst, selected, env.edge.surface))
         return out
 
-    def sources(self) -> list[str]:
+    def sources(self, has_hops: Callable[[str], bool]) -> list[str]:
         out = []
         for module in self.ctx.source_modules(self.kinds()):
             truth = Truth.TRUE
             if self.from_classes is not None:
                 truth = self.from_classes.truth(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
-            if truth is Truth.FALSE or not self.hops(module):
+            if truth is Truth.FALSE or not has_hops(module):
                 continue
             if truth is Truth.TRUE:
                 out.append(module)
@@ -99,8 +122,17 @@ class ReachPrimitive(EdgeRule):
         return out
 
     def evaluate(self) -> RuleRun:
-        for source in self.sources():
-            self.search(source)
+        search = self.ctx.reach_search(self)
+        if search is None:
+            for source in self.sources(lambda module: bool(self.hops(module))):
+                self.search(source)
+            return self.run
+        for found in search.run(self.sources(search.has_hops)):
+            env = EdgeEnv(self.ctx, found.path[-1], self.ctx.module_endpoint(found.source), found.dst)
+            if found.verdict is None:
+                self.on_unresolved(env)
+            else:
+                self.report(env, list(found.path), found.verdict)
         return self.run
 
     def hop_env(self, hop: Hop, origin: Endpoint) -> EdgeEnv:
@@ -198,6 +230,23 @@ class EndpointsEnv:
         return read_endpoint(self.ctx, self.src if root == "src" else self.dst, name, None, root)
 
 
+# The edges a cycle finding names as its witnesses.
+WITNESSES = 3
+
+
+@dataclass(frozen=False, slots=True)
+class Pair:
+    """The edges from one group to another: how many, and the first few as witnesses."""
+
+    count: int = 0
+    envs: list[EdgeEnv] = field(default_factory=list)
+
+    def add(self, env: EdgeEnv) -> None:
+        self.count += 1
+        if len(self.envs) < WITNESSES:
+            self.envs.append(env)
+
+
 class CyclePrimitive(EdgeRule):
     """Strongly connected parts of a grouped view: every pair inside one is a finding."""
 
@@ -231,34 +280,91 @@ class CyclePrimitive(EdgeRule):
             self.group_cache[key] = group
         return group
 
+    def consider(self, env: EdgeEnv, pairs: dict[tuple[str, str], Pair]) -> None:
+        """Pairs one environment's groups, or reports it when it cannot."""
+        selected = self.selection(env)
+        if selected is Truth.FALSE:
+            return
+        if env.dst.unresolved:
+            self.on_unresolved(env)
+            return
+        if selected is Truth.UNKNOWN:
+            self.incomplete(env, "selection reads an unknown value")
+            return
+        src, dst = self.group(env, "src"), self.group(env, "dst")
+        if src is None or dst is None or src == dst:
+            return
+        pairs.setdefault((src, dst), Pair()).add(env)
+
+    def action(self, env: EdgeEnv) -> tuple[str, str] | str | None:
+        """What `consider` does with an environment, as one value a group of them shares: its
+        pair, "unresolved", "unknown", or None to drop it."""
+        selected = self.selection(env)
+        if selected is Truth.FALSE:
+            return None
+        if env.dst.unresolved:
+            return "unresolved"
+        if selected is Truth.UNKNOWN:
+            return "unknown"
+        src, dst = self.group(env, "src"), self.group(env, "dst")
+        return None if src is None or dst is None or src == dst else (src, dst)
+
+    def env_of(self, edge: Edge) -> EdgeEnv:
+        return self.env(edge, self.ctx.src_endpoint(edge.site), self.ctx.dst_endpoints(edge, self.spec.endpoint)[0])
+
+    def grouped_pairs(self, grouped: GroupedSurvivors) -> dict[tuple[str, str], Pair]:
+        """`consider` over handle arrays: each group decides once from its representative, and
+        an Edge is made only for an edge reported on its own or among a pair's first witnesses."""
+        actions = [self.action(self.env_of(rep)) for rep in grouped.reps]
+        wanted: list[int] = []
+        seen: dict[tuple[str, str], int] = {}
+        for edge_id, group in zip(grouped.ids, grouped.groups):
+            action = actions[group] if group is not None else "alone"
+            if isinstance(action, tuple):
+                if seen.get(action, 0) < WITNESSES:
+                    wanted.append(edge_id)
+                seen[action] = seen.get(action, 0) + 1
+            elif action is not None:
+                wanted.append(edge_id)
+        edges = dict(zip(wanted, grouped.edges(wanted)))
+        pairs: dict[tuple[str, str], Pair] = {}
+        for edge_id, group in zip(grouped.ids, grouped.groups):
+            if group is None:
+                for env in self.edge_envs(edges[edge_id]):
+                    self.consider(env, pairs)
+                continue
+            action = actions[group]
+            if isinstance(action, tuple):
+                pair = pairs.setdefault(action, Pair())
+                pair.count += 1
+                if len(pair.envs) < WITNESSES:
+                    pair.envs.append(self.env_of(edges[edge_id]))
+            elif action == "unresolved":
+                self.on_unresolved(self.env_of(edges[edge_id]))
+            elif action == "unknown":
+                self.incomplete(self.env_of(edges[edge_id]), "selection reads an unknown value")
+        return pairs
+
     def evaluate(self) -> RuleRun:
-        pairs: dict[tuple[str, str], list[EdgeEnv]] = {}
-        for env in self.envs():
-            selected = self.selection(env)
-            if selected is Truth.FALSE:
-                continue
-            if env.dst.unresolved:
-                self.on_unresolved(env)
-                continue
-            if selected is Truth.UNKNOWN:
-                self.incomplete(env, "selection reads an unknown value")
-                continue
-            src, dst = self.group(env, "src"), self.group(env, "dst")
-            if src is None or dst is None or src == dst:
-                continue
-            pairs.setdefault((src, dst), []).append(env)
+        grouped = self.ctx.grouped_survivors(self)
+        pairs: dict[tuple[str, str], Pair] = {}
+        if grouped is not None:
+            pairs = self.grouped_pairs(grouped)
+        else:
+            for env in self.envs():
+                self.consider(env, pairs)
         components = strongly_connected(sorted(pairs))
-        for (src, dst), envs in sorted(pairs.items()):
+        for (src, dst), pair in sorted(pairs.items()):
             if components.get(src) is None or components.get(src) != components.get(dst):
                 continue
-            first = envs[0]
+            first = pair.envs[0]
             finding = self.ctx.finding(
                 self.spec,
                 project(self.spec.identity, first.resolve),
-                f"{src} -> {dst} closes a cycle ({len(envs)} edges)",
+                f"{src} -> {dst} closes a cycle ({pair.count} edges)",
                 first.src.module,
                 self.subjects(first),
-                tuple(env.edge for env in envs[:3]),
+                tuple(env.edge for env in pair.envs),
             )
             self.run.findings.append(finding)
         return self.run

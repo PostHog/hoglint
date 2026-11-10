@@ -175,7 +175,7 @@ impl Link {
 
     /// The longest dotted prefix of `dotted` that is a repo module with a file: what
     /// `GraphIndex.module_of_symbol` answers over `graph.modules`.
-    fn repo_module_of(&mut self, dotted: Sid) -> Option<Sid> {
+    pub(super) fn repo_module_of(&mut self, dotted: Sid) -> Option<Sid> {
         if let Some(&found) = self.endpoints.module_of.get(&dotted) {
             return found;
         }

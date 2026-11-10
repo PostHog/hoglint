@@ -10,12 +10,12 @@ Unknown semantics per position:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
@@ -34,6 +34,10 @@ from hoglint.model import (
     Shown,
     Site,
 )
+
+if TYPE_CHECKING:
+    from hoglint.rules.graphs import ReachPrimitive, ReachSearch
+
 from hoglint.selectors import (
     NONE,
     UNKNOWN,
@@ -116,6 +120,18 @@ class Endpoint:
         return f"{self.module}.{head}"
 
 
+@dataclass(frozen=True, slots=True)
+class GroupedSurvivors:
+    """A rule's survivors in judging order as a rule context grouped them
+    (`RuleContext.grouped_survivors`): each one's edge id and group (None for an edge judged
+    alone), a representative edge per group, and the Edges of the ids asked for."""
+
+    ids: list[int]
+    groups: list[int | None]
+    reps: list[Edge]
+    edges: Callable[[list[int]], list[Edge]]
+
+
 class RuleContext:
     """Shared state of one evaluation: config, graph, labels, per-edge ordinals and endpoint caches."""
 
@@ -171,6 +187,14 @@ class RuleContext:
 
     def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
         """A reach rule's hops out of `module` when this context builds them itself, else None."""
+        return None
+
+    def reach_search(self, rule: ReachPrimitive) -> ReachSearch | None:
+        """A reach rule's whole search when this context runs it itself, else None."""
+        return None
+
+    def grouped_survivors(self, rule: EdgeRule) -> GroupedSurvivors | None:
+        """The rule's survivors as handle arrays when this context groups edges, else None."""
         return None
 
     def edge_of(self, edge: Edge | int) -> Edge:

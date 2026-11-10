@@ -12,6 +12,7 @@ pub mod intern;
 pub mod paths;
 pub mod produce;
 pub mod queries;
+pub mod reach;
 pub mod resolve;
 pub mod scope;
 pub mod store;

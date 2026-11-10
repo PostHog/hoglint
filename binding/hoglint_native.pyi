@@ -159,6 +159,12 @@ class Link:
     def ids_seen_from(self, kind: str, module: str, include: int, exclude: int) -> bytes: ...
     @staticmethod
     def keep_classes(ids: bytes, key_of: bytes, class_of: bytes, keep: bytes) -> bytes: ...
+    def reach(
+        self, ids: bytes, classes: bytes, role: str, sources: list[tuple[str, int]], verdicts: bytes, width: int
+    ) -> list[tuple[str, int, bytes, int]]:
+        """A reach rule's search from each source (module, class of its verdicts) over the hops
+        `ids` with the verdict class of each: ("unresolved", source index, the hop's edge id, 0)
+        or ("denied", source index, the path's edge ids, verdict code), in the order found."""
     @staticmethod
     def key_classes(keys: bytes, size: int, columns: list[bytes]) -> tuple[bytes, bytes]:
         """The label class of each key in `keys` over code columns (one u32 code per key in

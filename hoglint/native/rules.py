@@ -32,6 +32,7 @@ from hoglint.rules.base import (
     EdgeEnv,
     EdgeRule,
     Endpoint,
+    GroupedSurvivors,
     Judgment,
     RuleContext,
     RuleRun,
@@ -40,7 +41,7 @@ from hoglint.rules.base import (
     joined,
     read_endpoint,
 )
-from hoglint.rules.graphs import Hop
+from hoglint.rules.graphs import EndpointsEnv, Found, Hop, ReachPrimitive
 from hoglint.rules.reads import Reads, granularity
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
 
@@ -232,10 +233,11 @@ class Survivors:
     ids: array[int]
     group_of: array[int]
     judgments: list[Judgment | None]
+    reps: list[Edge]
 
     @staticmethod
     def alone(ids: array[int]) -> Survivors:
-        return Survivors(ids, array("I", [NO_GROUP]) * len(ids), [])
+        return Survivors(ids, array("I", [NO_GROUP]) * len(ids), [], [])
 
     def judgment(self, at: int) -> Judgment | None:
         group = self.group_of[at]
@@ -501,7 +503,7 @@ class Grouper:
             keep.append(kept)
             judgments.append(judgment)
         kept_ids, groups = type(self.link).keep_keys(ids.tobytes(), group_of, bytes(keep))
-        return Survivors(array("I", kept_ids), array("I", groups), judgments)
+        return Survivors(array("I", kept_ids), array("I", groups), judgments, rep_edges)
 
     def audit(self, edges: list[Edge]) -> None:
         """In audit mode, checks the decision of each representative for undeclared reads."""
@@ -523,7 +525,8 @@ class Grouper:
         regular, irregular = self.link.split_irregular(ids.tobytes())
         kept = self.grouped(array("I", regular), reads)
         alone = array("I", irregular)
-        return Survivors(kept.ids + alone, kept.group_of + array("I", [NO_GROUP]) * len(alone), kept.judgments)
+        group_of = kept.group_of + array("I", [NO_GROUP]) * len(alone)
+        return Survivors(kept.ids + alone, group_of, kept.judgments, kept.reps)
 
     def grouped(self, ids: array[int], reads: Reads) -> Survivors:
         """The edges of `ids` whose group can make output; see the module doc."""
@@ -635,6 +638,101 @@ class FindingClasses:
         )
 
 
+VERDICT_CODES = {Truth.FALSE: 0, Truth.TRUE: 1, Truth.UNKNOWN: 2}
+VERDICT_TRUTHS = {code: truth for truth, code in VERDICT_CODES.items()}
+EXCUSED = 4
+
+
+class NativeReach:
+    """A reach rule's search in the link (D25, `Link.reach`). Python says what a hop means: the
+    class of what `deny` and `unless` read of its destination, and the verdict of each start
+    module's class against each class. The link walks the hops in the order the Python search
+    takes them, so the findings, incompletes and witness paths are the same.
+
+    Only for a rule whose verdicts read the endpoints alone, with no `select` (every edge it
+    sees is followed) and no irregular edge; any other rule searches in Python."""
+
+    def __init__(self, ctx: NativeRuleContext, rule: ReachPrimitive, ids: array[int]) -> None:
+        self.ctx = ctx
+        self.rule = rule
+        self.ids = ids
+        self.link = ctx.native.native.link
+        self.grouper = Grouper(ctx, rule)
+        self.modules = frozenset(self.link.columns(ids.tobytes(), ["module"])[0])
+        refs_read = [
+            ref for selector in (rule.spec.deny, rule.spec.unless) if selector is not None for ref in selector.refs()
+        ]
+        found = Reads.of(refs_read, ctx.config)
+        assert found is not None
+        self.reads = found
+
+    @staticmethod
+    def of(ctx: NativeRuleContext, rule: ReachPrimitive) -> NativeReach | None:
+        if rule.spec.select is not None or rule.spec.endpoint not in GROUPED_ROLES or not rule.endpoint_verdicts:
+            return None
+        link = ctx.native.native.link
+        include, exclude = context_bits(rule.include), context_bits(rule.exclude)
+        ids = array("I")
+        for kind in ctx.kinds_or_all(rule.kinds()):
+            ids.extend(array("I", link.candidates([kind], include, exclude)))
+        _, irregular = link.split_irregular(ids.tobytes())
+        return NativeReach(ctx, rule, ids) if not irregular else None
+
+    def has_hops(self, module: str) -> bool:
+        return module in self.modules
+
+    def hop_classes(self) -> tuple[bytes, list[Endpoint]]:
+        """The verdict class of each hop, and a destination of each class."""
+        keys = self.grouper.dst_keys(self.ids, self.reads)
+        names = tuple(sorted(self.reads.dst - {"unresolved"}))
+        classes = self.ctx.endpoint_classes.of(keys, self.grouper.dst_columns(names, False))
+        class_of, reps = type(self.link).group(self.ids.tobytes(), [(keys.key_of, classes.class_of)])
+        role = self.rule.spec.endpoint
+        dsts = [self.ctx.dst_endpoints(edge, role)[0] for edge in self.ctx.native.native.core.get(array("I", reps))]
+        return class_of, dsts
+
+    def origin_classes(self, sources: list[str]) -> tuple[list[int], list[Endpoint]]:
+        """The verdict class of each start module (what `deny` and `unless` read of it), and a
+        start of each class."""
+        names = sorted(self.reads.src)
+        index: dict[tuple[Any, ...], int] = {}
+        reps: list[Endpoint] = []
+        out = []
+        for source in sources:
+            origin = self.ctx.module_endpoint(source)
+            values = tuple(read_endpoint(self.ctx, origin, name, None, "src") for name in names)
+            found = index.get(values)
+            if found is None:
+                found = index[values] = len(reps)
+                reps.append(origin)
+            out.append(found)
+        return out, reps
+
+    def verdicts(self, origins: list[Endpoint], dsts: list[Endpoint]) -> bytes:
+        out = bytearray()
+        for origin in origins:
+            for dst in dsts:
+                verdict, excused = self.rule.judge_hop(EndpointsEnv(self.ctx, origin, dst))
+                out.append(VERDICT_CODES[verdict] | (EXCUSED if excused else 0))
+        return bytes(out)
+
+    def run(self, sources: list[str]) -> list[Found]:
+        class_of, dsts = self.hop_classes()
+        origin_of, origins = self.origin_classes(sources)
+        role = self.rule.spec.endpoint
+        found = self.link.reach(
+            self.ids.tobytes(), class_of, role, list(zip(sources, origin_of)), self.verdicts(origins, dsts), len(dsts)
+        )
+        paths = [array("I", path) for _, _, path, _ in found]
+        edges = iter(self.ctx.native.native.core.get(array("I", [edge for path in paths for edge in path])))
+        out = []
+        for (kind, source, _, verdict), path in zip(found, paths):
+            walked = tuple(next(edges) for _ in path)
+            dst = self.ctx.dst_endpoints(walked[-1], role)[0]
+            out.append(Found(sources[source], walked, dst, VERDICT_TRUTHS[verdict] if kind == "denied" else None))
+        return out
+
+
 class NativeRuleContext(RuleContext):
     """RuleContext over a NativeGraphIndex: groups come from the link, and a rule's groups hold
     only the core edges that can make output for it."""
@@ -652,6 +750,9 @@ class NativeRuleContext(RuleContext):
 
     def edge_of(self, edge: Edge | int) -> Edge:
         return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
+
+    def reach_search(self, rule: ReachPrimitive) -> NativeReach | None:
+        return NativeReach.of(self, rule)
 
     def reach_hops(self, rule: EdgeRule, module: str) -> list[Any] | None:
         """Core hops as edge ids with endpoints from the link, then pack edges as Edges, judged
@@ -723,6 +824,18 @@ class NativeRuleContext(RuleContext):
 
     def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
         return sorted({module for kind in self.kinds_or_all(kinds) for module in self.native.modules_of(kind)})
+
+    def grouped_survivors(self, rule: EdgeRule) -> GroupedSurvivors:
+        survivors = Grouper(self, rule).survivors()
+        order = array("I", self.native.native.link.rule_order(survivors.ids.tobytes(), self.kinds_or_all(rule.kinds())))
+        groups = [survivors.group_of[at] for at in order]
+        core = self.native.native.core
+        return GroupedSurvivors(
+            [survivors.ids[at] for at in order],
+            [None if group == NO_GROUP else group for group in groups],
+            survivors.reps,
+            lambda wanted: core.get(array("I", wanted)),
+        )
 
     def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, Finding | None]]:
         """The rule's survivors as handle arrays, in the order the rule judges edges. A grouped
