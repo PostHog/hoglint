@@ -265,16 +265,13 @@ class Engine:
         return lines
 
     def mark_accepted(self, result: RunResult, recorded: dict[LineKey, int]) -> None:
-        """A new finding is accepted when the ledger records at least as many as the scan counts."""
-        for run in result.runs.values():
-            table = run.findings
-            for row, finding in enumerate(list(table)):
-                key = finding.ledger_key
-                accepted = (
-                    finding.status is FindingStatus.NEW
-                    and finding.ledgerable
-                    and key in recorded
-                    and recorded[key] >= result.scan.get(key, 0)
-                )
-                if accepted:
-                    table.accept([table.identity_at[row]])
+        """A new finding is accepted when the ledger records at least as many as the scan counts.
+        That is a property of its identity: a row is accepted when its identity is, unless an
+        exception allows it or the ledger may not hold it (`FindingTable.status`)."""
+        for rule_id, run in result.runs.items():
+            accepted = []
+            for place, identity in enumerate(run.findings.identities):
+                key = (rule_id, identity)
+                if key in recorded and recorded[key] >= result.scan.get(key, 0):
+                    accepted.append(place)
+            run.findings.accept(accepted)
