@@ -685,6 +685,7 @@ impl Rules {
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, rule.role, dsts);
+            self.touch_sources(cx, rule, id, src, dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(*cx, Some(id), src, *dst);
                 let judgment = decide(rule, &env);
@@ -725,6 +726,7 @@ impl Rules {
         let kept = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, rule.role, dsts);
+            self.touch_sources(cx, rule, id, src, dsts);
             let mut selected = false;
             for dst in dsts.iter() {
                 let env = Env::new(*cx, Some(id), src, *dst);
@@ -755,6 +757,7 @@ impl Rules {
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, rule.role, dsts);
+            self.touch_sources(cx, rule, id, src, dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(*cx, Some(id), src, *dst);
                 let selected = rule.staged.truth(&env, false);
@@ -811,6 +814,21 @@ impl Rules {
         let cx = Cx { link, rules: self };
         for module in modules {
             self.read_source(&cx, rule, module);
+        }
+    }
+
+    /// In a config with labels that conflict only where read: the `src` parts of an edge with no
+    /// destination, which `EdgeRule.edge_envs` reads before it reads any destination.
+    fn touch_sources<'a>(
+        &self,
+        cx: &Cx<'a>,
+        rule: &'a Rule,
+        id: u32,
+        src: Endpoint<'a>,
+        dsts: &[Endpoint<'a>],
+    ) {
+        if self.touch && dsts.is_empty() {
+            parts_truth(rule.staged.src(), &Env::new(*cx, Some(id), src, src));
         }
     }
 

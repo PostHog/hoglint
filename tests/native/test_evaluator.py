@@ -905,6 +905,21 @@ def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_wh
     assert outcome(world, world.config(reads, base)) == native
 
 
+def test_an_edge_with_no_destination_reads_its_source_where_python_reads_it(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lead = (
+        CONFIG.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
+        + '\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["lead"]\n'
+        + '\n[[assign]]\nmatch = "products/billing/**"\nset = { lead = "someone" }\n'
+    )
+    reads = rule_table("via", {**EDGE, "endpoint": "via", "select": "src.scope startswith src.lead"})
+    native = outcome(world, world.config(reads, lead))
+    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
+    assert native == outcome(world, world.config(reads, lead))
+    assert len(native) > 1
+
+
 class Varied:
     """A config that differs from the fixture's outside `[rules]`: fields a provider sets (a set
     and a string, with or without a domain or an overriding assignment), `[roles]` with a group
