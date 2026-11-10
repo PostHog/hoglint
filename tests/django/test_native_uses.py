@@ -5,8 +5,10 @@ and files it cannot read."""
 from __future__ import annotations
 
 import json
+from array import array
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from core.support import SITE, func_def, import_row
 from django_facts import APPS, DJANGO, FIRST_PARTY, FactRepo
@@ -19,8 +21,10 @@ from hoglint.native.config import link_config
 from hoglint.native.graph import NativeGraph, NativeSink
 from hoglint.native.queries import NativePackQueries
 from hoglint.packs.django.config import DjangoPackConfig
-from hoglint.packs.django.pack import USES_KINDS, DjangoPack
-from hoglint.plugins import Refinement
+from hoglint.packs.django.native_uses import NativeUses, file_id
+from hoglint.packs.django.pack import USES_KINDS, DjangoPack, DjangoRun
+from hoglint.packs.django.uses import UseProducer
+from hoglint.plugins import PackSink, Refinement, Refinements
 from native.require import native_module
 
 # One use per row: (model, chain, up). Rows run in scope 0 of shop/views.py, one line each.
@@ -128,6 +132,75 @@ def engines(tmp_path: Path, *groups: dict[str, dict]) -> Engines:
     native_graph.modules = native_build.index.repo_modules()
     reader = BuildReader(native_build, NativePackQueries(native_build, native_graph, link))
     return Engines(python, (native_graph, reader, NativeSink(native_graph)))
+
+
+def django_run(reader: BuildReader, sink: PackSink) -> DjangoRun:
+    """The pack up to its model registry, which `django.uses` reads."""
+    run = DjangoRun(reader, DjangoPackConfig(settings_modules=("proj.settings",)), Path("."), sink)
+    run.read_apps()
+    run.read_models()
+    return run
+
+
+def rows(made: Refinements) -> list[tuple[Any, ...]]:
+    return [(made.handles[at], made.shapes[at], made.details[at], tuple(made.attrs[at])) for at in range(len(made))]
+
+
+def test_the_link_judges_every_use_as_the_python_producer_does(tmp_path: Path) -> None:
+    graph, reader, sink = engines(tmp_path, DJANGO, APPS, views(), UNREADABLE).native
+    run = django_run(reader, sink)
+    assert run.registry is not None
+    python = UseProducer(reader, run.registry).produce(run.files)
+    staged = graph.link.django_uses(
+        [file_id(scope) for scope in run.files], [(m.module, m.symbol) for m in run.registry.models]
+    )
+    ids, shapes, details, attrs = graph.link.staged_columns(staged)
+    native = Refinements(list(array("I", ids)), shapes, details, [tuple(pairs) for pairs in attrs])
+
+    assert rows(native) == rows(Refinements.of(python))
+    assert len(native) == len(SHAPES)
+    assert {(shape, detail) for shape, detail in zip(native.shapes, native.details)} >= {
+        ("lock", ""),
+        ("write", "update"),
+        ("scalar-chain", "count"),
+        ("instance-single", ""),
+        ("instance-many", "all"),
+        ("scalar-chain", "exists"),
+        ("other", "Attribute:_meta.managers"),
+        ("_meta", ""),
+        ("prefetch", ""),
+        ("subquery", "Exists"),
+        ("drf-field-queryset", ""),
+        ("exception", ""),
+        ("nested-class-attr", "Meta"),
+        ("other", "Attribute:pk"),
+        ("annotation", ""),
+        ("construct", ""),
+        ("in-collection", ""),
+        ("isinstance", ""),
+        ("passed-as-class", "cast"),
+        ("passed-as-class", "?"),
+        ("drf-model-serializer", ""),
+        ("other", "Return"),
+        ("other", "ListComp"),
+        ("other", "Call"),
+    }
+    assert [dict(pairs).get("flow_shape") for pairs in native.attrs if pairs] == [
+        "write(delete)",
+        "write(update)",
+        "lock",
+    ]
+
+    paths = graph.link.paths()
+    assert sorted(paths[file] for file in staged.failed()) == sorted(UNREADABLE)
+    failures = [edge for edge in python if isinstance(edge, Edge)]
+    made = NativeUses(UseProducer(reader, run.registry), sink).produce(run.files, USES_KINDS)
+    assert made == failures
+    assert sorted(edge.attr("error") for edge in made) == [
+        "IndexError: list index out of range",
+        "IndexError: list index out of range",
+        "ValueError: not enough values to unpack (expected 9, got 8)",
+    ]
 
 
 def test_a_later_producer_meets_the_fields_the_link_producer_set(tmp_path: Path) -> None:
