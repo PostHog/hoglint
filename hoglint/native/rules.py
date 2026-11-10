@@ -185,17 +185,21 @@ class Rejudged:
 
     def get(self) -> FindingDetail:
         if self.made is None:
-            edge = self.handle.get()
-            env = self.rule.envs_of(edge)[self.target]
-            judged = self.rule.decide(env)
-            if judged is not self.judgment:
-                site = edge.site
-                raise EngineError(
-                    f"rule {self.rule.spec.id} judges {edge.kind} {site.path}:{site.line} {judged}, "
-                    f"apart from the evaluator's {self.judgment}"
-                )
-            self.made = self.reported(env).findings[0].detail.get()
+            self.made = self.reported(self.confirmed()).findings[0].detail.get()
         return self.made
+
+    def confirmed(self) -> EdgeEnv:
+        """The destination's environment, once the rule's own code judges it as the evaluator did."""
+        edge = self.handle.get()
+        env = self.rule.envs_of(edge)[self.target]
+        judged = self.rule.decide(env)
+        if judged is not self.judgment:
+            site = edge.site
+            raise EngineError(
+                f"rule {self.rule.spec.id} judges {edge.kind} {site.path}:{site.line} {judged}, "
+                f"apart from the evaluator's {self.judgment}"
+            )
+        return env
 
     def reported(self, env: EdgeEnv) -> RuleRun:
         """What the judgment reports for `env`, message included, kept out of the rule's run: the
@@ -235,6 +239,7 @@ class NativeRuleContext(RuleContext):
         index = labeler.index
         assert isinstance(index, NativeGraphIndex)
         self.native = index
+        self.rejudged: list[Rejudged] = []
 
     @cached_property
     def plan(self) -> RulePlan:
@@ -318,10 +323,12 @@ class NativeRuleContext(RuleContext):
                 continue
             handle = EdgeHandle(edges, edge_id)
             ledgerable, unknown = flags[code]
+            detail = Rejudged(rule, handle, JUDGMENTS[code], target)
+            self.rejudged.append(detail)
             finding = Finding(
                 rule=spec.id,
                 identity=tuple(identity),
-                detail=Rejudged(rule, handle, JUDGMENTS[code], target),
+                detail=detail,
                 owner=self.owner(src),
                 subjects=(src, dst) if dst and dst != src else (src,),
                 ledgerable=ledgerable and spec.ledger,
@@ -330,6 +337,12 @@ class NativeRuleContext(RuleContext):
             )
             run.findings.append(finding)
         return True
+
+    def confirm_findings(self) -> None:
+        """Every finding the evaluator made is judged again by its rule's own code: a run that
+        writes a ledger reads no message, so a wrong row would become accepted debt."""
+        for detail in self.rejudged:
+            detail.confirmed()
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         with engine_errors():

@@ -1039,3 +1039,32 @@ def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, ba
         for name in ("registry", "lifecycle"):
             assert native.labeler.builtin(module, None, name) == python.builtin(module, None, name)
     assert sorted(native.labeler.conflicts) == sorted(python.conflicts)
+
+
+class Lying:
+    """The evaluator, with a violation row added for an edge the rule judges clean."""
+
+    def __init__(self, inner: Any, row: tuple[Any, ...]) -> None:
+        self.inner = inner
+        self.row = row
+
+    def judge(self, rule: int) -> list[tuple[Any, ...]]:
+        return [*self.inner.judge(rule), self.row]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'nowhere'"}))
+    edge = next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
+    row = (edge.handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ["a", "b"], edge.site.module, None)
+    made = NativeRuleContext.evaluator.func
+    monkeypatch.setattr(
+        NativeRuleContext, "evaluator", property(lambda ctx: ctx.__dict__.setdefault("lying", Lying(made(ctx), row)))
+    )
+    assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
+    with pytest.raises(EngineError, match="apart from the evaluator"):
+        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)

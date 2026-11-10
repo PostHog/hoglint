@@ -170,7 +170,9 @@ class Engine:
         if self.labeler.conflicts:
             raise ConfigError(sorted(set(self.labeler.conflicts)))
 
-    def run_rules(self) -> dict[str, RuleRun]:
+    def run_rules(self, confirm: bool = False) -> dict[str, RuleRun]:
+        """Every rule's run. With `confirm` (a run that writes a ledger), every finding a judge
+        outside its rule's code made is judged again by that code first."""
         ctx = context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
         ctx.find_conflicts()
         self.raise_conflicts()
@@ -187,6 +189,8 @@ class Engine:
                 continue
             ctx.results[spec.id] = primitive_of(spec)(ctx, spec).evaluate()
         ctx.met_conflicts()
+        if confirm:
+            ctx.confirm_findings()
         for name in sorted(self.labeler.providers.failures):
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
             run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))
@@ -210,7 +214,7 @@ class Engine:
     ) -> RunResult:
         """One run. With `rewrite_ledger`, findings and levels are judged against the ledger this
         run writes (its own scan), so the next check over the same code finds that ledger equal."""
-        result = RunResult(self.config, self.labeler, self.run_rules())
+        result = RunResult(self.config, self.labeler, self.run_rules(confirm=rewrite_ledger))
         if exceptions is not None:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)
