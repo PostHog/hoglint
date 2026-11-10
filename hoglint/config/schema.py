@@ -111,6 +111,20 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "coverage": COMMON_RULE_KEYS | {"covers", "inputs"},
     "inventory": COMMON_RULE_KEYS | {"kinds", "contexts", "select", "from", "classify", "on", "exactly_one"},
 }
+# Keys a rule type accepts that one of its modes never reads: a key no rule code reads has no
+# meaning, so each engine would give it one of its own (D52). A mode is a primitive, or an
+# inventory over edges (`classify`) or over entities (`exactly_one`).
+UNREAD_KEYS: dict[str, frozenset[str]] = {
+    "an inventory over entities (`exactly_one`)": frozenset(
+        {"from", "kinds", "contexts", "classify", "remedy", "on_unresolved"}
+    ),
+    "an inventory over edges (`classify`)": frozenset({"on", "exactly_one"}),
+    "a layout rule": frozenset({"remedy", "on_unresolved"}),
+    "a coverage rule": frozenset({"remedy", "on_unresolved"}),
+    "an export rule": frozenset({"remedy"}),
+    "a cycle rule": frozenset({"remedy"}),
+    "a use-shape rule": frozenset({"view"}),
+}
 DEFAULT_UNKNOWN_TYPES = ("typing.Any", "builtins.dict", "typing.Dict", "builtins.object")
 
 FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
@@ -715,6 +729,22 @@ class SchemaBuilder:
         self.check_keys(key, inputs, adapter.allowed_options | {"adapter"})
         return inputs
 
+    @staticmethod
+    def rule_mode(table: dict[str, Any], primitive: str) -> str:
+        if primitive == "inventory":
+            return (
+                "an inventory over edges (`classify`)"
+                if table.get("classify")
+                else "an inventory over entities (`exactly_one`)"
+            )
+        return f"{'an' if primitive[0] in 'aeiou' else 'a'} {primitive} rule"
+
+    def check_read_keys(self, key: str, table: dict[str, Any], primitive: str) -> None:
+        """A key the rule's mode accepts in the schema but never reads is a config error (D52)."""
+        mode = self.rule_mode(table, primitive)
+        for name in sorted(UNREAD_KEYS.get(mode, frozenset()) & table.keys()):
+            self.fail(key, f"{mode} does not read `{name}`; remove it")
+
     def read_rules(self, registries: dict[str, RegistrySpec], exports: dict[str, ExportSpec]) -> dict[str, RuleSpec]:
         out: dict[str, RuleSpec] = {}
         rule_ids = set(self.raw.get("rules", {}))
@@ -741,7 +771,8 @@ class SchemaBuilder:
             self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), RULE_KEYS)}")
             return None
         self.check_keys(key, table, RULE_KEYS[primitive])
-        entity_rule = primitive in ("layout", "coverage") or (primitive == "inventory" and table.get("on") is not None)
+        self.check_read_keys(key, table, primitive)
+        entity_rule = primitive in ("layout", "coverage") or (primitive == "inventory" and not table.get("classify"))
         edge_catalog = self.edge_catalog()
         entity_catalog = self.entity_catalog()
         predicate_catalog = entity_catalog if entity_rule else edge_catalog

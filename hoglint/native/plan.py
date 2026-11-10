@@ -170,7 +170,9 @@ class RulePlan:
         return None
 
     def rule(self, spec: RuleSpec) -> dict[str, Any]:
-        selectors = (spec.select,) if spec.primitive == "reach" else (spec.from_, spec.select)
+        # A reach rule's `from` is its start; a rule over entities reads its `select` alone.
+        alone = spec.primitive == "reach" or self.mode(spec) == "entities"
+        selectors = (spec.select,) if alone else (spec.from_, spec.select)
         return {
             "id": spec.id,
             "mode": self.mode(spec),
