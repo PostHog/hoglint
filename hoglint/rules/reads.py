@@ -18,6 +18,9 @@ from hoglint.selectors import Ref, refs
 # resolved. Endpoint modules and paths are not in it: a key holds label values, so two modules
 # with equal values share a group.
 IMPLIED: frozenset[tuple[str, str]] = frozenset({("edge", "kind"), ("dst", "unresolved")})
+# The edge fields `edge.label` is made of (`EdgeEnv.label`); whether the destination resolved is
+# implied.
+LABEL_PARTS: frozenset[str] = frozenset({"kind", "shape", "shape_detail"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +50,9 @@ class Reads:
                     return None
                 if name == "label":
                     dst.add("unresolved")
-                edge.add("kind" if name == "label" else name)
+                    edge.update(LABEL_PARTS)
+                else:
+                    edge.add(name)
             elif root in ("src", "dst") and name == "context":
                 edge.add("context")
             elif root == "src" and name in EDGE_DEPENDENT_FIELDS:
@@ -76,13 +81,14 @@ class Reads:
 
     def granted(self, src_scope: bool, dst_entity: bool) -> frozenset[tuple[str, str]]:
         """Every (root, field) a decision grouped on these reads may read: the reads, what the
-        key implies, and the symbol-level fields of an endpoint keyed at symbol level."""
+        key implies, the label where the key holds its parts, and the symbol-level fields of an
+        endpoint keyed at symbol level."""
         out = set(IMPLIED)
         out.update(("edge", name) for name in self.edge)
         out.update(("src", name) for name in self.src)
         out.update(("dst", name) for name in self.dst)
-        if "kind" in self.edge:
-            out.update({("edge", "label"), ("edge", "shape"), ("edge", "shape_detail"), ("edge", "producer")})
+        if LABEL_PARTS <= self.edge:
+            out.add(("edge", "label"))
         if "context" in self.edge:
             out.update({("edge", "context"), ("src", "context"), ("dst", "context")})
         if self.exported:

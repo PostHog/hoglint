@@ -196,3 +196,33 @@ def test_grouped_members_that_differ_outside_their_group_key_judge_alike(
     ]
     (tmp_path / "audit").mkdir()
     assert audit(tmp_path / "repo", tmp_path / "audit")
+
+
+LABEL_DECISION = """
+[rules.labels]
+primitive = "edge"
+kinds = ["reference"]
+from = "src.tier == 'core'"
+deny = "edge.label == 'write'"
+identity = ["src.module", "edge.surface"]
+ledger = false
+"""
+
+
+def test_a_decision_on_the_label_keeps_two_labels_of_one_kind_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = repo('steps = [{ name = "a", shape = "write" }]', LABEL_DECISION)
+    sources["core/a.py"] = (
+        "from products.billing.models import Invoice, Other\n\n\ndef f():\n"
+        "    Other.objects.all()\n    Invoice.objects.update()\n"
+    )
+    sources["products/billing/models.py"] = "class Invoice:\n    pass\n\n\nclass Other:\n    pass\n"
+    out = dumps(tmp_path, sources, monkeypatch)
+    same_in_both_engines(out)
+    assert findings(out, "labels") == [
+        ["core.a", "products.billing.models.Invoice"],
+        ["core.b", "products.billing.models.Invoice"],
+    ]
+    (tmp_path / "audit").mkdir()
+    assert audit(tmp_path / "repo", tmp_path / "audit")
