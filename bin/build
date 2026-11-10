@@ -43,7 +43,10 @@ else
 fi
 wheels="$CARGO_TARGET_DIR/wheels"
 rm -f "$wheels"/hoglint_native-*.whl
-(cd binding && "${maturin_cmd[@]}" build --release --locked --out "$wheels" "$@" >&2)
+# A local wheel is unpacked here, never shipped, so it skips the manylinux audit, which fails on a
+# glibc above 2.17. Release wheels keep `manylinux2014` (binding/pyproject.toml) and are built in
+# a manylinux container.
+(cd binding && "${maturin_cmd[@]}" build --release --locked --compatibility linux --out "$wheels" "$@" >&2)
 module_dir="$CARGO_TARGET_DIR/python"
 rm -rf "$module_dir/hoglint_native"
 mkdir -p "$module_dir"
