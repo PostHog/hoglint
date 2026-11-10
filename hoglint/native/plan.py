@@ -121,12 +121,10 @@ class RulePlan:
                 {
                     "rule": cover.rule or None,
                     "column": column.split("."),
-                    "column_text": cover.column,
                     "kinds": sorted(kinds) if kinds else None,
                     "by_edge": tree(by_edge[0] if len(by_edge) == 1 else And(tuple(by_edge))) if by_edge else None,
                     "rest": [tree(part) for part in parts if not CoveragePrimitive.reads_kind_and_context(part)],
                     "endpoint": cover.endpoint,
-                    "text": cover.text,
                 }
             )
         return out
@@ -139,7 +137,6 @@ class RulePlan:
         return {
             "on_symbol": spec.on == "symbol",
             "wanted": sorted(wanted) if wanted is not None else None,
-            "suffix": f" does not meet `{spec.require.source}`" if spec.require is not None else "",
             "exactly_one": spec.exactly_one or None,
         }
 

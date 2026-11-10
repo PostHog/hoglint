@@ -150,9 +150,8 @@ pub struct ExportRulePlan {
 pub struct CoverPlan {
     /// The rule whose column it reads, or None for an edge selection.
     pub rule: Option<String>,
-    /// That column as a ref path, and as the config writes it.
+    /// That column as a ref path.
     pub column: Vec<String>,
-    pub column_text: String,
     /// The kinds an edge selection pins, sorted; None when it pins none.
     pub kinds: Option<Vec<String>>,
     /// Its conjuncts that read only an edge's kind and contexts, joined, and the others.
@@ -160,7 +159,6 @@ pub struct CoverPlan {
     pub rest: Vec<NodePlan>,
     /// src or dst.
     pub endpoint: String,
-    pub text: String,
 }
 
 #[derive(Deserialize)]
@@ -256,8 +254,6 @@ pub struct EntitiesPlan {
     pub on_symbol: bool,
     /// The kinds a `select` pins, sorted; None when it pins none.
     pub wanted: Option<Vec<String>>,
-    /// What a layout finding's message adds after the subject.
-    pub suffix: String,
     /// An inventory's `exactly_one` field.
     pub exactly_one: Option<String>,
 }

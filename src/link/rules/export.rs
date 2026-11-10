@@ -134,7 +134,8 @@ impl ExportRule {
     }
 }
 
-/// What an export rule reports, in the order the Python primitive reports it.
+/// What an export rule reports, in the order the Python primitive reports it, as data: the
+/// rule's Python class words every message and reason (`ExportPrimitive`).
 pub enum ExportRow {
     Finding {
         symbol: String,
@@ -148,37 +149,17 @@ pub enum ExportRow {
         /// The module the symbol belongs to, or the symbol.
         subject: String,
     },
-    Incomplete {
-        key: String,
-        reason: String,
+    /// A symbol the rule cannot tell about, reported as incomplete: why, by its code
+    /// (`exports.UNKNOWN_WHY`), and the export's name or the slot the reason names.
+    Unknown {
+        symbol: String,
         module: String,
+        trail: Vec<String>,
+        why: &'static str,
+        detail: String,
     },
-}
-
-/// `repr()` of a string, as Python writes it in a message.
-pub fn python_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push(quote);
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
+    /// An import that did not resolve, reported as incomplete.
+    Unresolved { surface: String, module: String },
 }
 
 /// The link's edges an export rule reads, gathered while the link can still build its indexes.
@@ -313,12 +294,10 @@ impl<'a> Walk<'a> {
                     match member {
                         Truth::False => {}
                         Truth::Unknown => {
-                            let why = format!(
-                                "cannot tell whether it is in export {}: a base did not resolve",
-                                rules.export_names[export]
-                            );
                             let trail = vec![symbol.clone()];
-                            self.unknown(&symbol, &module_name, shape, &trail, edge, &why);
+                            let name = &rules.export_names[export];
+                            let why = ("not-member", name.as_str());
+                            self.unknown(&symbol, &module_name, shape, &trail, edge, why);
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
@@ -519,26 +498,12 @@ impl<'a> Walk<'a> {
             return;
         }
         if self.rule.unknown_types.iter().any(|name| name == symbol) {
-            self.unknown(
-                symbol,
-                module,
-                shape,
-                trail,
-                edge,
-                "a type hoglint reads as unknown",
-            );
+            self.unknown(symbol, module, shape, trail, edge, ("unknown-type", ""));
             return;
         }
         if !rules.has_symbol(self.cx.link, symbol) {
             if !complete {
-                self.unknown(
-                    symbol,
-                    module,
-                    shape,
-                    trail,
-                    edge,
-                    "no facts for this symbol",
-                );
+                self.unknown(symbol, module, shape, trail, edge, ("no-facts", ""));
             }
             return;
         }
@@ -551,8 +516,7 @@ impl<'a> Walk<'a> {
             let allowed = listed || self.behavior_ok(symbol, shape);
             if !allowed {
                 if !complete {
-                    let why = "its bases did not all resolve";
-                    self.unknown(symbol, module, shape, trail, edge, why);
+                    self.unknown(symbol, module, shape, trail, edge, ("bases", ""));
                     return;
                 }
                 self.finding(
@@ -631,12 +595,8 @@ impl<'a> Walk<'a> {
         let slot = link.core.it.get("slot");
         for id in self.member_edges(symbol, include_bases) {
             if self.cx.attr(id, annotation) == "missing" {
-                let named = match self.cx.attr(id, slot) {
-                    "" => "a slot",
-                    found => found,
-                };
-                let why = format!("{named} has no annotation");
-                self.unknown(symbol, module, shape, trail, Some(id), &why);
+                let why = ("no-annotation", self.cx.attr(id, slot));
+                self.unknown(symbol, module, shape, trail, Some(id), why);
                 continue;
             }
             let edges = &link.edges;
@@ -736,7 +696,7 @@ impl<'a> Walk<'a> {
         });
     }
 
-    /// `ExportPrimitive.unknown`.
+    /// `ExportPrimitive.unknown`; `why` is the reason's code and the name it holds.
     fn unknown(
         &mut self,
         symbol: &str,
@@ -744,15 +704,17 @@ impl<'a> Walk<'a> {
         shape: usize,
         trail: &[String],
         edge: Option<u32>,
-        why: &str,
+        why: (&'static str, &str),
     ) {
         let incomplete =
             self.cx.rules.shapes[shape].incomplete || self.rule.on_unknown == "incomplete";
         if incomplete {
-            self.rows.push(ExportRow::Incomplete {
-                key: format!("{module}|{symbol}"),
-                reason: format!("{}: {why}", trail.join(" -> ")),
+            self.rows.push(ExportRow::Unknown {
+                symbol: symbol.to_string(),
                 module: module.to_string(),
+                trail: trail.to_vec(),
+                why: why.0,
+                detail: why.1.to_string(),
             });
             return;
         }
@@ -773,9 +735,8 @@ impl<'a> Walk<'a> {
         let edges = &self.cx.link.edges;
         let surface = self.cx.text(edges.surface_of(id)).to_string();
         if self.rule.on_unresolved == "incomplete" {
-            self.rows.push(ExportRow::Incomplete {
-                key: format!("{module}|{surface}"),
-                reason: format!("{} did not resolve", python_repr(&surface)),
+            self.rows.push(ExportRow::Unresolved {
+                surface,
                 module: module.to_string(),
             });
             return;

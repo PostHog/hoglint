@@ -38,8 +38,9 @@ SLOTS = "products.billing.backend.facade.slots"
 class Flows:
     """A test pack: the flow-refined shapes a def-use analysis writes, edges with several targets
     or with their own endpoint labels, an edge it hands over twice (its ordinal is its last
-    row's), symbol facts, and signature slots as a facade pack writes them: one a core edge names
-    too, one it does not, one in a private callable and one with no annotation."""
+    row's), an unresolved edge whose surface holds a control character, symbol facts, and
+    signature slots as a facade pack writes them: one a core edge names too, one it does not, one
+    in a private callable and one with no annotation."""
 
     name = SECTION
     allowed_keys = frozenset()
@@ -90,6 +91,8 @@ class Flows:
             out.append(uses)
             if site.module == "core.a":
                 out.extend([Flows.uses(site, edge.surface), uses])
+                unresolved = dataclasses.replace(uses, surface=f"{edge.surface}\x07", resolution=Resolution.UNRESOLVED)
+                out.append(dataclasses.replace(unresolved, targets=(), via=()))
         return out
 
     @staticmethod
@@ -1191,6 +1194,26 @@ def test_a_coverage_rule_needs_the_paths_the_python_rule_needs(world: World) -> 
     native.results["named"] = primitive_of(config.rules["named"])(native, config.rules["named"]).evaluate()
     run = primitive_of(config.rules["covered"])(native, config.rules["covered"]).evaluate()
     assert len(run.findings) > 3 and run.incomplete
+
+
+def test_a_surface_with_a_control_character_is_worded_once_for_both_engines(world: World) -> None:
+    rules = rule_table(
+        "unplaced",
+        {
+            "primitive": "coverage",
+            "covers": ["edge.kind == 'uses': dst"],
+            "inputs": {"adapter": "globs", "paths": ["core/**"]},
+            "identity": ["subject"],
+            "ledger": False,
+        },
+    )
+    assert differences(world, rules) == []
+    config = world.config(rules)
+    native, _ = world.contexts(config)
+    run = primitive_of(config.rules["unplaced"])(native, config.rules["unplaced"]).evaluate()
+    assert "cannot place 'products.billing.backend.models.Invoice\\x07' for coverage" in [
+        item.reason for item in run.incomplete
+    ]
 
 
 class Lying:

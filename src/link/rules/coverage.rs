@@ -4,7 +4,6 @@
 //! coverage adapter, a Python plugin.
 
 use super::env::{Cx, Endpoint, Env, Role};
-use super::export::python_repr;
 use super::labels::Field;
 use super::plan::CoverPlan;
 use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
@@ -16,12 +15,7 @@ use rustc_hash::FxHashMap;
 /// One thing a coverage rule needs covered (`CoverSpec`), compiled.
 pub enum Cover {
     /// A column of another rule's findings, read off each witness with its first destination.
-    Rule {
-        rule: String,
-        column: Ref,
-        /// The column as the config writes it.
-        text: String,
-    },
+    Rule { column: Ref },
     /// The `src` or `dst` paths of the edges a selection keeps.
     Edges {
         /// The kinds the selection pins, sorted; every edge when it pins none.
@@ -31,17 +25,14 @@ pub enum Cover {
         /// The other conjuncts, staged as an edge rule's selection is.
         rest: Staged,
         src: bool,
-        text: String,
     },
 }
 
 impl Cover {
     pub fn new(plan: &CoverPlan, edge: &Compiler, fields: &[Field]) -> Result<Cover, String> {
-        if let Some(rule) = &plan.rule {
+        if plan.rule.is_some() {
             return Ok(Cover::Rule {
-                rule: rule.clone(),
                 column: edge.reference(&plan.column),
-                text: plan.column_text.clone(),
             });
         }
         let rest = edge.nodes(&plan.rest)?;
@@ -54,7 +45,6 @@ impl Cover {
                 .transpose()?,
             rest: Staged::new(&rest, fields),
             src: plan.endpoint == "src",
-            text: plan.text.clone(),
         })
     }
 
@@ -70,13 +60,14 @@ impl Cover {
     }
 }
 
-/// What a coverage rule's covers need: every path with why and the module that needs it (the
-/// first cover to name a path wins), sorted by path; and the items it cannot place, in order.
+/// What a coverage rule's covers need, as data the rule's Python class words
+/// (`CoveragePrimitive`): every path with the cover that names it first and the module that
+/// needs it, sorted by path; and in order, what it cannot tell, (what, cover, source module,
+/// surface): "not-run" for a cover whose rule did not run, "unplaced" for an edge it cannot place.
 #[derive(Default)]
 pub struct Required {
-    pub paths: Vec<(String, String, Option<String>)>,
-    /// (subject, module, reason).
-    pub incomplete: Vec<(String, Option<String>, String)>,
+    pub paths: Vec<(String, u32, Option<String>)>,
+    pub incomplete: Vec<(&'static str, u32, Option<String>, String)>,
 }
 
 /// The edge ids each cover reads: the witnesses of the named rule's findings, in order, or None
@@ -86,17 +77,14 @@ pub type CoverInputs = Vec<Option<Vec<u32>>>;
 /// `CoveragePrimitive.required` over the inputs Python gathered (`CoverInputs`).
 pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     let mut out = Required::default();
-    let mut found: FxHashMap<String, (String, Option<String>)> = FxHashMap::default();
+    let mut found: FxHashMap<String, (u32, Option<String>)> = FxHashMap::default();
     let mut dsts: Vec<Endpoint> = Vec::with_capacity(2);
-    for (cover, ids) in covers.iter().zip(inputs) {
+    for (at, (cover, ids)) in covers.iter().zip(inputs).enumerate() {
+        let at = at as u32;
         match cover {
-            Cover::Rule { rule, column, text } => {
+            Cover::Rule { column } => {
                 let Some(ids) = ids else {
-                    out.incomplete.push((
-                        format!("rules.{rule}"),
-                        None,
-                        format!("rule {rule} did not run before this coverage rule"),
-                    ));
+                    out.incomplete.push(("not-run", at, None, String::new()));
                     continue;
                 };
                 for &id in ids {
@@ -107,16 +95,13 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                     if matches!(value, Value::Unknown | Value::None) {
                         continue;
                     }
-                    found
-                        .entry(render(&value))
-                        .or_insert_with(|| (format!("rules.{rule}.{text}"), None));
+                    found.entry(render(&value)).or_insert((at, None));
                 }
             }
             Cover::Edges {
                 by_edge,
                 rest,
                 src: from_src,
-                text,
                 ..
             } => {
                 for &id in ids.as_deref().unwrap_or_default() {
@@ -139,11 +124,8 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         let module = src.module.map(|module| cx.text(module).to_string());
                         if endpoint.unresolved || truth == Truth::Unknown {
                             let surface = cx.text(cx.link.edges.surface_of(id));
-                            out.incomplete.push((
-                                format!("{}|{surface}", module.as_deref().unwrap_or("")),
-                                module,
-                                format!("cannot place {} for coverage", python_repr(surface)),
-                            ));
+                            out.incomplete
+                                .push(("unplaced", at, module, surface.to_string()));
                             continue;
                         }
                         let Some(path) = endpoint.path.filter(|path| !path.is_empty()) else {
@@ -153,17 +135,15 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                             continue;
                         }
                         let owner = endpoint.module.map(|module| cx.text(module).to_string());
-                        found
-                            .entry(path.to_string())
-                            .or_insert_with(|| (text.clone(), owner));
+                        found.entry(path.to_string()).or_insert((at, owner));
                     }
                 }
             }
         }
     }
-    let mut paths: Vec<(String, String, Option<String>)> = found
+    let mut paths: Vec<(String, u32, Option<String>)> = found
         .into_iter()
-        .map(|(path, (why, module))| (path, why, module))
+        .map(|(path, (cover, module))| (path, cover, module))
         .collect();
     paths.sort();
     out.paths = paths;

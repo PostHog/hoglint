@@ -39,6 +39,7 @@ from hoglint.selectors import (
 
 # The edge fields that every edge of one kind with one set of contexts shares.
 KIND_AND_CONTEXT = frozenset({("edge", "kind"), ("edge", "context")})
+UNKNOWN_SELECTION = "cannot tell whether this entity is selected"
 
 
 class EntityRule:
@@ -67,16 +68,28 @@ class EntityRule:
     def incomplete(self, subject: str, module: str | None, reason: str) -> None:
         self.run.incomplete.append(IncompleteItem(self.spec.id, subject, reason, (module or subject,)))
 
-    def report_rows(self, rows: list[tuple[bool, str, str | None, str, list[str]]]) -> None:
-        """What a rule context found on the entities itself: findings with their message and
-        identity, and incomplete items, in order."""
-        for found, subject, module, text, identity in rows:
-            if found:
+    def message(self, subject: str, count: int) -> str:
+        """A finding's message on `subject`; `count` is an inventory's count of values."""
+        raise NotImplementedError
+
+    def value_unknown(self) -> str:
+        """Why an inventory cannot count an entity's values."""
+        raise NotImplementedError
+
+    def report_rows(self, rows: list[tuple[str, str, str | None, int, list[str]]]) -> None:
+        """What a rule context found on the entities itself, (what, subject, module, count,
+        identity) in order, worded here: a finding, an entity it cannot tell is selected, or an
+        inventory's value it cannot read."""
+        for what, subject, module, count, identity in rows:
+            if what == "finding":
+                message = self.message(subject, count)
                 self.run.findings.append(
-                    self.ctx.finding(self.spec, tuple(identity), text, module, (module or subject,))
+                    self.ctx.finding(self.spec, tuple(identity), message, module, (module or subject,))
                 )
+            elif what == "unknown-selection":
+                self.incomplete(subject, module, UNKNOWN_SELECTION)
             else:
-                self.incomplete(subject, module, text)
+                self.incomplete(subject, module, self.value_unknown())
 
     def entities(self) -> Iterator[tuple[str | None, str | None, str]]:
         """(module, symbol, subject) for every entity the rule looks at. A `select` that pins
@@ -116,13 +129,17 @@ class LayoutPrimitive(EntityRule):
             if selected is Truth.FALSE:
                 continue
             if selected is Truth.UNKNOWN:
-                self.incomplete(subject, module, "cannot tell whether this entity is selected")
+                self.incomplete(subject, module, UNKNOWN_SELECTION)
                 continue
             verdict = self.spec.require.evaluate(resolve) if self.spec.require is not None else Truth.FALSE
             if verdict is Truth.TRUE:
                 continue
-            suffix = f" does not meet `{self.spec.require.source}`" if self.spec.require is not None else ""
-            self.emit(subject, module, f"{subject}{suffix}", resolve)
+            self.emit(subject, module, self.message(subject, 0), resolve)
+
+    def message(self, subject: str, count: int) -> str:
+        if self.spec.require is None:
+            return subject
+        return f"{subject} does not meet `{self.spec.require.source}`"
 
     def roots(self) -> list[str]:
         found = self.ctx.layout_roots(self.spec.within)
@@ -209,6 +226,12 @@ class LayoutPrimitive(EntityRule):
 class EntityInventory(EntityRule):
     """`exactly_one`: every selected entity has exactly one value of a set field."""
 
+    def message(self, subject: str, count: int) -> str:
+        return f"{subject} has {count} {self.spec.exactly_one} values, needs exactly one"
+
+    def value_unknown(self) -> str:
+        return f"{self.spec.exactly_one} is unknown"
+
     def evaluate(self) -> RuleRun:
         rows = self.ctx.entity_rows(self)
         if rows is not None:
@@ -220,21 +243,30 @@ class EntityInventory(EntityRule):
             if self.selection is not None:
                 selected = self.selection.truth(resolve)
                 if selected is Truth.UNKNOWN:
-                    self.incomplete(subject, module, "cannot tell whether this entity is selected")
+                    self.incomplete(subject, module, UNKNOWN_SELECTION)
                 if selected is not Truth.TRUE:
                     continue
             value = resolve(Ref((name,)))
             if value.state is State.UNKNOWN:
-                self.incomplete(subject, module, f"{name} is unknown")
+                self.incomplete(subject, module, self.value_unknown())
                 continue
             count = len(value.data) if value.state is State.KNOWN and isinstance(value.data, frozenset) else 0
             if count != 1:
-                self.emit(subject, module, f"{subject} has {count} {name} values, needs exactly one", resolve)
+                self.emit(subject, module, self.message(subject, count), resolve)
         return self.run
 
 
 class EdgeInventory(EdgeRule):
     """`classify`: every selected edge carries a classification, and every classification still matches one."""
+
+    def unclassified(self, identity: tuple[str, ...]) -> str:
+        """The message of an identity the classification file lacks: the words of both engines."""
+        return f"{' '.join(identity)} has no classification in {self.spec.classify}"
+
+    @staticmethod
+    def stale(identity: tuple[str, ...]) -> str:
+        """The message of an entry of the classification file that matches nothing."""
+        return f"classification {' '.join(identity)} matches nothing (stale)"
 
     def classifications(self) -> set[tuple[str, ...]]:
         repo = self.ctx.repo_root
@@ -261,11 +293,11 @@ class EdgeInventory(EdgeRule):
         classified = self.classifications()
         for identity in sorted(seen):
             if identity not in classified:
-                message = f"{' '.join(identity)} has no classification in {self.spec.classify}"
-                self.emit(seen[identity], Judgment.VIOLATION, message)
+                self.emit(seen[identity], Judgment.VIOLATION, self.unclassified(identity))
         for identity in sorted(classified - set(seen)):
-            message = f"classification {' '.join(identity)} matches nothing (stale)"
-            self.run.findings.append(self.ctx.finding(self.spec, identity, message, None, ledgerable=False))
+            self.run.findings.append(
+                self.ctx.finding(self.spec, identity, self.stale(identity), None, ledgerable=False)
+            )
         return self.run
 
 
@@ -280,16 +312,28 @@ class CoveragePrimitive(EntityRule):
         out: dict[str, tuple[str, str | None]] = {}
         for cover in self.spec.covers:
             if cover.rule:
-                self.from_rule(cover.rule, cover.column, out)
+                self.from_rule(cover, out)
             else:
                 self.from_edges(cover, out)
         return out
 
-    def from_rule(self, rule_id: str, column: str, out: dict[str, tuple[str, str | None]]) -> None:
-        run = self.ctx.results.get(rule_id)
+    @staticmethod
+    def why(cover: CoverSpec) -> str:
+        """Why a cover needs a path, as a finding's message names it: the words of both engines."""
+        return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
+
+    def not_run(self, cover: CoverSpec) -> None:
+        self.incomplete(f"rules.{cover.rule}", None, f"rule {cover.rule} did not run before this coverage rule")
+
+    def unplaced(self, module: str | None, surface: str) -> None:
+        self.incomplete(f"{module}|{surface}", module, f"cannot place {surface!r} for coverage")
+
+    def from_rule(self, cover: CoverSpec, out: dict[str, tuple[str, str | None]]) -> None:
+        run = self.ctx.results.get(cover.rule)
         if run is None:
-            self.incomplete(f"rules.{rule_id}", None, f"rule {rule_id} did not run before this coverage rule")
+            self.not_run(cover)
             return
+        column = cover.column
         ref = Ref(tuple(column.split("."))) if "." in column else Ref(("edge", column))
         for finding in run.findings:
             for edge in finding.witnesses:
@@ -297,7 +341,7 @@ class CoveragePrimitive(EntityRule):
                 env = EdgeEnv(self.ctx, edge, src, self.ctx.dst_endpoints(edge, "origin")[0])
                 value = env.resolve(ref)
                 if value.state is State.KNOWN:
-                    out.setdefault(render_value(value), (f"rules.{rule_id}.{column}", None))
+                    out.setdefault(render_value(value), (self.why(cover), None))
 
     @staticmethod
     def reads_kind_and_context(node: Node) -> bool:
@@ -336,12 +380,10 @@ class CoveragePrimitive(EntityRule):
                     continue
                 endpoint = src if cover.endpoint == "src" else dst
                 if endpoint.unresolved or truth is Truth.UNKNOWN:
-                    self.incomplete(
-                        f"{src.module}|{edge.surface}", src.module, f"cannot place {edge.surface!r} for coverage"
-                    )
+                    self.unplaced(src.module, edge.surface)
                     continue
                 if endpoint.path and endpoint.external is None:
-                    out.setdefault(endpoint.path, (cover.text, endpoint.module))
+                    out.setdefault(endpoint.path, (self.why(cover), endpoint.module))
 
     def expand(self, location: str) -> list[str]:
         if not location.endswith("/"):

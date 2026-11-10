@@ -405,11 +405,14 @@ class NativeRuleContext(RuleContext):
         edges = RowEdges(core, array("I", dict.fromkeys(row[5] for row in rows if row[5] is not None)))
         spec = rule.spec
         run = rule.run
-        for what, name, module, text, trail, edge_id, ledgerable, unknown, identity, subject in rows:
-            if what == "incomplete":
-                run.incomplete.append(IncompleteItem(spec.id, name, text, (module,)))
+        for what, name, module, label, trail, edge_id, ledgerable, unknown, identity, subject in rows:
+            if what == "unknown":
+                run.incomplete.append(rule.unknown_item(spec.id, module, name, trail, label, subject))
                 continue
-            message = f"{module} exports {' -> '.join(trail)}: {text}"
+            if what == "unresolved":
+                run.incomplete.append(rule.unresolved_item(spec.id, module, name))
+                continue
+            message = rule.message(module, trail, label)
             handle = EdgeHandle(edges, edge_id) if edge_id is not None else None
             detail: Shown = RowDetail(message, handle) if handle is not None else FindingDetail(message, None)
             finding = Finding(
@@ -451,11 +454,10 @@ class NativeRuleContext(RuleContext):
             if identity in classified:
                 continue
             handle, src, dst = seen[identity]
-            message = f"{' '.join(identity)} has no classification in {spec.classify}"
             finding = Finding(
                 rule=spec.id,
                 identity=identity,
-                detail=RowDetail(message, handle, rule.remedies()),
+                detail=RowDetail(rule.unclassified(identity), handle, rule.remedies()),
                 owner=self.owner(src),
                 subjects=(src, dst) if dst and dst != src else (src,),
                 ledgerable=spec.ledger,
@@ -463,11 +465,10 @@ class NativeRuleContext(RuleContext):
             )
             rule.run.findings.append(finding)
         for identity in sorted(classified - set(seen)):
-            message = f"classification {' '.join(identity)} matches nothing (stale)"
-            rule.run.findings.append(self.finding(spec, identity, message, None, ledgerable=False))
+            rule.run.findings.append(self.finding(spec, identity, rule.stale(identity), None, ledgerable=False))
         return True
 
-    def entity_rows(self, rule: EntityRule) -> list[tuple[bool, str, str | None, str, list[str]]] | None:
+    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
         if self.plan.mode(rule.spec) != "entities":
             return None
         with engine_errors():
@@ -483,7 +484,8 @@ class NativeRuleContext(RuleContext):
 
     def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]]:
         """The evaluator's paths of a coverage rule, from the witness ids of the findings its rule
-        covers name; what it cannot place goes to the rule's run."""
+        covers name, each with why its first cover needs it; what it cannot tell goes to the rule's
+        run. The rule's class words both."""
         witnesses: list[bytes | None] = []
         for cover in rule.spec.covers:
             run = self.results.get(cover.rule) if cover.rule else None
@@ -493,9 +495,13 @@ class NativeRuleContext(RuleContext):
             witnesses.append(array("I", (at for finding in run.findings for at in finding.witness_ids)).tobytes())
         with engine_errors():
             paths, incomplete = self.evaluator.coverage(self.plan.index[rule.spec.id], witnesses)
-        for subject, module, reason in incomplete:
-            rule.incomplete(subject, module, reason)
-        return {path: (why, module) for path, why, module in paths}
+        covers = rule.spec.covers
+        for what, at, module, surface in incomplete:
+            if what == "not-run":
+                rule.not_run(covers[at])
+            else:
+                rule.unplaced(module, surface)
+        return {path: (rule.why(covers[at]), module) for path, at, module in paths}
 
     def owner(self, module: str | None) -> Owners | None:
         """A finding's owners, one lookup per module: the evaluator's rows name few modules many

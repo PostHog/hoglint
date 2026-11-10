@@ -12,7 +12,7 @@ checked whatever its audience.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
@@ -27,6 +27,16 @@ PROTOCOL_BASES = frozenset({"typing.Protocol", "typing_extensions.Protocol"})
 
 
 DEFAULT_EXCLUDED = (Context.TYPE_ONLY, Context.TEST)  # a type-only or test import hands nothing out
+
+# Why an export rule cannot tell about a symbol, by code; `{detail}` is the export's name or the
+# slot. The native evaluator reports the code (`export.rs`).
+UNKNOWN_WHY = {
+    "not-member": "cannot tell whether it is in export {detail}: a base did not resolve",
+    "unknown-type": "a type hoglint reads as unknown",
+    "no-facts": "no facts for this symbol",
+    "bases": "its bases did not all resolve",
+    "no-annotation": "{detail} has no annotation",
+}
 
 
 class ExportPrimitive:
@@ -44,6 +54,27 @@ class ExportPrimitive:
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
+
+    @staticmethod
+    def message(module: str, trail: Sequence[str], label: str) -> str:
+        """A finding's message: the words of both engines."""
+        return f"{module} exports {' -> '.join(trail)}: {label}"
+
+    @staticmethod
+    def unknown_item(
+        rule: str, module: str, symbol: str, trail: Sequence[str], why: str, detail: str
+    ) -> IncompleteItem:
+        """What a symbol the rule cannot tell about leaves incomplete; `why` is a code of
+        `UNKNOWN_WHY`, and an annotation's `detail` is its slot."""
+        if why == "no-annotation":
+            detail = detail or "a slot"
+        reason = UNKNOWN_WHY[why].format(detail=detail)
+        return IncompleteItem(rule, f"{module}|{symbol}", f"{' -> '.join(trail)}: {reason}", (module,))
+
+    @staticmethod
+    def unresolved_item(rule: str, module: str, surface: str) -> IncompleteItem:
+        """What an import that did not resolve leaves incomplete."""
+        return IncompleteItem(rule, f"{module}|{surface}", f"{surface!r} did not resolve", (module,))
 
     @property
     def exposes(self) -> Mapping[str, list[tuple[str, int]]]:
@@ -88,8 +119,7 @@ class ExportPrimitive:
                     if member is Truth.FALSE:
                         continue
                     if member is Truth.UNKNOWN:
-                        why = f"cannot tell whether it is in export {export.name}: a base did not resolve"
-                        self.unknown(symbol, module, policy, (symbol,), edge, why)
+                        self.unknown(symbol, module, policy, (symbol,), edge, "not-member", export.name)
                         continue
                     self.check(symbol, module, policy, edge, (symbol,))
         return self.run
@@ -175,17 +205,17 @@ class ExportPrimitive:
             self.finding(symbol, module, f"export-denied({denied[0]})", trail, edge)
             return
         if symbol in self.spec.unknown_types:
-            self.unknown(symbol, module, policy, trail, edge, "a type hoglint reads as unknown")
+            self.unknown(symbol, module, policy, trail, edge, "unknown-type")
             return
         if not self.facts.has(symbol):
             if not complete:
-                self.unknown(symbol, module, policy, trail, edge, "no facts for this symbol")
+                self.unknown(symbol, module, policy, trail, edge, "no-facts")
             return
         if "class" in shapes:
             allowed = bool(shapes & {*policy.data, *policy.allow}) or self.behavior_ok(symbol, policy)
             if not allowed:
                 if not complete:
-                    self.unknown(symbol, module, policy, trail, edge, "its bases did not all resolve")
+                    self.unknown(symbol, module, policy, trail, edge, "bases")
                     return
                 self.finding(symbol, module, "export-shape(class)", trail, edge)
                 return
@@ -238,7 +268,7 @@ class ExportPrimitive:
     def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
         for edge in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
             if edge.attr("annotation") == "missing":
-                self.unknown(symbol, module, policy, trail, edge, f"{edge.attr('slot') or 'a slot'} has no annotation")
+                self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))
                 continue
             if edge.resolution is Resolution.UNRESOLVED:
                 self.unresolved(edge, module)
@@ -281,11 +311,10 @@ class ExportPrimitive:
         if key in self.reported:
             return
         self.reported.add(key)
-        path = " -> ".join(trail)
         finding = self.ctx.finding(
             self.spec,
             project(self.spec.identity, self.resolver(symbol, module, label)),
-            f"{module} exports {path}: {label}",
+            self.message(module, trail, label),
             module,
             (module, self.ctx.labeler.module_of_symbol(symbol) or symbol),
             (edge,) if edge is not None else (),
@@ -295,21 +324,24 @@ class ExportPrimitive:
         self.run.findings.append(finding)
 
     def unknown(
-        self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None, why: str
+        self,
+        symbol: str,
+        module: str,
+        policy: ShapePolicy,
+        trail: tuple[str, ...],
+        edge: Edge | None,
+        why: str,
+        detail: str = "",
     ) -> None:
         mode = "incomplete" if policy.unknown == "incomplete" else self.spec.on_unknown
         if mode == "incomplete":
-            self.run.incomplete.append(
-                IncompleteItem(self.spec.id, f"{module}|{symbol}", f"{' -> '.join(trail)}: {why}", (module,))
-            )
+            self.run.incomplete.append(self.unknown_item(self.spec.id, module, symbol, trail, why, detail))
             return
         self.finding(symbol, module, "export-unknown", trail, edge, ledgerable=mode == "finding", unknown=True)
 
     def unresolved(self, edge: Edge, module: str) -> None:
         if self.spec.on_unresolved == "incomplete":
-            self.run.incomplete.append(
-                IncompleteItem(self.spec.id, f"{module}|{edge.surface}", f"{edge.surface!r} did not resolve", (module,))
-            )
+            self.run.incomplete.append(self.unresolved_item(self.spec.id, module, edge.surface))
             return
         ledgerable = self.spec.on_unresolved == "finding"
         self.finding(edge.surface, module, f"unresolved-{edge.kind}", (edge.surface,), edge, ledgerable, unknown=True)

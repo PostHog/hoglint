@@ -18,10 +18,8 @@ pub struct EntityRule {
     /// The kinds a `select` pins, so on symbols only their members and the symbols of unknown
     /// kind are read (`EntityRule.entities`).
     wanted: Option<Vec<String>>,
-    /// What a layout finding's message adds after the subject.
-    suffix: String,
-    /// An inventory's `exactly_one` field, and its name.
-    exactly_one: Option<(Ref, String)>,
+    /// An inventory's `exactly_one` field.
+    exactly_one: Option<Ref>,
     identity: Vec<Ref>,
 }
 
@@ -30,27 +28,28 @@ impl EntityRule {
         EntityRule {
             on_symbol: plan.on_symbol,
             wanted: plan.wanted.clone(),
-            suffix: plan.suffix.clone(),
             exactly_one: plan
                 .exactly_one
                 .as_ref()
-                .map(|name| (entity.reference(std::slice::from_ref(name)), name.clone())),
+                .map(|name| entity.reference(std::slice::from_ref(name))),
             identity: identity.iter().map(|path| entity.reference(path)).collect(),
         }
     }
 
     pub fn refs(&self, out: &mut Vec<Ref>) {
         out.extend(&self.identity);
-        out.extend(self.exactly_one.as_ref().map(|(field, _)| *field));
+        out.extend(self.exactly_one);
     }
 }
 
 /// (module, its place, symbol, subject) of one entity a rule looks at.
 type Entity = (Option<Sid>, Option<u32>, Option<String>, String);
 
-/// What a rule over entities reports, in order: (finding or not, subject, module, message or
-/// reason, identity).
-pub type EntityRow = (bool, String, Option<String>, String, Vec<String>);
+/// What a rule over entities reports, in order, as data the rule's Python class words
+/// (`EntityRule.report_rows`): (what, subject, module, count, identity). What: "finding",
+/// "unknown-selection" (whether the entity is selected), or "unknown-value" (an inventory's
+/// field); the count of an inventory's values, else 0; the identity of a finding, else empty.
+pub type EntityRow = (&'static str, String, Option<String>, u32, Vec<String>);
 
 /// `ClassSelection.truth` over any environment: the `and` parts in order, false at the first
 /// false one; where labels conflict only where read, every field a part names is read first.
@@ -153,33 +152,26 @@ impl Rules {
             let module_name = module.map(|module| cx.text(module).to_string());
             let selected = class_truth(&rule.selection, &env, self.touch);
             if selected == Truth::Unknown {
-                let reason = "cannot tell whether this entity is selected".to_string();
-                out.push((
-                    false,
-                    subject.clone(),
-                    module_name.clone(),
-                    reason,
-                    Vec::new(),
-                ));
+                let (unselected, module) = (subject.clone(), module_name.clone());
+                out.push(("unknown-selection", unselected, module, 0, Vec::new()));
             }
             if selected != Truth::True {
                 continue;
             }
-            let message = match &entities.exactly_one {
-                Some((field, name)) => {
-                    let count = match env.resolve(*field) {
+            let count = match entities.exactly_one {
+                Some(field) => {
+                    let count = match env.resolve(field) {
                         Value::Unknown => {
-                            let reason = format!("{name} is unknown");
-                            out.push((false, subject.clone(), module_name, reason, Vec::new()));
+                            out.push(("unknown-value", subject, module_name, 0, Vec::new()));
                             continue;
                         }
-                        Value::Set(items) => items.len(),
+                        Value::Set(items) => items.len() as u32,
                         _ => 0,
                     };
                     if count == 1 {
                         continue;
                     }
-                    format!("{subject} has {count} {name} values, needs exactly one")
+                    count
                 }
                 None => {
                     let verdict = match &rule.require {
@@ -189,7 +181,7 @@ impl Rules {
                     if verdict == Truth::True {
                         continue;
                     }
-                    format!("{subject}{}", entities.suffix)
+                    0
                 }
             };
             let identity = entities
@@ -197,7 +189,7 @@ impl Rules {
                 .iter()
                 .map(|field| render(&env.resolve(*field)))
                 .collect();
-            out.push((true, subject, module_name, message, identity));
+            out.push(("finding", subject, module_name, count, identity));
         }
         Ok(out)
     }

@@ -214,17 +214,20 @@ class Rules:
         """The search of a reach rule from every start its `from` selects, in the order the Python
         search finds things."""
     def export(self, rule: int) -> list[tuple[str, str, str, str, list[str], int | None, bool, bool, list[str], str]]:
-        """What an export rule reports, in order: findings (what "finding", symbol, module, label,
-        trail, witness edge, ledgerable, unknown, identity, subject) and incomplete items (what
-        "incomplete", key, module, reason)."""
+        """What an export rule reports, in order, as data the rule words: findings ("finding",
+        symbol, module, label, trail, witness edge, ledgerable, unknown, identity, subject),
+        symbols it cannot tell about ("unknown", symbol, module, why code, trail, ..., detail) and
+        imports that did not resolve ("unresolved", surface, module, ...)."""
     def coverage(
         self, rule: int, witnesses: list[bytes | None]
-    ) -> tuple[list[tuple[str, str, str | None]], list[tuple[str, str | None, str]]]:
-        """The paths a coverage rule needs covered, (path, why, module) sorted by path, and what it
-        cannot place, (subject, module, reason) in order; `witnesses` per cover as edge ids."""
-    def entities(self, rule: int) -> list[tuple[bool, str, str | None, str, list[str]]]:
-        """What a layout rule or an entity inventory reports on its entities, in order: (finding
-        or not, subject, module, message or reason, identity)."""
+    ) -> tuple[list[tuple[str, int, str | None]], list[tuple[str, int, str | None, str]]]:
+        """The paths a coverage rule needs covered, (path, cover, module) sorted by path, and what
+        it cannot tell, (what, cover, source module, surface) in order, what "not-run" or
+        "unplaced"; `witnesses` per cover as edge ids."""
+    def entities(self, rule: int) -> list[tuple[str, str, str | None, int, list[str]]]:
+        """What a layout rule or an entity inventory reports on its entities, in order, as data the
+        rule words: (what, subject, module, count, identity), what "finding", "unknown-selection"
+        or "unknown-value"."""
     def level_groups(self, group_by: str, select: str | None = None) -> list[str]:
         """The groups a level judges: `group_by` known on a graph module whose `select` is true."""
     def kind_members(self, name: str) -> list[str]:

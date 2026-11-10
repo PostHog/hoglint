@@ -197,10 +197,9 @@ class RuleContext:
         """Whether this context judged an inventory over edges itself, into the rule's run."""
         return False
 
-    def entity_rows(self, rule: EntityRule) -> list[tuple[bool, str, str | None, str, list[str]]] | None:
-        """What a layout rule's or an entity inventory's entities report, (finding or not,
-        subject, module, message or reason, identity) in order, when this context finds them
-        itself; else None."""
+    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
+        """What a layout rule's or an entity inventory's entities report, as data the rule words
+        (`EntityRule.report_rows`), in order, when this context finds them itself; else None."""
         return None
 
     def layout_roots(self, within: str) -> list[str] | None:

@@ -32,9 +32,11 @@ type FoundTuple = (&'static str, String, Vec<(u32, u32)>, u8);
 /// A module field's column: its distinct values as (type, items), and each module's place.
 type ValueColumn<'py> = (Vec<(&'static str, Vec<String>)>, Bound<'py, PyBytes>);
 
-/// An export rule's report: (what, symbol or key, module, label or reason, trail, witness edge,
-/// ledgerable, unknown, identity, subject). What: "finding" or "incomplete"; an incomplete item
-/// fills only the key, module and reason.
+/// An export rule's report, as data the rule's Python class words. A finding: ("finding",
+/// symbol, module, label, trail, witness edge, ledgerable, unknown, identity, subject). A symbol
+/// it cannot tell about: ("unknown", symbol, module, why code, trail, None, false, false, [],
+/// detail). An import that did not resolve: ("unresolved", surface, module, "", [], None,
+/// false, false, [], "").
 type ExportTuple = (
     &'static str,
     String,
@@ -186,15 +188,29 @@ impl Rules {
                     "finding", symbol, module, label, trail, edge, ledgerable, unknown, identity,
                     subject,
                 ),
-                ExportRow::Incomplete {
-                    key,
-                    reason,
+                ExportRow::Unknown {
+                    symbol,
                     module,
+                    trail,
+                    why,
+                    detail,
                 } => (
-                    "incomplete",
-                    key,
+                    "unknown",
+                    symbol,
                     module,
-                    reason,
+                    why.to_string(),
+                    trail,
+                    None,
+                    false,
+                    false,
+                    Vec::new(),
+                    detail,
+                ),
+                ExportRow::Unresolved { surface, module } => (
+                    "unresolved",
+                    surface,
+                    module,
+                    String::new(),
                     Vec::new(),
                     None,
                     false,
@@ -206,10 +222,12 @@ impl Rules {
             .collect())
     }
 
-    /// The paths coverage rule `rule` needs covered: (path, why, module), sorted by path, and the
-    /// items it cannot place, (subject, module, reason), in order. `witnesses` holds, per cover,
-    /// the witness edge ids of the findings of the rule it reads (little-endian u32s), or None
-    /// when that rule did not run; an edge cover's entry is ignored.
+    /// The paths coverage rule `rule` needs covered: (path, the place of the cover that names it
+    /// first, module), sorted by path; and in order what it cannot tell, (what, cover, source
+    /// module, surface), what "not-run" (the cover's rule did not run) or "unplaced" (an edge it
+    /// cannot place). `witnesses` holds, per cover, the witness edge ids of the findings of the
+    /// rule it reads (little-endian u32s), or None when that rule did not run; an edge cover's
+    /// entry is ignored.
     #[allow(clippy::type_complexity)]
     fn coverage(
         &self,
@@ -217,8 +235,8 @@ impl Rules {
         rule: usize,
         witnesses: Vec<Option<Vec<u8>>>,
     ) -> PyResult<(
-        Vec<(String, String, Option<String>)>,
-        Vec<(String, Option<String>, String)>,
+        Vec<(String, u32, Option<String>)>,
+        Vec<(&'static str, u32, Option<String>, String)>,
     )> {
         let inputs = witnesses
             .iter()
@@ -232,14 +250,15 @@ impl Rules {
         Ok((found.paths, found.incomplete))
     }
 
-    /// What a layout rule or an entity inventory reports on its entities, in order:
-    /// (finding or not, subject, module, message or reason, identity).
+    /// What a layout rule or an entity inventory reports on its entities, in order, as data the
+    /// rule's Python class words: (what, subject, module, count, identity), what "finding",
+    /// "unknown-selection" or "unknown-value".
     #[allow(clippy::type_complexity)]
     fn entities(
         &self,
         py: Python<'_>,
         rule: usize,
-    ) -> PyResult<Vec<(bool, String, Option<String>, String, Vec<String>)>> {
+    ) -> PyResult<Vec<(&'static str, String, Option<String>, u32, Vec<String>)>> {
         let bound = self.link.bind(py).borrow();
         self.inner
             .entity_rows(&bound.inner, rule)
