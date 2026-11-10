@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import os
 import json
 import time
 import sqlite3
 import datetime
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.support import set_modified
 from hoglint.core.config import CoreConfig
 from hoglint.ledger.store import Walk
 from hoglint.native.analysis import LITE_KINDS
@@ -86,10 +87,44 @@ def test_a_working_tree_file_that_changes_during_the_run_is_never_stored(tmp_pat
     assert (imports(again), again.drifted(), counts) == (["Thing"], [], (2, 1))
 
 
-@pytest.mark.parametrize(
-    "damage", ["entry gone, id reused", "record gone", "record does not decompress", "a frame does not decompress"]
-)
-def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, damage: str) -> None:
+def stored_record(conn: sqlite3.Connection, oid: str) -> bytes:
+    query = "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.oid = ?"
+    return bytes(conn.execute(query, (oid,)).fetchone()[0])
+
+
+def replace_record(conn: sqlite3.Connection, oid: str, record: bytes) -> None:
+    conn.execute("UPDATE records SET json = ? WHERE id = (SELECT id FROM keys WHERE oid = ?)", (record, oid))
+
+
+def reuse_the_id(conn: sqlite3.Connection, oid: str) -> None:
+    entry_id, length = conn.execute("SELECT id, json_len FROM keys WHERE oid = ?", (oid,)).fetchone()
+    record = stored_record(conn, oid)
+    FactDatabase.delete(conn, [entry_id])
+    # Another blob's entry takes the freed id and has a record of the same length.
+    body = conn.execute("SELECT body FROM facts LIMIT 1").fetchone()[0]
+    reused = conn.execute("INSERT INTO facts (body) VALUES (?)", (body,)).lastrowid
+    conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record))
+    conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
+
+
+def drop_the_record(conn: sqlite3.Connection, oid: str) -> None:
+    conn.execute("DELETE FROM records WHERE id = (SELECT id FROM keys WHERE oid = ?)", (oid,))
+
+
+def garble_the_record(conn: sqlite3.Connection, oid: str) -> None:
+    replace_record(conn, oid, b"\xff" * 64)
+
+
+def garble_the_frames(conn: sqlite3.Connection, oid: str) -> None:
+    packed = stored_record(conn, oid)
+    index_end = 4 + int.from_bytes(packed[:4], "little")
+    replace_record(conn, oid, packed[:index_end] + b"\xff" * (len(packed) - index_end))
+
+
+@pytest.mark.parametrize("damage", [reuse_the_id, drop_the_record, garble_the_record, garble_the_frames])
+def test_a_record_the_database_cannot_give_is_extracted_again(
+    tmp_path: Path, damage: Callable[[sqlite3.Connection, str], None]
+) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
     database = fact_database(native, tmp_path)
@@ -97,38 +132,16 @@ def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, da
     run, counts = link(native, BlobSnapshot.index(repo), database)
     fresh, _ = link(native, BlobSnapshot.index(repo), None)
     with sqlite3.connect(database.path) as conn:
-        newest, length, oid = conn.execute("SELECT id, json_len, oid FROM keys ORDER BY id DESC LIMIT 1").fetchone()
-        if damage == "record gone":
-            conn.execute("DELETE FROM records WHERE id = ?", (newest,))
-        elif damage == "record does not decompress":
-            conn.execute("UPDATE records SET json = ? WHERE id = ?", (b"\xff" * 64, newest))
-        elif damage == "a frame does not decompress":
-            packed = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
-            index_end = 4 + int.from_bytes(packed[:4], "little")
-            garbled = packed[:index_end] + b"\xff" * (len(packed) - index_end)
-            conn.execute("UPDATE records SET json = ? WHERE id = ?", (garbled, newest))
-        else:
-            record = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
-            FactDatabase.delete(conn, [newest])
-            # Another blob's entry takes the freed id and has a record of the same length.
-            body = conn.execute("SELECT body FROM facts LIMIT 1").fetchone()[0]
-            reused = conn.execute("INSERT INTO facts (body) VALUES (?)", (body,)).lastrowid
-            conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record))
-            conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
+        (oid,) = conn.execute("SELECT oid FROM keys ORDER BY id DESC LIMIT 1").fetchone()
+        damage(conn, oid)
     assert counts == (3, 0)
     assert records(run) == records(fresh)
-    if damage == "entry gone, id reused":
-        return
-    # The run stored the record it extracted again, as a clean database holds it.
+    # After the next run the database holds the record as a clean one does: repaired, or stored anew.
+    link(native, BlobSnapshot.index(repo), database)
     clean = fact_database(native, tmp_path / "clean")
     link(native, BlobSnapshot.index(repo), clean)
-    assert stored_record(database, oid) == stored_record(clean, oid)
-
-
-def stored_record(database: FactDatabase, oid: str) -> bytes:
-    with sqlite3.connect(database.path) as conn:
-        query = "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.oid = ?"
-        return bytes(conn.execute(query, (oid,)).fetchone()[0])
+    with sqlite3.connect(database.path) as ours, sqlite3.connect(clean.path) as theirs:
+        assert stored_record(ours, oid) == stored_record(theirs, oid)
 
 
 @pytest.mark.parametrize("json_len", ["-1", str(1 << 62), "json_len + 1", "json_len - 1", "json_len / 2"])
@@ -206,8 +219,7 @@ def other_database(directory: Path, name: str, opened_days_ago: float) -> list[P
     files = [directory / f"{name}{suffix}" for suffix in ("", "-wal", "-shm", ".opened")]
     for path in files:
         path.write_bytes(b"x" * 1024)
-    stamp = time.time() - opened_days_ago * DAY
-    os.utime(files[-1], (stamp, stamp))
+    set_modified(files[-1], time.time() - opened_days_ago * DAY)
     return files
 
 
@@ -273,8 +285,8 @@ def records_directory(facts: Path, name: str, written_days_ago: float) -> Path:
     entry = directory / "0123.json"
     entry.write_bytes(b"{}")
     stamp = time.time() - written_days_ago * DAY
-    os.utime(entry, (stamp, stamp))
-    os.utime(directory, (stamp, stamp))
+    set_modified(entry, stamp)
+    set_modified(directory, stamp)
     return directory
 
 
@@ -293,8 +305,7 @@ def test_the_two_newest_record_namespaces_stay_whole_and_empty_directories_go(tm
     for name, age in namespaces.items():
         records_directory(facts, name, age)
     (facts / "left-empty").mkdir()
-    stamp = time.time() - 2 * DAY
-    os.utime(facts / "left-empty", (stamp, stamp))
+    set_modified(facts / "left-empty", time.time() - 2 * DAY)
     (facts / "made-now").mkdir()
     database.prune(TODAY)
     assert sorted(path.name for path in facts.iterdir()) == [

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import json
 import base64
 import shutil
@@ -13,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from core.support import set_modified
 from hoglint.cli import Commands, Snapshots
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
@@ -280,7 +280,7 @@ def test_the_cache_root_stays_within_its_age_and_size(tmp_path: Path, files: dic
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"x" * size)
-        os.utime(path, (NOW - age_days * DAY, NOW - age_days * DAY))
+        set_modified(path, NOW - age_days * DAY)
     CacheRoot(tmp_path, max_bytes=150).prune(now=NOW)
     assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == kept
 

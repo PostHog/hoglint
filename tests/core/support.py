@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
 from hoglint.facts import FactStore
 from hoglint.model import Edge, Graph
 
 SITE = ".venv/lib/python3.14/site-packages/"
+
+
+def set_modified(path: Path, stamp: float) -> None:
+    """Sets the access and modified time of `path` to `stamp`."""
+    os.utime(path, (stamp, stamp))
 
 
 def import_row(module: str, name: str | None, scope: int = -1, flags: int = 0, line: int = 1) -> list:
