@@ -255,12 +255,6 @@ class GraphIndex:
             head = head.rpartition(".")[0]
         return None
 
-    @cached_property
-    def ordinals(self) -> dict[int, int]:
-        """Each edge's place among edges with the same module, scope, kind and surface, by its
-        handle. An edge object a producer repeats has one handle, so it keeps its last place."""
-        return self.count_ordinals()
-
     def count_ordinals(self) -> dict[int, int]:
         """`ordinals`, counted over every edge in graph order."""
         out: dict[int, int] = {}
@@ -270,6 +264,12 @@ class GraphIndex:
             out[edge.handle] = counters.get(key, 0)
             counters[key] = counters.get(key, 0) + 1
         return out
+
+    @cached_property
+    def ordinals(self) -> dict[int, int]:
+        """Each edge's place among edges with the same module, scope, kind and surface, by its
+        handle. An edge object a producer repeats has one handle, so it keeps its last place."""
+        return self.count_ordinals()
 
     @cached_property
     def sorted_modules(self) -> list[tuple[str, str]]:
