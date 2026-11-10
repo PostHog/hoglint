@@ -940,3 +940,21 @@ class NativeGraphIndex(GraphIndex):
             return [(e.attr("callable") or e.site.scope, e) for e in self.module_edges("exposes", module)]
 
         return LazyModules(self.modules_of("exposes"), exposes)
+
+    @cached_property
+    def exposed_handles(self) -> Mapping[str, list[tuple[str, int]]]:  # type: ignore[override]
+        """(callable qualname, handle of the exposes edge) per module, read off the link's
+        columns."""
+
+        def exposed(module: str) -> list[tuple[str, int]]:
+            ids = self.native.link.ids_from("exposes", module)
+            callables, scopes = self.native.link.columns(ids, ["attr:callable", "scope"])
+            return [
+                (callable_name or scope, handle)
+                for callable_name, scope, handle in zip(callables, scopes, array("I", ids))
+            ]
+
+        return LazyModules(self.modules_of("exposes"), exposed)
+
+    def edges_at(self, handles: list[int]) -> list[Edge]:
+        return self.native.core.get(array("I", handles))

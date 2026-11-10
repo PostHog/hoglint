@@ -34,14 +34,16 @@ class ExportPrimitive:
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
         index = ctx.labeler.index
-        self.exposes = index.exposes
+        self.index = index
+        self.exposes = index.exposed_handles
         self.top_level = index.top_level
         self.module_imports = index.module_imports
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
         self.shapes: dict[str, tuple[frozenset[str], bool]] = {}
         self.members: dict[tuple[str, bool], list[Edge]] = {}
-        self.exposes_by_name: dict[str, dict[str, list[Edge]]] = {}
+        self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
+        self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
 
@@ -180,32 +182,39 @@ class ExportPrimitive:
         if "function" in shapes:
             self.check_members(symbol, module, policy, trail)
 
-    def exposes_under(self, module: str) -> dict[str, list[Edge]]:
-        """A module's exposes edges under every qualname their callable lies in: `A` holds the
-        edges of `A`, `A.f` and `A.B.g`, in the module's order."""
+    def exposes_under(self, module: str) -> dict[str, list[int]]:
+        """A module's exposes edges, as handles, under every qualname their callable lies in: `A`
+        holds the edges of `A`, `A.f` and `A.B.g`, in the module's order."""
         found = self.exposes_by_name.get(module)
         if found is None:
             found = self.exposes_by_name[module] = {}
-            for callable_name, edge in self.exposes.get(module, []):
+            for callable_name, handle in self.exposes.get(module, []):
                 parts = callable_name.split(".")
                 for end in range(1, len(parts) + 1):
-                    found.setdefault(".".join(parts[:end]), []).append(edge)
+                    found.setdefault(".".join(parts[:end]), []).append(handle)
         return found
+
+    def edges(self, handles: list[int]) -> list[Edge]:
+        """The edges at `handles`, each made once: only member edges a check reads become Edges."""
+        missing = list(dict.fromkeys(handle for handle in handles if handle not in self.made))
+        for handle, edge in zip(missing, self.index.edges_at(missing)):
+            self.made[handle] = edge
+        return [self.made[handle] for handle in handles]
 
     def member_edges(self, symbol: str, include_bases: bool) -> list[Edge]:
         """Exposes edges of a callable, or of a class's fields and methods (and its bases')."""
         key = (symbol, include_bases)
         found = self.members.get(key)
         if found is None:
-            found = self.members[key] = self.find_member_edges(symbol, include_bases)
+            found = self.members[key] = self.edges(self.member_handles(symbol, include_bases))
         return found
 
-    def find_member_edges(self, symbol: str, include_bases: bool) -> list[Edge]:
+    def member_handles(self, symbol: str, include_bases: bool) -> list[int]:
         lineage = [symbol]
         if include_bases:
             ancestors, _ = self.facts.ancestors(symbol)
             lineage.extend(sorted(ancestors))
-        out: list[Edge] = []
+        out: list[int] = []
         for target in lineage:
             owner = self.ctx.labeler.module_of_symbol(target)
             if owner is None or owner == target:

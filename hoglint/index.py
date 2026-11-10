@@ -296,3 +296,16 @@ class GraphIndex:
         for edge in self.by_kind.get("exposes", []):
             out.setdefault(edge.site.module, []).append((edge.attr("callable") or edge.site.scope, edge))
         return out
+
+    @cached_property
+    def exposed_handles(self) -> Mapping[str, list[tuple[str, int]]]:
+        """(callable qualname, handle of the exposes edge) per module: what an index that keeps
+        its edges outside Python answers with no Edge made."""
+        return {
+            module: [(callable_name, edge.handle) for callable_name, edge in pairs]
+            for module, pairs in self.exposes.items()
+        }
+
+    def edges_at(self, handles: list[int]) -> list[Edge]:
+        """The edges at `handles`."""
+        return [self.graph.edges[handle] for handle in handles]
