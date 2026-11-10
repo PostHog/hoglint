@@ -18,7 +18,9 @@ import re
 import hashlib
 import tempfile
 from collections.abc import Iterable
+from functools import cached_property
 from pathlib import Path
+from typing import ClassVar
 
 from hoglint.config.model import Config
 from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
@@ -54,15 +56,23 @@ class InputPatterns:
 
 
 class RunInputs:
-    """The path patterns of everything a run of `config` reads but its policy files."""
+    """The path patterns of everything a run of `config` reads but its policy files. One per
+    config object (`of`), so every reader of a run's patterns reads the same ones."""
+
+    taken: ClassVar[dict[int, RunInputs]] = {}
 
     def __init__(self, config: Config) -> None:
         self.config = config
 
-    def side(self) -> tuple[str, ...]:
-        """What each provider and coverage adapter declares, and the paths layout rules ask
-        about. A layout rule asks only whether a path exists, so its patterns cover every file
-        under such a path too."""
+    @staticmethod
+    def of(config: Config) -> RunInputs:
+        found = RunInputs.taken.get(id(config))
+        if found is None:
+            found = RunInputs.taken[id(config)] = RunInputs(config)
+        return found
+
+    def declared(self) -> tuple[str, ...]:
+        """What each provider and coverage adapter declares: the files a plugin reads."""
         patterns: set[str] = set()
         for spec in self.config.providers.values():
             patterns.update(declared_inputs(REGISTRY.providers.get(spec.use), dict(spec.options)))
@@ -71,6 +81,14 @@ class RunInputs:
                 adapter = REGISTRY.coverage_adapters.get(str(spec.input("adapter")))
                 options = {key: value for key, value in spec.inputs if key != "adapter"}
                 patterns.update(declared_inputs(adapter, options))
+        return tuple(sorted(patterns))
+
+    def side(self) -> tuple[str, ...]:
+        """What each provider and coverage adapter declares, and the paths layout rules ask
+        about. A layout rule asks only whether a path exists, so its patterns cover every file
+        under such a path too."""
+        patterns = set(self.declared())
+        for spec in self.config.rules.values():
             if spec.primitive == "layout" and spec.within:
                 within = CAPTURE_RE.sub("*", spec.within)
                 for name in (*spec.files, *spec.absent):
@@ -78,9 +96,14 @@ class RunInputs:
                     patterns.update((path, f"{path}/**"))
         return tuple(sorted(patterns))
 
+    @cached_property
     def patterns(self) -> InputPatterns:
         """Sources, side inputs and the ledger."""
         return InputPatterns((*SOURCE_INPUTS, *self.side(), self.config.ledger.file))
+
+    @cached_property
+    def plugin_patterns(self) -> InputPatterns:
+        return InputPatterns(self.declared())
 
 
 class TreeFiles:
@@ -89,13 +112,28 @@ class TreeFiles:
     file behind a skip-worktree bit. As a `TreeRoot` (plugins.py) it writes one directory per
     plugin, each holding exactly the files the plugin declares, into `work_dir`, and answers
     whether a path exists only for a path `asked` matches: the run's input patterns, so the
-    answer is in the run's key."""
+    answer is in the run's key. The first plugin directory reads the bytes of every file
+    `declared` matches (what the run's plugins declare) in one call; the later ones only write."""
 
-    def __init__(self, listing: Listing, work_dir: Path | None = None, asked: InputPatterns | None = None) -> None:
+    def __init__(
+        self,
+        listing: Listing,
+        work_dir: Path | None = None,
+        asked: InputPatterns | None = None,
+        declared: InputPatterns | None = None,
+    ) -> None:
         self.listing = listing
         self.work_dir = work_dir
         self.asked = asked
+        self.declared = declared
         self.plugin_roots: dict[tuple[str, ...], Path] = {}
+
+    @cached_property
+    def declared_bytes(self) -> dict[str, bytes]:
+        if self.declared is None:
+            return {}
+        declared = self.declared
+        return self.listing.read(path for path in self.listing.modes if declared.matches(path))
 
     def write(self, target: Path, paths: Iterable[str]) -> None:
         """Writes the paths the snapshot holds and can read under `target`; the others are left out."""
@@ -117,7 +155,8 @@ class TreeFiles:
             return found
         root = self.scratch("plugin-")
         wanted = InputPatterns(patterns)
-        unreadable = self.listing.write(root, [path for path in self.listing.paths if wanted.matches(path)])
+        paths = [path for path in self.listing.modes if wanted.matches(path)]
+        unreadable = self.listing.write(root, paths, self.declared_bytes)
         if unreadable:
             more = f" and {len(unreadable) - 1} more" if len(unreadable) > 1 else ""
             raise OSError(

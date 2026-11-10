@@ -165,6 +165,9 @@ class SummaryStore:
         self.root = self.cache.root / "summaries"
         self.pruned = False
         self.broken = False
+        # Sections decoded in this process by file, whose name is their digest: a check reads
+        # the same ones for its baseline and for its stored summary.
+        self.sections: dict[Path, dict[str, Any]] = {}
 
     def fail(self, what: str, error: OSError) -> None:
         self.broken = True
@@ -219,6 +222,9 @@ class SummaryStore:
 
     def read_section(self, key: Envelope, digest: str) -> dict[str, Any]:
         path = self.section_path(key, digest)
+        found = self.sections.get(path)
+        if found is not None:
+            return found
         raw = zstd.decompress(path.read_bytes())
         if hashlib.sha256(raw).hexdigest()[:SECTION_DIGEST_CHARS] != digest:
             raise ValueError(f"{path} does not hold the section its name says")
@@ -226,6 +232,7 @@ class SummaryStore:
         part = orjson.loads(raw)
         if not isinstance(part, dict):
             raise ValueError(f"{path} is not a summary section")
+        self.sections[path] = part
         return part
 
     def put(self, key: Envelope, summary: ScanSummary) -> Path | None:

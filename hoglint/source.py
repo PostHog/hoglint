@@ -49,26 +49,31 @@ class PackRoot:
         self.listing = listing
         self.directory = directory
 
-    def copy(self, key: str, value: str) -> Path:
+    def copy(self, key: str, value: str, known: Mapping[str, bytes]) -> Path:
         """Writes the policy file `value` names under the directory; returns the copy's path
-        relative to it."""
+        relative to it. `known` holds the bytes of the pack's policy files read from blobs."""
         if Path(value).is_absolute():
             copy = Path(key) / Path(value).name
             (self.directory / key).mkdir(parents=True, exist_ok=True)
             shutil.copyfile(value, self.directory / copy)
             return copy
         path = posixpath.normpath(value)
-        if path not in self.listing.modes or self.listing.write(self.directory / key, [path]):
+        if path not in self.listing.modes or self.listing.write(self.directory / key, [path], known):
             raise FileNotFoundError(f"{value}: the snapshot holds no file there that hoglint can read")
         return Path(key) / path
 
     def section_of_copies(self) -> dict[str, Any]:
         """The section with each policy file key naming the file's copy, relative to the directory."""
         out = dict(self.section)
+        named: dict[str, str] = {}
         for key in getattr(self.pack, "policy_file_keys", ()):
             value = self.section.get(key)
             if isinstance(value, str) and value:
-                out[key] = self.copy(key, value).as_posix()
+                named[key] = value
+        relative = [posixpath.normpath(value) for value in named.values() if not Path(value).is_absolute()]
+        known = self.listing.read(relative)
+        for key, value in named.items():
+            out[key] = self.copy(key, value, known).as_posix()
         return out
 
 

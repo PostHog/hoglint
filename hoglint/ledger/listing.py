@@ -26,7 +26,7 @@ import os
 import stat
 import shutil
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -42,6 +42,9 @@ DELETED_MODE = "000000"
 FILE_MODES = frozenset({"100644", "100755"})
 # More links than this in one path is a loop, as the operating system's limit says.
 MAX_LINK_HOPS = 40
+# Oids asked of `git cat-file --batch` at a time. A request this small fits an empty pipe even
+# with SHA-256 ids, so writing it never waits on git, which may be waiting for its output to be read.
+BLOB_CHUNK = 200
 # Fields before the path in a porcelain v2 status record, per record kind, and where the working
 # tree's file mode sits among them.
 FIELDS_BEFORE_PATH = {"1": 8, "2": 9, "u": 10}
@@ -80,27 +83,37 @@ def parse_index(output: str) -> list[IndexRecord]:
 
 
 def read_blobs(repo: Path, oids: dict[str, str]) -> dict[str, bytes]:
-    """path -> the bytes of its blob, all in one `git cat-file --batch`."""
+    """path -> the bytes of its blob, all from one `git cat-file --batch`, asked a chunk at a
+    time, so no copy of every blob's bytes is held besides the result."""
     if not oids:
         return {}
     pending = sorted(oids.items())
-    request = "".join(f"{oid}\n" for _, oid in pending).encode()
     command = ["git", "-C", str(repo), "cat-file", "--batch"]
-    out = subprocess.run(command, input=request, capture_output=True, check=True).stdout
     found: dict[str, bytes] = {}
-    at = 0
-    for path, oid in pending:
-        header_end = out.index(b"\n", at)
-        header = out[at:header_end].decode().split()
-        if header[1:] == ["missing"]:
-            raise EngineError(f"git has no object {oid} for {path}: a partial clone, or a pruned object")
-        got, kind, size = header
-        if got != oid or kind != "blob":
-            raise RuntimeError(f"git cat-file returned {got} {kind} for {path}")
-        start = header_end + 1
-        end = start + int(size)
-        found[path] = out[start:end]
-        at = end + 1
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as git:
+        requests, answers = git.stdin, git.stdout
+        if requests is None or answers is None:
+            raise RuntimeError("git cat-file has no pipes")
+        try:
+            for start in range(0, len(pending), BLOB_CHUNK):
+                chunk = pending[start : start + BLOB_CHUNK]
+                requests.write("".join(f"{oid}\n" for _, oid in chunk).encode())
+                requests.flush()
+                for path, oid in chunk:
+                    header = answers.readline().decode().split()
+                    if not header:
+                        raise subprocess.CalledProcessError(git.wait(), command)
+                    if header[1:] == ["missing"]:
+                        raise EngineError(f"git has no object {oid} for {path}: a partial clone, or a pruned object")
+                    got, kind, size = header
+                    if got != oid or kind != "blob":
+                        raise RuntimeError(f"git cat-file returned {got} {kind} for {path}")
+                    found[path] = answers.read(int(size))
+                    answers.read(1)
+        finally:
+            requests.close()
+    if git.returncode != 0:
+        raise subprocess.CalledProcessError(git.returncode, command)
     return found
 
 
@@ -168,8 +181,10 @@ class Listing:
     def directories(self) -> frozenset[str]:
         out: set[str] = set()
         for path in self.modes:
-            parts = path.split("/")[:-1]
-            out.update("/".join(parts[:end]) for end in range(1, len(parts) + 1))
+            parent = path.rpartition("/")[0]
+            while parent and parent not in out:
+                out.add(parent)
+                parent = parent.rpartition("/")[0]
         return frozenset(out)
 
     def link_texts(self) -> dict[str, str]:
@@ -207,18 +222,28 @@ class Listing:
         """Whether the snapshot holds `path`, as a file or as a directory with a file in it."""
         return path in self.modes or path in self.directories
 
-    def write(self, target: Path, paths: Iterable[str]) -> list[str]:
+    def read(self, paths: Iterable[str]) -> dict[str, bytes]:
+        """path -> bytes for each of `paths` whose bytes are in a blob, in one `git cat-file`."""
+        oids = {path: oid for path in paths if path in self.modes and (oid := self.blob(path)) is not None}
+        return read_blobs(self.repo, oids)
+
+    def write(self, target: Path, paths: Iterable[str], known: Mapping[str, bytes] | None = None) -> list[str]:
         """Writes the paths the snapshot holds under `target`; a path it does not hold is left out.
-        Returns the paths it holds but cannot read, which are left out too."""
+        `known` holds bytes read before (see `read`); only the other blobs are read now. Returns
+        the paths it holds but cannot read, which are left out too."""
         wanted = [path for path in paths if path in self.modes]
-        oids = {path: oid for path in wanted if (oid := self.blob(path)) is not None}
-        found = read_blobs(self.repo, oids)
+        known = known or {}
+        found = self.read(path for path in wanted if path not in known)
+        made: set[Path] = set()
         unreadable = []
         for path in wanted:
             written = target / path
-            written.parent.mkdir(parents=True, exist_ok=True)
-            if path in found:
-                written.write_bytes(found[path])
+            if written.parent not in made:
+                written.parent.mkdir(parents=True, exist_ok=True)
+                made.add(written.parent)
+            data = known[path] if path in known else found.get(path)
+            if data is not None:
+                written.write_bytes(data)
                 continue
             on_disk = self.disk_file(path)
             try:

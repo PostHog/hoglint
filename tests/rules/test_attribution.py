@@ -128,7 +128,8 @@ def test_a_reader_loads_only_the_sections_it_asks_for_and_equal_sections_are_sto
     assert incompletes is not None and incompletes.obligations() == {DYNAMIC: ["f1"]} and not incompletes.modules
     for section in sections:
         section.write_bytes(b"not zstd")
-    assert store.get(STORED, frozenset({"envelope", "incompletes"})) is None
+    # a store keeps what it decoded, so only another process reads the corrupt files
+    assert SummaryStore(tmp_path).get(STORED, frozenset({"envelope", "incompletes"})) is None
 
 
 CLASSIFY = """
@@ -565,7 +566,7 @@ def test_a_staged_check_reads_only_the_tree_it_captured_from_the_index(
     finally:
         commands.snapshots.close()
     assert "computed and stored): 1 introduced, 0 ambiguous, 1 inherited" in capfd.readouterr().out
-    patterns = RunInputs(config_from(tmp_path / "policy", DYNAMIC_CONFIG)).patterns()
+    patterns = RunInputs(config_from(tmp_path / "policy", DYNAMIC_CONFIG)).patterns
     staged = InputDigests.compute(TreeListing.of(repo, captured[0]), patterns)
     counts = stored_incomplete_counts(tmp_path / "cache" / "hoglint")
     assert sorted(counts.values()) == [1, 2] and counts[staged] == 2
@@ -695,7 +696,7 @@ def test_a_run_asks_whether_a_path_exists_only_for_a_path_its_key_covers(
     git_in(repo, "add", "-A")
     tree = git_in(repo, "write-tree").strip()
     files = TreeFiles(
-        TreeListing.of(repo, tree), tmp_path, RunInputs(config_from(tmp_path / "policy", COVERED)).patterns()
+        TreeListing.of(repo, tree), tmp_path, RunInputs(config_from(tmp_path / "policy", COVERED)).patterns
     )
     if held is None:
         with pytest.raises(EngineError, match="no source or declared input pattern covers it"):

@@ -82,6 +82,7 @@ class Snapshots:
         self.repo = repo
         self.work_dir = work_dir
         self.worktrees: list[Path] = []
+        self.trees: dict[str, str] = {}
 
     def write_tree(self) -> str:
         """The index as a git tree: the one read of the index a staged run makes. Empty when the
@@ -177,11 +178,16 @@ class Snapshots:
         return out
 
     def tree_of(self, ref: str) -> str:
-        """The git tree id of a commit; empty when there is none."""
+        """The git tree id of a commit; empty when there is none. Asked once per ref and run."""
+        found = self.trees.get(ref)
+        if found is not None:
+            return found
         try:
-            return git(self.repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{tree}}").strip()
+            found = git(self.repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{tree}}").strip()
         except subprocess.CalledProcessError:
-            return ""
+            found = ""
+        self.trees[ref] = found
+        return found
 
     def clean(self) -> bool:
         return not WorktreeStatus.of(self.repo).records
@@ -193,7 +199,7 @@ class Snapshots:
         tree = self.tree_of("HEAD")
         if not tree:
             return ""
-        return "" if WorktreeStatus.of(self.repo).drift(RunInputs(config).patterns().matches) else tree
+        return "" if WorktreeStatus.of(self.repo).drift(RunInputs.of(config).patterns.matches) else tree
 
 
 # ── one run ───────────────────────────────────────────────────────
@@ -235,8 +241,9 @@ class Runner:
         where rules and providers look for files. It answers whether a path exists only for the
         paths `config`'s input patterns cover. `config` is the policy as loaded, before its data
         files are anchored, as the run's key reads it."""
-        asked = RunInputs(config).patterns()
-        return TreeFiles(GraphSource.listing_of(repo, tree), self.source.work_dir, asked).run_root()
+        inputs = RunInputs.of(config)
+        listing = GraphSource.listing_of(repo, tree)
+        return TreeFiles(listing, self.source.work_dir, inputs.patterns, inputs.plugin_patterns).run_root()
 
     def evaluate(self, config: Config, code_root: Path, policy_root: Path) -> tuple[Graph, RunResult]:
         """One policy over the working tree of one code root, with no ledger and no exceptions."""
@@ -500,7 +507,7 @@ class LocalEngine:
 
     def inputs(self, repo: Path, tree: str, config: Config) -> str:
         """The inputs digest of a git tree under `config`; empty when there is no tree."""
-        return self.digests.of(repo, tree, RunInputs(config).patterns())
+        return self.digests.of(repo, tree, RunInputs.of(config).patterns)
 
     def envelope(self, run: Run, tree: str) -> Envelope:
         """The envelope of a run whose inputs are those of `tree` in the run's repo."""
