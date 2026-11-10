@@ -75,8 +75,27 @@ pub enum Value<'a> {
     List(&'a [String]),
 }
 
-/// What `str()` of a frozenset gives: no label value ever spells it.
-const SET_TEXT: &str = "\u{0}frozenset";
+/// `str()` of a frozenset of strings. Python orders the items of a set of several by their
+/// hashes, which change per process; the evaluator writes them sorted.
+fn set_text<'s>(items: impl Iterator<Item = Cow<'s, str>>) -> String {
+    let mut parts: Vec<String> = items.map(|item| py_repr(&item)).collect();
+    parts.sort();
+    parts.dedup();
+    if parts.is_empty() {
+        return "frozenset()".to_string();
+    }
+    format!("frozenset({{{}}})", parts.join(", "))
+}
+
+/// `str()` of an edge's contexts: a frozenset of `Context` members, each written as its repr.
+fn contexts_text(bits: u8) -> String {
+    let mut parts: Vec<String> = context_names(bits)
+        .into_iter()
+        .map(|name| format!("<Context.{}: {}>", name.to_uppercase(), py_repr(name)))
+        .collect();
+    parts.sort();
+    format!("frozenset({{{}}})", parts.join(", "))
+}
 
 fn context_names(bits: u8) -> Vec<&'static str> {
     CONTEXT_NAMES
@@ -167,7 +186,10 @@ impl<'a> Value<'a> {
             Value::Bool(false) => Cow::Borrowed("false"),
             Value::Zone(zone) => Cow::Borrowed(&zone.name),
             Value::List(items) => Cow::Owned(tuple_text(items)),
-            Value::Set(_) | Value::Contexts(_) => Cow::Borrowed(SET_TEXT),
+            Value::Set(items) => {
+                Cow::Owned(set_text(items.iter().map(|item| Cow::Borrowed(*item))))
+            }
+            Value::Contexts(bits) => Cow::Owned(contexts_text(*bits)),
             Value::Unknown | Value::None => Cow::Borrowed("None"),
         }
     }
@@ -353,6 +375,29 @@ mod tests {
         assert_eq!(equals(&Value::List(&list), &text("('a',)")), Truth::True);
         assert_eq!(
             equals(&Value::List(&list), &Value::Set(vec!["a"])),
+            Truth::True
+        );
+    }
+
+    #[test]
+    fn a_set_as_a_scalar_is_its_python_text() {
+        assert_eq!(
+            starts(&Value::Set(vec!["a"]), &Value::Set(vec!["a"])),
+            Truth::True
+        );
+        assert_eq!(
+            starts(&Value::Set(vec!["a"]), &Value::Set(vec!["b"])),
+            Truth::False
+        );
+        assert_eq!(
+            starts(&Value::Set(vec![]), &text("frozenset()")),
+            Truth::True
+        );
+        assert_eq!(
+            starts(
+                &Value::Contexts(1),
+                &text("frozenset({<Context.PROD: 'prod'>})")
+            ),
             Truth::True
         );
     }
