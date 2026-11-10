@@ -96,8 +96,9 @@ class ShownRecord:
 @dataclass(frozen=True, slots=True)
 class FindingRecord:
     """One finding. `shown` is kept only for a finding `check` prints (new, not accepted by the
-    run's ledger): making it can mean judging the edge again, and no reader of a stored summary
-    prints the others. None means not stored, never empty; a reader that needs it runs the check."""
+    run's ledger; with `--changed`, also accepted debt in touched files): making it can mean
+    judging the edge again, and no reader of a stored summary prints the others. None means not
+    stored, never empty; a reader that needs it runs the check."""
 
     rule: str
     identity: tuple[str, ...]
@@ -114,14 +115,14 @@ class FindingRecord:
         return self.rule, self.identity
 
     @staticmethod
-    def of(finding: Finding, portable: Portable) -> FindingRecord:
+    def of(finding: Finding, portable: Portable, shown: bool) -> FindingRecord:
         return FindingRecord(
             finding.rule,
             finding.identity,
             finding.status,
-            ShownRecord.of(finding, portable) if finding.status is FindingStatus.NEW else None,
+            ShownRecord.of(finding, portable) if shown else None,
             tuple(WitnessRecord.of(edge) for edge in finding.witnesses),
-            finding.subjects[0] if finding.subjects else "",  # RuleContext.finding: owner is the first subject
+            finding.owner.module if finding.owner is not None else "",
             finding.subjects,
             finding.ledgerable,
             finding.unknown,

@@ -12,14 +12,15 @@ import os
 import sys
 import json
 import argparse
+import datetime
 import tempfile
 import subprocess
 import dataclasses
 from collections import Counter
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Any
 
 from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
@@ -43,16 +44,16 @@ from hoglint.ledger.envelope import (
     PolicyFiles,
     policy_digest,
 )
-from hoglint.ledger.file import LedgerFile, render_key
+from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
-from hoglint.ledger.records import FindingRecord, Portable
-from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, obligation_of, obligations_of
+from hoglint.ledger.records import FindingRecord, IncompleteRecord
+from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.ledger.store import ExtractorStore, SummaryStore
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
 from hoglint.native.source import ENGINES, batch_mode, graph_source
-from hoglint.rules.base import EdgeRule, IncompleteItem, RuleContext
+from hoglint.rules.base import EdgeRule, RuleContext
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.selectors import Selector, State
@@ -197,7 +198,7 @@ class Runner:
     """Runs policy over code. One GraphIndex per graph serves every run that reads that graph, and
     one CandidateCache every run."""
 
-    def __init__(self, source: GraphSource, today: Any = None) -> None:
+    def __init__(self, source: GraphSource, today: datetime.date | None = None) -> None:
         self.source = source
         self.today = today
         self.indexes: dict[int, tuple[Graph, GraphIndex]] = {}
@@ -250,15 +251,17 @@ def native_id_of(crate: Path) -> str:
     return sources.digest(NATIVE)
 
 
-def portable_of(run: Run) -> Portable:
-    return Portable.of(run.policy_root or run.root, run.root)
-
-
 def summary_of(
-    run: Run, envelope: Envelope, scope: frozenset[str] = frozenset(), with_triples: bool = True
+    run: Run,
+    envelope: Envelope,
+    scope: frozenset[str] = frozenset(),
+    with_triples: bool = True,
+    shown: Callable[[Finding], bool] | None = None,
 ) -> ScanSummary:
     roots = (run.policy_root or run.root, run.root)
-    return ScanSummary.from_run(run.result, run.graph, envelope, scope, with_triples, roots, run.exceptions)
+    return ScanSummary.from_run(
+        run.result, run.graph, envelope, scope, with_triples, roots, run.exceptions, run.ledger, shown
+    )
 
 
 # ── rendering ─────────────────────────────────────────────────────
@@ -275,24 +278,44 @@ def finding_line(finding: Finding) -> str:
     return f"{finding.rule}  {' '.join(finding.identity)}\n    {finding.message}  {where(finding)}{owners}"
 
 
+# The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
+BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
+
+
+def touches(touched: set[str], paths: Iterable[str], subjects: Iterable[str]) -> bool:
+    return not touched.isdisjoint(paths) or not touched.isdisjoint(subjects)
+
+
+@dataclass(frozen=True, slots=True)
+class TouchedDebt:
+    """The findings a `--changed` report prints besides new ones: accepted debt in touched files."""
+
+    touched: set[str]
+
+    def shown(self, finding: Finding) -> bool:
+        if finding.status is FindingStatus.NEW:
+            return True
+        paths = (edge.site.path for edge in finding.witnesses)
+        return finding.status is FindingStatus.ACCEPTED and touches(self.touched, paths, finding.subjects)
+
+
 @dataclass(frozen=True, slots=True)
 class Attributed:
     """Incomplete items labelled against a baseline summary; `against` names the baseline."""
 
     labels: Labels
     against: str
-    portable: Portable = Portable()
 
     @property
     def blocking(self) -> bool:
         return any(label in BLOCKING for items in self.labels.values() for label in items)
 
-    def causes(self, items: list[IncompleteItem]) -> list[str]:
+    def causes(self, items: list[IncompleteRecord]) -> list[str]:
         """Each item's owner: a producer failure stays an extractor item, the rest take their label."""
         left = {key: list(labels) for key, labels in self.labels.items()}
         out = []
         for item in items:
-            labels = left.get(obligation_of(item, self.portable), [])
+            labels = left.get(((item.rule, item.key, item.reason), item.mark), [])
             if item.cause is not IncompleteCause.INHERITED or not labels:
                 out.append(item.cause.value)
                 continue
@@ -301,15 +324,48 @@ class Attributed:
 
 
 class CheckReport:
+    """What `check` prints and its exit code, read from a run summary: the one a live run makes,
+    or the stored one that stands in for the run. Owners and the day are read when it renders."""
+
     def __init__(
-        self, result: RunResult, touched: set[str] | None = None, attributed: Attributed | None = None
+        self,
+        summary: ScanSummary,
+        owners: ReadTimeOwners,
+        today: datetime.date,
+        touched: set[str] | None = None,
+        attributed: Attributed | None = None,
     ) -> None:
-        self.result = result
+        self.summary = summary
+        self.owners = owners
+        self.today = today
         self.touched = touched
         self.attributed = attributed
 
+    def keep(self, finding: FindingRecord) -> bool:
+        if self.touched is None:
+            return True
+        return touches(self.touched, (witness.path for witness in finding.witnesses), finding.subjects)
+
+    def new(self) -> list[FindingRecord]:
+        return [f for f in self.summary.findings if f.status is FindingStatus.NEW and self.keep(f)]
+
+    def violations(self) -> list[FindingRecord]:
+        return [f for f in self.new() if f.rule not in self.summary.advisory]
+
+    def advisory(self) -> list[FindingRecord]:
+        return [f for f in self.new() if f.rule in self.summary.advisory]
+
+    def finding_line(self, finding: FindingRecord) -> str:
+        shown = finding.shown
+        if shown is None:
+            raise ValueError(f"the summary keeps no message for {finding.rule} {' '.join(finding.identity)}")
+        site = f"{shown.path}:{shown.line}" if shown.path else ""
+        owners = self.owners.of(finding)
+        listed = f"  [{', '.join(owners)}]" if owners else ""
+        return f"{finding.rule}  {' '.join(finding.identity)}\n    {shown.message}  {site}{listed}"
+
     def incomplete_lines(self) -> list[str]:
-        items = self.result.incomplete()
+        items = self.summary.incomplete
         if self.attributed is None:
             causes = [item.cause.value for item in items]
         else:
@@ -326,44 +382,48 @@ class CheckReport:
             out.append(f"incomplete attributed against {self.attributed.against}: {tally}")
         return out
 
-    def keep(self, finding: Finding) -> bool:
-        if self.touched is None:
-            return True
-        paths = {edge.site.path for edge in finding.witnesses}
-        return bool(paths & self.touched) or any(subject in self.touched for subject in finding.subjects)
-
     def render(self) -> str:
-        result = self.result
+        summary = self.summary
         out: list[str] = []
-        violations = [f for f in result.violations() if self.keep(f)]
+        violations = self.violations()
         out.append(f"violations ({len(violations)})")
-        out.extend(f"  {finding_line(f)}" for f in violations)
-        advisory = [
-            f for f in result.findings() if f.status is FindingStatus.NEW and result.advisory(f.rule) and self.keep(f)
-        ]
+        out.extend(f"  {self.finding_line(f)}" for f in violations)
+        advisory = self.advisory()
         if advisory:
             out.append(f"advisory ({len(advisory)})")
-            out.extend(f"  {finding_line(f)}" for f in advisory)
+            out.extend(f"  {self.finding_line(f)}" for f in advisory)
         if self.touched is not None:
-            accepted = [f for f in result.findings() if f.status is FindingStatus.ACCEPTED and self.keep(f)]
+            accepted = [f for f in summary.findings if f.status is FindingStatus.ACCEPTED and self.keep(f)]
             out.append(f"existing debt in touched files (advisory) ({len(accepted)})")
-            out.extend(f"  {finding_line(f)}" for f in accepted)
+            out.extend(f"  {self.finding_line(f)}" for f in accepted)
         out.extend(self.incomplete_lines())
-        if result.equality is not None and not result.equality.equal:
+        equality = summary.equality
+        if equality is not None and not equality.equal:
             out.append("ledger is not equal to the scan")
-            out.extend(f"  {problem}" for problem in result.equality.header)
-            out.extend(f"  new    {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in result.equality.new)
-            out.extend(f"  stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in result.equality.stale)
-        for entry in result.exceptions.stale:
-            out.append(f"stale exception: {entry.label()} matches nothing")
-        for entry in result.exceptions.expired:
-            out.append(f"exception past review_by {entry.review_by}: {entry.label()} (reported, not blocking)")
-        out.extend(f"exceptions: {problem}" for problem in result.exceptions.problems)
-        for name, level in result.levels.items():
-            out.append(f"level {name}: {len(level.passing)} pass, {len(level.failing)} fail")
-        accepted_count = sum(1 for f in result.findings() if f.status is FindingStatus.ACCEPTED)
+            out.extend(f"  {problem}" for problem in equality.header)
+            out.extend(f"  new    {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.new)
+            out.extend(f"  stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.stale)
+        for label in summary.exceptions.stale:
+            out.append(f"stale exception: {label} matches nothing")
+        for review_by, label in summary.exceptions.expired(self.today):
+            out.append(f"exception past review_by {review_by}: {label} (reported, not blocking)")
+        out.extend(f"exceptions: {problem}" for problem in summary.exceptions.problems)
+        for name, passing in summary.levels.items():
+            out.append(f"level {name}: {len(passing)} pass, {len(summary.level_failures.get(name, {}))} fail")
+        accepted_count = sum(1 for f in summary.findings if f.status is FindingStatus.ACCEPTED)
         out.append(f"{accepted_count} findings accepted by the ledger")
         return "\n".join(out) + "\n"
+
+    def exit_code(self) -> int:
+        """`check` without `--changed`: 2 for a blocking incomplete result, 1 when the run failed."""
+        summary = self.summary
+        if self.attributed is not None and self.attributed.blocking:
+            return 2
+        if any(item.cause in BLOCKING_CAUSES for item in summary.incomplete):
+            return 2
+        unequal = summary.equality is not None and not summary.equality.equal
+        failed = self.violations() or unequal or summary.exceptions.stale or summary.exceptions.problems
+        return 1 if failed else 0
 
 
 # ── engines and baselines ─────────────────────────────────────────
@@ -546,15 +606,23 @@ class Baseline:
     """What one check run attributes its incomplete results against.
 
     `envelope` is the run's own; its tree is set when the run's code is HEAD's tree, and `pending`
-    names the index's tree for a staged run, so the run's summary is stored for the next commit. `reference` is None when the
-    run itself is the baseline (`is_self`) or when there is no commit to compare with."""
+    names the index's tree for a staged run, so the run's summary is stored for the next commit.
+    `reference` is None when the run itself is the baseline (`is_self`) or when there is no commit
+    to compare with. `config` is the run's policy and `head` HEAD's tree, as the key read them."""
 
     envelope: Envelope
     against: str
+    config: Config
     reference: dict[Obligation, list[str]] | None = None
     is_self: bool = False
     staged: bool = False
     pending: PendingTree | None = None  # the index's tree, for a staged run's own summary
+    head: str = ""
+
+    @property
+    def own_tree(self) -> str:
+        """The tree the run's summary is stored under; empty when the run's code is no tree."""
+        return self.pending.oid if self.pending is not None else self.envelope.tree
 
 
 class Baselines:
@@ -574,25 +642,25 @@ class Baselines:
 
     def prepare(self, policy_root: Path, staged: bool) -> Baseline:
         head_tree = self.snapshots.tree_of("HEAD")
-        if not head_tree:
-            return Baseline(Envelope(), "nothing (no commit yet)")
-        pending = PendingTree(self.repo) if staged else None
-        WorktreeStatus.start(self.repo)  # the side-input check reads it after the evaluation
         wanted, config = self.engine.envelope_at(policy_root, head_tree)
+        if not head_tree:
+            return Baseline(wanted, "nothing (no commit yet)", config)
+        pending = PendingTree(self.repo) if staged else None
+        WorktreeStatus.start(self.repo)  # the memo and the side-input check of the run's summary read it
         own = dataclasses.replace(wanted, tree="")
         short = head_tree[:12]
         stored = self.store.get(wanted, frozenset({"envelope", "incompletes"}))
         if stored is not None:
-            return Baseline(
-                own, f"HEAD (tree {short}, stored summary)", stored.obligations(), staged=staged, pending=pending
-            )
+            against = f"HEAD (tree {short}, stored summary)"
+            return Baseline(own, against, config, stored.obligations(), staged=staged, pending=pending, head=head_tree)
         own_tree = pending.oid if pending is not None else ""
         if own_tree == head_tree or (not staged and self.snapshots.head_tree_in_worktree(config.ledger.file)):
-            return Baseline(wanted, f"HEAD (tree {short}, this run)", is_self=True, staged=staged)
+            this_run = f"HEAD (tree {short}, this run)"
+            return Baseline(wanted, this_run, config, is_self=True, staged=staged, head=head_tree)
         summary = self.evaluate(policy_root, config.ledger.file, wanted)
         self.trees.put(summary)
         computed = f"HEAD (tree {short}, computed and stored)"
-        return Baseline(own, computed, summary.obligations(), staged=staged, pending=pending)
+        return Baseline(own, computed, config, summary.obligations(), staged=staged, pending=pending, head=head_tree)
 
     def evaluate(self, policy_root: Path, ledger_path: str, envelope: Envelope) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
@@ -600,20 +668,57 @@ class Baselines:
         try:
             ledger = LedgerFile.parse(git(self.repo, "show", f"{envelope.tree}:{ledger_path}"))
         except subprocess.CalledProcessError:
-            ledger = LedgerFile()
+            ledger = LedgerFile(source=ABSENT)
         runner = Runner(graph_source(self.engine.name, Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))))
         run = runner.run(policy_root, self.repo, tree=envelope.tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
-    def attribute(self, baseline: Baseline, run: Run, store: bool) -> Attributed:
-        """`store` keeps the run's summary under its tree; a run that rewrote the ledger has none."""
-        head = obligations_of(run.result.incomplete(), portable_of(run))
-        tree = baseline.pending.oid if baseline.pending is not None else baseline.envelope.tree
-        if store and tree:
-            summary = summary_of(run, dataclasses.replace(baseline.envelope, tree=tree), with_triples=False)
-            self.trees.put(summary, against_index=baseline.staged)
+    def attribute(self, baseline: Baseline, summary: ScanSummary) -> Attributed:
+        head = summary.obligations()
         reference = head if baseline.is_self else baseline.reference
-        return Attributed(attribute(head, reference), baseline.against, portable_of(run))
+        return Attributed(attribute(head, reference), baseline.against)
+
+
+class RunMemo:
+    """`check` of a git tree that a run already evaluated, as a lookup: the stored summary of the
+    tree stands in for the run when no other input of the output differs.
+
+    The key is the run's envelope (code tree, engine, policy, framework) and the source of its
+    ledger. The tree holds the code and every policy file the repo tracks. A run reads side inputs
+    from the working tree, so the working tree must equal the tree in every other file, as for
+    storing (see `TreeSummaries`). The policy digest and the ledger source cover the policy files
+    the tree does not hold, such as ignored ones. Owners and exceptions past review depend on other
+    files and on the day, so the report reads them when it renders.
+
+    These stay live: a working tree with any change, `--changed`, `--write-ledger`, a policy with
+    outputs (they are written from the graph), and a summary with an extractor failure, which can
+    be transient."""
+
+    SECTIONS = frozenset({"envelope", "incompletes", "findings", "levels"})
+
+    def __init__(self, snapshots: Snapshots, store: SummaryStore) -> None:
+        self.snapshots = snapshots
+        self.store = store
+
+    def lookup(self, baseline: Baseline, policy_root: Path) -> ScanSummary | None:
+        config = baseline.config
+        if config.outputs:
+            return None
+        tree = baseline.own_tree if baseline.staged else baseline.head
+        key = dataclasses.replace(baseline.envelope, tree=tree)
+        # The envelope alone first, so that a miss does not wait for git status: a live run lets it
+        # run while it evaluates.
+        if not tree or self.store.get(key, frozenset({"envelope"})) is None:
+            return None
+        status = WorktreeStatus.of(self.snapshots.repo)
+        if (status.entries and not baseline.staged) or status.side_input_drift(against_index=baseline.staged):
+            return None
+        summary = self.store.get(key, self.SECTIONS)
+        if summary is None or summary.ledger != LedgerFile.source_of(policy_root / config.ledger.file):
+            return None
+        if any(item.cause is IncompleteCause.EXTRACTOR for item in summary.incomplete):
+            return None
+        return summary
 
 
 class ReadTimeOwners:
@@ -637,21 +742,37 @@ class ReadTimeOwners:
 
 
 class Commands:
-    def __init__(self, repo: Path, work_dir: Path, engine: str = ENGINE_PYTHON) -> None:
+    """`today` replaces the date in output that depends on it. With `memo` off, every check runs live."""
+
+    def __init__(
+        self,
+        repo: Path,
+        work_dir: Path,
+        engine: str = ENGINE_PYTHON,
+        today: datetime.date | None = None,
+        memo: bool = True,
+    ) -> None:
         self.repo = repo
         self.work_dir = work_dir
         self.source: GraphSource = graph_source(engine, work_dir)
-        self.runner = Runner(self.source)
+        self.runner = Runner(self.source, today)
         self.snapshots = Snapshots(repo, work_dir)
         self.engine = LocalEngine(engine)
         self.summaries = SummaryStore()
         self.trees = TreeSummaries(self.snapshots, self.summaries)
         self.baselines = Baselines(self.snapshots, self.engine, self.summaries, self.trees)
         self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore())
+        self.memo = RunMemo(self.snapshots, self.summaries) if memo else None
 
     def check(self, index: bool, write_ledger: bool, changed: bool) -> int:
         policy_root = self.snapshots.index() if index else self.repo
         baseline = None if changed else self.baselines.prepare(policy_root, index)
+        if baseline is not None and self.memo is not None and not write_ledger:
+            stored = self.memo.lookup(baseline, policy_root)
+            if stored is not None:
+                return self.report(
+                    stored, baseline.config, policy_root, None, self.baselines.attribute(baseline, stored)
+                )
         run = self.runner.run(policy_root, self.repo, staged=index, rewrite_ledger=write_ledger)
         if write_ledger:
             if index:
@@ -659,17 +780,30 @@ class Commands:
             run.ledger.write(self.repo / run.config.ledger.file)
             sys.stdout.write(f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}\n")
         self.write_outputs(run)
-        touched = None
-        if changed:
+        if baseline is None:  # --changed: advisory, so it always exits 0
             touched = set(self.snapshots.changed_paths(None, index))
             touched |= {m for m, p in run.graph.modules.items() if p in touched}
-        attributed = None if baseline is None else self.baselines.attribute(baseline, run, store=not write_ledger)
-        sys.stdout.write(CheckReport(run.result, touched, attributed).render())
-        if changed:
+            summary = summary_of(run, Envelope(), with_triples=False, shown=TouchedDebt(touched).shown)
+            self.report(summary, run.config, policy_root, touched, None)
             return 0
-        if attributed is not None and attributed.blocking:
-            return 2
-        return run.result.exit_code()
+        summary = summary_of(run, dataclasses.replace(baseline.envelope, tree=baseline.own_tree), with_triples=False)
+        if not write_ledger:
+            self.trees.put(summary, against_index=baseline.staged)
+        return self.report(summary, run.config, policy_root, None, self.baselines.attribute(baseline, summary))
+
+    def report(
+        self,
+        summary: ScanSummary,
+        config: Config,
+        policy_root: Path,
+        touched: set[str] | None,
+        attributed: Attributed | None,
+    ) -> int:
+        """Prints the check report of a summary and returns its exit code."""
+        owners = ReadTimeOwners(PolicyFiles(config).anchored(policy_root, self.repo), summary.modules, self.repo)
+        report = CheckReport(summary, owners, self.runner.today or datetime.date.today(), touched, attributed)
+        sys.stdout.write(report.render())
+        return report.exit_code()
 
     def write_outputs(self, run: Run) -> None:
         for output in run.config.outputs.values():
@@ -825,8 +959,10 @@ class Commands:
             touched,
             renames,
         ).report()
+        owners = ReadTimeOwners(head.config, scans.head.modules, self.repo)
+        today = self.runner.today or datetime.date.today()
         sys.stdout.write(
-            CheckReport(head.result, attributed=Attributed(report.labels, "the base", portable_of(head))).render()
+            CheckReport(scans.head, owners, today, attributed=Attributed(report.labels, "the base")).render()
         )
         sys.stdout.write(report.render())
         return report.exit_code(head.result.failed(), bool(head.result.blocking_incomplete()))

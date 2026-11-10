@@ -10,7 +10,7 @@ oid, engine id, policy hash, framework digest; see `envelope.py`), and the engin
 namespace, so an old engine's summaries age out together. The manifest is JSON: the protocol, the
 envelope section inline, and the sha256 (first 32 hex) of every other section's JSON (see
 `SUMMARY_SECTIONS` in scan.py). A section file is that JSON, zstd-compressed, named by its own
-hash: a reader loads only the sections it reads (check reads the incompletes only), and a section
+hash: a reader loads only the sections it reads (a baseline reads incompletes only), and a section
 equal to a stored one is never written twice. `get` answers only the exact key, and the envelope
 inside the manifest must match it too: a corrupt or missing file, another protocol or another
 envelope is a miss, never a result. A summary of a working tree has no tree oid and is never

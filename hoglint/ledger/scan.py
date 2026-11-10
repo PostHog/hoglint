@@ -16,7 +16,9 @@ refuses any other protocol instead of guessing. It holds:
 - levels: the groups that pass each level, and why the others fail (a blocking finding by its
   key, not its message);
 - what else `check` prints: ledger equality, stale exceptions with every review date, exception
-  problems, advisory rules, and the module of each path for `--changed`.
+  problems, advisory rules, and the module of each path for `--changed`;
+- ledger: the `source` of the ledger file the run read, so a summary stands in for a `check` run
+  only when that run would read the same ledger (see `RunMemo` in cli.py).
 
 A summary holds no absolute path and nothing that depends on the day or the machine, so one
 built on Linux CI serves a Mac.
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,7 +41,7 @@ from hoglint.index import Memo
 from hoglint.ledger.couplings import Coupling, CouplingScan
 from hoglint.ledger.envelope import PROTOCOL, Envelope, short_digest
 from hoglint.ledger.equality import EqualityResult
-from hoglint.ledger.file import LineKey, parse_key, render_key
+from hoglint.ledger.file import LedgerFile, LineKey, parse_key, render_key
 from hoglint.ledger.records import (
     BlockRecord,
     ExceptionsRecord,
@@ -48,15 +51,14 @@ from hoglint.ledger.records import (
     equality_from_json,
     equality_to_json,
 )
-from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph
-from hoglint.rules.base import IncompleteItem
+from hoglint.model import SCHEMA_VERSION, Edge, Finding, FindingStatus, Graph
 from hoglint.rules.engine import RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
 ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a few hundredths of a second
 # The parts a reader loads on their own (see store.py), and the fields each part holds.
 SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
-    "envelope": ("protocol", "envelope", "schema", "growth", "scope", "with_triples", "advisory"),
+    "envelope": ("protocol", "envelope", "schema", "growth", "scope", "with_triples", "advisory", "ledger"),
     "incompletes": ("incomplete",),
     "findings": ("findings", "lines", "equality", "exceptions", "modules"),
     "couplings": ("triples", "couplings", "witnesses"),
@@ -80,6 +82,10 @@ def write_atomic(path: Path, content: bytes) -> None:
     Path(temporary).replace(path)
 
 
+def is_new(finding: Finding) -> bool:
+    return finding.status is FindingStatus.NEW
+
+
 def fingerprint(edge: Edge | None) -> str:
     """What tells apart two items of one obligation without line numbers: the site's scope and the
     edge's use, shape and attributes. Empty for an item that no single edge raised."""
@@ -87,18 +93,6 @@ def fingerprint(edge: Edge | None) -> str:
         return ""
     attrs = canonical(sorted(edge.attrs))
     return short_digest([edge.site.scope, edge.kind, edge.surface, edge.use, edge.shape, edge.shape_detail, attrs])
-
-
-def obligation_of(item: IncompleteItem, portable: Portable) -> tuple[Obligation, str]:
-    return (item.rule, item.key, portable.text(item.reason)), fingerprint(item.edge)
-
-
-def obligations_of(items: list[IncompleteItem], portable: Portable) -> dict[Obligation, list[str]]:
-    out: dict[Obligation, list[str]] = {}
-    for item in items:
-        obligation, mark = obligation_of(item, portable)
-        out.setdefault(obligation, []).append(mark)
-    return {obligation: sorted(marks) for obligation, marks in out.items()}
 
 
 @dataclass(frozen=False, slots=True)
@@ -120,6 +114,7 @@ class ScanSummary:
     exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
     advisory: frozenset[str] = frozenset()
     modules: dict[str, str] = field(default_factory=dict)
+    ledger: str = ""  # the run ledger's `source`; empty when unknown
     loaded: frozenset[str] = ALL_SECTIONS  # the sections that hold data; a reader may load fewer
 
     @staticmethod
@@ -131,17 +126,23 @@ class ScanSummary:
         with_triples: bool = True,
         roots: tuple[Path, ...] = (),
         exceptions: ExceptionsFile | None = None,
+        ledger: LedgerFile | None = None,
+        shown: Callable[[Finding], bool] | None = None,
     ) -> ScanSummary:
         """`scope` names the modules whose couplings and witnesses move admission reads. `roots`
         are the run's policy and code roots, which text in the summary names relative to the repo;
-        `exceptions` gives the review dates of the run's exception entries."""
+        `exceptions` gives the review dates of the run's exception entries, `ledger` the ledger the
+        run read. `shown` picks the findings whose message, site and remedies the summary keeps:
+        by default the new ones."""
         config = result.config
         portable = Portable.of(*roots)
         summary = ScanSummary(envelope=envelope, schema=SCHEMA_VERSION, lines=dict(result.scan), scope=scope)
+        summary.ledger = ledger.source if ledger is not None else ""
         for rule in config.rules.values():
             if rule.ledger and rule.identity:
                 summary.growth[rule.id] = tuple(rule.identity.index(column) for column in rule.growth_key)
-        summary.findings = [FindingRecord.of(finding, portable) for finding in result.findings()]
+        keep_shown = shown or is_new
+        summary.findings = [FindingRecord.of(finding, portable, keep_shown(finding)) for finding in result.findings()]
         summary.incomplete = [
             IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
         ]
@@ -208,6 +209,7 @@ class ScanSummary:
             "exceptions": self.exceptions.to_json(),
             "advisory": sorted(self.advisory),
             "modules": self.modules,
+            "ledger": self.ledger,
         }
 
     @staticmethod
@@ -242,6 +244,7 @@ class ScanSummary:
             exceptions=ExceptionsRecord.from_json(data.get("exceptions", {})),
             advisory=frozenset(data.get("advisory", [])),
             modules=dict(data.get("modules", {})),
+            ledger=str(data.get("ledger", "")),
         )
 
     def to_sections(self) -> dict[str, dict[str, Any]]:

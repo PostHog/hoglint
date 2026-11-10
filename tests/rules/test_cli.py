@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import shutil
+import datetime
 from pathlib import Path
 
 import pytest
 
-from hoglint.cli import Commands
-from hoglint.config import Config
-from hoglint.model import Graph
+from hoglint.cli import Commands, Run, Runner
+from hoglint.config import Config, load_config
+from hoglint.ledger.status import WorktreeStatus
+from hoglint.model import SCHEMA_VERSION, Graph, Resolution
 from hoglint.rules.base import RuleContext
 from hoglint.rules.engine import Engine
 from hoglint.source import GraphSource
 
 from rules.support import GraphBuilder, write_config
+from rules.test_compare import git_in
 
 CONFIG = """
 schema = 1
@@ -78,3 +82,186 @@ def test_explain_edge_lists_rules_that_read_every_edge_kind(
     edge = run.graph.edges[0]
     assert commands.explain(f"edge:{edge.run_id(ctx.ordinal(edge))}") == 0
     assert "rule     unresolved-anything" in capsys.readouterr().out
+
+
+MEMO_CONFIG = """
+schema = 1
+
+[fields]
+package = { type = "id", required_on = ["products/**"] }
+owners = { type = "set" }
+
+[[assign]]
+match = "products/{product}/**"
+set = { package = "{product}" }
+
+[roles]
+owner = "owners"
+
+[providers.codeowners]
+use = "codeowners"
+file = "CODEOWNERS"
+sets = ["owners"]
+
+[ledger]
+file = "local/hoglint.ledger"
+exceptions = "local/hoglint.exceptions.toml"
+
+[rules.crossings]
+primitive = "edge"
+kinds = ["import"]
+select = "src.package != dst.package"
+identity = "module-pair"
+growth_key = ["src.module"]
+
+[rules.notes]
+primitive = "edge"
+kinds = ["import"]
+select = "src.package != dst.package"
+identity = "module-pair"
+report = "advisory"
+ledger = false
+
+[rules.dynamic-imports]
+primitive = "edge"
+kinds = ["dynamic-import"]
+deny = "false"
+on_unresolved = "incomplete"
+ledger = false
+
+[levels.isolated]
+group_by = "package"
+requires = ["crossings"]
+"""
+ACCEPTED_LINE = "crossings\tproducts.alerts.logic\tproducts.billing.logic\t1\n"
+ALLOWED = """
+[[exception]]
+rule = "crossings"
+match = { "src.module" = "products.alerts.views" }
+reason = "moves behind the facade"
+owners = ["team-alerts"]
+scope = "prod"
+review_by = 2026-06-01
+"""
+STALE = """
+[[exception]]
+rule = "crossings"
+match = { "src.module" = "products.gone" }
+reason = "removed"
+owners = ["team-alerts"]
+scope = "prod"
+"""
+DAY = datetime.date(2026, 5, 1)
+
+
+def memo_graph(staged: bool) -> Graph:
+    graph = (
+        GraphBuilder()
+        .module("products.billing.logic", "products.alerts.logic", "products.alerts.views", "products.search.logic")
+        .edge("import", "products.alerts.logic", "products.billing.logic")
+        .edge("import", "products.alerts.views", "products.billing.logic")
+        .edge("import", "products.search.logic", "products.billing.logic")
+        .edge("dynamic-import", "products.search.logic", None, resolution=Resolution.UNRESOLVED)
+    )
+    # the staged code adds a crossing and a computed import, so a staged check differs from HEAD's
+    if staged:
+        graph.edge("import", "products.search.logic", "products.alerts.logic")
+        graph.edge("dynamic-import", "products.alerts.logic", None, resolution=Resolution.UNRESOLVED)
+    return graph.graph
+
+
+def memo_repo(root: Path) -> None:
+    write_config(
+        root,
+        MEMO_CONFIG,
+        {
+            ".gitignore": "local/\n",
+            "CODEOWNERS": "products/search/ @team-search\n",
+            "products/search/logic.py": "",
+            "local/hoglint.exceptions.toml": "schema = 1\n" + ALLOWED + STALE,
+        },
+    )
+    header = f"# schema={SCHEMA_VERSION} policy={load_config(root, root / 'hoglint.toml').policy_hash}\n"
+    (root / "local" / "hoglint.ledger").write_text(header + ACCEPTED_LINE + "crossings\tproducts.gone\tx\t1\n")
+    git_in(root, "init", "-q")
+    git_in(root, "add", "-A")
+    git_in(root, "commit", "-qm", "base")
+
+
+def check_once(repo: Path, work: Path, today: datetime.date, memo: bool, staged: bool) -> int:
+    key = repo.resolve()
+    WorktreeStatus.taken.pop(key, None)
+    started = WorktreeStatus.started.pop(key, None)
+    if started is not None:
+        started.communicate()
+    work.mkdir(exist_ok=True)
+    commands = Commands(repo, work, today=today, memo=memo)
+    try:
+        return commands.check(index=staged, write_ledger=False, changed=False)
+    finally:
+        commands.snapshots.close()
+
+
+@pytest.mark.parametrize(
+    "staged, change, ran_live, shows",
+    [
+        (True, None, False, None),
+        (False, "source", True, None),
+        # neither file is in the tree, so only the ledger source and the policy digest see an edit
+        (False, "ledger", True, "crossings  products.alerts.logic products.billing.logic"),
+        (False, "exceptions", True, "crossings  products.alerts.views products.billing.logic"),
+        # a stored summary keeps review dates, so the day decides what is past review
+        (False, "a day later", False, "exception past review_by 2026-06-01"),
+    ],
+    ids=["staged", "source edited", "ledger edited", "exceptions edited", "a day later"],
+)
+def test_a_stored_summary_stands_in_for_a_check_of_its_tree_only_when_the_output_would_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    staged: bool,
+    change: str | None,
+    ran_live: bool,
+    shows: str | None,
+) -> None:
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        return memo_graph(staged)
+
+    monkeypatch.setattr(GraphSource, "build", build)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    memo_repo(repo)
+    if staged:
+        (repo / "products/search/logic.py").write_text("X = 1\n")
+        git_in(repo, "add", "-A")
+    check_once(repo, tmp_path / "work", DAY, memo=True, staged=staged)
+    first = capsys.readouterr().out
+    today = DAY
+    if change == "source":
+        (repo / "products/search/logic.py").write_text("X = 2\n")
+    if change == "ledger":
+        ledger = repo / "local/hoglint.ledger"
+        ledger.write_text(ledger.read_text().replace(ACCEPTED_LINE, ""))
+    if change == "exceptions":
+        (repo / "local/hoglint.exceptions.toml").write_text("schema = 1\n" + STALE)
+    if change == "a day later":
+        today = datetime.date(2026, 7, 1)
+
+    runs: list[Path] = []
+    run = Runner.run
+
+    def counted(self: Runner, policy_root: Path, *args: object, **kwargs: object) -> Run:
+        runs.append(policy_root)
+        return run(self, policy_root, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Runner, "run", counted)
+    # the live run starts from the same cache, so it names its baseline the same way
+    shutil.copytree(tmp_path / "cache", tmp_path / "live-cache")
+    memoized = check_once(repo, tmp_path / "work", today, memo=True, staged=staged)
+    printed = capsys.readouterr().out
+    assert bool(runs) is ran_live
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "live-cache"))
+    live = check_once(repo, tmp_path / "work", today, memo=False, staged=staged)
+    assert (memoized, printed) == (live, capsys.readouterr().out)
+    if shows is not None:
+        assert shows in printed and shows not in first
