@@ -35,7 +35,7 @@ class NativeGraphSource(GraphSource):
         graph = analysis.graph
         build: Any = analysis.build
         reader = BuildReader(build, NativePackQueries(build, graph, graph.link))
-        run_packs(packs, reader, NativeSink(graph), code_root)
+        run_packs(packs, reader, NativeSink(graph), self.listing_of(code_root, tree))
         build.release()
         return graph
 

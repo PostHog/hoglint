@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import posixpath
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from hoglint.config import Config
 from hoglint.config.schema import as_tuple, canonical
 from hoglint.facts import FACT_KINDS, FactNeeds
+from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Pack, PackReader, PackSink, ProducerFailure
 
@@ -35,40 +37,52 @@ def active_packs(config: Config) -> list[tuple[Pack, Mapping[str, Any]]]:
 
 class PackRoot:
     """A directory of one pack's own: it holds exactly the policy files the pack's
-    `policy_file_keys` name, copied from where the policy holds them (an absolute path, or a
-    path under the code root), and the pack's section names those copies. A pack that reads any
-    other file finds nothing there, so it fails instead of reading the working tree."""
+    `policy_file_keys` name, and the pack's section names those copies. A path under the code
+    root is written from the run's snapshot (`listing`), as every other input of the run is; an
+    absolute path, which `PolicyFiles.anchored` makes for a policy root of its own, is copied as
+    it is. A pack that reads any other file finds nothing there, so it fails instead of reading
+    the working tree."""
 
-    def __init__(self, pack: Pack, section: Mapping[str, Any], code_root: Path, directory: Path) -> None:
+    def __init__(self, pack: Pack, section: Mapping[str, Any], listing: Listing, directory: Path) -> None:
         self.pack = pack
         self.section = section
-        self.code_root = code_root
+        self.listing = listing
         self.directory = directory
+
+    def copy(self, key: str, value: str) -> Path:
+        """Writes the policy file `value` names under the directory; returns the copy's path
+        relative to it."""
+        if Path(value).is_absolute():
+            copy = Path(key) / Path(value).name
+            (self.directory / key).mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(value, self.directory / copy)
+            return copy
+        path = posixpath.normpath(value)
+        if path not in self.listing.modes or self.listing.write(self.directory / key, [path]):
+            raise FileNotFoundError(f"{value}: the snapshot holds no file there that hoglint can read")
+        return Path(key) / path
 
     def section_of_copies(self) -> dict[str, Any]:
         """The section with each policy file key naming the file's copy, relative to the directory."""
         out = dict(self.section)
         for key in getattr(self.pack, "policy_file_keys", ()):
             value = self.section.get(key)
-            if not isinstance(value, str) or not value:
-                continue
-            source = self.code_root / value  # an absolute value stays as it is
-            copy = Path(key) / source.name
-            (self.directory / key).mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, self.directory / copy)
-            out[key] = copy.as_posix()
+            if isinstance(value, str) and value:
+                out[key] = self.copy(key, value).as_posix()
         return out
 
 
-def run_packs(packs: list[tuple[Pack, Mapping[str, Any]]], reader: PackReader, sink: PackSink, root: Path) -> None:
+def run_packs(
+    packs: list[tuple[Pack, Mapping[str, Any]]], reader: PackReader, sink: PackSink, listing: Listing
+) -> None:
     """Each active pack in order, into one sink, each reading through a root of its own (see
-    `PackRoot`); `root` is the code root the policy's relative paths start from. A pack that
-    raises, or whose policy file is missing, is a failed producer."""
+    `PackRoot`); `listing` is the run's snapshot, which the policy's relative paths name. A pack
+    that raises, or whose policy file is missing, is a failed producer."""
     for pack, section in packs:
         with tempfile.TemporaryDirectory(prefix=f"pack-{pack.name}-") as scratch:
             directory = Path(scratch)
             try:
-                own = PackRoot(pack, section, root, directory).section_of_copies()
+                own = PackRoot(pack, section, listing, directory).section_of_copies()
                 pack.produce(own, reader, sink, directory)
             except Exception as error:  # noqa: BLE001 - a failed pack makes its rules incomplete, never clean
                 reason = f"{type(error).__name__}: {error}"
@@ -83,6 +97,11 @@ class GraphSource:
     def __init__(self, work_dir: Path) -> None:
         self.work_dir = work_dir
         self.cache: dict[tuple[str, str], Graph] = {}
+
+    @staticmethod
+    def listing_of(code_root: Path, tree: str = "") -> Listing:
+        """The snapshot a build reads: the git tree, or the working tree as git sees it (D40)."""
+        return TreeListing.of(code_root, tree) if tree else WorktreeListing.of(code_root)
 
     def key(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
         sections = {name: config.sections.get(name) for name in sorted(config.sections)}
@@ -144,5 +163,5 @@ class GraphSource:
         analysis = CoreAnalysis(options).run()
         graph = analysis.graph
         reader, sink = python_pack_io(analysis.build, graph)
-        run_packs(packs, reader, sink, code_root)
+        run_packs(packs, reader, sink, self.listing_of(code_root, tree))
         return graph
