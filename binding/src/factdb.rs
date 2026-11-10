@@ -158,10 +158,6 @@ struct Frame {
     packed: Range<usize>,
 }
 
-fn u32_at(bytes: &[u8], at: usize) -> usize {
-    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize
-}
-
 /// The frames of a record's `index`, in a blob of `blob_len` bytes; None when they do not
 /// cover `json_len` bytes of text, or run past the blob.
 fn frames(index: &[u8], json_len: usize, blob_len: usize) -> Option<Vec<Frame>> {
@@ -304,50 +300,20 @@ impl FactDb {
         Ok(Some(Row { used, json_len }))
     }
 
-    /// The blob `sql` selects for the entry of (config, oid), or None when the entry is gone.
-    fn read(&self, sql: &str, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self.conn.prepare_cached(sql)?;
+    /// The binary facts of an entry, or None when it is gone.
+    pub fn read_facts(&self, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT f.body FROM facts f JOIN keys k ON k.id = f.id WHERE k.config = ?1 AND k.oid = ?2",
+        )?;
         Ok(stmt
             .query_row(params![config, oid], |r| r.get::<_, Vec<u8>>(0))
             .optional()?)
     }
 
-    /// The binary facts of an entry, or None when it is gone.
-    pub fn read_facts(&self, config: &str, oid: &str) -> Result<Option<Vec<u8>>> {
-        self.read(
-            "SELECT f.body FROM facts f JOIN keys k ON k.id = f.id WHERE k.config = ?1 AND k.oid = ?2",
-            config,
-            oid,
-        )
-    }
-
-    /// The record JSON of an entry; None when the entry is gone, or when its frames do not
-    /// decompress to `json_len` bytes: a miss, never a wrong answer.
-    pub fn read_json(&self, config: &str, oid: &str, json_len: usize) -> Result<Option<Vec<u8>>> {
-        let Some(blob) = self.read(
-            "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.config = ?1 AND k.oid = ?2",
-            config,
-            oid,
-        )?
-        else {
-            return Ok(None);
-        };
-        if blob.len() < 4 {
-            return Ok(None);
-        }
-        let Some(index) = blob.get(4..4 + u32_at(&blob, 0)) else {
-            return Ok(None);
-        };
-        let Some(all) = frames(index, json_len, blob.len()) else {
-            return Ok(None);
-        };
-        Ok(unpack(&blob, 0, &all))
-    }
-
     /// Bytes `range` of an entry's record JSON, read in one read transaction and decompressed
-    /// from the frames that hold them alone; None when the entry is gone or its frames do not
-    /// give `json_len` bytes.
-    pub fn read_json_range(
+    /// from the frames that hold them alone; None when the entry or its record is gone, or when
+    /// its frames do not give `json_len` bytes: a miss, never a wrong answer.
+    pub fn read_json(
         &self,
         config: &str,
         oid: &str,
@@ -358,6 +324,15 @@ impl FactDb {
         let found = self.json_range(config, oid, json_len, range);
         self.end_read()?;
         found
+    }
+
+    /// Whether the entry `id` has a record row: a key whose record is gone is a miss, as a gone
+    /// entry is, while any other error opening the record gives up the cache.
+    fn has_record(&self, id: i64) -> Result<bool> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT count(*) FROM records WHERE id = ?1")?;
+        Ok(stmt.query_row([id], |r| r.get::<_, i64>(0))? > 0)
     }
 
     fn json_range(
@@ -376,9 +351,15 @@ impl FactDb {
         else {
             return Ok(None);
         };
-        let blob = self
-            .conn
-            .blob_open(MAIN_DB, c"records", c"json", id, true)?;
+        let blob = match self.conn.blob_open(MAIN_DB, c"records", c"json", id, true) {
+            Ok(blob) => blob,
+            Err(error) => {
+                if self.has_record(id)? {
+                    return Err(error.into());
+                }
+                return Ok(None);
+            }
+        };
         if blob.len() < 4 || range.end > json_len {
             return Ok(None);
         }
@@ -463,8 +444,8 @@ impl FactDb {
         Ok(())
     }
 
-    /// Replaces the record of the entry of (config, oid), when there is one: `record` is its
-    /// compressed JSON text (`pack`) of `json_len` bytes.
+    /// Replaces the record of the entry of (config, oid), or puts back one that is gone, when the
+    /// entry is there: `record` is its compressed JSON text (`pack`) of `json_len` bytes.
     pub fn repair_record(
         &self,
         config: &str,
@@ -474,7 +455,7 @@ impl FactDb {
     ) -> Result<()> {
         self.write(|conn| {
             conn.execute(
-                "UPDATE records SET json = ?1 WHERE id = (SELECT id FROM keys WHERE config = ?2 AND oid = ?3)",
+                "INSERT OR REPLACE INTO records (id, json) SELECT id, ?1 FROM keys WHERE config = ?2 AND oid = ?3",
                 params![record, config, oid],
             )?;
             conn.execute(

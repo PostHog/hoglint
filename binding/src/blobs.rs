@@ -478,7 +478,9 @@ struct StoredRecords {
 }
 
 impl StoredRecords {
-    fn read(&self, stored: &Stored) -> Option<Vec<u8>> {
+    /// Bytes `range` of a stored record, decompressed from the frames that hold them; None
+    /// when the database cannot give them.
+    fn read(&self, stored: &Stored, range: Range<usize>) -> Option<Vec<u8>> {
         let path = self.db_path.as_deref()?;
         let mut db = self.db.lock().ok()?;
         if db.is_none() {
@@ -486,9 +488,9 @@ impl StoredRecords {
         }
         match db
             .as_ref()?
-            .read_json(&stored.config, &stored.oid, stored.json_len)
+            .read_json(&stored.config, &stored.oid, stored.json_len, range)
         {
-            Ok(json) => json,
+            Ok(found) => found,
             Err(error) => {
                 give_up(path, &error);
                 *db = None;
@@ -517,7 +519,7 @@ impl StoredRecords {
                 return use_text(json);
             }
         }
-        let json = match self.read(stored) {
+        let json = match self.read(stored, 0..stored.json_len) {
             Some(json) => json,
             None => {
                 let json = extract_again(&self.again, stored)?;
@@ -548,27 +550,6 @@ impl StoredRecords {
             );
         }
     }
-
-    /// Bytes `range` of a stored record, decompressed from the frames that hold them; None
-    /// when the database cannot give them.
-    fn read_range(&self, stored: &Stored, range: Range<usize>) -> Option<Vec<u8>> {
-        let path = self.db_path.as_deref()?;
-        let mut db = self.db.lock().ok()?;
-        if db.is_none() {
-            *db = open_cache(path);
-        }
-        match db
-            .as_ref()?
-            .read_json_range(&stored.config, &stored.oid, stored.json_len, range)
-        {
-            Ok(found) => found,
-            Err(error) => {
-                give_up(path, &error);
-                *db = None;
-                None
-            }
-        }
-    }
 }
 
 impl RecordText for StoredRecords {
@@ -580,7 +561,7 @@ impl RecordText for StoredRecords {
     /// made again whole, and kept for the next key of it.
     fn slice(&self, file: usize, range: Range<usize>) -> Result<Vec<u8>, String> {
         if let Json::Stored(stored) = &self.records[file]
-            && let Some(found) = self.read_range(stored, range.clone())
+            && let Some(found) = self.read(stored, range.clone())
         {
             return Ok(found);
         }
