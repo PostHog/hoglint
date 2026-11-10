@@ -25,6 +25,7 @@ from hoglint.ledger.envelope import (
     PROTOCOL,
     SECTIONS,
     BinaryIds,
+    EngineError,
     EngineSources,
     Envelope,
     Framework,
@@ -32,7 +33,7 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.file import LedgerFile
-from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs
+from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
@@ -671,6 +672,32 @@ def test_a_staged_check_reads_side_inputs_from_the_index_not_the_working_tree(tm
     staged, working = hoglint(repo, "check", "--index").stdout, hoglint(repo, "check").stdout
     assert [line in staged for line in differs] == [False, False], staged
     assert [line in working for line in differs] == [True, True], working
+
+
+@pytest.mark.parametrize(
+    "path, held",
+    [
+        ("products/billing/README.md", True),  # a layout rule's file
+        ("products/alerts/README.md", False),
+        ("products/billing/package.json", True),  # the turbo adapter's input
+        ("products/billing/logic.py", True),  # a source
+        ("products/billing/notes.txt", None),  # nothing declares it, so no key covers the answer
+    ],
+)
+def test_a_run_asks_whether_a_path_exists_only_for_a_path_its_key_covers(
+    tmp_path: Path, path: str, held: bool | None
+) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {**FILES, **WATCHED_PACKAGE, "products/billing/notes.txt": "x\n"})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    tree = git_in(repo, "write-tree").strip()
+    files = TreeFiles(repo, tree, tmp_path, RunInputs(config_from(tmp_path / "policy", COVERED)).patterns())
+    if held is None:
+        with pytest.raises(EngineError, match="no source or declared input pattern covers it"):
+            files.holds(path)
+        return
+    assert files.holds(path) is held
 
 
 GONE = (

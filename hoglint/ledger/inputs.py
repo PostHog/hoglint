@@ -22,6 +22,7 @@ from pathlib import Path
 
 from hoglint.config.model import Config
 from hoglint.globs import CAPTURE_RE, Braces, translate
+from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 
@@ -79,12 +80,14 @@ class RunInputs:
 class TreeFiles:
     """Files of one git tree, written into directories on request. As a `TreeRoot` (plugins.py)
     it writes one directory per plugin, each holding exactly the files the plugin declares, into
-    `work_dir`."""
+    `work_dir`, and answers whether a path exists only for a path `asked` matches: the run's
+    input patterns, so the answer is in the run's key."""
 
-    def __init__(self, repo: Path, tree: str, work_dir: Path | None = None) -> None:
+    def __init__(self, repo: Path, tree: str, work_dir: Path | None = None, asked: InputPatterns | None = None) -> None:
         self.repo = repo
         self.tree = tree
         self.work_dir = work_dir
+        self.asked = asked
         self.plugin_roots: dict[tuple[str, ...], Path] = {}
 
     @property
@@ -122,6 +125,10 @@ class TreeFiles:
         return root
 
     def holds(self, path: str) -> bool:
+        """Whether the snapshot holds `path`. A path no input pattern matches is not in the run's
+        key, so the question is an engine error: its plugin or rule must declare the path."""
+        if self.asked is not None and not self.asked.matches(path):
+            raise EngineError(f"the run asked whether {path} exists, but no source or declared input pattern covers it")
         return self.listing.holds(path)
 
 
@@ -130,8 +137,8 @@ class WorktreeFiles(TreeFiles):
     status reports, so a plugin of a working tree run never reads an ignored file or a file
     behind a skip-worktree bit."""
 
-    def __init__(self, repo: Path, work_dir: Path | None = None) -> None:
-        super().__init__(repo, "", work_dir)
+    def __init__(self, repo: Path, work_dir: Path | None = None, asked: InputPatterns | None = None) -> None:
+        super().__init__(repo, "", work_dir, asked)
 
     @property
     def listing(self) -> Listing:

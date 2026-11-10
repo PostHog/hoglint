@@ -290,7 +290,9 @@ class Provider(Protocol):
 class CoverageAdapter(Protocol):
     """Answers whether an outside input list (for example a build tool's task inputs) watches a
     path. It declares `inputs` as a provider does; to ask whether the snapshot holds a file it
-    does not read, it calls `PLUGIN_ROOTS.holds`."""
+    does not read, it calls `PLUGIN_ROOTS.holds`. In a run it may ask that only about a path its
+    `inputs`, a source pattern or another declared input covers, so the answer is in the run's
+    key; any other question fails the run."""
 
     name: str
     allowed_options: frozenset[str]
