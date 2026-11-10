@@ -23,7 +23,6 @@ import traceback
 import subprocess
 import dataclasses
 from collections import Counter
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -57,7 +56,7 @@ from hoglint.ledger.growth import Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
-from hoglint.ledger.records import FindingRecord, IncompleteRecord
+from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
@@ -296,11 +295,11 @@ def summary_of(
     envelope: Envelope,
     scope: frozenset[str] = frozenset(),
     with_triples: bool = True,
-    shown: Callable[[Finding], bool] | None = None,
+    touched: set[str] | None = None,
 ) -> ScanSummary:
     roots = (run.policy_root or run.root, run.root, run.files_root or run.root)
     return ScanSummary.from_run(
-        run.result, run.graph, envelope, scope, with_triples, roots, run.exceptions, run.ledger, shown
+        run.result, run.graph, envelope, scope, with_triples, roots, run.exceptions, run.ledger, touched
     )
 
 
@@ -320,23 +319,6 @@ def finding_line(finding: Finding) -> str:
 
 # The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
-
-
-def touches(touched: set[str], paths: Iterable[str], subjects: Iterable[str]) -> bool:
-    return not touched.isdisjoint(paths) or not touched.isdisjoint(subjects)
-
-
-@dataclass(frozen=True, slots=True)
-class TouchedDebt:
-    """The findings a `--changed` report prints besides new ones: accepted debt in touched files."""
-
-    touched: set[str]
-
-    def shown(self, finding: Finding) -> bool:
-        if finding.status is FindingStatus.NEW:
-            return True
-        paths = (edge.site.path for edge in finding.witnesses)
-        return finding.status is FindingStatus.ACCEPTED and touches(self.touched, paths, finding.subjects)
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,7 +369,7 @@ class CheckReport:
         return touches(self.touched, (witness.path for witness in finding.witnesses), finding.subjects)
 
     def new(self) -> list[FindingRecord]:
-        return [f for f in self.summary.findings if f.status is FindingStatus.NEW and self.keep(f)]
+        return [f for f in self.summary.findings.with_status(FindingStatus.NEW) if self.keep(f)]
 
     def violations(self) -> list[FindingRecord]:
         return [f for f in self.new() if f.rule not in self.summary.advisory]
@@ -433,7 +415,7 @@ class CheckReport:
             out.append(f"advisory ({len(advisory)})")
             out.extend(f"  {self.finding_line(f)}" for f in advisory)
         if self.touched is not None:
-            accepted = [f for f in summary.findings if f.status is FindingStatus.ACCEPTED and self.keep(f)]
+            accepted = [f for f in summary.findings.with_status(FindingStatus.ACCEPTED) if self.keep(f)]
             out.append(f"existing debt in touched files (advisory) ({len(accepted)})")
             out.extend(f"  {self.finding_line(f)}" for f in accepted)
         out.extend(self.incomplete_lines())
@@ -453,7 +435,7 @@ class CheckReport:
         out.extend(f"exceptions: {problem}" for problem in summary.exceptions.problems)
         for name, passing in summary.levels.items():
             out.append(f"level {name}: {len(passing)} pass, {len(summary.level_failures.get(name, {}))} fail")
-        accepted_count = sum(1 for f in summary.findings if f.status is FindingStatus.ACCEPTED)
+        accepted_count = summary.findings.count(FindingStatus.ACCEPTED)
         out.append(f"{accepted_count} findings accepted by the ledger")
         return "\n".join(out) + "\n"
 
@@ -821,7 +803,7 @@ class Commands:
         if baseline is None:  # --changed: advisory, so it always exits 0
             touched = set(self.snapshots.changed_paths(None, tree if index else ""))
             touched |= {m for m, p in run.graph.modules.items() if p in touched}
-            summary = summary_of(run, Envelope(), with_triples=False, shown=TouchedDebt(touched).shown)
+            summary = summary_of(run, Envelope(), with_triples=False, touched=touched)
             self.report(summary, run.config, policy_root, files_root, touched, None)
             return 0
         summary = summary_of(run, baseline.envelope, with_triples=False)

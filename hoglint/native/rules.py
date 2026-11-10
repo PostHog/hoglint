@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from array import array
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import cached_property
 from pathlib import Path
 from typing import Any, TypeVar
@@ -176,14 +176,17 @@ class RowEdges:
             self.made = dict(zip(self.ids, self.core.get(self.ids)))
         return self.made[edge_id]
 
-    def row(self, edge_id: int) -> WitnessRow:
+    def witness_rows(self) -> dict[int, WitnessRow]:
         if self.rows is None:
             found = self.core.link.witness_rows(self.ids.tobytes())
             self.rows = {
                 at: (kind, path, line, column, surface, tuple(targets))
                 for at, (kind, path, line, column, surface, targets) in zip(self.ids, found)
             }
-        return self.rows[edge_id]
+        return self.rows
+
+    def row(self, edge_id: int) -> WitnessRow:
+        return self.witness_rows()[edge_id]
 
 
 class EdgeHandle:
@@ -361,12 +364,16 @@ class JudgedRows:
     def edge_id(self, at: int) -> int:
         return self.edges[at]
 
-    def handle(self, at: int) -> EdgeHandle:
+    def edge_rows(self) -> RowEdges:
+        """The edges of the rows the rule takes as findings."""
         if self.row_edges is None:
             alone = set(self.alone)
             ids = distinct_ids(edge for row, edge in enumerate(self.edges) if row not in alone)
             self.row_edges = RowEdges(self.ctx.native.native.core, ids)
-        return EdgeHandle(self.row_edges, self.edges[at])
+        return self.row_edges
+
+    def handle(self, at: int) -> EdgeHandle:
+        return EdgeHandle(self.edge_rows(), self.edges[at])
 
     def edge(self, at: int) -> Edge:
         return self.handle(at).get()
@@ -384,9 +391,31 @@ class JudgedRows:
     def subjects(self, at: int) -> tuple[str, ...]:
         return subjects_of(self.src(at), self.dst(at))
 
-    def owner_module(self, at: int) -> str | None:
-        owner = self.ctx.owner(self.src(at))
+    def owner_module_of(self, module: str) -> str | None:
+        owner = self.ctx.owner(module)
         return owner.module if owner is not None else None
+
+    def owner_module(self, at: int) -> str | None:
+        return self.owner_module_of(self.src(at))
+
+    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+        """The witness rows, owner module and subjects of rows `ats`: the witness rows from the
+        link in one call, owners and subjects once per module and pair of modules."""
+        if not ats:
+            return [], [], []
+        by_edge, edges = self.edge_rows().witness_rows(), self.edges
+        witnesses: list[tuple[WitnessRow, ...]] = [(by_edge[edges[at]],) for at in ats]
+        owners = [self.owner_module_of(module) for module in self.modules]
+        src_at, dst_at = self.src_at, self.dst_at
+        subjects_by_pair: dict[tuple[int, int], tuple[str, ...]] = {}
+        subjects = []
+        for at in ats:
+            pair = (src_at[at], dst_at[at])
+            found = subjects_by_pair.get(pair)
+            if found is None:
+                found = subjects_by_pair[pair] = self.subjects(at)
+            subjects.append(found)
+        return witnesses, [owners[src_at[at]] for at in ats], subjects
 
     def rejudged(self, at: int, identity: tuple[str, ...]) -> Rejudged:
         return Rejudged(self.rule, self.handle(at), self.judgment(at), identity, self.targets[at])

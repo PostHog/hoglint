@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from itertools import repeat
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +45,15 @@ from hoglint.ledger.file import LedgerFile, LineKey, parse_key, render_key
 from hoglint.ledger.records import (
     BlockRecord,
     ExceptionsRecord,
-    FindingRecord,
     IncompleteRecord,
     Portable,
+    ShownRecord,
+    StoredFindings,
     equality_from_json,
     equality_to_json,
+    touches,
 )
-from hoglint.model import SCHEMA_VERSION, Edge, Finding, FindingStatus, Graph
+from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph, WitnessRow
 from hoglint.rules.engine import UNREADABLE, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
@@ -82,8 +84,49 @@ def write_atomic(path: Path, content: bytes) -> None:
     Path(temporary).replace(path)
 
 
-def is_new(finding: Finding) -> bool:
-    return finding.status is FindingStatus.NEW
+def is_shown(
+    status: FindingStatus, witnesses: tuple[WitnessRow, ...], subjects: tuple[str, ...], touched: set[str] | None
+) -> bool:
+    """Whether `check` prints a finding: a new one, and with `--changed` (`touched` holds the
+    changed paths and modules) also accepted debt whose witness or subject is touched."""
+    if status is FindingStatus.NEW:
+        return True
+    if touched is None or status is not FindingStatus.ACCEPTED:
+        return False
+    return touches(touched, (witness[1] for witness in witnesses), subjects)
+
+
+def finding_rows(result: RunResult, portable: Portable, touched: set[str] | None) -> list[Any]:
+    """Every finding of a run as the findings section stores it (`FindingRecord.to_json`), built
+    from each rule's table: a Finding is made only for a row `check` prints, for its message."""
+    out: list[Any] = []
+    for rule, run in result.runs.items():
+        table = run.findings
+        if not len(table):
+            continue
+        statuses = table.statuses()
+        witnesses, owners, subjects = table.stored_parts()
+        identities = table.identities
+        start = len(out)
+        out.extend(
+            zip(
+                repeat(rule),
+                [identities[place] for place in table.identity_at],
+                [status.value for status in statuses],
+                repeat(None),
+                witnesses,
+                [owner or "" for owner in owners],
+                subjects,
+                map(bool, table.ledgerable),
+                map(bool, table.unknown),
+            )
+        )
+        for row, status in enumerate(statuses):
+            if is_shown(status, witnesses[row], subjects[row], touched):
+                stored = out[start + row]
+                shown = ShownRecord.of(table.finding(row), portable).to_json()
+                out[start + row] = (*stored[:3], shown, *stored[4:])
+    return out
 
 
 def fingerprint(edge: Edge | None) -> str:
@@ -101,7 +144,7 @@ class ScanSummary:
     schema: int = 0
     lines: dict[LineKey, int] = field(default_factory=dict)
     growth: dict[str, tuple[int, ...]] = field(default_factory=dict)
-    findings: list[FindingRecord] = field(default_factory=list)
+    findings: StoredFindings = field(default_factory=StoredFindings)
     incomplete: list[IncompleteRecord] = field(default_factory=list)
     triples: set[Triple] = field(default_factory=set)
     with_triples: bool = False
@@ -127,13 +170,13 @@ class ScanSummary:
         roots: tuple[Path, ...] = (),
         exceptions: ExceptionsFile | None = None,
         ledger: LedgerFile | None = None,
-        shown: Callable[[Finding], bool] | None = None,
+        touched: set[str] | None = None,
     ) -> ScanSummary:
         """`scope` names the modules whose couplings and witnesses move admission reads. `roots`
         are the run's policy and code roots, which text in the summary names relative to the repo;
         `exceptions` gives the review dates of the run's exception entries, `ledger` the ledger the
-        run read. `shown` picks the findings whose message, site and remedies the summary keeps:
-        by default the new ones."""
+        run read. The summary keeps the message, site and remedies of the findings `check` prints
+        (`is_shown`); `touched` names the paths and modules of a `--changed` run."""
         config = result.config
         portable = Portable.of(*roots)
         summary = ScanSummary(envelope=envelope, schema=SCHEMA_VERSION, lines=dict(result.scan), scope=scope)
@@ -141,8 +184,7 @@ class ScanSummary:
         for rule in config.rules.values():
             if rule.ledger and rule.identity:
                 summary.growth[rule.id] = tuple(rule.identity.index(column) for column in rule.growth_key)
-        keep_shown = shown or is_new
-        summary.findings = [FindingRecord.of(finding, portable, keep_shown(finding)) for finding in result.findings()]
+        summary.findings = StoredFindings(finding_rows(result, portable, touched))
         summary.incomplete = [
             IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
         ]
@@ -192,7 +234,7 @@ class ScanSummary:
             "schema": self.schema,
             "lines": {render_key(key): count for key, count in sorted(self.lines.items())},
             "growth": {rule: list(indexes) for rule, indexes in sorted(self.growth.items())},
-            "findings": [finding.to_json() for finding in self.findings],
+            "findings": self.findings.to_json(),
             "incomplete": [item.to_json() for item in self.incomplete],
             "triples": sorted(list(triple) for triple in self.triples),
             "with_triples": self.with_triples,
@@ -227,7 +269,7 @@ class ScanSummary:
             schema=int(data.get("schema", 0)),
             lines={parse_key(text): int(count) for text, count in data.get("lines", {}).items()},
             growth={rule: tuple(indexes) for rule, indexes in data.get("growth", {}).items()},
-            findings=[FindingRecord.from_json(finding) for finding in data.get("findings", [])],
+            findings=StoredFindings(list(data.get("findings", []))),
             incomplete=[IncompleteRecord.from_json(item) for item in data.get("incomplete", [])],
             triples={(a, b, c, d) for a, b, c, d in data.get("triples", [])},
             with_triples=bool(data.get("with_triples", False)),

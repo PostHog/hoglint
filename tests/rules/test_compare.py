@@ -14,7 +14,7 @@ from hoglint.facts import Extractor
 from hoglint.ledger.envelope import NATIVE, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
-from hoglint.ledger.records import FindingRecord
+from hoglint.ledger.records import FindingRecord, StoredFindings
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus
 from native.require import native_required
@@ -39,7 +39,7 @@ def scan(lines: dict[tuple[str, str, str], int], envelope: Envelope | None = Non
         lines={(RULE, key): count for key, count in lines.items()},
         growth=GROWTH,
     )
-    summary.findings = [finding(key) for key in summary.lines]
+    summary.findings = StoredFindings.of([finding(key) for key in summary.lines])
     summary.couplings = {coupling(key): count for key, count in lines.items()}
     summary.witnesses = {(RULE, key): [coupling(key)] for key in lines}
     return summary

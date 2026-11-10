@@ -11,6 +11,7 @@ the snapshot's owners files when it renders them.
 from __future__ import annotations
 
 import datetime
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,10 @@ from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause, witness
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile
 from hoglint.rules.levels import Block
+
+
+def touches(touched: set[str], paths: Iterable[str], subjects: Iterable[str]) -> bool:
+    return not touched.isdisjoint(paths) or not touched.isdisjoint(subjects)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +159,39 @@ class FindingRecord:
             bool(ledgerable),
             bool(unknown),
         )
+
+
+class StoredFindings:
+    """The findings section as it is stored: one row per finding in `FindingRecord.to_json`'s
+    form, a list or a tuple. A row becomes a `FindingRecord` when a reader asks for it, so a
+    check that prints a few findings decodes a few."""
+
+    STATUS = 2  # a row's place of the status value
+
+    def __init__(self, rows: list[Any] | None = None) -> None:
+        self.rows: list[Any] = rows if rows is not None else []
+
+    @staticmethod
+    def of(records: list[FindingRecord]) -> StoredFindings:
+        return StoredFindings([record.to_json() for record in records])
+
+    def __iter__(self) -> Iterator[FindingRecord]:
+        for row in self.rows:
+            yield FindingRecord.from_json(row)
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def with_status(self, status: FindingStatus) -> list[FindingRecord]:
+        value = status.value
+        return [FindingRecord.from_json(row) for row in self.rows if row[self.STATUS] == value]
+
+    def count(self, status: FindingStatus) -> int:
+        value = status.value
+        return sum(1 for row in self.rows if row[self.STATUS] == value)
+
+    def to_json(self) -> list[Any]:
+        return self.rows
 
 
 @dataclass(frozen=True, slots=True)

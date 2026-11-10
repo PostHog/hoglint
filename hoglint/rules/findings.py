@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from array import array
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Protocol
 
 from hoglint.model import Edge, Finding, FindingStatus, WitnessRow
@@ -41,6 +41,10 @@ class RowSource(Protocol):
     def subjects(self, at: int) -> tuple[str, ...]: ...
 
     def owner_module(self, at: int) -> str | None: ...
+
+    def parts(self, ats: Sequence[int]) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+        """The witness rows, owner module and subjects of rows `ats`, read in bulk."""
+        ...
 
 
 class FindingTable:
@@ -223,3 +227,33 @@ class FindingTable:
             return made.owner.module if made.owner is not None else None
         assert self.source is not None
         return self.source.owner_module(self.source_at[row])
+
+    def statuses(self) -> list[FindingStatus]:
+        """Every row's status, in order."""
+        at, ledgerable, allowed, accepted = self.identity_at, self.ledgerable, self.allowed, self.accepted
+        new, done, kept = FindingStatus.NEW, FindingStatus.ACCEPTED, FindingStatus.ALLOWED
+        return [
+            kept if allowed[row] else done if ledgerable[row] and at[row] in accepted else new for row in range(len(at))
+        ]
+
+    def stored_parts(self) -> tuple[list[tuple[WitnessRow, ...]], list[str | None], list[tuple[str, ...]]]:
+        """Every row's witness rows, owner module and subjects, in order: what a stored summary
+        keeps of a row besides its identity, status and flags."""
+        source, objects = self.source, self.objects
+        if source is not None and not objects:
+            return source.parts(self.source_at)
+        count = len(self.identity_at)
+        witnesses: list[tuple[WitnessRow, ...]] = [()] * count
+        owners: list[str | None] = [None] * count
+        subjects: list[tuple[str, ...]] = [()] * count
+        for row, finding in objects.items():
+            witnesses[row] = finding.witness_rows
+            owners[row] = finding.owner.module if finding.owner is not None else None
+            subjects[row] = finding.subjects
+        if source is None:
+            return witnesses, owners, subjects
+        rows = [row for row in range(count) if row not in objects]
+        found = source.parts([self.source_at[row] for row in rows])
+        for row, witness, owner, subject in zip(rows, *found, strict=True):
+            witnesses[row], owners[row], subjects[row] = witness, owner, subject
+        return witnesses, owners, subjects
