@@ -14,12 +14,12 @@ from typing import Protocol
 
 from hoglint.config.loader import ConfigError
 from hoglint.config.model import Config, RuleSpec
-from hoglint.index import GraphIndex
+from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
 from hoglint.ledger.file import LedgerFile, LineKey, level_line
 from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph, IncompleteCause, Outcome, RuleResult
-from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_class, rule_kinds
+from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, context_class, labeler_class, rule_kinds
 from hoglint.rules.edges import EdgePrimitive, EntrypointPrimitive, SignaturePrimitive, UseShapePrimitive
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityInventory, LayoutPrimitive
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile, apply_exceptions
@@ -127,7 +127,8 @@ class Engine:
         self.graph = graph
         self.repo_root = repo_root
         self.today = today or datetime.date.today()
-        self.labeler = Labeler(config, graph, repo_root, index, candidates)
+        index = index or index_of(graph)
+        self.labeler = labeler_class(index)(config, graph, repo_root, index, candidates)
 
     def failed_producers(self, spec: RuleSpec) -> list[str]:
         """A producer named in `requires` (any version), or one that would have made an edge kind the rule reads."""

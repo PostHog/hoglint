@@ -88,6 +88,10 @@ pub struct PairRow {
     pub pair: Option<(String, String)>,
 }
 
+/// A module's place in a value column where reading the value meets a provider conflict, and
+/// in the registry column where no registry holds the module.
+pub const NO_PLACE: u32 = u32::MAX;
+
 /// `dst.exported`, the predicate of an entrypoint rule with none of its own.
 const EXPORTED: Node = Node::Bare(Operand::Ref(Ref::Dst(EndField::Exported)));
 
@@ -857,6 +861,44 @@ impl Rules {
             }));
         }
         Ok(out)
+    }
+
+    /// A module field's value on every graph module (`Labeler.field_value`), for Python to read
+    /// instead of labelling each module again: the distinct values, and each module's place
+    /// among them. A module whose value reads provider labels set two ways has `NO_PLACE`:
+    /// Python reads that one itself, to meet the conflict where the Python engine meets it.
+    pub fn value_column(&self, name: &str) -> Result<(Vec<&Cell>, Vec<u32>), String> {
+        let field = self
+            .labels
+            .fields
+            .iter()
+            .position(|field| field.name == name && !field.on_symbol)
+            .ok_or_else(|| format!("no module field {name}"))?;
+        let mut distinct: Vec<&Cell> = Vec::new();
+        let mut places: FxHashMap<&Cell, u32> = FxHashMap::default();
+        let mut codes = Vec::with_capacity(self.values[field].len());
+        for (at, cell) in self.values[field].iter().enumerate() {
+            if self.tainted.contains(&(field, at as u32)) {
+                codes.push(NO_PLACE);
+                continue;
+            }
+            let place = *places.entry(cell).or_insert_with(|| {
+                distinct.push(cell);
+                distinct.len() as u32 - 1
+            });
+            codes.push(place);
+        }
+        Ok((distinct, codes))
+    }
+
+    /// Each graph module's registry, by its place in the plan's registries; `NO_PLACE` where
+    /// none holds the module.
+    pub fn registry_column(&self) -> Vec<u32> {
+        self.labels
+            .registry_of
+            .iter()
+            .map(|found| found.map_or(NO_PLACE, u32::from))
+            .collect()
     }
 
     /// One field's value on every graph module, rendered as `render_value` does, with zones as

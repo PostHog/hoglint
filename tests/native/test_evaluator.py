@@ -947,3 +947,29 @@ def test_labels_are_the_labelers(world: World) -> None:
                     else str(data)
                 )
             assert (module, name, value) == (module, name, expected)
+
+
+# A field whose domain reads a provider field that a provider and an assignment set apart on
+# `core/**`: reading it there meets that conflict, as the Python labeler meets it.
+DOMAIN_READS_A_CONFLICT = CONFIG.replace(
+    "[fields]\n",
+    '[fields]\nlead = { type = "string" }\nreview = { type = "string", required_on = "lead == \'someone\'" }\n',
+) + (
+    '\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["lead"]\n'
+    '\n[[assign]]\nmatch = "core/**"\nset = { lead = "someone" }\n'
+)
+
+
+@pytest.mark.parametrize("base", [CONFIG, DOMAIN_READS_A_CONFLICT], ids=["fixture", "domain-reads-a-conflict"])
+def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, base: str) -> None:
+    config = world.config("", base)
+    native, _ = world.contexts(config)
+    native.find_conflicts()
+    python = Labeler(config, world.graph, world.repo, native.labeler.index)
+    names = [name for name, spec in config.fields.items() if spec.on == "module"]
+    for module in world.graph.modules:
+        for name in names:
+            assert native.labeler.field_value(module, None, name)[0] == python.field_value(module, None, name)[0]
+        for name in ("registry", "lifecycle"):
+            assert native.labeler.builtin(module, None, name) == python.builtin(module, None, name)
+    assert sorted(native.labeler.conflicts) == sorted(python.conflicts)

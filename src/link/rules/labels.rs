@@ -31,7 +31,7 @@ pub struct Field {
 }
 
 /// One label value, or what a field reads where no source sets it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Cell {
     Unknown,
     None,

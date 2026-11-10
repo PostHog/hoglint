@@ -193,6 +193,11 @@ class Rules:
         """The labels set two ways that the rules met while they ran, as `conflicts` gives them."""
     def column(self, field: str) -> list[str]:
         """One field's value (or `registry`, `lifecycle`) on every graph module, rendered."""
+    def values(self, field: str) -> tuple[list[tuple[str, list[str]]], bytes]:
+        """A module field's value on every graph module: its distinct values as (type, items),
+        and each module's place among them as u32s, 0xFFFFFFFF where Python reads it itself."""
+    def registries(self) -> bytes:
+        """Each graph module's registry by its place in the plan, as u32s; 0xFFFFFFFF for none."""
 
 def link_jsonl(path: str, config: str, threads: int = 0) -> Link: ...
 def link_blobs(

@@ -4,6 +4,7 @@ use crate::ids_bytes;
 use crate::link::Link;
 use hoglint_facts::link::rules::Rules as CoreRules;
 use hoglint_facts::link::rules::conflicts::Conflict;
+use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
 use hoglint_facts::link::rules::value::Truth;
 use pyo3::exceptions::PyValueError;
@@ -26,6 +27,9 @@ type ConflictTuple = (&'static str, String, String);
 /// What: "start" (path empty), "unresolved", "unknown" or "denied". Verdict codes: 1 true,
 /// 2 unknown; 0 for anything but "denied".
 type FoundTuple = (&'static str, String, Vec<(u32, u32)>, u8);
+
+/// A module field's column: its distinct values as (type, items), and each module's place.
+type ValueColumn<'py> = (Vec<(&'static str, Vec<String>)>, Bound<'py, PyBytes>);
 
 /// The run's labels and compiled rules over one link.
 #[pyclass(module = "hoglint_native", unsendable)]
@@ -187,6 +191,36 @@ impl Rules {
             .into_iter()
             .map(|conflict| self.conflict_tuple(&bound.inner, conflict))
             .collect()
+    }
+
+    /// A module field's value on every graph module (`Labeler.field_value`): its distinct
+    /// values as (type, items), and each module's place among them as little-endian u32s,
+    /// 0xFFFFFFFF where Python must read the value itself (it meets a provider conflict).
+    /// Types: unknown, none, text, bool (items "True" or "False"), set, zone (the zone's name).
+    fn values<'py>(&self, py: Python<'py>, field: &str) -> PyResult<ValueColumn<'py>> {
+        let (distinct, codes) = self
+            .inner
+            .value_column(field)
+            .map_err(PyValueError::new_err)?;
+        let zones = &self.inner.labels.zones.infos;
+        let typed = distinct
+            .into_iter()
+            .map(|cell| match cell {
+                Cell::Unknown => ("unknown", Vec::new()),
+                Cell::None => ("none", Vec::new()),
+                Cell::Text(text) => ("text", vec![text.to_string()]),
+                Cell::Bool(flag) => ("bool", vec![if *flag { "True" } else { "False" }.into()]),
+                Cell::Set(items) => ("set", items.iter().map(|item| item.to_string()).collect()),
+                Cell::Zone(code) => ("zone", vec![zones[*code as usize].name.clone()]),
+            })
+            .collect();
+        Ok((typed, ids_bytes(py, &codes)))
+    }
+
+    /// Each graph module's registry, by its place in the plan's registries, as little-endian
+    /// u32s; 0xFFFFFFFF where no registry holds the module.
+    fn registries<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        ids_bytes(py, &self.inner.registry_column())
     }
 
     /// One field's value (or `registry`, `lifecycle`) on every graph module, rendered as an

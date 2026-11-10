@@ -320,6 +320,11 @@ def context_class(index: GraphIndex) -> type[RuleContext]:
     return getattr(index, "context_class", RuleContext)
 
 
+def labeler_class(index: GraphIndex) -> type[Labeler]:
+    """The labeler for an index: an index whose labels the native evaluator makes brings its own."""
+    return getattr(index, "labeler_class", Labeler)
+
+
 def rule_kinds(spec: RuleSpec, views: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
     """Edge kinds a rule reads: its own list, else the primitive's or the view's default."""
     if spec.kinds:

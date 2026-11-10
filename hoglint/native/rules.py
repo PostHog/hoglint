@@ -24,6 +24,7 @@ from hoglint.ledger.envelope import EngineError
 from hoglint.model import Edge, Finding, FindingDetail, Graph
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
+from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import JUDGED, RulePlan, tree
 from hoglint.rules.base import EdgeEnv, EdgeRule, Judgment, RuleContext, RuleRun
 from hoglint.rules.engine import primitive_of
@@ -227,6 +228,8 @@ class NativeRuleContext(RuleContext):
         self.word(conflicts)
         if conflicts and not self.labeler.conflicts:
             raise EngineError(f"the evaluator finds labels set two ways that the labeler does not: {conflicts[:3]}")
+        if isinstance(self.labeler, NativeLabeler):
+            self.labeler.read_from(self.evaluator)
 
     def met_conflicts(self) -> None:
         """The labels set two ways that the evaluator met while rules ran: what the Python engine
@@ -353,6 +356,7 @@ class NativeGraphIndex(GraphIndex):
         self.module_of_symbol = Memo(self.find_module)
 
     context_class: type[RuleContext] = NativeRuleContext
+    labeler_class: type[Labeler] = NativeLabeler
 
     def kind_order(self) -> list[str]:
         """Kinds in the order their first edge appears: core kinds, then pack kinds."""
