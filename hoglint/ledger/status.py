@@ -1,20 +1,23 @@
 """The working tree's git status, read once per process and shared.
 
-The native snapshot reads it for dirty and untracked sources. A run of the working tree reads it
+The working tree listing (listing.py) reads it for the files to read from disk. `check` reads it
 to tell whether the working tree holds HEAD's inputs (sources, declared side inputs, the ledger),
-so that its summary may stand for HEAD's. One `git status --porcelain=v2 -uall` answers both.
+so that it can run HEAD's tree instead. One `git status --porcelain=v2 -uall` answers both.
 """
 
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-# Fields before the path in a porcelain v2 record, per record kind.
+# Fields before the path in a porcelain v2 record, per record kind, and where the working tree's
+# file mode sits among them.
 FIELDS_BEFORE_PATH = {"1": 8, "2": 9, "u": 10}
+WORKTREE_MODE_FIELD = {"1": 5, "2": 5, "u": 6}
+DELETED_MODE = "000000"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +25,8 @@ class StatusEntry:
     path: str
     staged: bool  # HEAD and the index differ
     unstaged: bool  # the index and the working tree differ, or the file is untracked
+    mode: str = ""  # the working tree's file mode; "000000" when deleted there, "" when untracked
+    renamed_from: bool = False  # the old path of a rename, which the index no longer holds
 
 
 def parse(records: list[str]) -> list[StatusEntry]:
@@ -38,12 +43,11 @@ def parse(records: list[str]) -> list[StatusEntry]:
             continue
         fields = record.split(" ", FIELDS_BEFORE_PATH[kind])
         change = fields[1]
-        entry = StatusEntry(
-            fields[-1], staged=kind == "u" or change[0] != ".", unstaged=kind == "u" or change[1] != "."
-        )
+        staged, unstaged = kind == "u" or change[0] != ".", kind == "u" or change[1] != "."
+        entry = StatusEntry(fields[-1], staged, unstaged, fields[WORKTREE_MODE_FIELD[kind]])
         out.append(entry)
         if kind == "2":
-            out.append(StatusEntry(records[at], entry.staged, entry.unstaged))  # the path it was renamed from
+            out.append(StatusEntry(records[at], staged, unstaged, renamed_from=True))
             at += 1
     return out
 
@@ -59,12 +63,6 @@ class WorktreeStatus:
     def __init__(self, records: list[str]) -> None:
         self.records = records
         self.entries = parse(records)
-        self.drifted: set[str] = set()
-
-    def mark_drifted(self, paths: Iterable[str]) -> None:
-        """Source files that changed while this process read them: the run used what it read,
-        which no tree holds, so no summary of the run may be stored."""
-        self.drifted.update(paths)
 
     @staticmethod
     def start(repo: Path) -> None:
@@ -88,6 +86,5 @@ class WorktreeStatus:
         return status
 
     def drift(self, is_input: Callable[[str], bool]) -> list[str]:
-        """Run inputs where the working tree differs from HEAD, staged or not, and source files
-        that changed while this process read them."""
-        return sorted({entry.path for entry in self.entries if is_input(entry.path)} | self.drifted)
+        """Run inputs where the working tree differs from HEAD, staged or not."""
+        return sorted({entry.path for entry in self.entries if is_input(entry.path)})

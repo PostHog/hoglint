@@ -4,10 +4,11 @@
   incomplete.
 - A git tree (a commit's, or the index's captured by `git write-tree`): `git ls-tree -r`, once
   per process.
-- The working tree: the index, then `git status --porcelain=v2 -uall` for what differs; a dirty
-  or untracked file is hashed from its raw bytes (`git hash-object --no-filters`), as the
-  extractor reads them, and its bytes come from the working tree. A file git cannot read gets
-  the null id, so the extractor reads it, fails, and records a read error for it.
+- The working tree: the index's blobs overlaid with what `git status --porcelain=v2 -uall`
+  reports (`WorktreeListing`, D40). A reported file is hashed from its raw bytes
+  (`git hash-object --no-filters`), as the extractor reads them, and its bytes come from the
+  working tree. A file git cannot read gets the null id, so the extractor reads it, fails, and
+  records a read error for it.
 
 Paths come only from git, never from listing or stat-ing the file system, so a case-insensitive
 file system cannot change a result.
@@ -19,8 +20,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hoglint.ledger.inputs import TreeListing
-from hoglint.ledger.status import WorktreeStatus
+from hoglint.ledger.listing import TreeListing, WorktreeListing
 
 SOURCE_SUFFIXES = (".py", ".pyi")
 SUBMODULE_MODE = "160000"
@@ -102,30 +102,12 @@ class BlobSnapshot:
 
     @staticmethod
     def worktree(repo: Path) -> BlobSnapshot:
-        snapshot = BlobSnapshot.index(repo)
-        snapshot.conflicts = []
-        dirty: list[str] = []
-        status = WorktreeStatus.of(repo).records  # shared with the summary store's side-input check
-        at = 0
-        while at < len(status):
-            record = status[at]
-            at += 1
-            kind = record[0]
-            if kind == "?":
-                if is_source(record[2:]):
-                    dirty.append(record[2:])
-                continue
-            if kind == "2":
-                at += 1  # the next record is the original path of a rename or copy
-            fields = record.split(" ", {"1": 8, "2": 9, "u": 10}.get(kind, 1))
-            if kind not in ("1", "2", "u") or not is_source(fields[-1]):
-                continue
-            path, worktree_mode, change = fields[-1], fields[5] if kind != "u" else fields[6], fields[1][1]
-            if change == "D" or worktree_mode == "000000":
-                snapshot.blobs.pop(path, None)
-                continue
-            if kind == "u" or change != ".":
-                dirty.append(path)
+        snapshot = BlobSnapshot(repo)
+        listing = WorktreeListing.of(repo)
+        for path, oid in listing.blobs.items():
+            if is_source(path):
+                snapshot.blobs[path] = (oid, False)
+        dirty = sorted(path for path in listing.disk if is_source(path))
         if dirty:
             for path, oid in zip(dirty, hash_worktree_files(repo, dirty), strict=True):
                 snapshot.blobs[path] = (oid, True)

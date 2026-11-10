@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hoglint.core.config import CoreConfig
-from hoglint.ledger.inputs import TreeListing
+from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 
 SOURCE_PATTERNS = ("*.py", "*.pyi")
 
@@ -22,29 +22,6 @@ class Inventory:
     root: Path
     files: tuple[str, ...]
     analyzed: tuple[str, ...]
-
-
-class WorkingTree:
-    """Git-visible files on disk: tracked plus untracked, minus gitignored."""
-
-    def __init__(self, repo: Path) -> None:
-        self.repo = repo
-        self.root = repo
-
-    def list(self, patterns: tuple[str, ...]) -> list[str]:
-        out = subprocess.run(
-            ["git", "ls-files", "-z", "-co", "--exclude-standard", "--", *patterns],
-            cwd=self.repo,
-            capture_output=True,
-            check=True,
-        ).stdout.decode()
-        return sorted({rel for rel in out.split("\0") if rel and (self.repo / rel).is_file()})
-
-    def read_bytes(self, rel: str) -> bytes:
-        return (self.repo / rel).read_bytes()
-
-    def close(self) -> None:
-        return None
 
 
 class StagedIndex:
@@ -109,19 +86,47 @@ class StagedIndex:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-class GitTree(StagedIndex):
-    """The blobs of one git tree, read by id into a temp tree. Never reads the index or the working tree."""
+class ListedSnapshot:
+    """The source files of one listed snapshot (listing.py), written into a temp tree on first
+    read. Never reads a file the listing does not name."""
+
+    def __init__(self, listing: Listing) -> None:
+        self.listing = listing
+        self.root = Path(tempfile.mkdtemp(prefix="hoglint-snapshot-"))
+        self.written: set[str] = set()
+
+    def list(self, patterns: tuple[str, ...]) -> list[str]:
+        paths = [rel for rel in self.listing.paths if any(fnmatch.fnmatchcase(rel, p) for p in patterns)]
+        self.listing.write(self.root, [rel for rel in paths if rel not in self.written])
+        self.written.update(paths)
+        return sorted(paths)
+
+    def read_bytes(self, rel: str) -> bytes:
+        if rel not in self.written:
+            self.listing.write(self.root, [rel])
+            self.written.add(rel)
+        return (self.root / rel).read_bytes()
+
+    def close(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+class GitTree(ListedSnapshot):
+    """The blobs of one git tree. Never reads the index or the working tree."""
 
     def __init__(self, repo: Path, tree: str) -> None:
-        super().__init__(repo)
-        self.tree = tree
-
-    def entries(self, patterns: tuple[str, ...]) -> dict[str, str]:
-        listed = TreeListing.of(self.repo, self.tree).blobs
-        return {rel: oid for rel, oid in listed.items() if any(fnmatch.fnmatchcase(rel, p) for p in patterns)}
+        super().__init__(TreeListing.of(repo, tree))
 
 
-Snapshot = WorkingTree | StagedIndex
+class WorkingTree(ListedSnapshot):
+    """The working tree as git sees it (D40): the index's blobs, overlaid with the files git
+    status reports. An ignored file, or a file behind a skip-worktree bit, is never read."""
+
+    def __init__(self, repo: Path) -> None:
+        super().__init__(WorktreeListing.of(repo))
+
+
+Snapshot = WorkingTree | StagedIndex | GitTree
 
 
 class Discovery:

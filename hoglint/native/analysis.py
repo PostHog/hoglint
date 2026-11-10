@@ -16,7 +16,6 @@ from hoglint.core.analysis import CoreAnalysis
 from hoglint.core.discovery import Discovery, Inventory
 from hoglint.core.producers import PRODUCERS
 from hoglint.facts import site_packages, site_packages_files
-from hoglint.ledger.status import WorktreeStatus
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
 from hoglint.native.config import link_config
@@ -118,9 +117,6 @@ class NativeAnalysis(CoreAnalysis):
         timings["facts.extracted"] = extracted
         if self.options.needs is not None:
             link.release_kinds(sorted(self.options.needs.kinds))
-        drifted = link.drifted()
-        if drifted:
-            WorktreeStatus.of(self.options.repo).mark_drifted(drifted)
         started = time.perf_counter()
         graph = NativeGraph(link, {})
         build = NativeBuild(config, link, external, graph.core.maker, f"{native.FACTS_ID}\0{options}")

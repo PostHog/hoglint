@@ -99,7 +99,7 @@ def test_an_inline_baseline_frees_its_graph_before_the_staged_run(
     batch_mode("native")
     try:
         tree = commands.snapshots.write_tree()
-        baseline = commands.baselines.prepare(commands.snapshots.policy_of(tree), tree)
+        baseline = commands.baselines.prepare(commands.snapshots.policy_of(tree), tree, staged=True)
         assert baseline.against.endswith("computed and stored)") and graphs[0]() is None
     finally:
         gc.enable()

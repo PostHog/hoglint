@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import base64
+import shutil
 import hashlib
 import datetime
 import dataclasses
@@ -12,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from hoglint.cli import Commands, Snapshots, TreeSummaries
+from hoglint.cli import Commands, Snapshots
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
@@ -31,7 +32,8 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.file import LedgerFile
-from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeListing
+from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs
+from hoglint.ledger.listing import TreeListing
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
@@ -671,6 +673,58 @@ def test_a_staged_check_reads_side_inputs_from_the_index_not_the_working_tree(tm
     assert [line in working for line in differs] == [True, True], working
 
 
+GONE = (
+    CONFIG
+    + """
+[rules.legacy-gone]
+primitive = "layout"
+within = "products/{product}"
+absent = ["legacy"]
+identity = "entity"
+growth_key = ["subject"]
+"""
+)
+
+
+def stored_manifests(cache: Path) -> list[str]:
+    return sorted(str(path.relative_to(cache)) for path in cache.rglob("summaries/**/*.json"))
+
+
+@needs_extractor
+@pytest.mark.parametrize("engine", ["python", "native"])
+def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored(tmp_path: Path, engine: str) -> None:
+    repo = tmp_path / "repo"
+    write_files(
+        repo, {**FILES, "hoglint.toml": GONE, ".gitignore": "__pycache__/\n", "products/billing/legacy/a.py": ""}
+    )
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "rm", "-q", "products/billing/legacy/a.py")
+    git_in(repo, "commit", "-qm", "drop legacy")
+    # On disk but not in git's view: an ignored directory, an empty one, a skip-worktree edit.
+    write_files(
+        repo, {"products/billing/legacy/__pycache__/a.pyc": "", "core/api.py": "import products.billing.logic\n"}
+    )
+    (repo / "products/alerts/legacy").mkdir()
+    git_in(repo, "update-index", "--skip-worktree", "core/api.py")
+    cache = tmp_path / "repo-cache" / "hoglint"
+    reports = []
+    for args in (("check",), ("check", "--index")):
+        shutil.rmtree(cache, ignore_errors=True)
+        done = hoglint(repo, "--engine", engine, *args)
+        reports.append((done.returncode, done.stdout.replace("this run", "HEAD"), stored_manifests(cache)))
+    shutil.rmtree(cache, ignore_errors=True)
+    hoglint(repo, "--engine", engine, "summary", "export", "--file", str(tmp_path / "summary"))
+    assert reports[0] == reports[1], reports
+    assert stored_manifests(cache) == reports[0][2] and len(reports[0][2]) == 1
+    assert "violations (1)" in reports[0][1] and "core.api" not in reports[0][1]
+    (repo / "products/alerts/new.py").write_text("X = 1\n")
+    dirty = hoglint(repo, "--engine", engine, "check")
+    assert "violations (1)" in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
+    assert stored_manifests(cache) == reports[0][2]
+
+
 SITE = {
     "django/__init__.py": "VERSION = 1",
     "django-6.1.3.dist-info/RECORD": "django/__init__.py,sha256=abc,11\n",
@@ -794,18 +848,3 @@ def test_a_working_tree_holds_heads_inputs_unless_a_declared_input_differs(
     records: list[str], drift: list[str]
 ) -> None:
     assert WorktreeStatus(records).drift(INPUTS.matches) == drift
-
-
-def test_a_source_file_that_changed_while_the_run_read_it_keeps_the_summary_out(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git_in(repo, "init", "-q")
-    WorktreeStatus.taken[repo.resolve()] = WorktreeStatus([])
-    try:
-        WorktreeStatus.of(repo).mark_drifted(["app/views.py"])
-        store = SummaryStore(tmp_path / "cache")
-        summary = ScanSummary(Envelope(inputs="abc", engine="e"))
-        TreeSummaries(Snapshots(repo, tmp_path / "work"), store).put(summary, from_worktree=True)
-    finally:
-        WorktreeStatus.taken.pop(repo.resolve())
-    assert not list((tmp_path / "cache" / "summaries").rglob("*"))

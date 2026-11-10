@@ -100,7 +100,6 @@ class TurboInputs:
         self.task = task
         self.tree = PLUGIN_ROOTS.tree(repo_root)
         self.root_config = self.read_config(repo_root / "turbo.json")
-        self.tracked_cache: dict[str, frozenset[str] | None] = {}
         self.directories = self.package_dirs()
         self.directory_set = frozenset(self.directories)
         self.tasks = self.package_tasks()
@@ -203,18 +202,10 @@ class TurboInputs:
             return glob.removeprefix(ROOT_MARKER)
         return posixpath.normpath(posixpath.join(directory, glob))
 
-    def tracked(self, directory: str, path: str) -> bool:
-        """Whether git tracks the path inside the package: in a root written from a git tree,
-        whether the tree holds it; on disk when there is no git."""
-        if self.tree is not None:
-            return self.tree.holds(path)
-        if directory not in self.tracked_cache:
-            listed = self.git("ls-files", "--", directory or ".")
-            self.tracked_cache[directory] = frozenset(listed) if listed is not None else None
-        files = self.tracked_cache[directory]
-        if files is None:
-            return (self.repo_root / path).is_file()
-        return path in files
+    def tracked(self, path: str) -> bool:
+        """Whether git tracks the path: whether the run's snapshot holds it. A working tree run
+        holds the files git status reports as untracked too, as the commit would (D40)."""
+        return PLUGIN_ROOTS.holds(self.repo_root, path)
 
     def watches(self, task: PackageTask, path: str) -> bool:
         excludes, includes = self.globs[task.directory]
@@ -223,7 +214,7 @@ class TurboInputs:
         if any(pattern.match(path) for pattern in includes):
             return True
         inside = not task.directory or path.startswith(task.directory + "/")
-        return task.default and inside and self.tracked(task.directory, path)
+        return task.default and inside and self.tracked(path)
 
     def holder(self, path: str) -> str:
         """The innermost workspace package directory that holds the path; "" for the repo root."""

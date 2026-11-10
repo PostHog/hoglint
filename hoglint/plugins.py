@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
+from hoglint.ledger.listing import WorktreeListing
 from hoglint.model import Edge, EntityId
 
 if TYPE_CHECKING:
@@ -316,12 +317,13 @@ class TreeRoot(Protocol):
 
 
 class PluginRoots:
-    """Which roots stand for a git tree rather than for the working tree.
+    """Which roots stand for a snapshot: a git tree, or the working tree as git sees it (D40).
 
-    A run of a git tree reads nothing from the working tree. Its root is an empty directory filed
-    here; each plugin it opens gets a directory of its own that holds exactly the files the
-    plugin declares, written from the tree. A question about a file that no plugin reads, such
-    as whether it exists, goes to `holds`. A root not filed here is a working tree."""
+    A run's root is an empty directory filed here; each plugin it opens gets a directory of its
+    own that holds exactly the files the plugin declares, written from the snapshot. A question
+    about a file that no plugin reads, such as whether it exists, goes to `holds`, which answers
+    from the snapshot's list of files. A root not filed here is a directory a plugin reads as it
+    is; whether it holds a path is still answered from git's list of its working tree."""
 
     def __init__(self) -> None:
         self.trees: dict[Path, TreeRoot] = {}
@@ -340,7 +342,7 @@ class PluginRoots:
     def holds(self, root: Path, path: str) -> bool:
         """Whether the snapshot behind `root` holds `path`, a file or a directory."""
         tree = self.tree(root)
-        return (root / path).exists() if tree is None else tree.holds(path)
+        return WorktreeListing.of(root).holds(path) if tree is None else tree.holds(path)
 
 
 PLUGIN_ROOTS = PluginRoots()

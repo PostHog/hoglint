@@ -72,7 +72,8 @@ def turbo(tmp_path_factory: pytest.TempPathFactory) -> TurboInputs:
         ("products/plain/other.py", False, False),
         ("products/default/anything.txt", True, True),
         ("products/default/secret/key.py", False, False),
-        ("products/default/untracked.py", False, False),
+        # The working tree as a snapshot holds an untracked file, as the commit would.
+        ("products/default/untracked.py", True, True),
         ("products/extends/backend/a.py", True, True),
         ("products/extends/extra/b.txt", True, True),
         # No check script: CI runs the full suite for any change there.
