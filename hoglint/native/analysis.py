@@ -26,6 +26,8 @@ from hoglint.native.snapshot import BlobSnapshot
 from hoglint.plugins import REGISTRY, ProducerFailure
 
 SNAPSHOT_PRODUCER = "snapshot"
+# The most threads a staged run takes: pre-commit runs beside other hooks and other worktrees.
+STAGED_MAX_THREADS = 4
 # What the extractor's `--lite-kinds` defaults to: what module tables and class ancestry read.
 LITE_KINDS = ("imports", "defs", "assigns")
 
@@ -41,14 +43,22 @@ class NativeAnalysisResult:
     timings: dict[str, float] = field(default_factory=dict)
 
 
+def staged_threads(cores: int, load: float) -> int:
+    """Threads for a staged run: the cores the 1-minute load average leaves idle, at least one and
+    at most STAGED_MAX_THREADS (D6 revised). Output is the same at any thread count."""
+    return max(1, min(STAGED_MAX_THREADS, int(cores - load)))
+
+
 class NativeAnalysis(CoreAnalysis):
     def threads(self) -> int:
-        """Worker threads for extraction and the link: HOGLINT_THREADS, else one for a staged run
-        (pre-commit, where ten worktrees may run at once), else every core (0)."""
+        """Worker threads for extraction and the link: HOGLINT_THREADS, else for a staged run
+        (pre-commit) the idle cores up to four, else every core (0)."""
         override = os.environ.get("HOGLINT_THREADS")
         if override:
             return int(override)
-        return 1 if self.options.staged else 0
+        if not self.options.staged:
+            return 0
+        return staged_threads(os.cpu_count() or 1, os.getloadavg()[0])
 
     def fact_database(self, facts_id: str, layout: int) -> FactDatabase | None:
         """The fact database of this build, pruned on the first run of the day; None without a
