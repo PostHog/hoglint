@@ -371,6 +371,8 @@ pub struct Labels {
     pub exports_of: Vec<u64>,
     /// Fields whose provider failed.
     pub failed: Vec<bool>,
+    /// Fields the plan sent a provider column for.
+    pub columns: Vec<bool>,
     /// Whether two sources set a module's field apart, or two leaf zones claim its path: a config
     /// error the Python labeler reports with its sources.
     pub conflicted: bool,
@@ -403,7 +405,7 @@ impl Labels {
             .iter()
             .map(Registry::new)
             .collect::<Result<Vec<_>, String>>()?;
-        let failed = fields
+        let failed: Vec<bool> = fields
             .iter()
             .map(|field| plan.failed.contains(&field.name))
             .collect();
@@ -415,6 +417,7 @@ impl Labels {
             registries,
             registry_of: Vec::with_capacity(paths.len()),
             exports_of: Vec::with_capacity(paths.len()),
+            columns: vec![false; failed.len()],
             failed,
             conflicted: false,
         };
@@ -551,6 +554,7 @@ impl Labels {
                 .iter()
                 .map(|value| self.cell_of(value))
                 .collect();
+            self.columns[at] = true;
         }
         Ok(())
     }

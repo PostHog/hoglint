@@ -218,6 +218,19 @@ impl Rules {
             .map(|file| &*link.core.facts.files[*file as usize].path)
             .collect();
         let mut labels = Labels::new(&plan, fields, &paths, &module_names, &exports)?;
+        for rule in &rules {
+            check_columns(&labels, &format!("rule {}", rule.id), &rule.refs())?;
+        }
+        for audience in exports.iter().filter_map(|export| export.audience.as_ref()) {
+            check_columns(&labels, "an export audience", &refs_of(audience))?;
+        }
+        for field in &labels.fields {
+            let domain = field.domain.as_ref();
+            if let Some(selector) = domain.and_then(|domain| domain.selector.as_ref()) {
+                let reader = format!("the domain of field {}", field.name);
+                check_columns(&labels, &reader, &refs_of(selector))?;
+            }
+        }
         let symbol_assigns: Vec<usize> = (0..labels.assigns.len())
             .filter(|at| labels.assigns[*at].symbols.is_some())
             .collect();
@@ -842,6 +855,7 @@ impl Rules {
             reading: Reading::Edge,
         }
         .node(&tree)?;
+        check_columns(&self.labels, "a coverage prefilter", &refs_of(&node))?;
         let mut sids: Vec<Sid> = Vec::new();
         for kind in kinds.iter().filter_map(|kind| link.kind_sid(kind)) {
             if !sids.contains(&kind) {
@@ -914,6 +928,41 @@ impl Rule {
         self.nodes().any(|node| node.reads(is_ordinal))
             || self.identity.iter().any(|field| is_ordinal(*field))
     }
+
+    /// Every ref the rule reads: its selectors, `from`, identity columns and group field.
+    fn refs(&self) -> Vec<Ref> {
+        let mut out = Vec::new();
+        for node in self.nodes().chain(&self.start) {
+            node.refs(&mut out);
+        }
+        out.extend(&self.identity);
+        if let Some((src, dst)) = self.group {
+            out.extend([src, dst]);
+        }
+        out
+    }
+}
+
+fn refs_of(node: &Node) -> Vec<Ref> {
+    let mut out = Vec::new();
+    node.refs(&mut out);
+    out
+}
+
+/// D43: a reader of a module field a Python provider sets needs that field's column in the
+/// plan. Without it the evaluator would read no label at all, a clean answer nothing checks.
+fn check_columns(labels: &Labels, reader: &str, refs: &[Ref]) -> Result<(), String> {
+    for field in refs.iter().filter_map(|field| field.field()) {
+        let spec = &labels.fields[field];
+        if spec.provided && !spec.on_symbol && !labels.columns[field] {
+            return Err(format!(
+                "{reader} reads field {}, which a provider sets, but the rule plan holds no \
+                 column for it",
+                spec.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `rows`, grouped by edge in id order (`edges` lists each edge once), with the edges put in

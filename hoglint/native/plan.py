@@ -154,9 +154,12 @@ class RulePlan:
                 yield field.domain.selector
 
     def names_read(self) -> set[str]:
-        """The last name of every field the plan reads."""
+        """The last name of every field the plan reads: selectors, identity columns and a cycle
+        rule's group. It only spares columns: a provider field read without one stops the run
+        in `Rules.new`."""
         out = {ref.path[-1] for selector in self.selectors() for ref in refs(selector.node)}
         out.update(column.rsplit(".", 1)[-1] for spec in self.specs for column in spec.identity)
+        out.update(CyclePrimitive.group_of(self.config, spec) for spec in self.specs if spec.primitive == "cycle")
         return out
 
     def provided(self) -> list[dict[str, Any]]:

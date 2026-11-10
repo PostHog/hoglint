@@ -18,6 +18,7 @@ from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution
+from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
 from hoglint.native.source import graph_source
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
@@ -165,6 +166,7 @@ lifecycle = "setup"
 """
 
 SOURCES = {
+    "CODEOWNERS": "products/billing/ @team-billing\nproducts/alerts/ @team-alerts\ncore/ @team-core\n",
     "core/__init__.py": "",
     "core/loader.py": "def load():\n    pass\n",
     "core/legacy.py": "import django.db\nfrom products.billing.backend.facade import api\n",
@@ -268,9 +270,9 @@ def run_rows(run: Any) -> list[tuple[Any, ...]]:
     return [*findings, *incomplete]
 
 
-def differences(world: World, rules: str) -> list[str]:
+def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
     """Where the evaluator and the Python rule code differ for every rule of `rules`."""
-    config = world.config(rules)
+    config = world.config(rules, base)
     native, python = world.contexts(config)
     out = []
     for spec in config.rules.values():
@@ -434,6 +436,35 @@ def test_a_label_set_two_ways_stops_the_native_run_before_any_rule(world: World,
     config = world.config("", CONFLICTS[name])
     with pytest.raises(ConfigError):
         Engine(config, world.graph, world.repo).run_rules()
+
+
+PROVIDED = (
+    CONFIG.replace("[fields]\n", '[fields]\nteam = { type = "set" }\n')
+    + '\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["team"]\n\n[roles]\ngroup = "team"\n'
+)
+TEAM_CYCLE = {"primitive": "cycle", "view": "packages", "identity": ["src.module", "dst.module"], "ledger": False}
+
+
+def test_a_cycle_over_a_group_a_provider_sets_finds_its_pairs_natively(world: World) -> None:
+    rules = rule_table("teams", TEAM_CYCLE)
+    assert differences(world, rules, PROVIDED) == []
+    config = world.config(rules, PROVIDED)
+    native, _ = world.contexts(config)
+    run = primitive_of(config.rules["teams"])(native, config.rules["teams"]).evaluate()
+    assert {finding.message.split(" closes")[0] for finding in run.findings} >= {
+        "@team-alerts -> @team-billing",
+        "@team-billing -> @team-alerts",
+    }
+
+
+def test_a_provider_field_read_without_its_column_stops_the_evaluator(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
+    native, _ = world.contexts(config)
+    monkeypatch.setattr(RulePlan, "names_read", lambda self: set())
+    with pytest.raises(Exception, match="field team, which a provider sets"):
+        assert native.evaluator
 
 
 def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:

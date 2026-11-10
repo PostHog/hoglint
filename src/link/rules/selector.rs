@@ -68,6 +68,18 @@ pub enum Ref {
     Unknown,
 }
 
+impl Ref {
+    /// The declared field the ref reads, on either end or of the entity.
+    pub fn field(self) -> Option<usize> {
+        match self {
+            Ref::Src(EndField::Field(at, _))
+            | Ref::Dst(EndField::Field(at, _))
+            | Ref::Entity(EntityField::Field(at)) => Some(at),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Operand {
     Ref(Ref),
