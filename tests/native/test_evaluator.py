@@ -1,0 +1,572 @@
+"""The native evaluator (src/link/rules) against the Python rule code, per edge, on one small repo:
+hand-written rules for the corners where the meaning is irregular, and seeded generated ones."""
+
+from __future__ import annotations
+
+import gc
+import random
+import subprocess
+from array import array
+from collections import Counter
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
+from hoglint.core.harness import Output, ProducerPlan, ProducerStep
+from hoglint.labels import Labeler
+from hoglint.model import Context, Edge, EntityId, Graph, Resolution
+from hoglint.native.rules import NativeRuleContext
+from hoglint.native.source import graph_source
+from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
+from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project
+from hoglint.rules.engine import Engine, primitive_of
+from hoglint.selectors import State
+
+from native.require import native_module
+
+SECTION = "flows"
+PRODUCER = "flows.{}@1"
+
+
+class Flows:
+    """A test pack: the flow-refined shapes a def-use analysis writes, edges with several targets
+    or with their own endpoint labels, and symbol facts."""
+
+    name = SECTION
+    allowed_keys = frozenset()
+    edge_kinds = frozenset({"reference", "uses"})
+
+    def produce(self, section: Mapping[str, Any], reader: PackReader, sink: PackSink, root: Path) -> None:
+        ProducerPlan(
+            [ProducerStep(PRODUCER.format("flow"), frozenset({"reference", "uses"}), lambda: self.run(reader))]
+        ).run(sink)
+        sink.add_symbols({"products.billing.backend.models.Invoice": {"decl": "class", "database": "billing"}})
+
+    @staticmethod
+    def run(reader: PackReader) -> list[Output]:
+        out: list[Output] = []
+        for edge in reader.edges_spelled("reference", ["Invoice"]):
+            if edge.site.module == "core.a":
+                out.append(Refinement(edge.handle, "instance-many", "filter", (("flow_shape", "write(delete)"),)))
+            elif edge.site.module == "core.b":
+                out.append(Refinement(edge.handle, None, None, (("flow_shape", "write(save)"),)))
+            site = edge.site
+            out.append(
+                Edge(
+                    "uses",
+                    site,
+                    edge.surface,
+                    (
+                        EntityId("python", "products.billing.backend.models", "Invoice"),
+                        EntityId("python", "products.alerts.backend.facade.api", "notify"),
+                    ),
+                    Resolution.RESOLVED,
+                    frozenset({Context.PROD}),
+                    PRODUCER.format("flow"),
+                    via=(
+                        EntityId("python", "products.alerts.backend.facade", "notify"),
+                        EntityId("python", "nowhere.at", "all"),
+                    ),
+                    attrs=(("src.tier", "product"), ("dst.zone", "facade")) if site.module == "core.b" else (),
+                )
+            )
+        return out
+
+
+if SECTION not in REGISTRY.packs:
+    REGISTRY.add_pack(Flows())
+
+
+CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core", "products", "packages"]
+
+[vocabulary]
+sections = ["flows"]
+edge_kinds = ["uses"]
+use_shapes = ["write", "instance-many"]
+
+[flows]
+
+[fields]
+package = { type = "id", required_on = ["products/**", "core/**"] }
+tier = { type = "enum", values = ["core", "product", "leaf"], required_on = ["products/**"] }
+zone = { type = "zone" }
+owners = { type = "set" }
+testcode = { type = "bool" }
+stage = { type = "enum", values = ["proto"], required_on = "name == 'legacy'" }
+database = { type = "string", on = "symbol", required_on = "kind == 'model'" }
+silo = { type = "enum", values = ["cell"], on = "symbol" }
+
+[[assign]]
+match = "products/{product}/**"
+set = { package = "{product}", tier = "product", owners = "team-{product}" }
+
+[[assign]]
+match = "core/**"
+set = { package = "core", tier = "core", owners = ["team-core", "team-devex"] }
+
+[[assign]]
+match = "core/legacy.py"
+set = { stage = "proto" }
+
+[[assign]]
+match = "packages/{pkg}/**"
+set = { package = "{pkg}", tier = "leaf" }
+
+[[assign]]
+match = ["**/tests/**", "**/test_*.py"]
+set = { testcode = true }
+
+[[assign]]
+symbols = { decorated_by = "products.billing.backend.models.cell" }
+set = { silo = "cell" }
+
+[zones]
+within = "products/{product}"
+default = "internal"
+backend = { paths = ["backend/**"] }
+facade = { parent = "backend", paths = ["backend/facade/**"] }
+contracts = { parent = "facade", paths = ["backend/facade/contracts.py"] }
+presentation = { parent = "backend", paths = ["backend/presentation/**"] }
+models = { parent = "backend", paths = ["backend/models.py"] }
+shared = { paths = ["backend/shared.py"] }
+special = { paths = ["backend/shared.py"], override = true }
+
+[kinds]
+model = { subclass_of = "products.billing.backend.models.Base" }
+
+[shapes.contract]
+allow = ["class"]
+
+[exports.facade]
+within = "products/{product}"
+paths = ["backend/facade/**"]
+shape = "contract"
+
+[exports.adapter]
+within = "products/{product}"
+paths = ["backend/presentation/**"]
+subclass_of = ["products.billing.backend.presentation.mixins.Mixin"]
+audience = "src.tier == 'core'"
+shape = "contract"
+
+[registries.routes]
+loader = "core.loader.load"
+module = "products/{product}/backend/routes.py"
+attribute = "ROUTES"
+lifecycle = "setup"
+"""
+
+SOURCES = {
+    "core/__init__.py": "",
+    "core/loader.py": "def load():\n    pass\n",
+    "core/legacy.py": "import django.db\nfrom products.billing.backend.facade import api\n",
+    "core/a.py": (
+        "from products.billing.backend.models import Invoice\nfrom products.billing.backend import missing\n\n\n"
+        "def f():\n    Invoice.objects.filter()\n"
+    ),
+    "core/b.py": "from products.billing.backend.models import Invoice\n\n\nclass B:\n    def g(self):\n        Invoice.objects.create()\n",
+    "core/tests/test_a.py": "from products.alerts.backend.logic import run\nimport core.a\n",
+    "packages/leaf/__init__.py": "from core.a import f\n",
+    "products/__init__.py": "",
+    "products/billing/__init__.py": "",
+    "products/billing/backend/__init__.py": "",
+    "products/billing/backend/models.py": (
+        "def cell(cls):\n    return cls\n\n\nclass Base:\n    pass\n\n\n@cell\nclass Invoice(Base):\n    pass\n\n\n"
+        "class Loose(Unknown):\n    pass\n"
+    ),
+    "products/billing/backend/shared.py": "from products.alerts.backend.facade.api import notify\n",
+    "products/billing/backend/routes.py": "from products.billing.backend.models import Invoice\n",
+    "products/billing/backend/facade/__init__.py": "",
+    "products/billing/backend/facade/api.py": "from products.alerts.backend.logic import run\n\n\ndef charge():\n    run()\n",
+    "products/billing/backend/facade/contracts.py": "import django.db.models\n",
+    "products/billing/backend/presentation/__init__.py": "",
+    "products/billing/backend/presentation/mixins.py": "class Mixin:\n    pass\n",
+    "products/billing/backend/presentation/views.py": (
+        "from products.billing.backend.presentation.mixins import Mixin\n\n\nclass View(Mixin):\n    pass\n\n\n"
+        "class Plain:\n    pass\n"
+    ),
+    "products/alerts/__init__.py": "",
+    "products/alerts/backend/__init__.py": "",
+    "products/alerts/backend/logic.py": (
+        "from products.billing.backend.presentation.views import View, Plain\nfrom products.billing.backend import facade\n\n\n"
+        "def run():\n    facade.api.charge()\n"
+    ),
+    "products/alerts/backend/facade/__init__.py": "from products.alerts.backend.facade.api import notify\n",
+    "products/alerts/jobs.py": (
+        "from products.billing.backend.facade.api import charge\nfrom products.alerts.backend.facade import notify\n"
+    ),
+    "products/alerts/backend/facade/api.py": "from core.legacy import api\n\n\ndef notify():\n    pass\n",
+}
+
+JUDGMENTS = list(Judgment)
+
+
+class World:
+    """The fixture repo linked once, and a context per rule config over it."""
+
+    def __init__(self, root: Path) -> None:
+        native_module()
+        self.root = root
+        repo = root / "repo"
+        for path, text in SOURCES.items():
+            (repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (repo / path).write_text(text)
+        (repo / CONFIG_FILE).write_text(CONFIG)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        self.repo = repo
+        work = root / "work"
+        work.mkdir()
+        self.graph: Graph = graph_source("native", work).build(repo, load_config(repo, repo / CONFIG_FILE))
+        gc.enable()
+
+    def config(self, rules: str) -> Config:
+        path = self.root / "config" / CONFIG_FILE
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(CONFIG + rules)
+        return load_config(self.repo, path)
+
+    def contexts(self, config: Config) -> tuple[NativeRuleContext, RuleContext]:
+        labeler: Labeler = Engine(config, self.graph, self.repo).labeler
+        labeler.find_conflicts()
+        native = NativeRuleContext(config, self.graph, labeler, self.repo)
+        return native, RuleContext(config, self.graph, labeler, self.repo)
+
+
+@pytest.fixture(scope="module")
+def world(tmp_path_factory: pytest.TempPathFactory) -> World:
+    return World(tmp_path_factory.mktemp("evaluator"))
+
+
+def python_rows(ctx: RuleContext, rule: EdgeRule) -> Counter[tuple[int, int, str, tuple[str, ...]]]:
+    """(edge, destination, judgment, identity) of every destination `EdgeRule.decide` does not
+    judge clean, by the Python rule code alone."""
+    out: Counter[tuple[int, int, str, tuple[str, ...]]] = Counter()
+    for edge in ctx.graph.edges:
+        if not rule.sees(edge):
+            continue
+        for target, env in enumerate(rule.envs_of(edge)):
+            judgment = rule.decide(env)
+            if judgment is not Judgment.CLEAN:
+                out[(edge.handle, target, judgment.value, project(rule.spec.identity, env.resolve))] += 1
+    return out
+
+
+def run_rows(run: Any) -> list[tuple[Any, ...]]:
+    findings = [
+        (f.identity, f.message, tuple(e.handle for e in f.witnesses), f.ledgerable, f.unknown) for f in run.findings
+    ]
+    incomplete = [(i.key, i.reason, i.subjects, i.edge.handle if i.edge is not None else None) for i in run.incomplete]
+    return [*findings, *incomplete]
+
+
+def differences(world: World, rules: str) -> list[str]:
+    """Where the evaluator and the Python rule code differ for every rule of `rules`."""
+    config = world.config(rules)
+    native, python = world.contexts(config)
+    out = []
+    for spec in config.rules.values():
+        mode = native.plan.mode(spec)
+        rule = primitive_of(spec)(native, spec)
+        assert isinstance(rule, EdgeRule)
+        index = native.plan.index[spec.id]
+        if mode == "judge":
+            ours = Counter(
+                (edge, target, JUDGMENTS[code].value, tuple(identity))
+                for edge, target, code, identity, _, _ in native.evaluator.judge(index)
+            )
+            theirs = python_rows(python, rule)
+            if ours != theirs:
+                out.append(f"{spec.id}: rust only {sorted(ours - theirs)}, python only {sorted(theirs - ours)}")
+        elif mode == "select":
+            selected = set(array("I", native.evaluator.select(index)))
+            kept = {edge for edge, _, _, _ in python_rows(python, rule)}
+            if kept - selected:
+                out.append(f"{spec.id}: not selected {sorted(kept - selected)}")
+        same = run_rows(primitive_of(spec)(native, spec).evaluate()) == run_rows(
+            primitive_of(spec)(python, spec).evaluate()
+        )
+        if not same:
+            out.append(f"{spec.id}: the {mode} run differs from the Python run")
+    return out
+
+
+def rule_table(name: str, fields: dict[str, Any]) -> str:
+    lines = [f"\n[rules.{name}]"]
+    for key, value in fields.items():
+        if isinstance(value, dict):
+            inner = ", ".join(f"{k} = {render_toml(v)}" for k, v in value.items())
+            lines.append(f"{key} = {{ {inner} }}")
+        else:
+            lines.append(f"{key} = {render_toml(value)}")
+    return "\n".join(lines) + "\n"
+
+
+def render_toml(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return "[" + ", ".join(render_toml(item) for item in value) + "]"
+    if isinstance(value, str) and "'" in value:
+        return '"' + value.replace('"', '\\"') + '"'
+    return f"'{value}'" if isinstance(value, str) else str(value)
+
+
+EDGE = {
+    "primitive": "edge",
+    "kinds": ["import", "reference", "uses"],
+    "identity": ["src.module", "dst.symbol"],
+    "ledger": False,
+}
+
+CORNERS = {
+    "zone-chain-against-a-scalar": {**EDGE, "deny": "dst.zone == 'backend'", "identity": ["dst.zone", "src.zone"]},
+    "zone-against-a-zone": {**EDGE, "deny": "dst.zone == src.zone and dst.zone in ['facade']"},
+    "set-against-a-member": {**EDGE, "deny": "src.owners == 'team-core' and src.owners != dst.owners"},
+    "list-literal-against-a-scalar": {**EDGE, "deny": "dst.package == ['billing'] or dst.package in ['billing']"},
+    "bool-rendering": {
+        **EDGE,
+        "deny": "src.testcode == true",
+        "identity": ["src.testcode", "dst.exported", "src.owners"],
+    },
+    "read-endpoint-order": {
+        **EDGE,
+        "endpoint": "surface",
+        "select": "dst.tier == 'product'",
+        "identity": ["dst.symbol", "dst.registry", "dst.lifecycle", "dst.external", "dst.name", "dst.kind", "dst.decl"],
+    },
+    "unresolved-symbol-answers": {
+        **EDGE,
+        "on_unresolved": "finding",
+        "identity": ["dst.symbol", "dst.module", "dst.tier", "dst.package"],
+    },
+    "endpoint-attrs": {
+        **EDGE,
+        "kinds": ["uses"],
+        "select": "src.tier == 'product'",
+        "identity": ["dst.zone", "src.tier"],
+    },
+    "source-path-is-the-site-path": {
+        **EDGE,
+        "deny": "src.path startswith 'core/'",
+        "identity": ["src.path", "src.scope"],
+    },
+    "leaf-zones-with-one-override": {**EDGE, "from": "src.zone == 'special'", "identity": ["src.zone"]},
+    "default-zone-under-within": {**EDGE, "from": "src.zone == 'internal'", "identity": ["src.zone", "dst.zone"]},
+    "symbol-fields-and-domains": {
+        **EDGE,
+        "endpoint": "origin",
+        "identity": ["dst.database", "dst.silo", "dst.stage", "src.stage"],
+    },
+    "export-by-class-and-audience": {
+        "primitive": "entrypoint",
+        "kinds": ["import"],
+        "select": "src.package != dst.package",
+        "identity": ["dst.symbol"],
+        "ledger": False,
+    },
+    "contexts-and-ordinals": {
+        **EDGE,
+        "deny": "edge.context subset_of ['prod', 'test']",
+        "identity": ["edge.context", "edge.ordinal", "edge.label"],
+    },
+    "via-destinations": {**EDGE, "endpoint": "via", "identity": ["dst.symbol", "dst.module"]},
+    "flow-shape-use-shape": {
+        "primitive": "use-shape",
+        "flow": "def-use",
+        "select": "edge.shape == 'write'",
+        "deny_shapes": ["write"],
+        "identity": ["src.module"],
+        "ledger": False,
+    },
+    "cycle-between-packages": {
+        "primitive": "cycle",
+        "kinds": ["import", "reference"],
+        "identity": ["src.package", "dst.package"],
+        "ledger": False,
+    },
+    "reach-from-contracts": {
+        "primitive": "reach",
+        "kinds": ["import"],
+        "from": "src.zone == 'contracts' or src.package == 'core'",
+        "deny": "dst.external == 'django'",
+        "on_unresolved": "incomplete",
+        "identity": ["src.module", "dst.module"],
+        "ledger": False,
+    },
+}
+
+
+@pytest.mark.parametrize("name", sorted(CORNERS))
+def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
+    assert differences(world, rule_table(name, CORNERS[name])) == []
+
+
+def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:
+    config = world.config(rule_table("flows", CORNERS["flow-shape-use-shape"]))
+    native, _ = world.contexts(config)
+    spec = config.rules["flows"]
+    run = primitive_of(spec)(native, spec).evaluate()
+    assert sorted(finding.identity for finding in run.findings) == [("core.a",), ("core.b",)]
+
+
+REFS = [
+    "src.package",
+    "dst.package",
+    "src.tier",
+    "dst.tier",
+    "src.zone",
+    "dst.zone",
+    "src.owners",
+    "dst.owners",
+    "src.testcode",
+    "dst.testcode",
+    "dst.stage",
+    "dst.database",
+    "dst.silo",
+    "dst.kind",
+    "src.kind",
+    "dst.decl",
+    "dst.exported",
+    "src.exported",
+    "dst.registry",
+    "dst.lifecycle",
+    "src.module",
+    "dst.module",
+    "dst.symbol",
+    "src.symbol",
+    "dst.name",
+    "src.path",
+    "src.scope",
+    "dst.external",
+    "src.subject",
+    "dst.nothing",
+    "edge.kind",
+    "edge.shape",
+    "edge.label",
+    "edge.use",
+    "edge.resolution",
+    "edge.surface",
+    "edge.producer",
+    "edge.context",
+    "edge.ordinal",
+    "edge.flow_shape",
+    "src.context",
+]
+LITERALS = [
+    "'billing'",
+    "'alerts'",
+    "'core'",
+    "'product'",
+    "'leaf'",
+    "'facade'",
+    "'backend'",
+    "'presentation'",
+    "'internal'",
+    "'team-core'",
+    "'team-billing'",
+    "'import'",
+    "'reference'",
+    "'prod'",
+    "'test'",
+    "'write'",
+    "'model'",
+    "'cell'",
+    "'products'",
+    "'django'",
+    "'0'",
+    "true",
+    "false",
+    "none",
+    "['billing', 'core']",
+    "['facade', 'backend']",
+]
+OPS = ["==", "!=", "in", "not in", "startswith", "subset_of"]
+
+
+def atom(rng: random.Random) -> str:
+    left = rng.choice(REFS)
+    if rng.random() < 0.15:
+        return left
+    right = rng.choice(REFS) if rng.random() < 0.3 else rng.choice(LITERALS)
+    return f"{left} {rng.choice(OPS)} {right}"
+
+
+def selector(rng: random.Random, depth: int = 2) -> str:
+    if depth == 0 or rng.random() < 0.4:
+        return atom(rng)
+    joiner = rng.choice([" and ", " or "])
+    parts = [selector(rng, depth - 1) for _ in range(rng.randint(2, 3))]
+    text = "(" + joiner.join(parts) + ")"
+    return f"not {text}" if rng.random() < 0.2 else text
+
+
+def generated(rng: random.Random) -> dict[str, Any]:
+    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle"])
+    spec: dict[str, Any] = {
+        "primitive": primitive,
+        "kinds": rng.sample(["import", "reference", "uses", "declares", "inherit"], rng.randint(1, 3)),
+        "identity": rng.sample(REFS, rng.randint(1, 3)),
+        "ledger": False,
+    }
+    if primitive in ("edge", "entrypoint"):
+        spec["endpoint"] = rng.choice(["origin", "origin", "surface", "via"])
+        spec["on_unresolved"] = rng.choice(["finding", "block", "incomplete"])
+    for key in ("from", "select", "deny", "allow", "unless"):
+        if rng.random() < 0.45 and (primitive in ("edge", "entrypoint") or key in ("from", "select")):
+            spec[key] = selector(rng)
+    if primitive == "use-shape":
+        spec["deny_shapes"] = ["write"]
+        if rng.random() < 0.5:
+            spec["flow"] = "def-use"
+    if rng.random() < 0.3:
+        spec["contexts"] = {"exclude": ["test"]}
+    return spec
+
+
+def test_generated_rules_are_judged_the_same_in_both(world: World) -> None:
+    rng = random.Random(20261110)
+    judged = 0
+    failures = []
+    while judged < 60:
+        rules = rule_table("generated", generated(rng))
+        try:
+            world.config(rules)
+        except ConfigError:
+            continue
+        judged += 1
+        failures.extend(f"{found}\n{rules}" for found in differences(world, rules))
+    assert failures == []
+
+
+def test_labels_are_the_labelers(world: World) -> None:
+    config = world.config("")
+    native, _ = world.contexts(config)
+    labeler = native.labeler
+    for name, spec in config.fields.items():
+        if spec.on != "module":
+            continue
+        values = native.evaluator.column(name)
+        for module, value in zip(native.graph.modules, values, strict=True):
+            found, _ = labeler.field_value(module, None, name)
+            expected = "?" if found.state is State.UNKNOWN else "-" if found.state is State.NONE else None
+            if expected is None:
+                data = found.data
+                expected = (
+                    f"{data}|{','.join(found.chain)}"
+                    if found.chain
+                    else ("true" if data else "false")
+                    if isinstance(data, bool)
+                    else ",".join(sorted(data)) or "-"
+                    if isinstance(data, frozenset)
+                    else str(data)
+                )
+            assert (module, name, value) == (module, name, expected)
