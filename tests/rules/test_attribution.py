@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.cli import Snapshots, TreeSummaries
+from hoglint.cli import Commands, Snapshots, TreeSummaries
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
 from hoglint.ledger.couplings import CouplingScan
@@ -448,6 +448,49 @@ def test_staged_check_blocks_only_what_it_introduced_against_head_and_chains_its
     chained = hoglint(repo, "check", "--index")
     assert chained.returncode == 0, chained.stdout + chained.stderr
     assert "stored summary): 0 introduced, 0 ambiguous, 2 inherited" in chained.stdout
+
+
+def stored_incomplete_counts(cache: Path) -> list[int]:
+    store = SummaryStore(cache)
+    counts = []
+    for manifest in sorted((cache / "summaries").rglob("*.json")):
+        envelope = Envelope.from_json(json.loads(manifest.read_text())["sections"]["envelope"]["envelope"])
+        summary = store.get(envelope, frozenset({"envelope", "incompletes"}))
+        assert summary is not None, manifest
+        counts.append(len(summary.incomplete))
+    return sorted(counts)
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_a_staged_check_reads_only_the_tree_it_captured_from_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {"hoglint.toml": DYNAMIC_CONFIG, "core/__init__.py": "", "core/loader.py": LOADER})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "one computed import")
+    (repo / "core/loader.py").write_text(SECOND_LOADER)
+    git_in(repo, "add", "-A")
+    policy_of = Snapshots.policy_of
+
+    def stage_a_third_after_the_capture(self: Snapshots, tree: str) -> Path:
+        (repo / "core/loader.py").write_text(
+            SECOND_LOADER.replace("return", "importlib.import_module(name)\n    return")
+        )
+        git_in(repo, "add", "-A")
+        return policy_of(self, tree)
+
+    monkeypatch.setattr(Snapshots, "policy_of", stage_a_third_after_the_capture)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    (tmp_path / "work").mkdir()
+    commands = Commands(repo, tmp_path / "work")
+    try:
+        assert commands.check(index=True, write_ledger=False, changed=False) == 2
+    finally:
+        commands.snapshots.close()
+    assert "computed and stored): 1 introduced, 0 ambiguous, 1 inherited" in capfd.readouterr().out
+    assert stored_incomplete_counts(tmp_path / "cache" / "hoglint") == [1, 2]
 
 
 OWNED_CONFIG = (

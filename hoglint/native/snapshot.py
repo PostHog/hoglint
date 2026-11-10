@@ -2,7 +2,8 @@
 
 - The index: `git ls-files -s` (it honours GIT_INDEX_FILE). Conflict entries make the run
   incomplete.
-- A commit's tree: `git ls-tree -r`.
+- A git tree (a commit's, or the index's captured by `git write-tree`): `git ls-tree -r`, once
+  per process.
 - The working tree: the index, then `git status --porcelain=v2 -uall` for what differs; a dirty
   or untracked file is hashed from its raw bytes (`git hash-object --no-filters`), as the
   extractor reads them, and its bytes come from the working tree. A file git cannot read gets
@@ -18,6 +19,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hoglint.ledger.inputs import TreeListing
 from hoglint.ledger.status import WorktreeStatus
 
 SOURCE_SUFFIXES = (".py", ".pyi")
@@ -93,10 +95,8 @@ class BlobSnapshot:
     @staticmethod
     def tree(repo: Path, tree: str) -> BlobSnapshot:
         snapshot = BlobSnapshot(repo)
-        for record in records(git(repo, "ls-tree", "-r", "-z", tree)):
-            meta, _, path = record.partition("\t")
-            _, kind, oid = meta.split()
-            if kind == "blob" and is_source(path):
+        for path, oid in TreeListing.of(repo, tree).blobs.items():
+            if is_source(path):
                 snapshot.blobs[path] = (oid, False)
         return snapshot
 

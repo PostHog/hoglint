@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hoglint.core.config import CoreConfig
+from hoglint.ledger.inputs import TreeListing
 
 SOURCE_PATTERNS = ("*.py", "*.pyi")
 
@@ -116,16 +117,8 @@ class GitTree(StagedIndex):
         self.tree = tree
 
     def entries(self, patterns: tuple[str, ...]) -> dict[str, str]:
-        out = subprocess.run(
-            ["git", "ls-tree", "-r", "-z", self.tree], cwd=self.repo, capture_output=True, check=True
-        ).stdout.decode()
-        blobs: dict[str, str] = {}
-        for entry in out.split("\0"):
-            meta, _, rel = entry.partition("\t")
-            parts = meta.split()
-            if len(parts) == 3 and parts[1] == "blob" and any(fnmatch.fnmatchcase(rel, p) for p in patterns):
-                blobs[rel] = parts[2]
-        return blobs
+        listed = TreeListing.of(self.repo, self.tree).blobs
+        return {rel: oid for rel, oid in listed.items() if any(fnmatch.fnmatchcase(rel, p) for p in patterns)}
 
 
 Snapshot = WorkingTree | StagedIndex

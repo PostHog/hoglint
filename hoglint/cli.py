@@ -11,9 +11,11 @@ from __future__ import annotations
 import os
 import sys
 import json
+import tomllib
 import argparse
 import datetime
 import tempfile
+import posixpath
 import subprocess
 import dataclasses
 from collections import Counter
@@ -25,6 +27,7 @@ from pathlib import Path
 from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
+from hoglint.config.loader import PACK_PREFIX
 from hoglint.config.schema import as_tuple
 from hoglint.facts import Extractor
 from hoglint.index import GraphIndex, index_of
@@ -46,6 +49,7 @@ from hoglint.ledger.envelope import (
 )
 from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
+from hoglint.ledger.inputs import TreeFiles, TreeListing
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
@@ -69,54 +73,51 @@ def git(repo: Path, *args: str) -> str:
 # ── snapshots ─────────────────────────────────────────────────────
 
 
-# Policy files hoglint reads from a snapshot: the config and its presets, ledger, exceptions and
-# data files (classification, routing). Each data file the policy names is added by path.
-POLICY_PATTERNS = ("*.toml", "*.ledger", "*.yaml", "*.yml")
-
-
-class PendingTree:
-    """`git write-tree` of the index, started early so it runs while hoglint evaluates the code.
-    The oid is empty while the index holds conflicts."""
-
-    def __init__(self, repo: Path) -> None:
-        command = ["git", "-C", str(repo), "write-tree"]
-        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-
-    @cached_property
-    def oid(self) -> str:
-        out, _ = self.process.communicate()
-        return out.strip() if self.process.returncode == 0 else ""
-
-
 class Snapshots:
-    """Materializes git snapshots (the index, a commit) into scratch directories, and names their trees."""
+    """Captures the index as a git tree, writes a tree's policy into a scratch directory, checks
+    out commits, and names their trees."""
 
     def __init__(self, repo: Path, work_dir: Path) -> None:
         self.repo = repo
         self.work_dir = work_dir
         self.worktrees: list[Path] = []
 
-    def checkout_paths(self, target: Path, paths: list[str]) -> None:
-        listed = "".join(f"{path}\0" for path in paths if path)
-        if listed:
-            subprocess.run(
-                ["git", "-C", str(self.repo), "checkout-index", "-z", "--stdin", f"--prefix={target}/"],
-                input=listed.encode(),
-                capture_output=True,
-                check=True,
-            )
+    def write_tree(self) -> str:
+        """`git write-tree` of the index: the one read of the index a staged run makes. Empty when
+        the index holds conflicts, which no tree can hold."""
+        completed = subprocess.run(["git", "-C", str(self.repo), "write-tree"], capture_output=True, text=True)
+        return completed.stdout.strip() if completed.returncode == 0 else ""
 
-    def index(self) -> Path:
-        """The index's policy (config, presets, ledger, exceptions, the data files the policy
-        names), written out alone: the code is read from the index by blob id, so the 70k-file
-        checkout of the whole index is not needed."""
-        target = Path(tempfile.mkdtemp(prefix="index-", dir=self.work_dir))
-        self.checkout_paths(target, git(self.repo, "ls-files", "-z", "--", *POLICY_PATTERNS).split("\0"))
-        if (target / CONFIG_FILE).is_file():
-            config = load_config(target, target / CONFIG_FILE)
-            named = [path for path in PolicyFiles(config).paths() if not (target / path).exists()]
-            if named:
-                self.checkout_paths(target, git(self.repo, "ls-files", "-z", "--", *named).split("\0"))
+    @staticmethod
+    def write_config(files: TreeFiles, target: Path) -> None:
+        """Writes the config and every repo file its `extends` chain names. A file that does not
+        parse ends the chain there; loading the config reports it."""
+        pending = [CONFIG_FILE]
+        written: set[str] = set()
+        while pending:
+            path = posixpath.normpath(pending.pop())
+            if path in written:
+                continue
+            written.add(path)
+            files.write(target, [path])
+            try:
+                extends = tomllib.loads((target / path).read_text()).get("extends", [])
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            entries = [extends] if isinstance(extends, str) else extends
+            pending.extend(e for e in entries if isinstance(e, str) and not e.startswith(PACK_PREFIX))
+
+    def policy_of(self, tree: str) -> Path:
+        """The tree's policy, written alone into a scratch directory: the config and the files it
+        extends, then the ledger, the exceptions and the data files the policy names. The code is
+        read from the tree by blob id, so nothing else of the tree is written."""
+        files = TreeFiles(self.repo, tree)
+        target = Path(tempfile.mkdtemp(prefix="policy-", dir=self.work_dir))
+        self.write_config(files, target)
+        if not (target / CONFIG_FILE).is_file():
+            return target
+        config = load_config(target, target / CONFIG_FILE)
+        files.write(target, [config.ledger.file, config.ledger.exceptions, *PolicyFiles(config).paths()])
         return target
 
     def commit(self, ref: str) -> Path:
@@ -139,9 +140,13 @@ class Snapshots:
         except subprocess.CalledProcessError:
             return git(self.repo, "rev-parse", ref).strip()
 
-    def changed_paths(self, ref: str | None, staged: bool) -> list[str]:
-        if staged:
-            return git(self.repo, "diff", "--cached", "--name-only").split()
+    def changed_paths(self, ref: str | None, tree: str = "") -> list[str]:
+        """Paths `tree` changes against HEAD, else the working tree against `ref` or HEAD."""
+        if tree:
+            head = self.tree_of("HEAD")
+            if not head:
+                return sorted(TreeListing.of(self.repo, tree).blobs)
+            return git(self.repo, "diff-tree", "-r", "--name-only", head, tree).splitlines()
         if ref is not None:
             return git(self.repo, "diff", "--name-only", ref).split()
         tracked = git(self.repo, "diff", "--name-only", "HEAD").split()
@@ -608,7 +613,7 @@ class TreeSummaries:
 class Baseline:
     """What one check run attributes its incomplete results against.
 
-    `envelope` is the run's own; its tree is set when the run's code is HEAD's tree, and `pending`
+    `envelope` is the run's own; its tree is set when the run's code is HEAD's tree, and `tree`
     names the index's tree for a staged run, so the run's summary is stored for the next commit.
     `reference` is None when the run itself is the baseline (`is_self`) or when there is no commit
     to compare with. `config` is the run's policy and `head` HEAD's tree, as the key read them."""
@@ -618,14 +623,17 @@ class Baseline:
     config: Config
     reference: dict[Obligation, list[str]] | None = None
     is_self: bool = False
-    staged: bool = False
-    pending: PendingTree | None = None  # the index's tree, for a staged run's own summary
+    tree: str = ""  # a staged run's tree, written from the index
     head: str = ""
+
+    @property
+    def staged(self) -> bool:
+        return bool(self.tree)
 
     @property
     def own_tree(self) -> str:
         """The tree the run's summary is stored under; empty when the run's code is no tree."""
-        return self.pending.oid if self.pending is not None else self.envelope.tree
+        return self.tree or self.envelope.tree
 
 
 class Baselines:
@@ -643,27 +651,26 @@ class Baselines:
         self.store = store
         self.trees = trees
 
-    def prepare(self, policy_root: Path, staged: bool) -> Baseline:
+    def prepare(self, policy_root: Path, tree: str) -> Baseline:
+        """`tree` is a staged run's tree, written from the index; empty for a working tree run."""
         head_tree = self.snapshots.tree_of("HEAD")
         wanted, config = self.engine.envelope_at(policy_root, head_tree)
         if not head_tree:
             return Baseline(wanted, "nothing (no commit yet)", config)
-        pending = PendingTree(self.repo) if staged else None
         WorktreeStatus.start(self.repo)  # the memo and the side-input check of the run's summary read it
         own = dataclasses.replace(wanted, tree="")
         short = head_tree[:12]
         stored = self.store.get(wanted, frozenset({"envelope", "incompletes"}))
         if stored is not None:
             against = f"HEAD (tree {short}, stored summary)"
-            return Baseline(own, against, config, stored.obligations(), staged=staged, pending=pending, head=head_tree)
-        own_tree = pending.oid if pending is not None else ""
-        if own_tree == head_tree or (not staged and self.snapshots.head_tree_in_worktree(config.ledger.file)):
+            return Baseline(own, against, config, stored.obligations(), tree=tree, head=head_tree)
+        if tree == head_tree or (not tree and self.snapshots.head_tree_in_worktree(config.ledger.file)):
             this_run = f"HEAD (tree {short}, this run)"
-            return Baseline(wanted, this_run, config, is_self=True, staged=staged, head=head_tree)
+            return Baseline(wanted, this_run, config, is_self=True, tree=tree, head=head_tree)
         summary = self.evaluate(policy_root, config.ledger.file, wanted)
         self.trees.put(summary)
         computed = f"HEAD (tree {short}, computed and stored)"
-        return Baseline(own, computed, config, summary.obligations(), staged=staged, pending=pending, head=head_tree)
+        return Baseline(own, computed, config, summary.obligations(), tree=tree, head=head_tree)
 
     def evaluate(self, policy_root: Path, ledger_path: str, envelope: Envelope) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
@@ -768,15 +775,24 @@ class Commands:
         self.memo = RunMemo(self.snapshots, self.summaries) if memo else None
 
     def check(self, index: bool, write_ledger: bool, changed: bool) -> int:
-        policy_root = self.snapshots.index() if index else self.repo
-        baseline = None if changed else self.baselines.prepare(policy_root, index)
+        """With `index`, the index is captured once as a git tree, and the run reads everything
+        from that tree."""
+        tree = ""
+        policy_root = self.repo
+        if index:
+            tree = self.snapshots.write_tree()
+            if not tree:
+                sys.stderr.write("the index holds merge conflicts, so there is no staged tree to check\n")
+                return 2
+            policy_root = self.snapshots.policy_of(tree)
+        baseline = None if changed else self.baselines.prepare(policy_root, tree)
         if baseline is not None and self.memo is not None and not write_ledger:
             stored = self.memo.lookup(baseline, policy_root)
             if stored is not None:
                 return self.report(
                     stored, baseline.config, policy_root, None, self.baselines.attribute(baseline, stored)
                 )
-        run = self.runner.run(policy_root, self.repo, staged=index, rewrite_ledger=write_ledger)
+        run = self.runner.run(policy_root, self.repo, staged=index, rewrite_ledger=write_ledger, tree=tree)
         if write_ledger:
             if index:
                 sys.stderr.write("--write-ledger writes the working tree file, not the index\n")
@@ -784,7 +800,7 @@ class Commands:
             sys.stdout.write(f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}\n")
         self.write_outputs(run)
         if baseline is None:  # --changed: advisory, so it always exits 0
-            touched = set(self.snapshots.changed_paths(None, index))
+            touched = set(self.snapshots.changed_paths(None, tree))
             touched |= {m for m, p in run.graph.modules.items() if p in touched}
             summary = summary_of(run, Envelope(), with_triples=False, shown=TouchedDebt(touched).shown)
             self.report(summary, run.config, policy_root, touched, None)
@@ -950,7 +966,7 @@ class Commands:
             base_graph, base_head = self.runner.evaluate(head.config, base_root, self.repo)
             envelope = Envelope("", self.engine.id, scans.head.envelope.policy, scans.head.envelope.framework)
             scans.base_head = ScanSummary.from_run(base_head, base_graph, envelope, roots=(self.repo, base_root))
-        touched_paths = set(self.snapshots.changed_paths(base_sha, staged=False))
+        touched_paths = set(self.snapshots.changed_paths(base_sha))
         touched = {module for module, path in head.graph.modules.items() if path in touched_paths}
         base_files = PolicyFiles(base_config).digests(base_root) if base_config is not None else {}
         report: CompareReport = Comparer(
