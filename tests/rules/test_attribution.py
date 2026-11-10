@@ -725,6 +725,43 @@ def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored
     assert stored_manifests(cache) == reports[0][2]
 
 
+LINKS = {
+    "core/impl.py": "from products.billing.logic import charge\n",
+    "core/link.py": "alias.py",
+    "core/alias.py": "impl.py",
+    "core/gone.py": "missing.py",
+    "core/out.py": "../../outside.py",
+    ".github/CODEOWNERS": "../CODEOWNERS",
+}
+
+
+@needs_extractor
+@pytest.mark.parametrize("engine", ["python", "native"])
+def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside(tmp_path: Path, engine: str) -> None:
+    repo = tmp_path / "repo"
+    config = OWNED_CONFIG.replace('file = "CODEOWNERS"', 'file = ".github/CODEOWNERS"')
+    write_files(repo, {**FILES, "hoglint.toml": config, "CODEOWNERS": "*.py @team-a\n"})
+    (tmp_path / "outside.py").write_text("from products.billing.logic import charge\n")
+    for path, target in LINKS.items():
+        if path == "core/impl.py":
+            (repo / path).write_text(target)
+            continue
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).symlink_to(target)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "links")
+    outputs = [hoglint(repo, "--engine", engine, *args).stdout for args in (("check",), ("check", "--index"))]
+    assert outputs[0] == outputs[1]
+    # An untracked file makes `check` read the working tree, which follows the same links.
+    (repo / "core/notes.py").write_text("")
+    outputs.append(hoglint(repo, "--engine", engine, "check").stdout)
+    for printed in outputs:
+        assert "products.billing.logic.charge core.link import" in printed, printed
+        assert "core/impl.py:1  [@team-a]" in printed
+        assert "unreadable sources, so their facts are missing (2)\n  core/gone.py\n  core/out.py\n" in printed
+
+
 SITE = {
     "django/__init__.py": "VERSION = 1",
     "django-6.1.3.dist-info/RECORD": "django/__init__.py,sha256=abc,11\n",

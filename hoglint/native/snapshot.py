@@ -10,6 +10,9 @@
   working tree. A file git cannot read gets the null id, so the extractor reads it, fails, and
   records a read error for it.
 
+A symlink is read as the file it leads to (D41). One that dangles or leaves the snapshot gets the
+null id from git's object store, which has no such blob, so it is a read error too.
+
 Paths come only from git, never from listing or stat-ing the file system, so a case-insensitive
 file system cannot change a result.
 """
@@ -95,20 +98,24 @@ class BlobSnapshot:
     @staticmethod
     def tree(repo: Path, tree: str) -> BlobSnapshot:
         snapshot = BlobSnapshot(repo)
-        for path, oid in TreeListing.of(repo, tree).blobs.items():
+        listing = TreeListing.of(repo, tree)
+        for path in listing.paths:
             if is_source(path):
-                snapshot.blobs[path] = (oid, False)
+                snapshot.blobs[path] = (listing.blobs.get(path, NULL_OID), False)
         return snapshot
 
     @staticmethod
     def worktree(repo: Path) -> BlobSnapshot:
         snapshot = BlobSnapshot(repo)
         listing = WorktreeListing.of(repo)
-        for path, oid in listing.blobs.items():
+        for path in listing.paths:
             if is_source(path):
-                snapshot.blobs[path] = (oid, False)
+                snapshot.blobs[path] = (listing.blobs.get(path, NULL_OID), False)
         dirty = sorted(path for path in listing.disk if is_source(path))
         if dirty:
-            for path, oid in zip(dirty, hash_worktree_files(repo, dirty), strict=True):
+            # A link is hashed by the file it leads to; the extractor reads the link, which the
+            # operating system follows to that file.
+            hashed = hash_worktree_files(repo, [listing.disk[path] for path in dirty])
+            for path, oid in zip(dirty, hashed, strict=True):
                 snapshot.blobs[path] = (oid, True)
         return snapshot

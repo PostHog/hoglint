@@ -28,6 +28,8 @@ from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 SOURCE_INPUTS = ("**/*.py", "**/*.pyi")
 INPUTS_DIGEST_CHARS = 40
 PATTERN_DIGEST_CHARS = 16
+# What an inputs digest hashes; a cached digest of another layout is never read.
+DIGEST_LAYOUT = "l2"
 
 
 class InputPatterns:
@@ -90,12 +92,8 @@ class TreeFiles:
         return TreeListing.of(self.repo, self.tree)
 
     def write(self, target: Path, paths: Iterable[str]) -> None:
-        """Writes the paths the snapshot holds under `target`; a path it does not hold is left
-        out, and one it holds but cannot read is an error."""
-        unreadable = self.listing.write(target, paths)
-        if unreadable:
-            more = f" and {len(unreadable) - 1} more" if len(unreadable) > 1 else ""
-            raise OSError(f"cannot read {unreadable[0]}{more}")
+        """Writes the paths the snapshot holds and can read under `target`; the others are left out."""
+        self.listing.write(target, paths)
 
     def scratch(self, prefix: str) -> Path:
         return Path(tempfile.mkdtemp(prefix=prefix, dir=self.work_dir)).resolve()
@@ -111,9 +109,15 @@ class TreeFiles:
         found = self.plugin_roots.get(patterns)
         if found is not None:
             return found
-        root = self.plugin_roots[patterns] = self.scratch("plugin-")
+        root = self.scratch("plugin-")
         wanted = InputPatterns(patterns)
-        self.write(root, [path for path in self.listing.paths if wanted.matches(path)])
+        unreadable = self.listing.write(root, [path for path in self.listing.paths if wanted.matches(path)])
+        if unreadable:
+            more = f" and {len(unreadable) - 1} more" if len(unreadable) > 1 else ""
+            raise OSError(
+                f"cannot read {unreadable[0]}{more}: a link that leads nowhere in the snapshot, or a lost file"
+            )
+        self.plugin_roots[patterns] = root
         PLUGIN_ROOTS.add(root, self)
         return root
 
@@ -135,10 +139,11 @@ class WorktreeFiles(TreeFiles):
 
 
 class InputDigests:
-    """The `inputs` part of a summary key: a digest of (path, blob oid) over every file of a git
-    tree that the run's input patterns match, sorted by path. A tree is immutable, so the digest
-    of each (tree, patterns) pair is kept under `<cache>/inputs`, and a tree seen before needs
-    no listing. That file is a cache: one that does not read is computed again."""
+    """The `inputs` part of a summary key: a digest of (path, mode, blob oid) over every file of a
+    git tree that the run's input patterns match, sorted by path. A link's blob is the one it
+    leads to, and an unreadable link has none (D41). A tree is immutable, so the digest of each
+    (tree, patterns) pair is kept under `<cache>/inputs`, and a tree seen before needs no listing.
+    That file is a cache: one that does not read is computed again."""
 
     def __init__(self, cache: Path) -> None:
         self.root = cache / "inputs"
@@ -147,8 +152,8 @@ class InputDigests:
     @staticmethod
     def compute(listing: TreeListing, patterns: InputPatterns) -> str:
         hasher = hashlib.sha256()
-        for path in sorted((path for path in listing.blobs if patterns.matches(path)), key=str.encode):
-            hasher.update(f"{path}\0{listing.blobs[path]}\0".encode())
+        for path in sorted((path for path in listing.modes if patterns.matches(path)), key=str.encode):
+            hasher.update(f"{path}\0{listing.modes[path]}\0{listing.blobs.get(path, '')}\0".encode())
         return hasher.hexdigest()[:INPUTS_DIGEST_CHARS]
 
     def of(self, repo: Path, tree: str, patterns: InputPatterns) -> str:
@@ -159,7 +164,7 @@ class InputDigests:
         found = self.known.get(key)
         if found is not None:
             return found
-        path = self.root / f"{tree}-{key[1]}"
+        path = self.root / f"{tree}-{key[1]}-{DIGEST_LAYOUT}"
         try:
             found = path.read_text().strip()
         except OSError:
