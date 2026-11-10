@@ -726,18 +726,21 @@ class NativeRuleContext(RuleContext):
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         rows = self.run_rule(self.evaluator.pairs, rule)
-        return [CycleRow(edge, target, Judgment(name), pair) for edge, target, name, pair in rows]
+        with engine_errors():
+            return [CycleRow(edge, target, Judgment(name), pair) for edge, target, name, pair in rows]
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found]:
         """The evaluator's search of a reach rule, its paths made into Edges."""
         found = self.run_rule(self.evaluator.reach, rule)
+        with engine_errors():
+            verdicts = [Truth(verdict) if verdict is not None else None for _, _, _, verdict in found]
         ids = distinct_ids(edge for _, _, path, _ in found for edge, _ in path)
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         out = []
-        for what, source, path, verdict in found:
+        for (what, source, path, _), verdict in zip(found, verdicts, strict=True):
             walked = tuple(edges[edge] for edge, _ in path)
             dst = rule.envs_of(walked[-1])[path[-1][1]].dst if walked else None
-            out.append(Found(what, source, walked, dst, Truth(verdict) if verdict is not None else None))
+            out.append(Found(what, source, walked, dst, verdict))
         return out
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:

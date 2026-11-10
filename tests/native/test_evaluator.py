@@ -1516,10 +1516,33 @@ def test_a_finding_names_its_source_and_another_destination_as_subjects(
     assert subjects_of(src, dst) == subjects
 
 
-def test_a_judgment_the_rule_code_does_not_name_stops_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}))
-    lie(monkeypatch, judge=lambda rows: [(*rows[0][:2], "violated", *rows[0][3:]), *rows[1:]])
-    with pytest.raises(EngineError, match="'violated' is not a valid Judgment"):
+@pytest.mark.parametrize(
+    ("rules", "lies", "name"),
+    [
+        (
+            rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
+            {"judge": lambda rows: [(*rows[0][:2], "violated", *rows[0][3:]), *rows[1:]]},
+            "violated",
+        ),
+        (
+            rule_table("lied", CORNERS["cycle-between-packages"]),
+            {"pairs": lambda rows: [(*rows[0][:2], "violated", *rows[0][3:]), *rows[1:]]},
+            "violated",
+        ),
+        (
+            rule_table("lied", CORNERS["reach-from-contracts"]),
+            {"reach": lambda rows: [(*row[:3], "maybe" if row[3] is not None else None) for row in rows]},
+            "maybe",
+        ),
+    ],
+    ids=["judge", "pairs", "reach"],
+)
+def test_a_name_the_rule_code_does_not_know_stops_the_run(
+    world: World, monkeypatch: pytest.MonkeyPatch, rules: str, lies: dict[str, Any], name: str
+) -> None:
+    config = world.config(rules)
+    lie(monkeypatch, **lies)
+    with pytest.raises(EngineError, match=f"'{name}' is not a valid"):
         Engine(config, world.graph, world.repo).evaluate()
 
 
