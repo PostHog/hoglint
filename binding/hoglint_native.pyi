@@ -201,8 +201,6 @@ class Rules:
         """The roots a layout rule's `within` names among the graph's module paths, sorted."""
     def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
         """The graph's (module, path) whose path a registry's `module` glob matches, by module."""
-    def select(self, rule: int) -> bytes:
-        """The candidate edges of a rule judged in Python that its selection does not rule out."""
     def passing(self, kinds: list[str], selector: str) -> bytes:
         """The edges of `kinds`, kind by kind in graph order, that a selector (its plan tree as
         JSON) does not make false, each read with its source as both ends."""

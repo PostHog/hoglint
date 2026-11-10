@@ -244,6 +244,8 @@ class EdgeInventory(EdgeRule):
         return {tuple(str(v) for v in entry.get("identity", ())) for entry in data.get("entry", [])}
 
     def evaluate(self) -> RuleRun:
+        if self.ctx.inventory_judged(self):
+            return self.run
         seen: dict[tuple[str, ...], EdgeEnv] = {}
         for env in self.envs():
             selected = self.selection(env)

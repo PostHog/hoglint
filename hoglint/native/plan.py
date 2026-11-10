@@ -38,7 +38,6 @@ from hoglint.selectors import (
 
 # How the evaluator treats each primitive's rules: judged in Rust, or selected for Python.
 JUDGED = frozenset({"edge", "entrypoint", "signature", "use-shape"})
-SELECTED = frozenset({"inventory"})
 
 
 def context_bits(names: frozenset[str]) -> int:
@@ -104,7 +103,6 @@ class RulePlan:
         self.graph = graph
         self.labeler = labeler
         self.specs = [spec for spec in config.rules.values() if spec.id in rules]
-        self.redefines = {spec.id: getattr(rules[spec.id], "redefines", ()) for spec in self.specs}
         self.index = {spec.id: at for at, spec in enumerate(self.specs)}
         self.export_at = {name: at for at, name in enumerate(config.exports)}
         self.shape_at = {name: at for at, name in enumerate(config.shapes)}
@@ -165,8 +163,8 @@ class RulePlan:
             return "judge"
         if spec.primitive == "layout" or (spec.primitive == "inventory" and not spec.classify):
             return "entities"
-        if spec.primitive in SELECTED:
-            return "select"
+        if spec.primitive == "inventory":
+            return "judge"
         if spec.primitive in ("reach", "cycle", "export", "coverage"):
             return spec.primitive
         return None
@@ -190,12 +188,12 @@ class RulePlan:
             and spec.allow is None
             and spec.require is None,
             "identity": [column.split(".") for column in spec.identity],
-            "redefines": list(self.redefines[spec.id]),
             "group": CyclePrimitive.group_of(self.config, spec) if spec.primitive == "cycle" else None,
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
             "export": self.export_rule(spec),
             "covers": self.covers(spec),
             "entities": self.entities(spec),
+            "inventory": spec.primitive == "inventory" and bool(spec.classify),
             "use_shape": {
                 "allow": list(spec.allow_shapes),
                 "deny": list(spec.deny_shapes),

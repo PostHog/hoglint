@@ -7,7 +7,6 @@ import gc
 import random
 import subprocess
 import dataclasses
-from array import array
 from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
@@ -206,6 +205,7 @@ lifecycle = "setup"
 
 SOURCES = {
     "CODEOWNERS": "products/billing/ @team-billing\nproducts/alerts/ @team-alerts\ncore/ @team-core\n",
+    "policy/classified.toml": '[[entry]]\nidentity = ["core", "billing"]\n\n[[entry]]\nidentity = ["nobody", "nowhere"]\n',
     "core/__init__.py": "",
     "core/loader.py": "def load():\n    pass\n",
     "core/legacy.py": "import django.db\nfrom products.billing.backend.facade import api\n",
@@ -338,7 +338,8 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
         mode = native.plan.mode(spec)
         rule = primitive_of(spec)(native, spec)
         index = native.plan.index[spec.id]
-        if mode == "judge":
+        # An inventory's rows keep the first destination of each identity; its run is compared.
+        if mode == "judge" and spec.primitive != "inventory":
             assert isinstance(rule, EdgeRule)
             ours = Counter(
                 (edge, target, JUDGMENTS[code].value, tuple(identity))
@@ -347,12 +348,6 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
             theirs = python_rows(python, rule)
             if ours != theirs:
                 out.append(f"{spec.id}: rust only {sorted(ours - theirs)}, python only {sorted(theirs - ours)}")
-        elif mode == "select":
-            assert isinstance(rule, EdgeRule)
-            selected = set(array("I", native.evaluator.select(index)))
-            kept = {edge for edge, _, _, _ in python_rows(python, rule)}
-            if kept - selected:
-                out.append(f"{spec.id}: not selected {sorted(kept - selected)}")
         native.results[spec.id] = primitive_of(spec)(native, spec).evaluate()
         python.results[spec.id] = primitive_of(spec)(python, spec).evaluate()
         if run_rows(native.results[spec.id]) != run_rows(python.results[spec.id]):
@@ -517,6 +512,15 @@ CORNERS = {
         "exactly_one": "owners",
         "select": "tier != 'leaf' and stage != none",
         "identity": ["subject", "owners"],
+        "ledger": False,
+    },
+    "inventory-classify": {
+        "primitive": "inventory",
+        "classify": "policy/classified.toml",
+        "kinds": ["import", "uses"],
+        "select": "src.package != dst.package",
+        "on_unresolved": "finding",
+        "identity": ["src.package", "dst.package"],
         "ledger": False,
     },
     "cycle-between-packages": {

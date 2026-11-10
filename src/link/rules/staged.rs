@@ -101,17 +101,10 @@ pub fn truth<'a>(node: &'a Node, env: &Env<'a>) -> Truth {
     parts_truth(parts(node), env)
 }
 
-/// One part of a staged selection, and whether its conjunct reads an edge field the primitive's
-/// own environment sets.
-pub struct Part {
-    pub node: Node,
-    pub redefined: bool,
-}
-
 /// A rule's selection as `StagedSelection` reads it: the parts that read only `src`, then only
 /// `dst`, then the rest. A class of one conjunct is judged by its `and` parts.
 pub struct Staged {
-    pub parts: Vec<Part>,
+    pub parts: Vec<Node>,
     /// How many of the first parts read only `src`.
     pub src_parts: usize,
     /// Whether those parts read only module fields (`StagedSelection.module_level`): Python then
@@ -120,14 +113,14 @@ pub struct Staged {
 }
 
 impl Staged {
-    pub fn new(conjuncts: &[Node], redefined: &[bool], fields: &[Field]) -> Staged {
-        let mut classes: [Vec<(&Node, bool)>; 3] = Default::default();
-        for (node, redefined) in conjuncts.iter().zip(redefined) {
-            classes[class_of(node) as usize].push((node, *redefined));
+    pub fn new(conjuncts: &[Node], fields: &[Field]) -> Staged {
+        let mut classes: [Vec<&Node>; 3] = Default::default();
+        for node in conjuncts {
+            classes[class_of(node) as usize].push(node);
         }
         let src = &classes[Class::Src as usize];
         let src_module_level = !src.is_empty()
-            && src.iter().all(|(node, _)| {
+            && src.iter().all(|node| {
                 let mut refs = Vec::new();
                 node.refs(&mut refs);
                 refs.into_iter().all(|field| module_level(field, fields))
@@ -135,17 +128,14 @@ impl Staged {
         let mut out = Vec::new();
         let mut src_parts = 0;
         for (at, class) in classes.iter().enumerate() {
-            let nodes: Vec<(&Node, bool)> = match class.as_slice() {
-                [(node, redefined)] => parts(node).iter().map(|part| (part, *redefined)).collect(),
+            let nodes: Vec<&Node> = match class.as_slice() {
+                [node] => parts(node).iter().collect(),
                 many => many.to_vec(),
             };
             if at == Class::Src as usize {
                 src_parts = nodes.len();
             }
-            out.extend(nodes.into_iter().map(|(node, redefined)| Part {
-                node: node.clone(),
-                redefined,
-            }));
+            out.extend(nodes.into_iter().cloned());
         }
         Staged {
             parts: out,
@@ -154,29 +144,13 @@ impl Staged {
         }
     }
 
-    /// The selection's truth (`StagedSelection.truth`). With `skip_redefined`, a part that reads a
-    /// field the primitive redefines is never false: selection for a rule judged in Python.
-    pub fn truth<'a>(&'a self, env: &Env<'a>, skip_redefined: bool) -> Truth {
-        let touching = env.cx.rules.touch;
-        let mut out = Truth::True;
-        for part in &self.parts {
-            if touching {
-                touch(&part.node, env);
-            }
-            if skip_redefined && part.redefined {
-                continue;
-            }
-            match evaluate(&part.node, env) {
-                Truth::False => return Truth::False,
-                Truth::Unknown => out = Truth::Unknown,
-                Truth::True => {}
-            }
-        }
-        out
+    /// The selection's truth (`StagedSelection.truth`).
+    pub fn truth<'a>(&'a self, env: &Env<'a>) -> Truth {
+        parts_truth(&self.parts, env)
     }
 
     /// The parts that read only `src`.
     pub fn src(&self) -> impl Iterator<Item = &Node> {
-        self.parts[..self.src_parts].iter().map(|part| &part.node)
+        self.parts[..self.src_parts].iter()
     }
 }

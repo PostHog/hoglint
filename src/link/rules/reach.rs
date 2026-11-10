@@ -86,7 +86,7 @@ impl<'a> Hops<'a> {
             cx.dst_endpoints(id, self.rule.role, &mut dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(cx, Some(id), src, *dst);
-                let selected = self.rule.staged.truth(&env, false);
+                let selected = self.rule.staged.truth(&env);
                 if selected != Truth::False {
                     out.push(Hop {
                         edge: id,

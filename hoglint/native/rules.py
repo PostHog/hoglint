@@ -21,14 +21,14 @@ from hoglint.config.model import Config
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Shown, WitnessRow
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Remedy, Shown, WitnessRow
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import JUDGED, RulePlan, tree
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun
 from hoglint.rules.engine import primitive_of
-from hoglint.rules.entities import CoveragePrimitive, EntityRule
+from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 from hoglint.selectors import Node, Truth
@@ -189,17 +189,18 @@ class RowDetail:
     """The detail of a finding whose message the evaluator's row holds: the site and witness
     are its edge's, made when something reads them."""
 
-    __slots__ = ("handle", "made", "message")
+    __slots__ = ("handle", "made", "message", "remedies")
 
-    def __init__(self, message: str, handle: EdgeHandle) -> None:
+    def __init__(self, message: str, handle: EdgeHandle, remedies: tuple[Remedy, ...] = ()) -> None:
         self.message = message
         self.handle = handle
+        self.remedies = remedies
         self.made: FindingDetail | None = None
 
     def get(self) -> FindingDetail:
         if self.made is None:
             edge = self.handle.get()
-            self.made = FindingDetail(self.message, edge.site, (edge,))
+            self.made = FindingDetail(self.message, edge.site, (edge,), self.remedies)
         return self.made
 
 
@@ -398,6 +399,48 @@ class NativeRuleContext(RuleContext):
             run.findings.append(finding)
         return run
 
+    def inventory_judged(self, rule: EdgeInventory) -> bool:
+        """The evaluator's rows of an inventory over edges: the first destination with each
+        identity, kept as a handle, and the ones it cannot place, which the rule reports itself;
+        then the classification file's entries, as `EdgeInventory.evaluate` compares them."""
+        with engine_errors():
+            rows = self.evaluator.judge(self.plan.index[rule.spec.id])
+        core = self.native.native.core
+        alone_ids = array("I", dict.fromkeys(row[0] for row in rows if row[2] != VIOLATION))
+        alone = dict(zip(alone_ids, core.get(alone_ids)))
+        edges = RowEdges(core, array("I", dict.fromkeys(row[0] for row in rows if row[2] == VIOLATION)))
+        seen: dict[tuple[str, ...], tuple[EdgeHandle, str, str | None]] = {}
+        for edge_id, target, code, identity, src, dst in rows:
+            if code == VIOLATION:
+                seen[tuple(identity)] = (EdgeHandle(edges, edge_id), src, dst)
+                continue
+            env = rule.envs_of(alone[edge_id])[target]
+            if JUDGMENTS[code] is Judgment.UNRESOLVED:
+                rule.on_unresolved(env)
+            else:
+                rule.incomplete(env, "selection reads an unknown value")
+        spec = rule.spec
+        classified = rule.classifications()
+        for identity in sorted(seen):
+            if identity in classified:
+                continue
+            handle, src, dst = seen[identity]
+            message = f"{' '.join(identity)} has no classification in {spec.classify}"
+            finding = Finding(
+                rule=spec.id,
+                identity=identity,
+                detail=RowDetail(message, handle, rule.remedies()),
+                owner=self.owner(src),
+                subjects=(src, dst) if dst and dst != src else (src,),
+                ledgerable=spec.ledger,
+                witness=handle,
+            )
+            rule.run.findings.append(finding)
+        for identity in sorted(classified - set(seen)):
+            message = f"classification {' '.join(identity)} matches nothing (stale)"
+            rule.run.findings.append(self.finding(spec, identity, message, None, ledgerable=False))
+        return True
+
     def entity_rows(self, rule: EntityRule) -> list[tuple[bool, str, str | None, str, list[str]]] | None:
         if self.plan.mode(rule.spec) != "entities":
             return None
@@ -479,16 +522,6 @@ class NativeRuleContext(RuleContext):
 
     def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
         return sorted({module for kind in self.kinds_or_all(kinds) for module in self.native.modules_of(kind)})
-
-    def judged_edges(self, rule: EdgeRule) -> Iterator[Edge]:
-        """The edges a rule that judges in Python judges, in its order: the ones its selection
-        does not rule out."""
-        if self.plan.mode(rule.spec) != "select":
-            yield from super().judged_edges(rule)
-            return
-        with engine_errors():
-            selected = array("I", self.evaluator.select(self.plan.index[rule.spec.id]))
-        yield from self.native.native.core.get(selected)
 
 
 class NativeGraphIndex(GraphIndex):

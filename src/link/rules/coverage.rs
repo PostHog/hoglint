@@ -45,7 +45,6 @@ impl Cover {
             });
         }
         let rest = edge.nodes(&plan.rest)?;
-        let redefined = vec![false; rest.len()];
         Ok(Cover::Edges {
             kinds: plan.kinds.clone(),
             by_edge: plan
@@ -53,7 +52,7 @@ impl Cover {
                 .as_ref()
                 .map(|node| edge.node(node))
                 .transpose()?,
-            rest: Staged::new(&rest, &redefined, fields),
+            rest: Staged::new(&rest, fields),
             src: plan.endpoint == "src",
             text: plan.text.clone(),
         })
@@ -63,10 +62,7 @@ impl Cover {
         match self {
             Cover::Rule { column, .. } => out.push(*column),
             Cover::Edges { by_edge, rest, .. } => {
-                for node in by_edge
-                    .iter()
-                    .chain(rest.parts.iter().map(|part| &part.node))
-                {
+                for node in by_edge.iter().chain(rest.parts.iter()) {
                     node.refs(out);
                 }
             }
@@ -134,10 +130,8 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                     }
                     cx.dst_endpoints(id, Role::Origin, &mut dsts);
                     for dst in dsts.iter() {
-                        let truth = all_of([
-                            edge_truth,
-                            rest.truth(&Env::new(cx, Some(id), src, *dst), false),
-                        ]);
+                        let truth =
+                            all_of([edge_truth, rest.truth(&Env::new(cx, Some(id), src, *dst))]);
                         if truth == Truth::False {
                             continue;
                         }

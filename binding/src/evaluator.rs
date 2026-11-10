@@ -262,16 +262,6 @@ impl Rules {
             .map_err(PyValueError::new_err)
     }
 
-    /// The candidate edges of rule `rule` its selection does not rule out, in judging order.
-    fn select<'py>(&self, py: Python<'py>, rule: usize) -> PyResult<Bound<'py, PyBytes>> {
-        let mut bound = self.link.bind(py).borrow_mut();
-        let ids = self
-            .inner
-            .select(&mut bound.inner, rule)
-            .map_err(PyValueError::new_err)?;
-        Ok(ids_bytes(py, &ids))
-    }
-
     /// The edges of `kinds`, kind by kind in graph order, that a selector (its plan tree as JSON)
     /// does not make false, each read with its source as both ends.
     fn passing<'py>(

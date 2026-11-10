@@ -197,8 +197,6 @@ pub enum Mode {
     /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint, signature and use-shape
     /// rules).
     Judge,
-    /// Only the selection: the rule judges in Python.
-    Select,
     /// The search of a reach rule.
     Reach,
     /// The package pairs of a cycle rule: what `CyclePrimitive.consider` reads.
@@ -230,8 +228,6 @@ pub struct RulePlan {
     /// An entrypoint rule with no predicate: a violation is a destination it does not export.
     pub default_allow: bool,
     pub identity: Vec<Vec<String>>,
-    /// Edge fields the primitive's own environment sets: selection skips conjuncts that read them.
-    pub redefines: Vec<String>,
     /// A cycle rule's group field (`CyclePrimitive.group_field`).
     pub group: Option<String>,
     /// A reach rule's `from`: which modules it searches from, read of the module alone.
@@ -246,6 +242,9 @@ pub struct RulePlan {
     pub covers: Vec<CoverPlan>,
     /// What a use-shape rule adds.
     pub use_shape: Option<UseShapePlan>,
+    /// An inventory over edges (`classify`): every selected destination is a row, the first
+    /// with each identity only.
+    pub inventory: bool,
     /// What a layout rule or an entity inventory adds: its selection and `require` are entity
     /// selectors.
     pub entities: Option<EntitiesPlan>,

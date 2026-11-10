@@ -95,6 +95,8 @@ pub struct Rule {
     covers: Vec<Cover>,
     /// What a use-shape rule adds.
     use_shape: Option<UseShape>,
+    /// An inventory over edges: a selected destination is the row.
+    inventory: bool,
     /// What a rule over entities adds.
     entities: Option<EntityRule>,
 }
@@ -216,16 +218,6 @@ fn field_kind(name: &str) -> FieldKind {
         "zone" => FieldKind::Zone,
         _ => FieldKind::Other,
     }
-}
-
-/// Whether a ref reads one of the edge fields a primitive redefines (`shape`, `label`).
-fn redefined(field: Ref, names: &[String]) -> bool {
-    let name = match field {
-        Ref::Edge(EdgeField::Shape) => "shape",
-        Ref::Edge(EdgeField::Label) => "label",
-        _ => return false,
-    };
-    names.iter().any(|redefined| redefined == name)
 }
 
 impl Rules {
@@ -455,11 +447,7 @@ impl Rules {
             compiler
         };
         let selection = compiler.nodes(&plan.selection)?;
-        let redefined: Vec<bool> = selection
-            .iter()
-            .map(|node| node.reads(|field| redefined(field, &plan.redefines)))
-            .collect();
-        let staged = Staged::new(&selection, &redefined, fields);
+        let staged = Staged::new(&selection, fields);
         let optional = |node: &Option<plan::NodePlan>| {
             node.as_ref().map(|node| compiler.node(node)).transpose()
         };
@@ -487,6 +475,7 @@ impl Rules {
                 .entities
                 .as_ref()
                 .map(|found| EntityRule::new(found, &plan.identity, entity)),
+            inventory: plan.inventory,
             use_shape: plan.use_shape.as_ref().map(|found| UseShape {
                 allow: found.allow.clone(),
                 deny: found.deny.clone(),
@@ -830,35 +819,16 @@ impl Rules {
         let mut edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
         edges.dedup();
         let order = self.order(link, rule, &edges)?;
-        Ok(in_order(rows, &edges, &order, |row| row.edge))
-    }
-
-    /// The candidate edges of rule `index` whose selection is not false for some destination,
-    /// in the order the Python engine judges them. Only conjuncts that read nothing the
-    /// primitive's own environment sets can drop an edge.
-    pub fn select(&self, link: &mut Link, index: usize) -> Result<Vec<u32>, String> {
-        let rule = self.rule(index, Mode::Select)?;
-        self.read_sources(link, rule);
-        let ids = self.candidates(link, rule);
-        let kept = self.over_candidates(link, &ids, |cx, id, dsts, out| {
-            let src = cx.src_endpoint(id);
-            cx.dst_endpoints(id, rule.role, dsts);
-            self.touch_sources(cx, rule, id, src, dsts);
-            let mut selected = false;
-            for dst in dsts.iter() {
-                let env = Env::new(*cx, Some(id), src, *dst);
-                selected |= rule.staged.truth(&env, true) != Truth::False;
-                // Python reads every destination of an edge before it judges any.
-                if selected && !self.touch {
-                    break;
-                }
-            }
-            if selected {
-                out.push(id);
-            }
-        });
-        let order = self.order(link, rule, &kept)?;
-        Ok(order.into_iter().map(|at| kept[at as usize]).collect())
+        let rows = in_order(rows, &edges, &order, |row| row.edge);
+        if !rule.inventory {
+            return Ok(rows);
+        }
+        // `EdgeInventory.evaluate` keeps the first destination with each identity.
+        let mut seen: FxHashSet<Vec<String>> = FxHashSet::default();
+        Ok(rows
+            .into_iter()
+            .filter(|row| row.judgment != Judgment::Violation || seen.insert(row.identity.clone()))
+            .collect())
     }
 
     /// What a cycle rule makes of every candidate destination (`CyclePrimitive.consider`), in
@@ -877,7 +847,7 @@ impl Rules {
             self.touch_sources(cx, rule, id, src, dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(*cx, Some(id), src, *dst);
-                let selected = rule.staged.truth(&env, false);
+                let selected = rule.staged.truth(&env);
                 let judgment = match selected {
                     Truth::False => continue,
                     _ if dst.unresolved => Judgment::Unresolved,
@@ -1215,7 +1185,7 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
 /// `EdgeRule.decide` for one environment, and `SignaturePrimitive.decide` for a signature rule.
 /// `deny`, `allow` and `require` are all judged, as `EdgeRule.violation` judges them.
 pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
-    let selected = rule.staged.truth(env, false);
+    let selected = rule.staged.truth(env);
     if selected == Truth::False {
         return Judgment::Clean;
     }
@@ -1230,6 +1200,9 @@ pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
     }
     if selected == Truth::Unknown {
         return Judgment::UnknownSelection;
+    }
+    if rule.inventory {
+        return Judgment::Violation;
     }
     let verdict = if rule.default_allow {
         truth(&EXPORTED, env).negate()

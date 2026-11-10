@@ -36,7 +36,7 @@ from hoglint.model import (
 )
 
 if TYPE_CHECKING:
-    from hoglint.rules.entities import CoveragePrimitive, EntityRule
+    from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
@@ -191,6 +191,10 @@ class RuleContext:
     def reach_found(self, rule: ReachPrimitive) -> list[Found] | None:
         """What a reach rule's search finds when this context runs it itself, else None."""
         return None
+
+    def inventory_judged(self, rule: EdgeInventory) -> bool:
+        """Whether this context judged an inventory over edges itself, into the rule's run."""
+        return False
 
     def entity_rows(self, rule: EntityRule) -> list[tuple[bool, str, str | None, str, list[str]]] | None:
         """What a layout rule's or an entity inventory's entities report, (finding or not,
@@ -644,10 +648,6 @@ class StagedSelection:
 
 class EdgeRule:
     """Selection and the predicate step for every primitive that judges single edges."""
-
-    # Edge fields this primitive's environment sets for itself (`env`): a selection made outside
-    # the primitive cannot read them.
-    redefines: tuple[str, ...] = ()
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
