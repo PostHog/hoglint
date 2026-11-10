@@ -506,7 +506,8 @@ class SchemaBuilder:
                 self.source(key),
             )
         if len(out) > MAX_EXPORTS:
-            self.fail("exports", f"{len(out)} exports; a config declares at most {MAX_EXPORTS}")
+            first_over = list(out)[MAX_EXPORTS]
+            self.fail(f"exports.{first_over}", f"{len(out)} exports; a config declares at most {MAX_EXPORTS}")
         return out
 
     def read_registries(self) -> dict[str, RegistrySpec]:
