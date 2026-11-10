@@ -36,8 +36,8 @@ from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeListing, WorktreeStatus, read_blobs
 from hoglint.ledger.obligations import Attribution, attribute, rows
-from hoglint.ledger.records import IncompleteRecord, ShownRecord
-from hoglint.ledger.scan import ScanSummary
+from hoglint.ledger.records import IncompleteRecord, ShownRecord, StoredFindings
+from hoglint.ledger.scan import ProtocolError, ScanSummary
 from hoglint.ledger.store import CacheRoot, CacheWarning, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause
 from hoglint.presets_py.posthog.owners import OWNERS_YAML
@@ -114,6 +114,26 @@ def test_a_stored_summary_serves_only_its_exact_envelope(
         path.write_text(content)
     found = store.get(asked)
     assert (found is not None and found.covers(scope) and found.obligations() == {DYNAMIC: ["f1"]}) is hit
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ["r", ["a"], "new", None, [], "", []],
+        ["r", ["a"], "forgotten", None, [], "", [], True, False],
+        ["r", ["a"], "new", None, [["import", "a.py", 1]], "", [], True, False],
+    ],
+    ids=["short row", "unknown status", "short witness"],
+)
+def test_a_malformed_findings_row_is_a_miss_not_a_crash(tmp_path: Path, row: list[Any]) -> None:
+    """Findings rows decode when read; a bad one must still fail where the store and the reader
+    guard, as the rest of the summary does."""
+    summary = ScanSummary(envelope=STORED, findings=StoredFindings([row]))
+    assert SummaryStore(tmp_path).put(STORED, summary) is not None
+    assert SummaryStore(tmp_path).get(STORED) is None
+    summary.write(tmp_path / "summary.zst")
+    with pytest.raises(ProtocolError):
+        ScanSummary.read(tmp_path / "summary.zst")
 
 
 def test_a_reader_loads_only_the_sections_it_asks_for_and_equal_sections_are_stored_once(tmp_path: Path) -> None:

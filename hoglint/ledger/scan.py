@@ -269,7 +269,7 @@ class ScanSummary:
             schema=int(data.get("schema", 0)),
             lines={parse_key(text): int(count) for text, count in data.get("lines", {}).items()},
             growth={rule: tuple(indexes) for rule, indexes in data.get("growth", {}).items()},
-            findings=StoredFindings(list(data.get("findings", []))),
+            findings=StoredFindings.loaded(data.get("findings", [])),
             incomplete=[IncompleteRecord.from_json(item) for item in data.get("incomplete", [])],
             triples={(a, b, c, d) for a, b, c, d in data.get("triples", [])},
             with_triples=bool(data.get("with_triples", False)),

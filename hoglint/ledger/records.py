@@ -161,6 +161,13 @@ class FindingRecord:
         )
 
 
+# The lengths of the stored lists `FindingRecord`, `ShownRecord` and `WitnessRecord` write.
+FINDING_FIELDS = 9
+SHOWN_FIELDS = 4
+WITNESS_FIELDS = 6
+STATUS_VALUES = frozenset(status.value for status in FindingStatus)
+
+
 class StoredFindings:
     """The findings section as it is stored: one row per finding in `FindingRecord.to_json`'s
     form, a list or a tuple. A row becomes a `FindingRecord` when a reader asks for it, so a
@@ -174,6 +181,35 @@ class StoredFindings:
     @staticmethod
     def of(records: list[FindingRecord]) -> StoredFindings:
         return StoredFindings([record.to_json() for record in records])
+
+    @staticmethod
+    def loaded(rows: Any) -> StoredFindings:
+        """Rows read from a stored summary, each checked for the shape `FindingRecord.from_json`
+        reads, with no record made: a malformed row fails here, where readers of a stored summary
+        turn an error into a miss (D28), not later in a reader."""
+        if not isinstance(rows, list):
+            raise ValueError("the findings section holds no list of rows")
+        for row in rows:
+            StoredFindings.check(row)
+        return StoredFindings(rows)
+
+    @staticmethod
+    def check(row: Any) -> None:
+        if not isinstance(row, list) or len(row) != FINDING_FIELDS:
+            raise ValueError(f"a findings row has {FINDING_FIELDS} fields: {row!r}")
+        rule, identity, status, shown, witnesses, owner, subjects, _, _ = row
+        if status not in STATUS_VALUES:
+            raise ValueError(f"a findings row has an unknown status {status!r}")
+        if not isinstance(rule, str) or not isinstance(owner, str):
+            raise ValueError(f"a findings row names its rule and owner as text: {row!r}")
+        if not isinstance(identity, list) or not isinstance(subjects, list):
+            raise ValueError(f"a findings row holds its identity and subjects as lists: {row!r}")
+        if shown is not None and (not isinstance(shown, list) or len(shown) != SHOWN_FIELDS):
+            raise ValueError(f"a findings row's message has {SHOWN_FIELDS} fields: {shown!r}")
+        if not isinstance(witnesses, list) or any(
+            not isinstance(witness, list) or len(witness) != WITNESS_FIELDS for witness in witnesses
+        ):
+            raise ValueError(f"a findings row's witnesses have {WITNESS_FIELDS} fields each: {witnesses!r}")
 
     def __iter__(self) -> Iterator[FindingRecord]:
         for row in self.rows:
