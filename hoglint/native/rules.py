@@ -933,6 +933,11 @@ class NativeRuleContext(RuleContext):
         if rule.spec.primitive in JUDGED:
             yield from self.evaluated(rule)
             return
+        if self.plan.mode(rule.spec) == "select":
+            selected = array("I", self.evaluator.select(self.plan.index[rule.spec.id]))
+            for edge in self.native.native.core.get(selected):
+                yield edge, None
+            return
         grouper = Grouper(self, rule)
         survivors = grouper.survivors()
         link = self.native.native.link
