@@ -385,6 +385,16 @@ class SchemaBuilder:
             out[name] = dataclasses.replace(out[name], domain=domain)
         return out
 
+    def check_within(self, key: str, within: str) -> None:
+        """A `within` names a directory by literal text and `{name}` captures. Both engines cut a
+        path at the length of the filled pattern, which is the matched text's only when no
+        wildcard stands in it."""
+        wildcards = [char for char in ("*", "?") if char in CAPTURE_RE.sub("", within)]
+        if wildcards:
+            self.fail(
+                key, f"`within = {within!r}` holds {wildcards[0]!r}; name the directory with a `{{name}}` capture"
+            )
+
     def read_zones(self, zones_raw: dict[str, Any]) -> ZoneTable:
         specs: list[ZoneSpec] = []
         for name in self.zone_names:
@@ -400,6 +410,8 @@ class SchemaBuilder:
                 )
             )
         table = ZoneTable(as_tuple(zones_raw.get("within")), str(zones_raw.get("default", "internal")), tuple(specs))
+        for within in table.within:
+            self.check_within("zones.within", within)
         for spec in specs:
             if len(table.chain(spec.name)) > len(self.zone_names):
                 self.fail(f"zones.{spec.name}", "zone parents form a cycle")
@@ -483,6 +495,7 @@ class SchemaBuilder:
             paths = as_tuple(table.get("paths"))
             if not paths:
                 self.fail(key, "an export needs `paths`")
+            self.check_within(key, str(table.get("within", "")))
             out[name] = ExportSpec(
                 name,
                 str(table.get("within", "")),

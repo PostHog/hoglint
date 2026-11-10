@@ -120,6 +120,13 @@ ledger = false
             + "".join(f"[exports.e{at}]\npaths = ['x{at}/**']\nshape = 'c'\n" for at in range(65)),
             "65 exports; a config declares at most 64",
         ),
+        # a path is cut at the length of the filled `within`, the matched text only without wildcards
+        ("[zones]\nwithin = 'pkgs/*'\n", "`within = 'pkgs/*'` holds '*'"),
+        (
+            "[shapes.c]\nallow = ['class']\n[exports.e]\nwithin = '{top}/**'\npaths = ['x/**']\nshape = 'c'\n",
+            "`within = '{top}/**'` holds '*'",
+        ),
+        ("[zones]\nwithin = ['products/{product}', 'pkgs/?']\n", "`within = 'pkgs/?'` holds '?'"),
         (
             "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \"" + "not " * 33 + "src.module == 'a'\"\n",
             "nested more than 32 deep",

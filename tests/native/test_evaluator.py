@@ -208,6 +208,11 @@ SOURCES = {
         "from products.billing.backend.facade.api import charge\nfrom products.alerts.backend.facade import notify\n"
     ),
     "products/alerts/backend/facade/api.py": "from core.legacy import api\n\n\ndef notify():\n    pass\n",
+    # A product whose directory and module name are not ASCII: `within` captures it.
+    "products/é/__init__.py": "",
+    "products/é/backend/__init__.py": "",
+    "products/é/backend/models.py": "class Café:\n    pass\n",
+    "products/é/jobs.py": "from products.é.backend.models import Café\nfrom products.billing.backend import facade\n",
 }
 
 JUDGMENTS = list(Judgment)
@@ -339,6 +344,12 @@ CORNERS = {
     "set-against-a-member": {**EDGE, "deny": "src.owners == 'team-core' and src.owners != dst.owners"},
     "list-literal-against-a-scalar": {**EDGE, "deny": "dst.package == ['billing'] or dst.package in ['billing']"},
     "set-read-as-text": {**EDGE, "deny": "src.owners startswith 'team-core,' or dst.zone == src.owners"},
+    "non-ascii-capture-under-within": {
+        **EDGE,
+        "select": "src.package == 'é' and dst.package == 'é'",
+        "deny": "dst.zone == 'backend'",
+        "identity": ["src.module", "dst.zone", "dst.package"],
+    },
     "bool-rendering": {
         **EDGE,
         "deny": "src.testcode == true",
@@ -484,6 +495,15 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
     monkeypatch.setattr(RulePlan, "modules", lambda self: list(reversed(self.graph.modules)))
     with pytest.raises(EngineError, match="modules in another order"):
         assert native.evaluator
+
+
+def test_a_capture_over_a_directory_that_is_not_ascii_gives_one_zone_in_both_engines(world: World) -> None:
+    config = world.config(rule_table("ascii", CORNERS["non-ascii-capture-under-within"]))
+    native, python = world.contexts(config)
+    spec = config.rules["ascii"]
+    found = run_rows(primitive_of(spec)(native, spec).evaluate())
+    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    assert {identity for identity, *_ in found} == {("products.é.jobs", "models", "é")}
 
 
 def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World) -> None:
