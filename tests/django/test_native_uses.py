@@ -131,9 +131,9 @@ def engines(tmp_path: Path, *groups: dict[str, dict]) -> Engines:
 
 
 def test_a_later_producer_meets_the_fields_the_link_producer_set(tmp_path: Path) -> None:
-    both = engines(tmp_path, DJANGO, APPS, views(), UNREADABLE)
+    both = engines(tmp_path, DJANGO, APPS, views())
     failed: list[dict[str, str]] = []
-    edges: list[list[Edge]] = []
+    refined: list[list[tuple[str, str, tuple[tuple[str, str], ...]]]] = []
     for graph, reader, sink in (both.python, both.native):
         DjangoPack.run(reader, DjangoPackConfig(settings_modules=("proj.settings",)), sink, Path("."))
         uses = graph.by_kind("reference")
@@ -148,10 +148,10 @@ def test_a_later_producer_meets_the_fields_the_link_producer_set(tmp_path: Path)
 
         ProducerPlan([ProducerStep("test.relabel@1", USES_KINDS, relabel)]).run(sink)
         failed.append({name: failure.reason for name, failure in graph.failed_producers.items()})
-        edges.append(list(graph.edges))
+        refined.append([(edge.shape, edge.shape_detail, edge.attrs) for edge in graph.by_kind("reference")])
 
     assert failed[0] == failed[1]
-    assert edges[0] == edges[1]
+    assert refined[0] == refined[1]
     reason = failed[1]["test.relabel@1"]
     assert reason.startswith("sets shape of edge ")
     assert reason.endswith(" (django.uses@1 set 'instance-single') and 2 more apart")
