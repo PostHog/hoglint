@@ -44,7 +44,8 @@ class NativeUses:
                 out.append(self.producer.failure(scope, self.error_of(scope)))
                 continue
             out.extend(self.producer.aggregate_edges(scope, aggregates.get(scope.path, [])))
-        self.sink.refine_staged(USES_PRODUCER, kinds, staged)
+        if len(staged):
+            self.sink.refine_staged(USES_PRODUCER, kinds, staged)
         return out
 
     def error_of(self, scope: FileScope) -> Exception:

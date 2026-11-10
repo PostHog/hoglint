@@ -17,7 +17,7 @@ from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
-from hoglint.plugins import ProducerFailure, RefinedFields, Refinements
+from hoglint.plugins import ProducerFailure, Refinements, conflict_text
 
 # Bit order of the link's context bits (src/link/scope.rs `ctx`).
 CONTEXT_BITS = (
@@ -221,43 +221,40 @@ class NativeSymbols(Mapping[str, Mapping[str, str]]):
 
 class NativeSink:
     """The native engine's sink (`hoglint.plugins.PackSink`): pack edges and refinements go into
-    the link, so every reader of edges reads one table with the refined edges in it."""
+    the link, so every reader of edges reads one table with the refined edges in it. The link
+    keeps the conflict bookkeeping (`RefinedFields`) for every producer, those it runs itself
+    included."""
 
     def __init__(self, graph: NativeGraph) -> None:
         self.graph = graph
-        self.refined = RefinedFields()
 
     def add_edges(self, producer: str, edges: Sequence[Edge]) -> None:
         self.graph.extend(edges)
 
-    def own_attrs(self, handle: int) -> dict[str, str]:
-        return dict(self.graph.edges[handle].attrs)
-
     def refine(self, producer: str, kinds: frozenset[str], refinements: Refinements) -> None:
-        conflicts = self.refined.conflicts(producer, refinements, self.own_attrs)
-        if conflicts:
-            more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
-            self.fail(producer, ProducerFailure(f"sets {conflicts[0]}{more} apart", kinds))
-            return
-        self.refined.record(producer, refinements)
-        self.graph.link.refine(
+        conflict = self.graph.link.refine(
+            producer,
             array("I", refinements.handles).tobytes(),
             refinements.shapes,
             refinements.details,
             refinements.attrs,
         )
+        self.fail_on(producer, kinds, conflict)
 
     def refine_staged(self, producer: str, kinds: frozenset[str], staged: Any) -> None:
-        """Applies refinements a link producer judged (`Link.django_uses`), as `refine` does:
-        all of them, or none when one would change an attr its edge has."""
-        conflict = self.graph.link.refine_staged(staged)
+        """Applies refinements a link producer judged (`Link.django_uses`), as `refine` does."""
+        self.fail_on(producer, kinds, self.graph.link.refine_staged(producer, staged))
+
+    def fail_on(
+        self, producer: str, kinds: frozenset[str], conflict: tuple[int, str, int, str | None, str] | None
+    ) -> None:
+        """Fails `producer` when the link refused its batch: the first field set apart, and how
+        many more."""
         if conflict is None:
             return
-        count, name, handle, _, value = conflict
+        count, name, handle, owner, value = conflict
         more = f" and {count - 1} more" if count > 1 else ""
-        self.fail(
-            producer, ProducerFailure(f"sets {name} of edge {handle} (the edge has {value!r}){more} apart", kinds)
-        )
+        self.fail(producer, ProducerFailure(f"sets {conflict_text(name, handle, owner, value)}{more} apart", kinds))
 
     def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:
         symbols: Any = self.graph.symbols

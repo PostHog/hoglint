@@ -5,6 +5,7 @@ use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::decode_lines;
 use hoglint_facts::link::intern::{Interner, Sid};
 use hoglint_facts::link::packs::Refinements;
+use hoglint_facts::link::packs::refined::{Field, RefinedFields};
 use hoglint_facts::link::produce::NO_FILE;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::{Lookup, Res};
@@ -21,7 +22,7 @@ type Loaded = (CoreLink, (usize, usize), Vec<Option<String>>, Vec<String>);
 /// The first of the fields a batch of refinements would set apart, for Python to word:
 /// (how many fields conflict, the field, the edge id, the producer that set it or None for an
 /// attr the edge has, the value there).
-type Conflict = (usize, String, u32, Option<String>, String);
+type ConflictRow = (usize, String, u32, Option<String>, String);
 
 /// Refinements a link producer judged and has not applied, and the files it could not read.
 /// Its rows stay in Rust: Python holds one object per batch.
@@ -60,6 +61,8 @@ pub(crate) struct Link {
     pub(crate) matched: Vec<FxHashMap<Sid, bool>>,
     /// The worker threads the link was built with (0: every core); rule evaluation takes them.
     pub(crate) threads: usize,
+    /// What each pack producer set on each edge it refined, for the sink's conflict check.
+    pub(crate) refined: RefinedFields,
 }
 
 impl Link {
@@ -129,6 +132,28 @@ impl Link {
             )));
         }
         Ok(())
+    }
+
+    /// Applies one producer's batch through the sink's bookkeeping (`RefinedFields`): all of
+    /// it, or none and the first conflict.
+    fn apply(&mut self, producer: &str, batch: Refinements) -> Option<ConflictRow> {
+        let producer = self.sid(producer);
+        let conflicts = self.refined.apply(&mut self.inner.edges, producer, batch);
+        let first = conflicts.first()?;
+        let it = &self.inner.core.it;
+        let field = match first.field {
+            Field::Shape => "shape".to_string(),
+            Field::ShapeDetail => "shape_detail".to_string(),
+            Field::Attr(key) => format!("attr:{}", it.s(key)),
+        };
+        let owner = first.owner.map(|owner| it.s(owner).to_string());
+        Some((
+            conflicts.len(),
+            field,
+            first.id,
+            owner,
+            it.s(first.value).to_string(),
+        ))
     }
 
     pub(crate) fn scope_index(&self, scope: u32) -> PyResult<usize> {
@@ -370,23 +395,25 @@ impl Link {
         (names, PyBytes::new(py, &kinds), ids_bytes(py, &files))
     }
 
-    /// Applies refinements to core edges (D22): for each edge id, the shape and shape detail to
-    /// set (None keeps the edge's) and attrs to add after the edge's own. Python checks first that
-    /// no two producers set one field apart.
+    /// Applies one producer's refinements to edges (D22): for each edge id, the shape and shape
+    /// detail to set (None keeps the edge's) and attrs to add after the edge's own. Applies none of
+    /// them when a field conflicts (`RefinedFields`), and returns the first conflict.
     #[allow(clippy::type_complexity)]
     fn refine(
         &mut self,
+        producer: &str,
         ids: &[u8],
         shapes: Vec<Option<String>>,
         details: Vec<Option<String>>,
         attrs: Vec<Vec<(String, String)>>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Option<ConflictRow>> {
         let ids = ids_from(ids)?;
         if shapes.len() != ids.len() || details.len() != ids.len() || attrs.len() != ids.len() {
             return Err(PyValueError::new_err(
                 "one shape, detail and attr list per edge",
             ));
         }
+        let mut batch = Refinements::default();
         for (((id, shape), detail), pairs) in ids.into_iter().zip(shapes).zip(details).zip(attrs) {
             if id as usize >= self.inner.edges.len() {
                 return Err(PyKeyError::new_err(id));
@@ -397,9 +424,9 @@ impl Link {
                 .iter()
                 .map(|(k, v)| (self.sid(k), self.sid(v)))
                 .collect();
-            self.inner.edges.refine(id, shape, detail, &pairs);
+            batch.add(id, shape, detail, pairs);
         }
-        Ok(())
+        Ok(self.apply(producer, batch))
     }
 
     /// Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
@@ -442,34 +469,11 @@ impl Link {
         )
     }
 
-    /// Applies the refinements a link producer judged, or none of them when one would change
-    /// an attr its edge has: then returns (conflicts, field, edge id, None, the edge's value)
-    /// of the first, for Python to word. `staged` is empty afterwards.
-    fn refine_staged(&mut self, staged: &mut Staged) -> Option<Conflict> {
-        let made = std::mem::take(&mut staged.refinements);
-        let it = &self.inner.core.it;
-        let edges = &self.inner.edges;
-        let mut found: Vec<Conflict> = Vec::new();
-        for (at, pairs) in made.attrs.iter().enumerate() {
-            let id = made.ids[at];
-            for &(key, value) in pairs {
-                let own = edges.attrs_with(id).filter(|(k, _)| *k == key).last();
-                if let Some(&(_, own)) = own.filter(|(_, own)| *own != value) {
-                    let field = format!("attr:{}", it.s(key));
-                    found.push((0, field, id, None, it.s(own).to_string()));
-                }
-            }
-        }
-        if let Some(first) = found.first() {
-            return Some((found.len(), first.1.clone(), first.2, None, first.4.clone()));
-        }
-        for at in 0..made.len() {
-            let id = made.ids[at];
-            self.inner
-                .edges
-                .refine(id, made.shapes[at], made.details[at], &made.attrs[at]);
-        }
-        None
+    /// Applies the refinements a link producer judged, as `refine` does. `staged` is empty
+    /// afterwards.
+    fn refine_staged(&mut self, producer: &str, staged: &mut Staged) -> Option<ConflictRow> {
+        let batch = std::mem::take(&mut staged.refinements);
+        self.apply(producer, batch)
     }
 
     /// Records the facts packs wrote for some symbols: each symbol's (key, value) pairs replace
@@ -692,6 +696,7 @@ pub(crate) fn link_jsonl(
         patterns: Vec::new(),
         matched: Vec::new(),
         threads,
+        refined: RefinedFields::default(),
     })
 }
 
@@ -799,6 +804,7 @@ pub(crate) fn link_blobs(
             patterns: Vec::new(),
             matched: Vec::new(),
             threads,
+            refined: RefinedFields::default(),
         },
         stats,
     ))

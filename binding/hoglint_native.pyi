@@ -150,10 +150,17 @@ class Link:
     def candidates(self, kinds: list[str], include: int, exclude: int) -> bytes: ...
     def edges(self, ids: bytes) -> list[EdgeTuple]: ...
     def refine(
-        self, ids: bytes, shapes: list[str | None], details: list[str | None], attrs: list[list[tuple[str, str]]]
-    ) -> None:
-        """Refines core edges (D22): per edge, the shape and shape detail to set (None keeps the
-        edge's) and attrs to add after its own."""
+        self,
+        producer: str,
+        ids: bytes,
+        shapes: list[str | None],
+        details: list[str | None],
+        attrs: list[list[tuple[str, str]]],
+    ) -> Conflict | None:
+        """Refines edges for one producer (D22): per edge, the shape and shape detail to set (None
+        keeps the edge's) and attrs to add after its own. Applies none of them when a field is set
+        apart from what another producer set, or an attr apart from the edge's own, and then
+        returns the first conflict."""
     def django_uses(self, files: list[int], models: list[Pair]) -> Staged:
         """Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
         producer's order) onto `models` in the link, with no Python object per use. Nothing is
@@ -162,9 +169,8 @@ class Link:
         self, staged: Staged
     ) -> tuple[bytes, list[str | None], list[str | None], list[list[tuple[str, str]]]]:
         """(edge ids, shapes, details, attrs) of judged refinements, for proofs."""
-    def refine_staged(self, staged: Staged) -> Conflict | None:
-        """Applies judged refinements, or none of them when one would change an attr its edge has;
-        then returns the first such conflict. `staged` is empty afterwards."""
+    def refine_staged(self, producer: str, staged: Staged) -> Conflict | None:
+        """Applies judged refinements for `producer` as `refine` does. `staged` is empty afterwards."""
     def witness_rows(self, ids: bytes) -> list[tuple[str, str, int, int, str, list[str]]]:
         """(kind, path, line, column, surface, targets) of each edge, as a stored summary keeps a
         finding's witness, with no Edge made."""

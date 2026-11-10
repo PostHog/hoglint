@@ -1,0 +1,157 @@
+"""`django.uses` in the link (D49) against the Python producer, which stays the meaning, on
+hand-written facts that both engines load: every shape the producer knows, the locals it follows,
+and files it cannot read."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from core.support import SITE, func_def, import_row
+from django_facts import APPS, DJANGO, FIRST_PARTY, FactRepo
+from hoglint.core.config import CoreConfig
+from hoglint.core.harness import GraphSink, ProducerPlan, ProducerStep
+from hoglint.core.reader import BuildReader, python_pack_io
+from hoglint.model import Edge, Graph
+from hoglint.native.build import NativeBuild
+from hoglint.native.config import link_config
+from hoglint.native.graph import NativeGraph, NativeSink
+from hoglint.native.queries import NativePackQueries
+from hoglint.packs.django.config import DjangoPackConfig
+from hoglint.packs.django.pack import USES_KINDS, DjangoPack
+from hoglint.plugins import Refinement
+from native.require import native_module
+
+# One use per row: (model, chain, up). Rows run in scope 0 of shop/views.py, one line each.
+SHAPES = [
+    ("Order", ".objects.select_for_update().count()", "expr"),
+    ("Order", ".objects.filter().update()", "expr"),
+    ("Order", ".objects.filter().count()", "return"),
+    ("Order", ".objects.filter().first()", "assign:o"),
+    ("Order", ".all_teams.all()", "assign:qs"),
+    ("Order", "._default_manager.get()", "expr"),
+    ("Order", "._meta.default_manager.all()", "expr"),
+    ("Order", "._meta.model.objects.exists()", "expr"),
+    ("Order", "._meta.managers", "expr"),
+    ("Order", "._meta", "expr"),
+    ("Order", ".objects.filter()", "arg:1:Prefetch"),
+    ("Order", ".objects.filter()", "arg:0:models.Exists"),
+    ("Order", ".objects.all()", "kw:queryset:serializers.PrimaryKeyRelatedField"),
+    ("Order", ".objects.filter()[]", "expr"),
+    ("Order", ".DoesNotExist", "except"),
+    ("Order", ".Meta", "expr"),
+    ("Order", ".pk", "expr"),
+    ("Order", "", "param-ann:o"),
+    ("Order", "[]", "returns"),
+    ("Order", "()", "assign:obj"),
+    ("Order", "[]", "expr"),
+    ("Order", "", "elt:list"),
+    ("Order", "", "arg:1:isinstance"),
+    ("Order", "", "arg:0:cast"),
+    ("Order", "", "arg:0:?Call"),
+    ("Order", "", "assign:model"),
+    ("Order", "", "kw:model:Meta"),
+    ("Order", "", "return"),
+    ("Order", "", "comp:elt"),
+    ("Order", "", "?Call.func"),
+    ("Invoice", ".objects.filter()", "await assign:qs"),
+    ("Invoice", ".objects.all()", "assign:later"),
+]
+# Later uses of the locals above: (line, root, chain, up). `o` flows into a delete; `qs` into an
+# update before line 33 reassigns it, and into a lock after, through `qs2`, a local assigned from
+# it; `later` only into a read, which changes nothing.
+DERIVED = [
+    (20, "qs", ".update()", "expr"),
+    (40, "o", ".delete()", "expr"),
+    (42, "qs", ".filter()", "assign:qs2"),
+    (43, "qs2", ".select_for_update().first()", "expr"),
+    (44, "later", ".count()", "expr"),
+]
+
+
+def views() -> dict[str, dict]:
+    refs = [[0, -1, line, 4, 4, model, chain, up] for line, (model, chain, up) in enumerate(SHAPES, start=3)]
+    derived = [[0, -1, line, 4, 4, root, chain, up, 0] for line, root, chain, up in DERIVED]
+    return {
+        "shop/views.py": {
+            "imports": [import_row("shop.models", "Order"), import_row("billing.models", "Invoice", line=2)],
+            "defs": [func_def("close", 3)],
+            "refs": refs,
+            "derived": derived,
+        }
+    }
+
+
+def unreadable(name: str, ref: list, derived: list) -> dict[str, dict]:
+    return {
+        f"shop/{name}.py": {
+            "imports": [import_row("shop.models", "Order")],
+            "defs": [func_def("run", 2)],
+            "refs": [[0, -1, 3, 4, 4, "Order", *ref]],
+            "derived": derived,
+        }
+    }
+
+
+# Files the shape code cannot read: a derived row that does not parse as one, a derived row whose
+# deriving scope is not a def of the file, and a call step without its callee.
+UNREADABLE = {
+    **unreadable("short_row", [".objects.all()", "assign:qs"], [[0, -1, 4, 4, 4, "qs", ".update()", "expr"]]),
+    **unreadable("lost_scope", [".objects.all()", "assign:qs"], [[0, -1, 4, 4, 4, "qs", ".update()", "expr", 7]]),
+    **unreadable("bare_call", ["", "arg:1"], []),
+}
+
+
+@dataclass(frozen=True)
+class Engines:
+    """One fact set loaded by both engines, with their pack readers and sinks."""
+
+    python: tuple[Graph, BuildReader, GraphSink]
+    native: tuple[NativeGraph, BuildReader, NativeSink]
+
+
+def engines(tmp_path: Path, *groups: dict[str, dict]) -> Engines:
+    native = native_module()
+    repo = FactRepo(*groups)
+    config = CoreConfig(first_party=FIRST_PARTY)
+    build = repo.build(config)
+    graph = build.graph()
+    python = (graph, *python_pack_io(build, graph))
+    facts = tmp_path / "facts.jsonl"
+    facts.write_text("".join(json.dumps(record) + "\n" for record in repo.records.values()))
+    external = {path: path.removeprefix(SITE) for path in repo.records if path.startswith(SITE)}
+    analyzed = tuple(path for path in repo.records if path not in external)
+    link = native.link_jsonl(str(facts), json.dumps(link_config(config, analyzed, external)), 1)
+    native_graph = NativeGraph(link, {})
+    native_build = NativeBuild(config, link, external, native_graph.core.maker)
+    native_graph.modules = native_build.index.repo_modules()
+    reader = BuildReader(native_build, NativePackQueries(native_build, native_graph, link))
+    return Engines(python, (native_graph, reader, NativeSink(native_graph)))
+
+
+def test_a_later_producer_meets_the_fields_the_link_producer_set(tmp_path: Path) -> None:
+    both = engines(tmp_path, DJANGO, APPS, views(), UNREADABLE)
+    failed: list[dict[str, str]] = []
+    edges: list[list[Edge]] = []
+    for graph, reader, sink in (both.python, both.native):
+        DjangoPack.run(reader, DjangoPackConfig(settings_modules=("proj.settings",)), sink, Path("."))
+        uses = graph.by_kind("reference")
+        flowing = next(edge for edge in uses if edge.attr("flow_shape") == "write(delete)")
+        locked = next(edge for edge in uses if edge.shape == "lock")
+
+        def relabel(flowing: Edge = flowing, locked: Edge = locked) -> list[Refinement]:
+            return [
+                Refinement(locked.handle, "lock", ""),
+                Refinement(flowing.handle, "lock", "", (("flow_shape", "lock"),)),
+            ]
+
+        ProducerPlan([ProducerStep("test.relabel@1", USES_KINDS, relabel)]).run(sink)
+        failed.append({name: failure.reason for name, failure in graph.failed_producers.items()})
+        edges.append(list(graph.edges))
+
+    assert failed[0] == failed[1]
+    assert edges[0] == edges[1]
+    reason = failed[1]["test.relabel@1"]
+    assert reason.startswith("sets shape of edge ")
+    assert reason.endswith(" (django.uses@1 set 'instance-single') and 2 more apart")

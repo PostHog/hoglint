@@ -133,6 +133,14 @@ class PackSink(Protocol):
     def fail(self, producer: str, failure: ProducerFailure) -> None: ...
 
 
+def conflict_text(name: str, handle: int, producer: str | None, value: str) -> str:
+    """One field a refinement would set apart, as a producer failure names it: `producer` set it
+    to `value`, or, with no producer, the edge has `value` there."""
+    if producer is None:
+        return f"{name} of edge {handle} (the edge has {value!r})"
+    return f"{name} of edge {handle} ({producer} set {value!r})"
+
+
 def fields_of(refinement: Refinement) -> list[tuple[str, str]]:
     """(field, value) of what a refinement sets; an attr is `attr:<name>`."""
     pairs = (("shape", refinement.shape), ("shape_detail", refinement.shape_detail))
@@ -223,13 +231,13 @@ class RefinedFields:
             for name, value in fields_of(refinement):
                 found = self.owner(refinement.handle, name) if self.made else None
                 if found is not None and found[0] != producer and found[1] != value:
-                    out.append(f"{name} of edge {refinement.handle} ({found[0]} set {found[1]!r})")
+                    out.append(conflict_text(name, refinement.handle, found[0], found[1]))
                 if not name.startswith("attr:"):
                     continue
                 if mine is None:
                     mine = own_attrs(refinement.handle)
                 if mine.get(name[5:], value) != value:
-                    out.append(f"{name} of edge {refinement.handle} (the edge has {mine[name[5:]]!r})")
+                    out.append(conflict_text(name, refinement.handle, None, mine[name[5:]]))
         return out
 
     def record(self, producer: str, refinements: Refinements) -> None:

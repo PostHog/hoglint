@@ -2,10 +2,12 @@
 //! when a profile shows it pays, and writes its refinements with no Python object per row. Its
 //! Python producer stays the meaning: the Python engine runs it, and a test holds the two equal.
 //!
-//! These producers read linked edges, never a file's raw facts as the extractor wrote them, so
-//! they stay out of the `[facts]` id (engine-sources.txt).
+//! They read linked edges and the records through the link, never the fact cache's own format,
+//! so they stay out of the `[facts]` id (engine-sources.txt). `refined` keeps the native sink's
+//! conflict bookkeeping, for the producers in Python and in the link alike.
 
 pub mod django;
+pub mod refined;
 
 use super::intern::Sid;
 
