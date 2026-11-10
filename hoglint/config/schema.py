@@ -770,7 +770,11 @@ class SchemaBuilder:
             self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), RULE_KEYS)}")
             return None
         self.check_keys(key, table, RULE_KEYS[primitive])
-        rule = rule_type_of(primitive, bool(table.get("classify")))
+        classify = table.get("classify", "")
+        if not isinstance(classify, str):
+            self.fail(key, f"`classify` is the path of a classification file, not {classify!r}")
+            classify = ""
+        rule = rule_type_of(primitive, bool(classify))
         self.check_read_keys(key, table, rule)
         entity_rule = rule.ENTITIES
         edge_catalog = self.edge_catalog()
@@ -815,7 +819,7 @@ class SchemaBuilder:
         inputs = table.get("inputs", {})
         if primitive == "coverage":
             inputs = self.read_inputs(f"{key}.inputs", inputs)
-        if primitive == "inventory" and not (table.get("classify") or table.get("exactly_one")):
+        if primitive == "inventory" and not (classify or table.get("exactly_one")):
             self.fail(key, "an inventory needs `classify` (edges) or `exactly_one` (entities)")
         return RuleSpec(
             id=rule_id,
@@ -848,7 +852,7 @@ class SchemaBuilder:
             allow_shapes=as_tuple(table.get("allow_shapes")),
             deny_shapes=as_tuple(table.get("deny_shapes")),
             requires=as_tuple(table.get("requires")),
-            classify=str(table.get("classify", "")),
+            classify=classify,
             exactly_one=str(table.get("exactly_one", "")),
             covers=self.read_covers(f"{key}.covers", table.get("covers"), rule_ids),
             inputs=tuple(inputs.items()) if isinstance(inputs, dict) else (),

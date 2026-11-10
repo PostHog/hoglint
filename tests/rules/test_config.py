@@ -175,6 +175,11 @@ ledger = false
             "ledger = false\n",
             "unknown field 'src.tier'",
         ),
+        # `classify` names a file: a bool would run an edge inventory over a file named "False"
+        (
+            "[rules.other]\nprimitive = 'inventory'\nclassify = false\nexactly_one = 'package'\nledger = false\n",
+            "`classify` is the path of a classification file, not False",
+        ),
         ("[discovery]\nsource_root = ['.']\n", "unknown key 'source_root'"),
         ("[unknown_section]\nx = 1\n", "unknown section"),
     ],
