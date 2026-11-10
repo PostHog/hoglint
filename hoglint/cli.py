@@ -607,7 +607,7 @@ class BaseEngines:
         work = Path(tempfile.mkdtemp(prefix="base-scan-", dir=self.work_dir))
         out, scope_file = work / "scan.json", work / "scope.json"
         scope_file.write_text(json.dumps(sorted(scope)))
-        command = [sys.executable, "-m", "hoglint", "--repo", str(base_root), "scan"]
+        command = [sys.executable, "-m", "hoglint", "--repo", str(base_root), "--engine", self.local.name, "scan"]
         command += ["--code-root", str(code_root), "--out", str(out), "--tree", tree, "--scope", str(scope_file)]
         env = {**os.environ, "PYTHONPATH": str(engine.python_path), "HOGLINT_FACTS_BIN": str(engine.binary)}
         completed = subprocess.run(command, env=env, capture_output=True, text=True)

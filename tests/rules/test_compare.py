@@ -294,6 +294,25 @@ def test_compare_tells_a_base_without_engine_from_a_base_engine_that_fails(
 
 
 @needs_extractor
+@pytest.mark.parametrize("engine", ["python", "native"])
+def test_compare_runs_a_changed_base_engine_as_the_engine_it_was_asked_for(tmp_path: Path, engine: str) -> None:
+    repo = tmp_path / "repo"
+    crate = Path(__file__).resolve().parents[2]
+    shutil.copytree(crate, repo / "tools/hoglint", ignore=shutil.ignore_patterns("__pycache__", "target", ".*"))
+    write_files(repo, {**FILES, "hoglint.toml": CONFIG.replace("[fields]", 'exclude = ["tools/**"]\n\n[fields]')})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+    views = repo / "tools/hoglint/hoglint/views.py"
+    views.write_text(views.read_text() + "\n# an engine edit\n")
+    git_in(repo, "commit", "-qam", "engine edit")
+    compared = hoglint(repo, "--engine", engine, "compare", "--base", "base", package_root=repo / "tools/hoglint")
+    assert "so the full base scan ran" in compared.stdout, compared.stdout + compared.stderr
+    assert "base scan failed" not in compared.stdout
+
+
+@needs_extractor
 @pytest.mark.parametrize(
     "imported, says",
     [
