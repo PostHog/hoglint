@@ -141,7 +141,7 @@ pub struct ProvidedPlan {
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// `EdgeRule.decide` per edge, findings as rows (edge and entrypoint rules).
+    /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint and signature rules).
     Judge,
     /// Only the selection: the rule judges in Python.
     Select,
@@ -176,6 +176,11 @@ pub struct RulePlan {
     pub group: Option<String>,
     /// A reach rule's `from`: which modules it searches from, read of the module alone.
     pub start: Option<NodePlan>,
+    /// A signature rule: it sees public callables only, once per slot, and judges a slot with no
+    /// usable type apart (`SignaturePrimitive`).
+    pub signature: bool,
+    /// The destination symbols a signature rule reads as of unknown type.
+    pub unknown_types: Vec<String>,
 }
 
 #[derive(Deserialize, Clone)]

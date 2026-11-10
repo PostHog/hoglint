@@ -175,7 +175,8 @@ class Rules:
 
     def __init__(self, link: Link, plan: str) -> None: ...
     def judge(self, rule: int) -> list[Row]:
-        """Every destination an edge or entrypoint rule does not judge clean, in judging order."""
+        """Every destination an edge, entrypoint or signature rule does not judge clean, in judging
+        order."""
     def pairs(self, rule: int) -> list[PairRow]:
         """What a cycle rule makes of each destination it cannot leave alone, in judging order."""
     def reach(self, rule: int) -> list[Found]:

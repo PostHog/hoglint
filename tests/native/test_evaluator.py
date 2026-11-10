@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import random
 import subprocess
+import dataclasses
 from array import array
 from collections import Counter
 from collections.abc import Mapping
@@ -32,22 +33,50 @@ from native.require import native_module
 
 SECTION = "flows"
 PRODUCER = "flows.{}@1"
+SLOTS = "products.billing.backend.facade.slots"
 
 
 class Flows:
     """A test pack: the flow-refined shapes a def-use analysis writes, edges with several targets
     or with their own endpoint labels, an edge it hands over twice (its ordinal is its last
-    row's), and symbol facts."""
+    row's), symbol facts, and signature slots as a facade pack writes them: one a core edge names
+    too, one it does not, one in a private callable and one with no annotation."""
 
     name = SECTION
     allowed_keys = frozenset()
-    edge_kinds = frozenset({"reference", "uses"})
+    edge_kinds = frozenset({"reference", "uses", "exposes"})
 
     def produce(self, section: Mapping[str, Any], reader: PackReader, sink: PackSink, root: Path) -> None:
         ProducerPlan(
-            [ProducerStep(PRODUCER.format("flow"), frozenset({"reference", "uses"}), lambda: self.run(reader))]
+            [
+                ProducerStep(PRODUCER.format("flow"), frozenset({"reference", "uses"}), lambda: self.run(reader)),
+                ProducerStep(PRODUCER.format("slots"), frozenset({"exposes"}), lambda: self.slots(reader)),
+            ]
         ).run(sink)
         sink.add_symbols({"products.billing.backend.models.Invoice": {"decl": "class", "database": "billing"}})
+
+    @staticmethod
+    def slots(reader: PackReader) -> list[Output]:
+        out: list[Output] = []
+        invoice = EntityId("python", "products.billing.backend.models", "Invoice")
+        for edge in reader.edges_to("exposes", [invoice]):
+            if edge.site.module != SLOTS:
+                continue
+            producer = PRODUCER.format("slots")
+            out.append(dataclasses.replace(edge, producer=producer, handle=-1))
+            named = edge.attr("callable")
+            for callable_name, slot, annotation in (
+                (named, "param:copy", ""),
+                (f"_{named}", "param:copy", ""),
+                (named, "param:untyped", "missing"),
+            ):
+                attrs = (
+                    ("callable", callable_name),
+                    ("slot", slot),
+                    *((("annotation", annotation),) if annotation else ()),
+                )
+                out.append(dataclasses.replace(edge, producer=producer, attrs=attrs, handle=-1))
+        return out
 
     @staticmethod
     def run(reader: PackReader) -> list[Output]:
@@ -197,6 +226,13 @@ SOURCES = {
     "products/billing/backend/facade/__init__.py": "",
     "products/billing/backend/facade/api.py": "from products.alerts.backend.logic import run\n\n\ndef charge():\n    run()\n",
     "products/billing/backend/facade/contracts.py": "import django.db.models\n",
+    "products/billing/backend/facade/slots.py": (
+        "from typing import Any\n\nfrom products.billing.backend.models import Invoice, Loose\n\n\n"
+        "def charge(invoice: Invoice, note: Any) -> dict[str, Loose]:\n    pass\n\n\n"
+        "def _hidden(invoice: Invoice) -> None:\n    pass\n\n\n"
+        "class Desk:\n    def __call__(self, invoice: Invoice) -> Invoice:\n        pass\n\n"
+        "    def _inner(self, invoice: Invoice) -> None:\n        pass\n"
+    ),
     "products/billing/backend/presentation/__init__.py": "",
     "products/billing/backend/presentation/mixins.py": "class Mixin:\n    pass\n",
     "products/billing/backend/presentation/views.py": (
@@ -263,7 +299,8 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> World:
 
 def python_rows(ctx: RuleContext, rule: EdgeRule) -> Counter[tuple[int, int, str, tuple[str, ...]]]:
     """(edge, destination, judgment, identity) of every destination `EdgeRule.decide` does not
-    judge clean, by the Python rule code alone; only a violation's row carries its identity."""
+    judge clean, by the Python rule code alone; only a violation's row and a signature slot of
+    unknown type carry their identity."""
     out: Counter[tuple[int, int, str, tuple[str, ...]]] = Counter()
     for edge in ctx.graph.edges:
         if not rule.sees(edge):
@@ -272,7 +309,8 @@ def python_rows(ctx: RuleContext, rule: EdgeRule) -> Counter[tuple[int, int, str
             judgment = rule.decide(env)
             if judgment is Judgment.CLEAN:
                 continue
-            identity = project(rule.spec.identity, env.resolve) if judgment is Judgment.VIOLATION else ()
+            found = judgment in (Judgment.VIOLATION, Judgment.UNKNOWN_TYPE)
+            identity = project(rule.spec.identity, env.resolve) if found else ()
             out[(edge.handle, target, judgment.value, identity)] += 1
     return out
 
@@ -344,6 +382,15 @@ EDGE = {
     "ledger": False,
 }
 
+SIGNATURE = {
+    "primitive": "signature",
+    "select": "src.zone == 'facade'",
+    "deny": "dst.kind == 'model' or dst.symbol == 'builtins.dict'",
+    "unknown_types": ["typing.Any"],
+    "identity": ["src.symbol", "edge.slot", "dst.symbol"],
+    "ledger": False,
+}
+
 CORNERS = {
     "zone-chain-against-a-scalar": {**EDGE, "deny": "dst.zone == 'backend'", "identity": ["dst.zone", "src.zone"]},
     "zone-against-a-zone": {**EDGE, "deny": "dst.zone == src.zone and dst.zone in ['facade']"},
@@ -410,6 +457,15 @@ CORNERS = {
         "deny_shapes": ["write"],
         "identity": ["src.module"],
         "ledger": False,
+    },
+    "signature-slots": SIGNATURE,
+    "signature-unknown-as-incomplete": {**SIGNATURE, "on_unknown": "incomplete"},
+    "signature-unknown-blocks": {
+        **SIGNATURE,
+        "on_unknown": "block",
+        "on_unresolved": "finding",
+        "ledger": True,
+        "growth_key": ["dst.symbol"],
     },
     "cycle-between-packages": {
         "primitive": "cycle",
@@ -595,6 +651,8 @@ REFS = [
     "edge.context",
     "edge.ordinal",
     "edge.flow_shape",
+    "edge.slot",
+    "edge.callable",
     "src.context",
 ]
 LITERALS = [
@@ -611,6 +669,8 @@ LITERALS = [
     "'team-billing'",
     "'import'",
     "'reference'",
+    "'exposes'",
+    "'returns'",
     "'prod'",
     "'test'",
     "'write'",
@@ -646,7 +706,7 @@ def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
 
 
 def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
-    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle"])
+    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle", "signature"])
     spec: dict[str, Any] = {
         "primitive": primitive,
         "kinds": rng.sample(["import", "reference", "uses", "declares", "inherit"], rng.randint(1, 3)),
@@ -655,9 +715,15 @@ def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
     }
     if primitive in ("edge", "entrypoint"):
         spec["endpoint"] = rng.choice(["origin", "origin", "surface", "via"])
+    if primitive in ("edge", "entrypoint", "signature"):
         spec["on_unresolved"] = rng.choice(["finding", "block", "incomplete"])
-    for key in ("from", "select", "deny", "allow", "unless"):
-        if rng.random() < 0.45 and (primitive in ("edge", "entrypoint") or key in ("from", "select")):
+    if primitive == "signature":
+        spec["kinds"] = ["exposes"] if rng.random() < 0.8 else [*spec["kinds"], "exposes"]
+        spec["on_unknown"] = rng.choice(["finding", "block", "incomplete"])
+        spec["unknown_types"] = rng.sample(["typing.Any", "builtins.dict", "products.billing.backend.models.Loose"], 2)
+    predicates = ("deny", "allow", "unless") if primitive in ("edge", "entrypoint") else ("deny", "unless")
+    for key in ("from", "select", *predicates):
+        if rng.random() < 0.45 and (primitive in ("edge", "entrypoint", "signature") or key in ("from", "select")):
             spec[key] = selector(rng, refs)
     if primitive == "use-shape":
         spec["deny_shapes"] = ["write"]

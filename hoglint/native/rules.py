@@ -221,6 +221,7 @@ def engine_errors() -> Iterator[None]:
 
 JUDGMENTS = list(Judgment)
 VIOLATION = JUDGMENTS.index(Judgment.VIOLATION)
+UNKNOWN_TYPE = JUDGMENTS.index(Judgment.UNKNOWN_TYPE)
 # The evaluator's verdict codes of a denied target (`Rules.reach`).
 VERDICT_TRUTHS = {1: Truth.TRUE, 2: Truth.UNKNOWN}
 
@@ -283,36 +284,47 @@ class NativeRuleContext(RuleContext):
             else:
                 labeler.provider_labels(entity)
 
+    @staticmethod
+    def found_codes(rule: EdgeRule) -> frozenset[int]:
+        """The judgment codes whose rows become findings here: a violation, and for a signature
+        rule a slot of unknown type it reports as a finding."""
+        spec = rule.spec
+        if spec.primitive == "signature" and spec.on_unknown != "incomplete":
+            return frozenset({VIOLATION, UNKNOWN_TYPE})
+        return frozenset({VIOLATION})
+
     def judged(self, rule: EdgeRule) -> bool:
-        """The evaluator's rows of an edge or entrypoint rule, into the rule's run in the order the
-        rule judges: a violation becomes its finding here, its edge kept as a handle; any other
-        judgment goes to the rule's own code, which must judge the same."""
+        """The evaluator's rows of an edge, entrypoint or signature rule, into the rule's run in
+        the order the rule judges: a violation (or a slot of unknown type the rule reports as a
+        finding) becomes its finding here, its edge kept as a handle; any other judgment goes to
+        the rule's own code, which must judge the same."""
         if rule.spec.primitive not in JUDGED:
             return False
         with engine_errors():
             rows = self.evaluator.judge(self.plan.index[rule.spec.id])
+        found = self.found_codes(rule)
         core = self.native.native.core
-        alone_ids = array("I", dict.fromkeys(row[0] for row in rows if row[2] != VIOLATION))
+        alone_ids = array("I", dict.fromkeys(row[0] for row in rows if row[2] not in found))
         alone = dict(zip(alone_ids, core.get(alone_ids)))
-        edges = RowEdges(core, array("I", dict.fromkeys(row[0] for row in rows if row[2] == VIOLATION)))
+        edges = RowEdges(core, array("I", dict.fromkeys(row[0] for row in rows if row[2] in found)))
         spec = rule.spec
         run = rule.run
-        ledgerable, unknown = rule.flags(Judgment.VIOLATION)
-        ledgerable = ledgerable and spec.ledger
+        flags = {code: rule.flags(JUDGMENTS[code]) for code in found}
         for edge_id, target, code, identity, src, dst in rows:
-            if code != VIOLATION:
+            if code not in found:
                 reported = self.judged_alone(rule, alone[edge_id], target, JUDGMENTS[code])
                 run.findings.extend(reported.findings)
                 run.incomplete.extend(reported.incomplete)
                 continue
             handle = EdgeHandle(edges, edge_id)
+            ledgerable, unknown = flags[code]
             finding = Finding(
                 rule=spec.id,
                 identity=tuple(identity),
-                detail=Rejudged(rule, handle, Judgment.VIOLATION, target),
+                detail=Rejudged(rule, handle, JUDGMENTS[code], target),
                 owner=self.owner(src),
                 subjects=(src, dst) if dst and dst != src else (src,),
-                ledgerable=ledgerable,
+                ledgerable=ledgerable and spec.ledger,
                 unknown=unknown,
                 witness=handle,
             )

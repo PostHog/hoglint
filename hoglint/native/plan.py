@@ -35,8 +35,8 @@ from hoglint.selectors import (
 )
 
 # How the evaluator treats each primitive's rules: judged in Rust, or selected for Python.
-JUDGED = frozenset({"edge", "entrypoint"})
-SELECTED = frozenset({"use-shape", "signature", "inventory"})
+JUDGED = frozenset({"edge", "entrypoint", "signature"})
+SELECTED = frozenset({"use-shape", "inventory"})
 
 
 def context_bits(names: frozenset[str]) -> int:
@@ -139,6 +139,8 @@ class RulePlan:
             "redefines": list(self.redefines[spec.id]),
             "group": CyclePrimitive.group_of(self.config, spec) if spec.primitive == "cycle" else None,
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
+            "signature": spec.primitive == "signature",
+            "unknown_types": list(spec.unknown_types) if spec.primitive == "signature" else [],
         }
 
     def selectors(self) -> Iterable[Selector]:

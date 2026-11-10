@@ -72,7 +72,7 @@ impl Rules {
 
     /// Every destination of every candidate edge rule `rule` does not judge clean, in the order
     /// the Python engine judges them. Judgment codes: 1 unresolved, 2 unknown selection, 3 unknown
-    /// violation, 4 violation.
+    /// violation, 4 violation, 5 unknown type (a signature rule's).
     fn judge(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<RowTuple>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let rows = self

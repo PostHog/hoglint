@@ -14,6 +14,7 @@ pub mod labels;
 pub mod plan;
 pub mod reach;
 pub mod selector;
+pub mod signature;
 pub mod staged;
 pub mod symbols;
 pub mod value;
@@ -23,6 +24,7 @@ use self::env::{Cx, Endpoint, Env, Role};
 use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{Mode, Plan, RulePlan, SetValue};
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
+use self::signature::Signature;
 use self::staged::{Staged, parts_truth, truth};
 use self::symbols::{KindSets, SymbolFacts};
 use self::value::{Truth, Value, any_of, render};
@@ -40,6 +42,8 @@ pub enum Judgment {
     UnknownSelection = 2,
     UnknownViolation = 3,
     Violation = 4,
+    /// A signature slot with no usable type.
+    UnknownType = 5,
 }
 
 /// One destination of one edge a rule does not judge clean: what Python needs to make its
@@ -49,8 +53,8 @@ pub struct Row {
     /// The destination's place among the edge's destinations.
     pub target: u32,
     pub judgment: Judgment,
-    /// The identity columns of a violation, rendered as `rules.base.project` renders them; empty
-    /// for any other judgment, which the rule's own code reports.
+    /// The identity columns of a violation or an unknown type, rendered as `rules.base.project`
+    /// renders them; empty for any other judgment, which the rule's own code reports.
     pub identity: Vec<String>,
     /// The source module (the finding's owner module) and the destination's module.
     pub src_module: Sid,
@@ -77,6 +81,8 @@ pub struct Rule {
     group: Option<(Ref, Ref)>,
     /// A reach rule's `from`.
     start: Option<Node>,
+    /// What a signature rule adds to an edge rule.
+    signature: Option<Signature>,
 }
 
 /// One destination a cycle rule cannot leave alone: its edge and place, its judgment
@@ -381,6 +387,10 @@ impl Rules {
                 .map(|path| compiler.reference(path))
                 .collect(),
             start: optional(&plan.start)?,
+            signature: plan.signature.then(|| Signature {
+                unknown_types: plan.unknown_types.clone(),
+                annotation: compiler.it.get("annotation"),
+            }),
             group: plan.group.as_ref().map(|name| {
                 let path = |root: &str| [root.to_string(), name.clone()];
                 (
@@ -668,7 +678,10 @@ impl Rules {
     pub fn judge(&self, link: &mut Link, index: usize) -> Result<Vec<Row>, String> {
         let rule = self.rule(index, Mode::Judge)?;
         self.read_sources(link, rule);
-        let ids = self.candidates(link, rule);
+        let mut ids = self.candidates(link, rule);
+        if let Some(signature) = &rule.signature {
+            ids = signature.seen(link, ids);
+        }
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, rule.role, dsts);
@@ -678,7 +691,7 @@ impl Rules {
                 if judgment == Judgment::Clean {
                     continue;
                 }
-                let identity = if judgment == Judgment::Violation {
+                let identity = if matches!(judgment, Judgment::Violation | Judgment::UnknownType) {
                     rule.identity
                         .iter()
                         .map(|field| render(&evaluate_ref(*field, &env)))
@@ -1022,12 +1035,18 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
     selector::Resolve::resolve(env, field)
 }
 
-/// `EdgeRule.decide` for one environment. `deny`, `allow` and `require` are all judged, as
-/// `EdgeRule.violation` judges them.
+/// `EdgeRule.decide` for one environment, and `SignaturePrimitive.decide` for a signature rule.
+/// `deny`, `allow` and `require` are all judged, as `EdgeRule.violation` judges them.
 pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
     let selected = rule.staged.truth(env, false);
     if selected == Truth::False {
         return Judgment::Clean;
+    }
+    if let (Some(signature), Some(id)) = (&rule.signature, env.edge)
+        && !env.dst.unresolved
+        && signature.unknown_type(&env.cx, id, &env.dst)
+    {
+        return Judgment::UnknownType;
     }
     if env.dst.unresolved {
         return Judgment::Unresolved;
