@@ -94,23 +94,24 @@ class Links:
 
 class Listing:
     """path -> mode for every file of a snapshot, in git's order, and where each file's bytes
-    are: `blobs` holds the paths read from git's object store by blob oid, `disk` the paths read
-    from the working tree (path -> the file to read), and `unreadable` the links that lead
-    nowhere inside the snapshot. A link's bytes are its target's."""
+    are: `blobs` holds the regular files read from git's object store by blob oid, `disk` the
+    regular files read from the working tree, and `link_oids` the links whose text a blob holds.
+    A link's bytes are those of the file it leads to; its text is read on the first question
+    about a link, for every link at once."""
 
     def __init__(
         self,
         repo: Path,
         modes: dict[str, str],
         blobs: dict[str, str],
-        disk: dict[str, str] | None = None,
-        unreadable: Iterable[str] = (),
+        link_oids: dict[str, str],
+        disk: Iterable[str] = (),
     ) -> None:
         self.repo = repo
         self.modes = modes
         self.blobs = blobs
-        self.disk = disk or {}
-        self.unreadable = frozenset(unreadable)
+        self.link_oids = link_oids
+        self.disk = frozenset(disk)
 
     @property
     def paths(self) -> list[str]:
@@ -124,6 +125,29 @@ class Listing:
             out.update("/".join(parts[:end]) for end in range(1, len(parts) + 1))
         return frozenset(out)
 
+    def link_texts(self) -> dict[str, str]:
+        return {path: os.fsdecode(raw) for path, raw in read_blobs(self.repo, self.link_oids).items()}
+
+    @cached_property
+    def targets(self) -> dict[str, str | None]:
+        """link path -> the regular file it leads to; None when it leads nowhere in the snapshot."""
+        texts = self.link_texts()
+        resolver = Links(self.modes, texts)
+        return {path: resolver.target(path) for path in texts}
+
+    def target(self, path: str) -> str | None:
+        return self.targets[path] if self.modes.get(path) == LINK_MODE else path
+
+    def blob(self, path: str) -> str | None:
+        """The blob oid that holds the bytes of `path`; None when they are on disk, or nowhere."""
+        target = self.target(path)
+        return self.blobs.get(target) if target is not None else None
+
+    def disk_file(self, path: str) -> str | None:
+        """The working tree file that holds the bytes of `path`; None when they are in a blob, or nowhere."""
+        target = self.target(path)
+        return target if target in self.disk else None
+
     def holds(self, path: str) -> bool:
         """Whether the snapshot holds `path`, as a file or as a directory with a file in it."""
         return path in self.modes or path in self.directories
@@ -132,7 +156,8 @@ class Listing:
         """Writes the paths the snapshot holds under `target`; a path it does not hold is left out.
         Returns the paths it holds but cannot read, which are left out too."""
         wanted = [path for path in paths if path in self.modes]
-        found = read_blobs(self.repo, {path: self.blobs[path] for path in wanted if path in self.blobs})
+        oids = {path: oid for path in wanted if (oid := self.blob(path)) is not None}
+        found = read_blobs(self.repo, oids)
         unreadable = []
         for path in wanted:
             written = target / path
@@ -140,20 +165,19 @@ class Listing:
             if path in found:
                 written.write_bytes(found[path])
                 continue
+            on_disk = self.disk_file(path)
             try:
-                shutil.copyfile(self.repo / self.disk[path], written)
-            except (KeyError, OSError):
+                if on_disk is None:
+                    raise FileNotFoundError(path)
+                shutil.copyfile(self.repo / on_disk, written)
+            except OSError:
                 unreadable.append(path)
         return unreadable
 
 
-def link_texts(repo: Path, oids: dict[str, str]) -> dict[str, str]:
-    return {path: os.fsdecode(raw) for path, raw in read_blobs(repo, oids).items()}
-
-
 class TreeListing(Listing):
-    """Every file of one git tree, from one `git ls-tree -r -z`, links resolved by their blobs. A
-    tree is immutable, so each one is listed at most once per process. Submodules are no files."""
+    """Every file of one git tree, from one `git ls-tree -r -z`. A tree is immutable, so each one
+    is listed at most once per process. Submodules are no files."""
 
     taken: ClassVar[dict[tuple[Path, str], TreeListing]] = {}
 
@@ -176,23 +200,12 @@ class TreeListing(Listing):
             return found
         command = ["git", "-C", str(repo), "ls-tree", "-r", "-z", tree]
         output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
-        found = TreeListing.taken[key] = TreeListing.resolved(repo, TreeListing.parse(output))
-        return found
-
-    @staticmethod
-    def resolved(repo: Path, entries: dict[str, tuple[str, str]]) -> TreeListing:
+        entries = TreeListing.parse(output)
         modes = {path: mode for path, (mode, _) in entries.items()}
+        blobs = {path: oid for path, (mode, oid) in entries.items() if mode != LINK_MODE}
         links = {path: oid for path, (mode, oid) in entries.items() if mode == LINK_MODE}
-        resolver = Links(modes, link_texts(repo, links))
-        blobs: dict[str, str] = {}
-        unreadable: list[str] = []
-        for path, (mode, oid) in entries.items():
-            target = resolver.target(path) if mode == LINK_MODE else path
-            if target is None:
-                unreadable.append(path)
-                continue
-            blobs[path] = oid if target == path else entries[target][1]
-        return TreeListing(repo, modes, blobs, unreadable=unreadable)
+        found = TreeListing.taken[key] = TreeListing(repo, modes, blobs, links)
+        return found
 
 
 class WorktreeListing(Listing):
@@ -203,6 +216,18 @@ class WorktreeListing(Listing):
     status the rest of the run reads."""
 
     taken: ClassVar[dict[Path, WorktreeListing]] = {}
+
+    def __init__(
+        self,
+        repo: Path,
+        modes: dict[str, str],
+        blobs: dict[str, str],
+        link_oids: dict[str, str],
+        disk: Iterable[str],
+        disk_links: Iterable[str],
+    ) -> None:
+        super().__init__(repo, modes, blobs, link_oids, disk)
+        self.disk_links = frozenset(disk_links)
 
     @staticmethod
     def index_entries(repo: Path) -> dict[str, tuple[str, str]]:
@@ -228,6 +253,15 @@ class WorktreeListing(Listing):
             return LINK_MODE
         return "100755" if found & stat.S_IXUSR else "100644"
 
+    def link_texts(self) -> dict[str, str]:
+        texts = super().link_texts()
+        for path in self.disk_links:
+            try:
+                texts[path] = os.readlink(self.repo / path)
+            except OSError:
+                texts[path] = "/"  # a link that cannot be read leads nowhere
+        return texts
+
     @staticmethod
     def of(repo: Path) -> WorktreeListing:
         key = repo.resolve()
@@ -243,24 +277,9 @@ class WorktreeListing(Listing):
             if entry.mode != DELETED_MODE:
                 dirty[entry.path] = entry.mode or WorktreeListing.mode_on_disk(repo / entry.path)
         modes = {**{path: mode for path, (mode, _) in entries.items()}, **dirty}
-        texts = link_texts(repo, {path: oid for path, (mode, oid) in entries.items() if mode == LINK_MODE})
-        for path, mode in dirty.items():
-            if mode == LINK_MODE:
-                try:
-                    texts[path] = os.readlink(repo / path)
-                except OSError:
-                    texts[path] = "/"  # a link that cannot be read leads nowhere
-        resolver = Links(modes, texts)
-        blobs: dict[str, str] = {}
-        disk: dict[str, str] = {}
-        unreadable: list[str] = []
-        for path, mode in modes.items():
-            target = resolver.target(path) if mode == LINK_MODE else path
-            if target is None:
-                unreadable.append(path)
-            elif target in dirty:
-                disk[path] = target
-            else:
-                blobs[path] = entries[target][1]
-        found = WorktreeListing.taken[key] = WorktreeListing(repo, modes, blobs, disk, unreadable)
+        blobs = {path: oid for path, (mode, oid) in entries.items() if mode != LINK_MODE}
+        links = {path: oid for path, (mode, oid) in entries.items() if mode == LINK_MODE}
+        disk = [path for path, mode in dirty.items() if mode != LINK_MODE]
+        disk_links = [path for path, mode in dirty.items() if mode == LINK_MODE]
+        found = WorktreeListing.taken[key] = WorktreeListing(repo, modes, blobs, links, disk, disk_links)
         return found

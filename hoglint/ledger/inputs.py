@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from hoglint.config.model import Config
-from hoglint.globs import CAPTURE_RE, Braces, translate
+from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
@@ -41,9 +41,13 @@ class InputPatterns:
         self.patterns = tuple(sorted(set(patterns)))
         regex = "|".join(f"(?:{translate(pattern, Braces.LITERAL)})" for pattern in self.patterns)
         self.regex = re.compile(regex, re.DOTALL)
+        # Every match ends with one of these texts, so a cheap test turns most paths away; a
+        # pattern with no literal end (`dir/**`) leaves every path to the regex.
+        ends = tuple(literal_ends(pattern, Braces.LITERAL)[1] for pattern in self.patterns)
+        self.ends = ends if all(ends) else ("",)
 
     def matches(self, path: str) -> bool:
-        return bool(self.patterns) and self.regex.fullmatch(path) is not None
+        return bool(self.patterns) and path.endswith(self.ends) and self.regex.fullmatch(path) is not None
 
     def digest(self) -> str:
         return hashlib.sha256("\0".join(self.patterns).encode()).hexdigest()[:PATTERN_DIGEST_CHARS]
@@ -162,7 +166,7 @@ class InputDigests:
     def compute(listing: TreeListing, patterns: InputPatterns) -> str:
         hasher = hashlib.sha256()
         for path in sorted((path for path in listing.modes if patterns.matches(path)), key=str.encode):
-            hasher.update(f"{path}\0{listing.modes[path]}\0{listing.blobs.get(path, '')}\0".encode())
+            hasher.update(f"{path}\0{listing.modes[path]}\0{listing.blob(path) or ''}\0".encode())
         return hasher.hexdigest()[:INPUTS_DIGEST_CHARS]
 
     def of(self, repo: Path, tree: str, patterns: InputPatterns) -> str:

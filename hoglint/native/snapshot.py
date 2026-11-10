@@ -101,21 +101,25 @@ class BlobSnapshot:
         listing = TreeListing.of(repo, tree)
         for path in listing.paths:
             if is_source(path):
-                snapshot.blobs[path] = (listing.blobs.get(path, NULL_OID), False)
+                snapshot.blobs[path] = (listing.blob(path) or NULL_OID, False)
         return snapshot
 
     @staticmethod
     def worktree(repo: Path) -> BlobSnapshot:
         snapshot = BlobSnapshot(repo)
         listing = WorktreeListing.of(repo)
+        dirty: dict[str, str] = {}
         for path in listing.paths:
-            if is_source(path):
-                snapshot.blobs[path] = (listing.blobs.get(path, NULL_OID), False)
-        dirty = sorted(path for path in listing.disk if is_source(path))
+            if not is_source(path):
+                continue
+            on_disk = listing.disk_file(path)
+            if on_disk is not None:
+                dirty[path] = on_disk
+                continue
+            snapshot.blobs[path] = (listing.blob(path) or NULL_OID, False)
         if dirty:
             # A link is hashed by the file it leads to; the extractor reads the link, which the
             # operating system follows to that file.
-            hashed = hash_worktree_files(repo, [listing.disk[path] for path in dirty])
-            for path, oid in zip(dirty, hashed, strict=True):
+            for path, oid in zip(dirty, hash_worktree_files(repo, list(dirty.values())), strict=True):
                 snapshot.blobs[path] = (oid, True)
         return snapshot
