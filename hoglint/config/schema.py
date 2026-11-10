@@ -115,15 +115,15 @@ RULE_KEYS: dict[str, frozenset[str]] = {
 # meaning, so each engine would give it one of its own (D52). A mode is a primitive, or an
 # inventory over edges (`classify`) or over entities (`exactly_one`).
 UNREAD_KEYS: dict[str, frozenset[str]] = {
-    "an inventory over entities (`exactly_one`)": frozenset(
+    "inventory rules with `exactly_one`": frozenset(
         {"from", "kinds", "contexts", "classify", "remedy", "on_unresolved"}
     ),
-    "an inventory over edges (`classify`)": frozenset({"on", "exactly_one"}),
-    "a layout rule": frozenset({"remedy", "on_unresolved"}),
-    "a coverage rule": frozenset({"remedy", "on_unresolved"}),
-    "an export rule": frozenset({"remedy"}),
-    "a cycle rule": frozenset({"remedy"}),
-    "a use-shape rule": frozenset({"view"}),
+    "inventory rules with `classify`": frozenset({"on", "exactly_one"}),
+    "layout rules": frozenset({"remedy", "on_unresolved"}),
+    "coverage rules": frozenset({"remedy", "on_unresolved"}),
+    "export rules": frozenset({"remedy"}),
+    "cycle rules": frozenset({"remedy"}),
+    "use-shape rules": frozenset({"view"}),
 }
 DEFAULT_UNKNOWN_TYPES = ("typing.Any", "builtins.dict", "typing.Dict", "builtins.object")
 
@@ -732,18 +732,14 @@ class SchemaBuilder:
     @staticmethod
     def rule_mode(table: dict[str, Any], primitive: str) -> str:
         if primitive == "inventory":
-            return (
-                "an inventory over edges (`classify`)"
-                if table.get("classify")
-                else "an inventory over entities (`exactly_one`)"
-            )
-        return f"{'an' if primitive[0] in 'aeiou' else 'a'} {primitive} rule"
+            return f"inventory rules with `{'classify' if table.get('classify') else 'exactly_one'}`"
+        return f"{primitive} rules"
 
     def check_read_keys(self, key: str, table: dict[str, Any], primitive: str) -> None:
         """A key the rule's mode accepts in the schema but never reads is a config error (D52)."""
         mode = self.rule_mode(table, primitive)
         for name in sorted(UNREAD_KEYS.get(mode, frozenset()) & table.keys()):
-            self.fail(key, f"{mode} does not read `{name}`; remove it")
+            self.fail(key, f"`{name}` is not read by {mode}; remove it")
 
     def read_rules(self, registries: dict[str, RegistrySpec], exports: dict[str, ExportSpec]) -> dict[str, RuleSpec]:
         out: dict[str, RuleSpec] = {}

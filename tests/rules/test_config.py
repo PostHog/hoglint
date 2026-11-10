@@ -143,25 +143,31 @@ ledger = false
         (
             "[rules.other]\nprimitive = 'inventory'\non = 'module'\nexactly_one = 'package'\n"
             "from = \"src.module == 'a'\"\nledger = false\n",
-            "an inventory over entities (`exactly_one`) does not read `from`",
+            "`from` is not read by inventory rules with `exactly_one`",
         ),
         (
             "[rules.other]\nprimitive = 'inventory'\nexactly_one = 'package'\nkinds = ['import']\nledger = false\n",
-            "an inventory over entities (`exactly_one`) does not read `kinds`",
+            "`kinds` is not read by inventory rules with `exactly_one`",
         ),
         (
             "[rules.other]\nprimitive = 'inventory'\nclassify = 'c.toml'\nexactly_one = 'package'\nledger = false\n",
-            "an inventory over edges (`classify`) does not read `exactly_one`",
+            "`exactly_one` is not read by inventory rules with `classify`",
         ),
         (
             "[rules.other]\nprimitive = 'inventory'\nclassify = 'c.toml'\non = 'module'\nledger = false\n",
-            "an inventory over edges (`classify`) does not read `on`",
+            "`on` is not read by inventory rules with `classify`",
         ),
-        ("[rules.other]\nprimitive = 'layout'\nremedy = 'move it'\nledger = false\n", "a layout rule does not read"),
-        ("[rules.other]\nprimitive = 'cycle'\nremedy = 'cut it'\nledger = false\n", "a cycle rule does not read"),
+        (
+            "[rules.other]\nprimitive = 'layout'\nremedy = 'move it'\nledger = false\n",
+            "`remedy` is not read by layout rules",
+        ),
+        (
+            "[rules.other]\nprimitive = 'cycle'\nremedy = 'cut it'\nledger = false\n",
+            "`remedy` is not read by cycle rules",
+        ),
         (
             "[rules.other]\nprimitive = 'use-shape'\nview = 'refs'\nledger = false\n",
-            "a use-shape rule does not read `view`",
+            "`view` is not read by use-shape rules",
         ),
         # an inventory over entities reads entity selectors, whether or not it names `on`
         (
