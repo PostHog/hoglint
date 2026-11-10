@@ -509,11 +509,7 @@ impl Link {
     /// (`ledger.records.WitnessRecord`): (kind, path, line, column, surface, targets written as
     /// `EntityId` writes them), with no Edge made.
     #[allow(clippy::type_complexity)]
-    fn witness_rows<'py>(
-        &self,
-        py: Python<'py>,
-        ids: &[u8],
-    ) -> PyResult<Vec<WitnessRow<'py>>> {
+    fn witness_rows<'py>(&self, py: Python<'py>, ids: &[u8]) -> PyResult<Vec<WitnessRow<'py>>> {
         let ids = ids_from(ids)?;
         let link = &self.inner;
         let it = &link.core.it;
