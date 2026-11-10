@@ -89,6 +89,18 @@ pub struct NewEntry<'a> {
     pub json_len: usize,
 }
 
+/// How many times lz4 can expand a block at most, with room for its last literals: a stored
+/// length past that is damage, and allocating it could abort the run.
+const MAX_EXPANSION: usize = 255;
+const EXPANSION_SLACK: usize = 64;
+
+/// The most text `packed` compressed bytes can hold.
+fn expands_to(packed: usize) -> usize {
+    packed
+        .saturating_mul(MAX_EXPANSION)
+        .saturating_add(EXPANSION_SLACK)
+}
+
 /// A record's JSON text, compressed for the `records` table in frames: one from the start of
 /// each key's value (`values`, ranges of the text) to the start of the next, and one for the
 /// text before the first, so the frames hold the text whole and a key's value sits in one.
@@ -153,20 +165,24 @@ fn u32_at(bytes: &[u8], at: usize) -> usize {
 fn frames(index: &[u8], json_len: usize, blob_len: usize) -> Option<Vec<Frame>> {
     let mut out = Vec::new();
     let mut read = 0;
-    let mut text = 0;
+    let mut text: usize = 0;
     let mut at = 4 + index.len();
     while read < index.len() {
         let len = varint(index, &mut read)?;
         let packed = varint(index, &mut read)?;
-        if at + packed > blob_len {
+        let (Some(text_end), Some(packed_end)) = (text.checked_add(len), at.checked_add(packed))
+        else {
+            return None;
+        };
+        if packed_end > blob_len || text_end > json_len {
             return None;
         }
         out.push(Frame {
-            text: text..text + len,
-            packed: at..at + packed,
+            text: text..text_end,
+            packed: at..packed_end,
         });
-        text += len;
-        at += packed;
+        text = text_end;
+        at = packed_end;
     }
     (text == json_len).then_some(out)
 }
@@ -177,6 +193,9 @@ fn unpack(bytes: &[u8], base: usize, frames: &[Frame]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for frame in frames {
         let packed = bytes.get(frame.packed.start - base..frame.packed.end - base)?;
+        if frame.text.len() > expands_to(packed.len()) {
+            return None;
+        }
         let text = lz4_flex::block::decompress(packed, frame.text.len()).ok()?;
         if text.len() != frame.text.len() {
             return None;
@@ -256,18 +275,31 @@ impl FactDb {
         Ok(self.conn.execute_batch("COMMIT")?)
     }
 
+    /// The entry of (config, oid); None when there is none, or when its stored lengths cannot be
+    /// those of a record: a damaged row is a miss.
     pub fn find(&self, config: &str, oid: &str) -> Result<Option<Row>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT used, json_len FROM keys WHERE config = ?1 AND oid = ?2")?;
-        Ok(stmt
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT used, json_len, bytes FROM keys WHERE config = ?1 AND oid = ?2",
+        )?;
+        let found = stmt
             .query_row(params![config, oid], |r| {
-                Ok(Row {
-                    used: r.get(0)?,
-                    json_len: r.get::<_, i64>(1)? as usize,
-                })
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
             })
-            .optional()?)
+            .optional()?;
+        let Some((used, json_len, bytes)) = found else {
+            return Ok(None);
+        };
+        let (Ok(json_len), Ok(bytes)) = (usize::try_from(json_len), usize::try_from(bytes)) else {
+            return Ok(None);
+        };
+        if json_len > expands_to(bytes) || json_len > u32::MAX as usize {
+            return Ok(None);
+        }
+        Ok(Some(Row { used, json_len }))
     }
 
     /// The blob `sql` selects for the entry of (config, oid), or None when the entry is gone.

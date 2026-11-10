@@ -116,6 +116,20 @@ def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, da
     assert records(run) == records(fresh)
 
 
+@pytest.mark.parametrize("json_len", [-1, 1 << 62])
+def test_a_stored_length_no_record_can_have_is_a_miss(tmp_path: Path, json_len: int) -> None:
+    native = native_module()
+    repo = make_repo(tmp_path)
+    database = fact_database(native, tmp_path)
+    link(native, BlobSnapshot.index(repo), database)
+    with sqlite3.connect(database.path) as conn:
+        conn.execute("UPDATE keys SET json_len = ? WHERE id = (SELECT max(id) FROM keys)", (json_len,))
+    run, counts = link(native, BlobSnapshot.index(repo), database)
+    fresh, _ = link(native, BlobSnapshot.index(repo), None)
+    assert counts == (2, 1)
+    assert records(run) == records(fresh)
+
+
 def test_a_damaged_database_is_moved_aside_and_the_run_goes_on(tmp_path: Path) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
