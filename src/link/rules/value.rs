@@ -75,28 +75,6 @@ pub enum Value<'a> {
     List(&'a [String]),
 }
 
-/// `str()` of a frozenset of strings. Python orders the items of a set of several by their
-/// hashes, which change per process; the evaluator writes them sorted.
-fn set_text<'s>(items: impl Iterator<Item = Cow<'s, str>>) -> String {
-    let mut parts: Vec<String> = items.map(|item| py_repr(&item)).collect();
-    parts.sort();
-    parts.dedup();
-    if parts.is_empty() {
-        return "frozenset()".to_string();
-    }
-    format!("frozenset({{{}}})", parts.join(", "))
-}
-
-/// `str()` of an edge's contexts: a frozenset of `Context` members, each written as its repr.
-fn contexts_text(bits: u8) -> String {
-    let mut parts: Vec<String> = context_names(bits)
-        .into_iter()
-        .map(|name| format!("<Context.{}: {}>", name.to_uppercase(), py_repr(name)))
-        .collect();
-    parts.sort();
-    format!("frozenset({{{}}})", parts.join(", "))
-}
-
 fn context_names(bits: u8) -> Vec<&'static str> {
     CONTEXT_NAMES
         .iter()
@@ -104,44 +82,6 @@ fn context_names(bits: u8) -> Vec<&'static str> {
         .filter(|(bit, _)| bits & (1 << bit) != 0)
         .map(|(_, name)| *name)
         .collect()
-}
-
-/// Python's `repr` of a string.
-pub fn py_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::new();
-    out.push(quote);
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32))
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
-/// Python's `str()` of a tuple of strings.
-fn tuple_text(items: &[String]) -> String {
-    let parts: Vec<String> = items.iter().map(|item| py_repr(item)).collect();
-    match parts.len() {
-        1 => format!("({},)", parts[0]),
-        _ => format!("({})", parts.join(", ")),
-    }
 }
 
 impl<'a> Value<'a> {
@@ -178,19 +118,14 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// `selectors.scalar`: a bool as true/false, anything else as `str()`.
+    /// `selectors.scalar`: a value read as text, in its one text form (D45): a bool as
+    /// true/false, a set or a list as its identity column.
     fn scalar(&self) -> Cow<'_, str> {
         match self {
             Value::Text(text) => Cow::Borrowed(text),
-            Value::Bool(true) => Cow::Borrowed("true"),
-            Value::Bool(false) => Cow::Borrowed("false"),
             Value::Zone(zone) => Cow::Borrowed(&zone.name),
-            Value::List(items) => Cow::Owned(tuple_text(items)),
-            Value::Set(items) => {
-                Cow::Owned(set_text(items.iter().map(|item| Cow::Borrowed(*item))))
-            }
-            Value::Contexts(bits) => Cow::Owned(contexts_text(*bits)),
             Value::Unknown | Value::None => Cow::Borrowed("None"),
+            other => Cow::Owned(render(other)),
         }
     }
 
@@ -368,11 +303,11 @@ mod tests {
     }
 
     #[test]
-    fn a_set_matches_a_member_and_a_list_literal_only_its_repr() {
+    fn a_set_matches_a_member_and_a_list_literal_its_items() {
         assert_eq!(equals(&Value::Set(vec!["a", "b"]), &text("a")), Truth::True);
         let list = ["a".to_string()];
-        assert_eq!(equals(&Value::List(&list), &text("a")), Truth::False);
-        assert_eq!(equals(&Value::List(&list), &text("('a',)")), Truth::True);
+        assert_eq!(equals(&Value::List(&list), &text("a")), Truth::True);
+        assert_eq!(equals(&Value::List(&list), &text("('a',)")), Truth::False);
         assert_eq!(
             equals(&Value::List(&list), &Value::Set(vec!["a"])),
             Truth::True
@@ -380,26 +315,17 @@ mod tests {
     }
 
     #[test]
-    fn a_set_as_a_scalar_is_its_python_text() {
+    fn a_set_as_text_is_its_items_sorted_and_joined() {
         assert_eq!(
-            starts(&Value::Set(vec!["a"]), &Value::Set(vec!["a"])),
+            starts(&Value::Set(vec!["b", "a"]), &text("a,b")),
             Truth::True
         );
         assert_eq!(
             starts(&Value::Set(vec!["a"]), &Value::Set(vec!["b"])),
             Truth::False
         );
-        assert_eq!(
-            starts(&Value::Set(vec![]), &text("frozenset()")),
-            Truth::True
-        );
-        assert_eq!(
-            starts(
-                &Value::Contexts(1),
-                &text("frozenset({<Context.PROD: 'prod'>})")
-            ),
-            Truth::True
-        );
+        assert_eq!(starts(&Value::Set(vec![]), &text("-")), Truth::True);
+        assert_eq!(starts(&Value::Contexts(3), &text("prod,test")), Truth::True);
     }
 
     #[test]

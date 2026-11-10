@@ -457,9 +457,9 @@ def render_value(value: Value) -> str:
 
 
 def scalar(value: Value) -> str:
-    if isinstance(value.data, bool):
-        return "true" if value.data else "false"
-    return str(value.data)
+    """A known value read as text, in its one text form: a set or a list as its identity column,
+    never `str()` of a frozenset, whose item order follows the hash seed."""
+    return render_data(value.data)
 
 
 def equals(left: Value, right: Value) -> Truth:

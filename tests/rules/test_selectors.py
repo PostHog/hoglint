@@ -60,6 +60,10 @@ def resolve(ref: Ref) -> Value:
         ("src.context == 'test'", Truth.TRUE),
         ("dst.exported", Truth.TRUE),
         ("dst.module startswith 'saleor.core.development'", Truth.TRUE),
+        # a set or a list read as text is its identity column, whatever the hash seed
+        ("dst.aliases startswith 'default,replica'", Truth.TRUE),
+        ("src.context startswith 'function_local,test'", Truth.TRUE),
+        ("dst.package == ['core']", Truth.TRUE),
         ("true", Truth.TRUE),
     ],
 )

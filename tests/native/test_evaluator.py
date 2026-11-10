@@ -337,6 +337,7 @@ CORNERS = {
     "zone-against-a-zone": {**EDGE, "deny": "dst.zone == src.zone and dst.zone in ['facade']"},
     "set-against-a-member": {**EDGE, "deny": "src.owners == 'team-core' and src.owners != dst.owners"},
     "list-literal-against-a-scalar": {**EDGE, "deny": "dst.package == ['billing'] or dst.package in ['billing']"},
+    "set-read-as-text": {**EDGE, "deny": "src.owners startswith 'team-core,' or dst.zone == src.owners"},
     "bool-rendering": {
         **EDGE,
         "deny": "src.testcode == true",
@@ -482,6 +483,15 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
     monkeypatch.setattr(RulePlan, "modules", lambda self: list(reversed(self.graph.modules)))
     with pytest.raises(Exception, match="modules in another order"):
         assert native.evaluator
+
+
+def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World) -> None:
+    config = world.config(rule_table("text", CORNERS["set-read-as-text"]))
+    native, python = world.contexts(config)
+    spec = config.rules["text"]
+    found = run_rows(primitive_of(spec)(native, spec).evaluate())
+    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
 
 
 def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:
