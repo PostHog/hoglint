@@ -18,11 +18,13 @@ summary made on Linux CI and one made on a Mac agree:
 from __future__ import annotations
 
 import os
+import base64
 import fnmatch
 import hashlib
 import sysconfig
 import subprocess
 import dataclasses
+import importlib.util
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -223,12 +225,17 @@ class EngineId:
 
 
 class Framework:
-    """The installed distributions that ship the `[discovery] external` packages: name and version
-    (the dist-info directory) and the RECORD rows of the package's Python sources, the files a run
-    reads. Each row holds the file's hash, and an install or upgrade rewrites RECORD, so no source
-    file is read. Other rows depend on the install, not on the code: a console script carries the
-    venv's own path in its shebang, and the installer adds rows of its own (INSTALLER, REQUESTED,
-    bytecode), so they would make every machine's digest differ."""
+    """The installed distributions a run reads or runs: those that ship the `[discovery] external`
+    packages, and those the active plugins declare they import (`distributions`, see plugins.py).
+    For each: name and version (the dist-info directory) and the RECORD rows of the package's
+    Python sources. Each row holds the file's hash, and an install or upgrade rewrites RECORD, so
+    no source file is read. Other rows depend on the install, not on the code: a console script
+    carries the venv's own path in its shebang, and the installer adds rows of its own
+    (INSTALLER, REQUESTED, bytecode), so they would make every machine's digest differ.
+
+    An editable install's RECORD lists no sources, only a path hook, so its rows are made the
+    same way from the files where the import finds the package: the same code installed either
+    way has one digest."""
 
     @staticmethod
     def site() -> Path:
@@ -271,6 +278,22 @@ class Framework:
         return sorted(row for row in rows if row.split(",", 1)[0].endswith(".py"))
 
     @staticmethod
+    def imported_sources(package: str) -> list[str]:
+        """RECORD rows (`path,sha256=<urlsafe base64>,size`) of the .py files where the import
+        finds the package, for an install whose RECORD lists none."""
+        spec = importlib.util.find_spec(package)
+        if spec is None or not spec.submodule_search_locations:
+            return []
+        rows = []
+        for location in spec.submodule_search_locations:
+            root = Path(location)
+            for path in root.rglob("*.py"):
+                data = path.read_bytes()
+                hashed = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+                rows.append(f"{package}/{path.relative_to(root).as_posix()},sha256={hashed},{len(data)}")
+        return sorted(rows)
+
+    @staticmethod
     def digest(packages: tuple[str, ...]) -> str:
         infos = Framework.dist_infos(Framework.site(), packages)
         parts: list[str | bytes] = []
@@ -279,12 +302,32 @@ class Framework:
             if info is None:
                 parts += [package, MISSING]
                 continue
-            parts += [package, info.name, *Framework.sources((info / "RECORD").read_text(), package)]
+            rows = Framework.sources((info / "RECORD").read_text(), package) or Framework.imported_sources(package)
+            parts += [package, info.name, *rows]
         return short_digest(parts)
 
     @staticmethod
+    def packages_of(config: Config) -> tuple[str, ...]:
+        """`[discovery] external`, and the distributions the config's packs, providers and
+        coverage adapters import."""
+        packages = set(as_tuple(config.discovery.get("external")))
+        plugins: list[object] = [REGISTRY.packs.get(name) for name in config.pack_sections]
+        plugins += [REGISTRY.providers.get(spec.use) for spec in config.providers.values()]
+        coverage = [spec for spec in config.rules.values() if spec.primitive == "coverage"]
+        plugins += [REGISTRY.coverage_adapters.get(str(spec.input("adapter"))) for spec in coverage]
+        for plugin in plugins:
+            packages.update(getattr(plugin, "distributions", ()))
+        return tuple(sorted(packages))
+
+    @staticmethod
+    def missing(packages: tuple[str, ...]) -> list[str]:
+        """The packages no installed distribution ships, so no key part can name their code."""
+        found = Framework.dist_infos(Framework.site(), packages)
+        return [package for package in packages if package not in found]
+
+    @staticmethod
     def of_config(config: Config) -> str:
-        return Framework.digest(as_tuple(config.discovery.get("external")))
+        return Framework.digest(Framework.packages_of(config))
 
 
 class PolicyFiles:

@@ -459,7 +459,7 @@ class LocalEngine:
         return EngineId.installed(self.name, BinaryIds.of(self.binary, ENGINE))
 
     def framework(self, config: Config) -> str:
-        packages = as_tuple(config.discovery.get("external"))
+        packages = Framework.packages_of(config)
         if packages not in self.frameworks:
             self.frameworks[packages] = Framework.digest(packages)
         return self.frameworks[packages]

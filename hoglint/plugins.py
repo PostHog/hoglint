@@ -238,7 +238,11 @@ class RefinedFields:
 
 class Pack(Protocol):
     """A framework or repo pack: reads its config section and one snapshot, and writes edges,
-    refinements, symbol facts and failures into the sink."""
+    refinements, symbol facts and failures into the sink.
+
+    A pack, a provider or an adapter that imports an installed distribution declares
+    `distributions: tuple[str, ...]` (import names). The run summary key covers their code like
+    `[discovery] external` packages (see `Framework` in ledger/envelope.py)."""
 
     name: str  # the config section it owns, e.g. "django"
     allowed_keys: frozenset[str]
@@ -260,7 +264,8 @@ class Provider(Protocol):
 
     `values` maps output names to values (plain, or wrapped in `Provided`). A provider may declare
     `outputs: tuple[str, ...]`; one with a single output fills every field its `sets` lists, and
-    otherwise each output fills the field of the same name unless `sets` renames it.
+    otherwise each output fills the field of the same name unless `sets` renames it. It declares
+    `distributions` as a pack does, and `open` fails when one of them is not installed.
     """
 
     use: str  # the `use = "..."` name in a [[provider]] or [providers.*] entry

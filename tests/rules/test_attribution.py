@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import base64
 import hashlib
 import datetime
 import dataclasses
@@ -11,6 +12,7 @@ import pytest
 
 from hoglint.cli import Snapshots, TreeSummaries
 from hoglint.facts import Extractor
+from hoglint.labels import ProviderRunner
 from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
     ENGINE,
@@ -522,6 +524,59 @@ def test_the_framework_digest_comes_from_distribution_metadata(
     before = Framework.digest(("django", "rest_framework"))
     (tmp_path / edited).write_text(content)
     assert (Framework.digest(("django", "rest_framework")) != before) is changes
+
+
+def record_row(path: str, text: str) -> str:
+    data = text.encode()
+    return (
+        f"{path},sha256={base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()},{len(data)}\n"
+    )
+
+
+def test_an_editable_install_and_a_wheel_of_the_same_code_have_one_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code = {"plugin_code/__init__.py": "X = 1\n", "plugin_code/rules/check.py": "def check():\n    pass\n"}
+    rows = "".join(record_row(path, text) for path, text in code.items())
+    write_files(tmp_path / "wheel", {**code, "plugin_code-1.0.dist-info/RECORD": rows})
+    # an editable RECORD lists only the path hook; the code is wherever the import finds it
+    write_files(
+        tmp_path / "editable", {"plugin_code-1.0.dist-info/RECORD": "__editable__.plugin_code.pth,sha256=a,9\n"}
+    )
+    write_files(tmp_path / "checkout", code)
+    monkeypatch.syspath_prepend(str(tmp_path / "checkout"))
+    digests = []
+    for site in ("wheel", "editable"):
+        monkeypatch.setattr(Framework, "site", staticmethod(lambda site=site: tmp_path / site))
+        digests.append(Framework.digest(("plugin_code",)))
+    (tmp_path / "checkout/plugin_code/rules/check.py").write_text("def check():\n    return 1\n")
+    assert digests[0] == digests[1] != Framework.digest(("plugin_code",))
+
+
+PROVIDER_CONFIG = """
+schema = 1
+
+[discovery]
+external = ["django"]
+plugins = ["hoglint.presets_py.posthog"]
+
+[fields]
+owners = { type = "set" }
+
+[providers.owners]
+use = "owners-yaml"
+sets = ["owners"]
+"""
+
+
+def test_a_provider_declares_the_distributions_it_imports_and_fails_without_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = config_from(tmp_path, PROVIDER_CONFIG)
+    assert Framework.packages_of(config) == ("django", "owners_yaml")
+    monkeypatch.setattr(Framework, "site", staticmethod(lambda: tmp_path))
+    failures = ProviderRunner(config.providers.values(), tmp_path).failures
+    assert failures == {"owners": "ModuleNotFoundError: no installed distribution ships owners_yaml"}
 
 
 ENTRY = "N... 100644 100644 100644 1111111 2222222"
