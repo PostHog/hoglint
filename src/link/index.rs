@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 #[derive(Default)]
 pub struct EdgeIndex {
     by_kind: Option<FxHashMap<Sid, Vec<u32>>>,
-    by_target: Option<FxHashMap<Ent, Vec<u32>>>,
+    by_target: FxHashMap<Sid, FxHashMap<Ent, Vec<u32>>>,
     by_source: Option<FxHashMap<(Sid, Sid), Vec<u32>>>,
     source_order: Option<FxHashMap<Sid, Vec<Sid>>>,
     by_spelling: FxHashMap<Sid, FxHashMap<Sid, Vec<u32>>>,
@@ -33,7 +33,7 @@ impl EdgeIndex {
     /// Estimated heap bytes (`Link::heap`).
     pub fn heap(&self) -> usize {
         let mut out = self.by_kind.as_ref().map_or(0, lists_heap);
-        out += self.by_target.as_ref().map_or(0, lists_heap);
+        out += heap::map(&self.by_target) + self.by_target.values().map(lists_heap).sum::<usize>();
         out += self.by_source.as_ref().map_or(0, lists_heap);
         if let Some(order) = &self.source_order {
             out += heap::map(order) + order.values().map(heap::vec).sum::<usize>();
@@ -57,11 +57,13 @@ impl EdgeIndex {
         by_kind.get(&kind).map_or(&[], Vec::as_slice)
     }
 
-    /// Edges of `kind` whose resolved origin is one of `targets`.
+    /// Edges of `kind` whose resolved origin is one of `targets`. Each kind's index is built on
+    /// its first query, over that kind's edges only.
     pub fn to_targets(&mut self, edges: &EdgeStore, kind: Sid, targets: &[Ent]) -> Vec<u32> {
-        let by_target = self.by_target.get_or_insert_with(|| {
+        if !self.by_target.contains_key(&kind) {
+            let ids = self.of_kind(edges, kind).to_vec();
             let mut out: FxHashMap<Ent, Vec<u32>> = FxHashMap::default();
-            for id in 0..edges.len() as u32 {
+            for id in ids {
                 for &target in edges.targets_of(id) {
                     let ids = out.entry(target).or_default();
                     if ids.last() != Some(&id) {
@@ -69,11 +71,10 @@ impl EdgeIndex {
                     }
                 }
             }
-            out
-        });
-        let mut ids = merged(targets.iter().filter_map(|t| by_target.get(t)));
-        ids.retain(|&i| edges.kind_of(i) == kind);
-        ids
+            self.by_target.insert(kind, out);
+        }
+        let by_target = &self.by_target[&kind];
+        merged(targets.iter().filter_map(|t| by_target.get(t)))
     }
 
     fn build_sources(&mut self, edges: &EdgeStore, module_of: impl Fn(u32) -> Sid) {
