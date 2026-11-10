@@ -284,6 +284,18 @@ def test_of_processes_that_start_the_day_together_one_prunes(tmp_path: Path) -> 
     assert CacheRoot(tmp_path).prune_daily(datetime.date(2026, 11, 11))
 
 
+def test_a_staged_check_needs_no_index_lock(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {"hoglint.toml": DYNAMIC_CONFIG, "core/__init__.py": "", "core/loader.py": LOADER})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    (repo / ".git" / "index.lock").write_text("")
+    (tmp_path / "work").mkdir()
+    tree = Snapshots(repo, tmp_path / "work").write_tree()
+    (repo / ".git" / "index.lock").unlink()
+    assert tree == git_in(repo, "write-tree").strip()
+
+
 @pytest.mark.parametrize("fault", ["unwritable", "full"])
 def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], fault: str

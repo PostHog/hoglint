@@ -12,6 +12,7 @@ import gc
 import os
 import sys
 import json
+import shutil
 import tomllib
 import argparse
 import datetime
@@ -85,10 +86,24 @@ class Snapshots:
         self.worktrees: list[Path] = []
 
     def write_tree(self) -> str:
-        """`git write-tree` of the index: the one read of the index a staged run makes. Empty when
-        the index holds conflicts, which no tree can hold."""
-        completed = subprocess.run(["git", "-C", str(self.repo), "write-tree"], capture_output=True, text=True)
-        return completed.stdout.strip() if completed.returncode == 0 else ""
+        """The index as a git tree: the one read of the index a staged run makes. Empty when the
+        index holds conflicts, which no tree can hold.
+
+        `git write-tree` takes the index's lock, which another git process or a parallel hoglint
+        run may hold, so it runs on a copy of the index. Git replaces the index by renaming a
+        new file over it, so the copy is one whole index."""
+        index = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
+        copy = Path(tempfile.mkdtemp(prefix="index-", dir=self.work_dir)) / "index"
+        if index.is_file():
+            shutil.copyfile(index, copy)
+        env = {**os.environ, "GIT_INDEX_FILE": str(copy)}
+        command = ["git", "-C", str(self.repo), "write-tree"]
+        completed = subprocess.run(command, capture_output=True, text=True, env=env)
+        if completed.returncode == 0:
+            return completed.stdout.strip()
+        if "unmerged" in completed.stderr:
+            return ""
+        raise EngineError(f"git write-tree failed: {completed.stderr.strip()[-500:]}")
 
     @staticmethod
     def write_config(files: TreeFiles, target: Path) -> None:
