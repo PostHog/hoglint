@@ -264,9 +264,17 @@ impl EdgeStore {
 pub struct Symbols {
     pub order: Vec<(Sid, u8, u32)>,
     pub at: rustc_hash::FxHashMap<Sid, usize>,
+    /// The facts packs wrote, as (key, value) pairs per symbol: they replace the symbol's facts
+    /// whole, as `NativeSymbols.update` does.
+    pub added: rustc_hash::FxHashMap<Sid, Vec<(Sid, Sid)>>,
 }
 
 impl Symbols {
+    /// Whether `graph.symbols` holds the name.
+    pub fn has(&self, name: Sid) -> bool {
+        self.at.contains_key(&name) || self.added.contains_key(&name)
+    }
+
     fn set(&mut self, name: Sid, kind: u8, file: u32) {
         match self.at.get(&name) {
             Some(&i) => self.order[i] = (name, kind, file),

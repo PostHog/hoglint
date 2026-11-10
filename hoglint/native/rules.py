@@ -26,7 +26,9 @@ from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo,
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
 from hoglint.model import Edge, Finding, FindingDetail, Graph
+from hoglint.native.bridge import import_module
 from hoglint.native.graph import CONTEXT_BITS, RESOLUTIONS, SYMBOL_KINDS, NativeGraph, NativeSymbols
+from hoglint.native.plan import JUDGED, RulePlan
 from hoglint.rules.audit import ReadAudit, audit_rule
 from hoglint.rules.base import (
     EdgeEnv,
@@ -41,7 +43,8 @@ from hoglint.rules.base import (
     joined,
     read_endpoint,
 )
-from hoglint.rules.graphs import EndpointsEnv, Found, Hop, ReachPrimitive
+from hoglint.rules.engine import primitive_of
+from hoglint.rules.graphs import CyclePrimitive, CycleRow, EndpointsEnv, Found, Hop, ReachPrimitive
 from hoglint.rules.reads import Reads, granularity
 from hoglint.selectors import UNKNOWN, Node, Ref, Truth, Value, evaluate, refs
 
@@ -163,34 +166,35 @@ NO_CLASS = 0xFFFFFFFF
 
 
 class Rejudged:
-    """The detail of a finding made from its group's judgment: the rule judges the edge again
-    when something reads the message, site, witnesses or remedies. An edge judged apart from its
-    group is an engine error, never a silent difference."""
+    """The detail of a finding made from a judgment made outside the rule's own code: the rule
+    judges the edge's destination again when something reads the message, site, witnesses or
+    remedies. A judgment that differs is an engine error, never a silent difference."""
 
-    __slots__ = ("edge", "judgment", "made", "rule")
+    __slots__ = ("edge", "judgment", "made", "rule", "target")
 
-    def __init__(self, rule: EdgeRule, edge: Edge, judgment: Judgment) -> None:
+    def __init__(self, rule: EdgeRule, edge: Edge, judgment: Judgment, target: int = 0) -> None:
         self.rule = rule
         self.edge = edge
         self.judgment = judgment
+        self.target = target
         self.made: FindingDetail | None = None
 
     def get(self) -> FindingDetail:
         if self.made is None:
-            envs = list(self.rule.edge_envs(self.edge))
-            judged = [self.rule.decide(env) for env in envs]
-            if judged != [self.judgment]:
+            env = self.rule.envs_of(self.edge)[self.target]
+            judged = self.rule.decide(env)
+            if judged is not self.judgment:
                 site = self.edge.site
                 raise EngineError(
                     f"rule {self.rule.spec.id} judges {self.edge.kind} {site.path}:{site.line} {judged}, "
-                    f"apart from its group's {self.judgment}"
+                    f"apart from the evaluator's {self.judgment}"
                 )
-            self.made = self.reported(envs[0]).findings[0].detail.get()
+            self.made = self.reported(env).findings[0].detail.get()
         return self.made
 
     def reported(self, env: EdgeEnv) -> RuleRun:
-        """What the group's judgment reports for `env`, message included, kept out of the rule's
-        run: the judgment is checked already, so the rule does not decide again."""
+        """What the judgment reports for `env`, message included, kept out of the rule's run: the
+        judgment is checked already, so the rule does not decide again."""
         rule = self.rule
         saved, rule.run = rule.run, RuleRun(rule.spec)
         try:
@@ -775,6 +779,66 @@ class NativeRuleContext(RuleContext):
     def edge_of(self, edge: Edge | int) -> Edge:
         return edge if isinstance(edge, Edge) else self.native.native.core.get([edge])[0]
 
+    @cached_property
+    def plan(self) -> RulePlan:
+        rules = {spec.id: primitive_of(spec) for spec in self.config.rules.values()}
+        edge_rules = {
+            name: made
+            for name, made in rules.items()
+            if issubclass(made, EdgeRule) and RulePlan.mode(self.config.rules[name])
+        }
+        return RulePlan(self.config, self.native.native, self.labeler, edge_rules)
+
+    @cached_property
+    def evaluator(self) -> Any:
+        """The native evaluator of this run: labels, and every edge rule compiled."""
+        native: Any = import_module()
+        return native.Rules(self.native.native.link, self.plan.text())
+
+    def evaluated(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun]]:
+        """The evaluator's rows of an edge or entrypoint rule, in the order the rule judges: a
+        violation becomes its finding here; any other judgment goes to the rule's own code, which
+        must judge the same."""
+        rows = self.evaluator.judge(self.plan.index[rule.spec.id])
+        ids = array("I", dict.fromkeys(row[0] for row in rows))
+        edges = dict(zip(ids, self.native.native.core.get(ids)))
+        spec = rule.spec
+        ledgerable, unknown = rule.flags(Judgment.VIOLATION)
+        for edge_id, target, code, identity, src, dst in rows:
+            edge = edges[edge_id]
+            judgment = JUDGMENTS[code]
+            if judgment is not Judgment.VIOLATION:
+                yield edge, self.judged_alone(rule, edge, target, judgment)
+                continue
+            finding = Finding(
+                rule=spec.id,
+                identity=tuple(identity),
+                detail=Rejudged(rule, edge, judgment, target),
+                owner=self.owner(src),
+                subjects=(src, dst) if dst and dst != src else (src,),
+                ledgerable=ledgerable and spec.ledger,
+                unknown=unknown,
+                witness=edge,
+            )
+            yield edge, RuleRun(spec, [finding])
+
+    def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
+        rows = self.evaluator.pairs(self.plan.index[rule.spec.id])
+        return [CycleRow(edge, target, JUDGMENTS[code], pair) for edge, target, code, pair in rows]
+
+    @staticmethod
+    def judged_alone(rule: EdgeRule, edge: Edge, target: int, judgment: Judgment) -> RuleRun:
+        """What the rule's own code reports for one destination the evaluator judged neither
+        clean nor a plain violation."""
+        env = rule.envs_of(edge)[target]
+        judged = rule.decide(env)
+        if judged is not judgment:
+            site = edge.site
+            raise EngineError(
+                f"rule {rule.spec.id} judges {edge.kind} {site.path}:{site.line} {judged}, the evaluator {judgment}"
+            )
+        return rule.recorded([env])
+
     def reach_search(self, rule: ReachPrimitive) -> NativeReach | None:
         return NativeReach.of(self, rule)
 
@@ -861,10 +925,14 @@ class NativeRuleContext(RuleContext):
             lambda wanted: core.get(array("I", wanted)),
         )
 
-    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, Finding | None]]:
-        """The rule's survivors as handle arrays, in the order the rule judges edges. A grouped
-        edge comes with its finding, made from its class; any other comes alone, to be judged.
-        Edges are made once, as the findings' witnesses."""
+    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun | None]]:
+        """The rule's edges in the order the rule judges them. An edge or entrypoint rule is
+        judged by the evaluator, per edge (`evaluated`); for the others the grouped survivors
+        come as handle arrays: a grouped edge with its finding, made from its class, any other
+        alone, to be judged. Edges are made once, as the findings' witnesses."""
+        if rule.spec.primitive in JUDGED:
+            yield from self.evaluated(rule)
+            return
         grouper = Grouper(self, rule)
         survivors = grouper.survivors()
         link = self.native.native.link
@@ -880,7 +948,7 @@ class NativeRuleContext(RuleContext):
                 continue
             if sees and not rule.sees(edge):
                 continue
-            yield edge, findings.finding(at, edge, judgment)
+            yield edge, RuleRun(rule.spec, [findings.finding(at, edge, judgment)])
 
 
 class NativeGraphIndex(GraphIndex):

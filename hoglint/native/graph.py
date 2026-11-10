@@ -250,6 +250,7 @@ class NativeSink:
     def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:
         symbols: Any = self.graph.symbols
         symbols.update(facts)
+        self.graph.link.add_symbol_facts([(name, list(values.items())) for name, values in facts.items()])
 
     def fail(self, producer: str, failure: ProducerFailure) -> None:
         self.graph.failed_producers[producer] = failure

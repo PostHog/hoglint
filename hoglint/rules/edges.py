@@ -45,6 +45,8 @@ class UseShapePrimitive(EdgeRule):
     shape; the edge stays the graph's own, so its ordinal and its witness identity hold.
     """
 
+    redefines = ("shape", "label")
+
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
         self.flow = dict(spec.producer_options).get("flow") == "def-use"

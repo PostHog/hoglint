@@ -32,6 +32,8 @@ pub(crate) struct Link {
     pub(crate) patterns: Vec<Option<regex::Regex>>,
     /// Per pattern, whether it matched each interned string it met (`mentions`).
     pub(crate) matched: Vec<FxHashMap<Sid, bool>>,
+    /// The worker threads the link was built with (0: every core); rule evaluation takes them.
+    pub(crate) threads: usize,
 }
 
 impl Link {
@@ -374,6 +376,19 @@ impl Link {
         Ok(())
     }
 
+    /// Records the facts packs wrote for some symbols: each symbol's (key, value) pairs replace
+    /// whatever was written for it before, as `NativeSymbols.update` does.
+    fn add_symbol_facts(&mut self, facts: Vec<(String, Vec<(String, String)>)>) {
+        for (name, pairs) in facts {
+            let name = self.sid(&name);
+            let pairs = pairs
+                .iter()
+                .map(|(key, value)| (self.sid(key), self.sid(value)))
+                .collect();
+            self.inner.symbols.added.insert(name, pairs);
+        }
+    }
+
     /// Edge kinds in the order their first edge appears: core kinds, then pack kinds.
     fn kind_order(&self) -> Vec<String> {
         let it = &self.inner.core.it;
@@ -580,6 +595,7 @@ pub(crate) fn link_jsonl(
         import_names: None,
         patterns: Vec::new(),
         matched: Vec::new(),
+        threads,
     })
 }
 
@@ -686,6 +702,7 @@ pub(crate) fn link_blobs(
             import_names: None,
             patterns: Vec::new(),
             matched: Vec::new(),
+            threads,
         },
         stats,
     ))

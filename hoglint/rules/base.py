@@ -36,7 +36,7 @@ from hoglint.model import (
 )
 
 if TYPE_CHECKING:
-    from hoglint.rules.graphs import ReachPrimitive, ReachSearch
+    from hoglint.rules.graphs import CyclePrimitive, CycleRow, ReachPrimitive, ReachSearch
 
 from hoglint.selectors import (
     NONE,
@@ -193,6 +193,10 @@ class RuleContext:
         """A reach rule's whole search when this context runs it itself, else None."""
         return None
 
+    def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow] | None:
+        """A cycle rule's rows when this context finds them itself, else None."""
+        return None
+
     def grouped_survivors(self, rule: EdgeRule) -> GroupedSurvivors | None:
         """The rule's survivors as handle arrays when this context groups edges, else None."""
         return None
@@ -202,9 +206,9 @@ class RuleContext:
         assert isinstance(edge, Edge)
         return edge
 
-    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, Finding | None]]:
-        """Each edge the rule judges, in order, with its finding when grouped evaluation already
-        made it from its group's judgment; None to judge the edge."""
+    def judged_edges(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun | None]]:
+        """Each edge the rule judges, in order, with what it reports when this context judged it
+        already; None to judge the edge."""
         for module, group in self.rule_groups(rule):
             for edge in rule.group_edges(module, group):
                 if rule.sees(edge):
@@ -617,6 +621,10 @@ class StagedSelection:
 class EdgeRule:
     """Selection and the predicate step for every primitive that judges single edges."""
 
+    # Edge fields this primitive's environment sets for itself (`env`): a selection made outside
+    # the primitive cannot read them.
+    redefines: tuple[str, ...] = ()
+
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
         self.spec = spec
@@ -824,9 +832,10 @@ class EdgeRule:
         self.report(env, self.decide(env), describe)
 
     def evaluate(self) -> RuleRun:
-        for edge, finding in self.ctx.judged_edges(self):
-            if finding is not None:
-                self.run.findings.append(finding)
+        for edge, reported in self.ctx.judged_edges(self):
+            if reported is not None:
+                self.run.findings.extend(reported.findings)
+                self.run.incomplete.extend(reported.incomplete)
                 continue
             for env in self.edge_envs(edge):
                 self.judge(env, self.describe(env))

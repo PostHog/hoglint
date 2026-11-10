@@ -9,9 +9,11 @@
 //! - `link`: building a link, the snapshot's records and the edges as tuples;
 //! - `queries`: edge ids by kind, origin, source module and spelling, for packs;
 //! - `rules`: candidate selection and grouping, for rule evaluation;
+//! - `evaluator`: the `Rules` of one run: labels, and edge rules judged per edge;
 //! - `resolver`: name resolution and class ancestry, for packs.
 
 mod blobs;
+mod evaluator;
 mod factdb;
 mod link;
 mod queries;
@@ -48,6 +50,7 @@ pub(crate) fn ids_from(raw: &[u8]) -> PyResult<Vec<u32>> {
 #[pymodule]
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
+    module.add_class::<evaluator::Rules>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
     module.add_function(wrap_pyfunction!(link_blobs, module)?)?;
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;

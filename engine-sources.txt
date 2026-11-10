@@ -28,6 +28,7 @@ src/**/*.rs
 !src/link/queries.rs
 !src/link/reach.rs
 !src/link/resolve.rs
+!src/link/rules/**
 !src/link/scope.rs
 Cargo.toml
 Cargo.lock

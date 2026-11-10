@@ -132,6 +132,9 @@ class Link:
         itself included, in scope and table order: `is_subclass` asked of every class at once."""
     def class_facts(self, kind: str, owner_attr: str) -> list[tuple[str, str, list[str], bool]]:
         """(owner, surface, names, frozen) of the inherit or decorate edges, core and pack."""
+    def add_symbol_facts(self, facts: list[tuple[str, list[tuple[str, str]]]]) -> None:
+        """Records the facts packs wrote for some symbols: each symbol's (key, value) pairs replace
+        whatever was written for it before, as `NativeSymbols.update` does."""
     def kind_order(self) -> list[str]: ...
     def candidates(self, kinds: list[str], include: int, exclude: int) -> bytes: ...
     def split_irregular(self, ids: bytes) -> tuple[bytes, bytes]:
@@ -196,6 +199,27 @@ class Link:
     def located(self, module: str, symbol: str) -> tuple[int, int] | None: ...
     def value_lookup(self, scope: int, value: object, at: int, line: int) -> LookupResult | None: ...
     def chain_lookup(self, scope: int, chain: str, at: int, line: int) -> tuple[LookupResult, list[str]]: ...
+
+Row = tuple[int, int, int, list[str], str, str | None]
+"""(edge id, destination index, judgment code, identity, source module, destination module or None).
+Codes: 1 unresolved, 2 unknown selection, 3 unknown violation, 4 violation."""
+
+PairRow = tuple[int, int, int, tuple[str, str] | None]
+"""(edge id, destination index, judgment code, the pair's (source, destination) groups or None)."""
+
+class Rules:
+    """The labels and compiled rules of one run over a link (src/link/rules), from a plan
+    (`hoglint.native.plan`). Evaluation runs on the threads the link was built with."""
+
+    def __init__(self, link: Link, plan: str) -> None: ...
+    def judge(self, rule: int) -> list[Row]:
+        """Every destination an edge or entrypoint rule does not judge clean, in judging order."""
+    def pairs(self, rule: int) -> list[PairRow]:
+        """What a cycle rule makes of each destination it cannot leave alone, in judging order."""
+    def select(self, rule: int) -> bytes:
+        """The candidate edges of a rule judged in Python that its selection does not rule out."""
+    def column(self, field: str) -> list[str]:
+        """One field's value (or `registry`, `lifecycle`) on every graph module, rendered."""
 
 def link_jsonl(path: str, config: str, threads: int = 0) -> Link: ...
 def link_blobs(

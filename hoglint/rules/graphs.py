@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from hoglint.config.model import RuleSpec
+from hoglint.config.model import Config, RuleSpec
 from hoglint.index import has_endpoint_attrs
 from hoglint.model import Edge
 from hoglint.rules.base import (
@@ -247,13 +247,29 @@ class Pair:
             self.envs.append(env)
 
 
+@dataclass(frozen=True, slots=True)
+class CycleRow:
+    """One destination a cycle rule cannot leave alone, as a rule context found it
+    (`RuleContext.cycle_rows`): unresolved, with an unknown selection, or one edge of `pair`."""
+
+    edge: int
+    target: int
+    judgment: Judgment
+    pair: tuple[str, str] | None
+
+
 class CyclePrimitive(EdgeRule):
     """Strongly connected parts of a grouped view: every pair inside one is a finding."""
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
-        self.group_field = ctx.config.roles.group if spec.view == "packages" else "module"
+        self.group_field = self.group_of(ctx.config, spec)
         self.group_cache: dict[tuple[str, Endpoint], str | None] = {}
+
+    @staticmethod
+    def group_of(config: Config, spec: RuleSpec) -> str:
+        """The field whose values are the nodes of the rule's graph."""
+        return config.roles.group if spec.view == "packages" else "module"
 
     def own_reads(self) -> list[Ref]:
         return [Ref(("src", self.group_field)), Ref(("dst", self.group_field))]
@@ -345,11 +361,38 @@ class CyclePrimitive(EdgeRule):
                 self.incomplete(self.env_of(edges[edge_id]), "selection reads an unknown value")
         return pairs
 
-    def evaluate(self) -> RuleRun:
-        grouped = self.ctx.grouped_survivors(self)
+    def pairs_of(self, rows: list[CycleRow]) -> dict[tuple[str, str], Pair]:
+        """`consider` over the rows a rule context found: an Edge is made only for a destination
+        reported on its own or among a pair's first witnesses."""
+        seen: dict[tuple[str, str], int] = {}
+        wanted: list[int] = []
+        for row in rows:
+            if row.pair is not None:
+                seen[row.pair] = seen.get(row.pair, 0) + 1
+                if seen[row.pair] > WITNESSES:
+                    continue
+            wanted.append(row.edge)
+        edges = dict(zip(wanted, self.ctx.index.edges_at(wanted)))
         pairs: dict[tuple[str, str], Pair] = {}
-        if grouped is not None:
-            pairs = self.grouped_pairs(grouped)
+        for row in rows:
+            if row.pair is None:
+                env = self.envs_of(edges[row.edge])[row.target]
+                if row.judgment is Judgment.UNRESOLVED:
+                    self.on_unresolved(env)
+                else:
+                    self.incomplete(env, "selection reads an unknown value")
+                continue
+            pair = pairs.setdefault(row.pair, Pair())
+            pair.count += 1
+            if len(pair.envs) < WITNESSES:
+                pair.envs.append(self.envs_of(edges[row.edge])[row.target])
+        return pairs
+
+    def evaluate(self) -> RuleRun:
+        rows = self.ctx.cycle_rows(self)
+        pairs: dict[tuple[str, str], Pair] = {}
+        if rows is not None:
+            pairs = self.pairs_of(rows)
         else:
             for env in self.envs():
                 self.consider(env, pairs)
