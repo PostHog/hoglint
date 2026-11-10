@@ -505,6 +505,13 @@ SITE = {
         ("djangorestframework-3.18.3.dist-info/RECORD", "", True),
         # sources are never read: only the metadata stands for them
         ("django/__init__.py", "VERSION = 2", False),
+        # rows that depend on the install: a script's shebang names the venv, the installer adds its own
+        (
+            "django-6.1.3.dist-info/RECORD",
+            "django/__init__.py,sha256=abc,11\n../../../bin/django-admin,sha256=venv,350\n"
+            "django-6.1.3.dist-info/REQUESTED,sha256=e,0\ndjango/__pycache__/__init__.cpython-314.pyc,,\n",
+            False,
+        ),
     ],
 )
 def test_the_framework_digest_comes_from_distribution_metadata(

@@ -224,8 +224,11 @@ class EngineId:
 
 class Framework:
     """The installed distributions that ship the `[discovery] external` packages: name and version
-    (the dist-info directory) and a hash of RECORD, which lists every installed file with its own
-    hash. An install or upgrade rewrites RECORD, so no source file is read."""
+    (the dist-info directory) and the RECORD rows of the package's Python sources, the files a run
+    reads. Each row holds the file's hash, and an install or upgrade rewrites RECORD, so no source
+    file is read. Other rows depend on the install, not on the code: a console script carries the
+    venv's own path in its shebang, and the installer adds rows of its own (INSTALLER, REQUESTED,
+    bytecode), so they would make every machine's digest differ."""
 
     @staticmethod
     def site() -> Path:
@@ -262,12 +265,21 @@ class Framework:
         return text.startswith(f"{package}/") or f"\n{package}/" in text
 
     @staticmethod
+    def sources(record: str, package: str) -> list[str]:
+        """The RECORD rows of the `.py` files under the package, as `site_packages_files` lists them."""
+        rows = (row for row in record.splitlines() if row.startswith(f"{package}/"))
+        return sorted(row for row in rows if row.split(",", 1)[0].endswith(".py"))
+
+    @staticmethod
     def digest(packages: tuple[str, ...]) -> str:
         infos = Framework.dist_infos(Framework.site(), packages)
         parts: list[str | bytes] = []
         for package in sorted(packages):
             info = infos.get(package)
-            parts += [package, info.name, file_digest(info / "RECORD")] if info is not None else [package, MISSING]
+            if info is None:
+                parts += [package, MISSING]
+                continue
+            parts += [package, info.name, *Framework.sources((info / "RECORD").read_text(), package)]
         return short_digest(parts)
 
     @staticmethod
