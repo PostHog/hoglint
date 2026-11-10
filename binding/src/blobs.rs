@@ -488,6 +488,27 @@ impl StoredRecords {
         *last = Some((file, json));
         found
     }
+
+    /// Bytes `range` of a stored record, decompressed from the frames that hold them; None
+    /// when the database cannot give them.
+    fn read_range(&self, stored: &Stored, range: Range<usize>) -> Option<Vec<u8>> {
+        let path = self.db_path.as_deref()?;
+        let mut db = self.db.lock().ok()?;
+        if db.is_none() {
+            *db = open_cache(path);
+        }
+        match db
+            .as_ref()?
+            .read_json_range(&stored.config, &stored.oid, stored.json_len, range)
+        {
+            Ok(found) => found,
+            Err(error) => {
+                give_up(path, &error);
+                *db = None;
+                None
+            }
+        }
+    }
 }
 
 impl RecordText for StoredRecords {
@@ -495,7 +516,14 @@ impl RecordText for StoredRecords {
         self.with_record(file, |json| Ok(json.to_vec()))
     }
 
+    /// Reads only the frames of `range` of a stored record. A record whose entry went away is
+    /// made again whole, and kept for the next key of it.
     fn slice(&self, file: usize, range: Range<usize>) -> Result<Vec<u8>, String> {
+        if let Json::Stored(stored) = &self.records[file]
+            && let Some(found) = self.read_range(stored, range.clone())
+        {
+            return Ok(found);
+        }
         self.with_record(file, |json| {
             json.get(range)
                 .map(<[u8]>::to_vec)
@@ -661,6 +689,16 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
     Ok((FactSet::deferred(files, text), stats))
 }
 
+/// Where each key's value sits in a record's own JSON text.
+fn key_ranges(facts: &FileFacts) -> Vec<Range<usize>> {
+    let start = facts.line.start;
+    facts
+        .keys
+        .iter()
+        .map(|(_, range)| range.start - start..range.end - start)
+        .collect()
+}
+
 /// Stores the new entries whose key is the id of the bytes they were extracted from, and marks
 /// the read ones as used today. A failed write only costs a later re-extraction or an early
 /// prune, so it never fails the run. True when the new entries are stored.
@@ -688,7 +726,7 @@ fn save(
                 config: profile_id(slot),
                 oid: key,
                 body: encode_facts(it, facts, facts.line.start),
-                record: pack(json.as_bytes()),
+                record: pack(json.as_bytes(), &key_ranges(facts)),
                 json_len: json.len(),
             })
         })

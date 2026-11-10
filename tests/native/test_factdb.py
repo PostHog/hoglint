@@ -85,7 +85,9 @@ def test_a_working_tree_file_that_changes_during_the_run_is_never_stored(tmp_pat
     assert (imports(again), again.drifted(), counts) == (["Thing"], [], (2, 1))
 
 
-@pytest.mark.parametrize("damage", ["entry gone, id reused", "record does not decompress"])
+@pytest.mark.parametrize(
+    "damage", ["entry gone, id reused", "record does not decompress", "a frame does not decompress"]
+)
 def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, damage: str) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
@@ -97,6 +99,11 @@ def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, da
         newest, length = conn.execute("SELECT id, json_len FROM keys ORDER BY id DESC LIMIT 1").fetchone()
         if damage == "record does not decompress":
             conn.execute("UPDATE records SET json = ? WHERE id = ?", (b"\xff" * 64, newest))
+        elif damage == "a frame does not decompress":
+            packed = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
+            index_end = 4 + int.from_bytes(packed[:4], "little")
+            garbled = packed[:index_end] + b"\xff" * (len(packed) - index_end)
+            conn.execute("UPDATE records SET json = ? WHERE id = ?", (garbled, newest))
         else:
             record = bytes(conn.execute("SELECT json FROM records WHERE id = ?", (newest,)).fetchone()[0])
             FactDatabase.delete(conn, [newest])

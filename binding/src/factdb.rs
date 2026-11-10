@@ -4,8 +4,9 @@
 //! - `keys`: (extract config id, blob oid) to the entry id, the day a run last read it
 //!   (`used`), the length of its JSON text and the bytes it holds.
 //! - `facts`: the binary facts the link reads (`hoglint_facts::link::store`).
-//! - `records`: the record JSON text that packs read, compressed one entry at a time
-//!   (`pack`), apart from the facts so a run that never reads it never touches its pages.
+//! - `records`: the record JSON text that packs read, compressed in frames (`pack`): a pack
+//!   that reads one key decompresses that key alone. Apart from the facts, so a run that never
+//!   reads it never touches its pages.
 //!
 //! WAL mode lets runs read while another run writes. Writes skip keys already stored and run in
 //! short transactions, so runs that extract the same blob at once store it once and hold the
@@ -16,14 +17,15 @@
 //! The database is a cache. An entry that is gone is a miss, and an error is the caller's to
 //! log and run past (`blobs.rs`).
 
-use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, params};
+use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The table layout. It is part of the database file name (`hoglint/native/factdb.py`), so two
 /// builds with different layouts never share a file; a file with another `user_version` is
 /// emptied and set up again.
-pub const LAYOUT: i64 = 3;
+pub const LAYOUT: i64 = 4;
 /// Entries per write transaction.
 const ROWS_PER_WRITE: usize = 256;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -87,16 +89,101 @@ pub struct NewEntry<'a> {
     pub json_len: usize,
 }
 
-/// A record's JSON text, compressed for the `records` table.
-pub fn pack(json: &[u8]) -> Vec<u8> {
-    lz4_flex::block::compress(json)
+/// A record's JSON text, compressed for the `records` table in frames: one from the start of
+/// each key's value (`values`, ranges of the text) to the start of the next, and one for the
+/// text before the first, so the frames hold the text whole and a key's value sits in one.
+///
+/// Layout: the length of the index (u32), the index (per frame in text order, the length of its
+/// text and of its compressed bytes, each a LEB128 number), then the compressed frames.
+pub fn pack(json: &[u8], values: &[Range<usize>]) -> Vec<u8> {
+    let mut cuts = vec![0, json.len()];
+    cuts.extend(values.iter().map(|range| range.start.min(json.len())));
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut index = Vec::new();
+    let mut frames = Vec::new();
+    for cut in cuts.windows(2) {
+        let packed = lz4_flex::block::compress(&json[cut[0]..cut[1]]);
+        put_varint(&mut index, cut[1] - cut[0]);
+        put_varint(&mut index, packed.len());
+        frames.extend_from_slice(&packed);
+    }
+    let mut out = Vec::with_capacity(4 + index.len() + frames.len());
+    out.extend_from_slice(&(index.len() as u32).to_le_bytes());
+    out.extend_from_slice(&index);
+    out.extend_from_slice(&frames);
+    out
 }
 
-/// The JSON text of a compressed record; None when it does not decompress to `json_len` bytes.
-fn unpack(packed: &[u8], json_len: usize) -> Option<Vec<u8>> {
-    lz4_flex::block::decompress(packed, json_len)
-        .ok()
-        .filter(|json| json.len() == json_len)
+fn put_varint(out: &mut Vec<u8>, mut value: usize) {
+    while value >= 0x80 {
+        out.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+/// The LEB128 number at `bytes[*at..]`, moving `at` past it; None when it runs off the end.
+fn varint(bytes: &[u8], at: &mut usize) -> Option<usize> {
+    let mut out = 0usize;
+    for shift in (0..64).step_by(7) {
+        let byte = *bytes.get(*at)?;
+        *at += 1;
+        out |= usize::from(byte & 0x7f) << shift;
+        if byte < 0x80 {
+            return Some(out);
+        }
+    }
+    None
+}
+
+/// One compressed frame of a record: where its text starts and how long it is, and where the
+/// frame sits in the stored blob and how long it is.
+struct Frame {
+    text: Range<usize>,
+    packed: Range<usize>,
+}
+
+fn u32_at(bytes: &[u8], at: usize) -> usize {
+    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize
+}
+
+/// The frames of a record's `index`, in a blob of `blob_len` bytes; None when they do not
+/// cover `json_len` bytes of text, or run past the blob.
+fn frames(index: &[u8], json_len: usize, blob_len: usize) -> Option<Vec<Frame>> {
+    let mut out = Vec::new();
+    let mut read = 0;
+    let mut text = 0;
+    let mut at = 4 + index.len();
+    while read < index.len() {
+        let len = varint(index, &mut read)?;
+        let packed = varint(index, &mut read)?;
+        if at + packed > blob_len {
+            return None;
+        }
+        out.push(Frame {
+            text: text..text + len,
+            packed: at..at + packed,
+        });
+        text += len;
+        at += packed;
+    }
+    (text == json_len).then_some(out)
+}
+
+/// The text of `frames`, back to back, from `bytes`, which hold the blob from offset `base`
+/// on; None when a frame does not decompress to its length.
+fn unpack(bytes: &[u8], base: usize, frames: &[Frame]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for frame in frames {
+        let packed = bytes.get(frame.packed.start - base..frame.packed.end - base)?;
+        let text = lz4_flex::block::decompress(packed, frame.text.len()).ok()?;
+        if text.len() != frame.text.len() {
+            return None;
+        }
+        out.extend_from_slice(&text);
+    }
+    Some(out)
 }
 
 pub struct FactDb {
@@ -200,15 +287,93 @@ impl FactDb {
         )
     }
 
-    /// The record JSON of an entry; None when the entry is gone, or when its record does not
+    /// The record JSON of an entry; None when the entry is gone, or when its frames do not
     /// decompress to `json_len` bytes: a miss, never a wrong answer.
     pub fn read_json(&self, config: &str, oid: &str, json_len: usize) -> Result<Option<Vec<u8>>> {
-        let packed = self.read(
+        let Some(blob) = self.read(
             "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.config = ?1 AND k.oid = ?2",
             config,
             oid,
-        )?;
-        Ok(packed.and_then(|packed| unpack(&packed, json_len)))
+        )?
+        else {
+            return Ok(None);
+        };
+        if blob.len() < 4 {
+            return Ok(None);
+        }
+        let Some(index) = blob.get(4..4 + u32_at(&blob, 0)) else {
+            return Ok(None);
+        };
+        let Some(all) = frames(index, json_len, blob.len()) else {
+            return Ok(None);
+        };
+        Ok(unpack(&blob, 0, &all))
+    }
+
+    /// Bytes `range` of an entry's record JSON, read in one read transaction and decompressed
+    /// from the frames that hold them alone; None when the entry is gone or its frames do not
+    /// give `json_len` bytes.
+    pub fn read_json_range(
+        &self,
+        config: &str,
+        oid: &str,
+        json_len: usize,
+        range: Range<usize>,
+    ) -> Result<Option<Vec<u8>>> {
+        self.begin_read()?;
+        let found = self.json_range(config, oid, json_len, range);
+        self.end_read()?;
+        found
+    }
+
+    fn json_range(
+        &self,
+        config: &str,
+        oid: &str,
+        json_len: usize,
+        range: Range<usize>,
+    ) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id FROM keys WHERE config = ?1 AND oid = ?2")?;
+        let Some(id) = stmt
+            .query_row(params![config, oid], |r| r.get::<_, i64>(0))
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let blob = self
+            .conn
+            .blob_open(MAIN_DB, c"records", c"json", id, true)?;
+        if blob.len() < 4 || range.end > json_len {
+            return Ok(None);
+        }
+        let mut length = [0u8; 4];
+        blob.read_at_exact(&mut length, 0)?;
+        let length = u32::from_le_bytes(length) as usize;
+        if 4 + length > blob.len() {
+            return Ok(None);
+        }
+        let mut index = vec![0; length];
+        blob.read_at_exact(&mut index, 4)?;
+        let Some(all) = frames(&index, json_len, blob.len()) else {
+            return Ok(None);
+        };
+        let wanted: Vec<Frame> = all
+            .into_iter()
+            .filter(|frame| frame.text.start < range.end && frame.text.end > range.start)
+            .collect();
+        let (Some(first), Some(last)) = (wanted.first(), wanted.last()) else {
+            return Ok(Some(Vec::new()));
+        };
+        let base = first.packed.start;
+        let mut bytes = vec![0; last.packed.end - base];
+        blob.read_at_exact(&mut bytes, base)?;
+        let offset = first.text.start;
+        Ok(unpack(&bytes, base, &wanted).and_then(|text| {
+            text.get(range.start - offset..range.end - offset)
+                .map(<[u8]>::to_vec)
+        }))
     }
 
     /// Stores new entries; a key already stored, or met before in `entries`, keeps its entry.
