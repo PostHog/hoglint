@@ -193,3 +193,55 @@ def test_another_database_goes_only_whole_and_only_when_no_run_has_it_open(
         monkeypatch.setattr("hoglint.native.factdb.MAX_BYTES", max_bytes)
     database.prune(TODAY)
     assert [path.exists() for path in files] == [not deleted] * len(files)
+
+
+def test_only_the_newest_other_database_stays_unless_a_run_opened_one_today(tmp_path: Path) -> None:
+    native = native_module()
+    database = fact_database(native, tmp_path)
+    database.directory.mkdir(parents=True)
+    ages = {"today": 0.1, "also-today": 0.2, "two-days": 2, "three-days": 3}
+    units = {name: other_database(database.directory, f"{name}-l9.sqlite", age) for name, age in ages.items()}
+    database.prune(TODAY)
+    kept = {name for name, files in units.items() if all(path.exists() for path in files)}
+    gone = {name for name, files in units.items() if not any(path.exists() for path in files)}
+    assert (kept, gone) == ({"today", "also-today"}, {"two-days", "three-days"})
+
+
+def records_directory(facts: Path, name: str, written_days_ago: float) -> Path:
+    """A directory of the Python engine's per-file records, last written `written_days_ago`."""
+    directory = facts / name
+    directory.mkdir()
+    entry = directory / "0123.json"
+    entry.write_bytes(b"{}")
+    stamp = time.time() - written_days_ago * DAY
+    os.utime(entry, (stamp, stamp))
+    os.utime(directory, (stamp, stamp))
+    return directory
+
+
+def test_the_two_newest_record_namespaces_stay_whole_and_empty_directories_go(tmp_path: Path) -> None:
+    native = native_module()
+    database = fact_database(native, tmp_path)
+    facts = database.directory
+    facts.mkdir(parents=True)
+    namespaces = {
+        "v3-b01-full": 2,
+        "v3-b01-lite": 2,
+        "v3-b02-full": 3,
+        "v3-b03-full": 4,
+        "v3-b03-lite": 1.5,
+    }
+    for name, age in namespaces.items():
+        records_directory(facts, name, age)
+    (facts / "left-empty").mkdir()
+    stamp = time.time() - 2 * DAY
+    os.utime(facts / "left-empty", (stamp, stamp))
+    (facts / "made-now").mkdir()
+    database.prune(TODAY)
+    assert sorted(path.name for path in facts.iterdir()) == [
+        "made-now",
+        "v3-b01-full",
+        "v3-b01-lite",
+        "v3-b03-full",
+        "v3-b03-lite",
+    ]

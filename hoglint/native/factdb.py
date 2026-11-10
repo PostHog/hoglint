@@ -6,13 +6,21 @@ last read it. Every run that opens a database touches its `.opened` mark first.
 
 A database is one unit: the main file, its `-wal` and `-shm` files and its marks. A unit is
 deleted whole or not at all, because SQLite replays a stale `-wal` into a new main file and a
-live run loses its writes when its `-wal` goes.
+live run loses its writes when its `-wal` goes. The Python engine's per-file records of one
+extractor build (the `v<schema>-b<facts id>-<cfg>` directories, one per extract config) are one
+namespace, deleted whole or not at all too.
 
 The first native run of each day, per database, prunes:
 - rows that no run read for 30 days;
 - other units no run opened for 30 days, and other files under `facts/` older than 30 days;
-- then, while the cache root holds more than 2 GB: other units no run opened since yesterday,
-  and other files, oldest first; after them the rows read longest ago.
+- other units but the one opened most recently, and namespaces but the two used most recently,
+  whatever the size bound says: a machine runs one or two engine builds at a time;
+- then, while the cache root holds more than 500 MB: other units no run opened since yesterday,
+  and other files, oldest first; after them the rows read longest ago;
+- last, the directories under `facts/` that the prune emptied, or that are empty and older than
+  a day.
+
+A unit some run opened since yesterday, and a namespace written since yesterday, always stay.
 
 The cache root's own prune (`hoglint/ledger/store.py`) leaves `facts/` to this one.
 """
@@ -20,20 +28,28 @@ The cache root's own prune (`hoglint/ledger/store.py`) leaves `facts/` to this o
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
+import shutil
 import sqlite3
 import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
-MAX_BYTES = 2 * 1024**3
+MAX_BYTES = 500 * 1024**2
 MAX_AGE_DAYS = 30
 IN_USE_DAYS = 1
 DATABASE = ".sqlite"
 UNIT_SUFFIXES = ("", "-wal", "-shm", ".opened", ".pruned")
 EPOCH = datetime.date(1970, 1, 1)
 CORRUPT = (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
+# A directory of the Python engine's per-file records: schema version and facts id, then the
+# extract config id (`ExtractConfig::cache_namespace` in src/config.rs).
+NAMESPACE = re.compile(r"(v\d+-b[0-9a-f]+)-.+")
+# Other databases and namespaces the prune keeps however old they are.
+KEPT_UNITS = 1
+KEPT_NAMESPACES = 2
 
 
 def files_under(directory: Path) -> list[tuple[float, int, Path]]:
@@ -48,6 +64,14 @@ def files_under(directory: Path) -> list[tuple[float, int, Path]]:
                 continue
             out.append((stat.st_mtime, stat.st_size, path))
     return out
+
+
+def modified_time(path: Path) -> float:
+    """When `path` last changed; 0 for one that went away."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def unit_files(database: Path) -> list[Path]:
@@ -78,6 +102,20 @@ class Unit:
     def delete(self) -> None:
         for path in unit_files(self.database):
             path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class Namespace:
+    """The Python engine's per-file records of one extractor build: when a file or directory of
+    them last changed (`opened`, as for a unit), and their size."""
+
+    directories: tuple[Path, ...]
+    opened: float
+    size: int
+
+    def delete(self) -> None:
+        for directory in self.directories:
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 class CacheWarning:
@@ -157,50 +195,108 @@ class FactDatabase:
                 old = [entry_id for (entry_id,) in conn.execute("SELECT id FROM keys WHERE used < ?", (cutoff_day,))]
                 self.delete(conn, old)
         old_age = now - MAX_AGE_DAYS * 86_400
-        units, files = self.others()
-        for unit in units:
-            if unit.opened < old_age:
-                unit.delete()
-        for modified, _, path in files:
+        in_use = now - IN_USE_DAYS * 86_400
+        units, namespaces, files = self.others()
+        emptied: set[Path] = set()
+        units = self.drop_all_but_newest(units, KEPT_UNITS, old_age, in_use)
+        namespaces = self.drop_all_but_newest(namespaces, KEPT_NAMESPACES, old_age, in_use)
+        kept_files = []
+        for modified, size, path in files:
             if modified < old_age:
                 path.unlink(missing_ok=True)
+                emptied.add(path.parent)
+            else:
+                kept_files.append((modified, size, path))
         excess = sum(size for _, size, _ in files_under(self.directory.parent)) - MAX_BYTES
-        in_use = now - IN_USE_DAYS * 86_400
-        idle: list[tuple[float, int, Unit | Path]] = [
-            (unit.opened, unit.size, unit) for unit in units if old_age <= unit.opened < in_use
+        idle: list[tuple[float, int, Unit | Namespace | Path]] = [
+            (unit.opened, unit.size, unit) for unit in units if unit.opened < in_use
         ]
-        idle.extend((modified, size, path) for modified, size, path in files if modified >= old_age)
+        idle.extend((space.opened, space.size, space) for space in namespaces if space.opened < in_use)
+        idle.extend(kept_files)
         for _, size, item in sorted(idle, key=lambda entry: entry[0]):
             if excess <= 0:
                 break
-            if isinstance(item, Unit):
-                item.delete()
-            else:
+            if isinstance(item, Path):
                 item.unlink(missing_ok=True)
+                emptied.add(item.parent)
+            else:
+                item.delete()
             excess -= size
         if excess > 0 and self.path.exists():
             self.remove_rows(excess)
+        self.remove_empty_directories(emptied, in_use)
 
-    def others(self) -> tuple[list[Unit], list[tuple[float, int, Path]]]:
-        """The other databases under `facts/` as units, and the files of no unit. A unit was last
-        opened when its `.opened` mark was touched, else when its newest file changed."""
+    @staticmethod
+    def drop_all_but_newest[T: (Unit, Namespace)](items: list[T], kept: int, old_age: float, in_use: float) -> list[T]:
+        """Deletes the items no run used for 30 days, and those past the `kept` newest that no run
+        used since yesterday; returns the rest, newest first."""
+        out = []
+        for rank, item in enumerate(sorted(items, key=lambda item: item.opened, reverse=True)):
+            if item.opened < old_age or (rank >= kept and item.opened < in_use):
+                item.delete()
+            else:
+                out.append(item)
+        return out
+
+    def remove_empty_directories(self, emptied: set[Path], in_use: float) -> None:
+        """Removes the empty directories under `facts/` that the prune emptied, or that no run
+        changed since yesterday, deepest first: a run about to write into a new one keeps it."""
+        walked = [Path(directory) for directory, _, _ in os.walk(self.directory)]
+        for directory in sorted(walked, key=lambda path: len(path.parts), reverse=True):
+            if directory == self.directory:
+                continue
+            try:
+                if any(directory.iterdir()):
+                    continue
+                if directory in emptied or modified_time(directory) < in_use:
+                    directory.rmdir()
+                    emptied.add(directory.parent)
+            except OSError:
+                continue
+
+    def others(self) -> tuple[list[Unit], list[Namespace], list[tuple[float, int, Path]]]:
+        """The other databases under `facts/` as units, the Python engine's record directories as
+        namespaces, and the files of neither. A unit was last opened when its `.opened` mark was
+        touched, else when its newest file changed; a namespace was last used when its newest
+        file or directory changed."""
         own = set(unit_files(self.path))
         members: dict[Path, list[tuple[float, int, Path]]] = {}
+        spaces: dict[str, list[tuple[float, int, Path]]] = {}
         loose = []
         for entry in files_under(self.directory):
             if entry[2] in own:
                 continue
             database = database_of(entry[2])
-            if database is None:
-                loose.append(entry)
-            else:
+            namespace = self.namespace_of(entry[2])
+            if database is not None:
                 members.setdefault(database, []).append(entry)
+            elif namespace is not None:
+                spaces.setdefault(namespace, []).append(entry)
+            else:
+                loose.append(entry)
         units = []
         for database, entries in members.items():
             marks = [modified for modified, _, path in entries if path.name.endswith(".opened")]
             opened = max(marks) if marks else max(modified for modified, _, _ in entries)
             units.append(Unit(database, opened, sum(size for _, size, _ in entries)))
-        return units, loose
+        directories: dict[str, list[Path]] = {}
+        for child in self.directory.iterdir() if self.directory.is_dir() else ():
+            match = NAMESPACE.fullmatch(child.name)
+            if match is not None and child.is_dir():
+                directories.setdefault(match.group(1), []).append(child)
+        namespaces = []
+        for name, found in directories.items():
+            entries = spaces.get(name, [])
+            changed = [modified for modified, _, _ in entries] + [modified_time(path) for path in found]
+            namespaces.append(Namespace(tuple(sorted(found)), max(changed), sum(size for _, size, _ in entries)))
+        return units, namespaces, loose
+
+    def namespace_of(self, path: Path) -> str | None:
+        """The namespace a file of the Python engine's records belongs to, by its directory."""
+        if path.parent.parent != self.directory:
+            return None
+        match = NAMESPACE.fullmatch(path.parent.name)
+        return match.group(1) if match is not None else None
 
     def connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=10)

@@ -21,7 +21,7 @@ every finding the ledger does not count. A CI job may later publish summaries of
 `Envelope.key`; nothing here fetches or publishes.
 
 Pruning: the first store use of each day removes every file under the root that is older than
-30 days, then the oldest files until the root holds 2 GB at most. A summary hit refreshes the
+30 days, then the oldest files until the root holds 500 MB at most. A summary hit refreshes the
 file's time, so a summary in use stays. A fact cache entry that goes away is only a re-parse.
 The first process of the day to create that day's mark (`O_EXCL`) prunes; the others do not.
 
@@ -51,7 +51,7 @@ from hoglint.ledger.scan import ALL_SECTIONS, ZSTD_LEVEL, ProtocolError, ScanSum
 
 ENVELOPE_SECTION = "envelope"
 SECTION_DIGEST_CHARS = 32
-MAX_BYTES = 2 * 1024**3
+MAX_BYTES = 500 * 1024**2
 MAX_AGE = datetime.timedelta(days=30)
 PRUNED_MARK = ".pruned-"  # then the day, one mark per day
 FACTS = "facts"  # the fact cache, pruned by its own pruner
