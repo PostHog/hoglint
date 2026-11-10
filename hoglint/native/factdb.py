@@ -15,8 +15,10 @@ The first native run of each day, per database, prunes:
 - other units no run opened for 30 days, and other files under `facts/` older than 30 days;
 - other units but the one opened most recently, and namespaces but the two used most recently,
   whatever the size bound says: a machine runs one or two engine builds at a time;
-- then, while the cache root holds more than 500 MB: other units no run opened since yesterday,
-  and other files, oldest first; after them the rows read longest ago;
+- then, while the cache root holds more than 1 GB: other units no run opened since yesterday,
+  and other files, oldest first; after them the rows read longest ago, but never a row some run
+  read since yesterday. A root still over the bound then stays over it: the bound is for stale
+  data, and evicting what the next run reads costs more than the disk it saves;
 - last, the directories under `facts/` that the prune emptied, or that are empty and older than
   a day.
 
@@ -37,7 +39,7 @@ import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
-MAX_BYTES = 500 * 1024**2
+MAX_BYTES = 1024**3
 MAX_AGE_DAYS = 30
 IN_USE_DAYS = 1
 DATABASE = ".sqlite"
@@ -223,7 +225,7 @@ class FactDatabase:
                 item.delete()
             excess -= size
         if excess > 0 and self.path.exists():
-            self.remove_rows(excess)
+            self.remove_rows(excess, (day - EPOCH).days - IN_USE_DAYS)
         self.remove_empty_directories(emptied, in_use)
 
     @staticmethod
@@ -311,13 +313,14 @@ class FactDatabase:
         conn.execute("DELETE FROM records WHERE id IN (SELECT id FROM doomed)")
         conn.execute("DELETE FROM keys WHERE id IN (SELECT id FROM doomed)")
 
-    def remove_rows(self, excess: int) -> None:
-        """Removes the entries read longest ago until `excess` bytes are free, and gives the
-        pages back to the file system. `incremental_vacuum` frees one page per result row, so it
-        is stepped to the end."""
+    def remove_rows(self, excess: int, in_use_day: int) -> None:
+        """Removes the entries read longest ago until `excess` bytes are free, but none read on
+        `in_use_day` or later, and gives the pages back to the file system.
+        `incremental_vacuum` frees one page per result row, so it is stepped to the end."""
         with self.connect() as conn:
             doomed = []
-            for entry_id, size in conn.execute("SELECT id, bytes FROM keys ORDER BY used, id"):
+            rows = conn.execute("SELECT id, bytes FROM keys WHERE used < ? ORDER BY used, id", (in_use_day,))
+            for entry_id, size in rows:
                 if excess <= 0:
                     break
                 doomed.append(entry_id)

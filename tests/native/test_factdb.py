@@ -127,7 +127,7 @@ def stored_ids(database: FactDatabase) -> list[int]:
         return [entry_id for (entry_id,) in conn.execute("SELECT id FROM keys ORDER BY id")]
 
 
-def test_the_daily_prune_drops_unread_entries_then_other_files_then_old_entries(
+def test_the_daily_prune_drops_unread_entries_then_other_files_then_entries_not_read_today(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     native = native_module()
@@ -152,12 +152,15 @@ def test_the_daily_prune_drops_unread_entries_then_other_files_then_old_entries(
     database.prune(TODAY)
     assert (stored_ids(database), other.exists()) == (ids[1:], False)
 
+    # Over the bound, rows read three days ago go; rows a run read today stay, so the root stays over it.
+    with sqlite3.connect(database.path) as conn:
+        conn.execute("UPDATE keys SET used = ? WHERE id = ?", (today - 3, ids[1]))
     monkeypatch.setattr("hoglint.native.factdb.MAX_BYTES", 0)
     database.prune(TODAY)
     with sqlite3.connect(database.path) as conn:
         bodies = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
-    assert (stored_ids(database), bodies, free) == ([], 0, 0)
+    assert (stored_ids(database), bodies, free) == (ids[2:], len(ids[2:]), 0)
 
 
 def other_database(directory: Path, name: str, opened_days_ago: float) -> list[Path]:
