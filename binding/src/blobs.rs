@@ -464,7 +464,8 @@ impl StoredRecords {
     }
 
     /// Calls `use_text` with one record's JSON text. A stored record is read and decompressed
-    /// whole once, and kept for the next key of it.
+    /// whole once, and kept for the next key of it. The lock on the kept record is not held
+    /// while a record is read or extracted again, so other readers do not wait on it.
     fn with_record<T>(
         &self,
         file: usize,
@@ -474,18 +475,20 @@ impl StoredRecords {
             Json::Fresh(json) => return use_text(json.as_bytes()),
             Json::Stored(stored) => stored,
         };
-        let mut last = self.last.lock().map_err(|e| e.to_string())?;
-        if let Some((at, json)) = last.as_ref()
-            && *at == file
         {
-            return use_text(json);
+            let last = self.last.lock().map_err(|e| e.to_string())?;
+            if let Some((at, json)) = last.as_ref()
+                && *at == file
+            {
+                return use_text(json);
+            }
         }
         let json = match self.read(stored) {
             Some(json) => json,
             None => extract_again(&self.again, stored)?.into_bytes(),
         };
         let found = use_text(&json);
-        *last = Some((file, json));
+        *self.last.lock().map_err(|e| e.to_string())? = Some((file, json));
         found
     }
 
