@@ -207,6 +207,11 @@ class NativeRuleContext(RuleContext):
         native: Any = import_module()
         return native.Rules(self.native.native.link, self.plan.text())
 
+    def may_conflict(self) -> bool:
+        """The evaluator labels every module before any rule runs and knows whether a label was
+        set two ways; only then does the labeler search for each conflict and its sources."""
+        return self.evaluator.conflicted()
+
     def evaluated(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun]]:
         """The evaluator's rows of an edge or entrypoint rule, in the order the rule judges: a
         violation becomes its finding here; any other judgment goes to the rule's own code, which

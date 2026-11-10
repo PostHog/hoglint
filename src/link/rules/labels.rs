@@ -265,10 +265,9 @@ impl Zones {
         at
     }
 
-    /// The path's zone (`Labeler.zone_candidate`): None outside every `within`, and nothing
-    /// (Ok(None) too) when several leaf zones match and none overrides; that is a conflict the
-    /// Python labeler reports.
-    fn of(&self, path: &str) -> Option<&str> {
+    /// The path's zone (`Labeler.zone_candidate`): None outside every `within`, and Err when
+    /// several leaf zones match and none overrides, a conflict.
+    fn of(&self, path: &str) -> Result<Option<&str>, ()> {
         for (within, inside) in &self.within {
             let Some(root) = inside.captures(path) else {
                 continue;
@@ -288,19 +287,19 @@ impl Zones {
                 .filter(|zone| !ancestors.contains(&zone.name))
                 .collect();
             return match leaves.as_slice() {
-                [] => Some(&self.default),
-                [one] => Some(&one.name),
+                [] => Ok(Some(&self.default)),
+                [one] => Ok(Some(&one.name)),
                 several => {
                     let overriding: Vec<&&ZoneDef> =
                         several.iter().filter(|zone| zone.overrides).collect();
                     match overriding.as_slice() {
-                        [one] => Some(&one.name),
-                        _ => None,
+                        [one] => Ok(Some(&one.name)),
+                        _ => Err(()),
                     }
                 }
             };
         }
-        None
+        Ok(None)
     }
 }
 
@@ -372,6 +371,9 @@ pub struct Labels {
     pub exports_of: Vec<u64>,
     /// Fields whose provider failed.
     pub failed: Vec<bool>,
+    /// Whether two sources set a module's field apart, or two leaf zones claim its path: a config
+    /// error the Python labeler reports with its sources.
+    pub conflicted: bool,
 }
 
 /// The most exports a run reads: one bit each.
@@ -414,6 +416,7 @@ impl Labels {
             registry_of: Vec::with_capacity(paths.len()),
             exports_of: Vec::with_capacity(paths.len()),
             failed,
+            conflicted: false,
         };
         for (path, module) in paths.iter().zip(modules) {
             out.label_module(path, module, exports);
@@ -437,11 +440,22 @@ impl Labels {
                 collected[field].push((candidate, overrides));
             }
         }
-        if let Some(zone) = self.zones.of(path).map(str::to_string) {
-            for (at, field) in self.fields.iter().enumerate() {
-                if field.kind == FieldKind::Zone {
-                    collected[at].push((Candidate::Text(zone.clone()), false));
+        if self
+            .fields
+            .iter()
+            .any(|field| field.kind == FieldKind::Zone)
+        {
+            match self.zones.of(path) {
+                Ok(Some(zone)) => {
+                    let zone = zone.to_string();
+                    for (at, field) in self.fields.iter().enumerate() {
+                        if field.kind == FieldKind::Zone {
+                            collected[at].push((Candidate::Text(zone.clone()), false));
+                        }
+                    }
                 }
+                Ok(None) => {}
+                Err(()) => self.conflicted = true,
             }
         }
         for (at, candidates) in collected.iter().enumerate() {
@@ -503,6 +517,7 @@ impl Labels {
             .iter()
             .any(|candidate| candidate.key() != pool[0].key())
         {
+            self.conflicted = true;
             return None;
         }
         Some(match (kind, pool[0]) {

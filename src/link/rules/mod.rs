@@ -25,7 +25,7 @@ use self::value::{Truth, Value, all_of, any_of, render};
 use super::Link;
 use super::intern::Sid;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -95,6 +95,9 @@ pub struct Rules {
     modules: Vec<Sid>,
     module_files: Vec<u32>,
     pub module_at: FxHashMap<Sid, u32>,
+    /// The attr names that start with `src.` or `dst.`: an edge with one overrides its
+    /// endpoints' labels.
+    pub endpoint_keys: FxHashSet<Sid>,
     pub labels: Labels,
     /// `values[field][module]`: `Labeler.field_value` of each module field on each module.
     pub values: Vec<Vec<Cell>>,
@@ -248,7 +251,9 @@ impl Rules {
             .num_threads(threads)
             .build()
             .map_err(|error| error.to_string())?;
+        let endpoint_keys = Self::endpoint_keys(link);
         let mut out = Rules {
+            endpoint_keys,
             modules,
             module_files,
             module_at,
@@ -268,6 +273,28 @@ impl Rules {
             out.ordinals = ordinals(link, &plan.repeats);
         }
         Ok(out)
+    }
+
+    /// Every attr name of any edge, refinements included, that starts with `src.` or `dst.`.
+    fn endpoint_keys(link: &Link) -> FxHashSet<Sid> {
+        let edges = &link.edges;
+        let refined = edges
+            .refined
+            .values()
+            .flat_map(|refinement| refinement.attrs.iter());
+        let keys: FxHashSet<Sid> = edges
+            .attrs
+            .iter()
+            .chain(refined)
+            .map(|(key, _)| *key)
+            .collect();
+        let it = &link.core.it;
+        keys.into_iter()
+            .filter(|key| {
+                let name = it.s(*key);
+                name.starts_with("src.") || name.starts_with("dst.")
+            })
+            .collect()
     }
 
     /// `graph.modules`: the modules with a file of the repo, in the module index's order.
@@ -473,6 +500,104 @@ impl Rules {
         Some(Value::text(text))
     }
 
+    /// Whether the config sets some label two ways on this graph (`Labeler.find_conflicts`): two
+    /// sources that set a module's field apart, two leaf zones that claim a path, a name two
+    /// kinds hold, or two symbol assignments that set a symbol's field apart. Python names each
+    /// one with its sources; the evaluator only says whether there is one.
+    pub fn conflicted(&self, link: &Link) -> bool {
+        self.labels.conflicted
+            || self
+                .kind_sets
+                .kinds_of
+                .values()
+                .any(|kinds| kinds.len() > 1)
+            || self.symbol_conflicted(link)
+    }
+
+    /// `Labeler.find_symbol_assignment_conflicts`: only symbols whose path two rival assignments
+    /// reach are labelled.
+    fn symbol_conflicted(&self, link: &Link) -> bool {
+        let assigns = &self.labels.assigns;
+        let mut keys: FxHashMap<usize, Vec<(u8, &str)>> = FxHashMap::default();
+        for &at in &self.symbol_assigns {
+            for (field, spec) in self.labels.fields.iter().enumerate() {
+                if spec.kind == FieldKind::Set {
+                    continue;
+                }
+                for value in assigns[at].sets_of(field) {
+                    let found = keys.entry(field).or_default();
+                    if !found.contains(&conflict_key(value)) {
+                        found.push(conflict_key(value));
+                    }
+                }
+            }
+        }
+        let contested: Vec<usize> = keys
+            .into_iter()
+            .filter(|(_, found)| found.len() > 1)
+            .map(|(field, _)| field)
+            .collect();
+        let rivals: Vec<&Assign> = self
+            .symbol_assigns
+            .iter()
+            .map(|&at| &assigns[at])
+            .filter(|assign| {
+                contested
+                    .iter()
+                    .any(|&field| assign.sets_of(field).next().is_some())
+            })
+            .collect();
+        if rivals.len() < 2 {
+            return false;
+        }
+        let cx = Cx { link, rules: self };
+        let mut reached: FxHashMap<Option<u32>, bool> = FxHashMap::default();
+        for name in SymbolFacts::all_symbols(link) {
+            let symbol = link.core.it.s(name);
+            let at = cx.module_of_symbol(symbol).map(|(_, at)| at);
+            let contested_here = *reached.entry(at).or_insert_with(|| {
+                let path = at.map(|at| self.module_path(link, at));
+                rivals.iter().filter(|assign| assign.allows(path)).count() > 1
+            });
+            if contested_here && self.symbol_labels_conflict(link, symbol, at) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether the symbol assignments that reach a symbol set one of its fields apart.
+    fn symbol_labels_conflict(&self, link: &Link, symbol: &str, at: Option<u32>) -> bool {
+        let path = at.map(|at| self.module_path(link, at));
+        let matching: Vec<&Assign> = self
+            .symbol_assigns
+            .iter()
+            .map(|&at| &self.labels.assigns[at])
+            .filter(|assign| self.symbol_matches(link, assign, symbol, path))
+            .collect();
+        self.labels.fields.iter().enumerate().any(|(field, spec)| {
+            if spec.kind == FieldKind::Set {
+                return false;
+            }
+            let candidates: Vec<(&SetValue, bool)> = matching
+                .iter()
+                .flat_map(|assign| assign.sets_of(field).map(|value| (value, assign.overrides)))
+                .collect();
+            let overriding: Vec<&SetValue> = candidates
+                .iter()
+                .filter(|(_, overrides)| *overrides)
+                .map(|(value, _)| *value)
+                .collect();
+            let pool: Vec<&SetValue> = if overriding.is_empty() {
+                candidates.iter().map(|(value, _)| *value).collect()
+            } else {
+                overriding
+            };
+            pool.iter()
+                .any(|value| conflict_key(value) != conflict_key(pool[0]))
+        })
+    }
+
     /// `Labeler.symbol_matches`.
     fn symbol_matches(
         &self,
@@ -650,14 +775,22 @@ impl Rules {
                 };
                 let mut pair = None;
                 if judgment == Judgment::Violation {
-                    let group = |field: Ref| match evaluate_ref(field, &env) {
-                        Value::Unknown | Value::None => None,
-                        value => Some(render(&value)),
-                    };
-                    match (group(src_group), group(dst_group)) {
-                        (Some(from), Some(to)) if from != to => pair = Some((from, to)),
-                        _ => continue,
+                    let (from, to) = (evaluate_ref(src_group, &env), evaluate_ref(dst_group, &env));
+                    let known = |value: &Value| !matches!(value, Value::Unknown | Value::None);
+                    if !known(&from) || !known(&to) {
+                        continue;
                     }
+                    // Most edges stay inside their group: same text, nothing to render.
+                    if let (Value::Text(left), Value::Text(right)) = (&from, &to)
+                        && left == right
+                    {
+                        continue;
+                    }
+                    let (from, to) = (render(&from), render(&to));
+                    if from == to {
+                        continue;
+                    }
+                    pair = Some((from, to));
                 }
                 out.push(PairRow {
                     edge: id,

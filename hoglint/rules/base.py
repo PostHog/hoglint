@@ -137,6 +137,11 @@ class RuleContext:
         self.symbol_cache: dict[tuple[str, Resolution], Endpoint] = {}
         self.target_cache: dict[tuple[EntityId, bool], Endpoint] = {}
 
+    def may_conflict(self) -> bool:
+        """Whether the config may set some label two ways on this graph, so the labeler must look
+        for conflicts before rules run (`Labeler.find_conflicts`)."""
+        return True
+
     def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
         """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""
         if not kinds:

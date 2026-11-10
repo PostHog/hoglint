@@ -228,10 +228,10 @@ class World:
         self.graph: Graph = graph_source("native", work).build(repo, load_config(repo, repo / CONFIG_FILE))
         gc.enable()
 
-    def config(self, rules: str) -> Config:
+    def config(self, rules: str, base: str = CONFIG) -> Config:
         path = self.root / "config" / CONFIG_FILE
         path.parent.mkdir(exist_ok=True)
-        path.write_text(CONFIG + rules)
+        path.write_text(base + rules)
         return load_config(self.repo, path)
 
     def contexts(self, config: Config) -> tuple[NativeRuleContext, RuleContext]:
@@ -408,6 +408,32 @@ CORNERS = {
 @pytest.mark.parametrize("name", sorted(CORNERS))
 def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
     assert differences(world, rule_table(name, CORNERS[name])) == []
+
+
+CONFLICTS = {
+    "module-assignments": CONFIG.replace(
+        '[[assign]]\nmatch = "core/legacy.py"',
+        '[[assign]]\nmatch = "core/legacy.py"\nset = { tier = "leaf" }\n\n[[assign]]\nmatch = "core/legacy.py"',
+    ),
+    "leaf-zones": CONFIG.replace(
+        'special = { paths = ["backend/shared.py"], override = true }', 'special = { paths = ["backend/shared.py"] }'
+    ),
+    "kinds": CONFIG.replace(
+        'model = { subclass_of = "products.billing.backend.models.Base" }',
+        'model = { subclass_of = "products.billing.backend.models.Base" }\nbase = { subclass_of = "products.billing.backend.models.Base" }',
+    ),
+    "symbol-assignments": CONFIG.replace(
+        'values = ["cell"], on = "symbol"', 'values = ["cell", "control"], on = "symbol"'
+    )
+    + '\n[[assign]]\nsymbols = { decorated_by = "products.billing.backend.models.cell" }\nset = { silo = "control" }\n',
+}
+
+
+@pytest.mark.parametrize("name", sorted(CONFLICTS))
+def test_a_label_set_two_ways_stops_the_native_run_before_any_rule(world: World, name: str) -> None:
+    config = world.config("", CONFLICTS[name])
+    with pytest.raises(ConfigError):
+        Engine(config, world.graph, world.repo).run_rules()
 
 
 def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:

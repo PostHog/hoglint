@@ -170,9 +170,10 @@ class Engine:
             raise ConfigError(sorted(set(self.labeler.conflicts)))
 
     def run_rules(self) -> dict[str, RuleRun]:
-        self.labeler.find_conflicts()
-        self.raise_conflicts()
         ctx = context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
+        if ctx.may_conflict():
+            self.labeler.find_conflicts()
+        self.raise_conflicts()
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
         for spec in ordered:

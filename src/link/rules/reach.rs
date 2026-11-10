@@ -52,79 +52,97 @@ const NO_DESTINATION: Endpoint<'static> = Endpoint {
     scope: "",
 };
 
+/// The hops out of each module, made when a search first reads them, as `ReachPrimitive.hops`
+/// makes them: the module's candidate edges kind by kind in graph order, each destination the
+/// selection does not rule out, stably sorted by destination module, symbol and surface.
+struct Hops<'a> {
+    cx: Cx<'a>,
+    rule: &'a Rule,
+    ids: FxHashMap<Sid, Vec<u32>>,
+    made: FxHashMap<Sid, Vec<Hop<'a>>>,
+}
+
+impl<'a> Hops<'a> {
+    fn of(&mut self, module: Sid) -> &[Hop<'a>] {
+        if !self.made.contains_key(&module) {
+            let hops = self.make(module);
+            self.made.insert(module, hops);
+        }
+        &self.made[&module]
+    }
+
+    fn make(&self, module: Sid) -> Vec<Hop<'a>> {
+        let cx = self.cx;
+        let mut out = Vec::new();
+        let mut dsts = Vec::with_capacity(2);
+        for &id in self.ids.get(&module).map_or(&[][..], Vec::as_slice) {
+            let src = cx.src_endpoint(id);
+            cx.dst_endpoints(id, self.rule.role, &mut dsts);
+            for (target, dst) in dsts.iter().enumerate() {
+                let env = Env::new(cx, Some(id), src, *dst);
+                let selected = all_of(self.rule.selection.iter().map(|node| evaluate(node, &env)));
+                if selected != Truth::False {
+                    out.push(Hop {
+                        edge: id,
+                        target: target as u32,
+                        dst: *dst,
+                        selected,
+                    });
+                }
+            }
+        }
+        out.sort_by_cached_key(|hop| {
+            (
+                hop.dst
+                    .module
+                    .map_or("", |module| cx.text(module))
+                    .to_string(),
+                cx.symbol_text(hop.dst.symbol)
+                    .unwrap_or_default()
+                    .into_owned(),
+                cx.text(cx.link.edges.surface_of(hop.edge)).to_string(),
+            )
+        });
+        out
+    }
+}
+
 impl Rules {
     /// The search of reach rule `index` (`ReachPrimitive.sources` and `search`).
     pub fn reach(&self, link: &mut Link, index: usize) -> Result<Vec<Found>, String> {
         let rule = self.rule(index, Mode::Reach)?;
         let kinds = self.kind_sids(link, rule);
         let mut starts: Vec<Sid> = Vec::new();
-        let mut ids: Vec<u32> = Vec::new();
+        let mut ids: FxHashMap<Sid, Vec<u32>> = FxHashMap::default();
         for &kind in &kinds {
             starts.extend(link.source_modules(kind));
-            ids.extend(link.candidates(&[kind], rule.include, rule.exclude));
+            for id in link.candidates(&[kind], rule.include, rule.exclude) {
+                ids.entry(link.module_of_edge(id)).or_default().push(id);
+            }
         }
         let link: &Link = link;
         let it = &link.core.it;
         starts.sort_by(|a, b| it.s(*a).cmp(it.s(*b)));
         starts.dedup();
-        let found = self.over_candidates(link, &ids, |cx, id, dsts, out| {
-            let src = cx.src_endpoint(id);
-            cx.dst_endpoints(id, rule.role, dsts);
-            for (target, dst) in dsts.iter().enumerate() {
-                let env = Env::new(*cx, Some(id), src, *dst);
-                let selected = all_of(rule.selection.iter().map(|node| evaluate(node, &env)));
-                if selected != Truth::False {
-                    out.push((
-                        src.module.unwrap_or_default(),
-                        Hop {
-                            edge: id,
-                            target: target as u32,
-                            dst: *dst,
-                            selected,
-                        },
-                    ));
-                }
-            }
-        });
         let cx = Cx { link, rules: self };
-        let hops = Self::hops_by_module(&cx, found);
+        let mut hops = Hops {
+            cx,
+            rule,
+            ids,
+            made: FxHashMap::default(),
+        };
         let mut out = Vec::new();
         for module in starts {
-            if !hops.contains_key(&module) {
+            let truth = self.start_truth(&cx, rule, module);
+            if truth == Truth::False || hops.of(module).is_empty() {
                 continue;
             }
-            match self.start_truth(&cx, rule, module) {
-                Truth::False => {}
+            match truth {
                 Truth::Unknown => out.push(Found::UnknownStart { module }),
-                Truth::True => self.search(&cx, rule, &hops, module, &mut out),
+                _ => self.search(&cx, rule, &mut hops, module, &mut out),
             }
         }
         Ok(out)
-    }
-
-    /// Each module's hops, stably sorted by destination module, symbol and surface, as
-    /// `ReachPrimitive.hops` sorts them.
-    fn hops_by_module<'a>(cx: &Cx<'a>, found: Vec<(Sid, Hop<'a>)>) -> FxHashMap<Sid, Vec<Hop<'a>>> {
-        let mut out: FxHashMap<Sid, Vec<Hop<'a>>> = FxHashMap::default();
-        for (module, hop) in found {
-            out.entry(module).or_default().push(hop);
-        }
-        let surface = |hop: &Hop| cx.text(cx.link.edges.surface_of(hop.edge));
-        for hops in out.values_mut() {
-            hops.sort_by_cached_key(|hop| {
-                (
-                    hop.dst
-                        .module
-                        .map_or("", |module| cx.text(module))
-                        .to_string(),
-                    cx.symbol_text(hop.dst.symbol)
-                        .unwrap_or_default()
-                        .into_owned(),
-                    surface(hop).to_string(),
-                )
-            });
-        }
-        out
     }
 
     /// Whether the rule searches from a module: its `from`, read of the module alone.
@@ -141,7 +159,7 @@ impl Rules {
         &self,
         cx: &Cx<'a>,
         rule: &Rule,
-        hops: &FxHashMap<Sid, Vec<Hop<'a>>>,
+        hops: &mut Hops<'a>,
         source: Sid,
         out: &mut Vec<Found>,
     ) {
@@ -151,7 +169,7 @@ impl Rules {
         let mut queue = VecDeque::from([source]);
         let mut reported: FxHashSet<String> = FxHashSet::default();
         while let Some(module) = queue.pop_front() {
-            for hop in hops.get(&module).map_or(&[][..], Vec::as_slice) {
+            for hop in hops.of(module) {
                 let step = (hop.edge, hop.target);
                 if hop.dst.unresolved {
                     out.push(Found::Unresolved { source, step });

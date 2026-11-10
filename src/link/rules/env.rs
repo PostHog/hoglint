@@ -115,7 +115,7 @@ impl<'a> Cx<'a> {
         let (module, scope) = self.link.site_of(id);
         let at = self.module_at(module);
         let scope_text = self.text(scope);
-        let scoped = !scope_text.is_empty() && scope_text != "<module>";
+        let scoped = scope != EMPTY && scope != self.link.settings.module_scope;
         let site_path = self.link.path_of_edge(id);
         let path = if site_path.is_empty() {
             self.path_at(at)
@@ -249,12 +249,15 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Whether the edge has `src.*`/`dst.*` attrs (`has_endpoint_attrs`).
     pub fn has_endpoint_attrs(&self, id: u32) -> bool {
-        let it = &self.link.core.it;
-        self.link.edges.attrs_with(id).any(|(key, _)| {
-            let key = it.s(*key);
-            key.starts_with("src.") || key.starts_with("dst.")
-        })
+        let keys = &self.rules.endpoint_keys;
+        !keys.is_empty()
+            && self
+                .link
+                .edges
+                .attrs_with(id)
+                .any(|(key, _)| keys.contains(key))
     }
 
     pub fn attr(&self, id: u32, name: Option<Sid>) -> &'a str {

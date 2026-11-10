@@ -143,6 +143,13 @@ impl Rules {
         Ok(ids_bytes(py, &ids))
     }
 
+    /// Whether the config sets some label two ways on this graph: then the Python labeler
+    /// finds and names each conflict.
+    fn conflicted(&self, py: Python<'_>) -> bool {
+        let bound = self.link.bind(py).borrow();
+        self.inner.conflicted(&bound.inner)
+    }
+
     /// One field's value (or `registry`, `lifecycle`) on every graph module, rendered as an
     /// identity column, a zone as `name|chain`.
     fn column(&self, py: Python<'_>, field: &str) -> PyResult<Vec<String>> {

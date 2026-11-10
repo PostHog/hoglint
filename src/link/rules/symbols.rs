@@ -89,10 +89,15 @@ impl SymbolFacts {
 
     /// One fact of a symbol, "" when it has none (`NativeSymbols.fact`).
     pub fn fact<'l>(link: &'l Link, name: &str, key: &str) -> &'l str {
+        link.core
+            .it
+            .get(name)
+            .map_or("", |sid| Self::fact_of(link, sid, key))
+    }
+
+    /// `fact` of an interned name.
+    fn fact_of<'l>(link: &'l Link, sid: Sid, key: &str) -> &'l str {
         let it = &link.core.it;
-        let Some(sid) = it.get(name) else {
-            return "";
-        };
         if let Some(facts) = link.symbols.added.get(&sid) {
             return facts
                 .iter()
@@ -108,6 +113,16 @@ impl SymbolFacts {
             "path" => &link.core.facts.files[file as usize].path,
             _ => "",
         }
+    }
+
+    /// `decl` of an interned name.
+    fn decl_of(link: &Link, sid: Sid) -> &str {
+        let raw = Self::fact_of(link, sid, "decl");
+        decl_name(if raw.is_empty() {
+            Self::fact_of(link, sid, "kind")
+        } else {
+            raw
+        })
     }
 
     pub fn decl<'l>(link: &'l Link, name: &str) -> &'l str {
@@ -169,20 +184,19 @@ impl SymbolFacts {
     }
 
     /// Every name in `graph.symbols`: the core's, then the ones only packs wrote.
-    fn all_symbols(link: &Link) -> Vec<&str> {
-        let it = &link.core.it;
-        let mut out: Vec<&str> = link
+    pub fn all_symbols(link: &Link) -> Vec<Sid> {
+        let mut out: Vec<Sid> = link
             .symbols
             .order
             .iter()
-            .map(|(name, _, _)| it.s(*name))
+            .map(|(name, _, _)| *name)
             .collect();
-        let mut added: Vec<&str> = link
+        let mut added: Vec<Sid> = link
             .symbols
             .added
             .keys()
             .filter(|name| !link.symbols.at.contains_key(*name))
-            .map(|name| it.s(*name))
+            .copied()
             .collect();
         added.sort_unstable();
         out.extend(added);
@@ -218,10 +232,14 @@ impl SymbolFacts {
         } else if !kind.decl.is_empty() {
             Self::all_symbols(link)
                 .into_iter()
-                .filter(|name| Self::decl(link, name) == kind.decl)
+                .filter(|sid| Self::decl_of(link, *sid) == kind.decl)
+                .map(|sid| link.core.it.s(sid))
                 .collect()
         } else {
             Self::all_symbols(link)
+                .into_iter()
+                .map(|sid| link.core.it.s(sid))
+                .collect()
         };
         out.extend(
             pool.into_iter()

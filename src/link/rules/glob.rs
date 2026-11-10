@@ -112,21 +112,34 @@ impl Glob {
         })
     }
 
-    /// The captures when the whole path matches, else None.
+    /// The captures when the whole path matches, else None. An ASCII path is matched byte by
+    /// byte, any other character by character.
     pub fn captures(&self, path: &str) -> Option<Captures> {
         if !path.starts_with(&self.prefix) || !path.ends_with(&self.suffix) {
             return None;
         }
+        if path.is_ascii() {
+            return self.captures_in(path.as_bytes());
+        }
         let chars: Vec<char> = path.chars().collect();
+        self.captures_in(&chars)
+    }
+
+    fn captures_in<T: Copy + PartialEq + Into<char>>(&self, text: &[T]) -> Option<Captures> {
         let mut found: Vec<(usize, usize)> = vec![(0, 0); self.names.len()];
-        if !self.walk(&chars, 0, 0, &mut found) {
+        if !self.walk(text, 0, 0, &mut found) {
             return None;
         }
         Some(
             self.names
                 .iter()
                 .zip(found)
-                .map(|(name, (start, end))| (name.clone(), chars[start..end].iter().collect()))
+                .map(|(name, (start, end))| {
+                    (
+                        name.clone(),
+                        text[start..end].iter().map(|&c| c.into()).collect(),
+                    )
+                })
                 .collect(),
         )
     }
@@ -137,15 +150,24 @@ impl Glob {
 
     /// Whether `tokens[token..]` matches `chars[at..]` to its end; `found` holds the span of
     /// each capture taken so far.
-    fn walk(&self, chars: &[char], token: usize, at: usize, found: &mut [(usize, usize)]) -> bool {
+    fn walk<T: Copy + PartialEq + Into<char>>(
+        &self,
+        chars: &[T],
+        token: usize,
+        at: usize,
+        found: &mut [(usize, usize)],
+    ) -> bool {
         let Some(current) = self.tokens.get(token) else {
             return at == chars.len();
         };
         let next = token + 1;
         match current {
-            Token::Char(c) => chars.get(at) == Some(c) && self.walk(chars, next, at + 1, found),
+            Token::Char(c) => {
+                chars.get(at).is_some_and(|&x| x.into() == *c)
+                    && self.walk(chars, next, at + 1, found)
+            }
             Token::Quest => {
-                chars.get(at).is_some_and(|&c| in_segment(c))
+                chars.get(at).is_some_and(|&c| in_segment(c.into()))
                     && self.walk(chars, next, at + 1, found)
             }
             Token::Star => {
@@ -162,7 +184,9 @@ impl Glob {
             }
             Token::Dirs => {
                 let longest = run_length(chars, at, any_char);
-                let slashes = (0..longest).rev().filter(|&taken| chars[at + taken] == '/');
+                let slashes = (0..longest)
+                    .rev()
+                    .filter(|&taken| chars[at + taken].into() == '/');
                 for taken in slashes {
                     if self.walk(chars, next, at + taken + 1, found) {
                         return true;
@@ -194,8 +218,8 @@ impl Glob {
 }
 
 /// How many characters from `at` on pass `test`.
-fn run_length(chars: &[char], at: usize, test: fn(char) -> bool) -> usize {
-    chars[at..].iter().take_while(|&&c| test(c)).count()
+fn run_length<T: Copy + Into<char>>(chars: &[T], at: usize, test: fn(char) -> bool) -> usize {
+    chars[at..].iter().take_while(|&&c| test(c.into())).count()
 }
 
 /// The text of a capture by name.
