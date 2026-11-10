@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.cli import Commands, Run, Runner
+from hoglint.cli import Commands, Run, Runner, main
 from hoglint.config import Config, load_config
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
@@ -72,6 +72,20 @@ def test_write_ledger_converges_in_one_run(commands: Commands) -> None:
     # the run that writes the ledger must already count the level lines that ledger makes pass
     assert commands.check(index=False, write_ledger=True, changed=False) == 0
     assert commands.check(index=False, write_ledger=False, changed=False) == 0
+
+
+def test_a_crash_is_an_internal_error_with_exit_2_never_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def crash(self: Commands) -> int:
+        raise KeyError("boom")
+
+    monkeypatch.setattr(Commands, "explain_config", crash)
+    write_config(tmp_path / "repo", CONFIG)
+    git_in(tmp_path / "repo", "init", "-q")
+    assert main(["--repo", str(tmp_path / "repo"), "explain-config"]) == 2
+    printed = capsys.readouterr().err
+    assert printed.startswith("internal error:\nTraceback") and "KeyError: 'boom'" in printed
 
 
 def test_explain_edge_lists_rules_that_read_every_edge_kind(

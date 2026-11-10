@@ -2,8 +2,9 @@
 
 Exit codes: 0 clean, 1 violations (new findings, a ledger that is not equal to the scan, code
 growth, a stale exception), 2 blocking incompleteness (a failed producer, an incomplete result
-the change introduced or cannot tell from an old one, a base engine that cannot run) or a config
-error. An incomplete result never hides violations: both are printed.
+the change introduced or cannot tell from an old one, a base engine that cannot run), a config
+error, or an internal error (a crash, with its traceback on stderr). An incomplete result never
+hides violations: both are printed.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import argparse
 import datetime
 import tempfile
 import posixpath
+import traceback
 import subprocess
 import dataclasses
 from collections import Counter
@@ -1179,7 +1181,7 @@ def parser() -> argparse.ArgumentParser:
     return main
 
 
-def main(argv: list[str] | None = None) -> int:
+def command(argv: list[str] | None) -> int:
     args = parser().parse_args(argv)
     repo = args.repo.resolve()
     batch_mode(args.engine)
@@ -1195,3 +1197,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         finally:
             commands.snapshots.close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Exit 1 means violations, so an exception nothing expected is an internal error, exit 2."""
+    try:
+        return command(argv)
+    except Exception:  # noqa: BLE001 - any crash must exit 2, never 1
+        sys.stderr.write("internal error:\n" + traceback.format_exc())
+        return 2
