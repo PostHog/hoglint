@@ -223,6 +223,9 @@ class RulePlan:
         for policy in self.config.shapes.values():
             if policy.behavior is not None and policy.behavior.where is not None:
                 yield policy.behavior.where
+        for level in self.config.levels.values():
+            if level.select is not None:
+                yield level.select
 
     def names_read(self) -> set[str]:
         """The last name of every field the plan reads: selectors, identity columns and a cycle
@@ -231,6 +234,8 @@ class RulePlan:
         out = {ref.path[-1] for selector in self.selectors() for ref in refs(selector.node)}
         out.update(column.rsplit(".", 1)[-1] for spec in self.specs for column in spec.identity)
         out.update(CyclePrimitive.group_of(self.config, spec) for spec in self.specs if spec.primitive == "cycle")
+        out.update(spec.exactly_one for spec in self.specs if spec.exactly_one)
+        out.update(level.group_by for level in self.config.levels.values())
         out.update(
             cover.column.rsplit(".", 1)[-1]
             for spec in self.specs

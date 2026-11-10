@@ -1261,3 +1261,22 @@ def test_an_expected_kind_no_symbol_holds_makes_a_rule_incomplete_in_both(
     monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
     assert native == reasons()
     assert native == ["kind ghost matched no symbol, but [kinds] marks it expected"]
+
+
+def test_a_provider_field_an_inventory_counts_or_a_level_groups_by_gets_its_column(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lead = PROVIDED.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n').replace(
+        'sets = ["team"]', 'sets = ["team", "lead"]'
+    )
+    counted = rule_table("teams", {"primitive": "inventory", "on": "module", "exactly_one": "team", "ledger": False})
+    assert differences(world, counted, lead) == []
+    config = world.config(LEVELS.replace('group_by = "zone"', 'group_by = "lead"'), lead)
+
+    def levels() -> dict[str, tuple[list[str], dict[str, list[str]]]]:
+        result = Engine(config, world.graph, world.repo).evaluate()
+        return {name: (level.passing, dict(level.failing)) for name, level in result.levels.items()}
+
+    native = levels()
+    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
+    assert native == levels()
