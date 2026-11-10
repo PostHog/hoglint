@@ -909,6 +909,8 @@ INPUTS = InputPatterns((*SOURCE_INPUTS, "**/turbo.json", "hoglint.ledger"))
         ([f"1 M. {ENTRY} hoglint.ledger"], ["hoglint.ledger"]),
         ([f"2 R. {ENTRY} R100 conf/new.py", "conf/old.py"], ["conf/new.py", "conf/old.py"]),
         ([f"1 .M {ENTRY} app/a.py", "? app/b.pyi"], ["app/a.py", "app/b.pyi"]),
+        # a directory name may hold a newline, and its sources are still inputs
+        (["? notes\nold/a.py"], ["notes\nold/a.py"]),
     ],
 )
 def test_a_working_tree_holds_heads_inputs_unless_a_declared_input_differs(

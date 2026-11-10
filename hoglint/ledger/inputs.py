@@ -34,11 +34,13 @@ DIGEST_LAYOUT = "l2"
 
 
 class InputPatterns:
-    """Path patterns as one regex: `**` spans directories, `*` and `?` stay in one segment."""
+    """Path patterns as one regex: `**` spans directories, `*` and `?` stay in one segment. A
+    path may hold any character, a newline included, as discovery takes it."""
 
     def __init__(self, patterns: Iterable[str]) -> None:
         self.patterns = tuple(sorted(set(patterns)))
-        self.regex = re.compile("|".join(f"(?:{translate(pattern, Braces.LITERAL)})" for pattern in self.patterns))
+        regex = "|".join(f"(?:{translate(pattern, Braces.LITERAL)})" for pattern in self.patterns)
+        self.regex = re.compile(regex, re.DOTALL)
 
     def matches(self, path: str) -> bool:
         return bool(self.patterns) and self.regex.fullmatch(path) is not None
