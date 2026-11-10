@@ -10,7 +10,7 @@ import subprocess
 import dataclasses
 from array import array
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -362,25 +362,24 @@ def judged_rows(columns: tuple[Any, ...]) -> list[JudgedRow]:
 def judged_columns(rows: list[JudgedRow]) -> tuple[Any, ...]:
     """Rows back as `Rules.judge`'s columns."""
     place = native_module().NO_PLACE
-    names: list[str] = []
-    identities: list[list[str]] = []
-    modules: list[str] = []
+    names: dict[str, int] = {}
+    identities: dict[tuple[str, ...], int] = {}
+    modules: dict[str, int] = {}
 
-    def at(found: list[Any], value: Any) -> int:
-        if value not in found:
-            found.append(value)
-        return found.index(value)
+    def at(found: dict[Any, int], value: Any) -> int:
+        return found.setdefault(value, len(found))
 
     columns = [array("I") for _ in range(6)]
     for edge, target, name, identity, src, dst in rows:
         columns[0].append(edge)
         columns[1].append(target)
         columns[2].append(at(names, name))
-        columns[3].append(at(identities, list(identity)) if name in IDENTIFIED and identity is not None else place)
+        columns[3].append(at(identities, tuple(identity)) if name in IDENTIFIED and identity is not None else place)
         columns[4].append(at(modules, src))
         columns[5].append(at(modules, dst) if dst is not None else place)
     edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns)
-    return edges, targets, names, judgment_at, identities, identity_at, modules, src_at, dst_at
+    distinct = [list(identity) for identity in identities]
+    return edges, targets, list(names), judgment_at, distinct, identity_at, list(modules), src_at, dst_at
 
 
 def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
@@ -1568,12 +1567,17 @@ def swapped(text: str, pair: tuple[str, str] = ("core", "billing")) -> str:
     return second if text == first else first if text == second else text
 
 
+def relabeled(change: Callable[[str], str]) -> Callable[[Any], Any]:
+    """A lie of the `values` call: every value of a label column changed by `change`."""
+    return lambda found: [[(kind, [change(item) for item in items]) for kind, items in found[0]], found[1]]
+
+
 def made_up_label(changes: dict[str, Any]) -> dict[str, Any]:
     """A `package` column that says `made-up` where it says `billing`, and judge rows whose
     identities say the same: labels the evaluator computed, wrong on both sides."""
     return {
         **changes,
-        "values": lambda found: [[(kind, [made_up(item) for item in items]) for kind, items in found[0]], found[1]],
+        "values": relabeled(made_up),
         "judge": lambda rows: [(*row[:3], [made_up(item) for item in row[3]], *row[4:]) for row in rows],
     }
 
@@ -1608,9 +1612,7 @@ LEDGER_LIES: dict[str, tuple[str, Any]] = {
                 "growth_key": ["src.package"],
             },
         ),
-        lambda world: {
-            "values": lambda found: [[(kind, [swapped(item) for item in items]) for kind, items in found[0]], found[1]]
-        },
+        lambda world: {"values": relabeled(swapped)},
     ),
     "source module": (
         rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
@@ -1708,10 +1710,7 @@ def test_a_ledger_write_holds_a_level_to_the_groups_a_python_labeler_blocks(
     honest = levels()
     # `billing` fails the level and `leaf` passes it.
     pair = ("billing", "leaf")
-    lie(
-        monkeypatch,
-        values=lambda found: [[(kind, [swapped(item, pair) for item in items]) for kind, items in found[0]], found[1]],
-    )
+    lie(monkeypatch, values=relabeled(lambda item: swapped(item, pair)))
     lied = levels()
     assert lied != honest and {name: set(sum(groups, [])) for name, groups in lied.items()} == {
         name: set(sum(groups, [])) for name, groups in honest.items()
