@@ -17,7 +17,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from hoglint.config.model import Config
+from hoglint.config.model import Config, RuleSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
@@ -26,7 +26,7 @@ from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import JUDGED, RulePlan, tree
-from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun
+from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, project
 from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
@@ -211,14 +211,18 @@ class RowDetail:
 class Rejudged:
     """The detail of a finding made from a judgment made outside the rule's own code: the rule
     judges the edge's destination again when something reads the message, site, witnesses or
-    remedies. A judgment that differs is an engine error, never a silent difference."""
+    remedies. A judgment or an identity that differs is an engine error, never a silent
+    difference."""
 
-    __slots__ = ("handle", "judgment", "made", "rule", "target")
+    __slots__ = ("handle", "identity", "judgment", "made", "rule", "target")
 
-    def __init__(self, rule: EdgeRule, handle: EdgeRef, judgment: Judgment, target: int = 0) -> None:
+    def __init__(
+        self, rule: EdgeRule, handle: EdgeRef, judgment: Judgment, identity: tuple[str, ...], target: int = 0
+    ) -> None:
         self.rule = rule
         self.handle = handle
         self.judgment = judgment
+        self.identity = identity
         self.target = target
         self.made: FindingDetail | None = None
 
@@ -228,15 +232,22 @@ class Rejudged:
         return self.made
 
     def confirmed(self) -> EdgeEnv:
-        """The destination's environment, once the rule's own code judges it as the evaluator did."""
+        """The destination's environment, once the rule's own code judges it as the evaluator did
+        and its own `project` gives the evaluator's identity: the ledger keys a finding by it."""
         edge = self.handle.get()
         env = self.rule.envs_of(edge)[self.target]
         judged = self.rule.decide(env)
+        site = edge.site
         if judged is not self.judgment:
-            site = edge.site
             raise EngineError(
                 f"rule {self.rule.spec.id} judges {edge.kind} {site.path}:{site.line} {judged}, "
                 f"apart from the evaluator's {self.judgment}"
+            )
+        identity = project(self.rule.spec.identity, env.resolve)
+        if identity != self.identity:
+            raise EngineError(
+                f"rule {self.rule.spec.id} gives {edge.kind} {site.path}:{site.line} the identity {identity}, "
+                f"apart from the evaluator's {self.identity}"
             )
         return env
 
@@ -260,6 +271,16 @@ def engine_errors() -> Iterator[None]:
         yield
     except ValueError as error:
         raise EngineError(f"the native evaluator failed: {error}") from error
+
+
+# The rule types that have no Python judge per row: a ledger write runs them whole again.
+RUN_WHOLE = frozenset({"export", "layout", "inventory"})
+
+
+def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
+    """What a ledger write holds the evaluator to: each finding's identity, subjects and flags,
+    and each incomplete item, in order."""
+    return [*((f.identity, f.subjects, f.ledgerable, f.unknown) for f in run.findings), *run.incomplete]
 
 
 JUDGMENTS = list(Judgment)
@@ -360,11 +381,11 @@ class NativeRuleContext(RuleContext):
                 continue
             handle = EdgeHandle(edges, edge_id)
             ledgerable, unknown = flags[code]
-            detail = Rejudged(rule, handle, JUDGMENTS[code], target)
+            detail = Rejudged(rule, handle, JUDGMENTS[code], tuple(identity), target)
             self.rejudged.append(detail)
             finding = Finding(
                 rule=spec.id,
-                identity=tuple(identity),
+                identity=detail.identity,
                 detail=detail,
                 owner=self.owner(src),
                 subjects=(src, dst) if dst and dst != src else (src,),
@@ -486,11 +507,34 @@ class NativeRuleContext(RuleContext):
             found = self.owners[module] = super().owner(module)
         return found
 
-    def confirm_findings(self) -> None:
+    def confirm_findings(self, ran: list[RuleSpec]) -> None:
         """Every finding the evaluator made is judged again by its rule's own code: a run that
-        writes a ledger reads no message, so a wrong row would become accepted debt."""
+        writes a ledger reads no message, so a wrong row would become accepted debt (D50).
+
+        A row of an edge, entrypoint, signature or use-shape rule is judged on its own. Export,
+        layout and inventory rules have no judge per row, so each one that ran runs whole again
+        in its Python primitive, over a plain rule context with a Python labeler, and must give
+        the evaluator's findings and incomplete items, in order."""
         for detail in self.rejudged:
             detail.confirmed()
+        whole = [spec for spec in ran if spec.primitive in RUN_WHOLE]
+        if not whole:
+            return
+        labeler = Labeler(self.config, self.graph, self.repo_root, self.index)
+        plain = RuleContext(self.config, self.graph, labeler, self.repo_root)
+        for spec in whole:
+            ours, theirs = (
+                confirmed_rows(self.results[spec.id]),
+                confirmed_rows(primitive_of(spec)(plain, spec).evaluate()),
+            )
+            if ours == theirs:
+                continue
+            at = next(
+                (at for at, (mine, other) in enumerate(zip(ours, theirs)) if mine != other), min(len(ours), len(theirs))
+            )
+            mine = ours[at] if at < len(ours) else "nothing"
+            other = theirs[at] if at < len(theirs) else "nothing"
+            raise EngineError(f"rule {spec.id}: the evaluator gives {mine} as row {at}, the rule's own code {other}")
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         with engine_errors():

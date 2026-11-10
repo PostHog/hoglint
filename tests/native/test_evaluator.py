@@ -1194,17 +1194,27 @@ def test_a_coverage_rule_needs_the_paths_the_python_rule_needs(world: World) -> 
 
 
 class Lying:
-    """The evaluator, with a violation row added for an edge the rule judges clean."""
+    """The evaluator, with the rows its call `method` returns changed by `change`."""
 
-    def __init__(self, inner: Any, row: tuple[Any, ...]) -> None:
+    def __init__(self, inner: Any, method: str, change: Any) -> None:
         self.inner = inner
-        self.row = row
-
-    def judge(self, rule: int) -> list[tuple[Any, ...]]:
-        return [*self.inner.judge(rule), self.row]
+        self.method = method
+        self.change = change
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.inner, name)
+        found = getattr(self.inner, name)
+        if name != self.method:
+            return found
+        return lambda *args: self.change(list(found(*args)))
+
+
+def lie(monkeypatch: pytest.MonkeyPatch, method: str, change: Any) -> None:
+    made = NativeRuleContext.evaluator.func
+    monkeypatch.setattr(
+        NativeRuleContext,
+        "evaluator",
+        property(lambda ctx: ctx.__dict__.setdefault("lying", Lying(made(ctx), method, change))),
+    )
 
 
 def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
@@ -1213,12 +1223,37 @@ def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
     config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'nowhere'"}))
     edge = next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
     row = (edge.handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ["a", "b"], edge.site.module, None)
-    made = NativeRuleContext.evaluator.func
-    monkeypatch.setattr(
-        NativeRuleContext, "evaluator", property(lambda ctx: ctx.__dict__.setdefault("lying", Lying(made(ctx), row)))
-    )
+    lie(monkeypatch, "judge", lambda rows: [*rows, row])
     assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
     with pytest.raises(EngineError, match="apart from the evaluator"):
+        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+
+
+# Per rule type, a rule and an evaluator call whose rows a lie changes: a violation row with an
+# identity the rule's own `project` does not give, or a first row the evaluator leaves out.
+LEDGER_LIES = {
+    "identity": (
+        {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"},
+        "judge",
+        lambda rows: [(*rows[0][:3], ["made", "up"], *rows[0][4:]), *rows[1:]],
+    ),
+    "export": (CORNERS["export-shapes"], "export", lambda rows: rows[1:]),
+    "layout": (CORNERS["layout-on-modules"], "entities", lambda rows: rows[1:]),
+    "entity-inventory": (CORNERS["inventory-exactly-one"], "entities", lambda rows: rows[1:]),
+    "inventory": (CORNERS["inventory-classify"], "judge", lambda rows: rows[1:]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(LEDGER_LIES))
+def test_a_ledger_write_holds_every_rule_type_to_its_own_code(
+    world: World, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    rule, method, change = LEDGER_LIES[name]
+    config = world.config(rule_table("lied", rule))
+    assert Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True).runs["lied"].findings
+    lie(monkeypatch, method, change)
+    Engine(config, world.graph, world.repo).evaluate()
+    with pytest.raises(EngineError, match="evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
 
 

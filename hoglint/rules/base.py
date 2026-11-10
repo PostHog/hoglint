@@ -144,9 +144,10 @@ class RuleContext:
         (`Labeler.find_conflicts`)."""
         self.labeler.find_conflicts()
 
-    def confirm_findings(self) -> None:
-        """Judges again, by each rule's own code, every finding a judge outside that code made;
-        a run that writes a ledger asks for it. The Python engine's rules judge their own edges."""
+    def confirm_findings(self, ran: list[RuleSpec]) -> None:
+        """Judges again, by each rule's own code, every finding a judge outside that code made
+        for the rules in `ran`; a run that writes a ledger asks for it. The Python engine's rules
+        judge their own edges."""
 
     def met_conflicts(self) -> None:
         """Records the labels set two ways that the run met so far, outside the labeler. The

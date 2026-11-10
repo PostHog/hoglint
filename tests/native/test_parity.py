@@ -15,7 +15,7 @@ from hoglint.model import Edge, WitnessRow, witness_row
 from hoglint.native.parity import Dump, compare_dumps, read_lines
 from hoglint.native.rules import Rejudged
 from hoglint.native.source import ENGINES
-from hoglint.rules.base import EdgeRule, Judgment, context_class
+from hoglint.rules.base import EdgeRule, Judgment, context_class, project
 from hoglint.rules.engine import Engine, primitive_of
 from rules.support import GraphBuilder, config_from
 
@@ -208,9 +208,12 @@ def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path
     rule = primitive_of(spec)(ctx, spec)
     assert isinstance(rule, EdgeRule)
     edge = Held(built.edges[0])
-    assert Rejudged(rule, edge, Judgment.VIOLATION).get().message
+    identity = project(spec.identity, rule.envs_of(built.edges[0])[0].resolve)
+    assert Rejudged(rule, edge, Judgment.VIOLATION, identity).get().message
     with pytest.raises(EngineError):
-        Rejudged(rule, edge, Judgment.UNKNOWN_VIOLATION).get()
+        Rejudged(rule, edge, Judgment.UNKNOWN_VIOLATION, identity).get()
+    with pytest.raises(EngineError, match="the identity"):
+        Rejudged(rule, edge, Judgment.VIOLATION, ("made", "up")).get()
 
 
 def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(

@@ -185,6 +185,7 @@ class Engine:
         self.raise_conflicts(ctx)
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
+        ran: list[RuleSpec] = []
         for spec in ordered:
             failures = self.failed_producers(spec) + self.missing_kinds(spec, empty)
             if failures:
@@ -195,9 +196,10 @@ class Engine:
                 ctx.results[spec.id] = run
                 continue
             ctx.results[spec.id] = primitive_of(spec)(ctx, spec).evaluate()
+            ran.append(spec)
         self.raise_conflicts(ctx)
         if confirm:
-            ctx.confirm_findings()
+            ctx.confirm_findings(ran)
         for name in sorted(self.labeler.providers.failures):
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
             run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))
