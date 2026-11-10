@@ -35,6 +35,7 @@ from typing import Any
 
 from hoglint.config.model import Config
 from hoglint.config.schema import as_tuple, canonical
+from hoglint.ledger.errors import EngineError
 from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
@@ -50,10 +51,6 @@ ID_FLAGS = {FACTS: "--facts-id", NATIVE: "--native-id", ENGINE: "--build-id"}
 DIGEST_CHARS = 16
 SOURCE_DIGEST_BYTES = 8
 MISSING = "missing"
-
-
-class EngineError(Exception):
-    """An engine that a comparison needs cannot run as pinned."""
 
 
 def short_digest(parts: Iterable[str | bytes]) -> str:

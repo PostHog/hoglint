@@ -34,7 +34,7 @@ from hoglint.ledger.envelope import (
 )
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
-from hoglint.ledger.listing import TreeListing, WorktreeListing
+from hoglint.ledger.listing import TreeListing, WorktreeListing, read_blobs
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
@@ -951,3 +951,12 @@ def test_the_working_tree_listing_follows_what_a_rename_or_copy_record_says(
         else:
             (tmp_path / step[1]).write_text(LINES + "e = 5\n")
     assert sorted(WorktreeListing.of(tmp_path).paths) == paths
+
+
+def test_a_blob_git_does_not_have_is_an_engine_error_that_names_the_path(tmp_path: Path) -> None:
+    write_files(tmp_path, {"a.py": LINES})
+    git_in(tmp_path, "init", "-q")
+    present = git_in(tmp_path, "hash-object", "-w", "a.py").strip()
+    lost = "1" * 40  # a partial clone or a pruned object
+    with pytest.raises(EngineError, match=f"git has no object {lost} for b.py"):
+        read_blobs(tmp_path, {"a.py": present, "b.py": lost})

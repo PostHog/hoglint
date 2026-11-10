@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hoglint.core.config import CoreConfig
-from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
+from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing, read_blobs
 
 SOURCE_PATTERNS = ("*.py", "*.pyi")
 
@@ -51,26 +51,12 @@ class StagedIndex:
         return blobs
 
     def materialize(self, blobs: dict[str, str]) -> None:
-        pending = [(rel, sha) for rel, sha in sorted(blobs.items()) if rel not in self.written]
-        if not pending:
-            return
-        request = "".join(f"{sha}\n" for _, sha in pending).encode()
-        out = subprocess.run(
-            ["git", "cat-file", "--batch"], cwd=self.repo, input=request, capture_output=True, check=True
-        ).stdout
-        at = 0
-        for rel, sha in pending:
-            header_end = out.index(b"\n", at)
-            got_sha, kind, size = out[at:header_end].decode().split()
-            if got_sha != sha or kind != "blob":
-                raise RuntimeError(f"git cat-file returned {got_sha} {kind} for {rel}")
-            start = header_end + 1
-            end = start + int(size)
+        pending = {rel: sha for rel, sha in blobs.items() if rel not in self.written}
+        for rel, data in read_blobs(self.repo, pending).items():
             target = self.root / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(out[start:end])
+            target.write_bytes(data)
             self.written.add(rel)
-            at = end + 1
 
     def list(self, patterns: tuple[str, ...]) -> list[str]:
         blobs = self.entries(patterns)

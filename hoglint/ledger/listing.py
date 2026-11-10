@@ -26,6 +26,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import ClassVar
 
+from hoglint.ledger.errors import EngineError
 from hoglint.ledger.status import DELETED_MODE, WorktreeStatus
 
 SUBMODULE_MODE = "160000"
@@ -47,7 +48,10 @@ def read_blobs(repo: Path, oids: dict[str, str]) -> dict[str, bytes]:
     at = 0
     for path, oid in pending:
         header_end = out.index(b"\n", at)
-        got, kind, size = out[at:header_end].decode().split()
+        header = out[at:header_end].decode().split()
+        if header[1:] == ["missing"]:
+            raise EngineError(f"git has no object {oid} for {path}: a partial clone, or a pruned object")
+        got, kind, size = header
         if got != oid or kind != "blob":
             raise RuntimeError(f"git cat-file returned {got} {kind} for {path}")
         start = header_end + 1
