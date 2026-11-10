@@ -47,6 +47,17 @@ EdgeTuple = tuple[
 attrs, shape, shape detail, producer), with what refinements set. Context bits follow
 `CONTEXT_BITS` in hoglint.native.graph."""
 
+Conflict = tuple[int, str, int, str | None, str]
+"""The first field a batch of refinements sets apart: (how many conflict, the field, the edge id, the
+producer that set it or None for an attr the edge has, the value there)."""
+
+class Staged:
+    """Refinements a link producer judged and has not applied; its rows stay in Rust."""
+
+    def __len__(self) -> int: ...
+    def failed(self) -> list[int]:
+        """The file ids whose uses the producer could not read, in the producer's order."""
+
 class Link:
     def timings(self) -> list[tuple[str, float]]: ...
     def heap(self) -> list[tuple[str, int]]:
@@ -143,6 +154,17 @@ class Link:
     ) -> None:
         """Refines core edges (D22): per edge, the shape and shape detail to set (None keeps the
         edge's) and attrs to add after its own."""
+    def django_uses(self, files: list[int], models: list[Pair]) -> Staged:
+        """Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
+        producer's order) onto `models` in the link, with no Python object per use. Nothing is
+        applied until `refine_staged`."""
+    def staged_columns(
+        self, staged: Staged
+    ) -> tuple[bytes, list[str | None], list[str | None], list[list[tuple[str, str]]]]:
+        """(edge ids, shapes, details, attrs) of judged refinements, for proofs."""
+    def refine_staged(self, staged: Staged) -> Conflict | None:
+        """Applies judged refinements, or none of them when one would change an attr its edge has;
+        then returns the first such conflict. `staged` is empty afterwards."""
     def witness_rows(self, ids: bytes) -> list[tuple[str, str, int, int, str, list[str]]]:
         """(kind, path, line, column, surface, targets) of each edge, as a stored summary keeps a
         finding's witness, with no Edge made."""

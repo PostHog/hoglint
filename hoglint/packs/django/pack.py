@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,7 @@ from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.ledger.store import cache_root
 from hoglint.model import Edge
+from hoglint.native.graph import NativeSink
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
 from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsProducer
@@ -24,6 +25,7 @@ from hoglint.packs.django.migrations import (
     SummaryCache,
 )
 from hoglint.packs.django.models import ModelRegistry, RelationBuilder
+from hoglint.packs.django.native_uses import NativeUses
 from hoglint.packs.django.relations import RELATIONS_PRODUCER, ModelFacts, RelationEdges
 from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalProducer
 from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelProducer, UseProducer
@@ -33,6 +35,7 @@ APPS_PRODUCER = "django.apps@1"
 MODELS_PRODUCER = "django.models@1"
 SYMBOLS_PRODUCER = "django.symbols@1"
 MODEL_KINDS = frozenset({"relation", "reverse-accessor", "model-label", "reference", "signal"})
+USES_KINDS = frozenset({"reference"})
 EDGE_KINDS = frozenset({*MODEL_KINDS, "migration-parent", "installs", "loads"})
 FACT_NEEDS = FactNeeds(
     kinds=frozenset({"imports", "defs", "assigns", "refs", "derived", "uses", "calls", "callees"}),
@@ -100,9 +103,13 @@ class DjangoRun:
         builder = RelationBuilder(self.registry, self.config)
         return RelationEdges(self.registry, builder, self.reader.index.path_of).produce()
 
-    def use_edges(self) -> list[Output]:
+    def use_edges(self) -> Sequence[Output]:
+        """On the native engine the link judges the uses (D49); `UseProducer` is the meaning."""
         assert self.registry is not None
-        return UseProducer(self.reader, self.registry).produce(self.files)
+        producer = UseProducer(self.reader, self.registry)
+        if isinstance(self.sink, NativeSink):
+            return NativeUses(producer, self.sink).produce(self.files, USES_KINDS)
+        return producer.produce(self.files)
 
     def get_model_edges(self) -> list[Edge]:
         assert self.registry is not None
@@ -140,7 +147,7 @@ class DjangoRun:
                     self.relation_edges,
                     (MODELS_PRODUCER,),
                 ),
-                ProducerStep(USES_PRODUCER, frozenset({"reference"}), self.use_edges, (MODELS_PRODUCER,)),
+                ProducerStep(USES_PRODUCER, USES_KINDS, self.use_edges, (MODELS_PRODUCER,)),
                 ProducerStep(GET_MODEL_PRODUCER, frozenset({"model-label"}), self.get_model_edges, (MODELS_PRODUCER,)),
                 ProducerStep(SIGNALS_PRODUCER, frozenset({"signal"}), self.signal_edges, (MODELS_PRODUCER,)),
                 ProducerStep(INSTALLS_PRODUCER, frozenset({"installs"}), self.installs_edges, (APPS_PRODUCER,)),

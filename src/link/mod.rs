@@ -8,6 +8,7 @@
 pub mod facts;
 pub mod index;
 pub mod intern;
+pub mod packs;
 pub mod paths;
 pub mod produce;
 pub mod queries;

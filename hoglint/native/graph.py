@@ -247,6 +247,18 @@ class NativeSink:
             refinements.attrs,
         )
 
+    def refine_staged(self, producer: str, kinds: frozenset[str], staged: Any) -> None:
+        """Applies refinements a link producer judged (`Link.django_uses`), as `refine` does:
+        all of them, or none when one would change an attr its edge has."""
+        conflict = self.graph.link.refine_staged(staged)
+        if conflict is None:
+            return
+        count, name, handle, _, value = conflict
+        more = f" and {count - 1} more" if count > 1 else ""
+        self.fail(
+            producer, ProducerFailure(f"sets {name} of edge {handle} (the edge has {value!r}){more} apart", kinds)
+        )
+
     def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:
         symbols: Any = self.graph.symbols
         symbols.update(facts)

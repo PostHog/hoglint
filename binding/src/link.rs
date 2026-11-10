@@ -4,6 +4,7 @@ use crate::blobs::{Blob, BlobRequest, configs, load};
 use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::decode_lines;
 use hoglint_facts::link::intern::{Interner, Sid};
+use hoglint_facts::link::packs::Refinements;
 use hoglint_facts::link::produce::NO_FILE;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::{Lookup, Res};
@@ -16,6 +17,31 @@ use rustc_hash::FxHashMap;
 /// A linked snapshot, (cache hits, files extracted), each record's fact cache key, and the
 /// working tree files that changed during the run.
 type Loaded = (CoreLink, (usize, usize), Vec<Option<String>>, Vec<String>);
+
+/// The first of the fields a batch of refinements would set apart, for Python to word:
+/// (how many fields conflict, the field, the edge id, the producer that set it or None for an
+/// attr the edge has, the value there).
+type Conflict = (usize, String, u32, Option<String>, String);
+
+/// Refinements a link producer judged and has not applied, and the files it could not read.
+/// Its rows stay in Rust: Python holds one object per batch.
+#[pyclass(module = "hoglint_native", unsendable)]
+pub(crate) struct Staged {
+    pub(crate) refinements: Refinements,
+    pub(crate) failed: Vec<u32>,
+}
+
+#[pymethods]
+impl Staged {
+    fn __len__(&self) -> usize {
+        self.refinements.len()
+    }
+
+    /// The file ids whose uses the producer could not read, in the producer's order.
+    fn failed(&self) -> Vec<u32> {
+        self.failed.clone()
+    }
+}
 
 /// One linked snapshot: facts, module index, resolver state and the core edges.
 #[pyclass(module = "hoglint_native", unsendable)]
@@ -374,6 +400,76 @@ impl Link {
             self.inner.edges.refine(id, shape, detail, &pairs);
         }
         Ok(())
+    }
+
+    /// Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
+    /// producer's order) onto `models` in the link (hoglint/packs/django/uses.py), with no
+    /// Python object per use. Nothing is applied: `refine_staged` applies them.
+    fn django_uses(&mut self, files: Vec<u32>, models: Vec<Pair>) -> PyResult<Staged> {
+        self.rows()?;
+        let models: Vec<Ent> = models.iter().map(|(m, s)| self.ent(m, s)).collect();
+        let uses = self.inner.django_uses(&files, &models);
+        Ok(Staged {
+            refinements: uses.refinements,
+            failed: uses.failed,
+        })
+    }
+
+    /// Refinements a link producer judged, as (edge ids, shapes, details, attrs): for the
+    /// proofs that hold them equal to the Python producer's.
+    #[allow(clippy::type_complexity)]
+    fn staged_columns<'py>(
+        &self,
+        py: Python<'py>,
+        staged: &Staged,
+    ) -> (
+        Bound<'py, PyBytes>,
+        Vec<Option<&str>>,
+        Vec<Option<&str>>,
+        Vec<Vec<(&str, &str)>>,
+    ) {
+        let it = &self.inner.core.it;
+        let made = &staged.refinements;
+        let text = |sid: &Option<Sid>| sid.map(|sid| it.s(sid));
+        (
+            ids_bytes(py, &made.ids),
+            made.shapes.iter().map(text).collect(),
+            made.details.iter().map(text).collect(),
+            made.attrs
+                .iter()
+                .map(|pairs| pairs.iter().map(|&(k, v)| (it.s(k), it.s(v))).collect())
+                .collect(),
+        )
+    }
+
+    /// Applies the refinements a link producer judged, or none of them when one would change
+    /// an attr its edge has: then returns (conflicts, field, edge id, None, the edge's value)
+    /// of the first, for Python to word. `staged` is empty afterwards.
+    fn refine_staged(&mut self, staged: &mut Staged) -> Option<Conflict> {
+        let made = std::mem::take(&mut staged.refinements);
+        let it = &self.inner.core.it;
+        let edges = &self.inner.edges;
+        let mut found: Vec<Conflict> = Vec::new();
+        for (at, pairs) in made.attrs.iter().enumerate() {
+            let id = made.ids[at];
+            for &(key, value) in pairs {
+                let own = edges.attrs_with(id).filter(|(k, _)| *k == key).last();
+                if let Some(&(_, own)) = own.filter(|(_, own)| *own != value) {
+                    let field = format!("attr:{}", it.s(key));
+                    found.push((0, field, id, None, it.s(own).to_string()));
+                }
+            }
+        }
+        if let Some(first) = found.first() {
+            return Some((found.len(), first.1.clone(), first.2, None, first.4.clone()));
+        }
+        for at in 0..made.len() {
+            let id = made.ids[at];
+            self.inner
+                .edges
+                .refine(id, made.shapes[at], made.details[at], &made.attrs[at]);
+        }
+        None
     }
 
     /// Records the facts packs wrote for some symbols: each symbol's (key, value) pairs replace

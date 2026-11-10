@@ -50,6 +50,7 @@ pub(crate) fn ids_from(raw: &[u8]) -> PyResult<Vec<u32>> {
 #[pymodule]
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
+    module.add_class::<link::Staged>()?;
     module.add_class::<evaluator::Rules>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
     module.add_function(wrap_pyfunction!(link_blobs, module)?)?;
