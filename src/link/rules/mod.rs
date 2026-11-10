@@ -43,6 +43,7 @@ use super::Link;
 use super::intern::Sid;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::hash::Hash;
 use std::sync::{Mutex, OnceLock};
 
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
@@ -180,6 +181,22 @@ impl RuleKind {
 /// A module's place in a value column where reading the value meets a provider conflict, and
 /// in the registry column where no registry holds the module.
 pub const NO_PLACE: u32 = u32::MAX;
+
+/// The place of `key` among `distinct`, added there when it is new, so places follow the order
+/// keys are first seen.
+pub fn place_of<K: Eq + Hash + Clone>(
+    places: &mut FxHashMap<K, u32>,
+    distinct: &mut Vec<K>,
+    key: K,
+) -> u32 {
+    if let Some(&at) = places.get(&key) {
+        return at;
+    }
+    let at = distinct.len() as u32;
+    places.insert(key.clone(), at);
+    distinct.push(key);
+    at
+}
 
 /// `dst.exported`, the predicate of an entrypoint rule with none of its own.
 const EXPORTED: Node = Node::Bare(Operand::Ref(Ref::Dst(EndField::Exported)));

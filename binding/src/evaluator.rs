@@ -6,12 +6,11 @@ use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::export::ExportRow;
 use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
-use hoglint_facts::link::rules::{NO_PLACE, Rules as CoreRules};
+use hoglint_facts::link::rules::{NO_PLACE, Rules as CoreRules, place_of};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use rustc_hash::FxHashMap;
-use std::hash::Hash;
 
 /// The rows of a judged rule as columns, so Python makes no object per row: (edge ids,
 /// destination indexes, judgment names, each row's judgment by place, distinct identities, each
@@ -29,21 +28,6 @@ type JudgedColumns<'py> = (
     Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
 );
-
-/// The place of `key` among `distinct`, added there when it is new.
-fn place_of<K: Eq + Hash + Clone>(
-    places: &mut FxHashMap<K, u32>,
-    distinct: &mut Vec<K>,
-    key: K,
-) -> u32 {
-    if let Some(&at) = places.get(&key) {
-        return at;
-    }
-    let at = distinct.len() as u32;
-    places.insert(key.clone(), at);
-    distinct.push(key);
-    at
-}
 
 /// A cycle row: (edge id, destination index, judgment name, the pair's groups or None).
 type PairTuple = (u32, u32, &'static str, Option<(String, String)>);

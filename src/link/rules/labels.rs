@@ -8,7 +8,7 @@ use super::glob::{Captures, Glob, capture, fill};
 use super::plan::{AssignPlan, ExportPlan, Plan, RegistryPlan, SetValue, ValuePlan, ZonesPlan};
 use super::selector::Node;
 use super::value::{Value, Zone};
-use super::{NO_PLACE, Rules};
+use super::{NO_PLACE, Rules, place_of};
 use crate::link::Link;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -790,11 +790,7 @@ impl Rules {
                 codes.push(NO_PLACE);
                 continue;
             }
-            let place = *places.entry(cell).or_insert_with(|| {
-                distinct.push(cell);
-                distinct.len() as u32 - 1
-            });
-            codes.push(place);
+            codes.push(place_of(&mut places, &mut distinct, cell));
         }
         Ok((distinct, codes))
     }
