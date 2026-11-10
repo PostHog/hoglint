@@ -25,6 +25,7 @@ import orjson
 from hoglint.core import records as records_module
 from hoglint.core.harness import PRODUCER_ERROR, failure_text
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
+from hoglint.ledger.store import CacheWarning
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
@@ -142,8 +143,8 @@ def summary_code() -> str:
 class SummaryCache:
     """Migration summaries by the digest of their file's facts, in one file under the cache root
     per summary code: the source of this module and of the record readers, and the interpreter.
-    The file loads on the first lookup; a missing or broken one is an empty cache, and one that
-    cannot be written is skipped."""
+    The file loads on the first lookup. It is a cache (D28): a missing file or an entry of the
+    wrong shape is a miss, and an I/O error warns once, after which the pack goes on without it."""
 
     MAX_ENTRIES = 50_000
 
@@ -151,22 +152,32 @@ class SummaryCache:
         self.root = root
         self.used: dict[str, Summary] = {}
         self.added = False
+        self.broken = False
 
-    @cached_property
-    def path(self) -> Path:
-        return self.root / f"migrations-{summary_code()}.json"
+    def fail(self, what: str, error: OSError) -> None:
+        self.broken = True
+        CacheWarning.warn(what, error)
 
     @cached_property
     def stored(self) -> dict[str, Summary]:
         try:
-            return orjson.loads(self.path.read_bytes())
-        except (OSError, orjson.JSONDecodeError):
+            loaded = orjson.loads((self.root / f"migrations-{summary_code()}.json").read_bytes())
+        except FileNotFoundError:
             return {}
+        except OSError as error:
+            self.fail("reading migration summaries", error)
+            return {}
+        except orjson.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
 
     def get(self, digest: str) -> Summary | None:
-        found = self.used.get(digest) or self.stored.get(digest)
-        if found is not None:
-            self.used[digest] = found
+        found = self.used.get(digest)
+        if found is None and not self.broken:
+            found = self.stored.get(digest)
+        if not isinstance(found, dict) or "class" not in found:
+            return None
+        self.used[digest] = found
         return found
 
     def put(self, digest: str, summary: Summary) -> None:
@@ -174,7 +185,7 @@ class SummaryCache:
         self.added = True
 
     def save(self) -> None:
-        if not self.added:
+        if not self.added or self.broken:
             return
         entries = dict(self.used)
         for digest, summary in self.stored.items():
@@ -182,12 +193,13 @@ class SummaryCache:
                 break
             entries.setdefault(digest, summary)
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+            path = self.root / f"migrations-{summary_code()}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
             temporary.write_bytes(orjson.dumps(entries))
-            os.replace(temporary, self.path)
-        except OSError:
-            return
+            os.replace(temporary, path)
+        except OSError as error:
+            self.fail("writing migration summaries", error)
 
 
 class MigrationParser:

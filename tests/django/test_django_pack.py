@@ -18,6 +18,7 @@ from django_facts import FIRST_PARTY, FactRepo
 from hoglint.core.config import CoreConfig
 from hoglint.core.reader import BuildReader
 from hoglint.core.symbols import FUNC
+from hoglint.ledger.store import CacheWarning
 from hoglint.model import Graph, Resolution
 from hoglint.native.queries import PackQueries
 from hoglint.packs.django.apps import AppRegistry
@@ -305,3 +306,27 @@ def test_a_cached_migration_summary_reads_the_settings_of_each_run(tmp_path: Pat
 
     assert first == ["shop.0001_initial -> billing.0001_initial"]
     assert second == ["unresolved ghost.__first__"]
+
+
+@pytest.mark.parametrize("fault", ["unreadable", "not a mapping", "entry of the wrong shape"])
+def test_a_migration_summary_cache_that_cannot_be_used_changes_no_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fault: str
+) -> None:
+    expected = migration_parents("billing.Invoice", SummaryCache(tmp_path / "healthy"))
+    monkeypatch.setattr(CacheWarning, "warned", False)
+    stored = next((tmp_path / "healthy").glob("migrations-*.json"))
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    cache_file = broken / stored.name
+    if fault == "unreadable":
+        cache_file.write_bytes(stored.read_bytes())
+        cache_file.chmod(0o000)
+    elif fault == "not a mapping":
+        cache_file.write_bytes(orjson.dumps([1, 2]))
+    else:
+        cache_file.write_bytes(orjson.dumps(dict.fromkeys(orjson.loads(stored.read_bytes()), "wrong")))
+    try:
+        assert migration_parents("billing.Invoice", SummaryCache(broken)) == expected
+    finally:
+        cache_file.chmod(0o600)
+    assert capsys.readouterr().err.count("cannot use the cache") == (fault == "unreadable")
