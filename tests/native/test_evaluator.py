@@ -18,7 +18,7 @@ from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
-from hoglint.model import Context, Edge, EntityId, Graph, Resolution
+from hoglint.model import Context, Edge, EntityId, Graph, Resolution, Site
 from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
 from hoglint.native.source import graph_source
@@ -36,7 +36,8 @@ PRODUCER = "flows.{}@1"
 
 class Flows:
     """A test pack: the flow-refined shapes a def-use analysis writes, edges with several targets
-    or with their own endpoint labels, and symbol facts."""
+    or with their own endpoint labels, an edge it hands over twice (its ordinal is its last
+    row's), and symbol facts."""
 
     name = SECTION
     allowed_keys = frozenset()
@@ -57,26 +58,31 @@ class Flows:
             elif edge.site.module == "core.b":
                 out.append(Refinement(edge.handle, None, None, (("flow_shape", "write(save)"),)))
             site = edge.site
-            out.append(
-                Edge(
-                    "uses",
-                    site,
-                    edge.surface,
-                    (
-                        EntityId("python", "products.billing.backend.models", "Invoice"),
-                        EntityId("python", "products.alerts.backend.facade.api", "notify"),
-                    ),
-                    Resolution.RESOLVED,
-                    frozenset({Context.PROD}),
-                    PRODUCER.format("flow"),
-                    via=(
-                        EntityId("python", "products.alerts.backend.facade", "notify"),
-                        EntityId("python", "nowhere.at", "all"),
-                    ),
-                    attrs=(("src.tier", "product"), ("dst.zone", "facade")) if site.module == "core.b" else (),
-                )
-            )
+            uses = Flows.uses(site, edge.surface)
+            out.append(uses)
+            if site.module == "core.a":
+                out.extend([Flows.uses(site, edge.surface), uses])
         return out
+
+    @staticmethod
+    def uses(site: Site, surface: str) -> Edge:
+        return Edge(
+            "uses",
+            site,
+            surface,
+            (
+                EntityId("python", "products.billing.backend.models", "Invoice"),
+                EntityId("python", "products.alerts.backend.facade.api", "notify"),
+            ),
+            Resolution.RESOLVED,
+            frozenset({Context.PROD}),
+            PRODUCER.format("flow"),
+            via=(
+                EntityId("python", "products.alerts.backend.facade", "notify"),
+                EntityId("python", "nowhere.at", "all"),
+            ),
+            attrs=(("src.tier", "product"), ("dst.zone", "facade")) if site.module == "core.b" else (),
+        )
 
 
 if SECTION not in REGISTRY.packs:
@@ -831,6 +837,91 @@ def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_wh
     assert [problem.partition(" by ")[0] for problem in native] == ["core.legacy.api: field 'silo' set differently"]
     monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
     assert outcome(world, world.config(reads, base)) == native
+
+
+class Varied:
+    """A config that differs from the fixture's outside `[rules]`: fields a provider sets (a set
+    and a string, with or without a domain or an overriding assignment), `[roles]` with a group
+    and an owner, symbol fields that module and `symbols = {}` assignments set, and a cycle over
+    the packages view. Rules over it are generated."""
+
+    def __init__(self, rng: random.Random) -> None:
+        self.rng = rng
+        self.base = CONFIG
+        self.added: list[str] = []
+        self.provided: list[str] = []
+        self.refs = list(REFS)
+        self.group = ""
+
+    def team(self) -> None:
+        domain = ', required_on = ["products/**"]' if self.rng.random() < 0.5 else ""
+        self.base = self.base.replace("[fields]\n", f'[fields]\nteam = {{ type = "set"{domain} }}\n')
+        self.provided.append("team")
+        self.refs += ["src.team", "dst.team"]
+
+    def lead(self) -> None:
+        self.base = self.base.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
+        self.provided.append("lead")
+        if self.rng.random() < 0.5:
+            match = self.rng.choice(PATHS)
+            self.added.append(f'\n[[assign]]\nmatch = "{match}"\noverride = true\nset = {{ lead = "someone" }}\n')
+        self.refs += ["src.lead", "dst.lead"]
+
+    def roles(self) -> None:
+        self.group = self.rng.choice(["package", "tier", "zone", *self.provided])
+        owner = self.rng.choice(["owners", *(name for name in self.provided if name == "team")])
+        self.added.append(f'\n[roles]\ngroup = "{self.group}"\nowner = "{owner}"\n')
+
+    def symbol_labels(self) -> None:
+        self.base = self.base.replace(SILO, TWO_SILOS)
+        if self.rng.random() < 0.5:
+            self.added.append(f'\n[[assign]]\nmatch = "{self.rng.choice(PATHS)}"\nset = {{ silo = "control" }}\n')
+        else:
+            path = self.rng.choice(FILES[:3])
+            self.added.append(f'\n[[assign]]\nmatch = "{path}"\nsymbols = {{}}\nset = {{ silo = "control" }}\n')
+
+    def config(self) -> str:
+        shapes = [self.team, self.lead, self.symbol_labels]
+        for shape in self.rng.sample(shapes, self.rng.randint(1, 3)):
+            shape()
+        if self.provided:
+            sets = ", ".join(f'"{name}"' for name in self.provided)
+            self.added.append(f'\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = [{sets}]\n')
+        if self.rng.random() < 0.7:
+            self.roles()
+        return self.base + "".join(self.added)
+
+    def rules(self, world: World, base: str) -> str:
+        """A cycle over the packages view when roles name a group, and generated rules that load."""
+        out = rule_table("cycle", TEAM_CYCLE) if self.group else ""
+        made = 0
+        wanted = self.rng.randint(1, 2)
+        while made < wanted:
+            rule = rule_table(f"generated{made}", generated(self.rng, self.refs))
+            try:
+                world.config(out + rule, base)
+            except ConfigError:
+                continue
+            out += rule
+            made += 1
+        return out
+
+
+def test_generated_configs_are_judged_the_same_in_both(world: World) -> None:
+    rng = random.Random(1111)
+    judged = 0
+    failures = []
+    while judged < 60:
+        varied = Varied(rng)
+        base = varied.config()
+        try:
+            world.config("", base)
+        except ConfigError:
+            continue
+        judged += 1
+        rules = varied.rules(world, base)
+        failures.extend(f"{found}\n{base[len(CONFIG) :]}{rules}" for found in differences(world, rules, base))
+    assert failures == []
 
 
 def test_labels_are_the_labelers(world: World) -> None:
