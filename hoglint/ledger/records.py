@@ -168,9 +168,9 @@ class BlockRecord:
 
     @staticmethod
     def of(block: Block, portable: Portable) -> BlockRecord:
-        if block.finding is None:
+        if block.table is None:
             return BlockRecord(block.rule, "", (), portable.text(block.text))
-        return BlockRecord(block.rule, block.why, block.finding.identity, "")
+        return BlockRecord(block.rule, block.why, block.identity, "")
 
     def to_json(self) -> list[Any]:
         return [self.rule, self.why, list(self.identity), self.reason]

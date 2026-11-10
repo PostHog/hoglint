@@ -17,26 +17,29 @@ from dataclasses import dataclass, field
 from hoglint.config.model import LevelSpec
 from hoglint.index import Memo
 from hoglint.labels import Labeler
-from hoglint.model import Finding, FindingStatus
+from hoglint.model import FindingStatus
 from hoglint.rules.base import RuleRun
+from hoglint.rules.findings import FindingTable
 from hoglint.selectors import Truth
 
 
 @dataclass(frozen=True, slots=True)
 class Block:
-    """One reason a group fails a level: a finding of a required rule, whose message is made only
-    when the reason is shown, or a reason with no finding (an incomplete result, a rule that did
-    not run), kept as `text`."""
+    """One reason a group fails a level: a finding of a required rule, kept as its identity and
+    its row, so its message is made only when the reason is shown; or a reason with no finding
+    (an incomplete result, a rule that did not run), kept as `text`."""
 
     rule: str
     why: str = ""
-    finding: Finding | None = None
+    identity: tuple[str, ...] = ()
     text: str = ""
+    table: FindingTable | None = field(default=None, compare=False, repr=False)
+    row: int = -1
 
     def render(self) -> str:
-        if self.finding is None:
+        if self.table is None:
             return self.text
-        return f"{self.rule}: {self.why}: {self.finding.message}"
+        return f"{self.rule}: {self.why}: {self.table.finding(self.row).message}"
 
 
 class Reasons(Mapping[str, list[str]]):
@@ -111,22 +114,18 @@ class LevelEvaluator:
 
     def collect(self, rule_id: str, run: RuleRun, reasons: dict[str, list[Block]]) -> None:
         strict = rule_id in self.spec.strict
-        for finding in run.findings:
-            if finding.status is FindingStatus.ALLOWED:
+        table = run.findings
+        unknown = table.unknown
+        new = set(table.rows_with(FindingStatus.NEW))
+        # A ledgered finding blocks only when it is unknown or its rule is strict.
+        for row in range(len(table)):
+            if table.allowed[row] or not (unknown[row] or strict or row in new):
                 continue
-            blocking = finding.unknown or strict or finding.status is FindingStatus.NEW
-            if not blocking:
-                continue
-            why = (
-                "unknown"
-                if finding.unknown
-                else "strict, so the ledger does not excuse it"
-                if strict
-                else "new finding"
-            )
-            for group in {self.group_of(subject) for subject in finding.subjects}:
+            why = "unknown" if unknown[row] else "strict, so the ledger does not excuse it" if strict else "new finding"
+            identity = table.identity(row)
+            for group in {self.group_of(subject) for subject in table.subjects(row)}:
                 if group in reasons:
-                    reasons[group].append(Block(rule_id, why, finding))
+                    reasons[group].append(Block(rule_id, why, identity, table=table, row=row))
         for item in run.incomplete:
             groups = {self.group_of(subject) for subject in item.subjects} if item.subjects else set(reasons)
             for group in groups:
