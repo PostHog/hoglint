@@ -28,6 +28,7 @@ from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import JUDGED, RulePlan, tree
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun
 from hoglint.rules.engine import primitive_of
+from hoglint.rules.entities import CoveragePrimitive
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 from hoglint.selectors import Node, Truth
@@ -396,6 +397,22 @@ class NativeRuleContext(RuleContext):
             )
             run.findings.append(finding)
         return run
+
+    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]]:
+        """The evaluator's paths of a coverage rule, from the witness ids of the findings its rule
+        covers name; what it cannot place goes to the rule's run."""
+        witnesses: list[bytes | None] = []
+        for cover in rule.spec.covers:
+            run = self.results.get(cover.rule) if cover.rule else None
+            if run is None:
+                witnesses.append(None)
+                continue
+            witnesses.append(array("I", (at for finding in run.findings for at in finding.witness_ids)).tobytes())
+        with engine_errors():
+            paths, incomplete = self.evaluator.coverage(self.plan.index[rule.spec.id], witnesses)
+        for subject, module, reason in incomplete:
+            rule.incomplete(subject, module, reason)
+        return {path: (why, module) for path, why, module in paths}
 
     def confirm_findings(self) -> None:
         """Every finding the evaluator made is judged again by its rule's own code: a run that

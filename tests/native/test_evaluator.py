@@ -353,10 +353,9 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
             kept = {edge for edge, _, _, _ in python_rows(python, rule)}
             if kept - selected:
                 out.append(f"{spec.id}: not selected {sorted(kept - selected)}")
-        same = run_rows(primitive_of(spec)(native, spec).evaluate()) == run_rows(
-            primitive_of(spec)(python, spec).evaluate()
-        )
-        if not same:
+        native.results[spec.id] = primitive_of(spec)(native, spec).evaluate()
+        python.results[spec.id] = primitive_of(spec)(python, spec).evaluate()
+        if run_rows(native.results[spec.id]) != run_rows(python.results[spec.id]):
             out.append(f"{spec.id}: the {mode} run differs from the Python run")
     return out
 
@@ -728,7 +727,15 @@ def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
 
 
 def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
-    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle", "signature", "export"])
+    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle", "signature", "export", "coverage"])
+    if primitive == "coverage":
+        return {
+            "primitive": "coverage",
+            "covers": [f"{selector(rng, refs)}: {rng.choice(['src', 'dst'])}" for _ in range(rng.randint(1, 2))],
+            "inputs": {"adapter": "globs", "paths": [rng.choice(["core/**", "products/**"])]},
+            "identity": rng.sample(["subject", "package", "tier", "zone", "path"], rng.randint(1, 2)),
+            "ledger": False,
+        }
     if primitive == "export":
         return {
             "primitive": "export",
@@ -1087,6 +1094,33 @@ def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, ba
         for name in ("registry", "lifecycle"):
             assert native.labeler.builtin(module, None, name) == python.builtin(module, None, name)
     assert sorted(native.labeler.conflicts) == sorted(python.conflicts)
+
+
+COVERED = rule_table("named", {**EDGE, "kinds": ["import", "uses"], "deny": "dst.package != src.package"}) + rule_table(
+    "covered",
+    {
+        "primitive": "coverage",
+        "covers": [
+            "rules.named.dst.path",
+            "rules.named.edge.surface",
+            "edge.kind in ['import', 'uses'] and src.package != dst.package: src",
+            "edge.context == 'test' and dst.zone == 'facade': dst",
+            "src.tier == 'core': dst",
+        ],
+        "inputs": {"adapter": "globs", "paths": ["core/**"]},
+        "identity": ["subject", "package"],
+        "ledger": False,
+    },
+)
+
+
+def test_a_coverage_rule_needs_the_paths_the_python_rule_needs(world: World) -> None:
+    assert differences(world, COVERED) == []
+    config = world.config(COVERED)
+    native, _ = world.contexts(config)
+    native.results["named"] = primitive_of(config.rules["named"])(native, config.rules["named"]).evaluate()
+    run = primitive_of(config.rules["covered"])(native, config.rules["covered"]).evaluate()
+    assert len(run.findings) > 3 and run.incomplete
 
 
 class Lying:

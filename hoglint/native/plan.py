@@ -17,6 +17,7 @@ from hoglint.config.model import Config, FieldSpec, RuleSpec
 from hoglint.labels import Labeler
 from hoglint.native.graph import CONTEXT_BITS, NativeGraph
 from hoglint.rules.base import conjuncts, rule_kinds
+from hoglint.rules.entities import CoveragePrimitive
 from hoglint.rules.exports import DEFAULT_EXCLUDED
 from hoglint.rules.graphs import CyclePrimitive
 from hoglint.selectors import (
@@ -108,6 +109,30 @@ class RulePlan:
         self.export_at = {name: at for at, name in enumerate(config.exports)}
         self.shape_at = {name: at for at, name in enumerate(config.shapes)}
 
+    @staticmethod
+    def covers(spec: RuleSpec) -> list[dict[str, Any]]:
+        """A coverage rule's covers, split as `CoveragePrimitive.from_edges` splits a selection."""
+        out = []
+        for cover in spec.covers if spec.primitive == "coverage" else ():
+            selector = cover.selector
+            kinds = selector.restricts(("edge", "kind")) if selector is not None else None
+            parts = conjuncts((selector,))
+            by_edge = [part for part in parts if CoveragePrimitive.reads_kind_and_context(part)]
+            column = cover.column if "." in cover.column else f"edge.{cover.column}"
+            out.append(
+                {
+                    "rule": cover.rule or None,
+                    "column": column.split("."),
+                    "column_text": cover.column,
+                    "kinds": sorted(kinds) if kinds else None,
+                    "by_edge": tree(by_edge[0] if len(by_edge) == 1 else And(tuple(by_edge))) if by_edge else None,
+                    "rest": [tree(part) for part in parts if not CoveragePrimitive.reads_kind_and_context(part)],
+                    "endpoint": cover.endpoint,
+                    "text": cover.text,
+                }
+            )
+        return out
+
     def export_rule(self, spec: RuleSpec) -> dict[str, Any] | None:
         """What an export rule adds: the exports it checks, their default contexts, and how it
         reports what it cannot tell (`ExportPrimitive`)."""
@@ -130,7 +155,7 @@ class RulePlan:
             return None
         if spec.primitive in SELECTED:
             return "select"
-        if spec.primitive in ("reach", "cycle", "export"):
+        if spec.primitive in ("reach", "cycle", "export", "coverage"):
             return spec.primitive
         return None
 
@@ -157,6 +182,7 @@ class RulePlan:
             "group": CyclePrimitive.group_of(self.config, spec) if spec.primitive == "cycle" else None,
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
             "export": self.export_rule(spec),
+            "covers": self.covers(spec),
             "signature": spec.primitive == "signature",
             "unknown_types": list(spec.unknown_types) if spec.primitive == "signature" else [],
         }
@@ -167,6 +193,9 @@ class RulePlan:
             for selector in (spec.from_, spec.select, spec.deny, spec.allow, spec.require, spec.unless):
                 if selector is not None:
                     yield selector
+            for cover in spec.covers if spec.primitive == "coverage" else ():
+                if cover.selector is not None:
+                    yield cover.selector
         for export in self.config.exports.values():
             if export.audience is not None:
                 yield export.audience
@@ -184,6 +213,13 @@ class RulePlan:
         out = {ref.path[-1] for selector in self.selectors() for ref in refs(selector.node)}
         out.update(column.rsplit(".", 1)[-1] for spec in self.specs for column in spec.identity)
         out.update(CyclePrimitive.group_of(self.config, spec) for spec in self.specs if spec.primitive == "cycle")
+        out.update(
+            cover.column.rsplit(".", 1)[-1]
+            for spec in self.specs
+            if spec.primitive == "coverage"
+            for cover in spec.covers
+            if cover.rule
+        )
         return out
 
     def modules(self) -> list[str]:

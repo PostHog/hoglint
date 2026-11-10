@@ -1,7 +1,7 @@
 //! Rule evaluation (`hoglint_facts::link::rules`): one `Rules` per run, made from a plan.
 
-use crate::ids_bytes;
 use crate::link::Link;
+use crate::{ids_bytes, ids_from};
 use hoglint_facts::link::rules::Rules as CoreRules;
 use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::export::ExportRow;
@@ -204,6 +204,32 @@ impl Rules {
                 ),
             })
             .collect())
+    }
+
+    /// The paths coverage rule `rule` needs covered: (path, why, module), sorted by path, and the
+    /// items it cannot place, (subject, module, reason), in order. `witnesses` holds, per cover,
+    /// the witness edge ids of the findings of the rule it reads (little-endian u32s), or None
+    /// when that rule did not run; an edge cover's entry is ignored.
+    #[allow(clippy::type_complexity)]
+    fn coverage(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+        witnesses: Vec<Option<Vec<u8>>>,
+    ) -> PyResult<(
+        Vec<(String, String, Option<String>)>,
+        Vec<(String, Option<String>, String)>,
+    )> {
+        let inputs = witnesses
+            .iter()
+            .map(|found| found.as_deref().map(ids_from).transpose())
+            .collect::<PyResult<Vec<_>>>()?;
+        let mut bound = self.link.bind(py).borrow_mut();
+        let found = self
+            .inner
+            .coverage(&mut bound.inner, rule, inputs)
+            .map_err(PyValueError::new_err)?;
+        Ok((found.paths, found.incomplete))
     }
 
     /// The candidate edges of rule `rule` its selection does not rule out, in judging order.

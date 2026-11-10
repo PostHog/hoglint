@@ -197,6 +197,8 @@ def witness_row(edge: Edge) -> WitnessRow:
 class EdgeRef(Protocol):
     """A finding's edge, made when something reads it: the native engine keeps an edge id."""
 
+    edge_id: int
+
     def get(self) -> Edge: ...
 
     def row(self) -> WitnessRow:
@@ -243,6 +245,14 @@ class Finding:
         if witness is not None and not isinstance(witness, Edge):
             return (witness.row(),)
         return tuple(witness_row(edge) for edge in self.witnesses)
+
+    @property
+    def witness_ids(self) -> tuple[int, ...]:
+        """The witnesses' rows in the graph; a witness kept by id makes no Edge."""
+        witness = self.witness
+        if witness is not None and not isinstance(witness, Edge):
+            return (witness.edge_id,)
+        return tuple(edge.handle for edge in self.witnesses)
 
     @property
     def site(self) -> Site | None:

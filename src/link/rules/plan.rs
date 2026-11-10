@@ -145,6 +145,24 @@ pub struct ExportRulePlan {
     pub on_unresolved: String,
 }
 
+/// One thing a coverage rule needs covered (`CoverSpec`).
+#[derive(Deserialize)]
+pub struct CoverPlan {
+    /// The rule whose column it reads, or None for an edge selection.
+    pub rule: Option<String>,
+    /// That column as a ref path, and as the config writes it.
+    pub column: Vec<String>,
+    pub column_text: String,
+    /// The kinds an edge selection pins, sorted; None when it pins none.
+    pub kinds: Option<Vec<String>>,
+    /// Its conjuncts that read only an edge's kind and contexts, joined, and the others.
+    pub by_edge: Option<NodePlan>,
+    pub rest: Vec<NodePlan>,
+    /// src or dst.
+    pub endpoint: String,
+    pub text: String,
+}
+
 #[derive(Deserialize)]
 pub struct KindPlan {
     pub name: String,
@@ -186,6 +204,8 @@ pub enum Mode {
     Cycle,
     /// The whole check of an export rule.
     Export,
+    /// The paths a coverage rule needs covered.
+    Coverage,
 }
 
 #[derive(Deserialize)]
@@ -219,6 +239,8 @@ pub struct RulePlan {
     /// The destination symbols a signature rule reads as of unknown type.
     pub unknown_types: Vec<String>,
     pub export: Option<ExportRulePlan>,
+    /// A coverage rule's covers.
+    pub covers: Vec<CoverPlan>,
 }
 
 #[derive(Deserialize, Clone)]

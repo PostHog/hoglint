@@ -189,6 +189,11 @@ class Rules:
         """What an export rule reports, in order: findings (what "finding", symbol, module, label,
         trail, witness edge, ledgerable, unknown, identity, subject) and incomplete items (what
         "incomplete", key, module, reason)."""
+    def coverage(
+        self, rule: int, witnesses: list[bytes | None]
+    ) -> tuple[list[tuple[str, str, str | None]], list[tuple[str, str | None, str]]]:
+        """The paths a coverage rule needs covered, (path, why, module) sorted by path, and what it
+        cannot place, (subject, module, reason) in order; `witnesses` per cover as edge ids."""
     def select(self, rule: int) -> bytes:
         """The candidate edges of a rule judged in Python that its selection does not rule out."""
     def passing(self, kinds: list[str], selector: str) -> bytes:

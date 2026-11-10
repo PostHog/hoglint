@@ -183,6 +183,10 @@ class Held:
 
     edge: Edge
 
+    @property
+    def edge_id(self) -> int:
+        return self.edge.handle
+
     def get(self) -> Edge:
         return self.edge
 

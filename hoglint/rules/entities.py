@@ -245,6 +245,9 @@ class CoveragePrimitive(EntityRule):
 
     def required(self) -> dict[str, tuple[str, str | None]]:
         """path -> (why, module) for every path that must be covered."""
+        found = self.ctx.coverage_required(self)
+        if found is not None:
+            return found
         out: dict[str, tuple[str, str | None]] = {}
         for cover in self.spec.covers:
             if cover.rule:

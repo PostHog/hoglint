@@ -7,6 +7,7 @@
 //! the meaning: each function here names the Python code it follows.
 
 pub mod conflicts;
+pub mod coverage;
 pub mod edges;
 pub mod env;
 pub mod export;
@@ -21,6 +22,7 @@ pub mod symbols;
 pub mod value;
 
 use self::conflicts::{Conflict, conflict_key};
+use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
 use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
 use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
@@ -87,6 +89,8 @@ pub struct Rule {
     signature: Option<Signature>,
     /// What an export rule checks.
     export: Option<ExportRule>,
+    /// What a coverage rule needs covered.
+    covers: Vec<Cover>,
 }
 
 /// One destination a cycle rule cannot leave alone: its edge and place, its judgment
@@ -421,6 +425,11 @@ impl Rules {
                 .map(|path| compiler.reference(path))
                 .collect(),
             start: optional(&plan.start)?,
+            covers: plan
+                .covers
+                .iter()
+                .map(|cover| Cover::new(cover, compiler, fields))
+                .collect::<Result<Vec<_>, String>>()?,
             export: plan
                 .export
                 .as_ref()
@@ -849,6 +858,31 @@ impl Rules {
         Ok(Walk::new(cx, export, &inputs).run())
     }
 
+    /// The paths coverage rule `index` needs covered, from the witnesses Python gathered for its
+    /// rule covers (`CoverInputs`; an edge cover's entry is ignored).
+    pub fn coverage(
+        &self,
+        link: &mut Link,
+        index: usize,
+        mut inputs: CoverInputs,
+    ) -> Result<Required, String> {
+        let rule = self.rule(index, Mode::Coverage)?;
+        if inputs.len() != rule.covers.len() {
+            return Err(format!(
+                "coverage rule {} has {} covers, the call {}",
+                rule.id,
+                rule.covers.len(),
+                inputs.len()
+            ));
+        }
+        for (cover, input) in rule.covers.iter().zip(inputs.iter_mut()) {
+            if matches!(cover, Cover::Edges { .. }) {
+                *input = Some(cover_edges(link, cover));
+            }
+        }
+        Ok(required(Cx { link, rules: self }, &rule.covers, &inputs))
+    }
+
     /// In a config with labels that conflict only where read: the `src` parts of a rule that
     /// reads only module fields there, judged once per source module of its kinds, edges seen or
     /// not, as `StagedSelection.module_false` judges them before any edge.
@@ -1042,6 +1076,9 @@ impl Rule {
             node.refs(&mut out);
         }
         out.extend(&self.identity);
+        for cover in &self.covers {
+            cover.refs(&mut out);
+        }
         if let Some((src, dst)) = self.group {
             out.extend([src, dst]);
         }

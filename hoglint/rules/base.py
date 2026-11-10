@@ -36,6 +36,7 @@ from hoglint.model import (
 )
 
 if TYPE_CHECKING:
+    from hoglint.rules.entities import CoveragePrimitive
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
@@ -189,6 +190,11 @@ class RuleContext:
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found] | None:
         """What a reach rule's search finds when this context runs it itself, else None."""
+        return None
+
+    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]] | None:
+        """The paths a coverage rule needs covered when this context finds them itself, its items
+        that cannot be placed already in the rule's run; else None."""
         return None
 
     def export_run(self, rule: ExportPrimitive) -> RuleRun | None:
