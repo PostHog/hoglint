@@ -341,6 +341,22 @@ class Labeler:
             collected.setdefault(name, []).append(candidate)
         return self.resolve_all(module, collected)
 
+    def planned_provided(self, module: str) -> tuple[Labels, bool]:
+        """`label_provided` for a plan that sends provider labels before anything reads them: the
+        labels, and whether two sources set one apart. Such a module's labels are not kept and its
+        conflicts not recorded, so they are found where something reads them, as in a run without
+        a plan."""
+        kept = self.provider_labels.values.get(module)
+        if kept is not None:
+            return kept, False
+        before = len(self.conflicts)
+        labels = self.label_provided(module)
+        if len(self.conflicts) == before:
+            self.provider_labels.values[module] = labels
+            return labels, False
+        del self.conflicts[before:]
+        return labels, True
+
     def registry_of(self, path: str, module: str) -> RegistrySpec | None:
         for spec, glob, loader_module in self.registries:
             if glob.match(path) is not None or loader_module == module:
@@ -683,7 +699,11 @@ class Labeler:
         """A name two kinds hold, from each kind's members: no symbol is classified on its own."""
         for symbol, kinds in self.kind_sets.kinds_of.items():
             if len(kinds) > 1:
-                self.conflicts.append(f"{symbol}: matches kinds {', '.join(kinds)}")
+                self.kind_conflict(symbol)
+
+    def kind_conflict(self, symbol: str) -> None:
+        """Records that two kinds hold `symbol`."""
+        self.conflicts.append(f"{symbol}: matches kinds {', '.join(self.kind_sets.kinds_of[symbol])}")
 
     def rival_symbol_assigns(self) -> list[Assignment]:
         """Symbol assignments that set a field another symbol assignment sets to a different value."""

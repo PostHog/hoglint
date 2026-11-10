@@ -186,8 +186,11 @@ class Rules:
     def passing(self, kinds: list[str], selector: str) -> bytes:
         """The edges of `kinds`, kind by kind in graph order, that a selector (its plan tree as
         JSON) does not make false, each read with its source as both ends."""
-    def conflicted(self) -> bool:
-        """Whether the config sets some label two ways on this graph (`Labeler.find_conflicts`)."""
+    def conflicts(self) -> list[tuple[str, str, str]]:
+        """Every label `Labeler.find_conflicts` finds set two ways: (what, entity, field), what
+        one of module, zones, kind, symbol, provided."""
+    def met(self) -> list[tuple[str, str, str]]:
+        """The labels set two ways that the rules met while they ran, as `conflicts` gives them."""
     def column(self, field: str) -> list[str]:
         """One field's value (or `registry`, `lifecycle`) on every graph module, rendered."""
 

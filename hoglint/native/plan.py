@@ -167,17 +167,28 @@ class RulePlan:
         """The graph's modules in the order of every per-module column of the plan."""
         return list(self.graph.modules)
 
-    def provided(self, modules: list[str]) -> list[dict[str, Any]]:
-        """The label column of each provider-set field the plan reads, module by module."""
-        read = self.names_read()
+    def provided(self, modules: list[str]) -> tuple[list[dict[str, Any]], list[int]]:
+        """The label column of each provider-set module field the plan reads, module by module,
+        and the places of the modules whose provider labels two sources set apart."""
         labeler = self.labeler
-        out = []
-        for name in sorted(labeler.provider_fields & read):
-            if name not in self.config.fields:
-                continue
-            labels = [label_value(labeler.label_only(module, None, name)) for module in modules]
-            out.append({"field": name, "labels": labels})
-        return out
+        fields = self.config.fields
+        names = [
+            name
+            for name in sorted(labeler.provider_fields & self.names_read())
+            if name in fields and fields[name].on == "module"
+        ]
+        if not names:
+            return [], []
+        columns: dict[str, list[Any]] = {name: [] for name in names}
+        conflicted = []
+        for at, module in enumerate(modules):
+            labels, conflict = labeler.planned_provided(module)
+            if conflict:
+                conflicted.append(at)
+            for name in names:
+                label = labels.get(name)
+                columns[name].append("none" if label is None else label_value(labeler.to_value(fields[name], label)))
+        return [{"field": name, "labels": columns[name]} for name in names], conflicted
 
     def fields(self) -> list[dict[str, Any]]:
         return [
@@ -221,6 +232,7 @@ class RulePlan:
         config = self.config
         zones = config.zones
         modules = self.modules()
+        provided, provider_conflicts = self.provided(modules)
         return {
             "module_count": len(modules),
             "modules": hashlib.sha256("\n".join(modules).encode()).hexdigest(),
@@ -257,7 +269,8 @@ class RulePlan:
                 }
                 for spec in config.kinds.values()
             ],
-            "provided": self.provided(modules),
+            "provided": provided,
+            "provider_conflicts": provider_conflicts,
             "failed": sorted(self.labeler.providers.failed_fields),
             "rules": [self.rule(spec) for spec in self.specs],
             "repeats": sorted(self.graph.repeats.items()),

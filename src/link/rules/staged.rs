@@ -1,0 +1,182 @@
+//! The order in which the Python engine reads a rule's selectors (`rules.base.StagedSelection`
+//! and `selectors.ClassSelection`), so the evaluator reads the labels Python reads.
+//!
+//! A selector's truth never depends on this order. Which labels a run reads does: a label set two
+//! ways is a config error only where something reads it (a provider's labels of a module, the
+//! labels of a symbol outside the graph's symbols). So the evaluator judges parts in Python's
+//! order, and in a config that has such a label (`Rules::touch`) it reads every field a part names
+//! before it judges the part, as `ClassSelection` reads them all.
+
+use super::env::Env;
+use super::labels::Field;
+use super::selector::{EndField, Node, Ref, Resolve, evaluate};
+use super::value::Truth;
+
+/// The endpoint a conjunct of a selection reads alone (`rules.base.endpoint_only`), in the order
+/// `StagedSelection` judges them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Src = 0,
+    Dst = 1,
+    Rest = 2,
+}
+
+fn class_of(node: &Node) -> Class {
+    let mut refs = Vec::new();
+    node.refs(&mut refs);
+    let mut found = None;
+    for field in refs {
+        let class = match field {
+            Ref::Src(EndField::Context | EndField::Exported)
+            | Ref::Dst(EndField::Context | EndField::Exported) => return Class::Rest,
+            Ref::Src(_) => Class::Src,
+            Ref::Dst(_) => Class::Dst,
+            _ => return Class::Rest,
+        };
+        if found.is_some_and(|seen| seen != class) {
+            return Class::Rest;
+        }
+        found = Some(class);
+    }
+    found.unwrap_or(Class::Rest)
+}
+
+/// Whether a ref reads only its endpoint's module (`Labeler.module_level`).
+fn module_level(field: Ref, fields: &[Field]) -> bool {
+    let (Ref::Src(end) | Ref::Dst(end)) = field else {
+        return false;
+    };
+    match end {
+        EndField::Module
+        | EndField::Path
+        | EndField::External
+        | EndField::Registry
+        | EndField::Lifecycle => true,
+        EndField::Field(at, _) => !fields[at].on_symbol,
+        _ => false,
+    }
+}
+
+/// The `and` parts of a node, or the node itself: what `ClassSelection` judges one by one.
+pub fn parts(node: &Node) -> &[Node] {
+    match node {
+        Node::And(parts) => parts,
+        other => std::slice::from_ref(other),
+    }
+}
+
+/// Reads every field the node names, for the conflicts those reads meet.
+pub fn touch<'a>(node: &Node, env: &impl Resolve<'a>) {
+    let mut refs = Vec::new();
+    node.refs(&mut refs);
+    for field in refs {
+        env.resolve(field);
+    }
+}
+
+/// `ClassSelection.truth`: the parts in order, false at the first false one, else unknown when
+/// one is unknown.
+pub fn parts_truth<'n, 'a>(parts: impl IntoIterator<Item = &'n Node>, env: &Env<'a>) -> Truth
+where
+    'n: 'a,
+{
+    let touching = env.cx.rules.touch;
+    let mut out = Truth::True;
+    for part in parts {
+        if touching {
+            touch(part, env);
+        }
+        match evaluate(part, env) {
+            Truth::False => return Truth::False,
+            Truth::Unknown => out = Truth::Unknown,
+            Truth::True => {}
+        }
+    }
+    out
+}
+
+/// A predicate (`deny`, `allow`, `require`, `unless`, a reach rule's `from`) as `ClassSelection`
+/// judges it.
+pub fn truth<'a>(node: &'a Node, env: &Env<'a>) -> Truth {
+    parts_truth(parts(node), env)
+}
+
+/// One part of a staged selection, and whether its conjunct reads an edge field the primitive's
+/// own environment sets.
+pub struct Part {
+    pub node: Node,
+    pub redefined: bool,
+}
+
+/// A rule's selection as `StagedSelection` reads it: the parts that read only `src`, then only
+/// `dst`, then the rest. A class of one conjunct is judged by its `and` parts.
+pub struct Staged {
+    pub parts: Vec<Part>,
+    /// How many of the first parts read only `src`.
+    pub src_parts: usize,
+    /// Whether those parts read only module fields (`StagedSelection.module_level`): Python then
+    /// judges them once per source module of the rule, before any edge.
+    pub src_module_level: bool,
+}
+
+impl Staged {
+    pub fn new(conjuncts: &[Node], redefined: &[bool], fields: &[Field]) -> Staged {
+        let mut classes: [Vec<(&Node, bool)>; 3] = Default::default();
+        for (node, redefined) in conjuncts.iter().zip(redefined) {
+            classes[class_of(node) as usize].push((node, *redefined));
+        }
+        let src = &classes[Class::Src as usize];
+        let src_module_level = !src.is_empty()
+            && src.iter().all(|(node, _)| {
+                let mut refs = Vec::new();
+                node.refs(&mut refs);
+                refs.into_iter().all(|field| module_level(field, fields))
+            });
+        let mut out = Vec::new();
+        let mut src_parts = 0;
+        for (at, class) in classes.iter().enumerate() {
+            let nodes: Vec<(&Node, bool)> = match class.as_slice() {
+                [(node, redefined)] => parts(node).iter().map(|part| (part, *redefined)).collect(),
+                many => many.to_vec(),
+            };
+            if at == Class::Src as usize {
+                src_parts = nodes.len();
+            }
+            out.extend(nodes.into_iter().map(|(node, redefined)| Part {
+                node: node.clone(),
+                redefined,
+            }));
+        }
+        Staged {
+            parts: out,
+            src_parts,
+            src_module_level,
+        }
+    }
+
+    /// The selection's truth (`StagedSelection.truth`). With `skip_redefined`, a part that reads a
+    /// field the primitive redefines is never false: selection for a rule judged in Python.
+    pub fn truth<'a>(&'a self, env: &Env<'a>, skip_redefined: bool) -> Truth {
+        let touching = env.cx.rules.touch;
+        let mut out = Truth::True;
+        for part in &self.parts {
+            if touching {
+                touch(&part.node, env);
+            }
+            if skip_redefined && part.redefined {
+                continue;
+            }
+            match evaluate(&part.node, env) {
+                Truth::False => return Truth::False,
+                Truth::Unknown => out = Truth::Unknown,
+                Truth::True => {}
+            }
+        }
+        out
+    }
+
+    /// The parts that read only `src`.
+    pub fn src(&self) -> impl Iterator<Item = &Node> {
+        self.parts[..self.src_parts].iter().map(|part| &part.node)
+    }
+}

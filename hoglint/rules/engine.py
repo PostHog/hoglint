@@ -171,8 +171,7 @@ class Engine:
 
     def run_rules(self) -> dict[str, RuleRun]:
         ctx = context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
-        if ctx.may_conflict():
-            self.labeler.find_conflicts()
+        ctx.find_conflicts()
         self.raise_conflicts()
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
@@ -186,6 +185,7 @@ class Engine:
                 ctx.results[spec.id] = run
                 continue
             ctx.results[spec.id] = primitive_of(spec)(ctx, spec).evaluate()
+        ctx.met_conflicts()
         for name in sorted(self.labeler.providers.failures):
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
             run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))

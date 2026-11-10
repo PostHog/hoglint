@@ -22,6 +22,7 @@ from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
 from hoglint.native.source import graph_source
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
+from hoglint.rules import engine
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project
 from hoglint.rules.engine import Engine, primitive_of
 from hoglint.selectors import State
@@ -250,15 +251,17 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> World:
 
 def python_rows(ctx: RuleContext, rule: EdgeRule) -> Counter[tuple[int, int, str, tuple[str, ...]]]:
     """(edge, destination, judgment, identity) of every destination `EdgeRule.decide` does not
-    judge clean, by the Python rule code alone."""
+    judge clean, by the Python rule code alone; only a violation's row carries its identity."""
     out: Counter[tuple[int, int, str, tuple[str, ...]]] = Counter()
     for edge in ctx.graph.edges:
         if not rule.sees(edge):
             continue
         for target, env in enumerate(rule.envs_of(edge)):
             judgment = rule.decide(env)
-            if judgment is not Judgment.CLEAN:
-                out[(edge.handle, target, judgment.value, project(rule.spec.identity, env.resolve))] += 1
+            if judgment is Judgment.CLEAN:
+                continue
+            identity = project(rule.spec.identity, env.resolve) if judgment is Judgment.VIOLATION else ()
+            out[(edge.handle, target, judgment.value, identity)] += 1
     return out
 
 
@@ -428,6 +431,10 @@ CONFLICTS = {
         'values = ["cell"], on = "symbol"', 'values = ["cell", "control"], on = "symbol"'
     )
     + '\n[[assign]]\nsymbols = { decorated_by = "products.billing.backend.models.cell" }\nset = { silo = "control" }\n',
+    "symbol-field-by-module-assignments": CONFIG.replace(
+        'values = ["cell"], on = "symbol"', 'values = ["cell", "control"], on = "symbol"'
+    )
+    + '\n[[assign]]\nmatch = "core/**"\nset = { silo = "cell" }\n\n[[assign]]\nmatch = "core/a.py"\nset = { silo = "control" }\n',
 }
 
 
@@ -559,29 +566,29 @@ LITERALS = [
 OPS = ["==", "!=", "in", "not in", "startswith", "subset_of"]
 
 
-def atom(rng: random.Random) -> str:
-    left = rng.choice(REFS)
+def atom(rng: random.Random, refs: list[str]) -> str:
+    left = rng.choice(refs)
     if rng.random() < 0.15:
         return left
-    right = rng.choice(REFS) if rng.random() < 0.3 else rng.choice(LITERALS)
+    right = rng.choice(refs) if rng.random() < 0.3 else rng.choice(LITERALS)
     return f"{left} {rng.choice(OPS)} {right}"
 
 
-def selector(rng: random.Random, depth: int = 2) -> str:
+def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
     if depth == 0 or rng.random() < 0.4:
-        return atom(rng)
+        return atom(rng, refs)
     joiner = rng.choice([" and ", " or "])
-    parts = [selector(rng, depth - 1) for _ in range(rng.randint(2, 3))]
+    parts = [selector(rng, refs, depth - 1) for _ in range(rng.randint(2, 3))]
     text = "(" + joiner.join(parts) + ")"
     return f"not {text}" if rng.random() < 0.2 else text
 
 
-def generated(rng: random.Random) -> dict[str, Any]:
+def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
     primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle"])
     spec: dict[str, Any] = {
         "primitive": primitive,
         "kinds": rng.sample(["import", "reference", "uses", "declares", "inherit"], rng.randint(1, 3)),
-        "identity": rng.sample(REFS, rng.randint(1, 3)),
+        "identity": rng.sample(refs, rng.randint(1, 3)),
         "ledger": False,
     }
     if primitive in ("edge", "entrypoint"):
@@ -589,7 +596,7 @@ def generated(rng: random.Random) -> dict[str, Any]:
         spec["on_unresolved"] = rng.choice(["finding", "block", "incomplete"])
     for key in ("from", "select", "deny", "allow", "unless"):
         if rng.random() < 0.45 and (primitive in ("edge", "entrypoint") or key in ("from", "select")):
-            spec[key] = selector(rng)
+            spec[key] = selector(rng, refs)
     if primitive == "use-shape":
         spec["deny_shapes"] = ["write"]
         if rng.random() < 0.5:
@@ -612,6 +619,162 @@ def test_generated_rules_are_judged_the_same_in_both(world: World) -> None:
         judged += 1
         failures.extend(f"{found}\n{rules}" for found in differences(world, rules))
     assert failures == []
+
+
+TIERS = ["core", "product", "leaf"]
+PATHS = ["core/legacy.py", "core/**", "products/billing/**", "products/alerts/**", "packages/**", "**/facade/**"]
+FILES = ["core/legacy.py", "core/a.py", "products/alerts/backend/facade/api.py", "products/billing/backend/models.py"]
+SILO = 'values = ["cell"], on = "symbol"'
+TWO_SILOS = 'values = ["cell", "control"], on = "symbol"'
+
+
+class Conflicting:
+    """A config that sets labels two ways, built from the fixture's: each shape adds sources that
+    may disagree on some module or symbol. Some are found before any rule runs, the rest where a
+    rule reads them."""
+
+    def __init__(self, rng: random.Random) -> None:
+        self.rng = rng
+        self.base = CONFIG
+        self.added: list[str] = []
+        # Fields whose conflicts are met only where a rule reads them, which rules read more often.
+        self.lazy: list[str] = []
+
+    def assign(self, match: str, sets: str, extra: str = "") -> None:
+        self.added.append(f'\n[[assign]]\nmatch = "{match}"\n{extra}set = {{ {sets} }}\n')
+
+    def module_field(self) -> None:
+        override = "override = true\n" if self.rng.random() < 0.2 else ""
+        self.assign(self.rng.choice(PATHS), f'tier = "{self.rng.choice(TIERS)}"', override)
+
+    def symbol_field_by_modules(self) -> None:
+        self.base = self.base.replace(SILO, TWO_SILOS)
+        for silo in ("cell", "control"):
+            self.assign(self.rng.choice(PATHS), f'silo = "{silo}"')
+
+    def zone_by_assignment(self) -> None:
+        zone = self.rng.choice(["backend", "facade", "internal"])
+        self.assign(self.rng.choice(["products/billing/backend/**", "products/**", "core/**"]), f'zone = "{zone}"')
+
+    def leaf_zones(self) -> None:
+        if self.rng.random() < 0.5:
+            self.base = self.base.replace(
+                'special = { paths = ["backend/shared.py"], override = true }',
+                'special = { paths = ["backend/shared.py"] }',
+            )
+        else:
+            self.base = self.base.replace("[kinds]\n", 'extra = { paths = ["backend/**"] }\n\n[kinds]\n')
+
+    def kinds(self) -> None:
+        test = self.rng.choice(
+            [
+                'subclass_of = "products.billing.backend.models.Base"',
+                'decorated_by = "products.billing.backend.models.cell"',
+            ]
+        )
+        self.base = self.base.replace("[kinds]\n", f"[kinds]\nother = {{ {test} }}\n")
+
+    def symbol_assignments(self) -> None:
+        self.base = self.base.replace(SILO, TWO_SILOS)
+        match = f'match = "{self.rng.choice(FILES)}"\n' if self.rng.random() < 0.5 else ""
+        self.added.append(
+            f'\n[[assign]]\n{match}symbols = {{ decorated_by = "products.billing.backend.models.cell" }}\nset = {{ silo = "control" }}\n'
+        )
+
+    def symbols_of_a_file(self) -> None:
+        self.base = self.base.replace(SILO, TWO_SILOS)
+        path = self.rng.choice(FILES)
+        for silo in ("cell", "control"):
+            self.added.append(f'\n[[assign]]\nmatch = "{path}"\nsymbols = {{}}\nset = {{ silo = "{silo}" }}\n')
+        self.lazy += ["dst.silo", "src.silo"]
+
+    def provider(self) -> None:
+        self.base = self.base.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
+        self.added.append('\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["lead"]\n')
+        self.assign(self.rng.choice(PATHS), 'lead = "someone"')
+        self.lazy += ["src.lead", "dst.lead"]
+
+    def config(self) -> str:
+        shapes = [
+            self.module_field,
+            self.symbol_field_by_modules,
+            self.zone_by_assignment,
+            self.leaf_zones,
+            self.kinds,
+            self.symbol_assignments,
+            self.symbols_of_a_file,
+            self.provider,
+        ]
+        # The shapes met only where read are drawn more often: they need a rule that reads them.
+        shapes += [self.symbols_of_a_file, self.provider] * 2
+        for shape in dict.fromkeys(self.rng.sample(shapes, self.rng.randint(1, 2))):
+            shape()
+        return self.base + "".join(self.added)
+
+    def rules(self, world: World, base: str) -> str:
+        """One to three generated rules that load over `base`."""
+        refs = REFS + self.lazy * 8
+        out = ""
+        made = 0
+        wanted = self.rng.randint(1, 3)
+        while made < wanted:
+            rule = rule_table(f"generated{made}", generated(self.rng, refs))
+            try:
+                world.config(out + rule, base)
+            except ConfigError:
+                continue
+            out += rule
+            made += 1
+        return out
+
+
+def outcome(world: World, config: Config) -> list[str]:
+    """The problems of the config error a whole run stops with, or none."""
+    try:
+        Engine(config, world.graph, world.repo).run_rules()
+    except ConfigError as error:
+        return sorted(error.problems)
+    return []
+
+
+def test_a_label_set_two_ways_stops_both_engines_alike(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    rng = random.Random(1110)
+    stopped = judged = 0
+    failures = []
+    while judged < 150:
+        conflicting = Conflicting(rng)
+        text = conflicting.config()
+        try:
+            world.config("", text)
+        except ConfigError:
+            continue
+        text += conflicting.rules(world, text)
+        config = world.config("", text)
+        judged += 1
+        native = outcome(world, config)
+        with monkeypatch.context() as patched:
+            patched.setattr(engine, "context_class", lambda index: RuleContext)
+            python = outcome(world, config)
+        stopped += bool(python)
+        if native != python:
+            failures.append(f"native {native}\npython {python}\n{text}")
+    assert failures == []
+    assert stopped > judged // 3
+
+
+def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_where_read(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = CONFIG.replace(SILO, TWO_SILOS) + "".join(
+        f'\n[[assign]]\nmatch = "core/legacy.py"\nsymbols = {{}}\nset = {{ silo = "{silo}" }}\n'
+        for silo in ("cell", "control")
+    )
+    reads = rule_table("reads", {**EDGE, "kinds": ["import"], "endpoint": "surface", "deny": "dst.silo == 'cell'"})
+    assert outcome(world, world.config("", base)) == []
+    native = outcome(world, world.config(reads, base))
+    assert [problem.partition(" by ")[0] for problem in native] == ["core.legacy.api: field 'silo' set differently"]
+    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
+    assert outcome(world, world.config(reads, base)) == native
 
 
 def test_labels_are_the_labelers(world: World) -> None:

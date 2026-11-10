@@ -5,8 +5,8 @@
 
 use super::env::{Cx, Endpoint, Env, Symbol};
 use super::plan::Mode;
-use super::selector::evaluate;
-use super::value::{Truth, all_of};
+use super::staged::truth;
+use super::value::Truth;
 use super::{Rule, Rules};
 use crate::link::Link;
 use crate::link::intern::Sid;
@@ -59,6 +59,8 @@ struct Hops<'a> {
     cx: Cx<'a>,
     rule: &'a Rule,
     ids: FxHashMap<Sid, Vec<u32>>,
+    /// The modules with an edge of the rule's kinds, seen by the rule or not.
+    sources: FxHashSet<Sid>,
     made: FxHashMap<Sid, Vec<Hop<'a>>>,
 }
 
@@ -73,6 +75,10 @@ impl<'a> Hops<'a> {
 
     fn make(&self, module: Sid) -> Vec<Hop<'a>> {
         let cx = self.cx;
+        let rules = cx.rules;
+        if rules.touch && self.rule.staged.src_module_level && self.sources.contains(&module) {
+            rules.read_source(&cx, self.rule, module);
+        }
         let mut out = Vec::new();
         let mut dsts = Vec::with_capacity(2);
         for &id in self.ids.get(&module).map_or(&[][..], Vec::as_slice) {
@@ -80,7 +86,7 @@ impl<'a> Hops<'a> {
             cx.dst_endpoints(id, self.rule.role, &mut dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(cx, Some(id), src, *dst);
-                let selected = all_of(self.rule.selection.iter().map(|node| evaluate(node, &env)));
+                let selected = self.rule.staged.truth(&env, false);
                 if selected != Truth::False {
                     out.push(Hop {
                         edge: id,
@@ -129,6 +135,7 @@ impl Rules {
             cx,
             rule,
             ids,
+            sources: starts.iter().copied().collect(),
             made: FxHashMap::default(),
         };
         let mut out = Vec::new();
@@ -151,7 +158,7 @@ impl Rules {
             return Truth::True;
         };
         let env = Env::new(*cx, None, cx.module_endpoint(module), NO_DESTINATION);
-        evaluate(start, &env)
+        truth(start, &env)
     }
 
     /// `ReachPrimitive.search` from one start module.
@@ -183,11 +190,11 @@ impl Rules {
                 let verdict = rule
                     .deny
                     .as_ref()
-                    .map_or(Truth::False, |deny| evaluate(deny, &env));
+                    .map_or(Truth::False, |deny| truth(deny, &env));
                 let excused = rule
                     .unless
                     .as_ref()
-                    .is_some_and(|unless| evaluate(unless, &env) == Truth::True);
+                    .is_some_and(|unless| truth(unless, &env) == Truth::True);
                 let target = match cx
                     .symbol_text(hop.dst.symbol)
                     .filter(|symbol| !symbol.is_empty())

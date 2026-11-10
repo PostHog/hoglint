@@ -3,6 +3,7 @@
 use crate::ids_bytes;
 use crate::link::Link;
 use hoglint_facts::link::rules::Rules as CoreRules;
+use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::reach::Found;
 use hoglint_facts::link::rules::value::Truth;
 use pyo3::exceptions::PyValueError;
@@ -16,6 +17,11 @@ type RowTuple = (u32, u32, u8, Vec<String>, String, Option<String>);
 /// A cycle row: (edge id, destination index, judgment code, the pair's groups or None).
 type PairTuple = (u32, u32, u8, Option<(String, String)>);
 
+/// A label set two ways: (what, entity, field). What: "module" (a module's field), "zones" (leaf
+/// zones that claim a module's path), "kind" (a name two kinds hold), "symbol" (a symbol's field),
+/// "provided" (a module's provider labels). The field is empty where it names none.
+type ConflictTuple = (&'static str, String, String);
+
 /// A reach finding: (what, start module, path of (edge id, destination index), verdict code).
 /// What: "start" (path empty), "unresolved", "unknown" or "denied". Verdict codes: 1 true,
 /// 2 unknown; 0 for anything but "denied".
@@ -26,6 +32,24 @@ type FoundTuple = (&'static str, String, Vec<(u32, u32)>, u8);
 pub(crate) struct Rules {
     link: Py<Link>,
     inner: CoreRules,
+}
+
+impl Rules {
+    fn conflict_tuple(
+        &self,
+        link: &hoglint_facts::link::Link,
+        conflict: Conflict,
+    ) -> ConflictTuple {
+        let module = |at: u32| self.inner.module_name(link, at).to_string();
+        let field = |at: usize| self.inner.labels.fields[at].name.clone();
+        match conflict {
+            Conflict::Module(at, name) => ("module", module(at), field(name)),
+            Conflict::Zones(at) => ("zones", module(at), String::new()),
+            Conflict::Kind(symbol) => ("kind", symbol, String::new()),
+            Conflict::Symbol(symbol, name) => ("symbol", symbol, field(name)),
+            Conflict::Provided(at) => ("provided", module(at), String::new()),
+        }
+    }
 }
 
 #[pymethods]
@@ -143,11 +167,26 @@ impl Rules {
         Ok(ids_bytes(py, &ids))
     }
 
-    /// Whether the config sets some label two ways on this graph: then the Python labeler
-    /// finds and names each conflict.
-    fn conflicted(&self, py: Python<'_>) -> bool {
+    /// Every label `Labeler.find_conflicts` finds set two ways on this graph, for the Python
+    /// labeler to word.
+    fn conflicts(&self, py: Python<'_>) -> Vec<ConflictTuple> {
         let bound = self.link.bind(py).borrow();
-        self.inner.conflicted(&bound.inner)
+        let found = self.inner.conflicts(&bound.inner);
+        found
+            .into_iter()
+            .map(|conflict| self.conflict_tuple(&bound.inner, conflict))
+            .collect()
+    }
+
+    /// The labels set two ways that the rules met while they ran: what the Python engine meets
+    /// lazily, where a rule reads them.
+    fn met(&self, py: Python<'_>) -> Vec<ConflictTuple> {
+        let bound = self.link.bind(py).borrow();
+        self.inner
+            .met()
+            .into_iter()
+            .map(|conflict| self.conflict_tuple(&bound.inner, conflict))
+            .collect()
     }
 
     /// One field's value (or `registry`, `lifecycle`) on every graph module, rendered as an

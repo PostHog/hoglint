@@ -18,6 +18,9 @@ pub struct Plan {
     pub kinds: Vec<KindPlan>,
     /// Per provider-set field a rule or a domain reads: its label on each module.
     pub provided: Vec<ProvidedPlan>,
+    /// The modules, by place, whose provider labels disagree with another source: a conflict
+    /// wherever something reads a provided column of the module (`Labeler.label_provided`).
+    pub provider_conflicts: Vec<u32>,
     /// Fields whose provider failed: outside the graph's modules they read as unknown.
     pub failed: Vec<String>,
     pub rules: Vec<RulePlan>,

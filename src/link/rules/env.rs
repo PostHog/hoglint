@@ -3,6 +3,7 @@
 //! (`Labeler.label_resolver`).
 
 use super::Rules;
+use super::conflicts::Conflict;
 use super::labels::{Cell, FieldKind};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
@@ -10,6 +11,7 @@ use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
 use std::borrow::Cow;
+use std::cell::Cell as Flag;
 
 /// A rule's view of an edge's destination.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -324,6 +326,7 @@ impl<'a> Cx<'a> {
         let spec = &rules.labels.fields[field];
         if !spec.on_symbol {
             if let Some(at) = at {
+                rules.read_module_field(field, at);
                 return self.cell(&rules.values[field][at as usize]);
             }
             if rules.labels.failed[field] {
@@ -355,9 +358,26 @@ impl<'a> Cx<'a> {
         at: Option<u32>,
         symbol: Option<&str>,
     ) -> Value<'a> {
+        let (value, read) = self.domain_value_read(field, module, at, symbol);
+        if let (true, Some(at)) = (read, at) {
+            self.rules.meet(Conflict::Provided(at));
+        }
+        value
+    }
+
+    /// `domain_value`, and whether the domain read provider labels of the module that are set
+    /// two ways.
+    pub fn domain_value_read(
+        &self,
+        field: usize,
+        module: Option<Sid>,
+        at: Option<u32>,
+        symbol: Option<&str>,
+    ) -> (Value<'a>, bool) {
         let Some(domain) = &self.rules.labels.fields[field].domain else {
-            return Value::None;
+            return (Value::None, false);
         };
+        let mut read = false;
         let inside = if domain.everywhere {
             true
         } else if let Some(selector) = &domain.selector {
@@ -366,13 +386,16 @@ impl<'a> Cx<'a> {
                 module,
                 at,
                 symbol,
+                read_conflict: Flag::new(false),
             };
-            evaluate(selector, &env) == Truth::True
+            let inside = evaluate(selector, &env) == Truth::True;
+            read = env.read_conflict.get();
+            inside
         } else {
             self.path_at(at)
                 .is_some_and(|path| domain.globs.iter().any(|glob| glob.is_match(path)))
         };
-        if inside { Value::Unknown } else { Value::None }
+        (if inside { Value::Unknown } else { Value::None }, read)
     }
 }
 
@@ -616,6 +639,8 @@ pub struct LabelEnv<'a, 's> {
     pub module: Option<Sid>,
     pub at: Option<u32>,
     pub symbol: Option<&'s str>,
+    /// Whether it read provider labels of its module that are set two ways.
+    pub read_conflict: Flag<bool>,
 }
 
 impl<'a> Resolve<'a> for LabelEnv<'a, '_> {
@@ -671,10 +696,14 @@ impl<'a> LabelEnv<'a, '_> {
                 None => Value::None,
             };
         }
-        match self
-            .at
-            .and_then(|at| rules.labels.labels[field][at as usize].as_ref())
-        {
+        let Some(at) = self.at else {
+            return Value::None;
+        };
+        let labels = &rules.labels;
+        if labels.fields[field].provided && labels.provider_conflicts[at as usize] {
+            self.read_conflict.set(true);
+        }
+        match &labels.labels[field][at as usize] {
             Some(label) => cx.cell(label),
             None => Value::None,
         }

@@ -6,6 +6,7 @@
 //! edges in parallel chunks; the output is the same at any thread count. The Python engine stays
 //! the meaning: each function here names the Python code it follows.
 
+pub mod conflicts;
 pub mod edges;
 pub mod env;
 pub mod glob;
@@ -13,19 +14,23 @@ pub mod labels;
 pub mod plan;
 pub mod reach;
 pub mod selector;
+pub mod staged;
 pub mod symbols;
 pub mod value;
 
+use self::conflicts::{Conflict, conflict_key};
 use self::env::{Cx, Endpoint, Env, Role};
 use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{Mode, Plan, RulePlan, SetValue};
-use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref, evaluate};
+use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
+use self::staged::{Staged, parts_truth, truth};
 use self::symbols::{KindSets, SymbolFacts};
-use self::value::{Truth, Value, all_of, any_of, render};
+use self::value::{Truth, Value, any_of, render};
 use super::Link;
 use super::intern::Sid;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Mutex;
 
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,7 +49,8 @@ pub struct Row {
     /// The destination's place among the edge's destinations.
     pub target: u32,
     pub judgment: Judgment,
-    /// The identity columns, rendered as `rules.base.project` renders them.
+    /// The identity columns of a violation, rendered as `rules.base.project` renders them; empty
+    /// for any other judgment, which the rule's own code reports.
     pub identity: Vec<String>,
     /// The source module (the finding's owner module) and the destination's module.
     pub src_module: Sid,
@@ -59,9 +65,8 @@ pub struct Rule {
     exclude: u8,
     role: Role,
     selection: Vec<Node>,
-    /// Per conjunct of the selection, whether it reads a field the primitive's own environment
-    /// sets: selection for a rule judged in Python skips it.
-    redefined: Vec<bool>,
+    /// The selection in the order and parts the Python engine judges it.
+    staged: Staged,
     deny: Option<Node>,
     allow: Option<Node>,
     require: Option<Node>,
@@ -111,6 +116,13 @@ pub struct Rules {
     /// Each edge's ordinal, when something reads `edge.ordinal`.
     ordinals: Vec<u32>,
     pool: rayon::ThreadPool,
+    /// Whether the config has a label that is a conflict only where it is read: reads then
+    /// follow the Python engine's (`staged.rs`).
+    pub touch: bool,
+    /// (field, module) whose value reads provider labels of the module that are set two ways.
+    tainted: FxHashSet<(usize, u32)>,
+    /// The conflicts rules met while they ran.
+    met: Mutex<FxHashSet<Conflict>>,
 }
 
 fn role_of(name: &str) -> Result<Role, String> {
@@ -209,7 +221,7 @@ impl Rules {
         let rules = plan
             .rules
             .iter()
-            .map(|rule| Self::compile(&edge, rule))
+            .map(|rule| Self::compile(&edge, rule, &fields))
             .collect::<Result<Vec<_>, String>>()?;
         let it = &link.core.it;
         let module_names: Vec<&str> = modules.iter().map(|module| it.s(*module)).collect();
@@ -285,8 +297,13 @@ impl Rules {
             rules,
             ordinals: Vec::new(),
             pool,
+            touch: false,
+            tainted: FxHashSet::default(),
+            met: Mutex::new(FxHashSet::default()),
         };
+        out.tainted = out.provider_reads();
         out.values = out.module_values(link);
+        out.touch = !out.tainted.is_empty() || !out.contested_fields().is_empty();
         if reads_ordinal {
             out.ordinals = ordinals(link, &plan.repeats);
         }
@@ -330,12 +347,13 @@ impl Rules {
         (modules, files)
     }
 
-    fn compile(compiler: &Compiler, plan: &RulePlan) -> Result<Rule, String> {
+    fn compile(compiler: &Compiler, plan: &RulePlan, fields: &[Field]) -> Result<Rule, String> {
         let selection = compiler.nodes(&plan.selection)?;
-        let redefined = selection
+        let redefined: Vec<bool> = selection
             .iter()
             .map(|node| node.reads(|field| redefined(field, &plan.redefines)))
             .collect();
+        let staged = Staged::new(&selection, &redefined, fields);
         let optional = |node: &Option<plan::NodePlan>| {
             node.as_ref().map(|node| compiler.node(node)).transpose()
         };
@@ -347,7 +365,7 @@ impl Rules {
             exclude: plan.exclude,
             role: role_of(&plan.endpoint)?,
             selection,
-            redefined,
+            staged,
             deny: optional(&plan.deny)?,
             allow: optional(&plan.allow)?,
             require: optional(&plan.require)?,
@@ -377,12 +395,35 @@ impl Rules {
         link.core.it.s(self.modules[at as usize])
     }
 
+    /// (field, module) of every provider-set module field on a module whose provider labels
+    /// are set two ways: reading any of them reads all of the module's (`Labeler.label_provided`).
+    fn provider_reads(&self) -> FxHashSet<(usize, u32)> {
+        let labels = &self.labels;
+        let mut out = FxHashSet::default();
+        for (at, _) in labels
+            .provider_conflicts
+            .iter()
+            .enumerate()
+            .filter(|(_, set)| **set)
+        {
+            for (field, spec) in labels.fields.iter().enumerate() {
+                if spec.provided && !spec.on_symbol {
+                    out.insert((field, at as u32));
+                }
+            }
+        }
+        out
+    }
+
     /// `values` of every module field (`Labeler.compute_value`): the label, else unknown where
-    /// the provider failed, else what the domain says.
-    fn module_values(&self, link: &Link) -> Vec<Vec<Cell>> {
+    /// the provider failed, else what the domain says. A value whose domain read provider labels
+    /// that are set two ways is tainted: reading it meets that conflict, as in Python, where the
+    /// domain is read only when the value is.
+    fn module_values(&mut self, link: &Link) -> Vec<Vec<Cell>> {
         let cx = Cx { link, rules: self };
         let count = self.modules.len();
         let mut out = Vec::with_capacity(self.labels.fields.len());
+        let mut tainted = Vec::new();
         for (field, spec) in self.labels.fields.iter().enumerate() {
             if spec.on_symbol {
                 out.push(Vec::new());
@@ -392,19 +433,22 @@ impl Rules {
                 .map(|at| match &self.labels.labels[field][at as usize] {
                     Some(label) => label.clone(),
                     None if self.labels.failed[field] => Cell::Unknown,
-                    None => match cx.domain_value(
-                        field,
-                        Some(self.modules[at as usize]),
-                        Some(at),
-                        None,
-                    ) {
-                        Value::Unknown => Cell::Unknown,
-                        _ => Cell::None,
-                    },
+                    None => {
+                        let module = Some(self.modules[at as usize]);
+                        let (value, read) = cx.domain_value_read(field, module, Some(at), None);
+                        if read {
+                            tainted.push((field, at));
+                        }
+                        match value {
+                            Value::Unknown => Cell::Unknown,
+                            _ => Cell::None,
+                        }
+                    }
                 })
                 .collect();
             out.push(column);
         }
+        self.tainted.extend(tainted);
         out
     }
 
@@ -495,6 +539,7 @@ impl Rules {
             .iter()
             .any(|value| conflict_key(value) != conflict_key(pool[0]))
         {
+            self.meet(Conflict::Symbol(symbol.to_string(), field));
             return None;
         }
         let text: &'a str = match pool[0] {
@@ -518,106 +563,8 @@ impl Rules {
         Some(Value::text(text))
     }
 
-    /// Whether the config sets some label two ways on this graph (`Labeler.find_conflicts`): two
-    /// sources that set a module's field apart, two leaf zones that claim a path, a name two
-    /// kinds hold, or two symbol assignments that set a symbol's field apart. Python names each
-    /// one with its sources; the evaluator only says whether there is one.
-    pub fn conflicted(&self, link: &Link) -> bool {
-        self.labels.conflicted
-            || self
-                .kind_sets
-                .kinds_of
-                .values()
-                .any(|kinds| kinds.len() > 1)
-            || self.symbol_conflicted(link)
-    }
-
-    /// `Labeler.find_symbol_assignment_conflicts`: only symbols whose path two rival assignments
-    /// reach are labelled.
-    fn symbol_conflicted(&self, link: &Link) -> bool {
-        let assigns = &self.labels.assigns;
-        let mut keys: FxHashMap<usize, Vec<(u8, &str)>> = FxHashMap::default();
-        for &at in &self.symbol_assigns {
-            for (field, spec) in self.labels.fields.iter().enumerate() {
-                if spec.kind == FieldKind::Set {
-                    continue;
-                }
-                for value in assigns[at].sets_of(field) {
-                    let found = keys.entry(field).or_default();
-                    if !found.contains(&conflict_key(value)) {
-                        found.push(conflict_key(value));
-                    }
-                }
-            }
-        }
-        let contested: Vec<usize> = keys
-            .into_iter()
-            .filter(|(_, found)| found.len() > 1)
-            .map(|(field, _)| field)
-            .collect();
-        let rivals: Vec<&Assign> = self
-            .symbol_assigns
-            .iter()
-            .map(|&at| &assigns[at])
-            .filter(|assign| {
-                contested
-                    .iter()
-                    .any(|&field| assign.sets_of(field).next().is_some())
-            })
-            .collect();
-        if rivals.len() < 2 {
-            return false;
-        }
-        let cx = Cx { link, rules: self };
-        let mut reached: FxHashMap<Option<u32>, bool> = FxHashMap::default();
-        for name in SymbolFacts::all_symbols(link) {
-            let symbol = link.core.it.s(name);
-            let at = cx.module_of_symbol(symbol).map(|(_, at)| at);
-            let contested_here = *reached.entry(at).or_insert_with(|| {
-                let path = at.map(|at| self.module_path(link, at));
-                rivals.iter().filter(|assign| assign.allows(path)).count() > 1
-            });
-            if contested_here && self.symbol_labels_conflict(link, symbol, at) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Whether the symbol assignments that reach a symbol set one of its fields apart.
-    fn symbol_labels_conflict(&self, link: &Link, symbol: &str, at: Option<u32>) -> bool {
-        let path = at.map(|at| self.module_path(link, at));
-        let matching: Vec<&Assign> = self
-            .symbol_assigns
-            .iter()
-            .map(|&at| &self.labels.assigns[at])
-            .filter(|assign| self.symbol_matches(link, assign, symbol, path))
-            .collect();
-        self.labels.fields.iter().enumerate().any(|(field, spec)| {
-            if spec.kind == FieldKind::Set {
-                return false;
-            }
-            let candidates: Vec<(&SetValue, bool)> = matching
-                .iter()
-                .flat_map(|assign| assign.sets_of(field).map(|value| (value, assign.overrides)))
-                .collect();
-            let overriding: Vec<&SetValue> = candidates
-                .iter()
-                .filter(|(_, overrides)| *overrides)
-                .map(|(value, _)| *value)
-                .collect();
-            let pool: Vec<&SetValue> = if overriding.is_empty() {
-                candidates.iter().map(|(value, _)| *value).collect()
-            } else {
-                overriding
-            };
-            pool.iter()
-                .any(|value| conflict_key(value) != conflict_key(pool[0]))
-        })
-    }
-
     /// `Labeler.symbol_matches`.
-    fn symbol_matches(
+    pub fn symbol_matches(
         &self,
         link: &Link,
         assign: &Assign,
@@ -716,6 +663,7 @@ impl Rules {
     /// order the Python engine judges them.
     pub fn judge(&self, link: &mut Link, index: usize) -> Result<Vec<Row>, String> {
         let rule = self.rule(index, Mode::Judge)?;
+        self.read_sources(link, rule);
         let ids = self.candidates(link, rule);
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
@@ -726,15 +674,19 @@ impl Rules {
                 if judgment == Judgment::Clean {
                     continue;
                 }
+                let identity = if judgment == Judgment::Violation {
+                    rule.identity
+                        .iter()
+                        .map(|field| render(&evaluate_ref(*field, &env)))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 out.push(Row {
                     edge: id,
                     target: target as u32,
                     judgment,
-                    identity: rule
-                        .identity
-                        .iter()
-                        .map(|field| render(&evaluate_ref(*field, &env)))
-                        .collect(),
+                    identity,
                     src_module: src.module.unwrap_or_default(),
                     dst_module: dst.module,
                 });
@@ -751,17 +703,20 @@ impl Rules {
     /// primitive's own environment sets can drop an edge.
     pub fn select(&self, link: &mut Link, index: usize) -> Result<Vec<u32>, String> {
         let rule = self.rule(index, Mode::Select)?;
+        self.read_sources(link, rule);
         let ids = self.candidates(link, rule);
         let kept = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, rule.role, dsts);
-            let selected = dsts.iter().any(|dst| {
+            let mut selected = false;
+            for dst in dsts.iter() {
                 let env = Env::new(*cx, Some(id), src, *dst);
-                rule.selection
-                    .iter()
-                    .zip(&rule.redefined)
-                    .all(|(node, redefined)| *redefined || evaluate(node, &env) != Truth::False)
-            });
+                selected |= rule.staged.truth(&env, true) != Truth::False;
+                // Python reads every destination of an edge before it judges any.
+                if selected && !self.touch {
+                    break;
+                }
+            }
             if selected {
                 out.push(id);
             }
@@ -778,13 +733,14 @@ impl Rules {
         let Some((src_group, dst_group)) = rule.group else {
             return Err(format!("cycle rule {} has no group field", rule.id));
         };
+        self.read_sources(link, rule);
         let ids = self.candidates(link, rule);
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, rule.role, dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(*cx, Some(id), src, *dst);
-                let selected = all_of(rule.selection.iter().map(|node| evaluate(node, &env)));
+                let selected = rule.staged.truth(&env, false);
                 let judgment = match selected {
                     Truth::False => continue,
                     _ if dst.unresolved => Judgment::Unresolved,
@@ -822,6 +778,29 @@ impl Rules {
         edges.dedup();
         let order = self.order(link, rule, &edges)?;
         Ok(in_order(rows, &edges, &order, |row| row.edge))
+    }
+
+    /// In a config with labels that conflict only where read: the `src` parts of a rule that
+    /// reads only module fields there, judged once per source module of its kinds, edges seen or
+    /// not, as `StagedSelection.module_false` judges them before any edge.
+    fn read_sources(&self, link: &mut Link, rule: &Rule) {
+        if !self.touch || !rule.staged.src_module_level {
+            return;
+        }
+        let mut modules = Vec::new();
+        for kind in self.kind_sids(link, rule) {
+            modules.extend(link.source_modules(kind));
+        }
+        let cx = Cx { link, rules: self };
+        for module in modules {
+            self.read_source(&cx, rule, module);
+        }
+    }
+
+    /// `StagedSelection.module_false` of one module, for the reads it makes.
+    fn read_source(&self, cx: &Cx, rule: &Rule, module: Sid) {
+        let endpoint = cx.module_endpoint(module);
+        parts_truth(rule.staged.src(), &Env::new(*cx, None, endpoint, endpoint));
     }
 
     fn rule(&self, index: usize, mode: Mode) -> Result<&Rule, String> {
@@ -872,7 +851,7 @@ impl Rules {
             let ids = link.ids_of_kind(kind);
             out.extend(self.over_candidates(link, &ids, |cx, id, _, kept| {
                 let src = cx.src_endpoint(id);
-                if evaluate(&node, &Env::new(*cx, Some(id), src, src)) != Truth::False {
+                if selector::evaluate(&node, &Env::new(*cx, Some(id), src, src)) != Truth::False {
                     kept.push(id);
                 }
             }));
@@ -993,17 +972,6 @@ fn in_order<T>(rows: Vec<T>, edges: &[u32], order: &[u32], edge_of: impl Fn(&T) 
     out
 }
 
-/// What a conflict between two symbol assignment values compares (`repr`).
-fn conflict_key(value: &SetValue) -> (u8, &str) {
-    match value {
-        SetValue::Text(text) => (0, text),
-        SetValue::Bool(true) => (1, "True"),
-        SetValue::Bool(false) => (1, "False"),
-        SetValue::Items(_) => (2, ""),
-        SetValue::Other(_, repr) => (3, repr),
-    }
-}
-
 fn is_ordinal(field: Ref) -> bool {
     field == Ref::Edge(EdgeField::Ordinal)
 }
@@ -1012,9 +980,10 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
     selector::Resolve::resolve(env, field)
 }
 
-/// `EdgeRule.decide` for one environment.
-pub fn decide(rule: &Rule, env: &Env) -> Judgment {
-    let selected = all_of(rule.selection.iter().map(|node| evaluate(node, env)));
+/// `EdgeRule.decide` for one environment. `deny`, `allow` and `require` are all judged, as
+/// `EdgeRule.violation` judges them.
+pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
+    let selected = rule.staged.truth(env, false);
     if selected == Truth::False {
         return Judgment::Clean;
     }
@@ -1025,17 +994,17 @@ pub fn decide(rule: &Rule, env: &Env) -> Judgment {
         return Judgment::UnknownSelection;
     }
     let verdict = if rule.default_allow {
-        evaluate(&EXPORTED, env).negate()
+        truth(&EXPORTED, env).negate()
     } else {
         let mut parts = Vec::with_capacity(3);
         if let Some(deny) = &rule.deny {
-            parts.push(evaluate(deny, env));
+            parts.push(truth(deny, env));
         }
         if let Some(allow) = &rule.allow {
-            parts.push(evaluate(allow, env).negate());
+            parts.push(truth(allow, env).negate());
         }
         if let Some(require) = &rule.require {
-            parts.push(evaluate(require, env).negate());
+            parts.push(truth(require, env).negate());
         }
         if parts.is_empty() {
             Truth::True
@@ -1047,7 +1016,7 @@ pub fn decide(rule: &Rule, env: &Env) -> Judgment {
         return Judgment::Clean;
     }
     if let Some(unless) = &rule.unless
-        && evaluate(unless, env) == Truth::True
+        && truth(unless, env) == Truth::True
     {
         return Judgment::Clean;
     }

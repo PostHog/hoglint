@@ -207,10 +207,31 @@ class NativeRuleContext(RuleContext):
         native: Any = import_module()
         return native.Rules(self.native.native.link, self.plan.text())
 
-    def may_conflict(self) -> bool:
-        """The evaluator labels every module before any rule runs and knows whether a label was
-        set two ways; only then does the labeler search for each conflict and its sources."""
-        return self.evaluator.conflicted()
+    def find_conflicts(self) -> None:
+        """The evaluator labels every module before any rule runs and finds each label set two
+        ways; the labeler words each one with its sources (D44)."""
+        conflicts = self.evaluator.conflicts()
+        self.word(conflicts)
+        if conflicts and not self.labeler.conflicts:
+            raise EngineError(f"the evaluator finds labels set two ways that the labeler does not: {conflicts[:3]}")
+
+    def met_conflicts(self) -> None:
+        """The labels set two ways that the evaluator met while rules ran: what the Python engine
+        meets lazily, where a rule reads them."""
+        self.word(self.evaluator.met())
+
+    def word(self, conflicts: list[tuple[str, str, str]]) -> None:
+        """Has the labeler record each conflict, with its sources, as reading its entity does."""
+        labeler = self.labeler
+        for what, entity, _ in conflicts:
+            if what in ("module", "zones"):
+                labeler.module_labels(entity)
+            elif what == "kind":
+                labeler.kind_conflict(entity)
+            elif what == "symbol":
+                labeler.symbol_labels(entity)
+            else:
+                labeler.provider_labels(entity)
 
     def evaluated(self, rule: EdgeRule) -> Iterator[tuple[Edge, RuleRun]]:
         """The evaluator's rows of an edge or entrypoint rule, in the order the rule judges: a

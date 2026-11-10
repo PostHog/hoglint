@@ -373,9 +373,12 @@ pub struct Labels {
     pub failed: Vec<bool>,
     /// Fields the plan sent a provider column for.
     pub columns: Vec<bool>,
-    /// Whether two sources set a module's field apart, or two leaf zones claim its path: a config
-    /// error the Python labeler reports with its sources.
-    pub conflicted: bool,
+    /// (module, field) where two sources set a module's field apart, with no field where two
+    /// leaf zones claim its path: config errors the Python labeler words with their sources.
+    pub conflicts: Vec<(u32, Option<usize>)>,
+    /// Per module, whether a Python provider's labels of it disagree with another source: met
+    /// where something reads a provider column of the module, as `Labeler.label_provided` is.
+    pub provider_conflicts: Vec<bool>,
 }
 
 /// The most exports a run reads: one bit each.
@@ -419,17 +422,18 @@ impl Labels {
             exports_of: Vec::with_capacity(paths.len()),
             columns: vec![false; failed.len()],
             failed,
-            conflicted: false,
+            conflicts: Vec::new(),
+            provider_conflicts: vec![false; paths.len()],
         };
-        for (path, module) in paths.iter().zip(modules) {
-            out.label_module(path, module, exports);
+        for (at, (path, module)) in paths.iter().zip(modules).enumerate() {
+            out.label_module(at as u32, path, module, exports);
         }
         out.fill_provided(plan)?;
         Ok(out)
     }
 
     /// One module's labels (`Labeler.label_module`), its registry and exports.
-    fn label_module(&mut self, path: &str, module: &str, exports: &[Export]) {
+    fn label_module(&mut self, module_at: u32, path: &str, module: &str, exports: &[Export]) {
         let mut collected: Vec<Vec<(Candidate, bool)>> = vec![Vec::new(); self.fields.len()];
         for assign in self
             .assigns
@@ -458,17 +462,26 @@ impl Labels {
                     }
                 }
                 Ok(None) => {}
-                Err(()) => self.conflicted = true,
+                Err(()) => self.conflicts.push((module_at, None)),
             }
         }
         for (at, candidates) in collected.iter().enumerate() {
             let field = &self.fields[at];
-            let label = if field.provided || field.on_symbol {
+            let (provided, on_symbol) = (field.provided, field.on_symbol);
+            let label = if provided {
                 None
             } else {
-                self.resolve(at, candidates)
+                match self.resolve(at, candidates) {
+                    Ok(label) => label,
+                    Err(()) => {
+                        self.conflicts.push((module_at, Some(at)));
+                        None
+                    }
+                }
             };
-            self.labels[at].push(label);
+            // A module assignment that sets a symbol field labels no symbol, but its
+            // conflicts are config errors all the same.
+            self.labels[at].push(if on_symbol { None } else { label });
         }
         let registry = self
             .registries
@@ -486,10 +499,14 @@ impl Labels {
     }
 
     /// The label of one field from its candidates (`Labeler.resolve_candidates`): a set field
-    /// unions them; otherwise the overriding ones win, and two that differ set nothing.
-    pub fn resolve(&mut self, field: usize, candidates: &[(Candidate, bool)]) -> Option<Cell> {
+    /// unions them; otherwise the overriding ones win, and two that differ are a conflict.
+    fn resolve(
+        &mut self,
+        field: usize,
+        candidates: &[(Candidate, bool)],
+    ) -> Result<Option<Cell>, ()> {
         if candidates.is_empty() {
-            return None;
+            return Ok(None);
         }
         let kind = self.fields[field].kind;
         if kind == FieldKind::Set {
@@ -504,7 +521,7 @@ impl Labels {
             }
             items.sort();
             items.dedup();
-            return Some(Cell::Set(items));
+            return Ok(Some(Cell::Set(items)));
         }
         let overriding: Vec<&Candidate> = candidates
             .iter()
@@ -520,14 +537,13 @@ impl Labels {
             .iter()
             .any(|candidate| candidate.key() != pool[0].key())
         {
-            self.conflicted = true;
-            return None;
+            return Err(());
         }
-        Some(match (kind, pool[0]) {
+        Ok(Some(match (kind, pool[0]) {
             (FieldKind::Zone, candidate) => Cell::Zone(self.zones.code(&candidate.text())),
             (_, Candidate::Bool(flag)) => Cell::Bool(*flag),
             (_, candidate) => Cell::Text(candidate.text().into()),
-        })
+        }))
     }
 
     /// The columns a Python provider set, from the plan.
@@ -555,6 +571,14 @@ impl Labels {
                 .map(|value| self.cell_of(value))
                 .collect();
             self.columns[at] = true;
+        }
+        for &at in &plan.provider_conflicts {
+            let Some(slot) = self.provider_conflicts.get_mut(at as usize) else {
+                return Err(format!(
+                    "a provider conflict on module {at} of another graph"
+                ));
+            };
+            *slot = true;
         }
         Ok(())
     }
