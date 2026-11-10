@@ -215,10 +215,8 @@ class FindingTable:
         """Whether a ledger counts the row: it is ledgerable and no exception allows it."""
         return bool(self.ledgerable[row]) and not self.allowed[row]
 
-    def counted_places(self) -> list[int] | array[int]:
+    def counted_places(self) -> list[int]:
         """The identity place of each row a ledger counts, in order."""
-        if all(self.ledgerable) and not any(self.allowed):
-            return self.identity_at
         at = self.identity_at
         return [at[row] for row in range(len(at)) if self.counts(row)]
 
