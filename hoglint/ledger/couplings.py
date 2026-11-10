@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from hoglint.ledger.file import LineKey
-from hoglint.model import Edge, FindingStatus, Graph
+from hoglint.model import Edge, Graph
 from hoglint.rules.base import EdgeRule, RuleContext, project, rule_kinds
 from hoglint.rules.engine import RunResult, primitive_of
 
@@ -76,14 +76,20 @@ class CouplingScan:
             return {}
         rules = self.result.config.rules
         out: dict[LineKey, list[Coupling]] = {}
-        for finding in self.result.findings():
-            spec = rules.get(finding.rule)
-            if spec is None or not spec.ledger or not finding.ledgerable or finding.status is FindingStatus.ALLOWED:
+        for rule, run in self.result.runs.items():
+            spec = rules.get(rule)
+            if spec is None or not spec.ledger:
                 continue
-            if not any(self.touches(edge) for edge in finding.witnesses):
-                continue
+            table = run.findings
             positions = [i for i, column in enumerate(spec.identity) if column.startswith(EDGE_ROOT)]
-            values = tuple(finding.identity[i] for i in positions if i < len(finding.identity))
-            for edge in finding.witnesses:
-                out.setdefault(finding.ledger_key, []).extend(self.couplings(finding.rule, edge, (values,)))
+            for row in range(len(table)):
+                if not table.ledgerable[row] or table.allowed[row]:
+                    continue
+                witnesses = table.witnesses(row)
+                if not any(self.touches(edge) for edge in witnesses):
+                    continue
+                identity = table.identity(row)
+                values = tuple(identity[i] for i in positions if i < len(identity))
+                for edge in witnesses:
+                    out.setdefault((rule, identity), []).extend(self.couplings(rule, edge, (values,)))
         return out
