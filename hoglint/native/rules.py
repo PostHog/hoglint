@@ -101,6 +101,30 @@ class LazyModules(Mapping[str, Any]):
         return module in self.known
 
 
+class LazyGroups(Mapping[str, LazyModules]):
+    """kind -> its edges per source module (`NativeGraphIndex.group`), the module list read
+    from the link on first read."""
+
+    def __init__(self, index: NativeGraphIndex, kinds: list[str]) -> None:
+        self.index = index
+        self.kinds = kinds
+        self.made: dict[str, LazyModules] = {}
+
+    def __getitem__(self, kind: str) -> LazyModules:
+        if kind not in self.kinds:
+            raise KeyError(kind)
+        found = self.made.get(kind)
+        if found is None:
+            found = self.made[kind] = LazyModules(self.index.modules_of(kind), self.index.group_maker(kind))
+        return found
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.kinds)
+
+    def __len__(self) -> int:
+        return len(self.kinds)
+
+
 class NativeSymbolFacts(SymbolFacts):
     """SymbolFacts from the link's inherit and decorate facts: one edge table, core and pack.
     Facts are read from the symbol columns (`NativeSymbols.fact`), with no dict per read."""
@@ -868,7 +892,7 @@ class NativeGraphIndex(GraphIndex):
         self.core_count: int = graph.link.core_count()
         self.module_order: dict[str, list[str]] = {}
         self.by_kind = LazyKinds(graph, self.kind_order())
-        self.groups = {kind: LazyModules(self.modules_of(kind), self.group_maker(kind)) for kind in self.kind_order()}
+        self.groups = LazyGroups(self, self.kind_order())
         self.facts = NativeSymbolFacts(graph)
         self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_of_symbol = Memo(self.find_module)
