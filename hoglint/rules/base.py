@@ -33,6 +33,7 @@ from hoglint.model import (
     Resolution,
     Shown,
     Site,
+    context_bits,
 )
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
     from hoglint.rules.levels import LevelResult
 
 from hoglint.rules.findings import FindingTable
-from hoglint.rules.plan import context_bits, identity_paths, selector_tree, tree
+from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import (
     NONE,
     UNKNOWN,

@@ -1,16 +1,12 @@
 """How a rule writes itself into the native evaluator's plan (src/link/rules/plan.rs): selector
-trees and context bits. Each rule class builds its own part (`plan()`) from what it derived."""
+trees; context bits are `model.context_bits`. Each rule class builds its own part (`plan()`) from
+what it derived."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from hoglint.native.graph import CONTEXT_BITS
 from hoglint.selectors import And, Bare, ListLiteral, Node, Not, Operand, Or, Ref, Selector
-
-
-def context_bits(names: frozenset[str]) -> int:
-    return sum(1 << bit for bit, context in enumerate(CONTEXT_BITS) if context.value in names)
 
 
 def operand_tree(operand: Operand) -> dict[str, Any]:

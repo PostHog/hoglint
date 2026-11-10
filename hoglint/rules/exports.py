@@ -17,9 +17,9 @@ from typing import Any
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
-from hoglint.model import Context, Edge, Resolution
+from hoglint.model import Context, Edge, Resolution, context_bits
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project
-from hoglint.rules.plan import context_bits, identity_paths
+from hoglint.rules.plan import identity_paths
 from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
 
 ABC_BASES = frozenset({"abc.ABC"})

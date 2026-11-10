@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import sys
 import json
 import tomllib
 import datetime
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -743,3 +745,10 @@ growth_key = ["src.module"]
     result = run(tmp_path, ENTRYPOINT + rules, graph, LedgerFile(), text)
     assert [f.status for f in result.runs["unexported"].findings] == [FindingStatus.ALLOWED]
     assert result.exceptions.stale == []
+
+
+def test_the_rule_classes_need_no_native_shell() -> None:
+    """What a rule means lives in `hoglint.rules`; the native engine depends on it, not back."""
+    code = "import sys, hoglint.rules.engine; print(sorted(m for m in sys.modules if m.startswith('hoglint.native')))"
+    found = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert found.stdout.strip() == "[]"

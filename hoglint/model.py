@@ -41,6 +41,23 @@ class Context(StrEnum):
     TYPE_CHECKING_ELSE = "type_checking_else"  # the else branch of `if TYPE_CHECKING:`; runs at runtime
 
 
+# Bit order of the link's context bits (src/link/scope.rs `ctx`).
+CONTEXT_BITS = (
+    Context.PROD,
+    Context.TEST,
+    Context.MIGRATION,
+    Context.TYPE_ONLY,
+    Context.FUNCTION_LOCAL,
+    Context.CONDITIONAL,
+    Context.TYPE_CHECKING_ELSE,
+)
+
+
+def context_bits(contexts: Iterable[str]) -> int:
+    """Contexts, or their names, as the link's bits."""
+    return sum(1 << CONTEXT_BITS.index(context) for context in contexts)
+
+
 @dataclass(frozen=True, slots=True)
 class EntityId:
     """Language-qualified id: the same path and symbol in another language is another entity."""

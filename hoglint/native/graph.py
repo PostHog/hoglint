@@ -16,19 +16,9 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
+from hoglint.model import CONTEXT_BITS, LANGUAGE_PYTHON, Edge, EntityId, Graph, Resolution, Site, context_bits
 from hoglint.plugins import ProducerFailure, Refinements, conflict_text
 
-# Bit order of the link's context bits (src/link/scope.rs `ctx`).
-CONTEXT_BITS = (
-    Context.PROD,
-    Context.TEST,
-    Context.MIGRATION,
-    Context.TYPE_ONLY,
-    Context.FUNCTION_LOCAL,
-    Context.CONDITIONAL,
-    Context.TYPE_CHECKING_ELSE,
-)
 CONTEXT_SETS = tuple(
     frozenset(context for bit, context in enumerate(CONTEXT_BITS) if mask & (1 << bit))
     for mask in range(1 << len(CONTEXT_BITS))
@@ -155,10 +145,6 @@ def edge_columns(edges: Sequence[Edge]) -> tuple[list[Any], ...]:
         [(edge.shape, edge.shape_detail) for edge in edges],
         [list(edge.attrs) for edge in edges],
     )
-
-
-def context_bits(contexts: Iterable[Context]) -> int:
-    return sum(1 << CONTEXT_BITS.index(context) for context in contexts)
 
 
 class NativeSymbols(Mapping[str, Mapping[str, str]]):
