@@ -235,6 +235,18 @@ def test_entrypoint_reads_the_surface_and_the_audience(tmp_path: Path) -> None:
     assert identities(result, "public-surface") == [("products.billing.logic.charge", "core.api", "import")]
 
 
+def test_an_edge_with_its_own_src_label_meets_the_audience_on_its_own(tmp_path: Path) -> None:
+    graph = (
+        base_graph()
+        .edge("import", "core.views", "products.billing.logic.charge", line=1)
+        .edge("import", "core.views", "products.billing.logic.charge", line=2, attrs=(("src.tier", "product"),))
+        .graph
+    )
+    rules = ENTRYPOINT.replace("audience = \"src.module == 'core.views'\"", "audience = \"src.tier == 'product'\"")
+    findings = run(tmp_path, rules, graph).runs["public-surface"].findings
+    assert [finding.site.line for finding in findings if finding.site is not None] == [1]
+
+
 USE_SHAPE = """
 [rules.model-crossings]
 primitive = "use-shape"

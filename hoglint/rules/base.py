@@ -466,7 +466,9 @@ class EdgeEnv:
     def exported(self, endpoint: Endpoint) -> Value:
         if endpoint.external is not None:
             return NONE
-        src = (self.src.module, self.src.path)
+        # An edge's own endpoint attrs can change what an audience reads, so its answer is not the
+        # one the labeler keeps per module pair.
+        src = None if has_endpoint_attrs(self.edge) else (self.src.module, self.src.path)
         truth = self.ctx.labeler.exported(endpoint.module, endpoint.symbol, self.resolve, src)
         if truth is Truth.UNKNOWN:
             return UNKNOWN
