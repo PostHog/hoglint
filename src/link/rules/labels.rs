@@ -2,11 +2,15 @@
 //! graph module, its registry and the exports that cover its path. Each module's labels are
 //! computed once per run; a field's domain fills the modules no source labels.
 
+use super::conflicts::{Conflict, conflict_key};
+use super::env::Cx;
 use super::glob::{Captures, Glob, capture, fill};
 use super::plan::{AssignPlan, ExportPlan, Plan, RegistryPlan, SetValue, ValuePlan, ZonesPlan};
 use super::selector::Node;
-use super::value::Zone;
-use rustc_hash::FxHashMap;
+use super::value::{Value, Zone};
+use super::{NO_PLACE, Rules};
+use crate::link::Link;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A field's type as labels read it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -594,5 +598,214 @@ impl Labels {
             }
             ValuePlan::Zone(name) => Cell::Zone(self.zones.code(name)),
         })
+    }
+}
+
+impl Rules {
+    /// (field, module) of every provider-set module field on a module whose provider labels
+    /// are set two ways: reading any of them reads all of the module's (`Labeler.label_provided`).
+    pub(super) fn provider_reads(&self) -> FxHashSet<(usize, u32)> {
+        let labels = &self.labels;
+        let mut out = FxHashSet::default();
+        for (at, _) in labels
+            .provider_conflicts
+            .iter()
+            .enumerate()
+            .filter(|(_, set)| **set)
+        {
+            for (field, spec) in labels.fields.iter().enumerate() {
+                if spec.provided && !spec.on_symbol {
+                    out.insert((field, at as u32));
+                }
+            }
+        }
+        out
+    }
+
+    /// `values` of every module field (`Labeler.compute_value`): the label, else unknown where
+    /// the provider failed, else what the domain says. A value whose domain read provider labels
+    /// that are set two ways is tainted: reading it meets that conflict, as in Python, where the
+    /// domain is read only when the value is.
+    pub(super) fn module_values(&mut self, link: &Link) -> Vec<Vec<Cell>> {
+        let cx = Cx { link, rules: self };
+        let count = self.modules.len();
+        let mut out = Vec::with_capacity(self.labels.fields.len());
+        let mut tainted = Vec::new();
+        for (field, spec) in self.labels.fields.iter().enumerate() {
+            if spec.on_symbol {
+                out.push(Vec::new());
+                continue;
+            }
+            let column = (0..count as u32)
+                .map(|at| match &self.labels.labels[field][at as usize] {
+                    Some(label) => label.clone(),
+                    None if self.labels.failed[field] => Cell::Unknown,
+                    None => {
+                        let module = Some(self.modules[at as usize]);
+                        let (value, read) = cx.domain_value_read(field, module, Some(at), None);
+                        if read {
+                            tainted.push((field, at));
+                        }
+                        match value {
+                            Value::Unknown => Cell::Unknown,
+                            _ => Cell::None,
+                        }
+                    }
+                })
+                .collect();
+            out.push(column);
+        }
+        self.tainted.extend(tainted);
+        out
+    }
+
+    /// The label symbol assignments give a symbol's field (`Labeler.label_symbol`), as a value.
+    /// Their values are fixed: a symbol assignment fills no template.
+    pub fn symbol_label<'a>(
+        &'a self,
+        link: &Link,
+        symbol: &str,
+        field: usize,
+    ) -> Option<Value<'a>> {
+        if self.symbol_assigns.is_empty() || symbol.is_empty() {
+            return None;
+        }
+        let cx = Cx { link, rules: self };
+        let path = cx
+            .module_of_symbol(symbol)
+            .map(|(_, at)| self.module_path(link, at));
+        let mut candidates: Vec<(&'a SetValue, bool)> = Vec::new();
+        for &at in &self.symbol_assigns {
+            let assign = &self.labels.assigns[at];
+            if self.symbol_matches(link, assign, symbol, path) {
+                candidates.extend(assign.sets_of(field).map(|value| (value, assign.overrides)));
+            }
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        let spec = &self.labels.fields[field];
+        if spec.kind == FieldKind::Set {
+            let mut items: Vec<&'a str> = Vec::new();
+            for (value, _) in &candidates {
+                match value {
+                    SetValue::Items(found) => items.extend(found.iter().map(String::as_str)),
+                    SetValue::Text(text) | SetValue::Other(text, _) => items.push(text),
+                    SetValue::Bool(flag) => items.push(if *flag { "True" } else { "False" }),
+                }
+            }
+            items.sort_unstable();
+            items.dedup();
+            return Some(Value::Set(items));
+        }
+        let overriding: Vec<&SetValue> = candidates
+            .iter()
+            .filter(|(_, overrides)| *overrides)
+            .map(|(value, _)| *value)
+            .collect();
+        let pool: Vec<&SetValue> = if overriding.is_empty() {
+            candidates.iter().map(|(value, _)| *value).collect()
+        } else {
+            overriding
+        };
+        if pool
+            .iter()
+            .any(|value| conflict_key(value) != conflict_key(pool[0]))
+        {
+            self.meet(Conflict::Symbol(symbol.to_string(), field));
+            return None;
+        }
+        let text: &'a str = match pool[0] {
+            SetValue::Bool(flag) if spec.kind != FieldKind::Zone => {
+                return Some(Value::Bool(*flag));
+            }
+            SetValue::Bool(flag) => {
+                if *flag {
+                    "True"
+                } else {
+                    "False"
+                }
+            }
+            SetValue::Text(text) | SetValue::Other(text, _) => text,
+            SetValue::Items(_) => return Some(Value::Unknown),
+        };
+        if spec.kind == FieldKind::Zone {
+            let code = self.labels.zones.code_of(text)?;
+            return Some(Value::Zone(&self.labels.zones.infos[code as usize]));
+        }
+        Some(Value::text(text))
+    }
+
+    /// `Labeler.symbol_matches`.
+    pub fn symbol_matches(
+        &self,
+        link: &Link,
+        assign: &Assign,
+        symbol: &str,
+        path: Option<&str>,
+    ) -> bool {
+        let Some((decorated_by, subclass_of)) = &assign.symbols else {
+            return false;
+        };
+        if !assign.allows(path) {
+            return false;
+        }
+        if !decorated_by.is_empty() {
+            let decorators = self.facts.decorators(link, symbol);
+            if !decorated_by
+                .iter()
+                .any(|name| decorators.contains(&name.as_str()))
+            {
+                return false;
+            }
+        }
+        if !subclass_of.is_empty() {
+            let (ancestors, _) = self.facts.ancestors(link, symbol);
+            if !subclass_of
+                .iter()
+                .any(|name| ancestors.contains(name.as_str()))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// A module field's value on every graph module (`Labeler.field_value`), for Python to read
+    /// instead of labelling each module again: the distinct values, and each module's place
+    /// among them. A module whose value reads provider labels set two ways has `NO_PLACE`:
+    /// Python reads that one itself, to meet the conflict where the Python engine meets it.
+    pub fn value_column(&self, name: &str) -> Result<(Vec<&Cell>, Vec<u32>), String> {
+        let field = self
+            .labels
+            .fields
+            .iter()
+            .position(|field| field.name == name && !field.on_symbol)
+            .ok_or_else(|| format!("no module field {name}"))?;
+        let mut distinct: Vec<&Cell> = Vec::new();
+        let mut places: FxHashMap<&Cell, u32> = FxHashMap::default();
+        let mut codes = Vec::with_capacity(self.values[field].len());
+        for (at, cell) in self.values[field].iter().enumerate() {
+            if self.tainted.contains(&(field, at as u32)) {
+                codes.push(NO_PLACE);
+                continue;
+            }
+            let place = *places.entry(cell).or_insert_with(|| {
+                distinct.push(cell);
+                distinct.len() as u32 - 1
+            });
+            codes.push(place);
+        }
+        Ok((distinct, codes))
+    }
+
+    /// Each graph module's registry, by its place in the plan's registries; `NO_PLACE` where
+    /// none holds the module.
+    pub fn registry_column(&self) -> Vec<u32> {
+        self.labels
+            .registry_of
+            .iter()
+            .map(|found| found.map_or(NO_PLACE, u32::from))
+            .collect()
     }
 }

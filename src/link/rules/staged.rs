@@ -7,10 +7,13 @@
 //! order, and in a config that has such a label (`Rules::touch`) it reads every field a part names
 //! before it judges the part, as `ClassSelection` reads them all.
 
-use super::env::Env;
+use super::env::{Cx, Endpoint, Env};
 use super::labels::Field;
 use super::selector::{EndField, Node, Ref, Resolve, evaluate};
 use super::value::Truth;
+use super::{Edges, Rules};
+use crate::link::Link;
+use crate::link::intern::Sid;
 
 /// The endpoint a conjunct of a selection reads alone (`rules.base.endpoint_only`), in the order
 /// `StagedSelection` judges them.
@@ -164,5 +167,45 @@ impl Staged {
     /// The parts that read only `src`.
     pub fn src(&self) -> impl Iterator<Item = &Node> {
         self.parts[..self.src_parts].iter()
+    }
+}
+
+impl Rules {
+    /// In a config with labels that conflict only where read: the `src` parts of a rule that
+    /// reads only module fields there, judged once per source module of its kinds, edges seen or
+    /// not, as `StagedSelection.module_false` judges them before any edge.
+    pub(super) fn read_sources(&self, link: &mut Link, rule: &Edges) {
+        if !self.touch || !rule.staged.src_module_level {
+            return;
+        }
+        let mut modules = Vec::new();
+        for kind in self.kind_sids(link, rule) {
+            modules.extend(link.source_modules(kind));
+        }
+        let cx = Cx { link, rules: self };
+        for module in modules {
+            self.read_source(&cx, rule, module);
+        }
+    }
+
+    /// In a config with labels that conflict only where read: the `src` parts of an edge with no
+    /// destination, which `EdgeRule.edge_envs` reads before it reads any destination.
+    pub(super) fn touch_sources<'a>(
+        &self,
+        cx: &Cx<'a>,
+        rule: &'a Edges,
+        id: u32,
+        src: Endpoint<'a>,
+        dsts: &[Endpoint<'a>],
+    ) {
+        if self.touch && dsts.is_empty() {
+            parts_truth(rule.staged.src(), &Env::new(*cx, Some(id), src, src));
+        }
+    }
+
+    /// `StagedSelection.module_false` of one module, for the reads it makes.
+    pub(super) fn read_source(&self, cx: &Cx, rule: &Edges, module: Sid) {
+        let endpoint = cx.module_endpoint(module);
+        parts_truth(rule.staged.src(), &Env::new(*cx, None, endpoint, endpoint));
     }
 }

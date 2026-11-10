@@ -8,6 +8,7 @@
 
 pub mod conflicts;
 pub mod coverage;
+pub mod cycle;
 pub mod edges;
 pub mod entities;
 pub mod env;
@@ -20,19 +21,23 @@ pub mod selector;
 pub mod signature;
 pub mod staged;
 pub mod symbols;
+pub mod use_shape;
 pub mod value;
 
-use self::conflicts::{Conflict, conflict_key};
+use self::conflicts::Conflict;
 use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
 use self::entities::EntityRule;
 use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
-use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
-use self::plan::{EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan};
+use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
+use self::plan::{
+    EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan, check_columns,
+};
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
 use self::signature::Signature;
-use self::staged::{Staged, parts_truth, truth};
+use self::staged::{Staged, truth};
 use self::symbols::{KindSets, SymbolFacts};
+use self::use_shape::UseShape;
 use self::value::{Truth, Value, any_of, render};
 use super::Link;
 use super::intern::Sid;
@@ -164,61 +169,6 @@ impl RuleKind {
             RuleKind::Entities(_) => "entities",
         }
     }
-}
-
-/// What a use-shape rule adds to an edge rule (`UseShapePrimitive`).
-pub struct UseShape {
-    allow: Vec<String>,
-    deny: Vec<String>,
-    /// The interned name of the `flow_shape` attr, with `flow = "def-use"`.
-    flow: Option<Option<Sid>>,
-}
-
-impl UseShape {
-    /// `UseShapePrimitive.env`: the flow shape, written `kind` or `kind(detail)`, replaces the
-    /// edge's shape.
-    fn shape<'a>(&self, cx: &Cx<'a>, id: u32) -> Option<(&'a str, &'a str)> {
-        let name = (*self.flow.as_ref()?)?;
-        let refined = cx.attr(id, Some(name));
-        if refined.is_empty() {
-            return None;
-        }
-        let (shape, detail) = refined.split_once('(').unwrap_or((refined, ""));
-        Some((shape, detail.strip_suffix(')').unwrap_or(detail)))
-    }
-
-    /// `UseShapePrimitive.violation`.
-    fn violation(&self, env: &Env) -> Truth {
-        let Some(id) = env.edge else {
-            return Truth::False;
-        };
-        let (shape, detail) = env.shape_of(id);
-        let shape = match shape {
-            "" => match env.cx.text(env.cx.link.edges.use_of(id)) {
-                "" => "other",
-                found => found,
-            },
-            found => found,
-        };
-        let detailed = (!detail.is_empty()).then(|| format!("{shape}({detail})"));
-        let named = |name: &String| name == shape || detailed.as_ref() == Some(name);
-        if !self.allow.is_empty() && !self.allow.iter().any(named) {
-            return Truth::True;
-        }
-        if self.deny.iter().any(named) {
-            return Truth::True;
-        }
-        Truth::False
-    }
-}
-
-/// One destination a cycle rule cannot leave alone: its edge and place, its judgment
-/// (unresolved, unknown selection, or a violation for a pair), and for a pair the two groups.
-pub struct PairRow {
-    pub edge: u32,
-    pub target: u32,
-    pub judgment: Judgment,
-    pub pair: Option<(String, String)>,
 }
 
 /// A module's place in a value column where reading the value meets a provider conflict, and
@@ -429,13 +379,6 @@ impl Rules {
     pub fn new(link: &mut Link, text: &str, threads: usize) -> Result<Rules, String> {
         let plan = Plan::parse(text)?;
         let (modules, module_files) = Self::graph_modules(link);
-        if modules.len() != plan.module_count {
-            return Err(format!(
-                "the link holds {} graph modules, the graph {}",
-                modules.len(),
-                plan.module_count
-            ));
-        }
         let facts = SymbolFacts::new(link);
         let kind_sets = facts.kind_sets(link, &plan.kinds);
         let compiled = Compiled::new(link, &plan)?;
@@ -450,11 +393,7 @@ impl Rules {
         } = compiled;
         let it = &link.core.it;
         let module_names: Vec<&str> = modules.iter().map(|module| it.s(*module)).collect();
-        if crate::sha256_hex(module_names.join("\n").as_bytes()) != plan.modules {
-            return Err(
-                "the rule plan lists the graph's modules in another order than the link".into(),
-            );
-        }
+        plan.check_modules(&module_names)?;
         let paths: Vec<&str> = module_files
             .iter()
             .map(|file| &*link.core.facts.files[*file as usize].path)
@@ -679,63 +618,6 @@ impl Rules {
         link.core.it.s(self.modules[at as usize])
     }
 
-    /// (field, module) of every provider-set module field on a module whose provider labels
-    /// are set two ways: reading any of them reads all of the module's (`Labeler.label_provided`).
-    fn provider_reads(&self) -> FxHashSet<(usize, u32)> {
-        let labels = &self.labels;
-        let mut out = FxHashSet::default();
-        for (at, _) in labels
-            .provider_conflicts
-            .iter()
-            .enumerate()
-            .filter(|(_, set)| **set)
-        {
-            for (field, spec) in labels.fields.iter().enumerate() {
-                if spec.provided && !spec.on_symbol {
-                    out.insert((field, at as u32));
-                }
-            }
-        }
-        out
-    }
-
-    /// `values` of every module field (`Labeler.compute_value`): the label, else unknown where
-    /// the provider failed, else what the domain says. A value whose domain read provider labels
-    /// that are set two ways is tainted: reading it meets that conflict, as in Python, where the
-    /// domain is read only when the value is.
-    fn module_values(&mut self, link: &Link) -> Vec<Vec<Cell>> {
-        let cx = Cx { link, rules: self };
-        let count = self.modules.len();
-        let mut out = Vec::with_capacity(self.labels.fields.len());
-        let mut tainted = Vec::new();
-        for (field, spec) in self.labels.fields.iter().enumerate() {
-            if spec.on_symbol {
-                out.push(Vec::new());
-                continue;
-            }
-            let column = (0..count as u32)
-                .map(|at| match &self.labels.labels[field][at as usize] {
-                    Some(label) => label.clone(),
-                    None if self.labels.failed[field] => Cell::Unknown,
-                    None => {
-                        let module = Some(self.modules[at as usize]);
-                        let (value, read) = cx.domain_value_read(field, module, Some(at), None);
-                        if read {
-                            tainted.push((field, at));
-                        }
-                        match value {
-                            Value::Unknown => Cell::Unknown,
-                            _ => Cell::None,
-                        }
-                    }
-                })
-                .collect();
-            out.push(column);
-        }
-        self.tainted.extend(tainted);
-        out
-    }
-
     pub fn ordinal(&self, id: u32) -> u32 {
         self.ordinals.get(id as usize).copied().unwrap_or(0)
     }
@@ -768,118 +650,6 @@ impl Rules {
         } else {
             Truth::Unknown
         }
-    }
-
-    /// The label symbol assignments give a symbol's field (`Labeler.label_symbol`), as a value.
-    /// Their values are fixed: a symbol assignment fills no template.
-    pub fn symbol_label<'a>(
-        &'a self,
-        link: &Link,
-        symbol: &str,
-        field: usize,
-    ) -> Option<Value<'a>> {
-        if self.symbol_assigns.is_empty() || symbol.is_empty() {
-            return None;
-        }
-        let cx = Cx { link, rules: self };
-        let path = cx
-            .module_of_symbol(symbol)
-            .map(|(_, at)| self.module_path(link, at));
-        let mut candidates: Vec<(&'a SetValue, bool)> = Vec::new();
-        for &at in &self.symbol_assigns {
-            let assign = &self.labels.assigns[at];
-            if self.symbol_matches(link, assign, symbol, path) {
-                candidates.extend(assign.sets_of(field).map(|value| (value, assign.overrides)));
-            }
-        }
-        if candidates.is_empty() {
-            return None;
-        }
-        let spec = &self.labels.fields[field];
-        if spec.kind == FieldKind::Set {
-            let mut items: Vec<&'a str> = Vec::new();
-            for (value, _) in &candidates {
-                match value {
-                    SetValue::Items(found) => items.extend(found.iter().map(String::as_str)),
-                    SetValue::Text(text) | SetValue::Other(text, _) => items.push(text),
-                    SetValue::Bool(flag) => items.push(if *flag { "True" } else { "False" }),
-                }
-            }
-            items.sort_unstable();
-            items.dedup();
-            return Some(Value::Set(items));
-        }
-        let overriding: Vec<&SetValue> = candidates
-            .iter()
-            .filter(|(_, overrides)| *overrides)
-            .map(|(value, _)| *value)
-            .collect();
-        let pool: Vec<&SetValue> = if overriding.is_empty() {
-            candidates.iter().map(|(value, _)| *value).collect()
-        } else {
-            overriding
-        };
-        if pool
-            .iter()
-            .any(|value| conflict_key(value) != conflict_key(pool[0]))
-        {
-            self.meet(Conflict::Symbol(symbol.to_string(), field));
-            return None;
-        }
-        let text: &'a str = match pool[0] {
-            SetValue::Bool(flag) if spec.kind != FieldKind::Zone => {
-                return Some(Value::Bool(*flag));
-            }
-            SetValue::Bool(flag) => {
-                if *flag {
-                    "True"
-                } else {
-                    "False"
-                }
-            }
-            SetValue::Text(text) | SetValue::Other(text, _) => text,
-            SetValue::Items(_) => return Some(Value::Unknown),
-        };
-        if spec.kind == FieldKind::Zone {
-            let code = self.labels.zones.code_of(text)?;
-            return Some(Value::Zone(&self.labels.zones.infos[code as usize]));
-        }
-        Some(Value::text(text))
-    }
-
-    /// `Labeler.symbol_matches`.
-    pub fn symbol_matches(
-        &self,
-        link: &Link,
-        assign: &Assign,
-        symbol: &str,
-        path: Option<&str>,
-    ) -> bool {
-        let Some((decorated_by, subclass_of)) = &assign.symbols else {
-            return false;
-        };
-        if !assign.allows(path) {
-            return false;
-        }
-        if !decorated_by.is_empty() {
-            let decorators = self.facts.decorators(link, symbol);
-            if !decorated_by
-                .iter()
-                .any(|name| decorators.contains(&name.as_str()))
-            {
-                return false;
-            }
-        }
-        if !subclass_of.is_empty() {
-            let (ancestors, _) = self.facts.ancestors(link, symbol);
-            if !subclass_of
-                .iter()
-                .any(|name| ancestors.contains(name.as_str()))
-            {
-                return false;
-            }
-        }
-        true
     }
 
     /// The kinds a rule reads as interned names, in its order; every kind when it names none.
@@ -999,60 +769,6 @@ impl Rules {
             .collect())
     }
 
-    /// What a cycle rule makes of every candidate destination (`CyclePrimitive.consider`), in
-    /// the order the Python engine judges them: unresolved ones, ones whose selection is
-    /// unknown, and the ones whose two groups are known and differ, with the groups.
-    pub fn pairs(&self, link: &mut Link, index: usize) -> Result<Vec<PairRow>, String> {
-        let (rule_id, rule) = self.rule_as(index, "cycle", |kind| match kind {
-            RuleKind::Cycle(found) => Some(found),
-            _ => None,
-        })?;
-        let (edges, (src_group, dst_group)) = (&rule.edges, rule.group);
-        self.read_sources(link, edges);
-        let ids = self.candidates(link, edges);
-        let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
-            let src = cx.src_endpoint(id);
-            cx.dst_endpoints(id, edges.role, dsts);
-            self.touch_sources(cx, edges, id, src, dsts);
-            for (target, dst) in dsts.iter().enumerate() {
-                let env = Env::new(*cx, Some(id), src, *dst);
-                let selected = edges.staged.truth(&env);
-                let judgment = match selected {
-                    Truth::False => continue,
-                    _ if dst.unresolved => Judgment::Unresolved,
-                    Truth::Unknown => Judgment::UnknownSelection,
-                    Truth::True => Judgment::Violation,
-                };
-                let mut pair = None;
-                if judgment == Judgment::Violation {
-                    let (from, to) = (evaluate_ref(src_group, &env), evaluate_ref(dst_group, &env));
-                    let known = |value: &Value| !matches!(value, Value::Unknown | Value::None);
-                    if !known(&from) || !known(&to) {
-                        continue;
-                    }
-                    // Most edges stay inside their group: same text, nothing to render.
-                    if let (Value::Text(left), Value::Text(right)) = (&from, &to)
-                        && left == right
-                    {
-                        continue;
-                    }
-                    let (from, to) = (render(&from), render(&to));
-                    if from == to {
-                        continue;
-                    }
-                    pair = Some((from, to));
-                }
-                out.push(PairRow {
-                    edge: id,
-                    target: target as u32,
-                    judgment,
-                    pair,
-                });
-            }
-        });
-        self.in_rule_order(link, rule_id, edges, rows, |row| row.edge)
-    }
-
     /// What export rule `index` reports, in the order `ExportPrimitive.evaluate` reports it.
     pub fn export(&self, link: &mut Link, index: usize) -> Result<Vec<ExportRow>, String> {
         let (_, export) = self.rule_as(index, "export", |kind| match kind {
@@ -1109,44 +825,6 @@ impl Rules {
             }
         }
         Ok(required(Cx { link, rules: self }, covers, &inputs))
-    }
-
-    /// In a config with labels that conflict only where read: the `src` parts of a rule that
-    /// reads only module fields there, judged once per source module of its kinds, edges seen or
-    /// not, as `StagedSelection.module_false` judges them before any edge.
-    fn read_sources(&self, link: &mut Link, rule: &Edges) {
-        if !self.touch || !rule.staged.src_module_level {
-            return;
-        }
-        let mut modules = Vec::new();
-        for kind in self.kind_sids(link, rule) {
-            modules.extend(link.source_modules(kind));
-        }
-        let cx = Cx { link, rules: self };
-        for module in modules {
-            self.read_source(&cx, rule, module);
-        }
-    }
-
-    /// In a config with labels that conflict only where read: the `src` parts of an edge with no
-    /// destination, which `EdgeRule.edge_envs` reads before it reads any destination.
-    fn touch_sources<'a>(
-        &self,
-        cx: &Cx<'a>,
-        rule: &'a Edges,
-        id: u32,
-        src: Endpoint<'a>,
-        dsts: &[Endpoint<'a>],
-    ) {
-        if self.touch && dsts.is_empty() {
-            parts_truth(rule.staged.src(), &Env::new(*cx, Some(id), src, src));
-        }
-    }
-
-    /// `StagedSelection.module_false` of one module, for the reads it makes.
-    fn read_source(&self, cx: &Cx, rule: &Edges, module: Sid) {
-        let endpoint = cx.module_endpoint(module);
-        parts_truth(rule.staged.src(), &Env::new(*cx, None, endpoint, endpoint));
     }
 
     /// Rule `index`'s id and what its mode reads, when `pick` finds the mode `mode` names.
@@ -1209,44 +887,6 @@ impl Rules {
             }));
         }
         Ok(out)
-    }
-
-    /// A module field's value on every graph module (`Labeler.field_value`), for Python to read
-    /// instead of labelling each module again: the distinct values, and each module's place
-    /// among them. A module whose value reads provider labels set two ways has `NO_PLACE`:
-    /// Python reads that one itself, to meet the conflict where the Python engine meets it.
-    pub fn value_column(&self, name: &str) -> Result<(Vec<&Cell>, Vec<u32>), String> {
-        let field = self
-            .labels
-            .fields
-            .iter()
-            .position(|field| field.name == name && !field.on_symbol)
-            .ok_or_else(|| format!("no module field {name}"))?;
-        let mut distinct: Vec<&Cell> = Vec::new();
-        let mut places: FxHashMap<&Cell, u32> = FxHashMap::default();
-        let mut codes = Vec::with_capacity(self.values[field].len());
-        for (at, cell) in self.values[field].iter().enumerate() {
-            if self.tainted.contains(&(field, at as u32)) {
-                codes.push(NO_PLACE);
-                continue;
-            }
-            let place = *places.entry(cell).or_insert_with(|| {
-                distinct.push(cell);
-                distinct.len() as u32 - 1
-            });
-            codes.push(place);
-        }
-        Ok((distinct, codes))
-    }
-
-    /// Each graph module's registry, by its place in the plan's registries; `NO_PLACE` where
-    /// none holds the module.
-    pub fn registry_column(&self) -> Vec<u32> {
-        self.labels
-            .registry_of
-            .iter()
-            .map(|found| found.map_or(NO_PLACE, u32::from))
-            .collect()
     }
 }
 
@@ -1314,22 +954,6 @@ fn refs_of(node: &Node) -> Vec<Ref> {
     let mut out = Vec::new();
     node.refs(&mut out);
     out
-}
-
-/// D43: a reader of a module field a Python provider sets needs that field's column in the
-/// plan. Without it the evaluator would read no label at all, a clean answer nothing checks.
-pub(crate) fn check_columns(labels: &Labels, reader: &str, refs: &[Ref]) -> Result<(), String> {
-    for field in refs.iter().filter_map(|field| field.field()) {
-        let spec = &labels.fields[field];
-        if spec.provided && !spec.on_symbol && !labels.columns[field] {
-            return Err(format!(
-                "{reader} reads field {}, which a provider sets, but the rule plan holds no \
-                 column for it",
-                spec.name
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// The kinds `names` lists that the link has, as interned names, each once, in order. None when

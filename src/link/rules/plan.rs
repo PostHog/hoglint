@@ -1,6 +1,8 @@
 //! The plan Python hands the evaluator (hoglint/native/plan.py): the config as data. Nothing in
 //! it is computed per module or per symbol, except the columns of fields a Python provider sets.
 
+use super::labels::Labels;
+use super::selector::Ref;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -359,8 +361,42 @@ pub enum LiteralPlan {
 }
 
 impl Plan {
+    /// The plan is for the link's graph: its modules, `names` in the link's order, are the ones
+    /// the plan's columns list, in that order.
+    pub fn check_modules(&self, names: &[&str]) -> Result<(), String> {
+        if names.len() != self.module_count {
+            return Err(format!(
+                "the link holds {} graph modules, the graph {}",
+                names.len(),
+                self.module_count
+            ));
+        }
+        if crate::sha256_hex(names.join("\n").as_bytes()) != self.modules {
+            return Err(
+                "the rule plan lists the graph's modules in another order than the link".into(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn parse(text: &str) -> Result<Plan, String> {
         serde_json::from_str(text)
             .map_err(|error| format!("a rule plan that does not parse: {error}"))
     }
+}
+
+/// D43: a reader of a module field a Python provider sets needs that field's column in the
+/// plan. Without it the evaluator would read no label at all, a clean answer nothing checks.
+pub(crate) fn check_columns(labels: &Labels, reader: &str, refs: &[Ref]) -> Result<(), String> {
+    for field in refs.iter().filter_map(|field| field.field()) {
+        let spec = &labels.fields[field];
+        if spec.provided && !spec.on_symbol && !labels.columns[field] {
+            return Err(format!(
+                "{reader} reads field {}, which a provider sets, but the rule plan holds no \
+                 column for it",
+                spec.name
+            ));
+        }
+    }
+    Ok(())
 }
