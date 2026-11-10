@@ -248,7 +248,8 @@ class Runner:
     def files_root(self, repo: Path, tree: str, config: Config) -> Path:
         """The root that stands for a git tree, or for the working tree when `tree` is empty,
         where rules and providers look for files. It answers whether a path exists only for the
-        paths `config`'s input patterns cover."""
+        paths `config`'s input patterns cover. `config` is the policy as loaded, before its data
+        files are anchored, as the run's key reads it."""
         asked = RunInputs(config).patterns()
         if tree:
             return TreeFiles(repo, tree, self.source.work_dir, asked).run_root()
@@ -258,7 +259,7 @@ class Runner:
         """One policy over the working tree of one code root, with no ledger and no exceptions."""
         judged = PolicyFiles(config).anchored(policy_root, code_root)
         graph = self.source.build(code_root, judged)
-        files_root = self.files_root(code_root, "", judged)
+        files_root = self.files_root(code_root, "", config)
         engine = Engine(judged, graph, files_root, self.today, self.index_of(graph), self.candidates)
         return graph, engine.evaluate()
 

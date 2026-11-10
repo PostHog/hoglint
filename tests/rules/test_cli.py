@@ -8,8 +8,10 @@ import pytest
 
 from hoglint.cli import Commands, Run, Runner, main
 from hoglint.config import Config, load_config
+from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.status import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
+from hoglint.plugins import PLUGIN_ROOTS
 from hoglint.rules.base import RuleContext
 from hoglint.rules.engine import Engine
 from hoglint.source import GraphSource
@@ -107,6 +109,45 @@ def test_the_repo_root_is_the_top_of_a_git_working_tree_or_a_config_error(
     printed = capsys.readouterr().err
     assert printed.startswith(f"config error:\n  {repo.resolve()} {error}"), printed
     assert git_dir is None or str((tmp_path / "outer").resolve()) in printed
+
+
+README_CONFIG = (
+    CONFIG
+    + """
+[rules.readme]
+primitive = "layout"
+within = "products/{product}"
+files = ["README.md"]
+identity = "entity"
+growth_key = ["subject"]
+"""
+)
+
+
+def test_a_policy_root_apart_from_the_code_asks_about_the_code_roots_declared_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packages = GraphBuilder().package("products.billing", "products.alerts").graph
+
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        return packages
+
+    monkeypatch.setattr(GraphSource, "build", build)
+    policy, code = tmp_path / "policy", tmp_path / "code"
+    write_config(policy, README_CONFIG)
+    write_config(code, CONFIG, {"products/billing/README.md": "billing\n"})
+    git_in(code, "init", "-q")
+    git_in(code, "add", "-A")
+    (tmp_path / "work").mkdir()
+    runner = Runner(GraphSource(tmp_path / "work"))
+    run = runner.run(policy, code_root=code)
+    _, evaluated = runner.evaluate(run.config, code, policy)
+    for result in (run.result, evaluated):
+        assert [finding.message for finding in result.runs["readme"].findings] == ["products/alerts lacks README.md"]
+    # The policy root declares the README; the code root's own config does not.
+    assert run.files_root is not None and PLUGIN_ROOTS.holds(run.files_root, "products/billing/README.md")
+    with pytest.raises(EngineError, match="no source or declared input pattern covers it"):
+        PLUGIN_ROOTS.holds(run.files_root, "products/billing/notes.txt")
 
 
 def test_explain_edge_lists_rules_that_read_every_edge_kind(
