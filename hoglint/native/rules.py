@@ -28,7 +28,7 @@ from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import JUDGED, RulePlan, tree
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun
 from hoglint.rules.engine import primitive_of
-from hoglint.rules.entities import CoveragePrimitive
+from hoglint.rules.entities import CoveragePrimitive, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 from hoglint.selectors import Node, Truth
@@ -397,6 +397,20 @@ class NativeRuleContext(RuleContext):
             )
             run.findings.append(finding)
         return run
+
+    def entity_rows(self, rule: EntityRule) -> list[tuple[bool, str, str | None, str, list[str]]] | None:
+        if self.plan.mode(rule.spec) != "entities":
+            return None
+        with engine_errors():
+            return self.evaluator.entities(self.plan.index[rule.spec.id])
+
+    def layout_roots(self, within: str) -> list[str]:
+        with engine_errors():
+            return self.evaluator.layout_roots(within)
+
+    def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
+        with engine_errors():
+            return self.evaluator.registry_modules(pattern)
 
     def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]]:
         """The evaluator's paths of a coverage rule, from the witness ids of the findings its rule

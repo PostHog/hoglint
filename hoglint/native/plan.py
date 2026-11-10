@@ -133,6 +133,18 @@ class RulePlan:
             )
         return out
 
+    def entities(self, spec: RuleSpec) -> dict[str, Any] | None:
+        """What a rule over entities adds (`EntityRule`)."""
+        if self.mode(spec) != "entities":
+            return None
+        wanted = spec.select.restricts(("kind",)) if spec.select is not None and spec.on == "symbol" else None
+        return {
+            "on_symbol": spec.on == "symbol",
+            "wanted": sorted(wanted) if wanted is not None else None,
+            "suffix": f" does not meet `{spec.require.source}`" if spec.require is not None else "",
+            "exactly_one": spec.exactly_one or None,
+        }
+
     def export_rule(self, spec: RuleSpec) -> dict[str, Any] | None:
         """What an export rule adds: the exports it checks, their default contexts, and how it
         reports what it cannot tell (`ExportPrimitive`)."""
@@ -151,8 +163,8 @@ class RulePlan:
     def mode(spec: RuleSpec) -> str | None:
         if spec.primitive in JUDGED:
             return "judge"
-        if spec.primitive == "inventory" and not spec.classify:
-            return None
+        if spec.primitive == "layout" or (spec.primitive == "inventory" and not spec.classify):
+            return "entities"
         if spec.primitive in SELECTED:
             return "select"
         if spec.primitive in ("reach", "cycle", "export", "coverage"):
@@ -183,6 +195,7 @@ class RulePlan:
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
             "export": self.export_rule(spec),
             "covers": self.covers(spec),
+            "entities": self.entities(spec),
             "use_shape": {
                 "allow": list(spec.allow_shapes),
                 "deny": list(spec.deny_shapes),

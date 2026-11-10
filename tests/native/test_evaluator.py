@@ -488,6 +488,37 @@ CORNERS = {
         "identity": ["dst.symbol"],
         "ledger": False,
     },
+    "layout-on-modules": {
+        "primitive": "layout",
+        "select": "tier == 'product' and zone != 'facade'",
+        "require": "package in ['billing', 'core'] or subject startswith 'products.alerts'",
+        "identity": ["subject", "package", "zone"],
+        "ledger": False,
+    },
+    "layout-on-symbols": {
+        "primitive": "layout",
+        "on": "symbol",
+        "select": "kind == 'model' or stage == 'proto'",
+        "require": "database == 'billing'",
+        "identity": ["subject", "database", "module"],
+        "ledger": False,
+    },
+    "layout-roots-and-registries": {
+        "primitive": "layout",
+        "within": "products/{product}",
+        "files": ["backend/__init__.py"],
+        "registry": ["routes"],
+        "identity": ["subject"],
+        "ledger": False,
+    },
+    "inventory-exactly-one": {
+        "primitive": "inventory",
+        "on": "module",
+        "exactly_one": "owners",
+        "select": "tier != 'leaf' and stage != none",
+        "identity": ["subject", "owners"],
+        "ledger": False,
+    },
     "cycle-between-packages": {
         "primitive": "cycle",
         "kinds": ["import", "reference"],
@@ -676,6 +707,25 @@ REFS = [
     "edge.callable",
     "src.context",
 ]
+ENTITY_REFS = [
+    "package",
+    "tier",
+    "zone",
+    "owners",
+    "testcode",
+    "stage",
+    "database",
+    "silo",
+    "subject",
+    "module",
+    "symbol",
+    "path",
+    "name",
+    "kind",
+    "decl",
+    "registry",
+    "lifecycle",
+]
 LITERALS = [
     "'billing'",
     "'alerts'",
@@ -727,7 +777,23 @@ def selector(rng: random.Random, refs: list[str], depth: int = 2) -> str:
 
 
 def generated(rng: random.Random, refs: list[str] = REFS) -> dict[str, Any]:
-    primitive = rng.choice(["edge", "edge", "entrypoint", "use-shape", "cycle", "signature", "export", "coverage"])
+    primitive = rng.choice(
+        ["edge", "edge", "entrypoint", "use-shape", "cycle", "signature", "export", "coverage", "entities"]
+    )
+    if primitive == "entities":
+        table: dict[str, Any] = {
+            "primitive": rng.choice(["layout", "inventory"]),
+            "identity": rng.sample(ENTITY_REFS, rng.randint(1, 2)),
+            "ledger": False,
+        }
+        if table["primitive"] == "inventory":
+            table["exactly_one"] = rng.choice(["owners", "tier"])
+        table["on"] = "symbol" if rng.random() < 0.4 else "module"
+        if rng.random() < 0.8:
+            table["select"] = selector(rng, ENTITY_REFS)
+        if table["primitive"] == "layout":
+            table["require"] = selector(rng, ENTITY_REFS)
+        return table
     if primitive == "coverage":
         return {
             "primitive": "coverage",

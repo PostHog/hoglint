@@ -664,7 +664,9 @@ impl<'a> Resolve<'a> for LabelEnv<'a, '_> {
         let module = self.module.map(|module| cx.text(module));
         let owned = |text: &str| Value::Text(Cow::Owned(text.to_string()));
         match field {
-            EntityField::Module => module.map_or(Value::None, Value::text_or_none),
+            EntityField::Module | EntityField::Subject => {
+                module.map_or(Value::None, Value::text_or_none)
+            }
             EntityField::Symbol => self.symbol.map_or(Value::None, |symbol| {
                 if symbol.is_empty() {
                     Value::None
@@ -729,6 +731,8 @@ pub struct EntityEnv<'a, 's> {
     pub module: Option<Sid>,
     pub at: Option<u32>,
     pub symbol: Option<&'s str>,
+    /// What a bare `subject` reads, when an entity rule names one (`EntityRule.resolver`).
+    pub subject: Option<&'s str>,
 }
 
 impl<'a> Resolve<'a> for EntityEnv<'a, '_> {
@@ -744,6 +748,9 @@ impl<'a> Resolve<'a> for EntityEnv<'a, '_> {
             read_conflict: Flag::new(false),
         };
         match field {
+            EntityField::Subject if self.subject.is_some() => {
+                Value::Text(Cow::Owned(self.subject.unwrap_or_default().to_string()))
+            }
             EntityField::Field(at) => {
                 let symbol = self.symbol.filter(|symbol| !symbol.is_empty());
                 self.cx.field_value(at, self.module, self.at, symbol)

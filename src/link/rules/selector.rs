@@ -54,6 +54,8 @@ pub enum EntityField {
     Kind,
     Registry,
     Lifecycle,
+    /// A bare `subject`: what an entity rule names (`EntityRule.resolver`); elsewhere the module.
+    Subject,
     /// A declared field, read from its labels alone.
     Field(usize),
     Unknown,
@@ -232,6 +234,9 @@ impl Compiler<'_> {
     pub fn reference(&self, path: &[String]) -> Ref {
         match self.reading {
             Reading::Edge => self.edge_reference(path),
+            Reading::Entity if path.len() == 1 && path[0] == "subject" => {
+                Ref::Entity(EntityField::Subject)
+            }
             Reading::Entity => Ref::Entity(
                 path.last()
                     .map_or(EntityField::Unknown, |name| self.entity(name)),

@@ -207,6 +207,8 @@ pub enum Mode {
     Export,
     /// The paths a coverage rule needs covered.
     Coverage,
+    /// A layout rule's or an entity inventory's entities.
+    Entities,
 }
 
 #[derive(Deserialize)]
@@ -244,6 +246,21 @@ pub struct RulePlan {
     pub covers: Vec<CoverPlan>,
     /// What a use-shape rule adds.
     pub use_shape: Option<UseShapePlan>,
+    /// What a layout rule or an entity inventory adds: its selection and `require` are entity
+    /// selectors.
+    pub entities: Option<EntitiesPlan>,
+}
+
+/// A rule over entities (`EntityRule`).
+#[derive(Deserialize)]
+pub struct EntitiesPlan {
+    pub on_symbol: bool,
+    /// The kinds a `select` pins, sorted; None when it pins none.
+    pub wanted: Option<Vec<String>>,
+    /// What a layout finding's message adds after the subject.
+    pub suffix: String,
+    /// An inventory's `exactly_one` field.
+    pub exactly_one: Option<String>,
 }
 
 /// What a use-shape rule adds (`UseShapePrimitive`).

@@ -9,6 +9,7 @@
 pub mod conflicts;
 pub mod coverage;
 pub mod edges;
+pub mod entities;
 pub mod env;
 pub mod export;
 pub mod glob;
@@ -23,6 +24,7 @@ pub mod value;
 
 use self::conflicts::{Conflict, conflict_key};
 use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
+use self::entities::EntityRule;
 use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
 use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
@@ -93,6 +95,8 @@ pub struct Rule {
     covers: Vec<Cover>,
     /// What a use-shape rule adds.
     use_shape: Option<UseShape>,
+    /// What a rule over entities adds.
+    entities: Option<EntityRule>,
 }
 
 /// What a use-shape rule adds to an edge rule (`UseShapePrimitive`).
@@ -444,6 +448,12 @@ impl Rules {
         plan: &RulePlan,
         fields: &[Field],
     ) -> Result<Rule, String> {
+        // A rule over entities reads its selectors as entity selectors.
+        let compiler = if plan.entities.is_some() {
+            entity
+        } else {
+            compiler
+        };
         let selection = compiler.nodes(&plan.selection)?;
         let redefined: Vec<bool> = selection
             .iter()
@@ -473,6 +483,10 @@ impl Rules {
                 .map(|path| compiler.reference(path))
                 .collect(),
             start: optional(&plan.start)?,
+            entities: plan
+                .entities
+                .as_ref()
+                .map(|found| EntityRule::new(found, &plan.identity, entity)),
             use_shape: plan.use_shape.as_ref().map(|found| UseShape {
                 allow: found.allow.clone(),
                 deny: found.deny.clone(),
@@ -1134,6 +1148,9 @@ impl Rule {
         out.extend(&self.identity);
         for cover in &self.covers {
             cover.refs(&mut out);
+        }
+        if let Some(entities) = &self.entities {
+            entities.refs(&mut out);
         }
         if let Some((src, dst)) = self.group {
             out.extend([src, dst]);

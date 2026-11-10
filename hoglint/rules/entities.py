@@ -67,6 +67,17 @@ class EntityRule:
     def incomplete(self, subject: str, module: str | None, reason: str) -> None:
         self.run.incomplete.append(IncompleteItem(self.spec.id, subject, reason, (module or subject,)))
 
+    def report_rows(self, rows: list[tuple[bool, str, str | None, str, list[str]]]) -> None:
+        """What a rule context found on the entities itself: findings with their message and
+        identity, and incomplete items, in order."""
+        for found, subject, module, text, identity in rows:
+            if found:
+                self.run.findings.append(
+                    self.ctx.finding(self.spec, tuple(identity), text, module, (module or subject,))
+                )
+            else:
+                self.incomplete(subject, module, text)
+
     def entities(self) -> Iterator[tuple[str | None, str | None, str]]:
         """(module, symbol, subject) for every entity the rule looks at. A `select` that pins
         `kind` is false for a symbol whose kind is known to be another, so on symbols only the
@@ -95,6 +106,10 @@ class LayoutPrimitive(EntityRule):
         return self.run
 
     def check_entities(self) -> None:
+        rows = self.ctx.entity_rows(self)
+        if rows is not None:
+            self.report_rows(rows)
+            return
         for module, symbol, subject in self.entities():
             resolve = self.resolver(module, symbol, subject)
             selected = self.selection.truth(resolve) if self.selection is not None else Truth.TRUE
@@ -110,6 +125,9 @@ class LayoutPrimitive(EntityRule):
             self.emit(subject, module, f"{subject}{suffix}", resolve)
 
     def roots(self) -> list[str]:
+        found = self.ctx.layout_roots(self.spec.within)
+        if found is not None:
+            return found
         roots: set[str] = set()
         for path in self.ctx.graph.modules.values():
             captures = glob_match(self.spec.within + "/**", path)
@@ -149,9 +167,14 @@ class LayoutPrimitive(EntityRule):
     def check_registry(self, registry: RegistrySpec) -> None:
         facts = self.ctx.labeler.facts
         base = registry.shape.removeprefix("abc:")
-        for module, path in self.ctx.labeler.index.sorted_modules:
-            if glob_match(registry.module, path) is None:
-                continue
+        matched = self.ctx.registry_modules(registry.module)
+        if matched is None:
+            matched = [
+                (module, path)
+                for module, path in self.ctx.labeler.index.sorted_modules
+                if glob_match(registry.module, path) is not None
+            ]
+        for module, path in matched:
             attribute = f"{module}.{registry.attribute}"
             resolve = self.resolver(module, None, attribute)
             if not facts.has(attribute) and not facts.any_decl("assignment"):
@@ -187,6 +210,10 @@ class EntityInventory(EntityRule):
     """`exactly_one`: every selected entity has exactly one value of a set field."""
 
     def evaluate(self) -> RuleRun:
+        rows = self.ctx.entity_rows(self)
+        if rows is not None:
+            self.report_rows(rows)
+            return self.run
         name = self.spec.exactly_one
         for module, symbol, subject in self.entities():
             resolve = self.resolver(module, symbol, subject)

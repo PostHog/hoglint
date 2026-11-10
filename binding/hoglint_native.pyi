@@ -194,6 +194,13 @@ class Rules:
     ) -> tuple[list[tuple[str, str, str | None]], list[tuple[str, str | None, str]]]:
         """The paths a coverage rule needs covered, (path, why, module) sorted by path, and what it
         cannot place, (subject, module, reason) in order; `witnesses` per cover as edge ids."""
+    def entities(self, rule: int) -> list[tuple[bool, str, str | None, str, list[str]]]:
+        """What a layout rule or an entity inventory reports on its entities, in order: (finding
+        or not, subject, module, message or reason, identity)."""
+    def layout_roots(self, within: str) -> list[str]:
+        """The roots a layout rule's `within` names among the graph's module paths, sorted."""
+    def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
+        """The graph's (module, path) whose path a registry's `module` glob matches, by module."""
     def select(self, rule: int) -> bytes:
         """The candidate edges of a rule judged in Python that its selection does not rule out."""
     def passing(self, kinds: list[str], selector: str) -> bytes:

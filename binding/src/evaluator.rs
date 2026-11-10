@@ -232,6 +232,36 @@ impl Rules {
         Ok((found.paths, found.incomplete))
     }
 
+    /// What a layout rule or an entity inventory reports on its entities, in order:
+    /// (finding or not, subject, module, message or reason, identity).
+    #[allow(clippy::type_complexity)]
+    fn entities(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+    ) -> PyResult<Vec<(bool, String, Option<String>, String, Vec<String>)>> {
+        let bound = self.link.bind(py).borrow();
+        self.inner
+            .entity_rows(&bound.inner, rule)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// The roots a layout rule's `within` names among the graph's module paths, sorted.
+    fn layout_roots(&self, py: Python<'_>, within: &str) -> PyResult<Vec<String>> {
+        let bound = self.link.bind(py).borrow();
+        self.inner
+            .layout_roots(&bound.inner, within)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// The graph's (module, path) whose path a registry's `module` glob matches, by module.
+    fn registry_modules(&self, py: Python<'_>, pattern: &str) -> PyResult<Vec<(String, String)>> {
+        let bound = self.link.bind(py).borrow();
+        self.inner
+            .registry_modules(&bound.inner, pattern)
+            .map_err(PyValueError::new_err)
+    }
+
     /// The candidate edges of rule `rule` its selection does not rule out, in judging order.
     fn select<'py>(&self, py: Python<'py>, rule: usize) -> PyResult<Bound<'py, PyBytes>> {
         let mut bound = self.link.bind(py).borrow_mut();

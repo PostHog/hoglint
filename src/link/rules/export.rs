@@ -480,6 +480,7 @@ impl<'a> Walk<'a> {
                 module: owner.map(|(module, _)| module),
                 at: owner.map(|(_, at)| at),
                 symbol: Some(&candidate),
+                subject: None,
             };
             if evaluate(node, &env) == Truth::True {
                 return true;
@@ -674,6 +675,7 @@ impl<'a> Walk<'a> {
                 module: owner.map(|(found, _)| found),
                 at: owner.map(|(_, at)| at),
                 symbol,
+                subject: None,
             };
             render(&super::selector::Resolve::resolve(&env, Ref::Entity(field)))
         };

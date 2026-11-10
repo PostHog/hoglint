@@ -36,7 +36,7 @@ from hoglint.model import (
 )
 
 if TYPE_CHECKING:
-    from hoglint.rules.entities import CoveragePrimitive
+    from hoglint.rules.entities import CoveragePrimitive, EntityRule
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
@@ -190,6 +190,22 @@ class RuleContext:
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found] | None:
         """What a reach rule's search finds when this context runs it itself, else None."""
+        return None
+
+    def entity_rows(self, rule: EntityRule) -> list[tuple[bool, str, str | None, str, list[str]]] | None:
+        """What a layout rule's or an entity inventory's entities report, (finding or not,
+        subject, module, message or reason, identity) in order, when this context finds them
+        itself; else None."""
+        return None
+
+    def layout_roots(self, within: str) -> list[str] | None:
+        """The roots `within` names among the graph's module paths, sorted, when this context
+        finds them itself; else None."""
+        return None
+
+    def registry_modules(self, pattern: str) -> list[tuple[str, str]] | None:
+        """The graph's (module, path) whose path `pattern` matches, by module, when this context
+        finds them itself; else None."""
         return None
 
     def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]] | None:
