@@ -154,7 +154,7 @@ scope = "prod"
 DAY = datetime.date(2026, 5, 1)
 
 
-def memo_graph(staged: bool) -> Graph:
+def memo_graph(staged: bool, read_error: bool = False) -> Graph:
     graph = (
         GraphBuilder()
         .module("products.billing.logic", "products.alerts.logic", "products.alerts.views", "products.search.logic")
@@ -167,6 +167,9 @@ def memo_graph(staged: bool) -> Graph:
     if staged:
         graph.edge("import", "products.search.logic", "products.alerts.logic")
         graph.edge("dynamic-import", "products.alerts.logic", None, resolution=Resolution.UNRESOLVED)
+    if read_error:
+        unread = (("status", "read_error"),)
+        graph.edge("unparsed", "products.search.logic", None, resolution=Resolution.UNRESOLVED, attrs=unread)
     return graph.graph
 
 
@@ -186,6 +189,18 @@ def memo_repo(root: Path) -> None:
     git_in(root, "init", "-q")
     git_in(root, "add", "-A")
     git_in(root, "commit", "-qm", "base")
+
+
+def count_runs(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    runs: list[Path] = []
+    run = Runner.run
+
+    def counted(self: Runner, policy_root: Path, *args: object, **kwargs: object) -> Run:
+        runs.append(policy_root)
+        return run(self, policy_root, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Runner, "run", counted)
+    return runs
 
 
 def check_once(repo: Path, work: Path, today: datetime.date, memo: bool, staged: bool) -> int:
@@ -247,14 +262,7 @@ def test_a_stored_summary_stands_in_for_a_check_of_its_tree_only_when_the_output
     if change == "a day later":
         today = datetime.date(2026, 7, 1)
 
-    runs: list[Path] = []
-    run = Runner.run
-
-    def counted(self: Runner, policy_root: Path, *args: object, **kwargs: object) -> Run:
-        runs.append(policy_root)
-        return run(self, policy_root, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(Runner, "run", counted)
+    runs = count_runs(monkeypatch)
     # the live run starts from the same cache, so it names its baseline the same way
     shutil.copytree(tmp_path / "cache", tmp_path / "live-cache")
     memoized = check_once(repo, tmp_path / "work", today, memo=True, staged=staged)
@@ -265,3 +273,24 @@ def test_a_stored_summary_stands_in_for_a_check_of_its_tree_only_when_the_output
     assert (memoized, printed) == (live, capsys.readouterr().out)
     if shows is not None:
         assert shows in printed and shows not in first
+
+
+def test_a_source_the_run_could_not_read_is_printed_and_its_summary_never_answers_a_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reads_fail = [True]
+
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        return memo_graph(staged, read_error=bool(reads_fail))
+
+    monkeypatch.setattr(GraphSource, "build", build)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    memo_repo(repo)
+    check_once(repo, tmp_path / "work", DAY, memo=True, staged=False)
+    unread = "unreadable sources, so their facts are missing (1)\n  products/search/logic.py\n"
+    assert unread in capsys.readouterr().out
+    reads_fail.clear()
+    runs = count_runs(monkeypatch)
+    check_once(repo, tmp_path / "work", DAY, memo=True, staged=False)
+    assert runs and "unreadable" not in capsys.readouterr().out

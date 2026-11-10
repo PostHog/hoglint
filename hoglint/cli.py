@@ -397,6 +397,9 @@ class CheckReport:
             out.append(f"existing debt in touched files (advisory) ({len(accepted)})")
             out.extend(f"  {self.finding_line(f)}" for f in accepted)
         out.extend(self.incomplete_lines())
+        if summary.unread:
+            out.append(f"unreadable sources, so their facts are missing ({len(summary.unread)})")
+            out.extend(f"  {path}" for path in summary.unread)
         equality = summary.equality
         if equality is not None and not equality.equal:
             out.append("ledger is not equal to the scan")
@@ -691,8 +694,8 @@ class RunMemo:
     files and on the day, so the report reads them when it renders.
 
     These stay live: a working tree with any change, `--changed`, `--write-ledger`, a policy with
-    outputs (they are written from the graph), and a summary with an extractor failure, which can
-    be transient."""
+    outputs (they are written from the graph), and a summary with an extractor failure or an
+    unreadable source, which can be transient."""
 
     SECTIONS = frozenset({"envelope", "incompletes", "findings", "levels"})
 
@@ -716,7 +719,7 @@ class RunMemo:
         summary = self.store.get(key, self.SECTIONS)
         if summary is None or summary.ledger != LedgerFile.source_of(policy_root / config.ledger.file):
             return None
-        if any(item.cause is IncompleteCause.EXTRACTOR for item in summary.incomplete):
+        if summary.unread or any(item.cause is IncompleteCause.EXTRACTOR for item in summary.incomplete):
             return None
         return summary
 

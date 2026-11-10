@@ -10,7 +10,8 @@ refuses any other protocol instead of guessing. It holds:
   allowed ones included (owners themselves are read at render time), and the message, site and
   remedies of each finding `check` prints;
 - incomplete: every incomplete item in run order with its cause and a line-free fingerprint, so
-  the count and a replacement under one key both survive serialization;
+  the count and a replacement under one key both survive serialization, and the sources the run
+  could not read;
 - triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;
 - couplings and witnesses: what move admission reads, cut to `scope`, the modules a rename touches;
 - levels: the groups that pass each level, and why the others fail (a blocking finding by its
@@ -59,13 +60,14 @@ ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a f
 # The parts a reader loads on their own (see store.py), and the fields each part holds.
 SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
     "envelope": ("protocol", "envelope", "schema", "growth", "scope", "with_triples", "advisory", "ledger"),
-    "incompletes": ("incomplete",),
+    "incompletes": ("incomplete", "unread"),
     "findings": ("findings", "lines", "equality", "exceptions", "modules"),
     "couplings": ("triples", "couplings", "witnesses"),
     "levels": ("levels", "level_failures"),
 }
 ALL_SECTIONS = frozenset(SUMMARY_SECTIONS)
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
+READ_ERROR = ("status", "read_error")
 Obligation = tuple[str, str, str]  # (rule, key, reason)
 
 
@@ -86,6 +88,12 @@ def is_new(finding: Finding) -> bool:
     return finding.status is FindingStatus.NEW
 
 
+def unread_sources(graph: Graph) -> tuple[str, ...]:
+    """Sources the run could not read, which an `unparsed` edge with a read error stands for. The
+    result holds none of their facts."""
+    return tuple(sorted({edge.site.path for edge in graph.by_kind("unparsed") if READ_ERROR in edge.attrs}))
+
+
 def fingerprint(edge: Edge | None) -> str:
     """What tells apart two items of one obligation without line numbers: the site's scope and the
     edge's use, shape and attributes. Empty for an item that no single edge raised."""
@@ -103,6 +111,7 @@ class ScanSummary:
     growth: dict[str, tuple[int, ...]] = field(default_factory=dict)
     findings: list[FindingRecord] = field(default_factory=list)
     incomplete: list[IncompleteRecord] = field(default_factory=list)
+    unread: tuple[str, ...] = ()
     triples: set[Triple] = field(default_factory=set)
     with_triples: bool = False
     scope: frozenset[str] = frozenset()
@@ -146,6 +155,7 @@ class ScanSummary:
         summary.incomplete = [
             IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
         ]
+        summary.unread = unread_sources(graph)
         summary.levels = {name: list(level.passing) for name, level in result.levels.items()}
         summary.level_failures = {
             name: {
@@ -189,6 +199,7 @@ class ScanSummary:
             "growth": {rule: list(indexes) for rule, indexes in sorted(self.growth.items())},
             "findings": [finding.to_json() for finding in self.findings],
             "incomplete": [item.to_json() for item in self.incomplete],
+            "unread": list(self.unread),
             "triples": sorted(list(triple) for triple in self.triples),
             "with_triples": self.with_triples,
             "scope": sorted(self.scope),
@@ -224,6 +235,7 @@ class ScanSummary:
             growth={rule: tuple(indexes) for rule, indexes in data.get("growth", {}).items()},
             findings=[FindingRecord.from_json(finding) for finding in data.get("findings", [])],
             incomplete=[IncompleteRecord.from_json(item) for item in data.get("incomplete", [])],
+            unread=tuple(data.get("unread", [])),
             triples={(a, b, c, d) for a, b, c, d in data.get("triples", [])},
             with_triples=bool(data.get("with_triples", False)),
             scope=frozenset(data.get("scope", [])),
