@@ -13,7 +13,9 @@ known before a run.
 
 from __future__ import annotations
 
+import os
 import re
+import hashlib
 import tempfile
 import subprocess
 from collections.abc import Iterable
@@ -26,6 +28,8 @@ from hoglint.globs import CAPTURE_RE, Braces, translate
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 
 SOURCE_INPUTS = ("**/*.py", "**/*.pyi")
+INPUTS_DIGEST_CHARS = 40
+PATTERN_DIGEST_CHARS = 16
 
 
 class InputPatterns:
@@ -37,6 +41,9 @@ class InputPatterns:
 
     def matches(self, path: str) -> bool:
         return bool(self.patterns) and self.regex.fullmatch(path) is not None
+
+    def digest(self) -> str:
+        return hashlib.sha256("\0".join(self.patterns).encode()).hexdigest()[:PATTERN_DIGEST_CHARS]
 
 
 class RunInputs:
@@ -172,3 +179,50 @@ class TreeFiles:
 
     def holds(self, path: str) -> bool:
         return path in self.listing.blobs or path in self.directories
+
+
+class InputDigests:
+    """The `inputs` part of a summary key: a digest of (path, blob oid) over every file of a git
+    tree that the run's input patterns match, sorted by path. A tree is immutable, so the digest
+    of each (tree, patterns) pair is kept under `<cache>/inputs`, and a tree seen before needs
+    no listing. That file is a cache: one that does not read is computed again."""
+
+    def __init__(self, cache: Path) -> None:
+        self.root = cache / "inputs"
+        self.known: dict[tuple[str, str], str] = {}
+
+    @staticmethod
+    def compute(listing: TreeListing, patterns: InputPatterns) -> str:
+        hasher = hashlib.sha256()
+        for path in sorted((path for path in listing.blobs if patterns.matches(path)), key=str.encode):
+            hasher.update(f"{path}\0{listing.blobs[path]}\0".encode())
+        return hasher.hexdigest()[:INPUTS_DIGEST_CHARS]
+
+    def of(self, repo: Path, tree: str, patterns: InputPatterns) -> str:
+        """The digest for `tree`; empty when there is no tree."""
+        if not tree:
+            return ""
+        key = (tree, patterns.digest())
+        found = self.known.get(key)
+        if found is not None:
+            return found
+        path = self.root / f"{tree}-{key[1]}"
+        try:
+            found = path.read_text().strip()
+        except OSError:
+            found = ""
+        if len(found) != INPUTS_DIGEST_CHARS:
+            found = self.compute(TreeListing.of(repo, tree), patterns)
+            self.keep(path, found)
+        self.known[key] = found
+        return found
+
+    @staticmethod
+    def keep(path: Path, digest: str) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            written = path.with_name(f".{path.name}.{os.getpid()}")
+            written.write_text(digest)
+            written.replace(path)
+        except OSError:
+            return

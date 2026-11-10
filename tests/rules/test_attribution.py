@@ -29,7 +29,7 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.file import LedgerFile
-from hoglint.ledger.inputs import SOURCE_INPUTS, InputPatterns
+from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeListing
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord
 from hoglint.ledger.scan import ScanSummary
@@ -113,7 +113,7 @@ def test_a_stored_summary_serves_only_its_exact_envelope(
 def test_a_reader_loads_only_the_sections_it_asks_for_and_equal_sections_are_stored_once(tmp_path: Path) -> None:
     store = SummaryStore(tmp_path)
     base = ScanSummary(envelope=STORED, incomplete=records({DYNAMIC: ["f1"]}), modules={"app.a": "app/a.py"})
-    staged = dataclasses.replace(base, envelope=dataclasses.replace(STORED, tree="tree2"))
+    staged = dataclasses.replace(base, envelope=dataclasses.replace(STORED, inputs="inputs2"))
     store.put(base.envelope, base)
     sections = sorted((tmp_path / "summaries").rglob("*.zst"))
     store.put(staged.envelope, staged)
@@ -452,15 +452,16 @@ def test_staged_check_blocks_only_what_it_introduced_against_head_and_chains_its
     assert "stored summary): 0 introduced, 0 ambiguous, 2 inherited" in chained.stdout
 
 
-def stored_incomplete_counts(cache: Path) -> list[int]:
+def stored_incomplete_counts(cache: Path) -> dict[str, int]:
+    """Inputs digest -> incomplete items of every stored summary."""
     store = SummaryStore(cache)
-    counts = []
+    counts = {}
     for manifest in sorted((cache / "summaries").rglob("*.json")):
         envelope = Envelope.from_json(json.loads(manifest.read_text())["sections"]["envelope"]["envelope"])
         summary = store.get(envelope, frozenset({"envelope", "incompletes"}))
         assert summary is not None, manifest
-        counts.append(len(summary.incomplete))
-    return sorted(counts)
+        counts[envelope.inputs] = len(summary.incomplete)
+    return counts
 
 
 @pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
@@ -475,8 +476,10 @@ def test_a_staged_check_reads_only_the_tree_it_captured_from_the_index(
     (repo / "core/loader.py").write_text(SECOND_LOADER)
     git_in(repo, "add", "-A")
     policy_of = Snapshots.policy_of
+    captured = []
 
     def stage_a_third_after_the_capture(self: Snapshots, tree: str) -> Path:
+        captured.append(tree)
         (repo / "core/loader.py").write_text(
             SECOND_LOADER.replace("return", "importlib.import_module(name)\n    return")
         )
@@ -492,7 +495,10 @@ def test_a_staged_check_reads_only_the_tree_it_captured_from_the_index(
     finally:
         commands.snapshots.close()
     assert "computed and stored): 1 introduced, 0 ambiguous, 1 inherited" in capfd.readouterr().out
-    assert stored_incomplete_counts(tmp_path / "cache" / "hoglint") == [1, 2]
+    patterns = RunInputs(config_from(tmp_path / "policy", DYNAMIC_CONFIG)).patterns()
+    staged = InputDigests.compute(TreeListing.of(repo, captured[0]), patterns)
+    counts = stored_incomplete_counts(tmp_path / "cache" / "hoglint")
+    assert sorted(counts.values()) == [1, 2] and counts[staged] == 2
 
 
 OWNED_CONFIG = (
@@ -538,6 +544,23 @@ def test_a_file_no_rule_reads_never_keeps_a_staged_summary_from_the_next_commit(
     git_in(repo, "add", "core/__init__.py")
     assert "(tree " in (after := hoglint(repo, "check", "--index")).stdout
     assert "stored summary)" in after.stdout, after.stdout + after.stderr
+
+
+@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+def test_a_commit_that_changes_no_input_keeps_the_summary_key(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, FILES)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    keys = [hoglint(repo, "summary", "key").stdout]
+    for path, text in (("README.md", "docs\n"), ("core/api.py", "from products.billing.facade import charge\nX = 1\n")):
+        (repo / path).write_text(text)
+        git_in(repo, "add", "-A")
+        git_in(repo, "commit", "-qm", path)
+        keys.append(hoglint(repo, "summary", "key").stdout)
+    assert keys[0].startswith("hoglint-summary-p3-")
+    assert keys[0] == keys[1] != keys[2]
 
 
 COVERED = (
@@ -716,7 +739,7 @@ def test_a_source_file_that_changed_while_the_run_read_it_keeps_the_summary_out(
     try:
         WorktreeStatus.of(repo).mark_drifted(["app/views.py"])
         store = SummaryStore(tmp_path / "cache")
-        summary = ScanSummary(Envelope(tree="abc", engine="e"))
+        summary = ScanSummary(Envelope(inputs="abc", engine="e"))
         TreeSummaries(Snapshots(repo, tmp_path / "work"), store).put(summary, from_worktree=True)
     finally:
         WorktreeStatus.taken.pop(repo.resolve())

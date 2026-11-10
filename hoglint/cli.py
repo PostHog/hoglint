@@ -49,12 +49,12 @@ from hoglint.ledger.envelope import (
 )
 from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
-from hoglint.ledger.inputs import RunInputs, TreeFiles, TreeListing
+from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles, TreeListing
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.status import WorktreeStatus
-from hoglint.ledger.store import ExtractorStore, SummaryStore
+from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
 from hoglint.native.source import ENGINES, batch_mode, graph_source
 from hoglint.rules.base import EdgeRule, RuleContext
@@ -449,9 +449,10 @@ class CheckReport:
 class LocalEngine:
     """The engine this process runs: its id, its extractor, and the envelope of one of its runs."""
 
-    def __init__(self, name: str = ENGINE_PYTHON) -> None:
+    def __init__(self, name: str = ENGINE_PYTHON, digests: InputDigests | None = None) -> None:
         self.name = name
         self.frameworks: dict[tuple[str, ...], str] = {}
+        self.digests = digests or InputDigests(cache_root())
 
     @cached_property
     def binary(self) -> Path:
@@ -478,17 +479,23 @@ class LocalEngine:
             self.frameworks[packages] = Framework.digest(packages)
         return self.frameworks[packages]
 
+    def inputs(self, repo: Path, tree: str, config: Config) -> str:
+        """The inputs digest of a git tree under `config`; empty when there is no tree."""
+        return self.digests.of(repo, tree, RunInputs(config).patterns())
+
     def envelope(self, run: Run, tree: str) -> Envelope:
+        """The envelope of a run whose inputs are those of `tree` in the run's repo."""
         root = run.policy_root or run.root
         policy = policy_digest(run.config, run.exceptions.raw, run.exceptions.problems, root)
-        return Envelope(tree, self.id, policy, self.framework(run.config))
+        return Envelope(self.inputs(run.root, tree, run.config), self.id, policy, self.framework(run.config))
 
-    def envelope_at(self, policy_root: Path, tree: str) -> tuple[Envelope, Config]:
-        """The envelope a run of this engine under the policy at `policy_root` would have, before the run."""
+    def envelope_at(self, policy_root: Path, repo: Path, tree: str) -> tuple[Envelope, Config]:
+        """The envelope a run of `tree` in `repo` under the policy at `policy_root` would have,
+        before the run."""
         config = load_config(policy_root, policy_root / CONFIG_FILE)
         exceptions = ExceptionsFile.read(policy_root / config.ledger.exceptions, config)
         policy = policy_digest(config, exceptions.raw, exceptions.problems, policy_root)
-        return Envelope(tree, self.id, policy, self.framework(config)), config
+        return Envelope(self.inputs(repo, tree, config), self.id, policy, self.framework(config)), config
 
 
 @dataclass(frozen=True, slots=True)
@@ -594,24 +601,24 @@ class BaseEngines:
 
 
 class TreeSummaries:
-    """Stores the summaries of runs whose key names a git tree. A run of the tree itself reads
-    only the tree. A run of the working tree has the tree's key only when the working tree held
-    the tree's inputs (see `Snapshots.head_tree_in_worktree`), and is stored only when no source
-    changed while the run read it."""
+    """Stores the summaries of runs whose key names the inputs of a git tree. A run of the tree
+    itself reads only the tree. A run of the working tree has the tree's key only when the working
+    tree held the tree's inputs (see `Snapshots.head_tree_in_worktree`), and is stored only when
+    no source changed while the run read it."""
 
     def __init__(self, snapshots: Snapshots, store: SummaryStore) -> None:
         self.snapshots = snapshots
         self.store = store
 
     def put(self, summary: ScanSummary, from_worktree: bool = False) -> None:
-        tree = summary.envelope.tree
-        if not tree:
+        inputs = summary.envelope.inputs
+        if not inputs:
             return
         drift = sorted(WorktreeStatus.of(self.snapshots.repo).drifted) if from_worktree else []
         if drift:
             more = f" and {len(drift) - 1} more" if len(drift) > 1 else ""
             sys.stderr.write(
-                f"summary of tree {tree[:12]} not stored: {drift[0]}{more} changed while this run read it\n"
+                f"summary of inputs {inputs[:12]} not stored: {drift[0]}{more} changed while this run read it\n"
             )
             return
         self.store.put(summary.envelope, summary)
@@ -621,27 +628,17 @@ class TreeSummaries:
 class Baseline:
     """What one check run attributes its incomplete results against.
 
-    `envelope` is the run's own; its tree is set when the run's code is HEAD's tree, and `tree`
-    names the index's tree for a staged run, so the run's summary is stored for the next commit.
-    `reference` is None when the run itself is the baseline (`is_self`) or when there is no commit
-    to compare with. `config` is the run's policy and `head` HEAD's tree, as the key read them."""
+    `envelope` is the run's own key: its inputs are the staged tree's for a staged run, so the
+    run's summary is stored for the next commit, HEAD's when the working tree holds HEAD's inputs,
+    and empty otherwise. `reference` is None when the run itself is the baseline (`is_self`) or
+    when there is no commit to compare with. `config` is the run's policy, as the key read it."""
 
     envelope: Envelope
     against: str
     config: Config
     reference: dict[Obligation, list[str]] | None = None
     is_self: bool = False
-    tree: str = ""  # a staged run's tree, written from the index
-    head: str = ""
-
-    @property
-    def staged(self) -> bool:
-        return bool(self.tree)
-
-    @property
-    def own_tree(self) -> str:
-        """The tree the run's summary is stored under; empty when the run's code is no tree."""
-        return self.tree or self.envelope.tree
+    staged: bool = False
 
 
 class Baselines:
@@ -649,7 +646,8 @@ class Baselines:
     engine and policy as the run, so a policy change never counts as introduced by code. It comes
     from the per-machine summary cache; else the run itself is HEAD; else HEAD's tree is evaluated
     once by blob id, with no checkout, and stored. A staged run stores its own summary under the
-    index tree, so the next commit finds its baseline in the cache."""
+    inputs of the index's tree, so the next commit finds its baseline in the cache. A commit that
+    changes no input has HEAD's key, so the run is its own baseline."""
 
     def __init__(self, snapshots: Snapshots, engine: LocalEngine, store: SummaryStore, trees: TreeSummaries) -> None:
         self.snapshots = snapshots
@@ -662,34 +660,36 @@ class Baselines:
     def prepare(self, policy_root: Path, tree: str) -> Baseline:
         """`tree` is a staged run's tree, written from the index; empty for a working tree run."""
         head_tree = self.snapshots.tree_of("HEAD")
-        wanted, config = self.engine.envelope_at(policy_root, head_tree)
+        wanted, config = self.engine.envelope_at(policy_root, self.repo, head_tree)
+        staged = bool(tree)
+        if not staged:
+            WorktreeStatus.start(self.repo)  # the key of a working tree run reads it
+            tree = self.snapshots.head_tree_in_worktree(config)
+        own = dataclasses.replace(wanted, inputs=self.engine.inputs(self.repo, tree, config))
         if not head_tree:
-            return Baseline(wanted, "nothing (no commit yet)", config)
-        if not tree:
-            WorktreeStatus.start(self.repo)  # the memo and the key of a working tree run read it
-        own = dataclasses.replace(wanted, tree="")
+            return Baseline(own, "nothing (no commit yet)", config, staged=staged)
         short = head_tree[:12]
         stored = self.store.get(wanted, frozenset({"envelope", "incompletes"}))
         if stored is not None:
             against = f"HEAD (tree {short}, stored summary)"
-            return Baseline(own, against, config, stored.obligations(), tree=tree, head=head_tree)
-        if tree == head_tree or (not tree and self.snapshots.head_tree_in_worktree(config)):
+            return Baseline(own, against, config, stored.obligations(), staged=staged)
+        if own.inputs == wanted.inputs:
             this_run = f"HEAD (tree {short}, this run)"
-            return Baseline(wanted, this_run, config, is_self=True, tree=tree, head=head_tree)
-        summary = self.evaluate(policy_root, config.ledger.file, wanted)
+            return Baseline(own, this_run, config, is_self=True, staged=staged)
+        summary = self.evaluate(policy_root, config.ledger.file, head_tree, wanted)
         self.trees.put(summary)
         computed = f"HEAD (tree {short}, computed and stored)"
-        return Baseline(own, computed, config, summary.obligations(), tree=tree, head=head_tree)
+        return Baseline(own, computed, config, summary.obligations(), staged=staged)
 
-    def evaluate(self, policy_root: Path, ledger_path: str, envelope: Envelope) -> ScanSummary:
+    def evaluate(self, policy_root: Path, ledger_path: str, head_tree: str, envelope: Envelope) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
         graph is freed before the run."""
         try:
-            ledger = LedgerFile.parse(git(self.repo, "show", f"{envelope.tree}:{ledger_path}"))
+            ledger = LedgerFile.parse(git(self.repo, "show", f"{head_tree}:{ledger_path}"))
         except subprocess.CalledProcessError:
             ledger = LedgerFile(source=ABSENT)
         runner = Runner(graph_source(self.engine.name, Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))))
-        run = runner.run(policy_root, self.repo, tree=envelope.tree, ledger=ledger)
+        run = runner.run(policy_root, self.repo, tree=head_tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
     def attribute(self, baseline: Baseline, summary: ScanSummary) -> Attributed:
@@ -702,7 +702,7 @@ class RunMemo:
     """`check` of a git tree that a run already evaluated, as a lookup: the stored summary of the
     tree stands in for the run when no other input of the output differs.
 
-    The key is the run's envelope (code tree, engine, policy, framework) and the source of its
+    The key is the run's envelope (inputs, engine, policy, framework) and the source of its
     ledger. A staged run reads every input from its tree. A run of the working tree has HEAD's key
     only when the working tree holds HEAD's inputs (sources, declared side inputs, the ledger);
     the policy digest covers the policy files it reads from the working tree, and the ledger
@@ -723,13 +723,8 @@ class RunMemo:
         config = baseline.config
         if config.outputs:
             return None
-        tree = baseline.own_tree if baseline.staged else baseline.head
-        key = dataclasses.replace(baseline.envelope, tree=tree)
-        # The envelope alone first, so that a miss does not wait for git status: a live run lets it
-        # run while it evaluates.
-        if not tree or self.store.get(key, frozenset({"envelope"})) is None:
-            return None
-        if not baseline.staged and not self.snapshots.head_tree_in_worktree(config):
+        key = baseline.envelope
+        if not key.inputs:
             return None
         summary = self.store.get(key, self.SECTIONS)
         if summary is None or summary.ledger != LedgerFile.source_of(policy_root / config.ledger.file):
@@ -815,7 +810,7 @@ class Commands:
             summary = summary_of(run, Envelope(), with_triples=False, shown=TouchedDebt(touched).shown)
             self.report(summary, run.config, policy_root, files_root, touched, None)
             return 0
-        summary = summary_of(run, dataclasses.replace(baseline.envelope, tree=baseline.own_tree), with_triples=False)
+        summary = summary_of(run, baseline.envelope, with_triples=False)
         if not write_ledger:
             self.trees.put(summary, from_worktree=not index)
         attributed = self.baselines.attribute(baseline, summary)
@@ -924,13 +919,14 @@ class Commands:
     def current_summary(self) -> tuple[ScanSummary, Config]:
         """The summary of the working tree: the stored summary of HEAD's tree when the working tree
         holds HEAD's inputs, else a run, which is stored when it has a tree."""
-        key, config = self.engine.envelope_at(self.repo, "")
-        key = dataclasses.replace(key, tree=self.snapshots.head_tree_in_worktree(config))
+        key, config = self.engine.envelope_at(self.repo, self.repo, "")
+        tree = self.snapshots.head_tree_in_worktree(config)
+        key = dataclasses.replace(key, inputs=self.engine.inputs(self.repo, tree, config))
         stored = self.summaries.get(key, frozenset({"envelope", "findings"}))
         if stored is not None:
             return stored, config
         run = self.runner.run(self.repo)
-        summary = summary_of(run, self.engine.envelope(run, key.tree), with_triples=False)
+        summary = summary_of(run, self.engine.envelope(run, tree), with_triples=False)
         self.trees.put(summary, from_worktree=True)
         return summary, run.config
 
@@ -968,7 +964,7 @@ class Commands:
             same_policy = base_policy == scans.head.envelope.policy
             try:
                 scans.base, scans.head_base, scans.base_source = self.base_scans(
-                    base_tree, base_root, base_policy, scans.head, same_policy
+                    base_tree, base_root, base_config, base_policy, head_tree, scans.head, same_policy
                 )
             except EngineError as error:
                 scans.base_failure = str(error)
@@ -1014,11 +1010,19 @@ class Commands:
         return summary if summary is not None and summary.covers(scope, triples) else None
 
     def base_scans(
-        self, base_tree: str, base_root: Path, base_policy: str, head: ScanSummary, same_policy: bool
+        self,
+        base_tree: str,
+        base_root: Path,
+        base_config: Config,
+        base_policy: str,
+        head_tree: str,
+        head: ScanSummary,
+        same_policy: bool,
     ) -> tuple[ScanSummary | None, ScanSummary | None, str]:
         """Base code and head code, both under the base engine and the base policy; (None, None)
         when the base predates hoglint, and where the base summary came from. Raises EngineError
-        when the base engine cannot run.
+        when the base engine cannot run. `head_tree` is HEAD's tree when the working tree holds
+        HEAD's inputs, else empty. Keys name inputs under the base policy's patterns.
 
         The base engine runs in this process when it is this engine, else in its own process. A
         stored summary with the exact key and the needed couplings replaces either scan; head code
@@ -1030,7 +1034,7 @@ class Commands:
         if engine is None:
             return None, None, ""
         scope, framework = head.scope, head.envelope.framework
-        base_key = Envelope(base_tree, engine.id, base_policy, framework)
+        base_key = Envelope(self.engine.inputs(self.repo, base_tree, base_config), engine.id, base_policy, framework)
         found = self.summaries.get(base_key)
         base = found if found is not None and found.covers(scope, triples=True) else None
         source = f"the stored summary {base_key.key()}"
@@ -1048,14 +1052,15 @@ class Commands:
             self.summaries.put(base.envelope, base)
         if same_policy and engine.binary is None:
             return base, head, source
-        head_base_key = Envelope(head.envelope.tree, engine.id, base_policy, framework)
+        head_inputs = self.engine.inputs(self.repo, head_tree, base_config)
+        head_base_key = Envelope(head_inputs, engine.id, base_policy, framework)
         head_base = self.stored(head_base_key, scope)
         if head_base is None:
             if engine.binary is None:
-                run = self.runner.run(base_root, code_root=self.repo, tree=head.envelope.tree)
+                run = self.runner.run(base_root, code_root=self.repo, tree=head_tree)
                 head_base = summary_of(run, head_base_key, scope, with_triples=False)
             else:
-                head_base = self.base_engines.scan(engine, base_root, self.repo, head.envelope.tree, scope)
+                head_base = self.base_engines.scan(engine, base_root, self.repo, head_tree, scope)
             self.trees.put(head_base)
         return base, head_base, source
 
@@ -1085,18 +1090,18 @@ class Commands:
             self.summaries.put(summary.envelope, summary)
             sys.stdout.write(f"{summary.envelope.key()}\n")
             return 0
-        key, root = self.commit_key(ref)
+        key, root, tree = self.commit_key(ref)
         if action == "export":
             if file is None:
                 raise EngineError("summary export needs --file")
-            summary = self.summaries.get(key) or self.summarize(key, root)
+            summary = self.summaries.get(key) or self.summarize(key, root, tree)
             summary.write(file)
         sys.stdout.write(f"{key.key()}\n")
         return 0
 
-    def commit_key(self, ref: str) -> tuple[Envelope, Path]:
-        """The key of a commit's summary, and a root that holds the commit's files: the repo when
-        it is a clean checkout of that commit, else a checkout of it."""
+    def commit_key(self, ref: str) -> tuple[Envelope, Path, str]:
+        """The key of a commit's summary, a root that holds the commit's files (the repo when it
+        is a clean checkout of that commit, else a checkout of it), and the commit's tree."""
         tree = self.snapshots.tree_of(ref)
         if not tree:
             raise EngineError(f"{ref} names no commit")
@@ -1105,18 +1110,18 @@ class Commands:
         engine_id = self.base_engines.id_of(root)
         if engine_id is None:
             raise EngineError(f"{ref} has no hoglint engine")
-        key, _ = self.engine.envelope_at(root, tree)
-        return dataclasses.replace(key, engine=engine_id), root
+        key, _ = self.engine.envelope_at(root, self.repo, tree)
+        return dataclasses.replace(key, engine=engine_id), root, tree
 
-    def summarize(self, key: Envelope, root: Path) -> ScanSummary:
+    def summarize(self, key: Envelope, root: Path, tree: str) -> ScanSummary:
         engine = self.base_engines.of(root)
         if engine is None:
             raise EngineError("the commit has no hoglint engine")
         if engine.binary is None:
-            run = self.runner.run(root, tree=key.tree)
+            run = self.runner.run(root, tree=tree)
             summary = summary_of(run, key)
         else:
-            summary = self.base_engines.scan(engine, root, root, key.tree, frozenset())
+            summary = self.base_engines.scan(engine, root, root, tree, frozenset())
         self.summaries.put(summary.envelope, summary)
         return summary
 
@@ -1159,7 +1164,7 @@ def parser() -> argparse.ArgumentParser:
     )
     summary = sub.add_parser("summary", help="the run summary cache for CI: print a commit's key, export or import")
     summary.add_argument("action", choices=("key", "export", "import"))
-    summary.add_argument("--ref", default="HEAD", help="the commit whose tree the key names (key, export)")
+    summary.add_argument("--ref", default="HEAD", help="the commit whose inputs the key names (key, export)")
     summary.add_argument("--file", type=Path, help="the summary file to write (export) or read (import)")
     summary.set_defaults(handler=lambda commands, args: commands.summary(args.action, args.ref, args.file))
     return main

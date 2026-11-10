@@ -3,8 +3,11 @@
 The envelope is the summary's cache key. A stored summary may stand in for a run only when its
 whole envelope equals the one the run would have. Every part is built from file contents, so a
 summary made on Linux CI and one made on a Mac agree:
-- tree: the git tree oid of the code (a commit's tree, or the index's from `git write-tree`);
-  empty for a working tree, which is never stored.
+- inputs: a digest of (path, blob oid) over the git tree's run inputs, sorted by path: its
+  sources, the side inputs the config's plugins and layout rules declare, and the ledger (see
+  `RunInputs` in inputs.py). A tree is a commit's, or the index's from `git write-tree`. A
+  change to any other file keeps the key. Empty for a working tree that differs from HEAD in an
+  input, which is never stored.
 - engine: the engine name, then the `[engine]` id of `engine-sources.txt`: a digest of the Rust
   and Python sources, manifests, Cargo.lock and the summary protocol. Never a binary's hash or
   the platform.
@@ -35,7 +38,7 @@ from hoglint.config.schema import as_tuple, canonical
 from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
-PROTOCOL = 2
+PROTOCOL = 3
 ENGINE_PYTHON = "python"
 ENGINE_SOURCES = "engine-sources.txt"
 PROTOCOL_LINE = "protocol "
@@ -67,7 +70,7 @@ def file_digest(path: Path) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Envelope:
-    tree: str = ""
+    inputs: str = ""
     engine: str = ""
     policy: str = ""
     framework: str = ""
@@ -78,7 +81,7 @@ class Envelope:
     @staticmethod
     def from_json(data: dict[str, Any]) -> Envelope:
         return Envelope(
-            str(data.get("tree", "")),
+            str(data.get("inputs", "")),
             str(data.get("engine", "")),
             str(data.get("policy", "")),
             str(data.get("framework", "")),
@@ -86,7 +89,7 @@ class Envelope:
 
     def key(self) -> str:
         """The envelope as one printable string, for a CI cache step (actions/cache `key`)."""
-        digest = hashlib.sha256("\0".join((self.tree, self.engine, self.policy, self.framework)).encode())
+        digest = hashlib.sha256("\0".join((self.inputs, self.engine, self.policy, self.framework)).encode())
         return f"hoglint-summary-p{PROTOCOL}-{digest.hexdigest()[:32]}"
 
     def causes(self, other: Envelope) -> list[str]:

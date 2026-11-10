@@ -2,18 +2,19 @@
 
 Root: `$XDG_CACHE_HOME/hoglint`, else `~/.cache/hoglint`, one per machine and shared by every
 worktree. It holds the fact cache (`facts/`, namespaced by the `[facts]` id), run summaries
-(`summaries/`) and extractor binaries (`extractors/`).
+(`summaries/`), the inputs digests of known trees (`inputs/`, see inputs.py) and extractor
+binaries (`extractors/`).
 
-Summaries: one manifest per exact key, `summaries/<engine id>/<tree>/<policy>-<framework>.json`,
-and its sections, `summaries/<engine id>/sections/<sha>.zst`. The key is the envelope (code tree
-oid, engine id, policy hash, framework digest; see `envelope.py`), and the engine id names the
+Summaries: one manifest per exact key, `summaries/<engine id>/<inputs>/<policy>-<framework>.json`,
+and its sections, `summaries/<engine id>/sections/<sha>.zst`. The key is the envelope (inputs
+digest, engine id, policy hash, framework digest; see `envelope.py`), and the engine id names the
 namespace, so an old engine's summaries age out together. The manifest is JSON: the protocol, the
 envelope section inline, and the sha256 (first 32 hex) of every other section's JSON (see
 `SUMMARY_SECTIONS` in scan.py). A section file is that JSON, zstd-compressed, named by its own
 hash: a reader loads only the sections it reads (a baseline reads incompletes only), and a section
 equal to a stored one is never written twice. `get` answers only the exact key, and the envelope
 inside the manifest must match it too: a corrupt or missing file, another protocol or another
-envelope is a miss, never a result. A summary of a working tree has no tree oid and is never
+envelope is a miss, never a result. A summary of a working tree has no inputs digest and is never
 stored. The ledger never stands in for a summary: it lacks incompletes, triples, couplings and
 every finding the ledger does not count. A CI job may later publish summaries of master trees as
 `hoglint summary export` files (the whole summary in one zstd JSON file) for readers to import by
@@ -138,7 +139,7 @@ class SummaryStore:
             self.cache.prune_daily()
 
     def path(self, key: Envelope) -> Path:
-        return self.root / key.engine / key.tree / f"{key.policy}-{key.framework}.json"
+        return self.root / key.engine / key.inputs / f"{key.policy}-{key.framework}.json"
 
     def section_path(self, key: Envelope, digest: str) -> Path:
         return self.root / key.engine / "sections" / f"{digest}.zst"
@@ -146,7 +147,7 @@ class SummaryStore:
     def get(self, key: Envelope, sections: frozenset[str] = ALL_SECTIONS) -> ScanSummary | None:
         """The stored summary with exactly this key, holding `sections` and the envelope, else None."""
         self.prune_once()
-        if not key.tree:
+        if not key.inputs:
             return None
         path = self.path(key)
         try:
@@ -174,13 +175,13 @@ class SummaryStore:
         return part
 
     def put(self, key: Envelope, summary: ScanSummary) -> Path | None:
-        """Stores a summary under its own envelope. A summary of no tree is not stored, and nor is
+        """Stores a summary under its own envelope. A summary with no inputs digest is not stored, and nor is
         one of a run that could not read a source: it holds less than the tree. Only the sections
         no stored summary holds yet are written."""
         if summary.envelope != key:
             raise ValueError(f"a summary of {summary.envelope} cannot be stored under {key}")
         self.prune_once()
-        if not key.tree or summary.unread:
+        if not key.inputs or summary.unread:
             return None
         parts = summary.to_sections()
         manifest: dict[str, Any] = {ENVELOPE_SECTION: parts.pop(ENVELOPE_SECTION)}
