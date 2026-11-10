@@ -23,10 +23,10 @@ from pathlib import Path
 from hoglint.config.model import Config
 from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
 from hoglint.ledger.envelope import EngineError
-from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
+from hoglint.ledger.listing import SOURCE_SUFFIXES, Listing, TreeListing, WorktreeListing
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 
-SOURCE_INPUTS = ("**/*.py", "**/*.pyi")
+SOURCE_INPUTS = tuple(f"**/*{suffix}" for suffix in SOURCE_SUFFIXES)
 INPUTS_DIGEST_CHARS = 40
 PATTERN_DIGEST_CHARS = 16
 # What an inputs digest hashes; a cached digest of another layout is never read.

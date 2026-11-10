@@ -55,7 +55,7 @@ from hoglint.ledger.errors import RepoRootError
 from hoglint.ledger.file import ABSENT, LedgerFile, render_key
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles, WorktreeFiles
-from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root
+from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
 from hoglint.ledger.records import FindingRecord, IncompleteRecord
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
@@ -69,10 +69,6 @@ from hoglint.selectors import Selector, State
 from hoglint.source import GraphSource
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
 
 
 # ── snapshots ─────────────────────────────────────────────────────

@@ -23,21 +23,9 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hoglint.ledger.listing import TreeListing, WorktreeListing
+from hoglint.ledger.listing import SOURCE_SUFFIXES, SUBMODULE_MODE, TreeListing, WorktreeListing, git, parse_index
 
-SOURCE_SUFFIXES = (".py", ".pyi")
-SUBMODULE_MODE = "160000"
 NULL_OID = "0" * 40  # no blob has it, so no stored facts answer for it
-
-
-def git(repo: Path, *args: str, stdin: str | None = None) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], input=stdin, capture_output=True, text=True, check=True
-    ).stdout
-
-
-def records(output: str) -> list[str]:
-    return [record for record in output.split("\0") if record]
 
 
 def is_source(path: str) -> bool:
@@ -83,16 +71,14 @@ class BlobSnapshot:
     @staticmethod
     def index(repo: Path) -> BlobSnapshot:
         snapshot = BlobSnapshot(repo)
-        for record in records(git(repo, "ls-files", "-s", "-z")):
-            meta, _, path = record.partition("\t")
-            mode, oid, stage = meta.split()
-            if not is_source(path) or mode == SUBMODULE_MODE:
+        for record in parse_index(git(repo, "ls-files", "-s", "-z")):
+            if not is_source(record.path) or record.mode == SUBMODULE_MODE:
                 continue
-            if stage != "0":
-                if path not in snapshot.conflicts:
-                    snapshot.conflicts.append(path)
+            if record.stage != "0":
+                if record.path not in snapshot.conflicts:
+                    snapshot.conflicts.append(record.path)
                 continue
-            snapshot.blobs[path] = (oid, False)
+            snapshot.blobs[record.path] = (record.oid, False)
         return snapshot
 
     @staticmethod

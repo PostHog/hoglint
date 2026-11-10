@@ -10,9 +10,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hoglint.core.config import CoreConfig
-from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing, read_blobs
+from hoglint.ledger.listing import (
+    SOURCE_SUFFIXES,
+    SUBMODULE_MODE,
+    Listing,
+    TreeListing,
+    WorktreeListing,
+    parse_index,
+    read_blobs,
+)
 
-SOURCE_PATTERNS = ("*.py", "*.pyi")
+SOURCE_PATTERNS = tuple(f"*{suffix}" for suffix in SOURCE_SUFFIXES)
 
 
 @dataclass(frozen=True)
@@ -39,16 +47,11 @@ class StagedIndex:
             capture_output=True,
             check=True,
         ).stdout.decode()
-        blobs: dict[str, str] = {}
-        for entry in out.split("\0"):
-            if not entry:
-                continue
-            meta, _, rel = entry.partition("\t")
-            mode, sha, stage = meta.split()
-            if stage != "0" or mode == "160000":
-                continue
-            blobs[rel] = sha
-        return blobs
+        return {
+            record.path: record.oid
+            for record in parse_index(out)
+            if record.stage == "0" and record.mode != SUBMODULE_MODE
+        }
 
     def materialize(self, blobs: dict[str, str]) -> None:
         pending = {rel: sha for rel, sha in blobs.items() if rel not in self.written}

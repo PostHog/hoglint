@@ -34,6 +34,8 @@ from typing import ClassVar
 
 from hoglint.ledger.errors import EngineError, RepoRootError
 
+# The files both engines read as Python sources.
+SOURCE_SUFFIXES = (".py", ".pyi")
 SUBMODULE_MODE = "160000"
 LINK_MODE = "120000"
 DELETED_MODE = "000000"
@@ -44,6 +46,37 @@ MAX_LINK_HOPS = 40
 # tree's file mode sits among them.
 FIELDS_BEFORE_PATH = {"1": 8, "2": 9, "u": 10}
 WORKTREE_MODE_FIELD = {"1": 5, "2": 5, "u": 6}
+
+
+def git(repo: Path, *args: str, stdin: str | None = None) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], input=stdin, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def records(output: str) -> list[str]:
+    """The records of NUL-separated git output (`-z`)."""
+    return [record for record in output.split("\0") if record]
+
+
+@dataclass(frozen=True, slots=True)
+class IndexRecord:
+    """One entry of `git ls-files -s -z`: a stage other than "0" is one side of a conflict."""
+
+    mode: str
+    oid: str
+    stage: str
+    path: str
+
+
+def parse_index(output: str) -> list[IndexRecord]:
+    """Every record of `git ls-files -s -z` output, in git's order."""
+    out = []
+    for record in records(output):
+        meta, _, path = record.partition("\t")
+        mode, oid, stage = meta.split()
+        out.append(IndexRecord(mode, oid, stage, path))
+    return out
 
 
 def read_blobs(repo: Path, oids: dict[str, str]) -> dict[str, bytes]:
@@ -212,9 +245,7 @@ class TreeListing(Listing):
         found = TreeListing.taken.get(key)
         if found is not None:
             return found
-        command = ["git", "-C", str(repo), "ls-tree", "-r", "-z", tree]
-        output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
-        entries = TreeListing.parse(output)
+        entries = TreeListing.parse(git(repo, "ls-tree", "-r", "-z", tree))
         modes = {path: mode for path, (mode, _) in entries.items()}
         blobs = {path: oid for path, (mode, oid) in entries.items() if mode != LINK_MODE}
         links = {path: oid for path, (mode, oid) in entries.items() if mode == LINK_MODE}
@@ -292,15 +323,11 @@ class WorktreeListing(Listing):
     def index_entries(repo: Path) -> dict[str, tuple[str, str]]:
         """path -> (mode, blob oid) of stage 0 entries; a conflicted path is in the status as a
         file to read from disk."""
-        command = ["git", "-C", str(repo), "ls-files", "-s", "-z"]
-        output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
-        entries: dict[str, tuple[str, str]] = {}
-        for record in output.split("\0"):
-            meta, _, path = record.partition("\t")
-            parts = meta.split()
-            if len(parts) == 3 and parts[2] == "0" and parts[0] != SUBMODULE_MODE:
-                entries[path] = (parts[0], parts[1])
-        return entries
+        return {
+            record.path: (record.mode, record.oid)
+            for record in parse_index(git(repo, "ls-files", "-s", "-z"))
+            if record.stage == "0" and record.mode != SUBMODULE_MODE
+        }
 
     @staticmethod
     def mode_on_disk(file: Path) -> str:
@@ -366,10 +393,7 @@ class WorktreeStatus:
         if status is not None:
             return status
         check_root(repo)
-        output = subprocess.run(
-            ["git", "-C", str(repo), *WorktreeStatus.COMMAND], capture_output=True, text=True, check=True
-        ).stdout
-        status = WorktreeStatus.taken[key] = WorktreeStatus(repo, [record for record in output.split("\0") if record])
+        status = WorktreeStatus.taken[key] = WorktreeStatus(repo, records(git(repo, *WorktreeStatus.COMMAND)))
         return status
 
     @cached_property
