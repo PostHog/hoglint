@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from hoglint.config.model import RuleSpec
 from hoglint.index import is_core
 from hoglint.model import Edge, EntityId, Remedy
@@ -62,6 +64,9 @@ class EntrypointPrimitive(EdgeRule):
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} names {env.edge.surface}, which is not exported to it"
 
+    def plan(self) -> dict[str, Any]:
+        return {**super().plan(), "default_allow": self.default_allow}
+
 
 class UseShapePrimitive(EdgeRule):
     """Is this use of a foreign symbol in an allowed shape?
@@ -118,6 +123,11 @@ class UseShapePrimitive(EdgeRule):
 
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} uses {env.dst.symbol} as {env.label()}"
+
+    def plan(self) -> dict[str, Any]:
+        spec = self.spec
+        shapes = {"allow": list(spec.allow_shapes), "deny": list(spec.deny_shapes), "flow": self.flow}
+        return {**super().plan(), "use_shape": shapes}
 
 
 SlotKey = tuple[str, str, tuple[EntityId, ...]]
@@ -212,3 +222,6 @@ class SignaturePrimitive(EdgeRule):
     def describe(self, env: EdgeEnv) -> str:
         slot = env.edge.attr("slot") or "signature"
         return f"{env.src.symbol} exposes {env.dst.symbol} in {slot}"
+
+    def plan(self) -> dict[str, Any]:
+        return {**super().plan(), "signature": True, "unknown_types": list(self.spec.unknown_types)}

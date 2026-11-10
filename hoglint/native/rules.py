@@ -25,12 +25,13 @@ from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, 
 from hoglint.native.bridge import import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
-from hoglint.native.plan import RulePlan, tree
+from hoglint.native.plan import RulePlan
 from hoglint.rules.base import EdgeEnv, EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, project
 from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
+from hoglint.rules.plan import tree
 from hoglint.selectors import Node, Truth
 
 

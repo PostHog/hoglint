@@ -14,7 +14,7 @@ from typing import Any
 from hoglint.config.model import KindSpec, LevelSpec
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.native.plan import tree
+from hoglint.rules.plan import tree
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
 # A module's place in a column where the evaluator has no value for Python to take.

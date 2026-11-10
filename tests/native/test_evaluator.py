@@ -1051,7 +1051,7 @@ class KeysRead:
             rule = cls(native, planned)
             self.by_class[cls.MODE] |= planned.keys & accepted
             planned.keys.clear()
-            native.plan.rule(rule)
+            rule.plan()
             self.by_plan[cls.MODE] |= planned.keys & accepted
 
     def problems(self) -> list[str]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
@@ -23,6 +24,7 @@ from hoglint.rules.base import (
     joined,
     project,
 )
+from hoglint.rules.plan import ABSENT, identity_paths, selector_tree, tree
 from hoglint.selectors import (
     ClassSelection,
     Node,
@@ -94,13 +96,39 @@ class EntityRule(RuleType):
             else:
                 self.incomplete(subject, module, self.value_unknown())
 
+    def wanted(self) -> frozenset[str] | None:
+        """The kinds a `select` on symbols pins: it is false for a symbol whose kind is known to be
+        another. None when the rule is on modules or pins no kind."""
+        if self.spec.on != "symbol" or self.spec.select is None:
+            return None
+        return self.spec.select.restricts(("kind",))
+
+    def plan(self) -> dict[str, Any]:
+        """Its `select` and `require` as entity selectors, on modules or on symbols."""
+        spec = self.spec
+        wanted = self.wanted()
+        entities = {
+            "on_symbol": spec.on == "symbol",
+            "wanted": sorted(wanted) if wanted is not None else None,
+            "exactly_one": None,
+        }
+        return {
+            **ABSENT,
+            "id": spec.id,
+            "mode": self.NATIVE_MODE,
+            "selection": [tree(part) for part in conjuncts((spec.select,))],
+            "require": selector_tree(spec.require),
+            "identity": identity_paths(spec.identity),
+            "entities": entities,
+        }
+
     def entities(self) -> Iterator[tuple[str | None, str | None, str]]:
         """(module, symbol, subject) for every entity the rule looks at. A `select` that pins
         `kind` is false for a symbol whose kind is known to be another, so on symbols only the
         pinned kinds' members and the symbols of unknown kind are read."""
         labeler = self.ctx.labeler
         if self.spec.on == "symbol":
-            wanted = self.spec.select.restricts(("kind",)) if self.spec.select is not None else None
+            wanted = self.wanted()
             symbols = labeler.index.sorted_symbols if wanted is None else labeler.kind_candidates(wanted)
             for symbol in symbols:
                 yield labeler.module_of_symbol(symbol), symbol, symbol
@@ -247,6 +275,10 @@ class EntityInventory(EntityRule):
     def value_unknown(self) -> str:
         return f"{self.spec.exactly_one} is unknown"
 
+    def plan(self) -> dict[str, Any]:
+        planned = super().plan()
+        return {**planned, "entities": {**planned["entities"], "exactly_one": self.spec.exactly_one}}
+
     def evaluate(self) -> RuleRun:
         rows = self.ctx.entity_rows(self)
         if rows is not None:
@@ -296,6 +328,9 @@ class EdgeInventory(EdgeRule):
             return set()
         data = read_table(repo / self.spec.classify)
         return {tuple(str(v) for v in entry.get("identity", ())) for entry in data.get("entry", [])}
+
+    def plan(self) -> dict[str, Any]:
+        return {**super().plan(), "inventory": True}
 
     def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
         """What a selected edge reports when it cannot be classified: one that did not resolve,
@@ -353,6 +388,47 @@ class CoveragePrimitive(EntityRule):
         return out
 
     @staticmethod
+    def column_path(cover: CoverSpec) -> tuple[str, ...]:
+        """The ref of a rule cover's column: `edge.<column>` when it names no root."""
+        column = cover.column
+        return tuple(column.split(".")) if "." in column else ("edge", column)
+
+    @classmethod
+    def split(cls, cover: CoverSpec) -> tuple[frozenset[str] | None, list[Node], list[Node]]:
+        """An edge cover's selection: the kinds it pins, its conjuncts that read only an edge's
+        kind and contexts, and the rest."""
+        selector = cover.selector
+        kinds = selector.restricts(("edge", "kind")) if selector is not None else None
+        parts = conjuncts((selector,))
+        by_edge = [part for part in parts if cls.reads_kind_and_context(part)]
+        return kinds, by_edge, [part for part in parts if not cls.reads_kind_and_context(part)]
+
+    def plan(self) -> dict[str, Any]:
+        """Its covers; the evaluator never reads its identity."""
+        spec = self.spec
+        covers = []
+        for cover in spec.covers:
+            kinds, by_edge, rest = self.split(cover)
+            edge_part = joined(by_edge)
+            covers.append(
+                {
+                    "rule": cover.rule or None,
+                    "column": list(self.column_path(cover)),
+                    "kinds": sorted(kinds) if kinds else None,
+                    "by_edge": tree(edge_part) if edge_part is not None else None,
+                    "rest": [tree(part) for part in rest],
+                    "endpoint": cover.endpoint,
+                }
+            )
+        return {
+            **ABSENT,
+            "id": spec.id,
+            "mode": self.NATIVE_MODE,
+            "identity": identity_paths(spec.identity),
+            "covers": covers,
+        }
+
+    @staticmethod
     def why(cover: CoverSpec) -> str:
         """Why a cover needs a path, as a finding's message names it: the words of both engines."""
         return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
@@ -368,8 +444,7 @@ class CoveragePrimitive(EntityRule):
         if run is None:
             self.not_run(cover)
             return
-        column = cover.column
-        ref = Ref(tuple(column.split("."))) if "." in column else Ref(("edge", column))
+        ref = Ref(self.column_path(cover))
         for finding in run.findings:
             for edge in finding.witnesses:
                 src = self.ctx.src_endpoint(edge.site)
@@ -396,10 +471,9 @@ class CoveragePrimitive(EntityRule):
         kind and contexts drop an edge before its endpoints are read; the rest are staged the way
         an edge rule's selection is, so endpoint labels are judged once per endpoint or module."""
         selector = cover.selector
-        kinds = selector.restricts(("edge", "kind")) if selector is not None else None
-        parts = conjuncts((selector,))
-        by_edge = joined([part for part in parts if self.reads_kind_and_context(part)])
-        rest = joined([part for part in parts if not self.reads_kind_and_context(part)])
+        kinds, by_edge_parts, rest_parts = self.split(cover)
+        by_edge = joined(by_edge_parts)
+        rest = joined(rest_parts)
         staged = StagedSelection(
             self.ctx, (Selector(selector.source, rest),) if selector is not None and rest is not None else ()
         )

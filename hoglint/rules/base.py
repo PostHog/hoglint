@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
+from hoglint.rules.plan import ABSENT, context_bits, identity_paths, selector_tree, tree
 from hoglint.selectors import (
     NONE,
     UNKNOWN,
@@ -97,6 +98,10 @@ class RuleType:
         raise NotImplementedError
 
     def evaluate(self) -> RuleRun:
+        raise NotImplementedError
+
+    def plan(self) -> dict[str, Any]:
+        """The rule as the native evaluator's plan holds it, from what the rule derived."""
         raise NotImplementedError
 
     @classmethod
@@ -897,3 +902,23 @@ class EdgeRule(RuleType):
 
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} -> {env.dst.symbol or env.dst.module} ({env.edge.kind})"
+
+    def plan(self) -> dict[str, Any]:
+        """What every rule over edges plans: its kinds, contexts, endpoint, selection in the order
+        it applies, predicates and identity. A subclass adds its own part."""
+        spec = self.spec
+        return {
+            **ABSENT,
+            "id": spec.id,
+            "mode": self.NATIVE_MODE,
+            "kinds": list(dict.fromkeys(self.kinds())),
+            "include": context_bits(self.include),
+            "exclude": context_bits(self.exclude),
+            "endpoint": spec.endpoint,
+            "selection": [tree(part) for part in conjuncts(self.selectors())],
+            "deny": selector_tree(spec.deny),
+            "allow": selector_tree(spec.allow),
+            "require": selector_tree(spec.require),
+            "unless": selector_tree(spec.unless),
+            "identity": identity_paths(spec.identity),
+        }

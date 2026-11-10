@@ -1,7 +1,7 @@
 """The plan the native evaluator runs (src/link/rules/plan.rs): the config of one run as data.
 
 Python loads and validates the config; the plan hands Rust its fields and domains, assignments,
-zones, registries, exports with their audiences, kinds, and per rule what `EdgeRule.decide` reads.
+zones, registries, exports with their audiences, kinds, and each rule as its class plans itself.
 Nothing in it is computed per module or per symbol, except the label column of a field a Python
 provider sets, and only when something the plan holds reads that field.
 """
@@ -13,58 +13,13 @@ import hashlib
 from collections.abc import Iterable
 from typing import Any
 
-from hoglint.config.model import Config, FieldSpec, RuleSpec
+from hoglint.config.model import Config, FieldSpec
 from hoglint.labels import Labeler
-from hoglint.native.graph import CONTEXT_BITS, NativeGraph
-from hoglint.rules.base import RuleType, conjuncts, rule_kinds
-from hoglint.rules.entities import CoveragePrimitive, EdgeInventory
-from hoglint.rules.exports import DEFAULT_EXCLUDED
+from hoglint.native.graph import NativeGraph
+from hoglint.rules.base import RuleType
 from hoglint.rules.graphs import CyclePrimitive
-from hoglint.selectors import (
-    And,
-    Bare,
-    FieldType,
-    ListLiteral,
-    Node,
-    Not,
-    Operand,
-    Or,
-    Ref,
-    Selector,
-    State,
-    Value,
-    refs,
-)
-
-
-def context_bits(names: frozenset[str]) -> int:
-    return sum(1 << bit for bit, context in enumerate(CONTEXT_BITS) if context.value in names)
-
-
-def operand_tree(operand: Operand) -> dict[str, Any]:
-    if isinstance(operand, Ref):
-        return {"ref": list(operand.path)}
-    if isinstance(operand, ListLiteral):
-        return {"list": [str(item) for item in operand.items]}
-    value = operand.value
-    return {"lit": value if value is None or isinstance(value, bool) else str(value)}
-
-
-def tree(node: Node) -> dict[str, Any]:
-    """A selector's syntax tree as the plan writes it."""
-    if isinstance(node, And):
-        return {"and": [tree(part) for part in node.parts]}
-    if isinstance(node, Or):
-        return {"or": [tree(part) for part in node.parts]}
-    if isinstance(node, Not):
-        return {"not": tree(node.inner)}
-    if isinstance(node, Bare):
-        return {"bare": operand_tree(node.operand)}
-    return {"cmp": [node.op, operand_tree(node.left), operand_tree(node.right)]}
-
-
-def selector_tree(selector: Selector | None) -> dict[str, Any] | None:
-    return tree(selector.node) if selector is not None else None
+from hoglint.rules.plan import selector_tree
+from hoglint.selectors import FieldType, Selector, State, Value, refs
 
 
 def set_value(spec: FieldSpec | None, value: Any) -> dict[str, Any]:
@@ -102,96 +57,7 @@ class RulePlan:
         self.rules = rules
         self.specs = [rule.spec for rule in rules]
         self.index = {spec.id: at for at, spec in enumerate(self.specs)}
-        self.export_at = {name: at for at, name in enumerate(config.exports)}
         self.shape_at = {name: at for at, name in enumerate(config.shapes)}
-
-    @staticmethod
-    def covers(spec: RuleSpec) -> list[dict[str, Any]]:
-        """A coverage rule's covers, split as `CoveragePrimitive.from_edges` splits a selection."""
-        out = []
-        for cover in spec.covers if spec.primitive == "coverage" else ():
-            selector = cover.selector
-            kinds = selector.restricts(("edge", "kind")) if selector is not None else None
-            parts = conjuncts((selector,))
-            by_edge = [part for part in parts if CoveragePrimitive.reads_kind_and_context(part)]
-            column = cover.column if "." in cover.column else f"edge.{cover.column}"
-            out.append(
-                {
-                    "rule": cover.rule or None,
-                    "column": column.split("."),
-                    "kinds": sorted(kinds) if kinds else None,
-                    "by_edge": tree(by_edge[0] if len(by_edge) == 1 else And(tuple(by_edge))) if by_edge else None,
-                    "rest": [tree(part) for part in parts if not CoveragePrimitive.reads_kind_and_context(part)],
-                    "endpoint": cover.endpoint,
-                }
-            )
-        return out
-
-    @staticmethod
-    def entities(spec: RuleSpec) -> dict[str, Any]:
-        """What a rule over entities adds (`EntityRule`)."""
-        wanted = spec.select.restricts(("kind",)) if spec.select is not None and spec.on == "symbol" else None
-        return {
-            "on_symbol": spec.on == "symbol",
-            "wanted": sorted(wanted) if wanted is not None else None,
-            "exactly_one": spec.exactly_one or None,
-        }
-
-    def export_rule(self, spec: RuleSpec) -> dict[str, Any] | None:
-        """What an export rule adds: the exports it checks, their default contexts, and how it
-        reports what it cannot tell (`ExportPrimitive`)."""
-        if spec.primitive != "export":
-            return None
-        excluded = DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude
-        return {
-            "exports": [self.export_at[name] for name in spec.exports or tuple(self.config.exports)],
-            "exclude": context_bits(frozenset(excluded)),
-            "unknown_types": list(spec.unknown_types),
-            "on_unknown": spec.on_unknown,
-            "on_unresolved": spec.on_unresolved,
-        }
-
-    def rule(self, rule: RuleType) -> dict[str, Any]:
-        spec = rule.spec
-        mode = rule.NATIVE_MODE
-        entities = mode == "entities"
-        # A reach rule's `from` is its start; a rule over entities reads its `select` alone and
-        # never an edge's kinds or contexts.
-        alone = spec.primitive == "reach" or entities
-        selectors = (spec.select,) if alone else (spec.from_, spec.select)
-        return {
-            "id": spec.id,
-            "mode": mode,
-            "kinds": [] if entities else list(dict.fromkeys(rule_kinds(spec, self.config.views))),
-            "include": 0 if entities else context_bits(frozenset(spec.contexts_include)),
-            "exclude": 0 if entities else context_bits(frozenset(spec.contexts_exclude or ())),
-            "endpoint": spec.endpoint,
-            "selection": [tree(part) for part in conjuncts(selectors)],
-            "deny": selector_tree(spec.deny),
-            "allow": selector_tree(spec.allow),
-            "require": selector_tree(spec.require),
-            "unless": selector_tree(spec.unless),
-            "default_allow": spec.primitive == "entrypoint"
-            and spec.deny is None
-            and spec.allow is None
-            and spec.require is None,
-            "identity": [column.split(".") for column in spec.identity],
-            "group": CyclePrimitive.group_of(self.config, spec) if spec.primitive == "cycle" else None,
-            "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
-            "export": self.export_rule(spec),
-            "covers": self.covers(spec),
-            "entities": self.entities(spec) if entities else None,
-            "inventory": isinstance(rule, EdgeInventory),
-            "use_shape": {
-                "allow": list(spec.allow_shapes),
-                "deny": list(spec.deny_shapes),
-                "flow": dict(spec.producer_options).get("flow") == "def-use",
-            }
-            if spec.primitive == "use-shape"
-            else None,
-            "signature": spec.primitive == "signature",
-            "unknown_types": list(spec.unknown_types) if spec.primitive == "signature" else [],
-        }
 
     def selectors(self) -> Iterable[Selector]:
         """Every selector the plan holds."""
@@ -357,7 +223,7 @@ class RulePlan:
             "provided": provided,
             "provider_conflicts": provider_conflicts,
             "failed": sorted(self.labeler.providers.failed_fields),
-            "rules": [self.rule(rule) for rule in self.rules],
+            "rules": [rule.plan() for rule in self.rules],
             "repeats": sorted(self.graph.repeats.items()),
         }
 

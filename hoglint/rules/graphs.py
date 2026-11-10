@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import has_endpoint_attrs
@@ -22,6 +23,7 @@ from hoglint.rules.base import (
     project,
     read_endpoint,
 )
+from hoglint.rules.plan import selector_tree
 from hoglint.selectors import UNKNOWN, ClassSelection, Ref, Selector, State, Truth, Value, render_value
 
 
@@ -214,6 +216,9 @@ class ReachPrimitive(EdgeRule):
             step = parents.get(previous)
         return list(reversed(path))
 
+    def plan(self) -> dict[str, Any]:
+        return {**super().plan(), "start": selector_tree(self.spec.from_)}
+
     def report(self, env: EdgeEnv, path: list[Edge], verdict: Truth) -> None:
         chain = " -> ".join([env.src.module or "", *(e.surface for e in path)])
         message = f"{env.src.module} reaches {env.dst.symbol or env.dst.module}: {chain}"
@@ -284,6 +289,9 @@ class CyclePrimitive(EdgeRule):
     def group_of(config: Config, spec: RuleSpec) -> str:
         """The field whose values are the nodes of the rule's graph."""
         return config.roles.group if spec.view == "packages" else "module"
+
+    def plan(self) -> dict[str, Any]:
+        return {**super().plan(), "group": self.group_field}
 
     def group(self, env: EdgeEnv, root: str) -> str | None:
         """The endpoint's group; cached per endpoint unless the edge's own attributes override labels."""
