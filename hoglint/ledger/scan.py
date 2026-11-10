@@ -209,7 +209,7 @@ class ScanSummary:
 
     def finding_keys(self) -> set[LineKey]:
         """The ledger key of every finding that no exception allows."""
-        return {finding.key for finding in self.findings if finding.status is not FindingStatus.ALLOWED}
+        return self.findings.keys()
 
     @property
     def unread(self) -> list[str]:

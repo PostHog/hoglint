@@ -226,6 +226,22 @@ class StoredFindings:
         value = status.value
         return sum(1 for row in self.rows if row[self.STATUS] == value)
 
+    def keys(self) -> set[LineKey]:
+        """The ledger key (rule, identity) of every row no exception allows."""
+        allowed = FindingStatus.ALLOWED.value
+        return {(row[0], tuple(row[1])) for row in self.rows if row[self.STATUS] != allowed}
+
+    def open_rows(self) -> Iterator[tuple[FindingStatus, str, str, str]]:
+        """(status, rule, owner module, target) of every row no exception allows: what `query`
+        groups by. The target is the first witness's first target, else the identity's first
+        column, else "?"."""
+        allowed = FindingStatus.ALLOWED.value
+        for rule, identity, status, _, witnesses, owner, _, _, _ in self.rows:
+            if status == allowed:
+                continue
+            target = next((witness[5][0] for witness in witnesses if witness[5]), identity[0] if identity else "?")
+            yield FindingStatus(status), rule, owner, target
+
     def to_json(self) -> list[Any]:
         return self.rows
 

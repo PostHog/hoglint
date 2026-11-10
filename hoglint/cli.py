@@ -730,9 +730,13 @@ class ReadTimeOwners:
         self.labeler = Labeler(config, Graph(modules=dict(modules)), root)
 
     def of(self, finding: FindingRecord) -> tuple[str, ...]:
-        if not self.field or not finding.owner:
+        return self.of_module(finding.owner)
+
+    def of_module(self, owner: str) -> tuple[str, ...]:
+        """The owners of a finding whose owner module is `owner` (empty for none)."""
+        if not self.field or not owner:
             return ()
-        value, _ = self.labeler.field_value(finding.owner, None, self.field)
+        value, _ = self.labeler.field_value(owner, None, self.field)
         if value.state is State.KNOWN and isinstance(value.data, frozenset):
             return tuple(sorted(value.data))
         return ()
@@ -897,15 +901,10 @@ class Commands:
         summary, config, files_root = self.current_summary()
         owners = ReadTimeOwners(config, summary.modules, files_root) if by == "owners" else None
         counts: dict[str, Counter[str]] = {}
-        for finding in summary.findings:
-            if finding.status is FindingStatus.ALLOWED:
-                continue
-            if owners is not None:
-                keys = owners.of(finding) or ("(no owner)",)
-            else:
-                keys = (self.target_of(finding),)
+        for status, rule, owner, target in summary.findings.open_rows():
+            keys = (owners.of_module(owner) or ("(no owner)",)) if owners is not None else (target,)
             for key in keys:
-                counts.setdefault(key, Counter())[f"{finding.status.value}:{finding.rule}"] += 1
+                counts.setdefault(key, Counter())[f"{status.value}:{rule}"] += 1
         for key in sorted(counts, key=lambda k: (-sum(counts[k].values()), k)):
             total = sum(counts[key].values())
             detail = ", ".join(f"{name} {count}" for name, count in counts[key].most_common())
@@ -925,13 +924,6 @@ class Commands:
         summary = summary_of(run, self.engine.envelope(run, tree), with_triples=False)
         self.summaries.put(summary.envelope, summary)
         return summary, run.config, run.files_root or run.root
-
-    @staticmethod
-    def target_of(finding: FindingRecord) -> str:
-        for witness in finding.witnesses:
-            if witness.targets:
-                return witness.targets[0]
-        return finding.identity[0] if finding.identity else "?"
 
     def explain_config(self) -> int:
         config = load_config(self.repo, self.repo / CONFIG_FILE)
