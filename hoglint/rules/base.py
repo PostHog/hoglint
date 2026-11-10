@@ -86,7 +86,7 @@ class RuleType:
     # an edge's two ends.
     ENTITIES: ClassVar[bool] = False
     # How a ledger write confirms what the evaluator found: "row" (the rule's own code judges each
-    # row again), "whole" (the rule runs whole again in Python) or "" (not confirmed).
+    # row again) or "whole" (the rule runs whole again in Python).
     CONFIRM: ClassVar[str]
     # The config keys the rule's code reads, besides the ones every rule has
     # (`config.schema.EVERY_RULE_READS`).
@@ -194,6 +194,10 @@ class RuleContext:
     def met_conflicts(self) -> None:
         """Records the labels set two ways that the run met so far, outside the labeler. The
         labeler records them as it reads them, so there is nothing left to do here."""
+
+    def confirm_levels(self) -> None:
+        """Groups every level again with labels its labeler did not compute, for a run that
+        writes a ledger. The Python engine's labeler computes its own."""
 
     def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
         """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""

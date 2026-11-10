@@ -31,6 +31,7 @@ from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
+from hoglint.rules.levels import LevelEvaluator
 from hoglint.rules.plan import tree
 from hoglint.selectors import Node, Truth
 
@@ -241,16 +242,19 @@ class Rejudged:
         self.target = target
         self.made: FindingDetail | None = None
 
-    def confirmed(self) -> EdgeEnv:
+    def confirmed(self, rule: EdgeRule | None = None) -> EdgeEnv:
         """The destination's environment, once the rule's own code judges it as the evaluator did
-        and its own `project` gives the evaluator's identity: the ledger keys a finding by it."""
+        and its own `project` gives the evaluator's identity: the ledger keys a finding by it.
+        `rule` is the rule over the labels it judges with: the run's own by default, one over a
+        plain Python labeler on a ledger write (D55)."""
+        rule = rule or self.rule
         edge = self.handle.get()
-        env = decided(self.rule, edge, self.target, self.judgment)
-        identity = project(self.rule.spec.identity, env.resolve)
+        env = decided(rule, edge, self.target, self.judgment)
+        identity = project(rule.spec.identity, env.resolve)
         if identity != self.identity:
             site = edge.site
             raise EngineError(
-                f"rule {self.rule.spec.id} gives {edge.kind} {site.path}:{site.line} the identity {identity}, "
+                f"rule {rule.spec.id} gives {edge.kind} {site.path}:{site.line} the identity {identity}, "
                 f"apart from the evaluator's {self.identity}"
             )
         return env
@@ -511,22 +515,36 @@ class NativeRuleContext(RuleContext):
             found = self.owners[module] = super().owner(module)
         return found
 
-    def confirm_findings(self, ran: list[RuleSpec]) -> None:
-        """Every finding the evaluator made is judged again by its rule's own code: a run that
-        writes a ledger reads no message, so a wrong row would become accepted debt (D50).
-
-        A row of an edge, entrypoint, signature or use-shape rule is judged on its own. Export,
-        layout and inventory rules have no judge per row, so each one that ran runs whole again
-        in its Python primitive, over a plain rule context with a Python labeler, and must give
-        the evaluator's findings and incomplete items, in order."""
-        for detail in self.rejudged:
-            detail.confirmed()
-        whole = [spec for spec in ran if primitive_of(spec).CONFIRM == "whole"]
-        if not whole:
-            return
+    @cached_property
+    def plain(self) -> RuleContext:
+        """A rule context over a plain Python labeler, which reads no label the evaluator
+        computed: what a ledger write confirms the evaluator's rows with (D55)."""
         labeler = Labeler(self.config, self.graph, self.repo_root, self.index)
-        plain = RuleContext(self.config, self.graph, labeler, self.repo_root)
-        for spec in whole:
+        return RuleContext(self.config, self.graph, labeler, self.repo_root)
+
+    def confirm_findings(self, ran: list[RuleSpec]) -> None:
+        """Every finding the evaluator made is judged again by its rule's own code, with labels
+        the evaluator did not compute: a run that writes a ledger reads no message, so a wrong
+        row would become accepted debt (D50, D55).
+
+        A rule whose class confirms per row (`RuleType.CONFIRM`) has each row judged again by its
+        rule over the plain context. Every other rule that ran runs whole again in its Python
+        primitive over the plain context, the runs before it at hand for a coverage rule, and
+        must give the evaluator's findings and incomplete items, in order."""
+        plain = self.plain
+        judges: dict[str, EdgeRule] = {}
+        for detail in self.rejudged:
+            spec = detail.rule.spec
+            judge = judges.get(spec.id)
+            if judge is None:
+                found = primitive_of(spec)(plain, spec)
+                assert isinstance(found, EdgeRule)
+                judge = judges[spec.id] = found
+            detail.confirmed(judge)
+        plain.results.update(self.results)
+        for spec in ran:
+            if primitive_of(spec).CONFIRM != "whole":
+                continue
             ours, theirs = (
                 confirmed_rows(self.results[spec.id]),
                 confirmed_rows(primitive_of(spec)(plain, spec).evaluate()),
@@ -539,6 +557,18 @@ class NativeRuleContext(RuleContext):
             mine = ours[at] if at < len(ours) else "nothing"
             other = theirs[at] if at < len(theirs) else "nothing"
             raise EngineError(f"rule {spec.id}: the evaluator gives {mine} as row {at}, the rule's own code {other}")
+
+    def confirm_levels(self) -> None:
+        """Every level's groups, as the evaluator gives them, must be the groups a plain Python
+        labeler gives (D55): a ledger writes a line per passing group."""
+        for spec in self.config.levels.values():
+            ours = self.labeler.level_groups(spec)
+            if ours is None:
+                continue
+            theirs = LevelEvaluator(spec, self.plain.labeler, {}).groups()
+            if ours != theirs:
+                wrong = sorted(set(ours) ^ set(theirs))[:3]
+                raise EngineError(f"level {spec.name}: the evaluator and the Python labeler group apart on {wrong}")
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         with engine_errors():

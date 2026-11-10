@@ -241,6 +241,8 @@ class Engine:
             result.levels[name] = level
             for group in level.passing:
                 result.scan[level_line(name, group)] = 1
+        if rewrite_ledger:
+            ctx.confirm_levels()
         self.raise_conflicts(ctx)
         if rewrite_ledger and ledger is not None:
             ledger.lines = dict(result.scan)

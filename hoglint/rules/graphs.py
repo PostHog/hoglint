@@ -63,7 +63,7 @@ class ReachPrimitive(EdgeRule):
 
     PRIMITIVE = MODE = "reach"
     NATIVE_MODE = "reach"
-    CONFIRM = ""
+    CONFIRM = "whole"
     READS = frozenset({"kinds", "contexts", "view", "from", "select", "deny", "unless", "remedy", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
@@ -287,7 +287,7 @@ class CyclePrimitive(EdgeRule):
 
     PRIMITIVE = MODE = "cycle"
     NATIVE_MODE = "cycle"
-    CONFIRM = ""
+    CONFIRM = "whole"
     READS = frozenset({"kinds", "contexts", "view", "from", "select", "remedy", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:

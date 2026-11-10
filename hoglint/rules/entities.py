@@ -370,7 +370,7 @@ class CoveragePrimitive(EntityRule):
 
     PRIMITIVE = MODE = "coverage"
     NATIVE_MODE = "coverage"
-    CONFIRM = ""
+    CONFIRM = "whole"
     READS = frozenset({"covers", "inputs"})
 
     def required(self) -> dict[str, tuple[str, str | None]]:

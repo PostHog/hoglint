@@ -1446,26 +1446,26 @@ def test_a_surface_with_a_control_character_is_worded_once_for_both_engines(worl
 
 
 class Lying:
-    """The evaluator, with the rows its call `method` returns changed by `change`."""
+    """The evaluator, with the rows each call `changes` names returns changed by its change."""
 
-    def __init__(self, inner: Any, method: str, change: Any) -> None:
+    def __init__(self, inner: Any, changes: dict[str, Any]) -> None:
         self.inner = inner
-        self.method = method
-        self.change = change
+        self.changes = changes
 
     def __getattr__(self, name: str) -> Any:
         found = getattr(self.inner, name)
-        if name != self.method:
+        change = self.changes.get(name)
+        if change is None:
             return found
-        return lambda *args: self.change(list(found(*args)))
+        return lambda *args: change(list(found(*args)))
 
 
-def lie(monkeypatch: pytest.MonkeyPatch, method: str, change: Any) -> None:
+def lie(monkeypatch: pytest.MonkeyPatch, **changes: Any) -> None:
     made = NativeRuleContext.evaluator.func
     monkeypatch.setattr(
         NativeRuleContext,
         "evaluator",
-        property(lambda ctx: ctx.__dict__.setdefault("lying", Lying(made(ctx), method, change))),
+        property(lambda ctx: ctx.__dict__.setdefault("lying", Lying(made(ctx), changes))),
     )
 
 
@@ -1475,24 +1475,79 @@ def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
     config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'nowhere'"}))
     edge = next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
     row = (edge.handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ["a", "b"], edge.site.module, None)
-    lie(monkeypatch, "judge", lambda rows: [*rows, row])
+    lie(monkeypatch, judge=lambda rows: [*rows, row])
     assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
     with pytest.raises(EngineError, match="apart from the evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
 
 
-# Per rule type, a rule and an evaluator call whose rows a lie changes: a violation row with an
-# identity the rule's own `project` does not give, or a first row the evaluator leaves out.
-LEDGER_LIES = {
+def an_import(world: World) -> Edge:
+    return next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
+
+
+def made_up(text: str) -> str:
+    return "made-up" if text == "billing" else text
+
+
+def made_up_label(changes: dict[str, Any]) -> dict[str, Any]:
+    """A `package` column that says `made-up` where it says `billing`, and judge rows whose
+    identities say the same: labels the evaluator computed, wrong on both sides."""
+    return {
+        **changes,
+        "values": lambda found: [[(kind, [made_up(item) for item in items]) for kind, items in found[0]], found[1]],
+        "judge": lambda rows: [(*row[:3], [made_up(item) for item in row[3]], *row[4:]) for row in rows],
+    }
+
+
+COVERED_CORE = rule_table(
+    "lied",
+    {
+        "primitive": "coverage",
+        "covers": ["edge.kind in ['import'] and src.tier == 'core': dst"],
+        "inputs": {"adapter": "globs", "paths": ["core/**"]},
+        "ledger": False,
+    },
+)
+
+# Per rule type, the rules and the lies of the evaluator's calls (each made from the fixture): a
+# row with an identity the rule's own `project` does not give, a first row left out, or a made-up
+# row: a label column, a reach path, a cycle pair, a coverage path, a level group.
+LEDGER_LIES: dict[str, tuple[str, Any]] = {
     "identity": (
-        {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"},
-        "judge",
-        lambda rows: [(*rows[0][:3], ["made", "up"], *rows[0][4:]), *rows[1:]],
+        rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
+        lambda world: {"judge": lambda rows: [(*rows[0][:3], ["made", "up"], *rows[0][4:]), *rows[1:]]},
     ),
-    "export": (CORNERS["export-shapes"], "export", lambda rows: rows[1:]),
-    "layout": (CORNERS["layout-on-modules"], "entities", lambda rows: rows[1:]),
-    "entity-inventory": (CORNERS["inventory-exactly-one"], "entities", lambda rows: rows[1:]),
-    "inventory": (CORNERS["inventory-classify"], "judge", lambda rows: rows[1:]),
+    "label column": (
+        rule_table(
+            "lied", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package", "identity": ["dst.package"]}
+        ),
+        lambda world: made_up_label({}),
+    ),
+    "export": (rule_table("lied", CORNERS["export-shapes"]), lambda world: {"export": lambda rows: rows[1:]}),
+    "layout": (rule_table("lied", CORNERS["layout-on-modules"]), lambda world: {"entities": lambda rows: rows[1:]}),
+    "entity-inventory": (
+        rule_table("lied", CORNERS["inventory-exactly-one"]),
+        lambda world: {"entities": lambda rows: rows[1:]},
+    ),
+    "inventory": (rule_table("lied", CORNERS["inventory-classify"]), lambda world: {"judge": lambda rows: rows[1:]}),
+    "reach path": (
+        rule_table("lied", CORNERS["reach-from-contracts"]),
+        lambda world: {"reach": lambda rows: [*rows, ("denied", "core.a", [(an_import(world).handle, 0)], 1)]},
+    ),
+    "cycle pair": (
+        rule_table("lied", CORNERS["cycle-between-packages"]),
+        lambda world: {
+            "pairs": lambda rows: [
+                *rows,
+                (an_import(world).handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ("made", "up")),
+                (an_import(world).handle, 0, JUDGMENTS.index(Judgment.VIOLATION), ("up", "made")),
+            ]
+        },
+    ),
+    "coverage path": (
+        COVERED_CORE,
+        lambda world: {"coverage": lambda found: [[*found[0], ("made/up.py", 0, None)], found[1]]},
+    ),
 }
 
 
@@ -1500,10 +1555,10 @@ LEDGER_LIES = {
 def test_a_ledger_write_holds_every_rule_type_to_its_own_code(
     world: World, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    rule, method, change = LEDGER_LIES[name]
-    config = world.config(rule_table("lied", rule))
+    rules, lies = LEDGER_LIES[name]
+    config = world.config(rules)
     assert Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True).runs["lied"].findings
-    lie(monkeypatch, method, change)
+    lie(monkeypatch, **lies(world))
     Engine(config, world.graph, world.repo).evaluate()
     with pytest.raises(EngineError, match="evaluator"):
         Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
@@ -1526,6 +1581,19 @@ def test_a_level_judges_the_groups_the_python_level_judges(world: World, monkeyp
     monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
     assert native == levels()
     assert all(passing or failing for passing, failing in native.values())
+
+
+def test_a_ledger_write_holds_a_level_to_the_groups_a_python_labeler_gives(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = world.config(LEVELS)
+    Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
+    lie(monkeypatch, level_groups=lambda groups: [*groups, "made-up"])
+    assert any(
+        "made-up" in level.passing for level in Engine(config, world.graph, world.repo).evaluate().levels.values()
+    )
+    with pytest.raises(EngineError, match="evaluator"):
+        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
 
 
 def problems(world: World, config: Config) -> list[str]:
