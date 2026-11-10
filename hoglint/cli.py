@@ -8,6 +8,7 @@ error. An incomplete result never hides violations: both are printed.
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 import json
@@ -676,20 +677,25 @@ class Baselines:
         if own.inputs == wanted.inputs:
             this_run = f"HEAD (tree {short}, this run)"
             return Baseline(own, this_run, config, is_self=True, staged=staged)
-        summary = self.evaluate(policy_root, config.ledger.file, head_tree, wanted)
+        summary = self.evaluate(policy_root, config.ledger.file, head_tree, wanted, staged)
+        # The baseline's graph sits in reference cycles (a rule's findings hold the rule), and a
+        # native run turns the cyclic collector off, so only a collection frees it before the run.
+        gc.collect()
         self.trees.put(summary)
         computed = f"HEAD (tree {short}, computed and stored)"
         return Baseline(own, computed, config, summary.obligations(), staged=staged)
 
-    def evaluate(self, policy_root: Path, ledger_path: str, head_tree: str, envelope: Envelope) -> ScanSummary:
+    def evaluate(
+        self, policy_root: Path, ledger_path: str, head_tree: str, envelope: Envelope, staged: bool
+    ) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
-        graph is freed before the run."""
+        graph can be freed before the run. A commit's baseline takes the staged thread count."""
         try:
             ledger = LedgerFile.parse(git(self.repo, "show", f"{head_tree}:{ledger_path}"))
         except subprocess.CalledProcessError:
             ledger = LedgerFile(source=ABSENT)
         runner = Runner(graph_source(self.engine.name, Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))))
-        run = runner.run(policy_root, self.repo, tree=head_tree, ledger=ledger)
+        run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
     def attribute(self, baseline: Baseline, summary: ScanSummary) -> Attributed:
