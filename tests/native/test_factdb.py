@@ -96,7 +96,7 @@ def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, da
     run, counts = link(native, BlobSnapshot.index(repo), database)
     fresh, _ = link(native, BlobSnapshot.index(repo), None)
     with sqlite3.connect(database.path) as conn:
-        newest, length = conn.execute("SELECT id, json_len FROM keys ORDER BY id DESC LIMIT 1").fetchone()
+        newest, length, oid = conn.execute("SELECT id, json_len, oid FROM keys ORDER BY id DESC LIMIT 1").fetchone()
         if damage == "record does not decompress":
             conn.execute("UPDATE records SET json = ? WHERE id = ?", (b"\xff" * 64, newest))
         elif damage == "a frame does not decompress":
@@ -114,6 +114,18 @@ def test_a_record_the_database_cannot_give_is_extracted_again(tmp_path: Path, da
             conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
     assert counts == (3, 0)
     assert records(run) == records(fresh)
+    if damage == "entry gone, id reused":
+        return
+    # The run stored the record it extracted again, as a clean database holds it.
+    clean = fact_database(native, tmp_path / "clean")
+    link(native, BlobSnapshot.index(repo), clean)
+    assert stored_record(database, oid) == stored_record(clean, oid)
+
+
+def stored_record(database: FactDatabase, oid: str) -> bytes:
+    with sqlite3.connect(database.path) as conn:
+        query = "SELECT r.json FROM records r JOIN keys k ON k.id = r.id WHERE k.oid = ?"
+        return bytes(conn.execute(query, (oid,)).fetchone()[0])
 
 
 @pytest.mark.parametrize("json_len", [-1, 1 << 62])
@@ -128,6 +140,8 @@ def test_a_stored_length_no_record_can_have_is_a_miss(tmp_path: Path, json_len: 
     fresh, _ = link(native, BlobSnapshot.index(repo), None)
     assert counts == (2, 1)
     assert records(run) == records(fresh)
+    # The run stored the entry anew, so the next run reads every record from the cache.
+    assert link(native, BlobSnapshot.index(repo), database)[1] == (3, 0)
 
 
 def test_a_damaged_database_is_moved_aside_and_the_run_goes_on(tmp_path: Path) -> None:

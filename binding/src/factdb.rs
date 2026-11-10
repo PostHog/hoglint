@@ -408,7 +408,10 @@ impl FactDb {
         }))
     }
 
-    /// Stores new entries; a key already stored, or met before in `entries`, keeps its entry.
+    /// Stores new entries. An entry met before in `entries` is stored once; an entry already
+    /// stored under the key is replaced: a run stores only what it had to extract, so a stored
+    /// entry it could not use is damaged (another run storing the same blob at once stores
+    /// equal facts).
     ///
     /// A chunk's bodies go in before its records. A run reads every body and few records, so
     /// the bodies lie in long runs of pages: a run whose pages left the page cache reads them
@@ -416,7 +419,7 @@ impl FactDb {
     pub fn store(&self, entries: &[NewEntry]) -> Result<()> {
         for chunk in entries.chunks(ROWS_PER_WRITE) {
             self.write(|conn| {
-                let mut exists = conn.prepare_cached("SELECT 1 FROM keys WHERE config = ?1 AND oid = ?2")?;
+                let mut existing = conn.prepare_cached("SELECT id FROM keys WHERE config = ?1 AND oid = ?2")?;
                 let mut facts = conn.prepare_cached("INSERT INTO facts (body) VALUES (?1)")?;
                 let mut records = conn.prepare_cached("INSERT INTO records (id, json) VALUES (?1, ?2)")?;
                 let mut keys = conn.prepare_cached(
@@ -427,8 +430,16 @@ impl FactDb {
                     let repeated = new
                         .iter()
                         .any(|other| other.config == entry.config && other.oid == entry.oid);
-                    if repeated || exists.exists(params![entry.config, entry.oid])? {
+                    if repeated {
                         continue;
+                    }
+                    let old: Option<i64> = existing
+                        .query_row(params![entry.config, entry.oid], |r| r.get(0))
+                        .optional()?;
+                    if let Some(old) = old {
+                        for table in ["facts", "records", "keys"] {
+                            conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [old])?;
+                        }
                     }
                     new.push(entry);
                 }
@@ -448,6 +459,29 @@ impl FactDb {
             })?;
         }
         Ok(())
+    }
+
+    /// Replaces the record of the entry of (config, oid), when there is one: `record` is its
+    /// compressed JSON text (`pack`) of `json_len` bytes.
+    pub fn repair_record(
+        &self,
+        config: &str,
+        oid: &str,
+        record: &[u8],
+        json_len: usize,
+    ) -> Result<()> {
+        self.write(|conn| {
+            conn.execute(
+                "UPDATE records SET json = ?1 WHERE id = (SELECT id FROM keys WHERE config = ?2 AND oid = ?3)",
+                params![record, config, oid],
+            )?;
+            conn.execute(
+                "UPDATE keys SET json_len = ?1, bytes = ?2 + (SELECT length(body) FROM facts WHERE facts.id = keys.id)
+                 WHERE config = ?3 AND oid = ?4",
+                params![json_len as i64, record.len() as i64, config, oid],
+            )?;
+            Ok(())
+        })
     }
 
     /// Records that this run read the entries of `keys` ((config id, oid)) today.

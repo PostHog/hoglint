@@ -25,8 +25,10 @@ use hoglint_facts::{
     ExtractConfig, Facts, FileRecord, Kinds, Status, extract, record_line, sha256_hex,
 };
 use rayon::prelude::*;
+use serde_json::value::RawValue;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -99,6 +101,7 @@ fn git_blob_id(bytes: &[u8], like: &str) -> String {
 }
 
 static WARNED: AtomicBool = AtomicBool::new(false);
+static REPAIRED: AtomicBool = AtomicBool::new(false);
 
 /// Logs a fact cache error, once per process: the run goes on without the cache.
 fn warn(error: &DbError) {
@@ -485,11 +488,34 @@ impl StoredRecords {
         }
         let json = match self.read(stored) {
             Some(json) => json,
-            None => extract_again(&self.again, stored)?.into_bytes(),
+            None => {
+                let json = extract_again(&self.again, stored)?;
+                self.repair(stored, &json);
+                json.into_bytes()
+            }
         };
         let found = use_text(&json);
         *self.last.lock().map_err(|e| e.to_string())? = Some((file, json));
         found
+    }
+
+    /// Rewrites the stored record of an entry whose record could not be read, so the next run
+    /// reads it from the cache again; an entry that went away is left alone. Logged once.
+    fn repair(&self, stored: &Stored, json: &str) {
+        let Ok(db) = self.db.lock() else {
+            return;
+        };
+        let Some(db) = db.as_ref() else {
+            return;
+        };
+        let record = pack(json.as_bytes(), &value_ranges(json));
+        let repaired = db.repair_record(&stored.config, &stored.oid, &record, json.len());
+        if repaired.is_ok() && !REPAIRED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "hoglint: the fact cache could not give the record of {}, so it was extracted again and stored anew",
+                stored.path
+            );
+        }
     }
 
     /// Bytes `range` of a stored record, decompressed from the frames that hold them; None
@@ -690,6 +716,20 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         drifted,
     };
     Ok((FactSet::deferred(files, text), stats))
+}
+
+/// Where each top-level key's value sits in a record's JSON text, as `key_ranges` gives them.
+fn value_ranges(json: &str) -> Vec<Range<usize>> {
+    let Ok(map) = serde_json::from_str::<BTreeMap<&str, &RawValue>>(json) else {
+        return Vec::new();
+    };
+    let start = json.as_ptr() as usize;
+    map.values()
+        .map(|raw| {
+            let at = raw.get().as_ptr() as usize - start;
+            at..at + raw.get().len()
+        })
+        .collect()
 }
 
 /// Where each key's value sits in a record's own JSON text.
