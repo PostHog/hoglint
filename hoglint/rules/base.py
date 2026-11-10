@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
+from hoglint.rules.findings import FindingTable
 from hoglint.rules.plan import context_bits, identity_paths, selector_tree, tree
 from hoglint.selectors import (
     NONE,
@@ -125,7 +126,7 @@ class IncompleteItem:
 @dataclass(frozen=False, slots=True)
 class RuleRun:
     spec: RuleSpec
-    findings: list[Finding] = field(default_factory=list)
+    findings: FindingTable = field(default_factory=FindingTable)
     incomplete: list[IncompleteItem] = field(default_factory=list)
 
 

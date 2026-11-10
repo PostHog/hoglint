@@ -7,7 +7,6 @@ levels last (they read every result). Nothing here deletes an edge.
 from __future__ import annotations
 
 import datetime
-import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -267,8 +266,8 @@ class Engine:
     def mark_accepted(self, result: RunResult, recorded: dict[LineKey, int]) -> None:
         """A new finding is accepted when the ledger records at least as many as the scan counts."""
         for run in result.runs.values():
-            updated = []
-            for finding in run.findings:
+            table = run.findings
+            for row, finding in enumerate(list(table)):
                 key = finding.ledger_key
                 accepted = (
                     finding.status is FindingStatus.NEW
@@ -276,5 +275,5 @@ class Engine:
                     and key in recorded
                     and recorded[key] >= result.scan.get(key, 0)
                 )
-                updated.append(dataclasses.replace(finding, status=FindingStatus.ACCEPTED) if accepted else finding)
-            run.findings = updated
+                if accepted:
+                    table.accept([table.identity_at[row]])

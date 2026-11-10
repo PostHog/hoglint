@@ -2,18 +2,48 @@
 
 use crate::link::Link;
 use crate::{ids_bytes, ids_from};
-use hoglint_facts::link::rules::Rules as CoreRules;
 use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::export::ExportRow;
 use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
+use hoglint_facts::link::rules::{NO_PLACE, Rules as CoreRules};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use rustc_hash::FxHashMap;
+use std::hash::Hash;
 
-/// A finding row: (edge id, destination index, judgment name, identity, source module,
-/// destination module or None).
-type RowTuple = (u32, u32, &'static str, Vec<String>, String, Option<String>);
+/// The rows of a judged rule as columns, so Python makes no object per row: (edge ids,
+/// destination indexes, judgment names, each row's judgment by place, distinct identities, each
+/// row's identity by place (`Judgment::has_identity`), distinct modules, each row's source module by place, each row's
+/// destination module by place). Per-row columns are little-endian u32s; a row with no identity
+/// or no destination module has `NO_PLACE` there.
+type JudgedColumns<'py> = (
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+    Vec<&'static str>,
+    Bound<'py, PyBytes>,
+    Vec<Vec<String>>,
+    Bound<'py, PyBytes>,
+    Vec<String>,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+);
+
+/// The place of `key` among `distinct`, added there when it is new.
+fn place_of<K: Eq + Hash + Clone>(
+    places: &mut FxHashMap<K, u32>,
+    distinct: &mut Vec<K>,
+    key: K,
+) -> u32 {
+    if let Some(&at) = places.get(&key) {
+        return at;
+    }
+    let at = distinct.len() as u32;
+    places.insert(key.clone(), at);
+    distinct.push(key);
+    at
+}
 
 /// A cycle row: (edge id, destination index, judgment name, the pair's groups or None).
 type PairTuple = (u32, u32, &'static str, Option<(String, String)>);
@@ -97,27 +127,59 @@ impl Rules {
     }
 
     /// Every destination of every candidate edge rule `rule` does not judge clean, in the order
-    /// the Python engine judges them, each with its judgment's name (`rules.base.Judgment`).
-    fn judge(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<RowTuple>> {
+    /// the Python engine judges them, as columns (`JudgedColumns`). A judgment travels by its
+    /// name (`rules.base.Judgment`).
+    fn judge<'py>(&self, py: Python<'py>, rule: usize) -> PyResult<JudgedColumns<'py>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let rows = self
             .inner
             .judge(&mut bound.inner, rule)
             .map_err(PyValueError::new_err)?;
         let it = &bound.inner.core.it;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                (
-                    row.edge,
-                    row.target,
-                    row.judgment.name(),
-                    row.identity,
-                    it.s(row.src_module).to_string(),
-                    row.dst_module.map(|module| it.s(module).to_string()),
-                )
-            })
-            .collect())
+        let count = rows.len();
+        let (mut edges, mut targets) = (Vec::with_capacity(count), Vec::with_capacity(count));
+        let (mut judgment_at, mut identity_at) =
+            (Vec::with_capacity(count), Vec::with_capacity(count));
+        let (mut src_at, mut dst_at) = (Vec::with_capacity(count), Vec::with_capacity(count));
+        let mut judgments = Vec::new();
+        let mut judgment_places = FxHashMap::default();
+        let mut identities = Vec::new();
+        let mut identity_places = FxHashMap::default();
+        let mut modules = Vec::new();
+        let mut module_places = FxHashMap::default();
+        for row in rows {
+            edges.push(row.edge);
+            targets.push(row.target);
+            judgment_at.push(place_of(
+                &mut judgment_places,
+                &mut judgments,
+                row.judgment.name(),
+            ));
+            identity_at.push(if row.judgment.has_identity() {
+                place_of(&mut identity_places, &mut identities, row.identity)
+            } else {
+                NO_PLACE
+            });
+            src_at.push(place_of(&mut module_places, &mut modules, row.src_module));
+            dst_at.push(match row.dst_module {
+                Some(module) => place_of(&mut module_places, &mut modules, module),
+                None => NO_PLACE,
+            });
+        }
+        Ok((
+            ids_bytes(py, &edges),
+            ids_bytes(py, &targets),
+            judgments,
+            ids_bytes(py, &judgment_at),
+            identities,
+            ids_bytes(py, &identity_at),
+            modules
+                .into_iter()
+                .map(|module| it.s(module).to_string())
+                .collect(),
+            ids_bytes(py, &src_at),
+            ids_bytes(py, &dst_at),
+        ))
     }
 
     /// What cycle rule `rule` makes of each destination it cannot leave alone, in judging order:

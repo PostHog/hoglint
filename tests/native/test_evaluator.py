@@ -8,6 +8,7 @@ import json
 import random
 import subprocess
 import dataclasses
+from array import array
 from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
@@ -332,6 +333,56 @@ def run_rows(run: Any) -> list[tuple[Any, ...]]:
     return [*findings, *incomplete]
 
 
+JudgedRow = tuple[int, int, str, list[str], str, str | None]
+# The judgments whose rows carry the rule's identity (`Judgment::has_identity`).
+IDENTIFIED = (Judgment.VIOLATION.value, Judgment.UNKNOWN_TYPE.value)
+
+
+def judged_rows(columns: tuple[Any, ...]) -> list[JudgedRow]:
+    """`Rules.judge`'s columns as rows: (edge id, destination, judgment name, identity, source
+    module, destination module)."""
+    names: list[str] = columns[2]
+    identities: list[list[str]] = columns[4]
+    modules: list[str] = columns[6]
+    edges, targets, judgment_at, identity_at, src_at, dst_at = (array("I", columns[at]) for at in (0, 1, 3, 5, 7, 8))
+    place = native_module().NO_PLACE
+    return [
+        (
+            edges[at],
+            targets[at],
+            names[judgment_at[at]],
+            identities[identity_at[at]] if identity_at[at] != place else [],
+            modules[src_at[at]],
+            modules[dst_at[at]] if dst_at[at] != place else None,
+        )
+        for at in range(len(edges))
+    ]
+
+
+def judged_columns(rows: list[JudgedRow]) -> tuple[Any, ...]:
+    """Rows back as `Rules.judge`'s columns."""
+    place = native_module().NO_PLACE
+    names: list[str] = []
+    identities: list[list[str]] = []
+    modules: list[str] = []
+
+    def at(found: list[Any], value: Any) -> int:
+        if value not in found:
+            found.append(value)
+        return found.index(value)
+
+    columns = [array("I") for _ in range(6)]
+    for edge, target, name, identity, src, dst in rows:
+        columns[0].append(edge)
+        columns[1].append(target)
+        columns[2].append(at(names, name))
+        columns[3].append(at(identities, list(identity)) if name in IDENTIFIED else place)
+        columns[4].append(at(modules, src))
+        columns[5].append(at(modules, dst) if dst is not None else place)
+    edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns)
+    return edges, targets, names, judgment_at, identities, identity_at, modules, src_at, dst_at
+
+
 def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
     """Where the evaluator and the Python rule code differ for every rule of `rules`."""
     config = world.config(rules, base)
@@ -346,7 +397,7 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
             assert isinstance(rule, EdgeRule)
             ours = Counter(
                 (edge, target, name, tuple(identity))
-                for edge, target, name, identity, _, _ in native.evaluator.judge(index)
+                for edge, target, name, identity, _, _ in judged_rows(native.evaluator.judge(index))
             )
             theirs = python_rows(python, rule)
             if ours != theirs:
@@ -1429,6 +1480,8 @@ class Lying:
         change = self.changes.get(name)
         if change is None:
             return found
+        if name == "judge":
+            return lambda *args: judged_columns(change(judged_rows(found(*args))))
         return lambda *args: change(list(found(*args)))
 
 

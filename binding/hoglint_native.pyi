@@ -190,9 +190,12 @@ class Link:
     def value_lookup(self, scope: int, value: object, at: int, line: int) -> LookupResult | None: ...
     def chain_lookup(self, scope: int, chain: str, at: int, line: int) -> tuple[LookupResult, list[str]]: ...
 
-Row = tuple[int, int, str, list[str], str, str | None]
-"""(edge id, destination index, judgment name, identity, source module, destination module or None).
-A judgment's name is its value in `rules.base.Judgment`."""
+JudgedColumns = tuple[bytes, bytes, list[str], bytes, list[list[str]], bytes, list[str], bytes, bytes]
+"""A judged rule's rows as columns: (edge ids, destination indexes, judgment names, each row's
+judgment by place, distinct identities, each row's identity by place, distinct modules, each row's
+source module by place, each row's destination module by place). Per-row columns are u32s;
+`NO_PLACE` where a row has no identity or no destination module. A judgment's name is its value
+in `rules.base.Judgment`."""
 
 PairRow = tuple[int, int, str, tuple[str, str] | None]
 """(edge id, destination index, judgment name, the pair's (source, destination) groups or None)."""
@@ -212,9 +215,9 @@ class Rules:
     def reads(link: Link, plan: str) -> list[str]:
         """The module fields a Python provider sets that the plan's compiled rules, audiences,
         shapes, domains and levels read: the columns the plan given to `Rules` must hold."""
-    def judge(self, rule: int) -> list[Row]:
+    def judge(self, rule: int) -> JudgedColumns:
         """Every destination an edge, entrypoint or signature rule does not judge clean, in judging
-        order."""
+        order, as columns."""
     def pairs(self, rule: int) -> list[PairRow]:
         """What a cycle rule makes of each destination it cannot leave alone, in judging order."""
     def reach(self, rule: int) -> list[Found]:

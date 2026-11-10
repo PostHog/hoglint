@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import tomllib
 import datetime
-import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from hoglint.config.model import Config
-from hoglint.model import Finding, FindingStatus
+from hoglint.model import Finding
 from hoglint.rules.base import RuleRun, contexts_of
 from hoglint.selectors import render_data
 
@@ -185,15 +184,13 @@ def apply_exceptions(runs: dict[str, RuleRun], exceptions: ExceptionsFile, today
         entries = by_rule.get(rule, [])
         if not entries:
             continue
-        updated: list[Finding] = []
-        for finding in run.findings:
+        table = run.findings
+        for row, finding in enumerate(list(table)):
             entry = next((e for e in entries if matches(e, finding)), None)
             if entry is None:
-                updated.append(finding)
                 continue
             used.add(entry.index)
-            updated.append(dataclasses.replace(finding, status=FindingStatus.ALLOWED))
-        run.findings = updated
+            table.allow(row)
     report = ExceptionReport(problems=list(exceptions.problems))
     for entry in exceptions.entries:
         if entry.index not in used:

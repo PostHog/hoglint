@@ -69,6 +69,12 @@ impl Judgment {
             Judgment::UnknownType => "unknown-type",
         }
     }
+
+    /// Whether a row of this judgment carries the rule's identity: Python reports any other
+    /// judgment with its own code.
+    pub fn has_identity(self) -> bool {
+        matches!(self, Judgment::Violation | Judgment::UnknownType)
+    }
 }
 
 /// One destination of one edge a rule does not judge clean: what Python needs to make its
@@ -739,7 +745,7 @@ impl Rules {
                 if judgment == Judgment::Clean {
                     continue;
                 }
-                let identity = if matches!(judgment, Judgment::Violation | Judgment::UnknownType) {
+                let identity = if judgment.has_identity() {
                     rule.identity
                         .iter()
                         .map(|field| render(&evaluate_ref(*field, &env)))

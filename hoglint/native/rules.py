@@ -20,7 +20,7 @@ from hoglint.config.model import Config, RuleSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow
+from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, FindingStatus, Graph, Owners, Remedy, Shown, WitnessRow
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
@@ -298,10 +298,119 @@ def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
     return [*((f.identity, f.subjects, f.ledgerable, f.unknown) for f in run.findings), *run.incomplete]
 
 
-# A row of `Rules.judge`: (edge id, destination, judgment name, identity, source module,
-# destination module), and one `found_rows` gives with its judgment and its edge as a handle.
-JudgedRow = tuple[int, int, str, list[str], str, str | None]
-FoundRow = tuple[EdgeHandle, int, Judgment, tuple[str, ...], str, str | None]
+def u32s(raw: bytes) -> array[int]:
+    out = array("I")
+    out.frombytes(raw)
+    return out
+
+
+class JudgedRows:
+    """A judged rule's rows as the evaluator gives them (`Rules.judge`): columns, with each
+    judgment, identity and module once. The rows whose judgment the rule takes as a finding
+    (`EdgeRule.found`) are a `RowSource` of the rule's table: a `Finding` is made for one of them
+    only when a reader asks for it."""
+
+    __slots__ = (
+        "alone",
+        "ctx",
+        "dst_at",
+        "edges",
+        "found",
+        "identities",
+        "identity_at",
+        "judgment_at",
+        "judgments",
+        "ledgerable",
+        "modules",
+        "no_place",
+        "row_edges",
+        "rule",
+        "src_at",
+        "targets",
+        "unknown",
+    )
+
+    def __init__(self, ctx: NativeRuleContext, rule: EdgeRule, raw: tuple[Any, ...]) -> None:
+        edges, targets, names, judgment_at, identities, identity_at, modules, src_at, dst_at = raw
+        self.ctx = ctx
+        self.rule = rule
+        self.edges = u32s(edges)
+        self.targets = u32s(targets)
+        with engine_errors():
+            self.judgments = [Judgment(name) for name in names]
+        self.judgment_at = u32s(judgment_at)
+        self.identities: list[tuple[str, ...]] = [tuple(identity) for identity in identities]
+        self.identity_at = u32s(identity_at)
+        self.modules: list[str] = modules
+        self.src_at = u32s(src_at)
+        self.dst_at = u32s(dst_at)
+        self.no_place: int = import_module().NO_PLACE
+        self.found = rule.found()
+        flags = [rule.flags(judgment) if judgment in self.found else (False, False) for judgment in self.judgments]
+        ledger = rule.spec.ledger
+        self.ledgerable = bytes([flags[at][0] and ledger for at in self.judgment_at])
+        self.unknown = bytes([flags[at][1] for at in self.judgment_at])
+        self.row_edges: RowEdges | None = None
+        # The rows whose judgment goes to the rule's own code, in order: few or none.
+        places = {at for at, judgment in enumerate(self.judgments) if judgment not in self.found}
+        self.alone = [row for row, at in enumerate(self.judgment_at) if at in places] if places else []
+
+    def judgment(self, at: int) -> Judgment:
+        return self.judgments[self.judgment_at[at]]
+
+    def edge_id(self, at: int) -> int:
+        return self.edges[at]
+
+    def handle(self, at: int) -> EdgeHandle:
+        if self.row_edges is None:
+            alone = set(self.alone)
+            ids = distinct_ids(edge for row, edge in enumerate(self.edges) if row not in alone)
+            self.row_edges = RowEdges(self.ctx.native.native.core, ids)
+        return EdgeHandle(self.row_edges, self.edges[at])
+
+    def edge(self, at: int) -> Edge:
+        return self.handle(at).get()
+
+    def witness_row(self, at: int) -> WitnessRow:
+        return self.handle(at).row()
+
+    def src(self, at: int) -> str:
+        return self.modules[self.src_at[at]]
+
+    def dst(self, at: int) -> str | None:
+        place = self.dst_at[at]
+        return None if place == self.no_place else self.modules[place]
+
+    def subjects(self, at: int) -> tuple[str, ...]:
+        return subjects_of(self.src(at), self.dst(at))
+
+    def owner_module(self, at: int) -> str | None:
+        owner = self.ctx.owner(self.src(at))
+        return owner.module if owner is not None else None
+
+    def rejudged(self, at: int, identity: tuple[str, ...]) -> Rejudged:
+        return Rejudged(self.rule, self.handle(at), self.judgment(at), identity, self.targets[at])
+
+    def finding(self, at: int, identity: tuple[str, ...], status: FindingStatus) -> Finding:
+        handle = self.handle(at)
+        return Finding(
+            rule=self.rule.spec.id,
+            identity=identity,
+            detail=self.rejudged(at, identity),
+            owner=self.ctx.owner(self.src(at)),
+            status=status,
+            subjects=self.subjects(at),
+            ledgerable=bool(self.ledgerable[at]),
+            unknown=bool(self.unknown[at]),
+            witness=handle,
+        )
+
+    def confirm(self, judge: EdgeRule) -> None:
+        """Every row the rule takes as a finding, judged again by `judge` (D50, D55)."""
+        alone = set(self.alone)
+        for at in range(len(self.edges)):
+            if at not in alone:
+                self.rejudged(at, self.identities[self.identity_at[at]]).confirmed(judge)
 
 
 class NativeRuleContext(RuleContext):
@@ -313,7 +422,7 @@ class NativeRuleContext(RuleContext):
         index = labeler.index
         assert isinstance(index, NativeGraphIndex)
         self.native = index
-        self.rejudged: list[Rejudged] = []
+        self.judged_rows: list[JudgedRows] = []
         self.owners: dict[str, Owners | None] = {}
 
     @cached_property
@@ -371,52 +480,33 @@ class NativeRuleContext(RuleContext):
         clean nor a finding of its own."""
         return rule.recorded([decided(rule, edge, target, judgment)])
 
-    def found_rows(self, rule: EdgeRule, rows: list[JudgedRow], found: frozenset[Judgment]) -> Iterator[FoundRow]:
-        """The evaluator's rows of a rule, in the order the rule judges. A row whose judgment
-        is not in `found` goes to the rule's own code, which reports it into the rule's run and
-        must judge the same; every other row is given here with its edge as a handle. A judgment
-        name the rule code does not know stops the run."""
-        with engine_errors():
-            judged = [
-                (edge, target, Judgment(name), identity, src, dst) for edge, target, name, identity, src, dst in rows
-            ]
-        core = self.native.native.core
-        alone_ids = distinct_ids(row[0] for row in judged if row[2] not in found)
-        alone = dict(zip(alone_ids, core.get(alone_ids)))
-        edges = RowEdges(core, distinct_ids(row[0] for row in judged if row[2] in found))
-        for edge_id, target, judgment, identity, src, dst in judged:
-            if judgment in found:
-                yield EdgeHandle(edges, edge_id), target, judgment, tuple(identity), src, dst
-                continue
-            reported = self.judged_alone(rule, alone[edge_id], target, judgment)
-            rule.run.findings.extend(reported.findings)
-            rule.run.incomplete.extend(reported.incomplete)
+    def alone_reports(self, rule: EdgeRule, rows: JudgedRows) -> Iterator[tuple[int, RuleRun]]:
+        """Each row whose judgment the rule does not take as a finding, with what the rule's own
+        code reports for it; that code must judge as the evaluator did."""
+        alone = rows.alone
+        alone_ids = distinct_ids(rows.edges[at] for at in alone)
+        edges = dict(zip(alone_ids, self.native.native.core.get(alone_ids)))
+        for at in alone:
+            yield at, self.judged_alone(rule, edges[rows.edges[at]], rows.targets[at], rows.judgment(at))
 
     def judged(self, rule: EdgeRule) -> bool:
         """The evaluator's rows of an edge, entrypoint, signature or use-shape rule, into the
-        rule's run in the order the rule judges: a violation (or a slot of unknown type the rule
-        reports as a finding) becomes its finding here, its edge kept as a handle."""
+        rule's findings table in the order the rule judges: a violation (or a slot of unknown
+        type the rule reports as a finding) is a row of the evaluator's columns, and a row the
+        rule's own code reports is a row it made."""
         if rule.CONFIRM != "row":
             return False
-        rows = self.run_rule(self.evaluator.judge, rule)
-        found = rule.found()
-        spec = rule.spec
-        flags = {judgment: rule.flags(judgment) for judgment in found}
-        for handle, target, judgment, identity, src, dst in self.found_rows(rule, rows, found):
-            ledgerable, unknown = flags[judgment]
-            detail = Rejudged(rule, handle, judgment, identity, target)
-            self.rejudged.append(detail)
-            finding = Finding(
-                rule=spec.id,
-                identity=identity,
-                detail=detail,
-                owner=self.owner(src),
-                subjects=subjects_of(src, dst),
-                ledgerable=ledgerable and spec.ledger,
-                unknown=unknown,
-                witness=handle,
-            )
-            rule.run.findings.append(finding)
+        rows = JudgedRows(self, rule, self.run_rule(self.evaluator.judge, rule))
+        table = rule.run.findings
+        table.take(rows)
+        self.judged_rows.append(rows)
+        start = 0
+        for at, reported in self.alone_reports(rule, rows):
+            table.add_rows(start, at)
+            table.extend(reported.findings)
+            rule.run.incomplete.extend(reported.incomplete)
+            start = at + 1
+        table.add_rows(start, len(rows.edges))
         return True
 
     def export_run(self, rule: ExportPrimitive) -> RuleRun:
@@ -454,10 +544,15 @@ class NativeRuleContext(RuleContext):
         """The evaluator's rows of an inventory over edges: the first destination with each
         identity, kept as a handle, and the ones it cannot place, which the rule reports itself;
         then the classification file's entries, as `EdgeInventory.evaluate` compares them."""
-        rows = self.run_rule(self.evaluator.judge, rule)
+        rows = JudgedRows(self, rule, self.run_rule(self.evaluator.judge, rule))
+        for _, reported in self.alone_reports(rule, rows):
+            rule.run.findings.extend(reported.findings)
+            rule.run.incomplete.extend(reported.incomplete)
+        alone = set(rows.alone)
         seen: dict[tuple[str, ...], tuple[EdgeHandle, str, str | None]] = {}
-        for handle, _, _, identity, src, dst in self.found_rows(rule, rows, frozenset({Judgment.VIOLATION})):
-            seen[identity] = (handle, src, dst)
+        for at in range(len(rows.edges)):
+            if at not in alone:
+                seen[rows.identities[rows.identity_at[at]]] = (rows.handle(at), rows.src(at), rows.dst(at))
         spec = rule.spec
         classified = rule.classifications()
         for identity in sorted(seen):
@@ -501,7 +596,7 @@ class NativeRuleContext(RuleContext):
             if run is None:
                 witnesses.append(None)
                 continue
-            witnesses.append(array("I", (at for finding in run.findings for at in finding.witness_ids)).tobytes())
+            witnesses.append(run.findings.witness_ids().tobytes())
         paths, incomplete = self.run_rule(self.evaluator.coverage, rule, witnesses)
         covers = rule.spec.covers
         for what, at, module, surface in incomplete:
@@ -538,15 +633,10 @@ class NativeRuleContext(RuleContext):
         primitive over the plain context, the runs before it at hand for a coverage rule, and
         must give the evaluator's findings and incomplete items, in order."""
         plain = self.plain
-        judges: dict[str, EdgeRule] = {}
-        for detail in self.rejudged:
-            spec = detail.rule.spec
-            judge = judges.get(spec.id)
-            if judge is None:
-                found = primitive_of(spec)(plain, spec)
-                assert isinstance(found, EdgeRule)
-                judge = judges[spec.id] = found
-            detail.confirmed(judge)
+        for rows in self.judged_rows:
+            judge = primitive_of(rows.rule.spec)(plain, rows.rule.spec)
+            assert isinstance(judge, EdgeRule)
+            rows.confirm(judge)
         plain.results.update(self.results)
         for spec in ran:
             if primitive_of(spec).CONFIRM != "whole":
