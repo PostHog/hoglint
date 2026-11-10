@@ -610,6 +610,11 @@ class SchemaBuilder:
             self.fail(
                 key, f'field {field_name!r} lives on modules; a symbols assignment needs a field with `on = "symbol"`'
             )
+        if spec.type is FieldType.SET:
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if not isinstance(item, str):
+                    self.fail(key, f"field {field_name!r} is a set of strings; {item!r} is not a string")
         if isinstance(value, str):
             for capture in CAPTURE_RE.findall(value):
                 if capture not in captures:

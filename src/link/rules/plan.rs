@@ -53,7 +53,7 @@ pub struct DomainPlan {
 pub enum SetValue {
     Text(String),
     Bool(bool),
-    /// A list, for a set field: its items as `str()` makes them.
+    /// A list, for a set field: its items, strings by the schema.
     Items(Vec<String>),
     /// Any other value: its `str()` and its `repr()`.
     Other(String, String),

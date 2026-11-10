@@ -100,6 +100,15 @@ ledger = false
         ),
         ("[[assign]]\nmatch = 'x/**'\nset = { tier = 'leaf' }\n", "'leaf' is not a value of field 'tier'"),
         ("[[assign]]\nmatch = 'x/**'\nset = { package = '{pkg}' }\n", "`{pkg}` is not captured"),
+        # a set holds strings in both engines: 1 and true have no one text form
+        (
+            "[fields]\nowners = { type = 'set' }\n[[assign]]\nmatch = 'x/**'\nset = { owners = ['a', 1, true] }\n",
+            "field 'owners' is a set of strings; 1 is not a string",
+        ),
+        (
+            "[fields]\nowners = { type = 'set' }\n[[assign]]\nmatch = 'x/**'\nset = { owners = true }\n",
+            "field 'owners' is a set of strings; True is not a string",
+        ),
         (
             "[shapes.contract]\ndata = ['frozen-dataclass']\n[exports.facade]\npaths = ['facade/**']\n",
             "needs a shape policy",

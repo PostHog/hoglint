@@ -70,10 +70,10 @@ def selector_tree(selector: Selector | None) -> dict[str, Any] | None:
 
 
 def set_value(spec: FieldSpec | None, value: Any) -> dict[str, Any]:
-    """A value an assignment sets: a set field's items, a string (maybe a template), a bool, or
-    the `str()` and `repr()` of anything else."""
-    if spec is not None and spec.type is FieldType.SET and isinstance(value, (frozenset, set, list, tuple)):
-        return {"items": [str(item) for item in value]}
+    """A value an assignment sets: a set field's items (strings, as the schema checks), a string
+    (maybe a template), a bool, or the `str()` and `repr()` of anything else."""
+    if spec is not None and spec.type is FieldType.SET and isinstance(value, list):
+        return {"items": list(value)}
     if isinstance(value, bool):
         return {"bool": value}
     if isinstance(value, str):
