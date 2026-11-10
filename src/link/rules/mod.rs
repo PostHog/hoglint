@@ -28,7 +28,7 @@ use self::entities::EntityRule;
 use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
 use self::labels::{Assign, Cell, Domain, Export, Field, FieldKind, Labels};
-use self::plan::{Mode, Plan, RulePlan, SetValue};
+use self::plan::{EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan};
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
 use self::signature::Signature;
 use self::staged::{Staged, parts_truth, truth};
@@ -67,38 +67,89 @@ pub struct Row {
     pub dst_module: Option<Sid>,
 }
 
+/// One compiled rule: its id, and its mode with what that mode reads.
 pub struct Rule {
     pub id: String,
-    pub mode: Mode,
+    pub kind: RuleKind,
+}
+
+/// A rule's mode (`RuleType.NATIVE_MODE`) and what it reads.
+pub enum RuleKind {
+    /// `EdgeRule.decide` per edge, findings as rows.
+    Judge(Judged),
+    /// The search of a reach rule.
+    Reach(Reach),
+    /// The group pairs of a cycle rule.
+    Cycle(Cycle),
+    /// The whole check of an export rule.
+    Export(ExportRule),
+    /// The paths a coverage rule needs covered.
+    Coverage(Vec<Cover>),
+    /// A layout rule's or an entity inventory's entities.
+    Entities(EntityRule),
+}
+
+/// Which edges a rule over edges sees (`EdgeRule.sees`) and how it selects them.
+pub struct Edges {
     kinds: Vec<String>,
     include: u8,
     exclude: u8,
     role: Role,
-    selection: Vec<Node>,
     /// The selection in the order and parts the Python engine judges it.
     staged: Staged,
-    deny: Option<Node>,
-    allow: Option<Node>,
-    require: Option<Node>,
-    unless: Option<Node>,
-    default_allow: bool,
+}
+
+/// A rule judged per edge: edge, entrypoint, signature, use-shape and edge inventory rules.
+pub struct Judged {
+    edges: Edges,
     identity: Vec<Ref>,
-    /// A cycle rule's group field on each end.
-    group: Option<(Ref, Ref)>,
-    /// A reach rule's `from`.
-    start: Option<Node>,
-    /// What a signature rule adds to an edge rule.
+    unless: Option<Node>,
+    /// What a signature rule adds.
     signature: Option<Signature>,
-    /// What an export rule checks.
-    export: Option<ExportRule>,
-    /// What a coverage rule needs covered.
-    covers: Vec<Cover>,
-    /// What a use-shape rule adds.
-    use_shape: Option<UseShape>,
+    verdict: Verdict,
+}
+
+/// How a judged rule decides a selected destination (`EdgeRule.violation` and its overrides).
+pub enum Verdict {
+    /// `deny`, `allow` and `require`, all judged; with none, the selection is the finding.
+    Predicates {
+        deny: Option<Node>,
+        allow: Option<Node>,
+        require: Option<Node>,
+    },
+    /// An entrypoint rule with no predicate: a destination it does not export.
+    DefaultAllow,
+    UseShape(UseShape),
     /// An inventory over edges: a selected destination is the row.
-    inventory: bool,
-    /// What a rule over entities adds.
-    entities: Option<EntityRule>,
+    Inventory,
+}
+
+/// A reach rule (`ReachPrimitive`).
+pub struct Reach {
+    edges: Edges,
+    /// Its `from`.
+    start: Option<Node>,
+    deny: Option<Node>,
+    unless: Option<Node>,
+}
+
+/// A cycle rule (`CyclePrimitive`): its group field on each end.
+pub struct Cycle {
+    edges: Edges,
+    group: (Ref, Ref),
+}
+
+impl RuleKind {
+    fn mode(&self) -> &'static str {
+        match self {
+            RuleKind::Judge(_) => "judge",
+            RuleKind::Reach(_) => "reach",
+            RuleKind::Cycle(_) => "cycle",
+            RuleKind::Export(_) => "export",
+            RuleKind::Coverage(_) => "coverage",
+            RuleKind::Entities(_) => "entities",
+        }
+    }
 }
 
 /// What a use-shape rule adds to an edge rule (`UseShapePrimitive`).
@@ -438,72 +489,84 @@ impl Rules {
     }
 
     fn compile(
-        compiler: &Compiler,
+        edge: &Compiler,
         entity: &Compiler,
         plan: &RulePlan,
         fields: &[Field],
     ) -> Result<Rule, String> {
-        // A rule over entities reads its selectors as entity selectors.
-        let compiler = if plan.entities.is_some() {
-            entity
-        } else {
-            compiler
-        };
-        let selection = compiler.nodes(&plan.selection)?;
-        let staged = Staged::new(&selection, fields);
-        let optional = |node: &Option<plan::NodePlan>| {
+        let optional = |compiler: &Compiler, node: &Option<NodePlan>| {
             node.as_ref().map(|node| compiler.node(node)).transpose()
+        };
+        let edges = |found: &EdgesPlan| -> Result<Edges, String> {
+            let selection = edge.nodes(&found.selection)?;
+            Ok(Edges {
+                kinds: found.kinds.clone(),
+                include: found.include,
+                exclude: found.exclude,
+                role: role_of(&found.endpoint)?,
+                staged: Staged::new(&selection, fields),
+            })
+        };
+        let kind = match &plan.mode {
+            ModePlan::Judge(found) => RuleKind::Judge(Judged {
+                edges: edges(&found.edges)?,
+                identity: found
+                    .identity
+                    .iter()
+                    .map(|path| edge.reference(path))
+                    .collect(),
+                unless: optional(edge, &found.unless)?,
+                signature: found.signature.as_ref().map(|signature| Signature {
+                    unknown_types: signature.unknown_types.clone(),
+                    annotation: edge.it.get("annotation"),
+                }),
+                verdict: match &found.verdict {
+                    VerdictPlan::Predicates {
+                        deny,
+                        allow,
+                        require,
+                    } => Verdict::Predicates {
+                        deny: optional(edge, deny)?,
+                        allow: optional(edge, allow)?,
+                        require: optional(edge, require)?,
+                    },
+                    VerdictPlan::DefaultAllow => Verdict::DefaultAllow,
+                    VerdictPlan::UseShape(shapes) => Verdict::UseShape(UseShape {
+                        allow: shapes.allow.clone(),
+                        deny: shapes.deny.clone(),
+                        flow: shapes.flow.then(|| edge.it.get("flow_shape")),
+                    }),
+                    VerdictPlan::Inventory => Verdict::Inventory,
+                },
+            }),
+            ModePlan::Reach(found) => RuleKind::Reach(Reach {
+                edges: edges(&found.edges)?,
+                start: optional(edge, &found.start)?,
+                deny: optional(edge, &found.deny)?,
+                unless: optional(edge, &found.unless)?,
+            }),
+            ModePlan::Cycle(found) => {
+                let path = |root: &str| [root.to_string(), found.group.clone()];
+                RuleKind::Cycle(Cycle {
+                    edges: edges(&found.edges)?,
+                    group: (edge.reference(&path("src")), edge.reference(&path("dst"))),
+                })
+            }
+            ModePlan::Export(found) => {
+                RuleKind::Export(ExportRule::new(&found.export, &found.identity, entity))
+            }
+            ModePlan::Coverage(found) => RuleKind::Coverage(
+                found
+                    .covers
+                    .iter()
+                    .map(|cover| Cover::new(cover, edge, fields))
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            ModePlan::Entities(found) => RuleKind::Entities(EntityRule::new(found, entity)?),
         };
         Ok(Rule {
             id: plan.id.clone(),
-            mode: plan.mode,
-            kinds: plan.kinds.clone(),
-            include: plan.include,
-            exclude: plan.exclude,
-            role: role_of(&plan.endpoint)?,
-            selection,
-            staged,
-            deny: optional(&plan.deny)?,
-            allow: optional(&plan.allow)?,
-            require: optional(&plan.require)?,
-            unless: optional(&plan.unless)?,
-            default_allow: plan.default_allow,
-            identity: plan
-                .identity
-                .iter()
-                .map(|path| compiler.reference(path))
-                .collect(),
-            start: optional(&plan.start)?,
-            entities: plan
-                .entities
-                .as_ref()
-                .map(|found| EntityRule::new(found, &plan.identity, entity)),
-            inventory: plan.inventory,
-            use_shape: plan.use_shape.as_ref().map(|found| UseShape {
-                allow: found.allow.clone(),
-                deny: found.deny.clone(),
-                flow: found.flow.then(|| compiler.it.get("flow_shape")),
-            }),
-            covers: plan
-                .covers
-                .iter()
-                .map(|cover| Cover::new(cover, compiler, fields))
-                .collect::<Result<Vec<_>, String>>()?,
-            export: plan
-                .export
-                .as_ref()
-                .map(|found| ExportRule::new(found, plan.include, &plan.identity, entity)),
-            signature: plan.signature.then(|| Signature {
-                unknown_types: plan.unknown_types.clone(),
-                annotation: compiler.it.get("annotation"),
-            }),
-            group: plan.group.as_ref().map(|name| {
-                let path = |root: &str| [root.to_string(), name.clone()];
-                (
-                    compiler.reference(&path("src")),
-                    compiler.reference(&path("dst")),
-                )
-            }),
+            kind,
         })
     }
 
@@ -719,7 +782,7 @@ impl Rules {
     }
 
     /// The kinds a rule reads as interned names, in its order; every kind when it names none.
-    fn kind_sids(&self, link: &Link, rule: &Rule) -> Vec<Sid> {
+    fn kind_sids(&self, link: &Link, rule: &Edges) -> Vec<Sid> {
         if rule.kinds.is_empty() {
             return link.kind_order();
         }
@@ -730,7 +793,7 @@ impl Rules {
     }
 
     /// The edges a rule sees (`EdgeRule.sees`), in id order.
-    fn candidates(&self, link: &mut Link, rule: &Rule) -> Vec<u32> {
+    fn candidates(&self, link: &mut Link, rule: &Edges) -> Vec<u32> {
         let kinds: Vec<Sid> = rule
             .kinds
             .iter()
@@ -768,33 +831,39 @@ impl Rules {
         found.into_iter().flatten().collect()
     }
 
-    /// Positions into `edges` (distinct ids) in the order the rule judges its edges.
-    fn order(&self, link: &mut Link, rule: &Rule, edges: &[u32]) -> Result<Vec<u32>, String> {
+    /// Positions into `edges` (distinct ids) in the order rule `id` judges its edges.
+    fn order(
+        &self,
+        link: &mut Link,
+        id: &str,
+        rule: &Edges,
+        edges: &[u32],
+    ) -> Result<Vec<u32>, String> {
         let kinds = self.kind_sids(link, rule);
-        link.rule_order(edges, &kinds).ok_or_else(|| {
-            format!(
-                "rule {}: an edge whose kind is not among its kinds",
-                rule.id
-            )
-        })
+        link.rule_order(edges, &kinds)
+            .ok_or_else(|| format!("rule {id}: an edge whose kind is not among its kinds"))
     }
 
     /// Every destination of every candidate edge that rule `index` does not judge clean, in the
     /// order the Python engine judges them.
     pub fn judge(&self, link: &mut Link, index: usize) -> Result<Vec<Row>, String> {
-        let rule = self.rule(index, Mode::Judge)?;
-        self.read_sources(link, rule);
-        let mut ids = self.candidates(link, rule);
+        let (rule_id, rule) = self.rule_as(index, "judge", |kind| match kind {
+            RuleKind::Judge(found) => Some(found),
+            _ => None,
+        })?;
+        let edges = &rule.edges;
+        self.read_sources(link, edges);
+        let mut ids = self.candidates(link, edges);
         if let Some(signature) = &rule.signature {
             ids = signature.seen(link, ids);
         }
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
-            cx.dst_endpoints(id, rule.role, dsts);
-            self.touch_sources(cx, rule, id, src, dsts);
+            cx.dst_endpoints(id, edges.role, dsts);
+            self.touch_sources(cx, edges, id, src, dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let mut env = Env::new(*cx, Some(id), src, *dst);
-                if let Some(use_shape) = &rule.use_shape {
+                if let Verdict::UseShape(use_shape) = &rule.verdict {
                     env.shape = use_shape.shape(cx, id);
                 }
                 let judgment = decide(rule, &env);
@@ -819,11 +888,11 @@ impl Rules {
                 });
             }
         });
-        let mut edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
-        edges.dedup();
-        let order = self.order(link, rule, &edges)?;
-        let rows = in_order(rows, &edges, &order, |row| row.edge);
-        if !rule.inventory {
+        let mut seen_edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
+        seen_edges.dedup();
+        let order = self.order(link, rule_id, edges, &seen_edges)?;
+        let rows = in_order(rows, &seen_edges, &order, |row| row.edge);
+        if !matches!(rule.verdict, Verdict::Inventory) {
             return Ok(rows);
         }
         // `EdgeInventory.evaluate` keeps the first destination with each identity.
@@ -838,19 +907,20 @@ impl Rules {
     /// the order the Python engine judges them: unresolved ones, ones whose selection is
     /// unknown, and the ones whose two groups are known and differ, with the groups.
     pub fn pairs(&self, link: &mut Link, index: usize) -> Result<Vec<PairRow>, String> {
-        let rule = self.rule(index, Mode::Cycle)?;
-        let Some((src_group, dst_group)) = rule.group else {
-            return Err(format!("cycle rule {} has no group field", rule.id));
-        };
-        self.read_sources(link, rule);
-        let ids = self.candidates(link, rule);
+        let (rule_id, rule) = self.rule_as(index, "cycle", |kind| match kind {
+            RuleKind::Cycle(found) => Some(found),
+            _ => None,
+        })?;
+        let (edges, (src_group, dst_group)) = (&rule.edges, rule.group);
+        self.read_sources(link, edges);
+        let ids = self.candidates(link, edges);
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
-            cx.dst_endpoints(id, rule.role, dsts);
-            self.touch_sources(cx, rule, id, src, dsts);
+            cx.dst_endpoints(id, edges.role, dsts);
+            self.touch_sources(cx, edges, id, src, dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(*cx, Some(id), src, *dst);
-                let selected = rule.staged.truth(&env);
+                let selected = edges.staged.truth(&env);
                 let judgment = match selected {
                     Truth::False => continue,
                     _ if dst.unresolved => Judgment::Unresolved,
@@ -884,18 +954,18 @@ impl Rules {
                 });
             }
         });
-        let mut edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
-        edges.dedup();
-        let order = self.order(link, rule, &edges)?;
-        Ok(in_order(rows, &edges, &order, |row| row.edge))
+        let mut seen_edges: Vec<u32> = rows.iter().map(|row| row.edge).collect();
+        seen_edges.dedup();
+        let order = self.order(link, rule_id, edges, &seen_edges)?;
+        Ok(in_order(rows, &seen_edges, &order, |row| row.edge))
     }
 
     /// What export rule `index` reports, in the order `ExportPrimitive.evaluate` reports it.
     pub fn export(&self, link: &mut Link, index: usize) -> Result<Vec<ExportRow>, String> {
-        let rule = self.rule(index, Mode::Export)?;
-        let Some(export) = &rule.export else {
-            return Err(format!("export rule {} has no exports planned", rule.id));
-        };
+        let (_, export) = self.rule_as(index, "export", |kind| match kind {
+            RuleKind::Export(found) => Some(found),
+            _ => None,
+        })?;
         let inputs = self
             .export_inputs
             .get_or_init(|| ExportInputs::read(self, link));
@@ -929,27 +999,29 @@ impl Rules {
         index: usize,
         mut inputs: CoverInputs,
     ) -> Result<Required, String> {
-        let rule = self.rule(index, Mode::Coverage)?;
-        if inputs.len() != rule.covers.len() {
+        let (id, covers) = self.rule_as(index, "coverage", |kind| match kind {
+            RuleKind::Coverage(found) => Some(found),
+            _ => None,
+        })?;
+        if inputs.len() != covers.len() {
             return Err(format!(
-                "coverage rule {} has {} covers, the call {}",
-                rule.id,
-                rule.covers.len(),
+                "coverage rule {id} has {} covers, the call {}",
+                covers.len(),
                 inputs.len()
             ));
         }
-        for (cover, input) in rule.covers.iter().zip(inputs.iter_mut()) {
+        for (cover, input) in covers.iter().zip(inputs.iter_mut()) {
             if matches!(cover, Cover::Edges { .. }) {
                 *input = Some(cover_edges(link, cover));
             }
         }
-        Ok(required(Cx { link, rules: self }, &rule.covers, &inputs))
+        Ok(required(Cx { link, rules: self }, covers, &inputs))
     }
 
     /// In a config with labels that conflict only where read: the `src` parts of a rule that
     /// reads only module fields there, judged once per source module of its kinds, edges seen or
     /// not, as `StagedSelection.module_false` judges them before any edge.
-    fn read_sources(&self, link: &mut Link, rule: &Rule) {
+    fn read_sources(&self, link: &mut Link, rule: &Edges) {
         if !self.touch || !rule.staged.src_module_level {
             return;
         }
@@ -968,7 +1040,7 @@ impl Rules {
     fn touch_sources<'a>(
         &self,
         cx: &Cx<'a>,
-        rule: &'a Rule,
+        rule: &'a Edges,
         id: u32,
         src: Endpoint<'a>,
         dsts: &[Endpoint<'a>],
@@ -979,23 +1051,30 @@ impl Rules {
     }
 
     /// `StagedSelection.module_false` of one module, for the reads it makes.
-    fn read_source(&self, cx: &Cx, rule: &Rule, module: Sid) {
+    fn read_source(&self, cx: &Cx, rule: &Edges, module: Sid) {
         let endpoint = cx.module_endpoint(module);
         parts_truth(rule.staged.src(), &Env::new(*cx, None, endpoint, endpoint));
     }
 
-    fn rule(&self, index: usize, mode: Mode) -> Result<&Rule, String> {
+    /// Rule `index`'s id and what its mode reads, when `pick` finds the mode `mode` names.
+    fn rule_as<'s, T>(
+        &'s self,
+        index: usize,
+        mode: &str,
+        pick: impl Fn(&'s RuleKind) -> Option<&'s T>,
+    ) -> Result<(&'s str, &'s T), String> {
         let rule = self
             .rules
             .get(index)
             .ok_or_else(|| format!("no rule {index} in the plan"))?;
-        if rule.mode != mode {
-            return Err(format!(
-                "rule {} is planned as {:?}, not {mode:?}",
-                rule.id, rule.mode
-            ));
-        }
-        Ok(rule)
+        let found = pick(&rule.kind).ok_or_else(|| {
+            format!(
+                "rule {} is planned as {}, not {mode}",
+                rule.id,
+                rule.kind.mode()
+            )
+        })?;
+        Ok((&rule.id, found))
     }
 
     /// The edges of `kinds`, kind by kind in graph order, that `selector` does not make false,
@@ -1119,34 +1198,60 @@ impl Rules {
 }
 
 impl Rule {
-    fn nodes(&self) -> impl Iterator<Item = &Node> {
-        self.selection.iter().chain(
-            [&self.deny, &self.allow, &self.require, &self.unless]
-                .into_iter()
-                .flatten(),
-        )
+    /// Every selector node the rule reads.
+    fn nodes(&self) -> Vec<&Node> {
+        match &self.kind {
+            RuleKind::Judge(rule) => {
+                let mut out: Vec<&Node> = rule.edges.staged.parts.iter().collect();
+                out.extend(&rule.unless);
+                if let Verdict::Predicates {
+                    deny,
+                    allow,
+                    require,
+                } = &rule.verdict
+                {
+                    out.extend([deny, allow, require].into_iter().flatten());
+                }
+                out
+            }
+            RuleKind::Reach(rule) => {
+                let mut out: Vec<&Node> = rule.edges.staged.parts.iter().collect();
+                out.extend(
+                    [&rule.start, &rule.deny, &rule.unless]
+                        .into_iter()
+                        .flatten(),
+                );
+                out
+            }
+            RuleKind::Cycle(rule) => rule.edges.staged.parts.iter().collect(),
+            RuleKind::Entities(rule) => rule.nodes(),
+            RuleKind::Export(_) | RuleKind::Coverage(_) => Vec::new(),
+        }
     }
 
     fn reads_ordinal(&self) -> bool {
-        self.nodes().any(|node| node.reads(is_ordinal))
-            || self.identity.iter().any(|field| is_ordinal(*field))
+        self.nodes().into_iter().any(|node| node.reads(is_ordinal))
+            || matches!(&self.kind, RuleKind::Judge(rule) if rule.identity.iter().any(|field| is_ordinal(*field)))
     }
 
-    /// Every ref the rule reads: its selectors, `from`, identity columns and group field.
+    /// Every ref the rule reads: its selectors, identity columns, group field, covers, an
+    /// inventory's field and an export rule's identity.
     fn refs(&self) -> Vec<Ref> {
         let mut out = Vec::new();
-        for node in self.nodes().chain(&self.start) {
+        for node in self.nodes() {
             node.refs(&mut out);
         }
-        out.extend(&self.identity);
-        for cover in &self.covers {
-            cover.refs(&mut out);
-        }
-        if let Some(entities) = &self.entities {
-            entities.refs(&mut out);
-        }
-        if let Some((src, dst)) = self.group {
-            out.extend([src, dst]);
+        match &self.kind {
+            RuleKind::Judge(rule) => out.extend(&rule.identity),
+            RuleKind::Cycle(rule) => out.extend([rule.group.0, rule.group.1]),
+            RuleKind::Coverage(covers) => {
+                for cover in covers {
+                    cover.refs(&mut out);
+                }
+            }
+            RuleKind::Entities(rule) => rule.refs(&mut out),
+            RuleKind::Export(rule) => rule.refs(&mut out),
+            RuleKind::Reach(_) => {}
         }
         out
     }
@@ -1207,8 +1312,8 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
 
 /// `EdgeRule.decide` for one environment, and `SignaturePrimitive.decide` for a signature rule.
 /// `deny`, `allow` and `require` are all judged, as `EdgeRule.violation` judges them.
-pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
-    let selected = rule.staged.truth(env);
+pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
+    let selected = rule.edges.staged.truth(env);
     if selected == Truth::False {
         return Judgment::Clean;
     }
@@ -1224,28 +1329,30 @@ pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
     if selected == Truth::Unknown {
         return Judgment::UnknownSelection;
     }
-    if rule.inventory {
-        return Judgment::Violation;
-    }
-    let verdict = if rule.default_allow {
-        truth(&EXPORTED, env).negate()
-    } else if let Some(use_shape) = &rule.use_shape {
-        use_shape.violation(env)
-    } else {
-        let mut parts = Vec::with_capacity(3);
-        if let Some(deny) = &rule.deny {
-            parts.push(truth(deny, env));
-        }
-        if let Some(allow) = &rule.allow {
-            parts.push(truth(allow, env).negate());
-        }
-        if let Some(require) = &rule.require {
-            parts.push(truth(require, env).negate());
-        }
-        if parts.is_empty() {
-            Truth::True
-        } else {
-            any_of(parts)
+    let verdict = match &rule.verdict {
+        Verdict::Inventory => return Judgment::Violation,
+        Verdict::DefaultAllow => truth(&EXPORTED, env).negate(),
+        Verdict::UseShape(use_shape) => use_shape.violation(env),
+        Verdict::Predicates {
+            deny,
+            allow,
+            require,
+        } => {
+            let mut parts = Vec::with_capacity(3);
+            if let Some(deny) = deny {
+                parts.push(truth(deny, env));
+            }
+            if let Some(allow) = allow {
+                parts.push(truth(allow, env).negate());
+            }
+            if let Some(require) = require {
+                parts.push(truth(require, env).negate());
+            }
+            if parts.is_empty() {
+                Truth::True
+            } else {
+                any_of(parts)
+            }
         }
     };
     if verdict == Truth::False {

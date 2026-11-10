@@ -93,12 +93,7 @@ pub struct ExportRule {
 }
 
 impl ExportRule {
-    pub fn new(
-        plan: &ExportRulePlan,
-        include: u8,
-        identity: &[Vec<String>],
-        entity: &Compiler,
-    ) -> ExportRule {
+    pub fn new(plan: &ExportRulePlan, identity: &[Vec<String>], entity: &Compiler) -> ExportRule {
         let field = |name: &str| match entity.reference(&[name.to_string()]) {
             Ref::Entity(found) => found,
             _ => EntityField::Unknown,
@@ -125,12 +120,21 @@ impl ExportRule {
             .collect();
         ExportRule {
             exports: plan.exports.clone(),
-            include,
+            include: plan.include,
             exclude: plan.exclude,
             unknown_types: plan.unknown_types.clone(),
             on_unknown: plan.on_unknown.clone(),
             on_unresolved: plan.on_unresolved.clone(),
             columns,
+        }
+    }
+
+    /// The fields its identity columns read of a module or a symbol.
+    pub fn refs(&self, out: &mut Vec<Ref>) {
+        for column in &self.columns {
+            if let Column::Src(field) | Column::Dst(field) = column {
+                out.push(Ref::Entity(*field));
+            }
         }
     }
 }

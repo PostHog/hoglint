@@ -2,18 +2,21 @@
 //! every module or symbol, an inventory's `exactly_one`, the roots a layout rule's `within`
 //! names, and the modules a registry's glob holds.
 
-use super::Rules;
 use super::env::{Cx, EntityEnv};
 use super::glob::{Glob, fill};
-use super::plan::EntitiesPlan;
-use super::selector::{Compiler, Ref, Resolve, evaluate};
+use super::plan::EntitiesRulePlan;
+use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
 use super::staged::class_truth;
 use super::value::{Truth, Value, render};
+use super::{RuleKind, Rules};
 use crate::link::Link;
 use crate::link::intern::Sid;
 
-/// What a rule over entities adds to a rule.
+/// A rule over entities: a layout rule or an entity inventory.
 pub struct EntityRule {
+    /// Its `select`, in its `and` parts, and `require`: entity selectors.
+    selection: Vec<Node>,
+    require: Option<Node>,
     on_symbol: bool,
     /// The kinds a `select` pins, so on symbols only their members and the symbols of unknown
     /// kind are read (`EntityRule.entities`).
@@ -24,16 +27,31 @@ pub struct EntityRule {
 }
 
 impl EntityRule {
-    pub fn new(plan: &EntitiesPlan, identity: &[Vec<String>], entity: &Compiler) -> EntityRule {
-        EntityRule {
-            on_symbol: plan.on_symbol,
-            wanted: plan.wanted.clone(),
-            exactly_one: plan
+    pub fn new(plan: &EntitiesRulePlan, entity: &Compiler) -> Result<EntityRule, String> {
+        let entities = &plan.entities;
+        Ok(EntityRule {
+            selection: entity.nodes(&plan.selection)?,
+            require: plan
+                .require
+                .as_ref()
+                .map(|node| entity.node(node))
+                .transpose()?,
+            on_symbol: entities.on_symbol,
+            wanted: entities.wanted.clone(),
+            exactly_one: entities
                 .exactly_one
                 .as_ref()
                 .map(|name| entity.reference(std::slice::from_ref(name))),
-            identity: identity.iter().map(|path| entity.reference(path)).collect(),
-        }
+            identity: plan
+                .identity
+                .iter()
+                .map(|path| entity.reference(path))
+                .collect(),
+        })
+    }
+
+    pub fn nodes(&self) -> Vec<&Node> {
+        self.selection.iter().chain(&self.require).collect()
     }
 
     pub fn refs(&self, out: &mut Vec<Ref>) {
@@ -118,10 +136,10 @@ impl Rules {
     /// What layout rule or entity inventory `index` reports on its entities
     /// (`LayoutPrimitive.check_entities`, `EntityInventory.evaluate`).
     pub fn entity_rows(&self, link: &Link, index: usize) -> Result<Vec<EntityRow>, String> {
-        let rule = self.rule(index, super::plan::Mode::Entities)?;
-        let Some(entities) = &rule.entities else {
-            return Err(format!("rule {} has no entity plan", rule.id));
-        };
+        let (_, entities) = self.rule_as(index, "entities", |kind| match kind {
+            RuleKind::Entities(found) => Some(found),
+            _ => None,
+        })?;
         let cx = Cx { link, rules: self };
         let mut out = Vec::new();
         for (module, at, symbol, subject) in self.entities(link, entities) {
@@ -133,7 +151,7 @@ impl Rules {
                 subject: Some(&subject),
             };
             let module_name = module.map(|module| cx.text(module).to_string());
-            let selected = class_truth(&rule.selection, &env, self.touch);
+            let selected = class_truth(&entities.selection, &env, self.touch);
             if selected == Truth::Unknown {
                 let (unselected, module) = (subject.clone(), module_name.clone());
                 out.push(("unknown-selection", unselected, module, 0, Vec::new()));
@@ -157,7 +175,7 @@ impl Rules {
                     count
                 }
                 None => {
-                    let verdict = match &rule.require {
+                    let verdict = match &entities.require {
                         Some(node) => evaluate(node, &env),
                         None => Truth::False,
                     };

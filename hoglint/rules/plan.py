@@ -8,30 +8,6 @@ from typing import Any
 from hoglint.native.graph import CONTEXT_BITS
 from hoglint.selectors import And, Bare, ListLiteral, Node, Not, Operand, Or, Ref, Selector
 
-# What a rule plan holds for a part its rule type lacks.
-ABSENT: dict[str, Any] = {
-    "kinds": [],
-    "include": 0,
-    "exclude": 0,
-    "endpoint": "origin",
-    "selection": [],
-    "deny": None,
-    "allow": None,
-    "require": None,
-    "unless": None,
-    "default_allow": False,
-    "identity": [],
-    "group": None,
-    "start": None,
-    "export": None,
-    "covers": [],
-    "entities": None,
-    "inventory": False,
-    "use_shape": None,
-    "signature": False,
-    "unknown_types": [],
-}
-
 
 def context_bits(names: frozenset[str]) -> int:
     return sum(1 << bit for bit, context in enumerate(CONTEXT_BITS) if context.value in names)

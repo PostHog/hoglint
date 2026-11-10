@@ -217,7 +217,17 @@ class ReachPrimitive(EdgeRule):
         return list(reversed(path))
 
     def plan(self) -> dict[str, Any]:
-        return {**super().plan(), "start": selector_tree(self.spec.from_)}
+        """Its `from` reads the start module alone; `deny` and `unless` judge each hop seen from
+        the start."""
+        spec = self.spec
+        return {
+            "id": spec.id,
+            "mode": self.NATIVE_MODE,
+            "edges": self.edges_plan(),
+            "start": selector_tree(spec.from_),
+            "deny": selector_tree(spec.deny),
+            "unless": selector_tree(spec.unless),
+        }
 
     def report(self, env: EdgeEnv, path: list[Edge], verdict: Truth) -> None:
         chain = " -> ".join([env.src.module or "", *(e.surface for e in path)])
@@ -291,7 +301,7 @@ class CyclePrimitive(EdgeRule):
         return config.roles.group if spec.view == "packages" else "module"
 
     def plan(self) -> dict[str, Any]:
-        return {**super().plan(), "group": self.group_field}
+        return {"id": self.spec.id, "mode": self.NATIVE_MODE, "edges": self.edges_plan(), "group": self.group_field}
 
     def group(self, env: EdgeEnv, root: str) -> str | None:
         """The endpoint's group; cached per endpoint unless the edge's own attributes override labels."""

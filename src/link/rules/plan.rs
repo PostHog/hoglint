@@ -133,12 +133,14 @@ pub struct ShapePlan {
     pub incomplete: bool,
 }
 
-/// What an export rule adds (`ExportPrimitive`).
+/// What an export rule checks (`ExportPrimitive`).
 #[derive(Deserialize)]
 pub struct ExportRulePlan {
     /// The exports it checks, by place, in order.
     pub exports: Vec<usize>,
-    /// The contexts it leaves out: type-only and test unless the rule names its own.
+    /// The contexts it reads, and the ones it leaves out: type-only and test unless the rule
+    /// names its own.
+    pub include: u8,
     pub exclude: u8,
     pub unknown_types: Vec<String>,
     pub on_unknown: String,
@@ -188,64 +190,118 @@ pub struct ProvidedPlan {
     pub labels: Vec<ValuePlan>,
 }
 
-/// How the evaluator treats a rule.
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint, signature and use-shape
-    /// rules).
-    Judge,
-    /// The search of a reach rule.
-    Reach,
-    /// The package pairs of a cycle rule: what `CyclePrimitive.consider` reads.
-    Cycle,
-    /// The whole check of an export rule.
-    Export,
-    /// The paths a coverage rule needs covered.
-    Coverage,
-    /// A layout rule's or an entity inventory's entities.
-    Entities,
-}
-
+/// One rule of the plan: its id, and its mode with what that mode reads.
 #[derive(Deserialize)]
 pub struct RulePlan {
     pub id: String,
-    pub mode: Mode,
+    #[serde(flatten)]
+    pub mode: ModePlan,
+}
+
+/// How the evaluator treats a rule, as the rule's Python class states it (`RuleType.NATIVE_MODE`).
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum ModePlan {
+    /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint, signature, use-shape and
+    /// edge inventory rules).
+    Judge(JudgePlan),
+    /// The search of a reach rule.
+    Reach(ReachPlan),
+    /// The group pairs of a cycle rule: what `CyclePrimitive.consider` reads.
+    Cycle(CyclePlan),
+    /// The whole check of an export rule.
+    Export(ExportModePlan),
+    /// The paths a coverage rule needs covered.
+    Coverage(CoveragePlan),
+    /// A layout rule's or an entity inventory's entities.
+    Entities(EntitiesRulePlan),
+}
+
+/// Which edges a rule over edges sees and how it selects them.
+#[derive(Deserialize)]
+pub struct EdgesPlan {
     /// The kinds in the order the rule reads them; every kind when empty.
     pub kinds: Vec<String>,
     pub include: u8,
     pub exclude: u8,
     /// origin, surface or via.
     pub endpoint: String,
-    /// The conjuncts of `from` and `select`, in order.
+    /// The conjuncts of `from` and `select` (of `select` alone for a reach rule), in order.
     pub selection: Vec<NodePlan>,
-    pub deny: Option<NodePlan>,
-    pub allow: Option<NodePlan>,
-    pub require: Option<NodePlan>,
-    pub unless: Option<NodePlan>,
-    /// An entrypoint rule with no predicate: a violation is a destination it does not export.
-    pub default_allow: bool,
+}
+
+#[derive(Deserialize)]
+pub struct JudgePlan {
+    pub edges: EdgesPlan,
     pub identity: Vec<Vec<String>>,
-    /// A cycle rule's group field (`CyclePrimitive.group_field`).
-    pub group: Option<String>,
-    /// A reach rule's `from`: which modules it searches from, read of the module alone.
-    pub start: Option<NodePlan>,
+    pub unless: Option<NodePlan>,
     /// A signature rule: it sees public callables only, once per slot, and judges a slot with no
     /// usable type apart (`SignaturePrimitive`).
-    pub signature: bool,
-    /// The destination symbols a signature rule reads as of unknown type.
+    pub signature: Option<SignaturePlan>,
+    pub verdict: VerdictPlan,
+}
+
+#[derive(Deserialize)]
+pub struct SignaturePlan {
+    /// The destination symbols it reads as of unknown type.
     pub unknown_types: Vec<String>,
-    pub export: Option<ExportRulePlan>,
-    /// A coverage rule's covers.
+}
+
+/// How a judged rule decides a selected destination (`EdgeRule.violation` and its overrides).
+// Decoded once per rule: the size of the largest variant costs nothing.
+#[allow(clippy::large_enum_variant)]
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum VerdictPlan {
+    /// `deny`, `allow` and `require`, all judged; with none, the selection is the finding.
+    Predicates {
+        deny: Option<NodePlan>,
+        allow: Option<NodePlan>,
+        require: Option<NodePlan>,
+    },
+    /// An entrypoint rule with no predicate: a violation is a destination it does not export.
+    DefaultAllow,
+    /// A use-shape rule's shapes (`UseShapePrimitive`).
+    UseShape(UseShapePlan),
+    /// An inventory over edges (`classify`): every selected destination is a row, the first with
+    /// each identity only.
+    Inventory,
+}
+
+#[derive(Deserialize)]
+pub struct ReachPlan {
+    pub edges: EdgesPlan,
+    /// Its `from`: which modules it searches from, read of the module alone.
+    pub start: Option<NodePlan>,
+    pub deny: Option<NodePlan>,
+    pub unless: Option<NodePlan>,
+}
+
+#[derive(Deserialize)]
+pub struct CyclePlan {
+    pub edges: EdgesPlan,
+    /// The field whose values are the nodes of its graph (`CyclePrimitive.group_field`).
+    pub group: String,
+}
+
+#[derive(Deserialize)]
+pub struct ExportModePlan {
+    pub identity: Vec<Vec<String>>,
+    pub export: ExportRulePlan,
+}
+
+#[derive(Deserialize)]
+pub struct CoveragePlan {
     pub covers: Vec<CoverPlan>,
-    /// What a use-shape rule adds.
-    pub use_shape: Option<UseShapePlan>,
-    /// An inventory over edges (`classify`): every selected destination is a row, the first
-    /// with each identity only.
-    pub inventory: bool,
-    /// What a layout rule or an entity inventory adds: its selection and `require` are entity
-    /// selectors.
-    pub entities: Option<EntitiesPlan>,
+}
+
+/// A layout rule or an entity inventory: its selection and `require` are entity selectors.
+#[derive(Deserialize)]
+pub struct EntitiesRulePlan {
+    pub selection: Vec<NodePlan>,
+    pub require: Option<NodePlan>,
+    pub identity: Vec<Vec<String>>,
+    pub entities: EntitiesPlan,
 }
 
 /// A rule over entities (`EntityRule`).
@@ -258,7 +314,7 @@ pub struct EntitiesPlan {
     pub exactly_one: Option<String>,
 }
 
-/// What a use-shape rule adds (`UseShapePrimitive`).
+/// A use-shape rule's shapes (`UseShapePrimitive`).
 #[derive(Deserialize)]
 pub struct UseShapePlan {
     pub allow: Vec<String>,

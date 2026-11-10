@@ -24,7 +24,7 @@ from hoglint.rules.base import (
     joined,
     project,
 )
-from hoglint.rules.plan import ABSENT, identity_paths, selector_tree, tree
+from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import (
     ClassSelection,
     Node,
@@ -113,7 +113,6 @@ class EntityRule(RuleType):
             "exactly_one": None,
         }
         return {
-            **ABSENT,
             "id": spec.id,
             "mode": self.NATIVE_MODE,
             "selection": [tree(part) for part in conjuncts((spec.select,))],
@@ -329,8 +328,8 @@ class EdgeInventory(EdgeRule):
         data = read_table(repo / self.spec.classify)
         return {tuple(str(v) for v in entry.get("identity", ())) for entry in data.get("entry", [])}
 
-    def plan(self) -> dict[str, Any]:
-        return {**super().plan(), "inventory": True}
+    def verdict_plan(self) -> dict[str, Any]:
+        return {"kind": "inventory"}
 
     def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
         """What a selected edge reports when it cannot be classified: one that did not resolve,
@@ -404,7 +403,7 @@ class CoveragePrimitive(EntityRule):
         return kinds, by_edge, [part for part in parts if not cls.reads_kind_and_context(part)]
 
     def plan(self) -> dict[str, Any]:
-        """Its covers; the evaluator never reads its identity."""
+        """Its covers. The evaluator never reads its identity, which Python projects."""
         spec = self.spec
         covers = []
         for cover in spec.covers:
@@ -420,13 +419,7 @@ class CoveragePrimitive(EntityRule):
                     "endpoint": cover.endpoint,
                 }
             )
-        return {
-            **ABSENT,
-            "id": spec.id,
-            "mode": self.NATIVE_MODE,
-            "identity": identity_paths(spec.identity),
-            "covers": covers,
-        }
+        return {"id": spec.id, "mode": self.NATIVE_MODE, "covers": covers}
 
     @staticmethod
     def why(cover: CoverSpec) -> str:

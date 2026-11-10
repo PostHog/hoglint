@@ -4,10 +4,9 @@
 //! search takes them, so a start reports the same targets through the same witness paths.
 
 use super::env::{Cx, Endpoint, Env, Symbol};
-use super::plan::Mode;
 use super::staged::truth;
 use super::value::Truth;
-use super::{Rule, Rules};
+use super::{Reach, RuleKind, Rules};
 use crate::link::Link;
 use crate::link::intern::Sid;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -57,7 +56,7 @@ const NO_DESTINATION: Endpoint<'static> = Endpoint {
 /// selection does not rule out, stably sorted by destination module, symbol and surface.
 struct Hops<'a> {
     cx: Cx<'a>,
-    rule: &'a Rule,
+    rule: &'a Reach,
     ids: FxHashMap<Sid, Vec<u32>>,
     /// The modules with an edge of the rule's kinds, seen by the rule or not.
     sources: FxHashSet<Sid>,
@@ -76,17 +75,18 @@ impl<'a> Hops<'a> {
     fn make(&self, module: Sid) -> Vec<Hop<'a>> {
         let cx = self.cx;
         let rules = cx.rules;
-        if rules.touch && self.rule.staged.src_module_level && self.sources.contains(&module) {
-            rules.read_source(&cx, self.rule, module);
+        let edges = &self.rule.edges;
+        if rules.touch && edges.staged.src_module_level && self.sources.contains(&module) {
+            rules.read_source(&cx, edges, module);
         }
         let mut out = Vec::new();
         let mut dsts = Vec::with_capacity(2);
         for &id in self.ids.get(&module).map_or(&[][..], Vec::as_slice) {
             let src = cx.src_endpoint(id);
-            cx.dst_endpoints(id, self.rule.role, &mut dsts);
+            cx.dst_endpoints(id, edges.role, &mut dsts);
             for (target, dst) in dsts.iter().enumerate() {
                 let env = Env::new(cx, Some(id), src, *dst);
-                let selected = self.rule.staged.truth(&env);
+                let selected = edges.staged.truth(&env);
                 if selected != Truth::False {
                     out.push(Hop {
                         edge: id,
@@ -116,13 +116,16 @@ impl<'a> Hops<'a> {
 impl Rules {
     /// The search of reach rule `index` (`ReachPrimitive.sources` and `search`).
     pub fn reach(&self, link: &mut Link, index: usize) -> Result<Vec<Found>, String> {
-        let rule = self.rule(index, Mode::Reach)?;
-        let kinds = self.kind_sids(link, rule);
+        let (_, rule) = self.rule_as(index, "reach", |kind| match kind {
+            RuleKind::Reach(found) => Some(found),
+            _ => None,
+        })?;
+        let kinds = self.kind_sids(link, &rule.edges);
         let mut starts: Vec<Sid> = Vec::new();
         let mut ids: FxHashMap<Sid, Vec<u32>> = FxHashMap::default();
         for &kind in &kinds {
             starts.extend(link.source_modules(kind));
-            for id in link.candidates(&[kind], rule.include, rule.exclude) {
+            for id in link.candidates(&[kind], rule.edges.include, rule.edges.exclude) {
                 ids.entry(link.module_of_edge(id)).or_default().push(id);
             }
         }
@@ -153,7 +156,7 @@ impl Rules {
     }
 
     /// Whether the rule searches from a module: its `from`, read of the module alone.
-    fn start_truth(&self, cx: &Cx, rule: &Rule, module: Sid) -> Truth {
+    fn start_truth(&self, cx: &Cx, rule: &Reach, module: Sid) -> Truth {
         let Some(start) = &rule.start else {
             return Truth::True;
         };
@@ -165,7 +168,7 @@ impl Rules {
     fn search<'a>(
         &self,
         cx: &Cx<'a>,
-        rule: &Rule,
+        rule: &Reach,
         hops: &mut Hops<'a>,
         source: Sid,
         out: &mut Vec<Found>,

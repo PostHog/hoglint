@@ -19,7 +19,7 @@ from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
 from hoglint.model import Context, Edge, Resolution
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project
-from hoglint.rules.plan import ABSENT, context_bits, identity_paths
+from hoglint.rules.plan import context_bits, identity_paths
 from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
 
 ABC_BASES = frozenset({"abc.ABC"})
@@ -106,19 +106,13 @@ class ExportPrimitive(RuleType):
         places = list(self.ctx.config.exports)
         checked = {
             "exports": [places.index(export.name) for export in self.selected_exports()],
+            "include": context_bits(self.include),
             "exclude": context_bits(self.exclude),
             "unknown_types": list(spec.unknown_types),
             "on_unknown": spec.on_unknown,
             "on_unresolved": spec.on_unresolved,
         }
-        return {
-            **ABSENT,
-            "id": spec.id,
-            "mode": self.NATIVE_MODE,
-            "include": context_bits(self.include),
-            "identity": identity_paths(spec.identity),
-            "export": checked,
-        }
+        return {"id": spec.id, "mode": self.NATIVE_MODE, "identity": identity_paths(spec.identity), "export": checked}
 
     def covered_modules(self) -> dict[str, list[tuple[str, str]]]:
         """(module, path) of every module each export covers, in module order: one pass over the

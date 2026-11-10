@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
-from hoglint.rules.plan import ABSENT, context_bits, identity_paths, selector_tree, tree
+from hoglint.rules.plan import context_bits, identity_paths, selector_tree, tree
 from hoglint.selectors import (
     NONE,
     UNKNOWN,
@@ -903,22 +903,35 @@ class EdgeRule(RuleType):
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} -> {env.dst.symbol or env.dst.module} ({env.edge.kind})"
 
-    def plan(self) -> dict[str, Any]:
-        """What every rule over edges plans: its kinds, contexts, endpoint, selection in the order
-        it applies, predicates and identity. A subclass adds its own part."""
-        spec = self.spec
+    def edges_plan(self) -> dict[str, Any]:
+        """Which edges the rule sees, and its selection in the order it applies."""
         return {
-            **ABSENT,
-            "id": spec.id,
-            "mode": self.NATIVE_MODE,
             "kinds": list(dict.fromkeys(self.kinds())),
             "include": context_bits(self.include),
             "exclude": context_bits(self.exclude),
-            "endpoint": spec.endpoint,
+            "endpoint": self.spec.endpoint,
             "selection": [tree(part) for part in conjuncts(self.selectors())],
+        }
+
+    def verdict_plan(self) -> dict[str, Any]:
+        """How the rule decides a selected destination: its predicates."""
+        spec = self.spec
+        return {
+            "kind": "predicates",
             "deny": selector_tree(spec.deny),
             "allow": selector_tree(spec.allow),
             "require": selector_tree(spec.require),
-            "unless": selector_tree(spec.unless),
+        }
+
+    def plan(self) -> dict[str, Any]:
+        """A rule judged per edge. A signature rule adds its part."""
+        spec = self.spec
+        return {
+            "id": spec.id,
+            "mode": self.NATIVE_MODE,
+            "edges": self.edges_plan(),
             "identity": identity_paths(spec.identity),
+            "unless": selector_tree(spec.unless),
+            "signature": None,
+            "verdict": self.verdict_plan(),
         }

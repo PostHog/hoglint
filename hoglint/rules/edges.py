@@ -64,8 +64,8 @@ class EntrypointPrimitive(EdgeRule):
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} names {env.edge.surface}, which is not exported to it"
 
-    def plan(self) -> dict[str, Any]:
-        return {**super().plan(), "default_allow": self.default_allow}
+    def verdict_plan(self) -> dict[str, Any]:
+        return {"kind": "default-allow"} if self.default_allow else super().verdict_plan()
 
 
 class UseShapePrimitive(EdgeRule):
@@ -124,10 +124,14 @@ class UseShapePrimitive(EdgeRule):
     def describe(self, env: EdgeEnv) -> str:
         return f"{env.src.module} uses {env.dst.symbol} as {env.label()}"
 
-    def plan(self) -> dict[str, Any]:
+    def verdict_plan(self) -> dict[str, Any]:
         spec = self.spec
-        shapes = {"allow": list(spec.allow_shapes), "deny": list(spec.deny_shapes), "flow": self.flow}
-        return {**super().plan(), "use_shape": shapes}
+        return {
+            "kind": "use-shape",
+            "allow": list(spec.allow_shapes),
+            "deny": list(spec.deny_shapes),
+            "flow": self.flow,
+        }
 
 
 SlotKey = tuple[str, str, tuple[EntityId, ...]]
@@ -224,4 +228,4 @@ class SignaturePrimitive(EdgeRule):
         return f"{env.src.symbol} exposes {env.dst.symbol} in {slot}"
 
     def plan(self) -> dict[str, Any]:
-        return {**super().plan(), "signature": True, "unknown_types": list(self.spec.unknown_types)}
+        return {**super().plan(), "signature": {"unknown_types": list(self.spec.unknown_types)}}
