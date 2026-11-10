@@ -419,6 +419,9 @@ pub struct Env<'a> {
     pub dst: Endpoint<'a>,
     /// Whether the edge has `src.*`/`dst.*` attrs, which override its endpoints' labels.
     pub attrs: bool,
+    /// (shape, shape detail) a primitive sets for itself in place of the edge's (use-shape's
+    /// flow shape).
+    pub shape: Option<(&'a str, &'a str)>,
 }
 
 impl<'a> Resolve<'a> for Env<'a> {
@@ -444,7 +447,17 @@ impl<'a> Env<'a> {
             src,
             dst,
             attrs,
+            shape: None,
         }
+    }
+
+    /// The edge's (shape, shape detail), or the ones the primitive set (`EdgeEnv.shape`).
+    pub fn shape_of(&self, id: u32) -> (&'a str, &'a str) {
+        if let Some(shape) = self.shape {
+            return shape;
+        }
+        let (shape, detail) = self.cx.link.edges.shape_of(id);
+        (self.cx.text(shape), self.cx.text(detail))
     }
 
     fn edge_value(&self, id: u32, field: EdgeField) -> Value<'a> {
@@ -453,7 +466,7 @@ impl<'a> Env<'a> {
         let text = |sid: Sid| Value::text_or_none(cx.text(sid));
         match field {
             EdgeField::Kind => text(edges.kind_of(id)),
-            EdgeField::Shape => text(edges.shape_of(id).0),
+            EdgeField::Shape => Value::text_or_none(self.shape_of(id).0),
             EdgeField::Use => text(edges.use_of(id)),
             EdgeField::Resolution => Value::text(edges.res_of(id).name()),
             EdgeField::Surface => text(edges.surface_of(id)),
@@ -473,8 +486,7 @@ impl<'a> Env<'a> {
         if self.dst.unresolved {
             return Value::Text(Cow::Owned(format!("unresolved-{kind}")));
         }
-        let (shape, detail) = edges.shape_of(id);
-        let (shape, detail) = (cx.text(shape), cx.text(detail));
+        let (shape, detail) = self.shape_of(id);
         if shape.is_empty() {
             return Value::text_or_none(kind);
         }

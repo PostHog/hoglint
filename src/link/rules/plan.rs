@@ -194,7 +194,8 @@ pub struct ProvidedPlan {
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint and signature rules).
+    /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint, signature and use-shape
+    /// rules).
     Judge,
     /// Only the selection: the rule judges in Python.
     Select,
@@ -241,6 +242,17 @@ pub struct RulePlan {
     pub export: Option<ExportRulePlan>,
     /// A coverage rule's covers.
     pub covers: Vec<CoverPlan>,
+    /// What a use-shape rule adds.
+    pub use_shape: Option<UseShapePlan>,
+}
+
+/// What a use-shape rule adds (`UseShapePrimitive`).
+#[derive(Deserialize)]
+pub struct UseShapePlan {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    /// `flow = "def-use"`: the edge's `flow_shape` attr replaces its shape.
+    pub flow: bool,
 }
 
 #[derive(Deserialize, Clone)]

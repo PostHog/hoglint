@@ -91,6 +91,54 @@ pub struct Rule {
     export: Option<ExportRule>,
     /// What a coverage rule needs covered.
     covers: Vec<Cover>,
+    /// What a use-shape rule adds.
+    use_shape: Option<UseShape>,
+}
+
+/// What a use-shape rule adds to an edge rule (`UseShapePrimitive`).
+pub struct UseShape {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    /// The interned name of the `flow_shape` attr, with `flow = "def-use"`.
+    flow: Option<Option<Sid>>,
+}
+
+impl UseShape {
+    /// `UseShapePrimitive.env`: the flow shape, written `kind` or `kind(detail)`, replaces the
+    /// edge's shape.
+    fn shape<'a>(&self, cx: &Cx<'a>, id: u32) -> Option<(&'a str, &'a str)> {
+        let name = (*self.flow.as_ref()?)?;
+        let refined = cx.attr(id, Some(name));
+        if refined.is_empty() {
+            return None;
+        }
+        let (shape, detail) = refined.split_once('(').unwrap_or((refined, ""));
+        Some((shape, detail.strip_suffix(')').unwrap_or(detail)))
+    }
+
+    /// `UseShapePrimitive.violation`.
+    fn violation(&self, env: &Env) -> Truth {
+        let Some(id) = env.edge else {
+            return Truth::False;
+        };
+        let (shape, detail) = env.shape_of(id);
+        let shape = match shape {
+            "" => match env.cx.text(env.cx.link.edges.use_of(id)) {
+                "" => "other",
+                found => found,
+            },
+            found => found,
+        };
+        let detailed = (!detail.is_empty()).then(|| format!("{shape}({detail})"));
+        let named = |name: &String| name == shape || detailed.as_ref() == Some(name);
+        if !self.allow.is_empty() && !self.allow.iter().any(named) {
+            return Truth::True;
+        }
+        if self.deny.iter().any(named) {
+            return Truth::True;
+        }
+        Truth::False
+    }
 }
 
 /// One destination a cycle rule cannot leave alone: its edge and place, its judgment
@@ -425,6 +473,11 @@ impl Rules {
                 .map(|path| compiler.reference(path))
                 .collect(),
             start: optional(&plan.start)?,
+            use_shape: plan.use_shape.as_ref().map(|found| UseShape {
+                allow: found.allow.clone(),
+                deny: found.deny.clone(),
+                flow: found.flow.then(|| compiler.it.get("flow_shape")),
+            }),
             covers: plan
                 .covers
                 .iter()
@@ -734,7 +787,10 @@ impl Rules {
             cx.dst_endpoints(id, rule.role, dsts);
             self.touch_sources(cx, rule, id, src, dsts);
             for (target, dst) in dsts.iter().enumerate() {
-                let env = Env::new(*cx, Some(id), src, *dst);
+                let mut env = Env::new(*cx, Some(id), src, *dst);
+                if let Some(use_shape) = &rule.use_shape {
+                    env.shape = use_shape.shape(cx, id);
+                }
                 let judgment = decide(rule, &env);
                 if judgment == Judgment::Clean {
                     continue;
@@ -1160,6 +1216,8 @@ pub fn decide<'a>(rule: &'a Rule, env: &Env<'a>) -> Judgment {
     }
     let verdict = if rule.default_allow {
         truth(&EXPORTED, env).negate()
+    } else if let Some(use_shape) = &rule.use_shape {
+        use_shape.violation(env)
     } else {
         let mut parts = Vec::with_capacity(3);
         if let Some(deny) = &rule.deny {

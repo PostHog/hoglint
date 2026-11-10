@@ -37,8 +37,8 @@ from hoglint.selectors import (
 )
 
 # How the evaluator treats each primitive's rules: judged in Rust, or selected for Python.
-JUDGED = frozenset({"edge", "entrypoint", "signature"})
-SELECTED = frozenset({"use-shape", "inventory"})
+JUDGED = frozenset({"edge", "entrypoint", "signature", "use-shape"})
+SELECTED = frozenset({"inventory"})
 
 
 def context_bits(names: frozenset[str]) -> int:
@@ -183,6 +183,13 @@ class RulePlan:
             "start": selector_tree(spec.from_) if spec.primitive == "reach" else None,
             "export": self.export_rule(spec),
             "covers": self.covers(spec),
+            "use_shape": {
+                "allow": list(spec.allow_shapes),
+                "deny": list(spec.deny_shapes),
+                "flow": dict(spec.producer_options).get("flow") == "def-use",
+            }
+            if spec.primitive == "use-shape"
+            else None,
             "signature": spec.primitive == "signature",
             "unknown_types": list(spec.unknown_types) if spec.primitive == "signature" else [],
         }
