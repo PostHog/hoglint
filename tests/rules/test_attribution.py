@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from hoglint import facts
 from hoglint.cli import Commands, Snapshots
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
@@ -828,6 +829,17 @@ def test_the_framework_digest_comes_from_distribution_metadata(
     before = Framework.digest(("django", "rest_framework"))
     (tmp_path / edited).write_text(content)
     assert (Framework.digest(("django", "rest_framework")) != before) is changes
+
+
+def test_the_site_packages_listing_is_what_the_framework_digest_covers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_files(tmp_path, {**SITE, "django/stray.py": "", "loose/__init__.py": ""})
+    monkeypatch.setattr(Framework, "site", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(facts, "site_packages", lambda: tmp_path)
+    listed = facts.site_packages_files(("django", "loose", "rest_framework"))
+    # RECORD names the sources; a package with no metadata is walked
+    assert list(listed.values()) == ["django/__init__.py", "loose/__init__.py", "rest_framework/__init__.py"]
 
 
 def record_row(path: str, text: str) -> str:
