@@ -217,6 +217,24 @@ def test_only_the_newest_other_database_stays_unless_a_run_opened_one_today(tmp_
     assert (kept, gone) == ({"today", "also-today"}, {"two-days", "three-days"})
 
 
+def test_a_database_opened_after_the_prune_listed_it_stays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    native = native_module()
+    database = fact_database(native, tmp_path)
+    database.directory.mkdir(parents=True)
+    other_database(database.directory, "newer-l9.sqlite", 2)
+    older = other_database(database.directory, "older-l9.sqlite", 3)
+    listed = FactDatabase.others
+
+    def others_then_opened(self: FactDatabase) -> Any:
+        found = listed(self)
+        older[-1].touch()  # a run of the older build opens it right after the listing
+        return found
+
+    monkeypatch.setattr(FactDatabase, "others", others_then_opened)
+    database.prune(TODAY)
+    assert all(path.exists() for path in older)
+
+
 def records_directory(facts: Path, name: str, written_days_ago: float) -> Path:
     """A directory of the Python engine's per-file records, last written `written_days_ago`."""
     directory = facts / name

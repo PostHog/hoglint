@@ -23,6 +23,9 @@ The first native run of each day, per database, prunes:
   a day.
 
 A unit some run opened since yesterday, and a namespace written since yesterday, always stay.
+Each one is checked again right before it is deleted, so a run that opened it after the prune
+listed the cache keeps it. What remains is the moment between that check and the unlink: a run
+that opens the unit inside it loses its cache files and extracts again.
 
 The cache root's own prune (`hoglint/ledger/store.py`) leaves `facts/` to this one.
 """
@@ -101,6 +104,12 @@ class Unit:
     opened: float
     size: int
 
+    def last_opened(self) -> float:
+        """When a run last opened the unit, read again now as `others` reads it: its `.opened`
+        mark, else its newest file."""
+        mark = modified_time(Path(f"{self.database}.opened"))
+        return mark or max(modified_time(path) for path in unit_files(self.database))
+
     def delete(self) -> None:
         for path in unit_files(self.database):
             path.unlink(missing_ok=True)
@@ -115,9 +124,21 @@ class Namespace:
     opened: float
     size: int
 
+    def last_opened(self) -> float:
+        """When a file was last added to the namespace, read again from its directories now."""
+        return max(modified_time(directory) for directory in self.directories)
+
     def delete(self) -> None:
         for directory in self.directories:
             shutil.rmtree(directory, ignore_errors=True)
+
+
+def delete_if_idle(item: Unit | Namespace, in_use: float) -> bool:
+    """Deletes `item` unless a run opened it since `in_use`, checked again right before."""
+    if item.last_opened() >= in_use:
+        return False
+    item.delete()
+    return True
 
 
 class CacheWarning:
@@ -163,12 +184,11 @@ class FactDatabase:
     @staticmethod
     def drop_all_but_newest[T: (Unit, Namespace)](items: list[T], kept: int, old_age: float, in_use: float) -> list[T]:
         """Deletes the items no run used for 30 days, and those past the `kept` newest that no run
-        used since yesterday; returns the rest, newest first."""
+        used since yesterday (`delete_if_idle`); returns the rest, newest first."""
         out = []
         for rank, item in enumerate(sorted(items, key=lambda item: item.opened, reverse=True)):
-            if item.opened < old_age or (rank >= kept and item.opened < in_use):
-                item.delete()
-            else:
+            stale = item.opened < old_age or (rank >= kept and item.opened < in_use)
+            if not (stale and delete_if_idle(item, in_use)):
                 out.append(item)
         return out
 
@@ -294,8 +314,8 @@ class FactDatabase:
             if isinstance(item, Path):
                 item.unlink(missing_ok=True)
                 emptied.add(item.parent)
-            else:
-                item.delete()
+            elif not delete_if_idle(item, in_use):
+                continue
             excess -= size
         if excess > 0 and self.path.exists():
             self.remove_rows(excess, (day - EPOCH).days - IN_USE_DAYS)
