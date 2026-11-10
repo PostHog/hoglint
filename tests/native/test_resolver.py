@@ -6,23 +6,15 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from core.support import CYCLE_KEYS, CYCLE_SOURCES, cycle_answers
 from hoglint.core.config import CoreConfig
-from hoglint.native import bridge
 from hoglint.native.analysis import LITE_KINDS
 from hoglint.native.config import link_config
 from hoglint.native.snapshot import BlobSnapshot
 
+from native.require import native_module
+
 Answer = tuple[str, tuple[str, ...]] | None
-
-
-def native_module() -> Any:
-    try:
-        return bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
 
 
 def make_repo(root: Path) -> Path:

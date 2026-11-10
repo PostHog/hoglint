@@ -26,7 +26,6 @@ from hoglint.ledger.envelope import (
     PROTOCOL,
     SECTIONS,
     BinaryIds,
-    EngineError,
     EngineSources,
     Envelope,
     Framework,
@@ -46,9 +45,10 @@ from hoglint.presets_py.posthog.owners import OWNERS_YAML
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.source import GraphSource
+from native.require import native_required
 
 from rules.support import GraphBuilder, config_from
-from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, write_files
+from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, needs_extractor, write_files
 
 DYNAMIC = ("dynamic-imports", "app.loader|dynamic-import|", "dynamic-import '' did not resolve")
 OTHER_REASON = ("dynamic-imports", "app.loader|dynamic-import|", "selection reads an unknown value")
@@ -324,7 +324,7 @@ def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
     assert printed.err.count("cannot use the cache") == 1, printed.err
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_a_run_waits_while_other_runs_hold_every_evaluation_slot(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(repo, FILES)
@@ -431,28 +431,19 @@ def test_the_engine_list_names_the_protocol_this_engine_reads() -> None:
     assert sources is not None and sources.protocol == str(PROTOCOL)
 
 
-def built_before_its_sources(section: str) -> bool:
-    """Whether the extractor binary is older than a source of the section, so its id cannot match yet."""
-    sources = EngineSources.read(CRATE)
-    if sources is None or not has_extractor() or not Extractor.find_binary().is_file():
-        return True
-    built = Extractor.find_binary().stat().st_mtime
-    return any((CRATE / rel).stat().st_mtime > built for rel in sources.files(section))
-
-
 # Not [engine]: its sources include every Python file, so the id a binary embeds at build time is
 # stale after any Python edit. The vectors in test_each_id_is_the_one_engine_sources_txt_defines,
 # which src/sources.rs repeats, pin the [engine] algorithm in both languages.
 @pytest.mark.parametrize("section", (FACTS, NATIVE))
 def test_the_extractor_reports_the_ids_of_its_sources(section: str) -> None:
-    if built_before_its_sources(section):
-        pytest.skip(f"no extractor binary built after the last [{section}] source edit")
-    try:
-        reported = BinaryIds.of(Extractor.find_binary(), section)
-    except EngineError:
-        pytest.skip(f"the extractor binary does not report its [{section}] id yet")
     sources = EngineSources.read(CRATE)
-    assert sources is not None and reported == sources.digest(section)
+    assert sources is not None
+    if not has_extractor() and not native_required():
+        pytest.skip("no extractor binary is built")
+    reported = BinaryIds.of(Extractor.find_binary(), section)
+    if reported != sources.digest(section) and not native_required():
+        pytest.skip(f"the extractor binary was built from other [{section}] sources: rebuild it")
+    assert reported == sources.digest(section)
 
 
 USE_SHAPE = """
@@ -521,7 +512,7 @@ LOADER = "import importlib\n\n\ndef load(name):\n    return importlib.import_mod
 SECOND_LOADER = LOADER.replace("return", "importlib.import_module(name)\n    return")
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_staged_check_blocks_only_what_it_introduced_against_head_and_chains_its_summary(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(repo, {"hoglint.toml": DYNAMIC_CONFIG, "core/__init__.py": "", "core/loader.py": LOADER})
@@ -559,7 +550,7 @@ def stored_incomplete_counts(cache: Path) -> dict[str, int]:
     return counts
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_a_staged_check_reads_only_the_tree_it_captured_from_the_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
@@ -610,7 +601,7 @@ sets = ["owners"]
 )
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_query_reads_owners_from_the_owners_files_not_from_the_summary(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(repo, {**FILES, "hoglint.toml": OWNED_CONFIG, "CODEOWNERS": "*.py @team-a\n"})
@@ -623,7 +614,7 @@ def test_query_reads_owners_from_the_owners_files_not_from_the_summary(tmp_path:
     assert "@team-b  " in owned and "@team-a" not in owned
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_a_file_no_rule_reads_never_keeps_a_staged_summary_from_the_next_commit(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(repo, FILES)
@@ -641,7 +632,7 @@ def test_a_file_no_rule_reads_never_keeps_a_staged_summary_from_the_next_commit(
     assert "stored summary)" in after.stdout, after.stdout + after.stderr
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_a_commit_that_changes_no_input_keeps_the_summary_key(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(repo, FILES)
@@ -686,7 +677,7 @@ def turbo_inputs(inputs: str) -> str:
     return json.dumps({"tasks": {"contract-check": {"inputs": [inputs]}}})
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_a_staged_check_reads_side_inputs_from_the_index_not_the_working_tree(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(repo, {**FILES, **WATCHED_PACKAGE, "hoglint.toml": COVERED})

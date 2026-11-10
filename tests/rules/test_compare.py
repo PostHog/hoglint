@@ -17,6 +17,7 @@ from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.records import FindingRecord
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus
+from native.require import native_required
 
 RULE = "model-crossings"
 GROWTH = {RULE: (0, 2)}  # identity (target, consumer module, shape); growth by (target, shape)
@@ -133,6 +134,12 @@ def has_extractor() -> bool:
     return shutil.which("git") is not None
 
 
+# With HOGLINT_REQUIRE_NATIVE=1 a test that needs the binary runs, and fails without it.
+needs_extractor = pytest.mark.skipif(
+    not has_extractor() and not native_required(), reason="needs the hoglint-facts binary"
+)
+
+
 CONFIG = """
 schema = 1
 
@@ -204,7 +211,7 @@ def git_in(repo: Path, *args: str) -> str:
     return subprocess.run([*command, *args], check=True, capture_output=True, text=True).stdout
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> None:
     for name, content in FILES.items():
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
@@ -244,7 +251,7 @@ FAKE_CRATE = {
 }
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 @pytest.mark.parametrize(
     "base_engine, code, says",
     [
@@ -286,7 +293,7 @@ def test_compare_tells_a_base_without_engine_from_a_base_engine_that_fails(
     assert says in compared.stdout
 
 
-@pytest.mark.skipif(not has_extractor(), reason="needs the hoglint-facts binary")
+@needs_extractor
 @pytest.mark.parametrize(
     "imported, says",
     [

@@ -9,10 +9,11 @@ import pytest
 
 import orjson
 from hoglint.core.config import CoreConfig
-from hoglint.native import bridge
 from hoglint.native.analysis import LITE_KINDS
 from hoglint.native.config import link_config
 from hoglint.native.snapshot import BlobSnapshot
+
+from native.require import native_module
 
 SOURCES = {
     "app/__init__.py": "",
@@ -24,10 +25,7 @@ SOURCES = {
 
 
 def linked(root: Path) -> Any:
-    try:
-        native = bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
+    native = native_module()
     repo = root / "repo"
     for path, text in SOURCES.items():
         (repo / path).parent.mkdir(parents=True, exist_ok=True)

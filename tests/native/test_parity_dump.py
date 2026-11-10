@@ -7,17 +7,14 @@ from pathlib import Path
 import pytest
 
 from hoglint.ledger.scan import ScanSummary
-from hoglint.native import bridge
 from hoglint.native.parity import Dump
 
+from native.require import native_module
 from native.test_parity import OWNERS_REPO
 
 
 def test_a_dump_fails_when_its_stored_summary_cannot_be_built(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    try:
-        bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
+    native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
     for path, text in OWNERS_REPO.items():

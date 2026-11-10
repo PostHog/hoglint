@@ -12,21 +12,15 @@ from typing import Any
 import pytest
 
 from hoglint.core.config import CoreConfig
-from hoglint.native import bridge
 from hoglint.native.analysis import LITE_KINDS
 from hoglint.native.config import link_config
 from hoglint.native.factdb import EPOCH, MAX_AGE_DAYS, FactDatabase, files_under
 from hoglint.native.snapshot import BlobSnapshot
 
+from native.require import native_module
+
 TODAY = datetime.date(2026, 11, 9)
 DAY = 86_400
-
-
-def native_module() -> Any:
-    try:
-        return bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
 
 
 def make_repo(root: Path) -> Path:

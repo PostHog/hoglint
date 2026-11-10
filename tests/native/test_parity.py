@@ -10,13 +10,14 @@ from pathlib import Path
 import pytest
 
 from hoglint.ledger.envelope import EngineError
-from hoglint.native import bridge
 from hoglint.native.parity import Dump, compare_dumps, read_lines
 from hoglint.native.rules import Rejudged
 from hoglint.native.source import ENGINES
 from hoglint.rules.base import EdgeRule, Judgment, context_class
 from hoglint.rules.engine import Engine, primitive_of
 from rules.support import GraphBuilder, config_from
+
+from native.require import native_module
 
 # Two core modules whose labels are equal for everything the rule reads, so the native engine
 # judges them as one group; each has its own owners.
@@ -126,10 +127,7 @@ ledger = false
 def dumps(
     tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPatch, unreadable: tuple[str, ...] = ()
 ) -> dict[str, Path]:
-    try:
-        bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
+    native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
     for path, text in sources.items():

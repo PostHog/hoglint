@@ -13,13 +13,13 @@ from hoglint.config import CONFIG_FILE, load_config
 from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph
-from hoglint.native import bridge
 from hoglint.native.rules import Rejudged
 from hoglint.native.source import ENGINES, batch_mode, graph_source
 from hoglint.rules.engine import Engine
 from rules.test_attribution import DYNAMIC_CONFIG, LOADER, SECOND_LOADER
 from rules.test_compare import git_in, write_files
 
+from native.require import native_module
 from native.test_parity import OWNERS_REPO
 
 ENVELOPE = Envelope("t" * 40, "engine", "policy", "framework")
@@ -58,10 +58,7 @@ def summary(repo: Path, engine: str, work: Path, monkeypatch: pytest.MonkeyPatch
 def test_levels_and_summaries_of_accepted_grouped_findings_judge_no_edge_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    try:
-        bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
+    native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
     for path, text in LEDGERED_REPO.items():
@@ -79,10 +76,7 @@ def test_levels_and_summaries_of_accepted_grouped_findings_judge_no_edge_again(
 def test_an_inline_baseline_frees_its_graph_before_the_staged_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    try:
-        bridge.load()
-    except ImportError:
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
+    native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
     write_files(repo, {"hoglint.toml": DYNAMIC_CONFIG, "core/__init__.py": "", "core/loader.py": LOADER})
