@@ -66,6 +66,7 @@ class CoreBuild:
             graph.symbols.update(scratch.symbols)
             graph.modules.update(scratch.modules)
             graph.failed_producers.update(scratch.failed_producers)
+            graph.hand_outs.update(scratch.hand_outs)
             return scratch.edges
 
         return ProducerStep(producer.name, producer.edge_kinds, run)

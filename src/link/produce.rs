@@ -8,7 +8,7 @@ use super::resolve::{
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
-use super::surface::{ALL_CLAUSE, HandedOut};
+use super::surface::{ALL_CLAUSE, HandOut, HandedOut};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::rc::Rc;
 
@@ -294,6 +294,8 @@ pub struct Producing {
     pub patch_callees: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     pub contract_surfaces: Vec<ExportPaths>,
+    /// The files of every export.
+    pub export_surfaces: Vec<ExportPaths>,
     k: Keys,
 }
 
@@ -367,6 +369,7 @@ impl Producing {
         dataclass_decorators: &[String],
         patch_callees: &[String],
         contract_surfaces: Vec<ExportPaths>,
+        export_surfaces: Vec<ExportPaths>,
     ) -> Producing {
         let mut last_names: Vec<String> = loaders
             .iter()
@@ -439,6 +442,7 @@ impl Producing {
                 .collect(),
             patch_callees: patch_callees.to_vec(),
             contract_surfaces,
+            export_surfaces,
             k,
         }
     }
@@ -709,6 +713,8 @@ pub struct Producers<'p> {
     pub fields: FxHashMap<u32, FxHashMap<i32, Vec<u32>>>,
     /// The contract roots of each file, by its scope (`contract_roots`).
     pub roots: FxHashMap<usize, Vec<(usize, String)>>,
+    /// What each export module hands out by import (`record_hand_out`).
+    pub hand_outs: FxHashMap<Sid, HandOut>,
 }
 
 impl Producers<'_> {
@@ -1775,6 +1781,30 @@ impl Producers<'_> {
         if contract {
             self.hand_out(owner);
         }
+        self.record_hand_out(owner);
+    }
+
+    /// What an export module hands out by import, for every rule that asks what it exports. A
+    /// test file hands nothing out.
+    fn record_hand_out(&mut self, owner: usize) {
+        let scope = &self.scopes[owner];
+        let path = &self.core.facts.files[scope.file as usize].path;
+        let covered = self
+            .settings
+            .export_surfaces
+            .iter()
+            .any(|surface| surface.covered_root(path).is_some());
+        if scope.base_ctx & ctx::TEST != 0 || !covered {
+            return;
+        }
+        let handed = HandedOut::new(self.core, &self.scopes[owner]);
+        let used = if handed.no_functions {
+            self.used_names(owner)
+        } else {
+            FxHashSet::default()
+        };
+        let found = handed.hand_out(self.core, &self.scopes[owner], &used);
+        self.hand_outs.insert(self.scopes[owner].module, found);
     }
 
     fn strings(&mut self, owner: usize) {

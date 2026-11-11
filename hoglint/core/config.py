@@ -123,6 +123,8 @@ class CoreConfig:
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
       they hand out from other modules.
+    - export_surfaces: the files of every export. Core records what each of them hands out by
+      import (`Graph.hand_outs`), so every rule reads one notion of what a module exports.
     """
 
     source_roots: tuple[str, ...] = (".",)
@@ -136,6 +138,7 @@ class CoreConfig:
     frozen_dataclass_decorators: tuple[str, ...] = ()
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
     contract_surfaces: tuple[ExportPaths, ...] = ()
+    export_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False
 
     @cached_property
@@ -154,6 +157,10 @@ class CoreConfig:
         """(export, root) of every contract surface that covers a path."""
         found = ((at, surface.covered_root(path)) for at, surface in enumerate(self.contract_surfaces))
         return frozenset((at, root) for at, root in found if root is not None)
+
+    def in_export(self, path: str) -> bool:
+        """Whether an export surface covers a path."""
+        return any(surface.covered_root(path) is not None for surface in self.export_surfaces)
 
     def loader_callee_names(self) -> tuple[str, ...]:
         """Last dotted parts of the dynamic loaders; the extractor records calls to these."""

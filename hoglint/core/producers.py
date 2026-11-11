@@ -531,8 +531,8 @@ class DeclarationProducer(Producer):
 
     @classmethod
     def fact_kinds(cls, config: CoreConfig) -> frozenset[str]:
-        """Only a contract surface reads facts besides the tables."""
-        return cls.contract_reads if config.contract_surfaces else frozenset()
+        """Only a contract or export surface reads facts besides the tables."""
+        return cls.contract_reads if config.contract_surfaces or config.export_surfaces else frozenset()
 
     def __init__(self) -> None:
         self.expansions: dict[tuple[tuple[str, str], SlotLookup], list[Expanded]] = {}
@@ -1003,6 +1003,15 @@ class DeclarationProducer(Producer):
             init = SlotRows(rows.site, f"{item.bound}.__init__", item.clause)
             self.expose_dataclass(context, graph, init, lookup, idx)
 
+    def record_hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
+        """What an export module hands out by import, for every rule that asks what it exports.
+        A test file hands nothing out."""
+        if Context.TEST in scope.base_contexts or not context.config.in_export(scope.path):
+            return
+        handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
+        used = self.used_names(scope) if handed.no_functions else frozenset()
+        graph.hand_outs[scope.module] = handed.hand_out(used)
+
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
             contract = bool(self.contract_roots(context, scope))
@@ -1010,6 +1019,7 @@ class DeclarationProducer(Producer):
                 self.declare(context, graph, scope, idx, node, contract)
             if contract:
                 self.hand_out(context, graph, scope)
+            self.record_hand_out(context, graph, scope)
 
 
 class StringProducer(Producer):

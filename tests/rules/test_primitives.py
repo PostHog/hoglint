@@ -11,7 +11,7 @@ import pytest
 
 from hoglint.config import Config
 from hoglint.ledger.file import LedgerFile
-from hoglint.model import Context, FindingStatus, Graph, IncompleteCause, Resolution
+from hoglint.model import Context, FindingStatus, Graph, HandOut, IncompleteCause, Resolution
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
@@ -505,6 +505,11 @@ growth_key = ["dst.symbol"]
 """
 
 
+# `products.billing.facade.api` hands out the `Invoice` it imports.
+BINDS_INVOICE = (("binds", "Invoice"),)
+HANDS_OUT_INVOICE = HandOut(frozenset({"Invoice"}), frozenset(), False)
+
+
 def test_export_shape_is_checked_through_fields(tmp_path: Path) -> None:
     graph = (
         base_graph()
@@ -522,9 +527,10 @@ def test_export_shape_is_checked_through_fields(tmp_path: Path) -> None:
             "products.billing.models.Invoice",
             attrs=(("callable", "Result.__init__"), ("slot", "field:invoice")),
         )
-        .edge("import", "products.billing.facade.api", "products.billing.models.Invoice")
+        .edge("import", "products.billing.facade.api", "products.billing.models.Invoice", attrs=BINDS_INVOICE)
         .graph
     )
+    graph.hand_outs["products.billing.facade.api"] = HANDS_OUT_INVOICE
     result = run(tmp_path, EXPORT, graph)
     found = sorted(identities(result, "export-shape"))
     assert found == [
@@ -539,9 +545,16 @@ def test_export_skips_test_imports_by_default_and_an_empty_exclude_keeps_them(
 ) -> None:
     graph = (
         base_graph()
-        .edge("import", "products.billing.facade.api", "products.billing.models.Invoice", contexts=(Context.TEST,))
+        .edge(
+            "import",
+            "products.billing.facade.api",
+            "products.billing.models.Invoice",
+            contexts=(Context.TEST,),
+            attrs=BINDS_INVOICE,
+        )
         .graph
     )
+    graph.hand_outs["products.billing.facade.api"] = HANDS_OUT_INVOICE
     result = run(tmp_path, EXPORT + contexts, graph)
     assert bool(identities(result, "export-shape")) is reported
 

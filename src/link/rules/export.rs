@@ -329,8 +329,23 @@ impl<'a> Walk<'a> {
         found
     }
 
-    /// `ExportPrimitive.exported_symbols`: top-level symbols, then what module-scope imports
-    /// bring in; an import that did not resolve is reported on the way.
+    /// Whether a module hands out what an import edge binds (`Graph.hand_outs`).
+    fn hands_out(&self, module: Sid, id: u32) -> bool {
+        let link = self.cx.link;
+        let Some(found) = link.hand_outs.get(&module) else {
+            return false;
+        };
+        if found.unread {
+            return true;
+        }
+        let binds = link.core.it.get("binds");
+        link.edges
+            .attrs_with(id)
+            .any(|&(key, value)| Some(key) == binds && found.handed.contains(&value))
+    }
+
+    /// `ExportPrimitive.exported_symbols`: top-level symbols, then the imports the module hands
+    /// out; an import that did not resolve is reported on the way.
     fn exported_symbols(&mut self, module: Sid) -> Vec<(String, Option<u32>)> {
         let mut out: Vec<(String, Option<u32>)> = self
             .top_level(module)
@@ -351,6 +366,10 @@ impl<'a> Walk<'a> {
             if (include != 0 && ctx & include == 0) || ctx & self.rule.exclude != 0 {
                 continue;
             }
+            if !self.hands_out(module, id) {
+                continue;
+            }
+            let edges = &self.cx.link.edges;
             let targets = edges.targets_of(id);
             if edges.res_of(id) == Res::Unresolved || targets.is_empty() {
                 self.unresolved(id, &module_name);

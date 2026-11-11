@@ -2,8 +2,8 @@
 
 The check is recursive. An exported class must have an allowed shape, and the types in its
 fields, its bases' fields and its methods' signatures must too. An exported function's
-signature types are checked the same way. Re-exports are judged at their origin, so a shim
-module hides nothing. Shape names are core recognizers plus the config's [kinds].
+signature types are checked the same way. A module exports its public definitions and the
+imports it hands out; a re-export is judged at its origin, so a shim module hides nothing. Shape names are core recognizers plus the config's [kinds].
 
 Membership is the labeler's: an export's paths, narrowed by `subclass_of`. The audience is not
 read here: it limits who may use an export, not what the export hands out, so every member is
@@ -149,9 +149,14 @@ class ExportPrimitive(RuleType):
         return self.run
 
     def exported_symbols(self, module: str) -> list[tuple[str, Edge | None]]:
+        """The module's public top-level definitions, then the imports it hands out
+        (`Graph.hand_outs`): an import it keeps to itself is no part of what it exports."""
         out: list[tuple[str, Edge | None]] = [(symbol, None) for symbol in self.top_level.get(module, [])]
+        hand_out = self.ctx.graph.hand_outs.get(module)
         for edge in self.module_imports.get(module, []):
             if not context_ok(edge, self.include, self.exclude):
+                continue
+            if hand_out is None or not (edge.attr("binds") in hand_out.handed or hand_out.unread):
                 continue
             if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
                 self.unresolved(edge, module)

@@ -668,10 +668,25 @@ class Labeler:
             self.exported_cache[key] = truth
         return truth
 
+    def hands_out(self, module: str, symbol: str | None) -> Truth:
+        """Whether a module hands out the name a symbol in it is bound by (`Graph.hand_outs`). A
+        name it does not bind by import is its own definition; one it imports and keeps to itself
+        is no part of what it exports, unknown when its `__all__` cannot be read."""
+        hand_out = self.graph.hand_outs.get(module)
+        if hand_out is None or symbol is None or not symbol.startswith(f"{module}."):
+            return Truth.TRUE
+        name = symbol[len(module) + 1 :].split(".", 1)[0]
+        if name not in hand_out.kept:
+            return Truth.TRUE
+        return Truth.UNKNOWN if hand_out.unread else Truth.FALSE
+
     def compute_exported(self, module: str | None, symbol: str | None, audience_resolver: Resolver) -> Truth:
         path = self.path_of(module) if module else None
-        if path is None:
+        if module is None or path is None:
             return Truth.UNKNOWN
+        handed = self.hands_out(module, symbol)
+        if handed is not Truth.TRUE:
+            return handed
         results: list[Truth] = []
         for spec in self.config.exports.values():
             truth = self.export_member((spec.name, path, symbol))

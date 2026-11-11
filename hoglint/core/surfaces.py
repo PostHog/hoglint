@@ -11,8 +11,9 @@ A module hands out a name it binds by import when one of these clauses holds:
 A star import hands out the names it binds (the source's `__all__`, else its public top-level
 names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
 
-This is not the export primitive's notion of what a module exports (every module-level import).
-A surface also imports the code it calls, and that code is not part of its contract.
+Every rule reads this notion of what a module exports: a surface also imports the code it calls,
+and that code is not part of its contract. Core records it for every export module
+(`Graph.hand_outs`).
 
 `__all__` is read in every form whose names a reader can list (`ListedNames`): `__all__ = [...]`,
 annotated or not, `+=` with a literal, a sum of literals, and copies of a module-level literal
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import ModuleTable, Tables, absolute_import
+from hoglint.model import HandOut
 
 ALL_CLAUSE = "all"
 ALIAS_CLAUSE = "alias"
@@ -226,3 +228,15 @@ class HandedOut:
                 seen.add(key)
                 out.append(Handed(name, key[1], LAZY_CLAUSE, 0, 0))
         return out
+
+    def hand_out(self, used: frozenset[str]) -> HandOut:
+        """The names the module hands out and the ones it binds by import and keeps to itself.
+        `used` as in `names`."""
+        handed = frozenset(item.bound for item in self.names(used))
+        bound = frozenset(
+            asname or name
+            for _, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ())
+            if name is not None and name != "*" and flags == 0
+        )
+        unread = not self.no_functions and self.dunder_all.unread is not None
+        return HandOut(handed, bound - handed, unread)

@@ -312,6 +312,16 @@ class RuleResult:
     incomplete: list[tuple[IncompleteCause, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class HandOut:
+    """What one export module binds by import, split by the hand-out rule (`core.surfaces`): the
+    names it hands out, the names it keeps to itself, and whether its `__all__` cannot be read."""
+
+    handed: frozenset[str]
+    kept: frozenset[str]
+    unread: bool
+
+
 @dataclass(frozen=False, slots=True)
 class Graph:
     """Everything producers made from one snapshot. Rules and views read only this.
@@ -325,6 +335,7 @@ class Graph:
     modules: dict[str, str] = field(default_factory=dict)  # module -> path
     failed_producers: dict[str, ProducerFailure] = field(default_factory=dict)
     symbols: dict[str, dict[str, str]] = field(default_factory=dict)  # "module.qualname" -> facts (kind, bases, ...)
+    hand_outs: dict[str, HandOut] = field(default_factory=dict)  # export module -> what it hands out
     kind_index: dict[str, list[Edge]] = field(default_factory=dict, repr=False, compare=False)
     indexed: int = field(default=0, repr=False, compare=False)
     indexed_list: list[Edge] | None = field(default=None, repr=False, compare=False)

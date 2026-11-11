@@ -397,6 +397,34 @@ impl Link {
         (names, PyBytes::new(py, &kinds), ids_bytes(py, &files))
     }
 
+    /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
+    /// kept names, whether its `__all__` cannot be read), in module name order.
+    #[allow(clippy::type_complexity)]
+    fn hand_outs(&self) -> Vec<(String, Vec<String>, Vec<String>, bool)> {
+        let it = &self.inner.core.it;
+        let sorted = |set: &rustc_hash::FxHashSet<Sid>| {
+            let mut out: Vec<String> = set.iter().map(|&name| it.s(name).to_string()).collect();
+            out.sort();
+            out
+        };
+        let mut out: Vec<(String, Vec<String>, Vec<String>, bool)> = self
+            .inner
+            .hand_outs
+            .iter()
+            .map(|(&module, found)| {
+                let handed = sorted(&found.handed);
+                (
+                    it.s(module).to_string(),
+                    handed,
+                    sorted(&found.kept),
+                    found.unread,
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Applies one producer's refinements to edges (D22): for each edge id, the shape and shape
     /// detail to set (None keeps the edge's) and attrs to add after the edge's own. Applies none of
     /// them when a field conflicts (`RefinedFields`), and returns the first conflict.

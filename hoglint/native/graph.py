@@ -16,7 +16,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from typing import Any, SupportsIndex, overload
 
 from hoglint.index import GraphIndex
-from hoglint.model import CONTEXT_BITS, LANGUAGE_PYTHON, Edge, EntityId, Graph, Resolution, Site, context_bits
+from hoglint.model import CONTEXT_BITS, LANGUAGE_PYTHON, Edge, EntityId, Graph, HandOut, Resolution, Site, context_bits
 from hoglint.plugins import ProducerFailure, Refinements, conflict_text
 
 CONTEXT_SETS = tuple(
@@ -262,7 +262,11 @@ class NativeGraph(Graph):
         self.core = LinkEdges(link)
         names, kinds, files = link.symbol_columns()
         symbols = NativeSymbols(names, kinds, array("I", files), link.paths())
-        super().__init__(edges=EdgeList(self.core), modules=modules, symbols=symbols)  # type: ignore[arg-type]
+        hand_outs = {
+            module: HandOut(frozenset(handed), frozenset(kept), unread)
+            for module, handed, kept, unread in link.hand_outs()
+        }
+        super().__init__(edges=EdgeList(self.core), modules=modules, symbols=symbols, hand_outs=hand_outs)  # type: ignore[arg-type]
         self.repeats: dict[int, int] = {}
 
     def make_index(self) -> GraphIndex:

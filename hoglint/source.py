@@ -114,12 +114,21 @@ class GraphSource:
         """The files of exports whose shape makes their signatures part of their contract."""
         return tuple(spec.files for spec in config.exports.values() if config.shapes[spec.shape].signatures)
 
+    @staticmethod
+    def export_surfaces(config: Config) -> tuple[ExportPaths, ...]:
+        """The files of every export: core records what each of them hands out."""
+        return tuple(spec.files for spec in config.exports.values())
+
     def key(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
         sections = {name: config.sections.get(name) for name in sorted(config.sections)}
         snapshot = f":tree={tree}" if tree else ":staged" if staged else ""
-        # The contract surfaces come from [exports] and [shapes] and change what core produces.
+        # The contract and export surfaces come from [exports] and [shapes] and change what core
+        # produces.
         surfaces = [(surface.within, surface.paths) for surface in self.contract_surfaces(config)]
-        return f"{code_root}{snapshot}", canonical({"sections": sections, "contract_surfaces": surfaces})
+        exports = [(surface.within, surface.paths) for surface in self.export_surfaces(config)]
+        return f"{code_root}{snapshot}", canonical(
+            {"sections": sections, "contract_surfaces": surfaces, "export_surfaces": exports}
+        )
 
     def build(self, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
         key = self.key(code_root, config, staged, tree)
@@ -149,6 +158,7 @@ class GraphSource:
         if "frozen_dataclass_decorators" in discovery:
             fields["frozen_dataclass_decorators"] = as_tuple(discovery["frozen_dataclass_decorators"])
         fields["contract_surfaces"] = GraphSource.contract_surfaces(config)
+        fields["export_surfaces"] = GraphSource.export_surfaces(config)
         return CoreConfig(**fields)
 
     @staticmethod

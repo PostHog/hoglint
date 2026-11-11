@@ -592,6 +592,40 @@ impl<'a> Env<'a> {
         cx.field_value(field, endpoint.module, endpoint.at, symbol.as_deref())
     }
 
+    /// `Labeler.hands_out`: whether a module hands out the name a symbol in it is bound by. A name
+    /// it does not bind by import is its own definition; one it imports and keeps to itself is no
+    /// part of what it exports, unknown when its `__all__` cannot be read.
+    fn hands_out(&self, endpoint: &Endpoint<'a>) -> Truth {
+        let cx = self.cx;
+        let Some(module) = endpoint.module else {
+            return Truth::True;
+        };
+        let Some(found) = cx.link.hand_outs.get(&module) else {
+            return Truth::True;
+        };
+        let Some(symbol) = cx.symbol_text(endpoint.symbol) else {
+            return Truth::True;
+        };
+        let Some(rest) = symbol
+            .strip_prefix(cx.text(module))
+            .and_then(|rest| rest.strip_prefix('.'))
+        else {
+            return Truth::True;
+        };
+        let name = rest.split('.').next().unwrap_or(rest);
+        let kept = cx
+            .link
+            .core
+            .it
+            .get(name)
+            .is_some_and(|name| found.kept.contains(&name));
+        match (kept, found.unread) {
+            (false, _) => Truth::True,
+            (true, true) => Truth::Unknown,
+            (true, false) => Truth::False,
+        }
+    }
+
     /// `EdgeEnv.exported`, uncached: each export that holds the endpoint, with its audience
     /// read through this environment (`Labeler.compute_exported`).
     fn exported(&self, endpoint: &Endpoint<'a>) -> Value<'a> {
@@ -602,6 +636,11 @@ impl<'a> Env<'a> {
         let Some(at) = endpoint.at else {
             return Value::Unknown;
         };
+        match self.hands_out(endpoint) {
+            Truth::True => {}
+            Truth::False => return Value::Bool(false),
+            Truth::Unknown => return Value::Unknown,
+        }
         let bits = cx.rules.labels.exports_of[at as usize];
         let symbol = cx.symbol_text(endpoint.symbol);
         let mut results = Vec::new();

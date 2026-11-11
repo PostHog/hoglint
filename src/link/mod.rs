@@ -183,6 +183,9 @@ pub struct LinkConfig {
     /// The files of exports whose signatures are part of their contract.
     #[serde(default)]
     pub contract_surfaces: Vec<SurfaceConfig>,
+    /// The files of every export.
+    #[serde(default)]
+    pub export_surfaces: Vec<SurfaceConfig>,
     /// Python's `dir(builtins)` of the interpreter that runs the packs.
     #[serde(default)]
     pub builtins: Vec<String>,
@@ -251,6 +254,8 @@ pub struct Link {
     pub edges: EdgeStore,
     pub index: EdgeIndex,
     pub symbols: Symbols,
+    /// What each export module hands out by import (surface.rs `HandOut`).
+    pub hand_outs: FxHashMap<Sid, surface::HandOut>,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
     /// `config.dataclass_decorators` and `config.frozen_dataclass_decorators`, for the rules'
@@ -336,6 +341,12 @@ impl Link {
             .map(|surface| ExportPaths::new(&surface.within, &surface.paths))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("contract_surfaces: {e}"))?;
+        let export_surfaces = config
+            .export_surfaces
+            .iter()
+            .map(|surface| ExportPaths::new(&surface.within, &surface.paths))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("export_surfaces: {e}"))?;
         let settings = Producing::new(
             &mut it,
             &config.builtins,
@@ -343,6 +354,7 @@ impl Link {
             &config.dataclass_decorators,
             &config.patch_callees,
             contract_surfaces,
+            export_surfaces,
         );
         let mut core = Core::new(it, Arc::new(facts), namer, index);
         let mut scopes: Vec<Scope> = analyzed
@@ -367,6 +379,7 @@ impl Link {
             expansions: FxHashMap::default(),
             fields: FxHashMap::default(),
             roots: FxHashMap::default(),
+            hand_outs: FxHashMap::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
@@ -374,6 +387,7 @@ impl Link {
         edges.via.shrink_to_fit();
         edges.attrs.shrink_to_fit();
         let symbols = std::mem::take(&mut producers.symbols);
+        let hand_outs = std::mem::take(&mut producers.hand_outs);
         edges.kind_names = KIND_NAMES.iter().map(|kind| core.it.intern(kind)).collect();
         edges.producers = (0..KIND_NAMES.len() as u8)
             .map(|kind| core.it.intern(&Self::producer_name(kind)))
@@ -387,6 +401,7 @@ impl Link {
             edges,
             index: EdgeIndex::default(),
             symbols,
+            hand_outs,
             first_party,
             dataclass_kinds: DataclassKinds {
                 make: config.dataclass_decorators.iter().cloned().collect(),

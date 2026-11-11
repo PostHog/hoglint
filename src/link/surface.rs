@@ -2,13 +2,15 @@
 //!
 //! A module hands out a name it binds by import when `__all__` lists it, when the import binds
 //! it under its own name (`from x import f as f`), when it is a lazy (PEP 562) name, or when the
-//! module has no top-level function and its own code does not refer to the name. This is not the
-//! export primitive's notion of what a module exports (every module-level import): a surface
-//! also imports the code it calls.
+//! module has no top-level function and its own code does not refer to the name. A surface also
+//! imports the code it calls, and that code is not part of its contract.
 //!
 //! A star import hands out the names it binds (the source's `__all__`, else its public top-level
 //! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
 //! follows.
+//!
+//! Every rule reads this notion of what a module exports: core records it for every export
+//! module (`Link::hand_outs`).
 //!
 //! `__all__` is read in every form whose names a reader can list (`ListedNames`): `__all__ = [...]`,
 //! annotated or not, `+=` with a literal, a sum of literals, and copies of a module-level literal
@@ -33,6 +35,15 @@ pub struct Handed {
     pub clause: &'static str,
     pub line: u32,
     pub col: u32,
+}
+
+/// What one export module binds by import, split by the hand-out rule (hoglint/model.py
+/// `HandOut`): the names it hands out, the names it keeps to itself, and whether its `__all__`
+/// cannot be read.
+pub struct HandOut {
+    pub handed: FxHashSet<Sid>,
+    pub kept: FxHashSet<Sid>,
+    pub unread: bool,
 }
 
 /// The names a module's `__all__` lists, or where it first cannot be read (`unread`).
@@ -310,5 +321,31 @@ impl HandedOut {
             }
         }
         out
+    }
+
+    /// The names the module hands out and the ones it binds by import and keeps to itself.
+    /// `used` as in `names`.
+    pub fn hand_out(&self, core: &mut Core, scope: &Scope, used: &FxHashSet<Sid>) -> HandOut {
+        let handed: FxHashSet<Sid> = self
+            .names(core, scope, used)
+            .into_iter()
+            .map(|item| item.bound)
+            .collect();
+        let star = core.star();
+        let kept = core.facts.files[scope.file as usize]
+            .imports
+            .iter()
+            .filter(|row| row.flags == 0)
+            .filter_map(|row| {
+                let name = row.name.filter(|&name| name != star)?;
+                Some(row.asname.filter(|&a| a != EMPTY).unwrap_or(name))
+            })
+            .filter(|bound| !handed.contains(bound))
+            .collect();
+        HandOut {
+            handed,
+            kept,
+            unread: !self.no_functions && self.dunder_all.unread.is_some(),
+        }
     }
 }

@@ -236,7 +236,7 @@ SOURCES = {
     "products/billing/backend/facade/contracts.py": "import django.db.models\n",
     "products/billing/backend/facade/slots.py": (
         "import abc\nimport dataclasses\nimport enum\nfrom typing import Any\n\n"
-        "from products.billing.backend import nowhere\nfrom products.billing.backend.models import Invoice, Loose\n\n\n"
+        "from products.billing.backend import nowhere as nowhere\nfrom products.billing.backend.models import Invoice, Loose\n\n\n"
         "@dataclasses.dataclass(frozen=True)\nclass Note:\n    invoice: Invoice\n    text: str\n\n\n"
         "@dataclasses.dataclass\nclass Draft:\n    note: Note\n\n\n"
         "class Level(enum.Enum):\n    LOW = 1\n\n\nclass Port(abc.ABC):\n    pass\n\n\n"

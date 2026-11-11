@@ -96,3 +96,59 @@ def test_a_frozen_dataclass_is_read_from_the_dataclass_decorators(
     out = both_engines(tmp_path, {"products/shop/backend/facade/contracts.py": IMPORTS + body}, monkeypatch)
     expected = [[f"{CONTRACTS}.Order", CONTRACTS, "export-shape(class)"]] if flagged else []
     assert export_shape_findings(out["native"]) == expected
+
+
+SURFACE_CONFIG = (
+    CONFIG
+    + """
+[rules.public-surface]
+primitive = "entrypoint"
+kinds = ["import"]
+select = "src.package != dst.package"
+identity = ["dst.symbol", "src.module"]
+ledger = false
+"""
+)
+LOGIC = (
+    "class Order:\n    pass\n\n\nclass Receipt:\n    pass\n\n\nclass Ticket:\n    pass\n\n\n"
+    "class Base:\n    pass\n\n\nclass Spare:\n    pass\n\n\nclass Late:\n    pass\n"
+)
+# A surface module hands out what `__all__` lists, what it imports as its own name, its lazy names,
+# and in a module with no function every import its own code does not use; its own public
+# definitions besides. Any other import is the module's private business.
+SURFACE = {
+    "hoglint.toml": SURFACE_CONFIG,
+    "products/shop/backend/logic.py": LOGIC,
+    "products/shop/backend/facade/api.py": (
+        "from products.shop.backend.logic import Order, Receipt\n"
+        "from products.shop.backend.logic import Ticket as Ticket\n\n"
+        '__all__ = ["Receipt", "place"]\n\n\n'
+        "def place() -> None:\n    Order()\n"
+    ),
+    "products/shop/backend/facade/contracts.py": (
+        "from products.shop.backend.logic import Base, Spare\n\n\nclass Own(Base):\n    pass\n"
+    ),
+    "products/shop/backend/facade/lazy.py": (
+        '_LAZY = {"Late": "products.shop.backend.logic"}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
+    ),
+    "products/other/__init__.py": "",
+    "products/other/use.py": (
+        "from products.shop.backend.facade.api import Order, Receipt, Ticket, place\n"
+        "from products.shop.backend.facade.contracts import Base, Own, Spare\n"
+        "from products.shop.backend.facade.lazy import Late\n"
+    ),
+}
+SHOP = "products.shop.backend"
+
+
+def test_a_surface_module_exports_only_what_it_hands_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out = both_engines(tmp_path, SURFACE, monkeypatch)
+    findings = sorted([row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl"))
+    assert findings == [
+        ["export-shape", [f"{SHOP}.facade.contracts.Own", f"{SHOP}.facade.contracts", "export-shape(class)"]],
+        ["export-shape", [f"{SHOP}.logic.Receipt", f"{SHOP}.facade.api", "export-shape(class)"]],
+        ["export-shape", [f"{SHOP}.logic.Spare", f"{SHOP}.facade.contracts", "export-shape(class)"]],
+        ["export-shape", [f"{SHOP}.logic.Ticket", f"{SHOP}.facade.api", "export-shape(class)"]],
+        ["public-surface", [f"{SHOP}.facade.api.Order", "products.other.use"]],
+        ["public-surface", [f"{SHOP}.facade.contracts.Base", "products.other.use"]],
+    ]
