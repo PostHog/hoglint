@@ -134,3 +134,40 @@ def test_the_pack_memo_key_holds_the_policy_file_of_the_snapshot_and_every_confi
     assert key(api, first) == key(api, first)
     assert key(api, first) != key(api, second)
     assert key(api, first) != key(facade, first)
+
+
+PINNED_CONFIG = """schema = 1
+
+[discovery]
+source_roots = ["."]
+dataclass_decorators = "pkg.frozen"
+
+[shapes.loose]
+allow = ["class"]
+
+[shapes.typed]
+allow = ["class"]
+signatures = true
+
+[exports.api]
+within = "app"
+paths = ["api/**"]
+shape = "loose"
+
+[exports.typed]
+within = "lib"
+paths = ["typed.py", "more/**"]
+shape = "typed"
+"""
+# Run summaries key on this text, so a change to how the graph key is built must not move it.
+PINNED_KEY = (
+    '{"contract_surfaces": [["lib", ["typed.py", "more/**"]]], '
+    '"export_surfaces": [["app", ["api/**"]], ["lib", ["typed.py", "more/**"]]], '
+    '"sections": {"discovery": {"dataclass_decorators": "pkg.frozen", "source_roots": ["."]}}}'
+)
+
+
+def test_the_graph_key_text_of_a_fixed_config_does_not_move(tmp_path: Path) -> None:
+    write_files(tmp_path, {"hoglint.toml": PINNED_CONFIG})
+    assert GraphSource.key(Path("/repo"), load_config(tmp_path), True) == ("/repo:staged", PINNED_KEY)
+

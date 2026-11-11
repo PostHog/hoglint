@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hoglint.config import Config
-from hoglint.config.schema import as_tuple, canonical
+from hoglint.config.schema import as_tuple
 from hoglint.facts import FACT_KINDS, FactNeeds
-from hoglint.globs import ExportPaths
 from hoglint.ledger.cache import RunStores
+from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Pack, PackReader, PackSink, ProducerFailure
@@ -113,25 +113,11 @@ class GraphSource:
         return TreeListing.of(code_root, tree) if tree else WorktreeListing.of(code_root)
 
     @staticmethod
-    def contract_surfaces(config: Config) -> tuple[ExportPaths, ...]:
-        """The files of exports whose shape makes their signatures part of their contract."""
-        return tuple(spec.files for spec in config.exports.values() if config.shapes[spec.shape].signatures)
-
-    @staticmethod
-    def export_surfaces(config: Config) -> tuple[ExportPaths, ...]:
-        """The files of every export: core records what each of them hands out."""
-        return tuple(spec.files for spec in config.exports.values())
-
-    def key(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
-        sections = {name: config.sections.get(name) for name in sorted(config.sections)}
+    def key(code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
+        """The snapshot, and the config inputs outside it (`ConfigInputs`): the contract and export
+        surfaces come from [exports] and [shapes] and change what core produces."""
         snapshot = f":tree={tree}" if tree else ":staged" if staged else ""
-        # The contract and export surfaces come from [exports] and [shapes] and change what core
-        # produces.
-        surfaces = [(surface.within, surface.paths) for surface in self.contract_surfaces(config)]
-        exports = [(surface.within, surface.paths) for surface in self.export_surfaces(config)]
-        return f"{code_root}{snapshot}", canonical(
-            {"sections": sections, "contract_surfaces": surfaces, "export_surfaces": exports}
-        )
+        return f"{code_root}{snapshot}", ConfigInputs.of(config).key()
 
     def build(self, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
         key = self.key(code_root, config, staged, tree)
@@ -162,8 +148,9 @@ class GraphSource:
             fields["path_callees"] = as_tuple(discovery["path_callees"])
         if "frozen_dataclass_decorators" in discovery:
             fields["frozen_dataclass_decorators"] = as_tuple(discovery["frozen_dataclass_decorators"])
-        fields["contract_surfaces"] = GraphSource.contract_surfaces(config)
-        fields["export_surfaces"] = GraphSource.export_surfaces(config)
+        inputs = ConfigInputs.of(config)
+        fields["contract_surfaces"] = inputs.contract_surfaces
+        fields["export_surfaces"] = inputs.export_surfaces
         return CoreConfig(**fields)
 
     @staticmethod

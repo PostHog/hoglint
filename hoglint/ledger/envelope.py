@@ -28,12 +28,13 @@ import sysconfig
 import subprocess
 import dataclasses
 import importlib.util
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+from hoglint.config.loader import PACK_PREFIX
 from hoglint.config.model import Config
 from hoglint.config.schema import as_tuple, canonical
 from hoglint.ledger.cache import answer_key
@@ -344,12 +345,41 @@ class Framework:
         return Framework.digest(Framework.packages_of(config))
 
 
-class PolicyFiles:
-    """Data files the policy names: each rule's `classify` file and each active pack's
-    `policy_file_keys` values. Paths are relative to the policy root."""
+class ConfigInputs:
+    """What a run of `config` reads from outside its snapshot: the config's sections, the files of
+    its contract and export surfaces, and the policy data files it names (each rule's `classify`
+    file and each active pack's `policy_file_keys` values, relative to the policy root). One per
+    config object (`of`): the graph key, the pack memo key, the summary envelope and the
+    predictor each take what they need from it, so none of them can miss an input."""
+
+    taken: ClassVar[dict[int, ConfigInputs]] = {}
 
     def __init__(self, config: Config) -> None:
         self.config = config
+        self.sections = {name: config.sections.get(name) for name in sorted(config.sections)}
+        # The contract surfaces: the files of exports whose shape makes their signatures part of
+        # their contract. The export surfaces: the files of every export.
+        exports = config.exports.values()
+        self.contract_surfaces = tuple(spec.files for spec in exports if config.shapes[spec.shape].signatures)
+        self.export_surfaces = tuple(spec.files for spec in exports)
+
+    @staticmethod
+    def of(config: Config) -> ConfigInputs:
+        found = ConfigInputs.taken.get(id(config))
+        if found is None:
+            found = ConfigInputs.taken[id(config)] = ConfigInputs(config)
+        return found
+
+    def key(self, sections: Mapping[str, Any] | None = None) -> str:
+        """The inputs as one canonical text, which the graph key holds. `sections` stands in for
+        the config's own: the pack memo names each policy file there by the bytes a pack reads."""
+        return canonical(
+            {
+                "sections": self.sections if sections is None else sections,
+                "contract_surfaces": [(surface.within, surface.paths) for surface in self.contract_surfaces],
+                "export_surfaces": [(surface.within, surface.paths) for surface in self.export_surfaces],
+            }
+        )
 
     def rule_files(self) -> dict[str, str]:
         return {spec.id: spec.classify for spec in self.config.rules.values() if spec.classify}
@@ -367,8 +397,25 @@ class PolicyFiles:
                     out[(name, key)] = value
         return out
 
-    def paths(self) -> list[str]:
+    def policy_paths(self) -> list[str]:
         return sorted({*self.rule_files().values(), *self.pack_files().values()})
+
+    def predicted_policy(self) -> tuple[str, ...]:
+        """The files a prediction treats as policy: every config file of the repo (not a pack's
+        own), and every policy data file."""
+        configs = [label for label in self.config.files if not label.startswith(PACK_PREFIX)]
+        return tuple(sorted({*configs, *self.policy_paths()}))
+
+
+class PolicyFiles:
+    """Data files the policy names (`ConfigInputs`). Paths are relative to the policy root."""
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+        self.inputs = ConfigInputs.of(config)
+
+    def paths(self) -> list[str]:
+        return self.inputs.policy_paths()
 
     def digests(self, root: Path) -> dict[str, str]:
         return {path: file_digest(root / path) for path in self.paths()}
@@ -391,7 +438,7 @@ class PolicyFiles:
             for rule_id, spec in self.config.rules.items()
         }
         sections = dict(self.config.sections)
-        for (name, key), path in self.pack_files().items():
+        for (name, key), path in self.inputs.pack_files().items():
             if path in differs:
                 sections[name] = {**sections[name], key: str(policy_root / path)}
         return dataclasses.replace(self.config, rules=rules, sections=sections)

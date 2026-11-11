@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config import Config
-from hoglint.config.schema import canonical
 from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.memo import OFF, TRACE, TRACER, PackMemo, digest
 from hoglint.core.reader import BuildReader
 from hoglint.ledger.cache import RunStores
+from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.listing import Listing
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
@@ -91,14 +91,14 @@ class NativeGraphSource(GraphSource):
         return own
 
     def memo_config(self, config: Config, packs: list[tuple[Pack, Mapping[str, Any]]], listing: Listing) -> str:
-        """The config as the pack memo keys on it: every config input `GraphSource.key` holds,
-        with each pack's policy files by the bytes the pack reads (`policy_digests`)."""
-        sections: dict[str, Any] = {name: config.sections.get(name) for name in sorted(config.sections)}
+        """The config as the pack memo keys on it: the config inputs `GraphSource.key` holds
+        (`ConfigInputs`), with each pack's policy files by the bytes the pack reads
+        (`policy_digests`)."""
+        inputs = ConfigInputs.of(config)
+        sections = dict(inputs.sections)
         for pack, section in packs:
             sections[pack.name] = self.policy_digests(pack, section, listing)
-        surfaces = [(surface.within, surface.paths) for surface in self.contract_surfaces(config)]
-        exports = [(surface.within, surface.paths) for surface in self.export_surfaces(config)]
-        return canonical({"sections": sections, "contract_surfaces": surfaces, "export_surfaces": exports})
+        return inputs.key(sections)
 
     def pack_memo(self, options: AnalysisOptions, build: NativeBuild, config_key: str) -> PackMemo | None:
         """The run's pack memo (hoglint/core/memo.py), keyed by every input outside the snapshot
