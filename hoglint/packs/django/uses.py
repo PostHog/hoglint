@@ -24,7 +24,10 @@ USES_PRODUCER = "django.uses@1"
 GET_MODEL_PRODUCER = "django.get-model@1"
 CORE_REFERENCE_PRODUCER = "core-reference@1"
 GET_MODEL = "get_model"
-NOT_A_REGISTRY = frozenset({"self", "cls"})
+# Django's app registry, by origin.
+APP_REGISTRIES = frozenset({"django.apps.apps", "django.apps.registry.apps"})
+# The parameter a migration function takes the historical app registry by.
+REGISTRY_PARAMETER = "apps"
 
 
 USE_COLUMNS = ("producer", "path", "scope", "line", "column", "target", "attr:chain", "attr:up")
@@ -203,8 +206,9 @@ class UseProducer:
 
 
 class GetModelProducer:
-    """`<receiver>.get_model("app", "Model")` with literal arguments, matched by spelling: the
-    receiver is often a parameter (`apps` in a migration), which has no origin."""
+    """`<registry>.get_model("app", "Model")` on Django's app registry: the `apps` object of
+    `django.apps`, or the `apps` argument of a migration function, which has no origin. A method of
+    any other receiver that is named `get_model` names no model."""
 
     def __init__(self, reader: PackReader, registry: ModelRegistry) -> None:
         self.reader = reader
@@ -214,13 +218,34 @@ class GetModelProducer:
         calls = {scope.path: rows for scope, rows in self.reader.calls_named(files, "calls", (GET_MODEL,))}
 
         def file_edges(scope: FileScope) -> list[Edge]:
-            return [self.edge(scope, row) for row in calls[scope.path] if "." in row[5]]
+            return [self.edge(scope, row) for row in calls[scope.path] if self.on_registry(scope, row)]
 
         return each_item([scope for scope in files if scope.path in calls], file_edges, self.failure)
 
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("model-label", GET_MODEL_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
+
+    @staticmethod
+    def is_parameter(scope: FileScope, at_scope: int, name: str) -> bool:
+        """Whether a function the site lies in, or one around it, takes a parameter `name`."""
+        while at_scope >= 0:
+            node = scope.defs[at_scope]
+            if any(param[0] == name for param in node.get("params", ())):
+                return True
+            at_scope = node["s"]
+        return False
+
+    def on_registry(self, scope: FileScope, row: list) -> bool:
+        """Whether a `get_model` call's receiver is Django's app registry."""
+        at_scope, _, line, _, _, callee, _, _ = row
+        receiver, _, _ = callee.rpartition(".")
+        if not receiver:
+            return False
+        if receiver == REGISTRY_PARAMETER and self.is_parameter(scope, at_scope, receiver):
+            return True
+        found, rest = self.reader.context.chain_lookup(scope, receiver, at_scope, line)
+        return not rest and found.hit is not None and str(found.hit.origin) in APP_REGISTRIES
 
     @staticmethod
     def label_of(args: list, kws: list) -> tuple[str | None, str | None]:
@@ -238,9 +263,9 @@ class GetModelProducer:
         site = scope.site(at_scope, line, column)
         contexts = scope.contexts(flags, at_scope)
         if app_label is None or class_name is None:
-            receiver = callee.split(".", 1)[0]
-            resolution = Resolution.NOT_APPLICABLE if receiver in NOT_A_REGISTRY else Resolution.UNRESOLVED
-            return Edge("model-label", site, callee, (), resolution, contexts, GET_MODEL_PRODUCER, shape=GET_MODEL)
+            return Edge(
+                "model-label", site, callee, (), Resolution.UNRESOLVED, contexts, GET_MODEL_PRODUCER, shape=GET_MODEL
+            )
         label = f"{app_label}.{class_name}"
         found = self.registry.resolve_label(label, app_label, None)
         if found is None:
