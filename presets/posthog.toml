@@ -361,9 +361,9 @@ growth_key = ["dst.symbol", "edge.label"]
 
 [rules.reverse-accessor]
 primitive     = "edge"
-doc           = "A relation into another package is sealed: hidden, with no explicit query name. Owner by defining module."
+doc           = "A relation into another package is sealed: hidden, with no explicit query name. Owner by defining module. A third-party app is no package."
 kinds         = ["reverse-accessor"]
-select        = "src.package != dst.package"
+select        = "src.package != dst.package and dst.external == none"
 on_unresolved = "block"
 identity      = "relation"
 growth_key    = ["dst.symbol"]

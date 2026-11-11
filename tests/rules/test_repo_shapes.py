@@ -193,6 +193,28 @@ def test_sentry_silo_from_decorators_and_owners_from_codeowners(tmp_path: Path) 
     )
 
 
+def test_posthog_preset_seals_relations_between_packages_but_not_onto_a_third_party_app(tmp_path: Path) -> None:
+    accessor = (("declaring_model", "posthog.models.user.User"), ("field", "groups"), ("accessor", "user_set"))
+    graph = (
+        GraphBuilder()
+        .module("posthog.models.user", "products.billing.backend.models")
+        .symbol("products.billing.backend.models.Invoice", "model", abstract="false")
+        .edge(
+            "reverse-accessor",
+            "posthog.models.user",
+            "django.contrib.auth.models.Group",
+            resolution=Resolution.EXTERNAL,
+            attrs=accessor,
+        )
+        .edge("reverse-accessor", "posthog.models.user", "products.billing.backend.models.Invoice", attrs=accessor)
+        .graph
+    )
+    result = run_shape(tmp_path, "posthog", graph)
+    assert found(result, "reverse-accessor") == [
+        ("products.billing.backend.models.Invoice", "posthog.models.user.User", "groups", "user_set")
+    ]
+
+
 def test_posthog_preset_gives_only_django_migration_files_the_migration_context(tmp_path: Path) -> None:
     run_shape(tmp_path, "posthog", Graph())
     config = load_config(tmp_path, tmp_path / "hoglint.toml", PACKS_DIR)
