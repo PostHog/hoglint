@@ -12,10 +12,12 @@ from typing import Any
 import pytest
 
 from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, PackMemo, part_of
+from hoglint.ledger.store import MEMO
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.native.answers import ReaderAnswers
 from hoglint.native.build import TracedDict
-from hoglint.native.memo_store import MemoStore
+from hoglint.native.factdb import CacheWarning
+from hoglint.native.memo_store import MemoStore, MemoWarning
 from hoglint.packs.django.models import ModelEntry, TracedModels
 
 KIND = "test.answer"
@@ -202,3 +204,19 @@ def test_an_item_that_reads_a_whole_traced_map_runs_again_when_the_map_gains_a_k
         TRACER.reset()
         ran.append(items.ran)
     assert ran == [["a"], ["a"]]
+
+
+def test_a_pack_memo_that_cannot_open_says_so_apart_from_the_fact_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(CacheWarning, "logged", False)
+    monkeypatch.setattr(MemoWarning, "logged", False)
+    (tmp_path / MEMO).write_text("a file where the memo directory goes")
+    store = MemoStore(tmp_path, "engine")
+    assert store.manifest("step") is None
+    assert store.state() == "failed"
+    memo_error = capsys.readouterr().err
+    assert "the pack memo is not usable" in memo_error
+    assert "fact cache" not in memo_error
+    CacheWarning.log(OSError("disk full"))
+    assert "the fact cache is not usable" in capsys.readouterr().err

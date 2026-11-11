@@ -31,7 +31,7 @@ import datetime
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import orjson
 
@@ -78,9 +78,19 @@ def decoded(found: str, body: object) -> Any:
         return None
 
 
+class MemoWarning(CacheWarning):
+    """Logs that the pack memo is not usable, once per process. It has its own flag and text, so
+    stderr tells it from the fact cache, and a later fact cache failure still logs."""
+
+    logged = False
+    text = "the pack memo is not usable, so this run runs every pack item and stores none"
+
+
 @dataclass(frozen=True)
 class MemoDatabase(FactDatabase):
     """The memo's database; the fact database's prune with the memo's tables."""
+
+    warning: ClassVar[type[CacheWarning]] = MemoWarning
 
     @staticmethod
     def delete(conn: sqlite3.Connection, ids: list[int]) -> None:
@@ -104,7 +114,7 @@ class MemoStore:
 
     def fail(self, error: Exception) -> None:
         self.broken = True
-        CacheWarning.log(error)
+        MemoWarning.log(error)
         if is_corrupt(error):
             self.close()
             self.database.move_aside()

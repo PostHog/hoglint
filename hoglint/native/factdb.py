@@ -40,6 +40,7 @@ import sqlite3
 import datetime
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from hoglint.ledger.store import Walk
 
@@ -145,12 +146,13 @@ class CacheWarning:
     """Logs that the fact cache is not usable, once per process: the run goes on without it."""
 
     logged = False
+    text = "the fact cache is not usable, so this run extracts without it"
 
     @classmethod
     def log(cls, error: Exception) -> None:
         if not cls.logged:
             cls.logged = True
-            sys.stderr.write(f"hoglint: the fact cache is not usable, so this run extracts without it: {error}\n")
+            sys.stderr.write(f"hoglint: {cls.text}: {error}\n")
 
 
 @dataclass(frozen=True)
@@ -161,6 +163,8 @@ class FactDatabase:
     directory: Path
     facts_id: str
     layout: int
+    # The warning of the store this database holds.
+    warning: ClassVar[type[CacheWarning]] = CacheWarning
 
     @property
     def path(self) -> Path:
@@ -344,7 +348,7 @@ class FactDatabase:
             self.opened_mark.touch()
             self.prune_daily(today)
         except (OSError, sqlite3.Error) as error:
-            CacheWarning.log(error)
+            self.warning.log(error)
             if is_corrupt(error):
                 self.move_aside()
             return False
