@@ -807,6 +807,24 @@ class DeclarationProducer(Producer):
                     continue
                 graph.edges.append(site.edge(found.surface if found else "", UNRESOLVED, rows.attrs("whole")))
 
+    def expose_dataclass(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        site: SlotSite,
+        lookup: SlotLookup,
+        idx: int,
+        callable_name: str,
+        handed: str = "",
+    ) -> None:
+        """The `__init__` slots of a contract dataclass (its def index in the file `lookup` names):
+        a row per unresolved base along its MRO, then its fields as the dataclass machinery
+        collects them."""
+        lineage = self.lineage(context, lookup.scope, idx)
+        self.expose_unresolved_bases(context, graph, site, lineage, callable_name, handed)
+        fields = self.mro_fields(context, lineage, lookup)
+        self.expose_fields(context, graph, site, fields, callable_name, True, handed)
+
     def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
         """Whether a class takes a decorator `dataclass_decorators` names, by spelling or target."""
         wanted = context.config.dataclass_decorators
@@ -897,9 +915,7 @@ class DeclarationProducer(Producer):
                     own = [Field(row, lookup, True) for row in fields.get(idx, [])]
                     self.expose_fields(context, graph, site, own, init, False)
                     return
-                lineage = self.lineage(context, scope, idx)
-                self.expose_unresolved_bases(context, graph, site, lineage, init)
-                self.expose_fields(context, graph, site, self.mro_fields(context, lineage, lookup), init, True)
+                self.expose_dataclass(context, graph, site, lookup, idx, init)
             return
         if nested:
             return
@@ -954,10 +970,7 @@ class DeclarationProducer(Producer):
             if not self.is_dataclass_like(context, origin, node):
                 continue
             init = f"{item.bound}.__init__"
-            lineage = self.lineage(context, origin, idx)
-            self.expose_unresolved_bases(context, graph, site, lineage, init, item.clause)
-            fields = self.mro_fields(context, lineage, lookup)
-            self.expose_fields(context, graph, site, fields, init, True, item.clause)
+            self.expose_dataclass(context, graph, site, lookup, idx, init, item.clause)
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:

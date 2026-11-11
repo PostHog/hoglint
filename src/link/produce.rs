@@ -1438,6 +1438,23 @@ impl Producers<'_> {
         }
     }
 
+    /// The `__init__` slots of a contract dataclass (its def index in the file `lookup` names): a
+    /// row per unresolved base along its MRO, then its fields as the dataclass machinery collects
+    /// them.
+    fn expose_dataclass(
+        &mut self,
+        site: SlotSite,
+        lookup: SlotLookup,
+        idx: u32,
+        callable: Sid,
+        handed: Sid,
+    ) {
+        let lineage = self.lineage(lookup.owner, idx);
+        self.expose_unresolved_bases(site, &lineage, callable, handed);
+        let fields = self.mro_fields(&lineage, lookup);
+        self.expose_fields(site, &fields, callable, true, handed);
+    }
+
     fn lookup_value(&mut self, owner: usize, value: &V, at: i32, line: u32) -> (Sid, Resolved) {
         let core = &mut *self.core;
         match core.value_lookup(
@@ -1653,10 +1670,7 @@ impl Producers<'_> {
                 continue;
             }
             let init = self.core.it.join(item.bound, self.settings.k.init);
-            let lineage = self.lineage(origin, idx);
-            self.expose_unresolved_bases(site, &lineage, init, clause);
-            let fields = self.mro_fields(&lineage, lookup);
-            self.expose_fields(site, &fields, init, true, clause);
+            self.expose_dataclass(site, lookup, idx, init, clause);
         }
     }
 
@@ -1759,10 +1773,7 @@ impl Producers<'_> {
                         self.expose_fields(site, &own, init, false, EMPTY);
                         continue;
                     }
-                    let lineage = self.lineage(owner, idx as u32);
-                    self.expose_unresolved_bases(site, &lineage, init, EMPTY);
-                    let fields = self.mro_fields(&lineage, lookup);
-                    self.expose_fields(site, &fields, init, true, EMPTY);
+                    self.expose_dataclass(site, lookup, idx as u32, init, EMPTY);
                 }
                 continue;
             }
