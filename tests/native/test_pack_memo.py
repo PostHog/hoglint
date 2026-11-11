@@ -11,13 +11,11 @@ from typing import Any
 
 import pytest
 
-from hoglint.core.memo import ItemOutput, ItemRun, Items, PackMemo, Tracer, part_of
+from hoglint.core.memo import ItemOutput, ItemRun, Items, PackMemo, TracedMap, Tracer, part_of
 from hoglint.ledger.cache import FACT_STORE, MEMO, RunStores
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
-from hoglint.native.answers import ReaderAnswers
-from hoglint.native.build import TracedDict
 from hoglint.native.memo_store import MemoStore
-from hoglint.packs.django.models import ModelEntry, TracedModels
+from hoglint.packs.django.models import ModelEntry
 
 KIND = "test.answer"
 
@@ -162,16 +160,12 @@ def model(name: str) -> tuple[EntityId, ModelEntry]:
     return ref, ModelEntry(ref, "app/models.py", 1, "app", False, False, ref, {})
 
 
-def module_index(names: list[str], tracer: Tracer) -> tuple[TracedDict, Callable[[], None]]:
-    found = TracedDict("module-path", {name: f"{name}.py" for name in names})
-    found.tracer = tracer
-    return found, lambda: tracer.answer_with("module-path", lambda key: ReaderAnswers.index_answer(found, key))
+def module_index(names: list[str], tracer: Tracer) -> TracedMap[str, str]:
+    return TracedMap(tracer, "module-path", {name: f"{name}.py" for name in names})
 
 
-def models(names: list[str], tracer: Tracer) -> tuple[TracedModels, Callable[[], None]]:
-    found = TracedModels(tracer)
-    found.update(dict(model(name) for name in names))
-    return found, found.answer_reads
+def models(names: list[str], tracer: Tracer) -> TracedMap[EntityId, ModelEntry]:
+    return TracedMap(tracer, "django.model", dict(model(name) for name in names), key=str)
 
 
 WHOLE_READS = {
@@ -190,8 +184,8 @@ def test_an_item_that_reads_a_whole_traced_map_runs_again_when_the_map_gains_a_k
     ran = []
     for names in (["a"], ["a", "b"]):
         memo = PackMemo(store, "policy")
-        found, answer = make(names, memo.tracer)
-        answer()
+        found = make(names, memo.tracer)
+        found.answer_reads()
         items = WholeMap(lambda found=found: read(found))
         step = memo.step("whole@1")
         with memo.tracer.step("whole@1"):

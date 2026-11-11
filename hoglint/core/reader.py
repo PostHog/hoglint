@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from hoglint.core.build import CoreBuild
 from hoglint.core.harness import GraphSink
-from hoglint.core.memo import NULL_TRACER, PackMemo, digest, edge_form, key_of
+from hoglint.core.memo import NULL_TRACER, PackMemo, TracedQuery, digest, edge_form, key_of
 from hoglint.core.records import RecordBodies
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge, EntityId, Graph
@@ -27,6 +27,18 @@ if TYPE_CHECKING:
 
 def targets_key(targets: Collection[EntityId]) -> str:
     return digest(sorted(str(target) for target in targets))
+
+
+def edge_forms(edges: list[Edge]) -> list[tuple[object, ...]]:
+    return [edge_form(edge) for edge in edges]
+
+
+def import_rows_form(found: list[tuple[FileScope, Sequence[Any]]]) -> object:
+    return [(scope.path, list(row)) for scope, row in found]
+
+
+def entity_names(found: list[EntityId]) -> object:
+    return [str(ref) for ref in found]
 
 
 class BuildReader:
@@ -47,27 +59,35 @@ class BuildReader:
         self.external = build.external
         self.records_read = 0
         self.memo = memo
-        self.tracer = memo.tracer if memo is not None else NULL_TRACER
+        self.tracer = tracer = memo.tracer if memo is not None else NULL_TRACER
+        records = build.store.records
+        self.record_read = TracedQuery(tracer, "record", records.__contains__, plain=True)
+        self.listing = TracedQuery(tracer, "listing", self.listing_answer, plain=True)
+        self.importing_read = TracedQuery(tracer, "importing", queries.importing, import_rows_form)
+        self.subclasses_read = TracedQuery(tracer, "subclasses", queries.subclasses, entity_names, plain=True)
+        for read in (self.record_read, self.listing, self.importing_read, self.subclasses_read):
+            read.answer_reads()
+
+    def listing_answer(self, which: str) -> object:
+        if which == "files":
+            return [(scope.path, scope.module) for scope in self.scopes]
+        return self.record_paths
 
     @property
     def files(self) -> list[FileScope]:
-        if self.tracer.frames:
-            self.tracer.note_lazy("listing", "files", lambda: [(scope.path, scope.module) for scope in self.scopes])
+        self.listing.note("files")
         return self.scopes
 
     @property
     def paths(self) -> list[str]:
-        if self.tracer.frames:
-            self.tracer.note_lazy("listing", "paths", lambda: self.record_paths)
+        self.listing.note("paths")
         return self.record_paths
 
     def record(self, path: str) -> Mapping[str, Any]:
         """One file's whole record: the escape hatch, counted."""
         self.records_read += 1
-        records = self.build.store.records
-        if self.tracer.frames:
-            self.tracer.note("record", path, path in records)
-        return records[path]
+        self.record_read(path)
+        return self.build.store.records[path]
 
     def note_file(self, scope: FileScope) -> None:
         """A read of one file's facts. Only the native engine traces, and its records have a file id."""
@@ -82,16 +102,14 @@ class BuildReader:
         found = self.queries.edges_to(kind, targets)
         tracer = self.tracer
         if tracer.frames:
-            tracer.note(
-                f"edges-to@{tracer.step_name}", key_of(kind, targets_key(targets)), [edge_form(e) for e in found]
-            )
+            tracer.note(f"edges-to@{tracer.step_name}", key_of(kind, targets_key(targets)), found, edge_forms)
         return found
 
     def edges_spelled(self, kind: str, names: Collection[str]) -> list[Edge]:
         found = self.queries.edges_spelled(kind, names)
         tracer = self.tracer
         if tracer.frames:
-            tracer.note(f"edges-spelled@{tracer.step_name}", key_of(kind, sorted(names)), [edge_form(e) for e in found])
+            tracer.note(f"edges-spelled@{tracer.step_name}", key_of(kind, sorted(names)), found, edge_forms)
         return found
 
     def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch:
@@ -137,10 +155,7 @@ class BuildReader:
         return iter([(scope, found[scope]) for scope in scopes if scope in found])
 
     def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
-        found = self.queries.importing(names)
-        if self.tracer.frames:
-            self.tracer.note("importing", key_of(sorted(set(names))), [(scope.path, list(row)) for scope, row in found])
-        return found
+        return self.importing_read(sorted(set(names)))
 
     def rows(self, scope: FileScope, kind: str) -> list[Any]:
         self.note_file(scope)
@@ -151,10 +166,7 @@ class BuildReader:
         return self.queries.imported_modules(scope)
 
     def subclasses(self, qualified: str) -> list[EntityId]:
-        found = self.queries.subclasses(qualified)
-        if self.tracer.frames:
-            self.tracer.note("subclasses", qualified, [str(ref) for ref in found])
-        return found
+        return self.subclasses_read(qualified)
 
 
 def python_pack_io(build: CoreBuild, graph: Graph) -> tuple[BuildReader, GraphSink]:

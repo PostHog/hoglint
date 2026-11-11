@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import orjson
 
@@ -139,6 +139,18 @@ class AllKinds(frozenset[str]):
 ALL_DROPPED = AllKinds()
 
 
+class DigestMap:
+    """A verifier that answers reads again from a digest per key, `default` for a key it lacks:
+    a part checks these with no call per read."""
+
+    def __init__(self, digests: dict[str, str], default: str) -> None:
+        self.digests = digests
+        self.default = default
+
+    def __call__(self, key: str) -> str:
+        return self.digests.get(key, self.default)
+
+
 class Tracer:
     """Notes what the running item reads. `answers` keeps the digest of each answer, once per run:
     an answer does not change while the packs run, except an edge query's, whose key names the
@@ -154,7 +166,6 @@ class Tracer:
         dropped = os.environ.get(DROP_ENV, "")
         self.dropped = ALL_DROPPED if dropped == ALL_KINDS else frozenset(filter(None, dropped.split(",")))
         self.verifiers: dict[str, Callable[[str], str | None]] = {}
-        self.maps: dict[str, tuple[dict[str, str], str]] = {}
         self.files: FileKeys | None = None
 
     @property
@@ -170,9 +181,11 @@ class Tracer:
         """Answers reads of `kind` again from a digest of `form(value)` per key, of `form(empty)`
         for a key `values` lacks: what a part checks without a call per read."""
         digests = {key: digest(form(value)) for key, value in values.items()}
-        default = digest(form(empty))
-        self.maps[kind] = (digests, default)
-        self.verifiers[kind] = lambda key: digests.get(key, default)
+        self.verifiers[kind] = DigestMap(digests, digest(form(empty)))
+
+    def maps(self) -> dict[str, DigestMap]:
+        """The kinds answered again from a digest per key."""
+        return {kind: found for kind, found in self.verifiers.items() if isinstance(found, DigestMap)}
 
     def current(self, kind: str, key: str) -> str | None:
         """The digest of a read's answer in this run; None when no one can answer it."""
@@ -213,22 +226,15 @@ class Tracer:
             out.append([FILE, path, content])
         return out
 
-    def note(self, kind: str, key: str, answer: object) -> None:
+    def note(self, kind: str, key: str, value: object, form: Callable[[Any], object] | None = None) -> None:
+        """A read whose answer is `form(value)`, or `value` with no form: the answer is built and
+        digested only the first time the run notes the read."""
         if not self.frames or kind in self.dropped:
             return
         read = (kind, key)
         self.frames[-1].reads.add(read)
         if read not in self.answers:
-            self.answers[read] = digest(answer)
-
-    def note_lazy(self, kind: str, key: str, answer: Callable[[], object]) -> None:
-        """`note` for an answer that costs time to build: it is built only once per run."""
-        if not self.frames or kind in self.dropped:
-            return
-        read = (kind, key)
-        self.frames[-1].reads.add(read)
-        if read not in self.answers:
-            self.answers[read] = digest(answer())
+            self.answers[read] = digest(value if form is None else form(value))
 
     def note_file(self, file: int) -> None:
         if self.frames and FILE not in self.dropped:
@@ -308,6 +314,153 @@ class TracedMemo[K, V]:
             value = compute()
         self.entries[key] = (value, reads)
         return value
+
+
+class Traced(Protocol):
+    """A declared read the tracer answers again: a `TracedQuery` or a `TracedMap`."""
+
+    tracer: Tracer
+
+    def answer_reads(self) -> None: ...
+
+
+class TracedQuery:
+    """One kind of read, declared once: `ask(*parts)` gives a question's value, and `form(value)`
+    is the answer its read is noted and checked by (the value itself with no form). The read's key
+    is `key_of(*parts)`, or with `plain` its one string part. Calling the query asks and notes;
+    `answer_reads` lets the tracer answer its reads again from their keys, by the same ask and form.
+    """
+
+    def __init__(
+        self,
+        tracer: Tracer,
+        kind: str,
+        ask: Callable[..., Any],
+        form: Callable[[Any], object] | None = None,
+        plain: bool = False,
+    ) -> None:
+        self.tracer = tracer
+        self.kind = kind
+        self.ask = ask
+        self.form = form
+        self.plain = plain
+
+    def key(self, parts: tuple[Any, ...]) -> str:
+        return parts[0] if self.plain else key_of(*parts)
+
+    def answer(self, parts: tuple[Any, ...]) -> object:
+        value = self.ask(*parts)
+        return value if self.form is None else self.form(value)
+
+    def again(self, key: str) -> object:
+        return self.answer((key,) if self.plain else tuple(parts_of(key)))
+
+    def __call__(self, *parts: Any) -> Any:
+        found = self.ask(*parts)
+        if self.tracer.frames:
+            self.tracer.note(self.kind, self.key(parts), found, self.form)
+        return found
+
+    def note(self, *parts: Any) -> None:
+        """A read whose value the caller has another way: its answer is asked only the first
+        time the run notes it."""
+        if self.tracer.frames:
+            self.tracer.note(self.kind, self.key(parts), parts, self.answer)
+
+    def answer_reads(self) -> None:
+        self.tracer.answer_with(self.kind, self.again)
+
+
+class TracedMap[K, V](dict[K, V]):
+    """A map whose lookups are reads of `kind`. A key's read is keyed by `key(k)` (by the key
+    itself with no `key`: a map keyed by strings) and answered by `form(value)`, None for an
+    absent key. Every way to read the whole map (a walk, `keys`, `values`, `items`, `len`) is one
+    read of `*`, answered by every entry in order. Its reads are answered again from the map as it
+    is then, so a map registers (`answer_reads`) once it is complete."""
+
+    __slots__ = ("by_key", "form", "key", "kind", "tracer")
+
+    def __init__(
+        self,
+        tracer: Tracer,
+        kind: str,
+        entries: Mapping[K, V],
+        key: Callable[[K], str] | None = None,
+        form: Callable[[V], object] | None = None,
+    ) -> None:
+        super().__init__(entries)
+        self.tracer = tracer
+        self.kind = kind
+        self.key = key
+        self.form = form
+        self.by_key: dict[str, K] | None = None
+
+    def answer(self, value: V | None) -> object:
+        if value is None or self.form is None:
+            return value
+        return self.form(value)
+
+    def whole(self, _: object = None) -> list[tuple[object, object]]:
+        """The answer of the whole map's read."""
+        key = self.key
+        return [(k if key is None else key(k), self.answer(v)) for k, v in dict.items(self)]
+
+    def again(self, key: str) -> object:
+        if key == "*":
+            return self.whole()
+        if self.key is None:
+            return self.answer(dict.get(self, key))  # type: ignore[call-overload]
+        if self.by_key is None:
+            self.by_key = {self.key(k): k for k in dict.keys(self)}
+        found = self.by_key.get(key)
+        return None if found is None else self.answer(dict.__getitem__(self, found))
+
+    def answer_reads(self) -> None:
+        self.tracer.answer_with(self.kind, self.again)
+
+    def note(self, key: K, found: V | None) -> None:
+        read = key if self.key is None else self.key(key)
+        # A map keyed by strings answers None to any other key, whatever the snapshot.
+        if isinstance(read, str):
+            self.tracer.note(self.kind, read, found, self.answer)
+
+    def note_all(self) -> None:
+        if self.tracer.frames:
+            self.tracer.note(self.kind, "*", None, self.whole)
+
+    def get(self, key: K, default: Any = None) -> Any:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        found = dict.get(self, key)
+        if self.tracer.frames:
+            self.note(key, found)
+        return default if found is None else found
+
+    def __getitem__(self, key: K) -> V:
+        if self.tracer.frames:
+            self.note(key, dict.get(self, key))
+        return dict.__getitem__(self, key)
+
+    def __contains__(self, key: object) -> bool:
+        return self.get(cast(K, key)) is not None
+
+    def __iter__(self) -> Iterator[K]:
+        self.note_all()
+        return dict.__iter__(self)
+
+    def __len__(self) -> int:
+        self.note_all()
+        return dict.__len__(self)
+
+    def keys(self) -> Any:
+        self.note_all()
+        return dict.keys(self)
+
+    def values(self) -> Any:
+        self.note_all()
+        return dict.values(self)
+
+    def items(self) -> Any:
+        self.note_all()
+        return dict.items(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -479,14 +632,13 @@ class Part:
         of digests are checked with no call per read."""
         if self.failing is None:
             files = tracer.files.keys if isinstance(tracer.files, FileKeysMap) else None
-            maps, current = tracer.maps, tracer.current
+            maps, current = tracer.maps(), tracer.current
             failing = set()
             for at, (kind, key, wanted) in enumerate(self.reads):
                 if kind == FILE and files is not None:
                     held = files.get(key) == wanted
                 elif kind in maps:
-                    digests, default = maps[kind]
-                    held = digests.get(key, default) == wanted
+                    held = maps[kind](key) == wanted
                 else:
                     held = current(kind, key) == wanted
                 if not held:
@@ -801,83 +953,3 @@ class ItemRun:
             out.extend(result.outputs)
         out.extend(self.items.finish())
         return out
-
-
-class TracedMapping[K, V]:
-    """A read-only view of a map that items read: each lookup is a read of `kind`, keyed by
-    `key(k)` and answered by `form(value)`, or the value itself when there is no form; an absent
-    key answers None. A walk over the whole map is one read of every entry."""
-
-    def __init__(
-        self,
-        tracer: Tracer,
-        kind: str,
-        entries: dict[K, V],
-        key: Callable[[K], str] = str,
-        form: Callable[[V], object] | None = None,
-    ) -> None:
-        self.tracer = tracer
-        self.kind = kind
-        self.entries = entries
-        self.key = key
-        self.form = form
-        self.by_key: dict[str, K] | None = None
-
-    def answer_again(self, key: str) -> object:
-        """A read's answer from the map as it is now: what `answer_with` asks."""
-        if key == "*":
-            return [(self.key(k), self.answer(v)) for k, v in self.entries.items()]
-        if self.by_key is None:
-            self.by_key = {self.key(k): k for k in self.entries}
-        found = self.by_key.get(key)
-        return None if found is None else self.answer(self.entries[found])
-
-    def answer_reads(self) -> None:
-        """Answers this map's reads again in this run (`Tracer.answer_with`)."""
-        self.tracer.answer_with(self.kind, self.answer_again)
-
-    def answer(self, found: V | None) -> object:
-        if found is None or self.form is None:
-            return found
-        return self.form(found)
-
-    def get(self, key: K, default: V | None = None) -> V | None:
-        found = self.entries.get(key)
-        if self.tracer.frames:
-            self.tracer.note(self.kind, self.key(key), self.answer(found))
-        return default if found is None else found
-
-    def __contains__(self, key: K) -> bool:
-        return self.get(key) is not None
-
-    def __getitem__(self, key: K) -> V:
-        found = self.get(key)
-        if found is None:
-            raise KeyError(key)
-        return found
-
-    def note_all(self) -> None:
-        if self.tracer.frames:
-            self.tracer.note_lazy(
-                self.kind, "*", lambda: [(self.key(k), self.answer(v)) for k, v in self.entries.items()]
-            )
-
-    def keys(self) -> Iterable[K]:
-        self.note_all()
-        return self.entries.keys()
-
-    def values(self) -> Iterable[V]:
-        self.note_all()
-        return self.entries.values()
-
-    def items(self) -> Iterable[tuple[K, V]]:
-        self.note_all()
-        return self.entries.items()
-
-    def __iter__(self) -> Iterator[K]:
-        self.note_all()
-        return iter(self.entries)
-
-    def __len__(self) -> int:
-        self.note_all()
-        return len(self.entries)

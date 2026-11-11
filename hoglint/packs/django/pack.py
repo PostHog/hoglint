@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
-from hoglint.core.memo import ItemOutput, ItemRun, Items
+from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedQuery
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.ledger.store import cache_root
@@ -94,9 +94,11 @@ class MigrationItems(Items):
 
     def __init__(self, run: DjangoRun) -> None:
         self.run = run
-        run.reader.tracer.answer_with(AliasProjection.ROUTING, self.routes)
+        self.routing = TracedQuery(run.reader.tracer, AliasProjection.ROUTING, self.routes, plain=True)
+        self.routing.answer_reads()
 
-    def routes(self, key: str) -> object:
+    def routes(self, path: str) -> object:
+        """The routes of the routing file, the one `path` names in the config."""
         return sorted(AliasProjection(self.run.repo_root, self.run.config.routing).route.items())
 
     def folds(self) -> list[str]:
@@ -107,9 +109,7 @@ class MigrationItems(Items):
         assert run.apps is not None
         projection = AliasProjection(run.repo_root, run.config.routing)
         if run.config.routing is not None:
-            run.reader.tracer.note(
-                AliasProjection.ROUTING, str(run.config.routing.path), sorted(projection.route.items())
-            )
+            self.routing.note(str(run.config.routing.path))
         cache = SummaryCache(cache_root() / "packs")
         graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
         aliases = {app: sorted(found) for app, found in graph.aliases.items()}

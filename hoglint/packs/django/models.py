@@ -6,11 +6,10 @@ Owners are never decided here: edges carry modules, and labels decide packages l
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
-from hoglint.core.memo import ItemOutput, Items, TracedMemo, Tracer, key_of, parts_of
+from hoglint.core.memo import ItemOutput, Items, TracedMap, TracedMemo, TracedQuery
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import entity
@@ -35,6 +34,14 @@ def ancestry(defs: list[dict], idx: int) -> list[int]:
         idx = defs[idx]["s"]
         out.append(idx)
     return out
+
+
+def ref_names(refs: list[EntityId] | None) -> object:
+    return None if refs is None else [str(ref) for ref in refs]
+
+
+def ref_name(ref: EntityId | None) -> object:
+    return None if ref is None else str(ref)
 
 
 class ClassBody:
@@ -286,63 +293,6 @@ class LabelRef:
         return LabelRef(module, owner, field, line, surface, None if target is None else entity(*target))
 
 
-class TracedModels(dict[EntityId, ModelEntry]):
-    """The registry's models by class: each lookup is a read of the registry, and every way to
-    read the whole map (a walk, `keys`, `values`, `items`, `len`) reads them all."""
-
-    MODEL = "django.model"
-
-    def __init__(self, tracer: Tracer) -> None:
-        super().__init__()
-        self.tracer = tracer
-
-    def get(self, key: EntityId, default: Any = None) -> Any:  # type: ignore[override]  # ty: ignore[invalid-method-override]
-        found = dict.get(self, key)
-        if self.tracer.frames:
-            self.tracer.note(self.MODEL, str(key), found)
-        return default if found is None else found
-
-    def __getitem__(self, key: EntityId) -> ModelEntry:
-        if self.tracer.frames:
-            self.tracer.note(self.MODEL, str(key), dict.get(self, key))
-        return dict.__getitem__(self, key)
-
-    def __contains__(self, key: object) -> bool:
-        found = dict.get(self, key) if isinstance(key, EntityId) else None  # type: ignore[call-overload]
-        if self.tracer.frames and isinstance(key, EntityId):
-            self.tracer.note(self.MODEL, str(key), found)
-        return found is not None
-
-    def note_all(self) -> None:
-        if self.tracer.frames:
-            self.tracer.note_lazy(self.MODEL, "*", lambda: list(dict.values(self)))
-
-    def answer_reads(self) -> None:
-        by_name = {str(ref): entry for ref, entry in dict.items(self)}
-        whole = list(dict.values(self))
-        self.tracer.answer_with(self.MODEL, lambda key: whole if key == "*" else by_name.get(key))
-
-    def __iter__(self) -> Iterator[EntityId]:
-        self.note_all()
-        return dict.__iter__(self)
-
-    def __len__(self) -> int:
-        self.note_all()
-        return dict.__len__(self)
-
-    def keys(self) -> Any:
-        self.note_all()
-        return dict.keys(self)
-
-    def values(self) -> Any:
-        self.note_all()
-        return dict.values(self)
-
-    def items(self) -> Any:
-        self.note_all()
-        return dict.items(self)
-
-
 class ModelItems(Items):
     """Model discovery as one item per module that defines a model. Which classes are models is
     asked of the whole snapshot once (`subclasses`); each item reads its own module's part,
@@ -357,11 +307,12 @@ class ModelItems(Items):
             if str(ref) != MODEL_BASE:
                 self.by_module.setdefault(ref.module, []).append(ref)
         self.files = {scope.path: scope for scope in files if scope.module in self.by_module}
-        registry.reader.tracer.answer_with(self.FOUND, self.found_again)
+        self.found = TracedQuery(registry.reader.tracer, self.FOUND, self.refs_in, ref_names, plain=True)
+        self.found.answer_reads()
 
-    def found_again(self, key: str) -> object:
-        scope = self.files.get(key)
-        return None if scope is None else [str(ref) for ref in self.by_module[scope.module]]
+    def refs_in(self, path: str) -> list[EntityId] | None:
+        scope = self.files.get(path)
+        return None if scope is None else self.by_module[scope.module]
 
     def keys(self) -> list[str]:
         return list(self.files)
@@ -370,8 +321,8 @@ class ModelItems(Items):
         scope = self.files[key]
         reader = self.registry.reader
         reader.note_file(scope)
-        refs = self.by_module[scope.module]
-        reader.tracer.note(self.FOUND, key, [str(ref) for ref in refs])
+        refs = self.found(key)
+        assert refs is not None
         if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
             return ItemOutput([])
         if reader.index.path_of.get(scope.module) != scope.path:
@@ -403,12 +354,14 @@ class ModelRegistry:
     """Every first-party model with its app label, plus the label table."""
 
     LABEL = "django.model-label"
+    MODEL = "django.model"
 
     def __init__(self, reader: PackReader, apps: AppRegistry) -> None:
         self.reader = reader
         self.apps = apps
         self.index = ModelIndex(reader)
-        self.models = TracedModels(reader.tracer)
+        self.models: TracedMap[EntityId, ModelEntry] = TracedMap(reader.tracer, self.MODEL, {}, key=str)
+        self.labels = TracedQuery(reader.tracer, self.LABEL, self.label_of, ref_name)
         self.by_label: dict[str, EntityId] = {}
         self.failures: list[str] = []
 
@@ -432,12 +385,11 @@ class ModelRegistry:
     def answer_reads(self) -> None:
         """Answers the registry's reads again in this run, once every model is in."""
         self.models.answer_reads()
-        self.reader.tracer.answer_with(self.LABEL, self.label_again)
+        self.labels.answer_reads()
 
-    def label_again(self, key: str) -> object:
-        value, app_label, own = parts_of(key)
-        found = self.read_label(value, app_label, None if own is None else entity(*own))
-        return None if found is None else str(found)
+    def label_of(self, value: str, app_label: str, own: list[str] | None) -> EntityId | None:
+        """`read_label` with the model a `self` names as [module, symbol]: a read's key parts."""
+        return self.read_label(value, app_label, None if own is None else entity(*own))
 
     def add(self, entry: ModelEntry) -> None:
         self.models[entry.ref] = entry
@@ -454,12 +406,7 @@ class ModelRegistry:
 
     def resolve_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
         """`app.Model`, `Model` (same app) or `self` to a model class, as Django's registry would."""
-        found = self.read_label(value, app_label, self_ref)
-        tracer = self.reader.tracer
-        if tracer.frames:
-            own = None if self_ref is None else [self_ref.module, self_ref.symbol]
-            tracer.note(self.LABEL, key_of(value, app_label, own), None if found is None else str(found))
-        return found
+        return self.labels(value, app_label, None if self_ref is None else [self_ref.module, self_ref.symbol])
 
     def read_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
         if value == RECURSIVE:

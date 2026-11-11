@@ -10,7 +10,7 @@ import fnmatch
 from dataclasses import astuple, dataclass, field
 from typing import Any
 
-from hoglint.core.memo import Tracer
+from hoglint.core.memo import TracedQuery, Tracer
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.symbols import entity
 from hoglint.model import EntityId
@@ -136,12 +136,14 @@ class AppRegistry:
     def __init__(
         self, settings_modules: list[str], settings: SettingsValues, apps: list[InstalledApp], tracer: Tracer
     ) -> None:
-        self.tracer = tracer
         self.read_settings_modules = settings_modules
         self.settings = settings
         self.installed = apps
         self.by_name_length = sorted(apps, key=lambda a: -len(a.name))
         self.module_labels: dict[str, str | None] = {}
+        self.listed = TracedQuery(tracer, self.APPS, self.listing, plain=True)
+        self.settings_read = TracedQuery(tracer, self.SETTING, settings.strings.get, plain=True)
+        self.labels = TracedQuery(tracer, self.APP_LABEL, self.label_of, plain=True)
 
     def data(self) -> list[Any]:
         return [
@@ -159,27 +161,22 @@ class AppRegistry:
 
     def answer_reads(self) -> None:
         """Answers the registry's reads again in this run (`Tracer.answer_with`)."""
-        self.tracer.answer_with(self.APPS, lambda key: self.installed if key == "apps" else self.read_settings_modules)
-        self.tracer.answer_with(self.SETTING, self.settings.strings.get)
-        self.tracer.answer_with(self.APP_LABEL, self.label_for_module)
+        for read in (self.listed, self.settings_read, self.labels):
+            read.answer_reads()
+
+    def listing(self, which: str) -> list[Any]:
+        return self.installed if which == "apps" else self.read_settings_modules
 
     @property
     def apps(self) -> list[InstalledApp]:
-        if self.tracer.frames:
-            self.tracer.note(self.APPS, "apps", self.installed)
-        return self.installed
+        return self.listed("apps")
 
     @property
     def settings_modules(self) -> list[str]:
-        if self.tracer.frames:
-            self.tracer.note(self.APPS, "settings_modules", self.read_settings_modules)
-        return self.read_settings_modules
+        return self.listed("settings_modules")
 
     def setting(self, name: str) -> str | None:
-        found = self.settings.strings.get(name)
-        if self.tracer.frames:
-            self.tracer.note(self.SETTING, name, found)
-        return found
+        return self.settings_read(name)
 
     def app_for_module(self, module: str) -> InstalledApp | None:
         for app in self.by_name_length:
@@ -187,14 +184,14 @@ class AppRegistry:
                 return app
         return None
 
-    def label_for_module(self, module: str) -> str | None:
+    def label_of(self, module: str) -> str | None:
         if module not in self.module_labels:
             app = self.app_for_module(module)
             self.module_labels[module] = app.label if app is not None else None
-        found = self.module_labels[module]
-        if self.tracer.frames:
-            self.tracer.note(self.APP_LABEL, module, found)
-        return found
+        return self.module_labels[module]
+
+    def label_for_module(self, module: str) -> str | None:
+        return self.labels(module)
 
 
 class AppReader:

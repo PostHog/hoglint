@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedMapping, TracedMemo, key_of
+from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedMap, TracedMemo, TracedQuery, key_of
 from hoglint.core.producers import chain_tokens
 from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
 from hoglint.core.sites import FileScope
@@ -673,7 +673,7 @@ class CallView:
     reaches it, so a query's answer (and its memo) depends only on the call graph and the limit,
     never on which queries ran before it."""
 
-    def __init__(self, facts: TracedMapping[str, FileFacts]) -> None:
+    def __init__(self, facts: TracedMap[str, FileFacts]) -> None:
         self.facts = facts
         self.memo: TracedMemo[tuple[str, str, frozenset[str]], Reach] = TracedMemo(facts.tracer)
         self.found_targets: TracedMemo[Node, list[tuple[str, Body]]] = TracedMemo(facts.tracer)
@@ -777,7 +777,7 @@ class Deriver:
 
     def __init__(self, facts: dict[str, FileFacts], snapshot: PackReader) -> None:
         self.tracer = snapshot.tracer
-        self.facts: TracedMapping[str, FileFacts] = TracedMapping(self.tracer, self.MODULE, facts, form=file_rel)
+        self.facts: TracedMap[str, FileFacts] = TracedMap(self.tracer, self.MODULE, facts, form=file_rel)
         self.facts.answer_reads()
         self.snapshot = snapshot
         self.by_rel = {f.rel: f for f in facts.values()}
@@ -842,20 +842,20 @@ class Deriver:
         self.registry = [state["kinds"], state["members"], state["enums"], state["query_products"]]
         origins = {(module, name): label for module, name, label in state["origins"]}
         tracer = self.tracer
-        self.origins = TracedMapping(tracer, self.ORIGIN, origins, key=pair_key)
-        self.origin_modules = TracedMapping(tracer, self.ORIGIN_MODULE, dict.fromkeys((m for m, _ in origins), True))
+        self.origins = TracedMap(tracer, self.ORIGIN, origins, key=pair_key)
+        self.origin_modules = TracedMap(tracer, self.ORIGIN_MODULE, dict.fromkeys((m for m, _ in origins), True))
         products = {module: set(found) for module, found in state["origin_products"]}
-        self.origin_products = TracedMapping(tracer, self.ORIGIN_PRODUCTS, products, form=sorted)
+        self.origin_products = TracedMap(tracer, self.ORIGIN_PRODUCTS, products, form=sorted)
         importers = {module: set(found) for module, found in state["importer_products"]}
-        self.importer_products = TracedMapping(tracer, self.IMPORTER_PRODUCTS, importers, form=sorted)
-        for mapping in (self.origins, self.origin_modules, self.origin_products, self.importer_products):
-            mapping.answer_reads()
-        tracer.answer_with(self.REGISTRY, lambda key: self.registry)
+        self.importer_products = TracedMap(tracer, self.IMPORTER_PRODUCTS, importers, form=sorted)
+        self.registry_read = TracedQuery(tracer, self.REGISTRY, lambda key: self.registry, plain=True)
+        for traced in (self.origins, self.origin_modules, self.origin_products, self.importer_products):
+            traced.answer_reads()
+        self.registry_read.answer_reads()
 
     def note_registry(self) -> None:
         """A test item reads the registry: the query kinds, their products and the enum members."""
-        if self.tracer.frames:
-            self.tracer.note(self.REGISTRY, "*", self.registry)
+        self.registry_read.note("*")
 
     def module_exists(self, dotted: str) -> bool:
         return dotted in self.facts
@@ -1156,7 +1156,7 @@ class DriveItems(Items):
         return [self.ORIGINS]
 
     def keys(self) -> list[str]:
-        self.tests = {ff.rel: ff for ff in self.deriver.facts.entries.values() if ff.is_test}
+        self.tests = {ff.rel: ff for ff in dict.values(self.deriver.facts) if ff.is_test}
         return list(self.tests)
 
     def run_item(self, key: str) -> ItemOutput:
