@@ -618,6 +618,17 @@ class Held(Outcome):
         return f"{self.label}: {self.word} ({self.truth} files of the truth set predicted)"
 
 
+@dataclass(frozen=True)
+class Lacking(Outcome):
+    """A verdict the mode owes that the pair does not have."""
+
+    word: ClassVar[str] = "NO VERDICT"
+    label: str
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} (the mode owes it)"
+
+
 def labelled(name: str, what: str) -> str:
     """A verdict's label with what its case did, as `name (what)`."""
     return f"{name} ({what})" if what else name
@@ -883,6 +894,8 @@ class Mode:
     name = "today"
     # Only the cold parent and the cold child run: the mode checks a prediction, not reuse.
     cold_only = False
+    # The verdicts every pair must have; a pair without one fails.
+    owes: tuple[str, ...] = ("child", "back")
 
     def env(self) -> dict[str, str]:
         return {}
@@ -935,6 +948,7 @@ class Traces(Mode):
 
     name = "traces"
     cold_only = True
+    owes = ("prediction",)
 
     def __init__(self) -> None:
         self.pair: PairPrediction | None = None
@@ -1434,10 +1448,21 @@ class PairResult:
     cold: CheckDump | None = None
     warm: CheckDump | None = None
     notes: list[str] = field(default_factory=list)
+    # The labels of the verdicts the mode owes (`Mode.owes`).
+    owed: tuple[str, ...] = ()
+
+    def outcomes(self) -> list[Outcome]:
+        """The verdicts, and a NO VERDICT for each owed one the pair lacks. A failing verdict
+        already says why later ones are missing, so then nothing is added."""
+        if not all(verdict.ok for verdict in self.verdicts):
+            return list(self.verdicts)
+        labels = {verdict.label for verdict in self.verdicts}
+        return [*self.verdicts, *(Lacking(label) for label in self.owed if label not in labels)]
 
     @property
     def ok(self) -> bool:
-        return bool(self.verdicts) and all(verdict.ok for verdict in self.verdicts)
+        outcomes = self.outcomes()
+        return bool(outcomes) and all(outcome.ok for outcome in outcomes)
 
     @property
     def memo(self) -> bool:
@@ -1445,14 +1470,15 @@ class PairResult:
         return any(verdict.label == "child" and verdict.memo for verdict in self.verdicts)
 
     def status(self) -> str:
-        """The words of the failing verdicts; else NOT EQUAL for a failure with no word of its
-        own; else the words of the verdicts that hold, such as HELD; else MEMO or EQUAL."""
-        failed = [verdict.word for verdict in self.verdicts if not verdict.ok and verdict.word]
+        """The words of the failing outcomes; else NOT EQUAL for a failure with no word of its
+        own; else the words of the outcomes that hold, such as HELD; else MEMO or EQUAL."""
+        outcomes = self.outcomes()
+        failed = [outcome.word for outcome in outcomes if not outcome.ok and outcome.word]
         if failed:
             return " ".join(dict.fromkeys(failed))
         if not self.ok:
             return "NOT EQUAL"
-        held = [verdict.word for verdict in self.verdicts if verdict.word]
+        held = [outcome.word for outcome in outcomes if outcome.word]
         if held:
             return " ".join(dict.fromkeys(held))
         return "MEMO" if self.memo else "EQUAL"
@@ -1463,7 +1489,7 @@ class PairResult:
         return f"cold {self.cold.wall:.1f}s/{self.cold.cpu:.1f}cpu warm {self.warm.wall:.1f}s/{self.warm.cpu:.1f}cpu"
 
     def line(self) -> str:
-        parts = [self.pair.name, self.status(), *(v.short() for v in self.verdicts)]
+        parts = [self.pair.name, self.status(), *(outcome.short() for outcome in self.outcomes())]
         parts.append(self.timing())
         if self.prediction is not None:
             parts.append(self.prediction.short())
@@ -1482,7 +1508,7 @@ class Replay:
         self.rng = random.Random(0)
 
     def run(self, pair: Pair) -> PairResult:
-        result = PairResult(pair)
+        result = PairResult(pair, owed=self.checker.mode.owes)
         try:
             self.replay(pair, result)
         except CheckFailed as error:

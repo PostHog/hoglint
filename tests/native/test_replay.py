@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from hoglint.native.parity import RowDiff
 from hoglint.native.replay import (
     CHECK_OUTPUTS,
     COLD,
@@ -280,3 +281,15 @@ def test_a_cold_check_that_shared_a_store_is_not_compared(tmp_path: Path, reuse:
     result = PairResult(Pair("p", "a", "b"), [verdict])
     assert not result.ok
     assert result.status() == "NOT COLD"
+
+
+def test_a_pair_without_a_verdict_its_mode_owes_fails() -> None:
+    equal = Compared("child", (RowDiff("check-exit", 1, 1, 1, 0, 0, (), ()),), False)
+    owed = MODES["today"].owes
+    result = PairResult(Pair("p", "a", "b"), [equal], owed=owed)
+    assert not result.ok
+    assert result.status() == "NO VERDICT"
+    assert "back: NO VERDICT" in result.line()
+    assert not PairResult(Pair("p", "a", "b"), owed=owed).ok
+    assert not PairResult(Pair("p", "a", "b"), owed=MODES["traces"].owes).ok
+    assert not PairResult(Pair("p", "a", "b"), [Compared("child", (), False)]).ok
