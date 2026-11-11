@@ -16,7 +16,7 @@ use rustc_hash::FxHashMap;
 pub enum Cover {
     /// A column of another rule's findings, read off each witness with its first destination.
     Rule { column: Ref },
-    /// The `src` or `dst` paths of the edges a selection keeps.
+    /// The `src`, `dst` or `surface` paths of the edges a selection keeps.
     Edges {
         /// The kinds the selection pins, sorted; every edge when it pins none.
         kinds: Option<Vec<String>>,
@@ -25,6 +25,8 @@ pub enum Cover {
         /// The other conjuncts, staged as an edge rule's selection is.
         rest: Staged,
         src: bool,
+        /// The destination is the one the edge names (a patch target's module), not its origin.
+        surface: bool,
     },
 }
 
@@ -45,6 +47,7 @@ impl Cover {
                 .transpose()?,
             rest: Staged::new(&rest, fields),
             src: plan.endpoint == "src",
+            surface: plan.endpoint == "surface",
         })
     }
 
@@ -102,8 +105,14 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                 by_edge,
                 rest,
                 src: from_src,
+                surface,
                 ..
             } => {
+                let role = if *surface {
+                    Role::Surface
+                } else {
+                    Role::Origin
+                };
                 for &id in ids.as_deref().unwrap_or_default() {
                     let src = cx.src_endpoint(id);
                     let edge_truth = match by_edge {
@@ -113,7 +122,7 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                     if edge_truth == Truth::False {
                         continue;
                     }
-                    cx.dst_endpoints(id, Role::Origin, &mut dsts);
+                    cx.dst_endpoints(id, role, &mut dsts);
                     for dst in dsts.iter() {
                         let truth =
                             all_of([edge_truth, rest.truth(&Env::new(cx, Some(id), src, *dst))]);

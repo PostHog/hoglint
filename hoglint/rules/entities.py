@@ -476,7 +476,7 @@ class CoveragePrimitive(EntityRule):
             if edge_truth is Truth.FALSE:
                 continue
             src = self.ctx.src_endpoint(edge.site)
-            for dst in self.ctx.dst_endpoints(edge, "origin"):
+            for dst in self.ctx.dst_endpoints(edge, "surface" if cover.endpoint == "surface" else "origin"):
                 truth = all_of([edge_truth, staged.truth(EdgeEnv(self.ctx, edge, src, dst))])
                 if truth is Truth.FALSE:
                     continue

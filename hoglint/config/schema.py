@@ -741,8 +741,8 @@ class SchemaBuilder:
                 continue
             selector_text, _, endpoint = text.rpartition(":")
             endpoint = endpoint.strip()
-            if not selector_text or endpoint not in ("src", "dst"):
-                self.fail(key, f"covers {text!r}: expected `<selector>: src` or `<selector>: dst`")
+            if not selector_text or endpoint not in ("src", "dst", "surface"):
+                self.fail(key, f"covers {text!r}: expected `<selector>: src`, `: dst` or `: surface`")
                 continue
             selector = self.parse(key, selector_text, self.edge_catalog())
             out.append(CoverSpec(text, selector=selector, endpoint=endpoint))

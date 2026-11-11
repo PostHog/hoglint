@@ -403,7 +403,7 @@ doc        = "Every wiring location another package drives, every receiver or ho
 covers     = [
   "rules.drives.dst.path",
   "edge.kind in ['signal', 'installs'] and src.package != dst.package: src",
-  "edge.kind == 'dotted-path' and edge.context == 'test' and src.package != dst.package: dst",
+  "edge.kind == 'dotted-path' and edge.context == 'test' and src.package != dst.package: surface",
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
