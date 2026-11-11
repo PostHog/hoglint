@@ -87,3 +87,15 @@ def test_two_checks_of_different_engines_are_never_compared(tmp_path: Path) -> N
     verdict = Verdict.of("child", tmp_path / "left", tmp_path / "right")
     assert not verdict.equal
     assert "different engines" in verdict.short()
+
+
+def test_the_certificate_predicts_from_the_parents_traces_and_reports_each_gap(
+    tmp_path: Path, pair: tuple[Path, Pair]
+) -> None:
+    result = replay(tmp_path, pair, "traces")
+    prediction = result.prediction
+    assert prediction is not None
+    assert prediction.truth == {"core/b.py"}
+    assert "core/b.py" in prediction.predicted
+    assert not prediction.missed
+    assert [note for note in result.notes if note.startswith("gaps ")] == ["gaps none"]

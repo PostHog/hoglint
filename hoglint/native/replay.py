@@ -22,9 +22,14 @@ checks the mode's predicted files against it. With `--damage`, it damages the st
 between the parent's check and the child's, or runs two child checks at once, or kills a check
 in its writes and runs it again: the child's tables must stay equal and no run may fail (D28).
 
+With `--mode traces` the replay is the certificate of stage S5: the cold checks record link
+traces (`hoglint.native.predict`), the prediction from the parent's traces must hold every file
+of the truth set, and each read kind is left out once to show which pairs need it (the planted
+gaps). Only the two cold checks run.
+
 Usage:
   python -m hoglint.native.replay pairs --repo <git repo> --pairs <tsv> [--pairs <tsv>] --work <dir>
-      [--engine native] [--mode today] [--only <name,...>] [--damage all|<name,...>]
+      [--engine native] [--mode today|planted-miss|traces] [--only <name,...>] [--damage all|<name,...>]
   python -m hoglint.native.replay determinism --repo <git repo> --tree <tree> [--tree ...] --work <dir>
       the cold dump of each tree under three hash seeds and one and four threads, each with an
       empty fact cache, compared with the first
@@ -61,6 +66,8 @@ from typing import Any
 from hoglint.cli import Commands, Run, Snapshots
 from hoglint.ledger.scan import SUMMARY_SECTIONS, ScanSummary
 from hoglint.model import Finding, Graph
+from hoglint.native.config import TRACE_ENV
+from hoglint.native.graph import NativeGraph
 from hoglint.native.normal import FIELDS, Row
 from hoglint.native.parity import (
     LIST_OUTPUTS,
@@ -72,6 +79,12 @@ from hoglint.native.parity import (
     row_text,
     row_texts,
     stored_summary,
+)
+from hoglint.native.predict import (
+    KIND_NAMES,
+    PairPrediction,
+    Prediction as Predicted,
+    write_trace_dump,
 )
 from hoglint.native.source import ENGINES, batch_mode
 from hoglint.rules.base import IncompleteItem
@@ -241,6 +254,8 @@ class TreeCheck:
         tables.write_lines("labels", labels)
         tables.write_lines("finding-files", [finding_files(f, modules) for f in run.result.findings()])
         tables.write_lines("incomplete-files", [incomplete_files(i, modules) for i in run.result.incomplete()])
+        if os.environ.get(TRACE_ENV) == "1" and isinstance(graph, NativeGraph):
+            write_trace_dump(graph.link, run.result.config, self.out)
 
 
 # ── dumps and their comparison ────────────────────────────────────
@@ -330,6 +345,9 @@ class TruthItem:
     key: str
     home: str
     files: frozenset[str]
+    # The rule of a finding or an incomplete item, the module of a label row.
+    rule: str = ""
+    module: str = ""
 
 
 class FileDigests:
@@ -343,15 +361,17 @@ class FileDigests:
 
 
 class RowCounts:
-    """Rows counted by digest, each with the files it names."""
+    """Rows counted by digest, each with the files it names and its rule."""
 
     def __init__(self) -> None:
         self.counts: Counter[bytes] = Counter()
         self.files: dict[bytes, tuple[str, list[str]]] = {}
+        self.rules: dict[bytes, str] = {}
 
-    def add(self, text: str, home: str, files: list[str]) -> None:
+    def add(self, text: str, home: str, files: list[str], rule: str = "") -> None:
         key = row_key(text)
         self.counts[key] += 1
+        self.rules[key] = rule
         known = self.files.get(key)
         self.files[key] = (known[0], sorted({*known[1], *files})) if known else (home, files)
 
@@ -384,9 +404,11 @@ class DumpIndex:
         return out
 
     def labels(self) -> FileDigests:
+        """Per file, keyed by (path, module)."""
         out = FileDigests()
         for text in row_texts(self.dump / "labels.jsonl"):
-            out.add((json.loads(text)[1], ""), text)
+            row = json.loads(text)
+            out.add((row[1], row[0]), text)
         return out
 
     def findings(self, by_key: bool = False) -> RowCounts:
@@ -398,7 +420,7 @@ class DumpIndex:
             row = json.loads(text)
             files = json.loads(files_text)
             site = row[3][0] if row[3] else (files[0] if files else "")
-            out.add(json.dumps([row[0], row[1], row[7]]) if by_key else text, site, files)
+            out.add(json.dumps([row[0], row[1], row[7]]) if by_key else text, site, files, row[0])
         return out
 
     def incomplete(self) -> RowCounts:
@@ -406,7 +428,7 @@ class DumpIndex:
         pairs = zip(row_texts(self.dump / "incomplete.jsonl"), row_texts(self.dump / "incomplete-files.jsonl"))
         for text, files_text in pairs:
             files = json.loads(files_text)
-            out.add(text, files[0] if files else "", files)
+            out.add(text, files[0] if files else "", files, json.loads(text)[0])
         return out
 
 
@@ -438,7 +460,8 @@ class TruthSet:
             if left.sums.get(key) == right.sums.get(key):
                 continue
             path, producer = key
-            out.append(TruthItem(table, producer, path, frozenset({path})))
+            module = producer if table == "labels" else ""
+            out.append(TruthItem(table, producer, path, frozenset({path}), module=module))
         return out
 
     @staticmethod
@@ -448,7 +471,8 @@ class TruthSet:
             if left.counts[key] == right.counts[key]:
                 continue
             home, files = left.files.get(key) or right.files[key]
-            out.append(TruthItem(table, key.hex()[:12], home, frozenset(files) | {home}))
+            rule = left.rules.get(key) or right.rules.get(key, "")
+            out.append(TruthItem(table, key.hex()[:12], home, frozenset(files) | {home}, rule=rule))
         return out
 
     @property
@@ -482,10 +506,23 @@ class Prediction:
         return text + (f" missed {missed}" if missed else "")
 
     @staticmethod
-    def of(truth: TruthSet, predicted: set[str]) -> Prediction:
-        missed = tuple(item for item in truth.items if not item.files & predicted)
-        by_key = tuple(item for item in truth.key_items if not item.files & predicted)
-        return Prediction(frozenset(truth.files), frozenset(predicted), missed, by_key)
+    def covers(item: TruthItem, predicted: set[str] | Predicted) -> bool:
+        """A file the item names is predicted; a label row's module is relabelled; a finding or
+        an incomplete item belongs to a folded rule that reruns."""
+        if isinstance(predicted, set):
+            return bool(item.files & predicted)
+        if item.files & predicted.files:
+            return True
+        if item.table == "labels":
+            return predicted.labels is None or item.module in predicted.labels
+        return bool(item.rule) and item.rule in predicted.rerun
+
+    @staticmethod
+    def of(truth: TruthSet, predicted: set[str] | Predicted) -> Prediction:
+        missed = tuple(item for item in truth.items if not Prediction.covers(item, predicted))
+        by_key = tuple(item for item in truth.key_items if not Prediction.covers(item, predicted))
+        files = predicted if isinstance(predicted, set) else set(predicted.files)
+        return Prediction(frozenset(truth.files), frozenset(files), missed, by_key)
 
 
 # ── modes ─────────────────────────────────────────────────────────
@@ -509,13 +546,19 @@ class Mode:
     it on; it may predict the files a child changes, and the harness checks that against the truth."""
 
     name = "today"
+    # Only the cold parent and the cold child run: the mode checks a prediction, not reuse.
+    cold_only = False
 
     def env(self) -> dict[str, str]:
         return {}
 
-    def predict(self, git: Git, parent: str, child: str) -> set[str] | None:
+    def predict(self, git: Git, pair: Pair, dumps: tuple[Path, Path]) -> set[str] | Predicted | None:
         """The files the commit changed."""
-        return git.changed(parent, child)
+        return git.changed(pair.parent, pair.child)
+
+    def gaps(self, truth: TruthSet) -> str:
+        """What the prediction misses with parts of it left out; nothing in today's mode."""
+        return ""
 
     def tamper(self, warm_child: Path, cold_parent: Path, truth: TruthSet) -> str:
         """A test mode's wrong reuse, done to the warm child's dump; today's mode does none."""
@@ -551,7 +594,36 @@ class PlantedMiss(Mode):
         return f"planted the parent's rows of {planted}"
 
 
-MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss)}
+class Traces(Mode):
+    """The certificate of stage S5: the prediction from the parent's link traces, and once per
+    read kind the prediction with that kind left out of every trace (the planted gaps)."""
+
+    name = "traces"
+    cold_only = True
+
+    def __init__(self) -> None:
+        self.pair: PairPrediction | None = None
+
+    def env(self) -> dict[str, str]:
+        return {TRACE_ENV: "1"}
+
+    def predict(self, git: Git, pair: Pair, dumps: tuple[Path, Path]) -> Predicted:
+        self.pair = PairPrediction(dumps[0], dumps[1], git.changed(pair.parent, pair.child))
+        return self.pair.predict()
+
+    def gaps(self, truth: TruthSet) -> str:
+        """Per read kind left out: the files of the truth set the prediction then misses."""
+        if self.pair is None:
+            return ""
+        found = []
+        for kind in KIND_NAMES:
+            missed = Prediction.of(truth, self.pair.predict([kind])).missed
+            if missed:
+                found.append(f"{kind}:{len({item.home for item in missed})}")
+        return "gaps " + (" ".join(found) or "none")
+
+
+MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces)}
 
 
 # ── state directories ─────────────────────────────────────────────
@@ -897,9 +969,16 @@ class Replay:
         cold_parent = check(pair.parent, pair.parent, self.state("cold-parent"), "cold-parent")
         result.cold = cold_child = check(pair.child, pair.parent, self.state("cold-child"), "cold-child")
         truth = TruthSet(cold_parent.out, cold_child.out).compute()
-        predicted = self.checker.mode.predict(self.git, pair.parent, pair.child)
+        mode = self.checker.mode
+        predicted = mode.predict(self.git, pair, (cold_parent.out, cold_child.out))
         if predicted is not None:
             result.prediction = Prediction.of(truth, predicted)
+        gaps = mode.gaps(truth)
+        if gaps:
+            result.notes.append(gaps)
+        if mode.cold_only:
+            result.verdicts.append(Verdict("cold", (), ()))
+            return
         warm = self.state("warm")
         check(pair.parent, pair.parent, warm, "warm-parent", tables=False)
         result.warm = warm_child = check(pair.child, pair.parent, warm, "warm-child")
