@@ -295,6 +295,15 @@ fn edge_site(edges: &EdgeStore, scopes: &[Scope], module_scope: Sid, id: u32) ->
     }
 }
 
+/// The parsed globs of each surface; an error names the config key.
+fn surface_paths(key: &str, surfaces: &[SurfaceConfig]) -> Result<Vec<ExportPaths>, String> {
+    surfaces
+        .iter()
+        .map(|surface| ExportPaths::new(&surface.within, &surface.paths))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{key}: {e}"))
+}
+
 fn base_contexts(path: &str, tests: &PathGlobs, migrations: &PathGlobs) -> u8 {
     let mut found = if tests.matches(path) {
         ctx::TEST
@@ -345,18 +354,8 @@ impl Link {
             })
             .collect();
         drop(file_of);
-        let contract_surfaces = config
-            .contract_surfaces
-            .iter()
-            .map(|surface| ExportPaths::new(&surface.within, &surface.paths))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("contract_surfaces: {e}"))?;
-        let export_surfaces = config
-            .export_surfaces
-            .iter()
-            .map(|surface| ExportPaths::new(&surface.within, &surface.paths))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("export_surfaces: {e}"))?;
+        let contract_surfaces = surface_paths("contract_surfaces", &config.contract_surfaces)?;
+        let export_surfaces = surface_paths("export_surfaces", &config.export_surfaces)?;
         let settings = Producing::new(
             &mut it,
             &config.builtins,
