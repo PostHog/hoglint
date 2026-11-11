@@ -621,9 +621,18 @@ class Traces(Mode):
             if missed:
                 found.append(f"{kind}:{len({item.home for item in missed})}")
         return "gaps " + (" ".join(found) or "none")
+class PackMemoMiss(Mode):
+    """Test only: every pack item's trace leaves out the files it read (`HOGLINT_PACK_MEMO_DROP`),
+    as a pack memo that forgot a read would; the warm child then keeps a stale item, and the
+    replay must report the pair as different."""
+
+    name = "pack-memo-miss"
+
+    def env(self) -> dict[str, str]:
+        return {"HOGLINT_PACK_MEMO_DROP": "file"}
 
 
-MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces)}
+MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces, PackMemoMiss)}
 
 
 # ── state directories ─────────────────────────────────────────────
@@ -786,6 +795,40 @@ class RemoveFactRows(FactRows):
         return removed + conn.execute("DELETE FROM records WHERE id % 10 = 7").rowcount
 
 
+class MemoRows(Damage):
+    """Damage to the pack memo's stored parts and states (hoglint/native/memo_store.py)."""
+
+    def apply(self, state: State, rng: random.Random) -> list[str]:
+        done = []
+        for path in state.files("memo", "*.sqlite"):
+            with contextlib.closing(sqlite3.connect(path)) as conn:
+                changed = self.damage(conn)
+                conn.commit()
+            done.append(f"{path.name}: {changed} rows")
+        return done
+
+    def damage(self, conn: sqlite3.Connection) -> int:
+        raise NotImplementedError
+
+
+class GarbageMemoParts(MemoRows):
+    name = "garbage-memo-parts"
+
+    def damage(self, conn: sqlite3.Connection) -> int:
+        changed = conn.execute("UPDATE parts SET body = randomblob(length(body)) WHERE digest < '8'").rowcount
+        return changed + conn.execute("UPDATE blobs SET body = randomblob(length(body)) WHERE id % 3 = 1").rowcount
+
+
+class RemoveMemoParts(MemoRows):
+    """Removes parts that states still name, and some states' manifests: names that lead nowhere."""
+
+    name = "remove-memo-parts"
+
+    def damage(self, conn: sqlite3.Connection) -> int:
+        removed = conn.execute("DELETE FROM parts WHERE digest < '8'").rowcount
+        return removed + conn.execute("DELETE FROM blobs WHERE id % 3 = 2").rowcount
+
+
 class GarbageFactRows(FactRows):
     name = "garbage-fact-rows"
 
@@ -801,6 +844,8 @@ CACHE_FILES = (
     ("packs", "packs", "*", "shared"),
     ("fact-database", "facts", "*.sqlite", "copy"),
     ("fact-marks", "facts", "*.sqlite.*", "copy"),
+    ("pack-memo", "memo", "*.sqlite", "shared"),
+    ("pack-memo-wal", "memo", "*.sqlite-*", "shared"),
 )
 STATE_DAMAGES: tuple[Damage, ...] = (
     *(
@@ -814,6 +859,8 @@ STATE_DAMAGES: tuple[Damage, ...] = (
     RemovePackEntry(),
     RemoveFactRows(),
     GarbageFactRows(),
+    GarbageMemoParts(),
+    RemoveMemoParts(),
 )
 # Damages that are a way of running checks, not a change to stored files.
 RUN_DAMAGES = ("two-children-at-once", "killed-in-fact-writes", "killed-in-summary-write")
