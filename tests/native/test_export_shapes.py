@@ -252,3 +252,30 @@ def test_a_rule_tells_a_bare_generic_from_one_with_arguments(
     out = both_engines(tmp_path, files, monkeypatch)
     findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "bare-dict"]
     assert findings == ([[API, "charge", "param:amount"]] if flagged else [])
+
+
+# A module-level import hands out its name in whatever block it runs; one under `if TYPE_CHECKING:`
+# never runs, so it hands out nothing.
+IMPORT_BLOCK_CASES = {
+    "under try": (
+        "try:\n    from products.shop.backend.logic import Order\nexcept ImportError:\n    Order = None\n",
+        True,
+    ),
+    "under a plain if": ("import sys\n\nif sys.platform:\n    from products.shop.backend.logic import Order\n", True),
+    "under if TYPE_CHECKING": (
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from products.shop.backend.logic import Order\n",
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", IMPORT_BLOCK_CASES)
+def test_a_module_level_import_in_a_block_is_handed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    imports, flagged = IMPORT_BLOCK_CASES[case]
+    api = imports + '\n__all__ = ["Order"]\n\n\ndef place() -> None:\n    pass\n'
+    files = {"products/shop/backend/logic.py": LOGIC, "products/shop/backend/facade/api.py": api}
+    out = both_engines(tmp_path, files, monkeypatch)
+    expected = [[f"{SHOP}.logic.Order", API, "export-shape(class)"]] if flagged else []
+    assert export_shape_findings(out["native"]) == expected

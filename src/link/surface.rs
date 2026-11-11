@@ -3,7 +3,9 @@
 //! A module hands out a name it binds by import when `__all__` lists it, when the import binds
 //! it under its own name (`from x import f as f`), when it is a lazy (PEP 562) name, or when the
 //! module has no top-level function and its own code does not refer to the name. A surface also
-//! imports the code it calls, and that code is not part of its contract.
+//! imports the code it calls, and that code is not part of its contract. An import in any block
+//! of the module body counts (`try`, `except`, `if`, `else`, `with`), as it binds the name at run
+//! time; one under `if TYPE_CHECKING:` does not.
 //!
 //! A star import hands out the names it binds (the source's `__all__`, else its public top-level
 //! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
@@ -17,9 +19,9 @@
 //! such as `sorted(_LAZY)`. One built by other code, changed by a method or set under a condition
 //! cannot be read: what the module hands out is then unknown.
 
-use super::facts::{Assign, COPY_CALLEES, Op, V};
+use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
-use super::resolve::{Core, absolute_import};
+use super::resolve::{Core, RUN_TIME_MODULE_FLAGS, absolute_import};
 use super::scope::Scope;
 use super::trace::Kind;
 use rustc_hash::FxHashSet;
@@ -195,6 +197,13 @@ fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
     Some(names)
 }
 
+/// An import of the module body that runs at run time, in whatever block it sits: one under
+/// `if TYPE_CHECKING:` binds nothing at run time, and one in a function or class binds no module
+/// name.
+fn binds_at_run_time(row: &Import) -> bool {
+    row.scope == -1 && row.flags & !RUN_TIME_MODULE_FLAGS == 0
+}
+
 /// The names one module hands out, in import order and then lazy-name order.
 ///
 /// `no_functions`: the module body defines no function outside any block, so it hands out every
@@ -270,7 +279,7 @@ impl HandedOut {
             let Some(name) = row.name else {
                 continue;
             };
-            if row.flags != 0 {
+            if !binds_at_run_time(row) {
                 continue;
             }
             let Some(source) = absolute_import(
@@ -337,7 +346,7 @@ impl HandedOut {
         let kept = core.facts.files[scope.file as usize]
             .imports
             .iter()
-            .filter(|row| row.flags == 0)
+            .filter(|row| binds_at_run_time(row))
             .filter_map(|row| {
                 let name = row.name.filter(|&name| name != star)?;
                 Some(row.asname.filter(|&a| a != EMPTY).unwrap_or(name))

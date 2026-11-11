@@ -25,6 +25,8 @@ BLOCK = 64
 
 # Module-level statements: module body plus if, try, with, loop and TYPE_CHECKING bodies.
 MODULE_LEVEL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY | BLOCK
+# Module-level statements that run at run time: every block but the `if TYPE_CHECKING:` body.
+RUN_TIME_MODULE_FLAGS = TC_ELSE | IF | TRY | BLOCK
 # Statements that may not run, or run instead of another branch.
 CONDITIONAL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY
 

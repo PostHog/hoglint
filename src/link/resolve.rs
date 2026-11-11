@@ -19,6 +19,8 @@ pub const IF: u32 = 32;
 pub const BLOCK: u32 = 64;
 pub const MODULE_LEVEL_FLAGS: u32 = TYPE_ONLY | TC_ELSE | IF | TRY | BLOCK;
 pub const CONDITIONAL_FLAGS: u32 = TYPE_ONLY | TC_ELSE | IF | TRY;
+/// Module-level statements that run at run time: every block but the `if TYPE_CHECKING:` body.
+pub const RUN_TIME_MODULE_FLAGS: u32 = TC_ELSE | IF | TRY | BLOCK;
 
 pub const MODULE_ATTRIBUTES: [&str; 9] = [
     "__doc__",

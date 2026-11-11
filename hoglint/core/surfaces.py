@@ -8,6 +8,9 @@ A module hands out a name it binds by import when one of these clauses holds:
 - the module has no top-level function, so every import is there to be handed on, unless the
   module's own code refers to the name (a decorator, a base, an annotation, a call, ...).
 
+An import in any block of the module body counts (`try`, `except`, `if`, `else`, `with`), as it
+binds the name at run time; one under `if TYPE_CHECKING:` does not.
+
 A star import hands out the names it binds (the source's `__all__`, else its public top-level
 names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
 
@@ -28,7 +31,7 @@ from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import ModuleTable, Tables, absolute_import
+from hoglint.core.symbols import RUN_TIME_MODULE_FLAGS, ModuleTable, Tables, absolute_import
 from hoglint.model import HandOut
 
 ALL_CLAUSE = "all"
@@ -146,6 +149,13 @@ def read_dunder_all(record: dict) -> DunderAll:
     return DunderAll(names, min(unread) if unread else None)
 
 
+def binds_at_run_time(scope: int, flags: int) -> bool:
+    """An import of the module body that runs at run time, in whatever block it sits: one under
+    `if TYPE_CHECKING:` binds nothing at run time, and one in a function or class binds no
+    module name."""
+    return scope == -1 and not flags & ~RUN_TIME_MODULE_FLAGS
+
+
 class HandedOut:
     """The names one module hands out, in import order and then lazy-name order.
 
@@ -204,8 +214,8 @@ class HandedOut:
         scope = self.scope
         out: list[Handed] = []
         seen: set[tuple[str, str]] = set()
-        for _, line, column, flags, target, level, name, asname in scope.record.get("imports", ()):
-            if name is None or flags != 0:
+        for scope_id, line, column, flags, target, level, name, asname in scope.record.get("imports", ()):
+            if name is None or not binds_at_run_time(scope_id, flags):
                 continue
             source = absolute_import(scope.module, scope.is_package, target, level)
             if source is None:
@@ -235,8 +245,8 @@ class HandedOut:
         handed = frozenset(item.bound for item in self.names(used))
         bound = frozenset(
             asname or name
-            for _, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ())
-            if name is not None and name != "*" and flags == 0
+            for scope_id, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ())
+            if name is not None and name != "*" and binds_at_run_time(scope_id, flags)
         )
         unread = not self.no_functions and self.dunder_all.unread is not None
         return HandOut(handed, bound - handed, unread)
