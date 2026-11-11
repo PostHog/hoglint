@@ -622,14 +622,14 @@ class Traces(Mode):
                 found.append(f"{kind}:{len({item.home for item in missed})}")
         return "gaps " + (" ".join(found) or "none")
 class PackMemoMiss(Mode):
-    """Test only: every pack item's trace leaves out the files it read (`HOGLINT_PACK_MEMO_DROP`),
-    as a pack memo that forgot a read would; the warm child then keeps a stale item, and the
-    replay must report the pair as different."""
+    """Test only: every pack item's trace leaves out the files it read and which models a module
+    defines (`HOGLINT_PACK_MEMO_DROP`), as a pack memo that forgot a read would. A pair that
+    adds or removes a model then keeps the stale registry item, and the replay must report it."""
 
     name = "pack-memo-miss"
 
     def env(self) -> dict[str, str]:
-        return {"HOGLINT_PACK_MEMO_DROP": "file"}
+        return {"HOGLINT_PACK_MEMO_DROP": "file,django.models-in"}
 
 
 MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces, PackMemoMiss)}

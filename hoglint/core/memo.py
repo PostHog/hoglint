@@ -41,7 +41,8 @@ Read = tuple[str, str]
 
 # The read of a file's facts, noted by file id; its answer is the file's content key.
 FILE = "file"
-# Test only: reads of this kind are left out of every trace, so a replay must find the miss.
+# Test only: reads of these kinds (comma-separated) are left out of every trace, so a replay
+# must find the miss.
 DROP_ENV = "HOGLINT_PACK_MEMO_DROP"
 DIGEST_BYTES = 12
 # A step's stored state is split by item key into this many parts.
@@ -136,7 +137,7 @@ class Tracer:
     def __init__(self) -> None:
         self.frames: list[Frame] = []
         self.answers: dict[Read, str] = {}
-        self.dropped = os.environ.get(DROP_ENV, "")
+        self.dropped = frozenset(os.environ.get(DROP_ENV, "").split(","))
         self.step = ""  # the running step, which an edge query's key names
         self.verifiers: dict[str, Callable[[str], str | None]] = {}
         self.maps: dict[str, tuple[dict[str, str], str]] = {}
@@ -192,7 +193,7 @@ class Tracer:
         return out
 
     def note(self, kind: str, key: str, answer: object) -> None:
-        if not self.frames or kind == self.dropped:
+        if not self.frames or kind in self.dropped:
             return
         read = (kind, key)
         self.frames[-1].reads.add(read)
@@ -201,7 +202,7 @@ class Tracer:
 
     def note_lazy(self, kind: str, key: str, answer: Callable[[], object]) -> None:
         """`note` for an answer that costs time to build: it is built only once per run."""
-        if not self.frames or kind == self.dropped:
+        if not self.frames or kind in self.dropped:
             return
         read = (kind, key)
         self.frames[-1].reads.add(read)
@@ -209,7 +210,7 @@ class Tracer:
             self.answers[read] = digest(answer())
 
     def note_file(self, file: int) -> None:
-        if self.frames and self.dropped != FILE:
+        if self.frames and FILE not in self.dropped:
             self.frames[-1].files.add(file)
 
     def merge(self, frame: Frame) -> None:
