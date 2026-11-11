@@ -640,11 +640,11 @@ impl Producers<'_> {
         for owner in 0..self.scopes.len() {
             self.references(owner);
         }
-        let owner_of: FxHashMap<Sid, usize> = self
+        let owner_of: FxHashMap<u32, usize> = self
             .scopes
             .iter()
             .enumerate()
-            .map(|(owner, scope)| (scope.module, owner))
+            .map(|(owner, scope)| (scope.file, owner))
             .collect();
         for owner in 0..self.scopes.len() {
             self.declarations(owner, &owner_of);
@@ -1129,7 +1129,7 @@ impl Producers<'_> {
     fn handed_def(
         &mut self,
         target: Sid,
-        owner_of: &FxHashMap<Sid, usize>,
+        owner_of: &FxHashMap<u32, usize>,
     ) -> Option<(usize, u32)> {
         let core = &mut *self.core;
         let head = core.it.head(target);
@@ -1150,17 +1150,21 @@ impl Producers<'_> {
             }
         }
         let origin = core.origin(hit);
-        let owner = *owner_of.get(&origin.m)?;
-        match (kind, core.binding_of(origin.m, origin.s)?) {
+        let idx = match (kind, core.binding_of(origin.m, origin.s)?) {
             (HitKind::Def, Binding::Def(idx, false))
-            | (HitKind::Class, Binding::Class(idx, false)) => Some((owner, idx)),
-            _ => None,
-        }
+            | (HitKind::Class, Binding::Class(idx, false)) => idx,
+            _ => return None,
+        };
+        // The module table reads its own bindings from one file: never a stub twin or a package
+        // of the same name.
+        let table = core.table(origin.m)?;
+        let file = core.table_at(table).record?;
+        Some((*owner_of.get(&file)?, idx))
     }
 
     /// The slots of the functions and dataclass fields a contract surface hands out from other
     /// modules, at the import that hands each one out.
-    fn hand_out(&mut self, owner: usize, owner_of: &FxHashMap<Sid, usize>) {
+    fn hand_out(&mut self, owner: usize, owner_of: &FxHashMap<u32, usize>) {
         let facts = self.core.facts.clone();
         let handed = handed_out(self.core, &self.scopes[owner]);
         for item in handed {
@@ -1196,7 +1200,7 @@ impl Producers<'_> {
         }
     }
 
-    fn declarations(&mut self, owner: usize, owner_of: &FxHashMap<Sid, usize>) {
+    fn declarations(&mut self, owner: usize, owner_of: &FxHashMap<u32, usize>) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];

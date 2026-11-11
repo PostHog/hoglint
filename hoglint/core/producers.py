@@ -144,12 +144,18 @@ class BuildContext:
     resolver: Resolver
     files: list[FileScope]
     first_party: FirstParty
-    scope_of_module: dict[str, FileScope] = field(init=False)
+    scope_of_path: dict[str, FileScope] = field(init=False)
 
     def __post_init__(self) -> None:
         self.classifier = Classifier(self.index)
         self.names = NameLookup(self.resolver)
-        self.scope_of_module = {scope.module: scope for scope in self.files}
+        self.scope_of_path = {scope.path: scope for scope in self.files}
+
+    def table_scope(self, module: str) -> FileScope | None:
+        """The analyzed file a module table reads its own bindings from: the one file the index
+        names for the module, never a stub twin or a package of the same name."""
+        path = self.index.path_of.get(module)
+        return self.scope_of_path.get(path) if path is not None else None
 
     def is_builtin(self, name: str) -> bool:
         return name in BUILTIN_NAMES
@@ -200,9 +206,11 @@ class BuildContext:
             return None
         origin = hit.origin
         table = self.resolver.tables.get(origin.module)
-        scope = self.scope_of_module.get(origin.module)
         binding = table.names.get(origin.symbol) if table is not None else None
-        if scope is None or binding is None or binding[0] != hit.kind or binding[2]:
+        if binding is None or binding[0] != hit.kind or binding[2]:
+            return None
+        scope = self.table_scope(origin.module)
+        if scope is None:
             return None
         return scope, binding[1]
 
