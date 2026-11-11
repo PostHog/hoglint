@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from hoglint import facts
-from hoglint.adapters.turbo import TaskTable, TurboAdapter, TurboInputs
+from hoglint.adapters.turbo import TurboAdapter, TurboInputs
 from hoglint.facts import SitePackagesFiles, site_packages_files
 from hoglint.ledger.cache import OFF_SWITCH, AnswerStore
 from hoglint.ledger.inputs import InputPatterns, TreeFiles
