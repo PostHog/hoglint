@@ -15,7 +15,7 @@ from hoglint.ledger.envelope import NATIVE, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.records import FindingRecord, StoredFindings
-from hoglint.ledger.scan import ScanSummary
+from hoglint.ledger.scan import GrowthColumns, ScanSummary
 from hoglint.model import FindingStatus
 from native.require import native_required
 
@@ -85,7 +85,7 @@ def test_growth_by_attribution_and_move_admission(
 
 
 # Growth by (target, consumer's package, shape): the package is derived from the consumer module.
-GROWTH_BY_PACKAGE = {RULE: (0, ("package", 1), 2)}
+GROWTH_BY_PACKAGE: dict[str, GrowthColumns] = {RULE: (0, ("package", 1), 2)}
 PACKAGES = {
     "alerts.a": "alerts",
     "alerts.b": "alerts",
