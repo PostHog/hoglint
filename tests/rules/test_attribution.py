@@ -649,7 +649,7 @@ def test_a_commit_that_changes_no_input_keeps_the_summary_key(tmp_path: Path) ->
         git_in(repo, "add", "-A")
         git_in(repo, "commit", "-qm", path)
         keys.append(hoglint(repo, "summary", "key").stdout)
-    assert keys[0].startswith("hoglint-summary-p3-")
+    assert keys[0].startswith(f"hoglint-summary-p{PROTOCOL}-")
     assert keys[0] == keys[1] != keys[2]
 
 
