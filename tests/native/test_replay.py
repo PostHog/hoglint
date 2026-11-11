@@ -126,14 +126,16 @@ def test_the_truth_set_holds_the_file_whose_rows_changed_and_the_commit_predicts
     assert not prediction.missed
 
 
-def test_two_checks_of_different_engines_are_never_compared(tmp_path: Path) -> None:
+@pytest.mark.parametrize("what", ["", "3 damaged"])
+def test_two_checks_of_different_engines_are_never_compared(tmp_path: Path, what: str) -> None:
     for side, engine in (("left", "native-aaaa"), ("right", "native-bbbb")):
         (tmp_path / side).mkdir()
         (tmp_path / side / "check.json").write_text(json.dumps({"engine": engine}))
         (tmp_path / side / "check-exit.jsonl").write_text("[0]\n")
-    verdict = Verdict.of("child", tmp_path / "left", tmp_path / "right")
+    verdict = Replay.verdict("garbage-inputs", tmp_path / "left", tmp_path / "right", what)
     assert not verdict.equal
     assert "different engines" in verdict.short()
+    assert not PairResult(Pair("p", "a", "b"), [verdict]).equal
 
 
 def test_the_certificate_predicts_from_the_parents_traces_and_reports_each_gap(

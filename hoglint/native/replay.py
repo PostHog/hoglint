@@ -60,7 +60,7 @@ import statistics
 import subprocess
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -1230,7 +1230,7 @@ class Replay:
         shutil.rmtree(other, ignore_errors=True)
         if not what:
             return verdict
-        return Verdict(f"{label} ({what})", verdict.diffs, verdict.skipped)
+        return replace(verdict, label=f"{label} ({what})")
 
     @staticmethod
     def writing_facts(state: State) -> bool:
