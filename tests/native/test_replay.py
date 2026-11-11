@@ -15,14 +15,18 @@ from hoglint.native.replay import (
     COLD_SWITCHES,
     MODES,
     Checker,
+    CheckDump,
+    Compared,
     Pair,
     PairResult,
     PairsReport,
     PredictionScore,
     Replay,
     TruthItem,
-    Verdict,
+    certify,
     check_env,
+    compare,
+    labelled,
 )
 
 from native.require import native_module
@@ -100,12 +104,13 @@ def test_a_replay_reports_a_pair_equal_only_when_every_check_reports_the_same(
     tmp_path: Path, pair: tuple[Path, Pair], mode: str, damages: tuple[str, ...], equal: bool
 ) -> None:
     result = replay(tmp_path, pair, mode, damages)
-    assert result.equal is equal, result.line()
+    assert result.ok is equal, result.line()
     labels = [verdict.label.split(" ")[0] for verdict in result.verdicts]
     assert labels[:2] == ["child", "back"]
     assert len(labels) == 2 + len(damages) + ("two-children-at-once" in damages)
     if not equal:
         child = result.verdicts[0]
+        assert isinstance(child, Compared)
         assert [diff.name for diff in child.diffs if not diff.equal] == ["edges"]
 
 
@@ -114,7 +119,7 @@ def test_a_pack_memo_that_forgets_its_reads_makes_the_replay_fail(
     tmp_path: Path, model_pair: tuple[Path, Pair], mode: str, equal: bool
 ) -> None:
     result = replay(tmp_path, model_pair, mode)
-    assert result.equal is equal, result.line()
+    assert result.ok is equal, result.line()
 
 
 def test_the_truth_set_holds_the_file_whose_rows_changed_and_the_commit_predicts_it(
@@ -133,10 +138,11 @@ def test_two_checks_of_different_engines_are_never_compared(tmp_path: Path, what
         (tmp_path / side).mkdir()
         (tmp_path / side / "check.json").write_text(json.dumps({"engine": engine}))
         (tmp_path / side / "check-exit.jsonl").write_text("[0]\n")
-    verdict = Replay.verdict("garbage-inputs", tmp_path / "left", tmp_path / "right", what)
-    assert not verdict.equal
+    left, right = CheckDump.load(tmp_path / "left"), CheckDump.load(tmp_path / "right")
+    verdict = Replay.verdict(labelled("garbage-inputs", what), left, right)
+    assert not verdict.ok
     assert "different engines" in verdict.short()
-    assert not PairResult(Pair("p", "a", "b"), [verdict]).equal
+    assert not PairResult(Pair("p", "a", "b"), [verdict]).ok
 
 
 def test_the_certificate_predicts_from_the_parents_traces_and_reports_each_gap(
@@ -157,16 +163,16 @@ def missed_prediction() -> PredictionScore:
 
 
 def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pytest.CaptureFixture[str]) -> None:
-    result = PairResult(Pair("p", "a", "b"), [Verdict.predicted(missed_prediction())], missed_prediction())
-    assert not result.equal
+    result = PairResult(Pair("p", "a", "b"), [certify(missed_prediction())], missed_prediction())
+    assert not result.ok
     assert result.status() == "MISSED"
     report = PairsReport()
     report.add(result)
     assert report.close() is False
     assert "p  MISSED  prediction: MISSED (1 files" in capsys.readouterr().out
     held = PredictionScore(frozenset({"core/t.py"}), frozenset({"core/t.py"}), (), ())
-    assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(held)]).status() == "EQUAL"
-    assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "NO PREDICTION"
+    assert PairResult(Pair("p", "a", "b"), [certify(held)]).status() == "HELD"
+    assert PairResult(Pair("p", "a", "b"), [certify(None)]).status() == "NO PREDICTION"
 
 
 def test_a_replay_that_compared_no_pair_fails() -> None:
@@ -210,10 +216,10 @@ def test_a_warm_check_must_show_that_it_reused_stored_work(
 ) -> None:
     cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
     warm = write_check(tmp_path / "warm", meta, graph)
-    verdict = Verdict.of("child", cold, warm, warm=True)
+    verdict = compare("child", CheckDump.load(cold), CheckDump.load(warm), warm=True)
     assert verdict.word == word, verdict.short()
-    assert verdict.equal is (word == "")
-    assert Verdict.of("child", cold, warm).word == ""
+    assert verdict.ok is (word == "")
+    assert compare("child", CheckDump.load(cold), CheckDump.load(warm)).word == ""
 
 
 @pytest.mark.parametrize("warm", [False, True])
@@ -221,15 +227,15 @@ def test_a_side_without_its_check_tables_is_not_compared(tmp_path: Path, warm: b
     cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
     other = write_check(tmp_path / "other", {"memo": False, "reuse": OPEN}, graph=True)
     (other / "check-summary.jsonl").unlink()
-    verdict = Verdict.of("child", cold, other, warm=warm)
+    verdict = compare("child", CheckDump.load(cold), CheckDump.load(other), warm=warm)
     assert verdict.word == "NOT COMPARED"
-    assert not PairResult(Pair("p", "a", "b"), [verdict]).equal
+    assert not PairResult(Pair("p", "a", "b"), [verdict]).ok
 
 
 def test_a_warm_child_served_by_the_run_memo_is_not_printed_equal(tmp_path: Path) -> None:
     cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
     warm = write_check(tmp_path / "warm", {"memo": True}, graph=False)
-    result = PairResult(Pair("p", "a", "b"), [Verdict.of("child", cold, warm, warm=True)])
-    assert result.equal
+    result = PairResult(Pair("p", "a", "b"), [compare("child", CheckDump.load(cold), CheckDump.load(warm), warm=True)])
+    assert result.ok
     assert result.status() == "MEMO"
     assert "served by the run memo (3 tables compared" in result.line()

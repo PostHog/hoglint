@@ -293,16 +293,27 @@ def read_lines(path: Path) -> list[Row]:
     return list(read_rows(path))
 
 
-def compare_dumps(left: Path, right: Path) -> list[RowDiff]:
-    """Table by table and row by row: a dump is too large to hold two of in memory."""
+def compare_dumps(
+    left: Path,
+    right: Path,
+    lists: Sequence[str] = LIST_OUTPUTS,
+    values: Sequence[str] = VALUE_OUTPUTS,
+    skip_missing: bool = False,
+) -> list[RowDiff]:
+    """Table by table and row by row: a dump is too large to hold two of in memory. With
+    `skip_missing`, a table that either side lacks is left out instead of failing the read."""
     diffs = []
-    for name in LIST_OUTPUTS:
+    for name in lists:
+        a, b = left / f"{name}.jsonl", right / f"{name}.jsonl"
+        if skip_missing and not (a.is_file() and b.is_file()):
+            continue
         fields = FIELDS if name == "edges" else ()
-        diffs.append(diff_lines(name, row_texts(left / f"{name}.jsonl"), row_texts(right / f"{name}.jsonl"), fields))
-    for name in VALUE_OUTPUTS:
-        a = json.loads((left / f"{name}.json").read_text())
-        b = json.loads((right / f"{name}.json").read_text())
-        diffs.append(diff_lines(name, [row_text(a)], [row_text(b)]))
+        diffs.append(diff_lines(name, row_texts(a), row_texts(b), fields))
+    for name in values:
+        a, b = left / f"{name}.json", right / f"{name}.json"
+        if skip_missing and not (a.is_file() and b.is_file()):
+            continue
+        diffs.append(diff_lines(name, [row_text(json.loads(a.read_text()))], [row_text(json.loads(b.read_text()))]))
     return diffs
 
 
@@ -311,16 +322,16 @@ def dump_in_process(repo: Path, engine: str, out: Path, env: dict[str, str] | No
     subprocess.run([*command, "--repo", str(repo)], check=True, env={**os.environ, **(env or {})})
 
 
+def seed_env(seed: str, threads: str, link_threads: str) -> dict[str, str]:
+    """A hash seed, and the thread counts of extraction and of the link."""
+    return {"PYTHONHASHSEED": seed, "HOGLINT_THREADS": threads, "RAYON_NUM_THREADS": link_threads}
+
+
 def determinism_env(work: Path, run: int) -> dict[str, str]:
     """Run `run` of the determinism check: its own hash seed, thread count (extraction and link)
     and an empty fact cache, so every run extracts every file at its own thread count."""
     threads = (1, 2, 4, 8, 0)[run % 5]
-    return {
-        "PYTHONHASHSEED": str(run * 7919),
-        "HOGLINT_THREADS": str(threads),
-        "RAYON_NUM_THREADS": str(threads or 16),
-        "XDG_CACHE_HOME": str(work / f"cache-{run}"),
-    }
+    return {**seed_env(str(run * 7919), str(threads), str(threads or 16)), "XDG_CACHE_HOME": str(work / f"cache-{run}")}
 
 
 def report(title: str, diffs: list[RowDiff], left: Path, right: Path) -> bool:

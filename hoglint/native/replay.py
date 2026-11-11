@@ -60,12 +60,11 @@ import statistics
 import subprocess
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from hoglint.cli import Commands, Run, Snapshots
-from hoglint.core.modules import longest_prefix
 from hoglint.core.memo import (
     DROP_ENV as PACK_MEMO_DROP,
     MODE_ENV as PACK_MEMO_SWITCH,
@@ -73,6 +72,7 @@ from hoglint.core.memo import (
     STATS_ENV as PACK_MEMO_STATS,
     PackMemo,
 )
+from hoglint.core.modules import longest_prefix
 from hoglint.ledger.cache import (
     OFF_SWITCH as ANSWER_CACHE_SWITCH,
     AnswerStore,
@@ -86,13 +86,12 @@ from hoglint.native.memo_store import MemoStore
 from hoglint.native.normal import FIELDS, Row
 from hoglint.native.parity import (
     LIST_OUTPUTS,
-    VALUE_OUTPUTS,
     RowDiff,
     Tables,
-    diff_lines,
+    compare_dumps,
     row_key,
-    row_text,
     row_texts,
+    seed_env,
     stored_summary,
 )
 from hoglint.native.predict import PairPrediction, Prediction, write_trace_dump
@@ -311,37 +310,40 @@ class TreeCheck:
 # ── dumps and their comparison ────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class CheckOutcome:
-    """A finished check: where its files are, its time, and whether a stored summary stood in."""
-
-    out: Path
-    wall: float
-    cpu: float
-    memo: bool
-
-
 class CheckFailed(Exception):
     """A check that did not finish: the run failed, which a cache problem must never cause."""
 
 
-def compare_tables(left: Path, right: Path) -> tuple[list[RowDiff], list[str]]:
-    """Every table both dumps hold, in order and as multisets; and the tables only one holds."""
-    diffs, skipped = [], []
-    for name in (*CHECK_OUTPUTS, *GRAPH_OUTPUTS):
-        a, b = left / f"{name}.jsonl", right / f"{name}.jsonl"
-        if not a.is_file() or not b.is_file():
-            skipped.append(name)
-            continue
-        fields = FIELDS if name == "edges" else ()
-        diffs.append(diff_lines(name, row_texts(a), row_texts(b), fields))
-    for name in VALUE_OUTPUTS:
-        a, b = left / f"{name}.json", right / f"{name}.json"
-        if not a.is_file() or not b.is_file():
-            skipped.append(name)
-            continue
-        diffs.append(diff_lines(name, [row_text(json.loads(a.read_text()))], [row_text(json.loads(b.read_text()))]))
-    return diffs, skipped
+@dataclass(frozen=True)
+class CheckDump:
+    """A finished check: the directory of its tables and the `check.json` it wrote there."""
+
+    path: Path
+    meta: dict[str, Any]
+
+    @staticmethod
+    def load(path: Path) -> CheckDump:
+        return CheckDump(path, json.loads((path / "check.json").read_text()))
+
+    @property
+    def engine(self) -> str:
+        return str(self.meta.get("engine", ""))
+
+    @property
+    def memo(self) -> bool:
+        """A stored summary stood in for the check (the run memo)."""
+        return bool(self.meta.get("memo"))
+
+    @property
+    def wall(self) -> float:
+        return float(self.meta["wall"])
+
+    @property
+    def cpu(self) -> float:
+        return float(self.meta["cpu"])
+
+    def has(self, table: str) -> bool:
+        return (self.path / f"{table}.jsonl").is_file()
 
 
 def reuse_problem(meta: dict[str, Any]) -> str:
@@ -367,79 +369,197 @@ def reuse_problem(meta: dict[str, Any]) -> str:
     return f"the pack memo was {bad[0]}" if bad else ""
 
 
+class Outcome:
+    """One verdict of a pair. Each kind has a fixed `word`, the word the pair's status shows for
+    it ("" for none), and a fixed `ok`; only `Compared` computes `ok`. No kind is ok by default."""
+
+    word: ClassVar[str] = ""
+    label: str
+
+    @property
+    def ok(self) -> bool:
+        return False
+
+    @property
+    def memo(self) -> bool:
+        return False
+
+    def short(self) -> str:
+        raise NotImplementedError
+
+    def details(self) -> str | None:
+        """The rows of each differing table, or None when there is nothing to print."""
+        return None
+
+
 @dataclass(frozen=True)
-class Verdict:
-    """One comparison of two dumps, as one short text and the rows of each differing table.
-    `word` names a failure that is not a table difference (MISSED, NO REUSE, NO GRAPH TABLES,
-    NOT COMPARED),
-    with `note` saying more; `memo` says the right side's check was served by the run memo."""
+class TableOutcome(Outcome):
+    """An outcome that holds the tables it compared, and prints the rows of each that differs."""
 
     label: str
     diffs: tuple[RowDiff, ...]
-    skipped: tuple[str, ...]
-    note: str = ""
-    word: str = ""
-    memo: bool = False
+
+    def details(self) -> str | None:
+        if not self.diffs or self.ok:
+            return None
+        return "\n".join(f"  [{self.label}] {diff.render()}" for diff in self.diffs if not diff.equal)
+
+
+@dataclass(frozen=True)
+class Compared(TableOutcome):
+    """Every table of two dumps compared. It is ok only when it compared at least one table and
+    every table is equal; `memo` says the other side was served by the run memo."""
+
+    served_by_memo: bool
 
     @property
-    def equal(self) -> bool:
-        return not self.note and not self.word and all(diff.equal for diff in self.diffs)
+    def ok(self) -> bool:
+        return bool(self.diffs) and all(diff.equal for diff in self.diffs)
 
     @property
-    def graph_tables(self) -> int:
-        return sum(diff.name not in CHECK_OUTPUTS for diff in self.diffs)
+    def memo(self) -> bool:
+        return self.served_by_memo
 
     def short(self) -> str:
-        if self.word:
-            return f"{self.label}: {self.word} ({self.note})"
-        if self.note:
-            return f"{self.label}: {self.note}"
-        if not self.equal:
+        if not self.ok:
             different = ",".join(diff.name for diff in self.diffs if not diff.equal)
             return f"{self.label}: DIFFERENT ({different})"
-        if self.memo:
+        if self.served_by_memo:
             return f"{self.label}: equal, served by the run memo ({len(self.diffs)} tables compared, no graph table)"
         return f"{self.label}: equal ({len(self.diffs)} tables)"
 
-    def details(self) -> str:
-        return "\n".join(f"  [{self.label}] {diff.render()}" for diff in self.diffs if not diff.equal)
 
-    @staticmethod
-    def of(label: str, left: Path, right: Path, warm: bool = False) -> Verdict:
-        """Refuses two checks of different engines: a replay across two engine versions proves
-        nothing. A `warm` right side must show that it reused stored work."""
-        metas = [json.loads((side / "check.json").read_text()) for side in (left, right)]
-        engines = [meta.get("engine", "") for meta in metas]
-        if engines[0] != engines[1]:
-            return Verdict(label, (), (), f"REFUSED: the two checks ran different engines ({engines[0]}, {engines[1]})")
-        diffs, skipped = compare_tables(left, right)
-        # Every check writes these tables; one missing on either side leaves nothing to stand on.
-        missing = [name for name in CHECK_OUTPUTS if name in skipped]
-        if missing:
-            return Verdict(label, tuple(diffs), tuple(skipped), f"missing {','.join(missing)}", "NOT COMPARED")
-        memo = bool(metas[1].get("memo"))
-        problem = reuse_problem(metas[1]) if warm else ""
+@dataclass(frozen=True)
+class Refused(Outcome):
+    """Two checks of different engines: a replay across two engine versions proves nothing."""
+
+    label: str
+    engines: tuple[str, str]
+
+    def short(self) -> str:
+        left, right = self.engines
+        return f"{self.label}: REFUSED: the two checks ran different engines ({left}, {right})"
+
+
+@dataclass(frozen=True)
+class Failed(Outcome):
+    """A check that did not finish."""
+
+    label: str
+    error: str
+
+    def short(self) -> str:
+        return f"{self.label}: FAILED RUN: {self.error}"
+
+
+@dataclass(frozen=True)
+class NotCompared(TableOutcome):
+    """A side lacks a table every check writes, so it did not finish its dump."""
+
+    word: ClassVar[str] = "NOT COMPARED"
+    missing: tuple[str, ...]
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} (missing {','.join(self.missing)})"
+
+
+@dataclass(frozen=True)
+class NoReuse(TableOutcome):
+    """A warm side that cannot show it reused stored work."""
+
+    word: ClassVar[str] = "NO REUSE"
+    problem: str
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} ({self.problem})"
+
+
+@dataclass(frozen=True)
+class NoGraphTables(TableOutcome):
+    """A warm side that ran live and still wrote no graph table."""
+
+    word: ClassVar[str] = "NO GRAPH TABLES"
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} (the check ran live)"
+
+
+@dataclass(frozen=True)
+class Missed(Outcome):
+    """A certificate whose prediction left out files of the truth set."""
+
+    word: ClassVar[str] = "MISSED"
+    label: str
+    files: int
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} ({self.files} files of the truth set not predicted)"
+
+
+@dataclass(frozen=True)
+class NoPrediction(Outcome):
+    """A certificate with no prediction certified nothing."""
+
+    word: ClassVar[str] = "NO PREDICTION"
+    label: str
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} (the mode made no prediction)"
+
+
+@dataclass(frozen=True)
+class Held(Outcome):
+    """A certificate whose prediction holds every item of the truth set. Nothing was compared, so
+    its word is HELD, not EQUAL."""
+
+    word: ClassVar[str] = "HELD"
+    label: str
+    truth: int
+
+    @property
+    def ok(self) -> bool:
+        return True
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} ({self.truth} files of the truth set predicted)"
+
+
+def labelled(name: str, what: str) -> str:
+    """A verdict's label with what its case did, as `name (what)`."""
+    return f"{name} ({what})" if what else name
+
+
+def graph_tables(diffs: tuple[RowDiff, ...]) -> int:
+    return sum(diff.name not in CHECK_OUTPUTS for diff in diffs)
+
+
+def compare(label: str, base: CheckDump, other: CheckDump, warm: bool = False) -> Outcome:
+    """The only maker of an outcome that compared tables. Every table both dumps hold is compared
+    in order and as a multiset; a `warm` other side must show that it reused stored work."""
+    if base.engine != other.engine:
+        return Refused(label, (base.engine, other.engine))
+    diffs = tuple(compare_dumps(base.path, other.path, (*CHECK_OUTPUTS, *GRAPH_OUTPUTS), skip_missing=True))
+    # Every check writes these tables; one missing on either side leaves nothing to stand on.
+    missing = tuple(name for name in CHECK_OUTPUTS if not (base.has(name) and other.has(name)))
+    if missing:
+        return NotCompared(label, diffs, missing)
+    if warm:
+        problem = reuse_problem(other.meta)
         if problem:
-            return Verdict(label, tuple(diffs), tuple(skipped), problem, "NO REUSE", memo)
-        verdict = Verdict(label, tuple(diffs), tuple(skipped), memo=memo)
-        if warm and not memo and verdict.graph_tables == 0:
-            return Verdict(label, tuple(diffs), tuple(skipped), "the check ran live", "NO GRAPH TABLES")
-        return verdict
+            return NoReuse(label, diffs, problem)
+        if not other.memo and graph_tables(diffs) == 0:
+            return NoGraphTables(label, diffs)
+    return Compared(label, diffs, other.memo)
 
-    @staticmethod
-    def failed(label: str, error: str) -> Verdict:
-        return Verdict(label, (), (), f"FAILED RUN: {error}")
 
-    @staticmethod
-    def predicted(prediction: PredictionScore | None) -> Verdict:
-        """A certificate's verdict: its prediction must hold every item of the truth set. A mode
-        that made no prediction certified nothing."""
-        if prediction is None:
-            return Verdict("prediction", (), (), "the mode made no prediction", "NO PREDICTION")
-        if not prediction.missed:
-            return Verdict("prediction", (), ())
-        files = sorted({item.home for item in prediction.missed})
-        return Verdict("prediction", (), (), f"{len(files)} files of the truth set not predicted", "MISSED")
+def certify(score: PredictionScore | None) -> Outcome:
+    """A certificate's verdict: its prediction must hold every item of the truth set. A mode
+    that made no prediction certified nothing."""
+    if score is None:
+        return NoPrediction("prediction")
+    if score.missed:
+        return Missed("prediction", len({item.home for item in score.missed}))
+    return Held("prediction", len(score.truth))
 
 
 # ── the truth set ─────────────────────────────────────────────────
@@ -1044,17 +1164,16 @@ class Checker:
             raise TypeError("a check is started with an argument list")
         return Path(str(args[args.index("--out") + 1]))
 
-    def finish(self, process: subprocess.Popen[str]) -> CheckOutcome:
+    def finish(self, process: subprocess.Popen[str]) -> CheckDump:
         _, stderr = process.communicate()
         out = self.out_of(process)
         if process.returncode != 0 or not (out / "check.json").is_file():
             raise CheckFailed(f"exit {process.returncode}: {stderr.strip()[-1500:]}")
-        meta = json.loads((out / "check.json").read_text())
-        return CheckOutcome(out, meta["wall"], meta["cpu"], meta["memo"])
+        return CheckDump.load(out)
 
     def check(
         self, tree: str, head: str, state: State, label: str, tables: bool = True, env: dict[str, str] | None = None
-    ) -> CheckOutcome:
+    ) -> CheckDump:
         return self.finish(self.start(tree, head, state, label, tables, env or {}))
 
     def killed(self, tree: str, head: str, state: State, label: str, ready: Callable[[], bool]) -> str:
@@ -1078,15 +1197,15 @@ class Checker:
 @dataclass(frozen=False)
 class PairResult:
     pair: Pair
-    verdicts: list[Verdict] = field(default_factory=list)
+    verdicts: list[Outcome] = field(default_factory=list)
     prediction: PredictionScore | None = None
-    cold: CheckOutcome | None = None
-    warm: CheckOutcome | None = None
+    cold: CheckDump | None = None
+    warm: CheckDump | None = None
     notes: list[str] = field(default_factory=list)
 
     @property
-    def equal(self) -> bool:
-        return bool(self.verdicts) and all(verdict.equal for verdict in self.verdicts)
+    def ok(self) -> bool:
+        return bool(self.verdicts) and all(verdict.ok for verdict in self.verdicts)
 
     @property
     def memo(self) -> bool:
@@ -1094,11 +1213,16 @@ class PairResult:
         return any(verdict.label == "child" and verdict.memo for verdict in self.verdicts)
 
     def status(self) -> str:
-        words = [verdict.word for verdict in self.verdicts if verdict.word]
-        if words:
-            return " ".join(dict.fromkeys(words))
-        if not self.equal:
+        """The words of the failing verdicts; else NOT EQUAL for a failure with no word of its
+        own; else the words of the verdicts that hold, such as HELD; else MEMO or EQUAL."""
+        failed = [verdict.word for verdict in self.verdicts if not verdict.ok and verdict.word]
+        if failed:
+            return " ".join(dict.fromkeys(failed))
+        if not self.ok:
             return "NOT EQUAL"
+        held = [verdict.word for verdict in self.verdicts if verdict.word]
+        if held:
+            return " ".join(dict.fromkeys(held))
         return "MEMO" if self.memo else "EQUAL"
 
     def timing(self) -> str:
@@ -1133,7 +1257,7 @@ class Replay:
         try:
             self.replay(pair, result)
         except CheckFailed as error:
-            result.verdicts.append(Verdict.failed("check", str(error)))
+            result.verdicts.append(Failed("check", str(error)))
         finally:
             shutil.rmtree(self.work / "dumps", ignore_errors=True)
             shutil.rmtree(self.work / "states", ignore_errors=True)
@@ -1145,40 +1269,40 @@ class Replay:
         result.cold = cold_child = check(
             pair.child, pair.parent, self.state("cold-child"), "cold-child", env=COLD_SWITCHES
         )
-        truth = TruthSet(cold_parent.out, cold_child.out).compute()
+        truth = TruthSet(cold_parent.path, cold_child.path).compute()
         mode = self.checker.mode
-        predicted = mode.predict(changed_paths(self.checker.repo, pair), (cold_parent.out, cold_child.out))
+        predicted = mode.predict(changed_paths(self.checker.repo, pair), (cold_parent.path, cold_child.path))
         result.prediction = PredictionScore.of(truth, predicted)
         gaps = mode.gaps(truth)
         if gaps:
             result.notes.append(gaps)
         if mode.cold_only:
-            result.verdicts.append(Verdict.predicted(result.prediction))
+            result.verdicts.append(certify(result.prediction))
             return
         warm = self.state("warm")
         check(pair.parent, pair.parent, warm, "warm-parent", tables=False)
         result.warm = warm_child = check(pair.child, pair.parent, warm, "warm-child")
-        planted = self.checker.mode.tamper(warm_child.out, cold_parent.out, truth)
+        planted = self.checker.mode.tamper(warm_child.path, cold_parent.path, truth)
         if planted:
             result.notes.append(planted)
-        result.verdicts.append(Verdict.of("child", cold_child.out, warm_child.out, warm=True))
+        result.verdicts.append(compare("child", cold_child, warm_child, warm=True))
         back = check(pair.parent, pair.parent, warm, "back")
-        result.verdicts.append(Verdict.of("back", cold_parent.out, back.out, warm=True))
-        shutil.rmtree(warm_child.out)
-        shutil.rmtree(back.out)
+        result.verdicts.append(compare("back", cold_parent, back, warm=True))
+        shutil.rmtree(warm_child.path)
+        shutil.rmtree(back.path)
         for name in self.damages:
-            result.verdicts.extend(self.damaged(pair, name, cold_parent.out, cold_child.out))
+            result.verdicts.extend(self.damaged(pair, name, cold_parent, cold_child))
 
-    def damaged(self, pair: Pair, name: str, cold_parent: Path, cold_child: Path) -> list[Verdict]:
+    def damaged(self, pair: Pair, name: str, cold_parent: CheckDump, cold_child: CheckDump) -> list[Outcome]:
         """One damage case; a check that fails is the finding, reported as a failed run."""
         try:
             return self.damage_case(pair, name, cold_parent, cold_child)
         except CheckFailed as error:
-            return [Verdict.failed(name, str(error))]
+            return [Failed(name, str(error))]
         finally:
             shutil.rmtree(self.work / "states" / name, ignore_errors=True)
 
-    def damage_case(self, pair: Pair, name: str, cold_parent: Path, cold_child: Path) -> list[Verdict]:
+    def damage_case(self, pair: Pair, name: str, cold_parent: CheckDump, cold_child: CheckDump) -> list[Outcome]:
         check = self.checker.check
         if name == "two-children-at-once":
             state = self.state(name)
@@ -1186,7 +1310,7 @@ class Replay:
             first = self.checker.start(pair.child, pair.parent, state, f"{name}-a", True, {})
             second = self.checker.start(pair.child, pair.parent, state, f"{name}-b", True, {})
             outcomes = [self.checker.finish(first), self.checker.finish(second)]
-            return [self.verdict(f"{name}-{n}", cold_child, o.out) for n, o in zip("ab", outcomes, strict=True)]
+            return [self.verdict(f"{name}-{n}", cold_child, o) for n, o in zip("ab", outcomes, strict=True)]
         if name == "killed-in-fact-writes":
             state = self.state(name, facts="empty")
             what = self.checker.killed(
@@ -1195,8 +1319,8 @@ class Replay:
             again = check(pair.parent, pair.parent, state, f"{name}-parent-again")
             child = check(pair.child, pair.parent, state, f"{name}-child")
             return [
-                self.verdict(f"{name}-parent", cold_parent, again.out, what),
-                self.verdict(f"{name}-child", cold_child, child.out),
+                self.verdict(labelled(f"{name}-parent", what), cold_parent, again),
+                self.verdict(f"{name}-child", cold_child, child),
             ]
         if name == "killed-in-summary-write":
             state = self.state(name)
@@ -1206,21 +1330,21 @@ class Replay:
                 pair.child, pair.parent, state, f"{name}-child", lambda: self.new_summary_file(state, known)
             )
             child = check(pair.child, pair.parent, state, f"{name}-child-again")
-            return [self.verdict(name, cold_child, child.out, what)]
+            return [self.verdict(labelled(name, what), cold_child, child)]
         damage = next(d for d in STATE_DAMAGES if d.name == name)
         state = self.state(name, damage.facts)
         check(pair.parent, pair.parent, state, f"{name}-parent", tables=False)
         done = damage.apply(state, self.rng)
         child = check(pair.child, pair.parent, state, f"{name}-child")
-        return [self.verdict(name, cold_child, child.out, f"{len(done)} damaged" if done else "nothing to damage")]
+        what = f"{len(done)} damaged" if done else "nothing to damage"
+        return [self.verdict(labelled(name, what), cold_child, child)]
 
     @staticmethod
-    def verdict(label: str, cold: Path, other: Path, what: str = "") -> Verdict:
-        verdict = Verdict.of(label, cold, other)
-        shutil.rmtree(other, ignore_errors=True)
-        if not what:
-            return verdict
-        return replace(verdict, label=f"{label} ({what})")
+    def verdict(label: str, cold: CheckDump, other: CheckDump) -> Outcome:
+        """The comparison, made once with its whole label, so no field is lost to a relabel."""
+        outcome = compare(label, cold, other)
+        shutil.rmtree(other.path, ignore_errors=True)
+        return outcome
 
     @staticmethod
     def writing_facts(state: State) -> bool:
@@ -1243,11 +1367,12 @@ class PairsReport:
         self.results.append(result)
         sys.stdout.write(result.line() + "\n")
         for verdict in result.verdicts:
-            if verdict.diffs and not verdict.equal:
-                sys.stdout.write(verdict.details() + "\n")
+            details = verdict.details()
+            if details is not None:
+                sys.stdout.write(details + "\n")
         sys.stdout.flush()
 
-    def times(self, pick: Callable[[PairResult], CheckOutcome | None]) -> str:
+    def times(self, pick: Callable[[PairResult], CheckDump | None]) -> str:
         outcomes = [o for o in (pick(r) for r in self.results) if o is not None]
         if not outcomes:
             return "no checks"
@@ -1258,8 +1383,8 @@ class PairsReport:
         )
 
     def close(self) -> bool:
-        equal = sum(result.equal for result in self.results)
-        memo = sum(result.equal and result.memo for result in self.results)
+        equal = sum(result.ok for result in self.results)
+        memo = sum(result.ok and result.memo for result in self.results)
         sys.stdout.write(f"\n{equal} of {len(self.results)} pairs equal ({memo} of them served by the run memo)\n")
         sys.stdout.write(f"cold child: {self.times(lambda r: r.cold)}\n")
         sys.stdout.write(f"warm child: {self.times(lambda r: r.warm)}\n")
@@ -1283,15 +1408,14 @@ class Determinism:
 
     def run(self, tree: str) -> bool:
         ok = True
-        first: Path | None = None
+        first: CheckDump | None = None
         try:
             for seed in SEEDS:
                 for threads in THREADS:
                     label = f"seed{seed}-threads{threads}"
                     state = State(self.work / "states" / label).create(self.work / "facts", facts="empty")
-                    env = {"PYTHONHASHSEED": seed, "HOGLINT_THREADS": threads, "RAYON_NUM_THREADS": threads}
                     try:
-                        outcome = self.checker.check(tree, tree, state, label, env=env)
+                        dump = self.checker.check(tree, tree, state, label, env=seed_env(seed, threads, threads))
                     except CheckFailed as error:
                         sys.stdout.write(f"{tree[:11]} {label}: FAILED RUN: {error}\n")
                         ok = False
@@ -1299,15 +1423,15 @@ class Determinism:
                     finally:
                         state.remove()
                     if first is None:
-                        first = outcome.out
-                        sys.stdout.write(f"{tree[:11]} {label}: first ({outcome.wall:.1f}s)\n")
+                        first = dump
+                        sys.stdout.write(f"{tree[:11]} {label}: first ({dump.wall:.1f}s)\n")
                         continue
-                    verdict = Verdict.of(label, first, outcome.out)
-                    shutil.rmtree(outcome.out)
-                    sys.stdout.write(f"{tree[:11]} {verdict.short()} ({outcome.wall:.1f}s)\n")
-                    if not verdict.equal:
-                        sys.stdout.write(verdict.details() + "\n")
-                    ok = ok and verdict.equal
+                    verdict = compare(label, first, dump)
+                    shutil.rmtree(dump.path)
+                    sys.stdout.write(f"{tree[:11]} {verdict.short()} ({dump.wall:.1f}s)\n")
+                    if not verdict.ok:
+                        sys.stdout.write((verdict.details() or "") + "\n")
+                    ok = ok and verdict.ok
                     sys.stdout.flush()
         finally:
             shutil.rmtree(self.work / "dumps", ignore_errors=True)
