@@ -328,7 +328,7 @@ class FactDatabase:
         try:
             if self.pruned_mark.read_text() == day.isoformat():
                 return False
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
         self.directory.mkdir(parents=True, exist_ok=True)
         self.pruned_mark.write_text(day.isoformat())

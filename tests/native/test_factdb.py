@@ -160,6 +160,15 @@ def test_a_stored_length_that_is_not_the_records_is_a_miss(tmp_path: Path, json_
     assert link(native, BlobSnapshot.index(repo), database)[1] == (3, 0)
 
 
+@pytest.mark.parametrize("mark", [b"\x86\x00not text", b"", b"2026-11"], ids=["not-utf8", "empty", "truncated"])
+def test_a_damaged_prune_mark_means_not_pruned_today(tmp_path: Path, mark: bytes) -> None:
+    database = FactDatabase(tmp_path / "cache" / "facts", "facts-id", 1)
+    database.directory.mkdir(parents=True)
+    database.pruned_mark.write_bytes(mark)
+    assert database.open_for_run(TODAY)
+    assert database.pruned_mark.read_text() == TODAY.isoformat()
+
+
 def test_a_damaged_database_is_moved_aside_and_the_run_goes_on(tmp_path: Path) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
