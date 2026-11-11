@@ -451,26 +451,32 @@ class ClassIndex:
     def bases(self, ref: EntityId) -> list[EntityId]:
         if ref in self.bases_cache:
             return self.bases_cache[ref]
-        out: list[EntityId] = []
         node = self.node(ref)
-        for base in node.get("bases", ()) if node else ():
-            hit = self.resolver.resolve_value(ref.module, base)
-            if hit is not None and hit.kind == "class":
-                out.append(hit.origin)
+        out = self.resolved_bases(ref.module, node) if node else []
         self.bases_cache[ref] = out
         return out
+
+    def resolved_bases(self, module: str, node: dict) -> list[EntityId]:
+        """The classes a class def's bases resolve to, seen from its module."""
+        out: list[EntityId] = []
+        for base in node.get("bases", ()):
+            hit = self.resolver.resolve_value(module, base)
+            if hit is not None and hit.kind == "class":
+                out.append(hit.origin)
+        return out
+
+    def ancestors(self, bases: list[EntityId]) -> list[EntityId]:
+        """C3 over resolved bases: the MRO of a class with these bases, without the class."""
+        if len(bases) <= 1:
+            # C3 over one base is that base's MRO; skip the merge, the common case by far.
+            return list(self.mro(bases[0])) if bases else []
+        return self.merge([list(self.mro(b)) for b in bases] + [list(bases)])
 
     def mro(self, ref: EntityId) -> list[EntityId]:
         if ref in self.mro_cache:
             return self.mro_cache[ref]
         self.mro_cache[ref] = [ref]
-        bases = self.bases(ref)
-        if len(bases) <= 1:
-            # C3 over one base is that base's MRO; skip the merge, the common case by far.
-            result = [ref, *(self.mro(bases[0]) if bases else ())]
-            self.mro_cache[ref] = result
-            return result
-        result = [ref, *self.merge([list(self.mro(b)) for b in bases] + [list(bases)])]
+        result = [ref, *self.ancestors(self.bases(ref))]
         self.mro_cache[ref] = result
         return result
 

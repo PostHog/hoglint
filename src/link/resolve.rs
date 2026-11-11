@@ -265,7 +265,7 @@ pub fn unpacked_names(it: &Interner, target: &V, out: &mut Vec<Sid>) {
 }
 
 /// The C3 merge of the bases' MROs and the bases themselves.
-pub fn c3_merge(mut sequences: Vec<Vec<Ent>>) -> Vec<Ent> {
+fn c3_merge(mut sequences: Vec<Vec<Ent>>) -> Vec<Ent> {
     let mut result = Vec::new();
     loop {
         sequences.retain(|s| !s.is_empty());
@@ -913,19 +913,37 @@ impl Core {
         if let Some(found) = self.bases_cache.get(&class) {
             return found.clone();
         }
-        let mut out = Vec::new();
-        if let Some((file, idx)) = self.located(class) {
-            let facts = self.facts.clone();
-            for base in &facts.files[file as usize].defs[idx as usize].bases {
-                if let Some(hit) = self.resolve_value(class.m, base)
-                    && self.kind(hit) == HitKind::Class
-                {
-                    out.push(self.origin(hit));
-                }
+        let out = match self.located(class) {
+            Some((file, idx)) => {
+                let facts = self.facts.clone();
+                self.resolved_bases(class.m, &facts.files[file as usize].defs[idx as usize])
             }
-        }
+            None => Vec::new(),
+        };
         self.bases_cache.insert(class, out.clone());
         out
+    }
+
+    /// The classes a class def's bases resolve to, seen from its module.
+    pub fn resolved_bases(&mut self, module: Sid, node: &Def) -> Vec<Ent> {
+        let mut out = Vec::new();
+        for base in &node.bases {
+            if let Some(class) = self.resolve_class(module, base) {
+                out.push(class);
+            }
+        }
+        out
+    }
+
+    /// C3 over resolved bases: the MRO of a class with these bases, without the class.
+    pub fn ancestors(&mut self, bases: &[Ent]) -> Vec<Ent> {
+        if bases.len() <= 1 {
+            // C3 over one base is that base's MRO; skip the merge, the common case by far.
+            return bases.first().map_or_else(Vec::new, |&base| self.mro(base));
+        }
+        let mut sequences: Vec<Vec<Ent>> = bases.iter().map(|&base| self.mro(base)).collect();
+        sequences.push(bases.to_vec());
+        c3_merge(sequences)
     }
 
     /// C3 over resolved bases. A class that inherits itself sees only itself.
@@ -935,18 +953,8 @@ impl Core {
         }
         self.mro_cache.insert(class, vec![class]);
         let bases = self.bases(class);
-        if bases.len() <= 1 {
-            let mut result = vec![class];
-            if let Some(&base) = bases.first() {
-                result.extend(self.mro(base));
-            }
-            self.mro_cache.insert(class, result.clone());
-            return result;
-        }
-        let mut sequences: Vec<Vec<Ent>> = bases.iter().map(|&base| self.mro(base)).collect();
-        sequences.push(bases.clone());
         let mut result = vec![class];
-        result.extend(c3_merge(sequences));
+        result.extend(self.ancestors(&bases));
         self.mro_cache.insert(class, result.clone());
         result
     }

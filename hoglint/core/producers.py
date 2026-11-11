@@ -755,16 +755,10 @@ class DeclarationProducer(Producer):
     def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
         """A class and its ancestors in MRO order, through the link's own class resolution, each
         as its file and def index. An ancestor whose file is not analyzed is left out."""
-        node = scope.defs[idx]
-        bases = []
-        for base in node.get("bases", ()):
-            hit = context.resolver.resolve_value(scope.module, base)
-            if hit is not None and hit.kind == "class":
-                bases.append(hit.origin)
+        classes = context.classes
         own = entity(scope.module, scope.qualnames[idx])
-        order = ClassIndex.merge([list(context.classes.mro(base)) for base in bases] + [list(bases)])
         out = [(scope, idx)]
-        for ref in order:
+        for ref in classes.ancestors(classes.resolved_bases(scope.module, scope.defs[idx])):
             found = context.def_of(ref.module, ref.symbol, "class") if ref != own else None
             if found is not None:
                 out.append(found)

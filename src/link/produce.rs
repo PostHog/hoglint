@@ -4,7 +4,7 @@
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
-    Binding, CLASS, Core, Ent, HitKind, OrderedMap, absolute_import, c3_merge, module_assigns,
+    Binding, CLASS, Core, Ent, HitKind, OrderedMap, absolute_import, module_assigns,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -1345,20 +1345,13 @@ impl Producers<'_> {
         let facts = self.core.facts.clone();
         let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
         let module = self.scopes[owner].module;
-        let mut bases = Vec::new();
-        for base in &node.bases {
-            if let Some(class) = self.core.resolve_class(module, base) {
-                bases.push(class);
-            }
-        }
         let own = Ent {
             m: module,
             s: self.scopes[owner].qualnames[idx as usize],
         };
-        let mut sequences: Vec<Vec<Ent>> = bases.iter().map(|&base| self.core.mro(base)).collect();
-        sequences.push(bases);
+        let bases = self.core.resolved_bases(module, node);
         let mut out = vec![(owner, idx)];
-        for class in c3_merge(sequences) {
+        for class in self.core.ancestors(&bases) {
             if class == own {
                 continue;
             }
