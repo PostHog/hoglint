@@ -365,6 +365,7 @@ impl Producing {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         it: &mut Interner,
         builtins: &[String],
