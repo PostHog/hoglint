@@ -36,8 +36,8 @@ Usage:
   python -m hoglint.native.replay check ...
       one check in this process (the harness runs it)
 
-Exit 0 only when every compared table is equal, no check failed, and a certificate's prediction
-holds every item of the truth set.
+Exit 0 only when every compared table is equal, no check failed, each warm check shows that it
+reused stored work, and a certificate's prediction holds every item of the truth set.
 """
 
 from __future__ import annotations
@@ -66,14 +66,21 @@ from typing import Any
 
 from hoglint.cli import Commands, Run, Snapshots
 from hoglint.core.memo import (
+    DROP_ENV as PACK_MEMO_DROP,
     MODE_ENV as PACK_MEMO_SWITCH,
     OFF as PACK_MEMO_OFF,
+    STATS_ENV as PACK_MEMO_STATS,
+    PackMemo,
 )
-from hoglint.ledger.cache import OFF_SWITCH as ANSWER_CACHE_SWITCH
+from hoglint.ledger.cache import (
+    OFF_SWITCH as ANSWER_CACHE_SWITCH,
+    AnswerStore,
+)
 from hoglint.ledger.scan import SUMMARY_SECTIONS, ScanSummary
 from hoglint.model import Finding, Graph
 from hoglint.native.config import TRACE_ENV
 from hoglint.native.graph import NativeGraph
+from hoglint.native.memo_store import MemoStore
 from hoglint.native.normal import FIELDS, Row
 from hoglint.native.parity import (
     LIST_OUTPUTS,
@@ -92,7 +99,7 @@ from hoglint.native.predict import (
     Prediction as Predicted,
     write_trace_dump,
 )
-from hoglint.native.source import ENGINES, batch_mode
+from hoglint.native.source import ENGINES, NativeGraphSource, batch_mode
 from hoglint.rules.base import IncompleteItem
 
 # The tables a check writes besides the parity tables, and the ones every check writes.
@@ -124,12 +131,43 @@ class FixedSnapshots(Snapshots):
         return self.tree
 
 
+class RecordingNativeSource(NativeGraphSource):
+    """A native graph source that keeps the pack memo of each build, so a check can say whether
+    its pack memo was on and its store opened."""
+
+    def __init__(self, work_dir: Path) -> None:
+        super().__init__(work_dir)
+        self.memos: list[PackMemo | None] = []
+
+    def pack_memo(self, options: Any, build: Any, config_key: str) -> PackMemo | None:
+        memo = super().pack_memo(options, build, config_key)
+        self.memos.append(memo)
+        return memo
+
+    def memo_states(self) -> list[str]:
+        """Per build: `off`, `no store` (the trace mode, or no cache root), or the store's state."""
+        states = []
+        for memo in self.memos:
+            if memo is None:
+                states.append("off")
+            elif isinstance(memo.store, MemoStore):
+                states.append(memo.store.state())
+            else:
+                states.append("no store")
+        return states
+
+
 class RecordingCommands(Commands):
     """`check --index` of a fixed tree that keeps what the run made: its graph when it ran live
-    (`write_outputs` gets every live run) and the summary it reported (`report` gets every check)."""
+    (`write_outputs` gets every live run), the summary it reported (`report` gets every check)
+    and its pack memos."""
 
     def __init__(self, repo: Path, work_dir: Path, engine: str, today: datetime.date, tree: str, head: str) -> None:
         super().__init__(repo, work_dir, engine, today)
+        self.recording: RecordingNativeSource | None = None
+        if isinstance(self.source, NativeGraphSource):
+            self.recording = RecordingNativeSource(work_dir)
+            self.source = self.runner.source = self.recording
         self.snapshots = FixedSnapshots(repo, work_dir, tree, head)
         self.baselines.snapshots = self.snapshots
         if self.memo is not None:
@@ -154,6 +192,14 @@ class RecordingCommands(Commands):
         self.reported = summary
         self.against = attributed.against if attributed is not None else ""
         return super().report(summary, config, policy_root, files_root, touched, attributed)
+
+    def reuse(self) -> dict[str, Any]:
+        """Which stores of reused work this check had: the answer stores, the summary store, and
+        per native build its pack memo (`memo_states`; absent on the Python engine)."""
+        out: dict[str, Any] = {"answers": not AnswerStore.off(), "summaries": not self.summaries.broken}
+        if self.recording is not None:
+            out["pack_memo"] = self.recording.memo_states()
+        return out
 
 
 def summary_rows(summary: ScanSummary) -> list[Row]:
@@ -209,6 +255,7 @@ class TreeCheck:
             "memo": commands.live is None,
             "against": commands.against,
             "engine": commands.engine.id,
+            "reuse": commands.reuse(),
             **timing,
         }
         (self.out / "check.json").write_text(json.dumps(meta))
@@ -300,43 +347,82 @@ def compare_tables(left: Path, right: Path) -> tuple[list[RowDiff], list[str]]:
     return diffs, skipped
 
 
+def reuse_problem(meta: dict[str, Any]) -> str:
+    """Why a warm check reused no stored work, or "" when it could. A check the run memo served
+    reused a stored summary. Otherwise every store must have been on, and each pack memo's store
+    opened and read, or never asked because no step had items: a count of reused items cannot
+    be the test, since a pair that changes the config rightly reuses none."""
+    if meta.get("memo"):
+        return ""
+    reuse = meta.get("reuse")
+    if not isinstance(reuse, dict):
+        return "the check did not say what it reused"
+    if not reuse.get("answers"):
+        return "the answer stores were off"
+    if not reuse.get("summaries"):
+        return "the summary store failed"
+    memos = reuse.get("pack_memo")
+    if memos is None:
+        return ""
+    if not memos:
+        return "no build made a pack memo"
+    bad = [state for state in memos if state not in ("open", "unused")]
+    return f"the pack memo was {bad[0]}" if bad else ""
+
+
 @dataclass(frozen=True)
 class Verdict:
     """One comparison of two dumps, as one short text and the rows of each differing table.
-    `word` names a failure that is not a table difference (MISSED), with `note` saying more."""
+    `word` names a failure that is not a table difference (MISSED, NO REUSE, NO GRAPH TABLES),
+    with `note` saying more; `memo` says the right side's check was served by the run memo."""
 
     label: str
     diffs: tuple[RowDiff, ...]
     skipped: tuple[str, ...]
     note: str = ""
     word: str = ""
+    memo: bool = False
 
     @property
     def equal(self) -> bool:
         return not self.note and not self.word and all(diff.equal for diff in self.diffs)
+
+    @property
+    def graph_tables(self) -> int:
+        return sum(diff.name not in CHECK_OUTPUTS for diff in self.diffs)
 
     def short(self) -> str:
         if self.word:
             return f"{self.label}: {self.word} ({self.note})"
         if self.note:
             return f"{self.label}: {self.note}"
-        if self.equal:
-            memo = f", {len(self.skipped)} graph tables not built (memo)" if self.skipped else ""
-            return f"{self.label}: equal ({len(self.diffs)} tables{memo})"
-        different = ",".join(diff.name for diff in self.diffs if not diff.equal)
-        return f"{self.label}: DIFFERENT ({different})"
+        if not self.equal:
+            different = ",".join(diff.name for diff in self.diffs if not diff.equal)
+            return f"{self.label}: DIFFERENT ({different})"
+        if self.memo:
+            return f"{self.label}: equal, served by the run memo ({len(self.diffs)} tables compared, no graph table)"
+        return f"{self.label}: equal ({len(self.diffs)} tables)"
 
     def details(self) -> str:
         return "\n".join(f"  [{self.label}] {diff.render()}" for diff in self.diffs if not diff.equal)
 
     @staticmethod
-    def of(label: str, left: Path, right: Path) -> Verdict:
-        """Refuses two checks of different engines: a replay across two engine versions proves nothing."""
-        engines = [json.loads((side / "check.json").read_text()).get("engine", "") for side in (left, right)]
+    def of(label: str, left: Path, right: Path, warm: bool = False) -> Verdict:
+        """Refuses two checks of different engines: a replay across two engine versions proves
+        nothing. A `warm` right side must show that it reused stored work."""
+        metas = [json.loads((side / "check.json").read_text()) for side in (left, right)]
+        engines = [meta.get("engine", "") for meta in metas]
         if engines[0] != engines[1]:
             return Verdict(label, (), (), f"REFUSED: the two checks ran different engines ({engines[0]}, {engines[1]})")
         diffs, skipped = compare_tables(left, right)
-        return Verdict(label, tuple(diffs), tuple(skipped))
+        memo = bool(metas[1].get("memo"))
+        problem = reuse_problem(metas[1]) if warm else ""
+        if problem:
+            return Verdict(label, tuple(diffs), tuple(skipped), problem, "NO REUSE", memo)
+        verdict = Verdict(label, tuple(diffs), tuple(skipped), memo=memo)
+        if warm and not memo and verdict.graph_tables == 0:
+            return Verdict(label, tuple(diffs), tuple(skipped), "the check ran live", "NO GRAPH TABLES")
+        return verdict
 
     @staticmethod
     def failed(label: str, error: str) -> Verdict:
@@ -896,6 +982,16 @@ DAMAGES = (*(damage.name for damage in STATE_DAMAGES), *RUN_DAMAGES)
 # answers adds its off switch here. The per-blob fact cache stays on: its entries are what the
 # extractor makes of a file's bytes, keyed by those bytes.
 COLD_SWITCHES = {PACK_MEMO_SWITCH: PACK_MEMO_OFF, ANSWER_CACHE_SWITCH: "1"}
+# Every switch that turns a store of reused answers or a recording on or off. A check never
+# takes them from the caller's shell: the replay sets what each side needs, so a warm side
+# reuses what it stored. Every new store adds its switch here too.
+REUSE_SWITCHES = (*COLD_SWITCHES, PACK_MEMO_DROP, PACK_MEMO_STATS, TRACE_ENV)
+
+
+def check_env(caller: dict[str, str], side: dict[str, str]) -> dict[str, str]:
+    """The caller's environment with no reuse switch, and then the side's own settings."""
+    out = {name: value for name, value in caller.items() if name not in REUSE_SWITCHES}
+    return {**out, **side}
 
 
 @dataclass(frozen=True)
@@ -939,7 +1035,7 @@ class Checker:
         out = self.work / "dumps" / f"{self.count:04d}-{label}"
         if out.exists():
             shutil.rmtree(out)
-        full_env = {**os.environ, **self.mode.env(), **env, "XDG_CACHE_HOME": str(state.root)}
+        full_env = check_env(dict(os.environ), {**self.mode.env(), **env, "XDG_CACHE_HOME": str(state.root)})
         return subprocess.Popen(
             self.command(tree, head, out, tables),
             env=full_env,
@@ -1000,11 +1096,18 @@ class PairResult:
     def equal(self) -> bool:
         return bool(self.verdicts) and all(verdict.equal for verdict in self.verdicts)
 
+    @property
+    def memo(self) -> bool:
+        """The warm child was served by the run memo, so no graph table of it was compared."""
+        return any(verdict.label == "child" and verdict.memo for verdict in self.verdicts)
+
     def status(self) -> str:
         words = [verdict.word for verdict in self.verdicts if verdict.word]
         if words:
             return " ".join(dict.fromkeys(words))
-        return "EQUAL" if self.equal else "NOT EQUAL"
+        if not self.equal:
+            return "NOT EQUAL"
+        return "MEMO" if self.memo else "EQUAL"
 
     def timing(self) -> str:
         if self.cold is None or self.warm is None:
@@ -1068,9 +1171,9 @@ class Replay:
         planted = self.checker.mode.tamper(warm_child.out, cold_parent.out, truth)
         if planted:
             result.notes.append(planted)
-        result.verdicts.append(Verdict.of("child", cold_child.out, warm_child.out))
+        result.verdicts.append(Verdict.of("child", cold_child.out, warm_child.out, warm=True))
         back = check(pair.parent, pair.parent, warm, "back")
-        result.verdicts.append(Verdict.of("back", cold_parent.out, back.out))
+        result.verdicts.append(Verdict.of("back", cold_parent.out, back.out, warm=True))
         shutil.rmtree(warm_child.out)
         shutil.rmtree(back.out)
         for name in self.damages:
@@ -1166,7 +1269,8 @@ class PairsReport:
 
     def close(self) -> bool:
         equal = sum(result.equal for result in self.results)
-        sys.stdout.write(f"\n{equal} of {len(self.results)} pairs equal\n")
+        memo = sum(result.equal and result.memo for result in self.results)
+        sys.stdout.write(f"\n{equal} of {len(self.results)} pairs equal ({memo} of them served by the run memo)\n")
         sys.stdout.write(f"cold child: {self.times(lambda r: r.cold)}\n")
         sys.stdout.write(f"warm child: {self.times(lambda r: r.warm)}\n")
         predictions = [r for r in self.results if r.prediction is not None]

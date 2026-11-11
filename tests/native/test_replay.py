@@ -10,7 +10,19 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.native.replay import MODES, Checker, Pair, PairResult, PairsReport, Prediction, Replay, TruthItem, Verdict
+from hoglint.native.replay import (
+    COLD_SWITCHES,
+    MODES,
+    Checker,
+    Pair,
+    PairResult,
+    PairsReport,
+    Prediction,
+    Replay,
+    TruthItem,
+    Verdict,
+    check_env,
+)
 
 from native.require import native_module
 from native.test_parity import OWNERS_REPO
@@ -150,3 +162,54 @@ def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pyt
     assert report.close() is False
     assert "p  MISSED  prediction: MISSED (1 files" in capsys.readouterr().out
     assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "EQUAL"
+
+
+def test_a_check_takes_no_reuse_switch_from_the_callers_shell() -> None:
+    caller = {"PATH": "/bin", "HOGLINT_PACK_MEMO": "off", "HOGLINT_NO_ANSWER_CACHE": "1", "HOGLINT_LINK_TRACE": "1"}
+    assert check_env(caller, {}) == {"PATH": "/bin"}
+    assert check_env(caller, COLD_SWITCHES) == {"PATH": "/bin", **COLD_SWITCHES}
+
+
+def write_check(side: Path, meta: dict[str, object], graph: bool) -> Path:
+    side.mkdir()
+    (side / "check.json").write_text(json.dumps({"engine": "native-a", **meta}))
+    (side / "check-exit.jsonl").write_text("[0]\n")
+    if graph:
+        (side / "modules.jsonl").write_text('["a", "a.py"]\n')
+    return side
+
+
+OPEN = {"answers": True, "summaries": True, "pack_memo": ["open"]}
+
+
+@pytest.mark.parametrize(
+    ("meta", "graph", "word"),
+    [
+        ({"memo": False, "reuse": OPEN}, True, ""),
+        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["unused"]}}, True, ""),
+        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["off"]}}, True, "NO REUSE"),
+        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["no store"]}}, True, "NO REUSE"),
+        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["failed"]}}, True, "NO REUSE"),
+        ({"memo": False, "reuse": {**OPEN, "answers": False}}, True, "NO REUSE"),
+        ({"memo": False, "reuse": OPEN}, False, "NO GRAPH TABLES"),
+        ({"memo": True, "reuse": {**OPEN, "pack_memo": []}}, False, ""),
+    ],
+)
+def test_a_warm_check_must_show_that_it_reused_stored_work(
+    tmp_path: Path, meta: dict[str, object], graph: bool, word: str
+) -> None:
+    cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
+    warm = write_check(tmp_path / "warm", meta, graph)
+    verdict = Verdict.of("child", cold, warm, warm=True)
+    assert verdict.word == word, verdict.short()
+    assert verdict.equal is (word == "")
+    assert Verdict.of("child", cold, warm).word == ""
+
+
+def test_a_warm_child_served_by_the_run_memo_is_not_printed_equal(tmp_path: Path) -> None:
+    cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
+    warm = write_check(tmp_path / "warm", {"memo": True}, graph=False)
+    result = PairResult(Pair("p", "a", "b"), [Verdict.of("child", cold, warm, warm=True)])
+    assert result.equal
+    assert result.status() == "MEMO"
+    assert "served by the run memo (1 tables compared" in result.line()

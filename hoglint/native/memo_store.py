@@ -109,6 +109,12 @@ class MemoStore:
             self.close()
             self.database.move_aside()
 
+    def state(self) -> str:
+        """`failed` once an error turned the store off, `open` once a run read it, else `unused`."""
+        if self.broken:
+            return "failed"
+        return "open" if self.conn is not None else "unused"
+
     def close(self) -> None:
         if self.conn is not None:
             try:
