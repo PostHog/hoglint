@@ -288,8 +288,8 @@ class LabelRef:
 
 
 class TracedModels(dict[EntityId, ModelEntry]):
-    """The registry's models by class: each lookup is a read of the registry, and a walk over
-    them reads them all."""
+    """The registry's models by class: each lookup is a read of the registry, and every way to
+    read the whole map (a walk, `keys`, `values`, `items`, `len`) reads them all."""
 
     MODEL = "django.model"
 
@@ -322,6 +322,14 @@ class TracedModels(dict[EntityId, ModelEntry]):
     def __iter__(self) -> Iterator[EntityId]:
         self.note_all()
         return dict.__iter__(self)
+
+    def __len__(self) -> int:
+        self.note_all()
+        return dict.__len__(self)
+
+    def keys(self) -> Any:
+        self.note_all()
+        return dict.keys(self)
 
     def values(self) -> Any:
         self.note_all()

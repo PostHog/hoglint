@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import gc
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, PackMemo, part_of
-from hoglint.model import Context, Edge, Resolution, Site
+from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
+from hoglint.native.answers import ReaderAnswers
+from hoglint.native.build import TracedDict
 from hoglint.native.memo_store import MemoStore
+from hoglint.packs.django.models import ModelEntry, TracedModels
 
 KIND = "test.answer"
 
@@ -138,3 +142,63 @@ def test_items_that_read_a_fold_of_their_own_part_are_reused(tmp_path: Path) -> 
         memo.flush()
         TRACER.reset()
     assert world.ran == []
+
+
+class WholeMap(Items):
+    """One item that reads a traced map as a whole, by `read`."""
+
+    def __init__(self, read: Callable[[], Any]) -> None:
+        self.read = read
+        self.ran: list[str] = []
+
+    def keys(self) -> list[str]:
+        return ["a"]
+
+    def run_item(self, key: str) -> ItemOutput:
+        self.ran.append(key)
+        return ItemOutput([], {"seen": self.read()})
+
+
+def model(name: str) -> tuple[EntityId, ModelEntry]:
+    ref = EntityId(LANGUAGE_PYTHON, "app.models", name)
+    return ref, ModelEntry(ref, "app/models.py", 1, "app", False, False, ref, {})
+
+
+def module_index(names: list[str]) -> tuple[TracedDict, Callable[[], None]]:
+    found = TracedDict("module-path", {name: f"{name}.py" for name in names})
+    return found, lambda: TRACER.answer_with("module-path", lambda key: ReaderAnswers.index_answer(found, key))
+
+
+def models(names: list[str]) -> tuple[TracedModels, Callable[[], None]]:
+    found = TracedModels(dict(model(name) for name in names))
+    return found, found.answer_reads
+
+
+WHOLE_READS = {
+    "len of the module index": (module_index, len),
+    "items of the module index": (module_index, lambda found: sorted(found.items())),
+    "values of the module index": (module_index, lambda found: sorted(found.values())),
+    "len of the models": (models, len),
+    "keys of the models": (models, lambda found: sorted(str(ref) for ref in found.keys())),
+}
+
+
+@pytest.mark.parametrize("case", WHOLE_READS)
+def test_an_item_that_reads_a_whole_traced_map_runs_again_when_the_map_gains_a_key(tmp_path: Path, case: str) -> None:
+    make, read = WHOLE_READS[case]
+    store = MemoStore(tmp_path, "engine")
+    ran = []
+    for names in (["a"], ["a", "b"]):
+        TRACER.reset()
+        found, answer = make(names)
+        answer()
+        items = WholeMap(lambda found=found: read(found))
+        memo = PackMemo(store, "policy")
+        step = memo.step("whole@1")
+        with TRACER.frame():
+            ItemRun(items, step).outputs()
+        memo.end_step(step)
+        memo.flush()
+        TRACER.reset()
+        ran.append(items.ran)
+    assert ran == [["a"], ["a"]]

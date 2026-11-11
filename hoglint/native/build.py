@@ -141,8 +141,9 @@ class ModuleValues(dict[str, object]):
 
 
 class TracedDict(dict[str, str]):
-    """A map of the module index whose lookups are reads: a key's answer is its value or None,
-    and a walk over every key reads them all."""
+    """A map of the module index whose lookups are reads: a key's answer is its value or None.
+    Every way to read the whole map (a walk, `keys`, `values`, `items`, `len`) is one read of
+    `*`, answered by every entry."""
 
     def __init__(self, kind: str, values: dict[str, str]) -> None:
         super().__init__(values)
@@ -165,10 +166,29 @@ class TracedDict(dict[str, str]):
             TRACER.note(self.kind, key, found)
         return found is not None
 
-    def __iter__(self) -> Iterator[str]:
+    def note_all(self) -> None:
         if TRACER.frames:
-            TRACER.note(self.kind, "*", sorted(dict.keys(self)))
+            TRACER.note_lazy(self.kind, "*", lambda: sorted(dict.items(self)))
+
+    def __iter__(self) -> Iterator[str]:
+        self.note_all()
         return dict.__iter__(self)
+
+    def __len__(self) -> int:
+        self.note_all()
+        return dict.__len__(self)
+
+    def keys(self) -> Any:
+        self.note_all()
+        return dict.keys(self)
+
+    def values(self) -> Any:
+        self.note_all()
+        return dict.values(self)
+
+    def items(self) -> Any:
+        self.note_all()
+        return dict.items(self)
 
 
 class TracedModuleIndex(ModuleIndex):

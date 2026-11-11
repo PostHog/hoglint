@@ -55,9 +55,9 @@ class ReaderAnswers:
 
     @staticmethod
     def index_answer(values: dict[str, str], key: str) -> object:
-        """A module index map's answer as `TracedDict` notes it: a value, or every key for "*"."""
+        """A module index map's answer as `TracedDict` notes it: a value, or every entry for "*"."""
         if key == "*":
-            return sorted(dict.keys(values))
+            return sorted(dict.items(values))
         return dict.get(values, key)
 
     def listing(self, key: str) -> object:
