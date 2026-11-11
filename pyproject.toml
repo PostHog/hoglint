@@ -1,0 +1,86 @@
+[project]
+name = "hoglint"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "orjson==3.11.9",
+    "pyyaml==6.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.15.20",
+    "ty==0.0.80",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+force-exclude = true
+# Keeps hoglint and the test helper modules classified as in the monorepo (isort order).
+src = ["src"]
+exclude = [".git", "target"]
+
+[tool.ruff.lint]
+ignore = [
+    "B017",
+    "B904",
+    "B905",
+    "C901",
+    "E501",
+    "E722",
+    "E731",
+    "F541",
+    "UP007",
+    "UP032",
+    "UP045",
+    "UP046",
+    "UP047",
+    "UP042",
+]
+select = [
+    "B",
+    "C4",
+    "C9",
+    "E",
+    "F",
+    "I",
+    "PLC0415",
+    "RUF005",
+    "RUF013",
+    "RUF015",
+    "RUF019",
+    "T100",
+    "T2",
+    "TRY201",
+    "TRY400",
+    "UP",
+    "W",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+length-sort-straight = true
+split-on-trailing-comma = false
+section-order = ["future", "standard-library", "testing", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+"testing" = ["pytest", "unittest"]
+
+[tool.ruff.lint.per-file-ignores]
+# One lazy import predates this repo; the monorepo exempted the whole tools/ tree.
+"hoglint/source.py" = ["PLC0415"]
+
+[tool.ty.src]
+include = ["hoglint", "tests"]
