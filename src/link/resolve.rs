@@ -116,13 +116,6 @@ impl<V: Copy> OrderedMap<V> {
         }
     }
 
-    /// `d.setdefault(key, value)`.
-    pub fn set_default(&mut self, key: Sid, value: V) {
-        if !self.map.contains_key(&key) {
-            self.insert(key, value);
-        }
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = (Sid, V)> + '_ {
         self.order.iter().map(|key| (*key, self.map[key]))
     }
@@ -136,6 +129,8 @@ pub struct ModuleTable {
     pub lazy: OrderedMap<Sid>,
     pub record: Option<u32>,
     pub stub_record: Option<u32>,
+    /// Names only the `.pyi` beside the module binds.
+    pub stub_names: FxHashSet<Sid>,
 }
 
 /// One module-level binding in source order: (line, column, order, flags, binding or None for
@@ -284,7 +279,12 @@ impl Core {
         let tables: usize = self
             .tables
             .iter()
-            .map(|t| t.names.heap() + heap::vec(&t.star_imports) + t.lazy.heap())
+            .map(|t| {
+                t.names.heap()
+                    + heap::vec(&t.star_imports)
+                    + t.lazy.heap()
+                    + heap::set(&t.stub_names)
+            })
             .sum();
         let mut resolver =
             heap::vec(&self.hits) + heap::vec(&self.chains) + heap::map(&self.module_hits);
@@ -489,6 +489,7 @@ impl Core {
             lazy: OrderedMap::default(),
             record: None,
             stub_record: None,
+            stub_names: FxHashSet::default(),
         };
         if let Some(&file) = self.index.path_of.get(&module) {
             table.record = Some(file);
@@ -510,10 +511,14 @@ impl Core {
                     lazy: OrderedMap::default(),
                     record: None,
                     stub_record: None,
+                    stub_names: FxHashSet::default(),
                 };
                 self.collect(&mut stub_table, stub, true);
                 for (name, binding) in stub_table.names.iter() {
-                    table.names.set_default(name, binding);
+                    if table.names.get(&name).is_none() {
+                        table.names.insert(name, binding);
+                        table.stub_names.insert(name);
+                    }
                 }
             }
         }

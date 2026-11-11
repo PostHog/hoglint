@@ -592,6 +592,9 @@ pub struct Producers<'p> {
     pub first_party: &'p FxHashSet<Sid>,
     pub edges: EdgeStore,
     pub symbols: Symbols,
+    /// Per module: name -> (file, assign row) of the value each module-level name is assigned,
+    /// read from the file the module table reads the name from.
+    pub aliases: FxHashMap<Sid, FxHashMap<Sid, (u32, u32)>>,
 }
 
 impl Producers<'_> {
@@ -822,39 +825,66 @@ impl Producers<'_> {
         }
     }
 
-    /// The value of a module-level type alias a bare name binds (`X = dict[str, Any]`), as the
-    /// module's table keeps it (the last module-level assignment of the name).
-    fn alias_value(&mut self, owner: usize, name: Sid) -> Option<V> {
+    /// name -> assign row of the last module-level assignment of each name in one file.
+    fn assigned(
+        &self,
+        file: u32,
+        out: &mut FxHashMap<Sid, (u32, u32)>,
+        only: Option<&FxHashSet<Sid>>,
+    ) {
+        let record = &self.core.facts.files[file as usize];
+        if !record.ok() {
+            return;
+        }
+        for (at, row) in record.assigns.iter().enumerate() {
+            let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
+            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || !assigned || row.value.is_none() {
+                continue;
+            }
+            for target in &row.targets {
+                if let V::Chain(name) = target
+                    && !self.core.it.s(*name).contains('.')
+                    && only.is_none_or(|names| names.contains(name))
+                {
+                    out.insert(*name, (file, at as u32));
+                }
+            }
+        }
+    }
+
+    /// The value of a module-level type alias a bare name binds (`X = dict[str, Any]`), read
+    /// from the file the module table reads the name from: the `.py`, or the stub for a name
+    /// only the stub binds. Each module's values are read once.
+    fn alias_value(&mut self, module: Sid, name: Sid) -> Option<V> {
         if self.core.it.s(name).contains('.') {
             return None;
         }
-        let module = self.scopes[owner].module;
         if !matches!(
             self.core.binding_of(module, name)?,
             Binding::Alias(_) | Binding::Variable
         ) {
             return None;
         }
-        let facts = self.core.facts.clone();
-        let mut found = None;
-        for row in &facts.files[self.scopes[owner].file as usize].assigns {
-            let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
-            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || !assigned {
-                continue;
+        if !self.aliases.contains_key(&module) {
+            let mut found = FxHashMap::default();
+            let table = self.core.table(module)?;
+            let table = self.core.table_at(table);
+            let (record, stub) = (table.record, table.stub_record);
+            let stub_names = table.stub_names.clone();
+            if let Some(file) = record {
+                self.assigned(file, &mut found, None);
             }
-            let Some(value) = &row.value else {
-                continue;
-            };
-            if row
-                .targets
-                .iter()
-                .any(|target| matches!(target, V::Chain(bound) if *bound == name))
-            {
-                found = Some(value);
+            if let Some(file) = stub.filter(|_| !stub_names.is_empty()) {
+                self.assigned(file, &mut found, Some(&stub_names));
             }
+            self.aliases.insert(module, found);
         }
-        match found? {
-            value @ (V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..)) => Some(value.clone()),
+        let (file, at) = *self.aliases[&module].get(&name)?;
+        let value = self.core.facts.files[file as usize].assigns[at as usize]
+            .value
+            .as_ref()?;
+        match value {
+            V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..) => Some(value.clone()),
             _ => None,
         }
     }
@@ -873,7 +903,8 @@ impl Producers<'_> {
             if expanding.contains(&value) {
                 continue;
             }
-            let Some(alias) = self.alias_value(owner, value) else {
+            let module = self.scopes[owner].module;
+            let Some(alias) = self.alias_value(module, value) else {
                 continue;
             };
             let mut inner = Vec::new();

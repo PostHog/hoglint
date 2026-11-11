@@ -15,7 +15,7 @@ from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import chain_last
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import HandedOut
-from hoglint.core.symbols import CLASS, Hit, Resolver, absolute_import, entity
+from hoglint.core.symbols import CLASS, MODULE_LEVEL_FLAGS, Hit, Resolver, Tables, absolute_import, entity
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
@@ -134,6 +134,44 @@ def frozen_keyword(call: dict) -> bool:
     return any(pair == ["frozen", True] for pair in call.get("kw", ()))
 
 
+class AliasValues:
+    """The value of each module-level name a module table binds by assignment, read once per
+    module from the file the table reads the name from: the `.py`, or the stub for a name only
+    the stub binds."""
+
+    def __init__(self, tables: Tables) -> None:
+        self.tables = tables
+        self.by_module: dict[str, dict[str, object]] = {}
+
+    @staticmethod
+    def assigned(record: dict | None) -> dict[str, object]:
+        """name -> value of its last module-level assignment in one record."""
+        values: dict[str, object] = {}
+        if record is None or record.get("status") != "ok":
+            return values
+        for row in record.get("assigns", ()):
+            if row["s"] != -1 or row.get("f", 0) & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
+                continue
+            if "v" not in row:
+                continue
+            for target in row["t"]:
+                if isinstance(target, str) and "." not in target:
+                    values[target] = row["v"]
+        return values
+
+    def of(self, module: str) -> dict[str, object]:
+        found = self.by_module.get(module)
+        if found is not None:
+            return found
+        found = self.assigned(self.tables.record(module))
+        table = self.tables.get(module)
+        if table is not None and table.stub_names:
+            stub = self.assigned(self.tables.stub_record(module))
+            found.update((name, value) for name, value in stub.items() if name in table.stub_names)
+        self.by_module[module] = found
+        return found
+
+
 @dataclass(frozen=False)
 class BuildContext:
     """What every producer reads. Built once per run."""
@@ -150,6 +188,7 @@ class BuildContext:
         self.classifier = Classifier(self.index)
         self.names = NameLookup(self.resolver)
         self.scope_of_path = {scope.path: scope for scope in self.files}
+        self.aliases = AliasValues(self.resolver.tables)
 
     def table_scope(self, module: str) -> FileScope | None:
         """The analyzed file a module table reads its own bindings from: the one file the index
@@ -223,7 +262,7 @@ class BuildContext:
         binding = table.names.get(name) if table is not None else None
         if binding is None or binding[0] not in ("alias", "variable"):
             return None
-        value = table.values.get(name) if table is not None else None
+        value = self.aliases.of(module).get(name)
         if isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value)):
             return value
         return None

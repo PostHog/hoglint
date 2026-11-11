@@ -221,3 +221,51 @@ def test_a_handed_out_def_is_read_from_the_file_the_module_table_reads(
         ("charge", "param:amount", "builtins.int", "external", "alias"),
         ("charge", "return", "builtins.str", "external", "alias"),
     ]
+
+
+TOTALS_IN_PY = "Totals = dict[str, int]\n\n\ndef charge(amount: Totals) -> None:\n    pass\n"
+# The slots of `charge` in a file whose `Totals` is the module table's (`dict[str, int]`).
+CHARGE_WITH_TOTALS = [
+    ("charge", "param:amount", f"{FACADE}.Totals", "resolved", ""),
+    ("charge", "param:amount", "builtins.dict", "external", ""),
+    ("charge", "param:amount", "builtins.int", "external", ""),
+    ("charge", "param:amount", "builtins.str", "external", ""),
+    ("charge", "return", "builtins.None", "external", ""),
+]
+# A type alias is read from the file whose binding the module table holds: the `.py` for a name it
+# binds, the stub for a name only the stub binds; a package of the same name is never read.
+ALIAS_FILE_CASES = {
+    "stub twin": (
+        {
+            "products/shop/backend/facade/api.py": TOTALS_IN_PY,
+            "products/shop/backend/facade/api.pyi": (
+                "Totals = dict[str, bytes]\nStubOnly = list[float]\n\n\n"
+                "def charge(amount: Totals) -> None: ...\ndef total(x: StubOnly) -> None: ...\n"
+            ),
+        },
+        [
+            *CHARGE_WITH_TOTALS,
+            *CHARGE_WITH_TOTALS,
+            ("total", "param:x", f"{FACADE}.StubOnly", "resolved", ""),
+            ("total", "param:x", "builtins.float", "external", ""),
+            ("total", "param:x", "builtins.list", "external", ""),
+            ("total", "return", "builtins.None", "external", ""),
+        ],
+    ),
+    "package of the same name": (
+        {
+            "products/shop/backend/facade/api.py": TOTALS_IN_PY,
+            "products/shop/backend/facade/api/__init__.py": TOTALS_IN_PY.replace("int", "bytes", 1),
+        },
+        [*CHARGE_WITH_TOTALS, *CHARGE_WITH_TOTALS],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", ALIAS_FILE_CASES)
+def test_an_alias_is_read_from_the_file_the_module_table_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = ALIAS_FILE_CASES[case]
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(expected)

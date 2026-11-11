@@ -114,6 +114,7 @@ class ModuleTable:
     star_imports: list[str] = field(default_factory=list)
     lazy: dict[str, str] = field(default_factory=dict)  # name -> module, from a PEP 562 lazy map
     values: dict[str, object] = field(default_factory=dict)  # name -> V value of its last module-level assign
+    stub_names: set[str] = field(default_factory=set)  # names only the `.pyi` beside the module binds
 
     def classes(self) -> dict[str, int]:
         """Classes the module's own source defines at module level: name -> def index."""
@@ -228,7 +229,9 @@ class Tables:
             stub_table = ModuleTable(module, self.index.stub_of[module], table.is_package)
             self.collect(stub_table, stub, "stub")
             for name, binding in stub_table.names.items():
-                table.names.setdefault(name, binding)
+                if name not in table.names:
+                    table.names[name] = binding
+                    table.stub_names.add(name)
         return table
 
     def get(self, module: str) -> ModuleTable | None:

@@ -345,6 +345,7 @@ impl Link {
             first_party: &first_party,
             edges: EdgeStore::default(),
             symbols: Symbols::default(),
+            aliases: FxHashMap::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
