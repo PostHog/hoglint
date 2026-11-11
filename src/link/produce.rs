@@ -3,7 +3,7 @@
 
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
-use super::resolve::{Binding, CLASS, Core, Ent, HitKind, absolute_import};
+use super::resolve::{Binding, CLASS, Core, Ent, HitKind, MODULE_LEVEL_FLAGS, absolute_import};
 use super::rules::glob::ExportPaths;
 use super::scope::{LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::handed_out;
@@ -822,6 +822,69 @@ impl Producers<'_> {
         }
     }
 
+    /// The value of a module-level type alias a bare name binds (`X = dict[str, Any]`), as the
+    /// module's table keeps it (the last module-level assignment of the name).
+    fn alias_value(&mut self, owner: usize, name: Sid) -> Option<V> {
+        if self.core.it.s(name).contains('.') {
+            return None;
+        }
+        let module = self.scopes[owner].module;
+        if !matches!(
+            self.core.binding_of(module, name)?,
+            Binding::Alias(_) | Binding::Variable
+        ) {
+            return None;
+        }
+        let facts = self.core.facts.clone();
+        let mut found = None;
+        for row in &facts.files[self.scopes[owner].file as usize].assigns {
+            let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
+            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || !assigned {
+                continue;
+            }
+            let Some(value) = &row.value else {
+                continue;
+            };
+            if row
+                .targets
+                .iter()
+                .any(|target| matches!(target, V::Chain(bound) if *bound == name))
+            {
+                found = Some(value);
+            }
+        }
+        match found? {
+            value @ (V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    /// Each mention, followed by the names of the type alias it is, when it is one: a module
+    /// holds `Handler = Callable[[Order], None]` to shorten a signature, not to hide its types.
+    fn expand_aliases(
+        &mut self,
+        owner: usize,
+        mentions: Vec<(Sid, bool)>,
+        expanding: &mut Vec<Sid>,
+    ) -> Vec<(Sid, bool)> {
+        let mut out = Vec::new();
+        for (value, whole) in mentions {
+            out.push((value, whole));
+            if expanding.contains(&value) {
+                continue;
+            }
+            let Some(alias) = self.alias_value(owner, value) else {
+                continue;
+            };
+            let mut inner = Vec::new();
+            self.mentions(&alias, whole, &mut inner);
+            expanding.push(value);
+            out.extend(self.expand_aliases(owner, inner, expanding));
+            expanding.pop();
+        }
+        out
+    }
+
     /// One `exposes` edge per type name in a slot. Builtin types count only in a contract, and
     /// there an unannotated slot (annotation None) is an edge of its own. `handed` is the clause
     /// a handed-out callable comes by, EMPTY for the module's own.
@@ -856,6 +919,9 @@ impl Producers<'_> {
         };
         let mut found_names = Vec::new();
         self.mentions(annotation, true, &mut found_names);
+        if contract {
+            found_names = self.expand_aliases(lookup.owner, found_names, &mut Vec::new());
+        }
         for (value, whole) in found_names {
             let core = &mut *self.core;
             let head = core.it.head(value);
@@ -915,7 +981,7 @@ impl Producers<'_> {
         for param in &node.params {
             let name = self.core.it.s(param.name);
             let in_slot = contract && name != "self" && name != "cls";
-            if param.annotation.is_none() && !in_slot {
+            if !in_slot && (param.annotation.is_none() || handed != EMPTY) {
                 continue;
             }
             let slot = self.core.it.intern(&format!("param:{name}"));

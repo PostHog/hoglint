@@ -66,7 +66,8 @@ REPO = {
     "products/shop/backend/logic.py": (
         "from typing import ClassVar\n\n"
         "from products.shop.backend.kit import frozen\n\n\n"
-        "def charge(self, amount: int, note) -> dict:\n    return {}\n\n\n"
+        "Totals = dict[str, int]\n\n\n"
+        "def charge(cls: type, amount: Totals, note) -> dict:\n    return {}\n\n\n"
         "def refund(order_id):\n    pass\n\n\n"
         "@frozen\nclass Receipt:\n    total: int\n    kind: ClassVar[str]\n"
     ),
@@ -95,12 +96,16 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.api", "close", "param:flag", "builtins.bool", "", ""),
     ("products.shop.backend.facade.api", "close", "return", "builtins.None", "", ""),
     ("products.shop.backend.facade.api", "Orders.find", "param:key", "builtins.str", "", ""),
+    ("products.shop.backend.facade.api", "charge", "param:amount", "products.shop.backend.logic.Totals", "", "alias"),
+    ("products.shop.backend.facade.api", "charge", "param:amount", "builtins.dict", "", "alias"),
+    ("products.shop.backend.facade.api", "charge", "param:amount", "builtins.str", "", "alias"),
     ("products.shop.backend.facade.api", "charge", "param:amount", "builtins.int", "", "alias"),
     ("products.shop.backend.facade.api", "charge", "param:note", "", "missing", "alias"),
     ("products.shop.backend.facade.api", "charge", "return", "builtins.dict", "", "alias"),
     ("products.shop.backend.facade.contracts", "Order.__init__", "field:total", "builtins.int", "", ""),
     ("products.shop.backend.facade.contracts", "Line.__init__", "field:meta", "builtins.dict", "", ""),
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:total", "builtins.int", "", "no-functions"),
+    ("products.shop.backend.logic", "charge", "param:amount", "products.shop.backend.logic.Totals", "", ""),
     ("products.shop.backend.logic", "Receipt.__init__", "field:kind", "typing.ClassVar", "", ""),
 ]
 

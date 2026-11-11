@@ -206,6 +206,20 @@ class BuildContext:
             return None
         return scope, binding[1]
 
+    def alias_value(self, module: str, name: str) -> object:
+        """The value of a module-level type alias the bare name binds (`X = dict[str, Any]`),
+        else None."""
+        if "." in name:
+            return None
+        table = self.resolver.tables.get(module)
+        binding = table.names.get(name) if table is not None else None
+        if binding is None or binding[0] not in ("alias", "variable"):
+            return None
+        value = table.values.get(name) if table is not None else None
+        if isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value)):
+            return value
+        return None
+
     def resolve_dotted(self, dotted: str) -> tuple[Resolved, str] | None:
         """A dotted path in a string. None unless its head names repo code."""
         if self.index.is_external(dotted):
@@ -443,6 +457,21 @@ class DeclarationProducer(Producer):
                 return [m for item in value[key] for m in self.mentions(item, "nested")]
         return []
 
+    def expand_aliases(
+        self, context: BuildContext, module: str, mentions: list[tuple[str, str]], expanding: frozenset[str]
+    ) -> list[tuple[str, str]]:
+        """Each mention, followed by the names of the type alias it is, when it is one: a module
+        holds `Handler = Callable[[Order], None]` to shorten a signature, not to hide its types."""
+        out: list[tuple[str, str]] = []
+        for value, position in mentions:
+            out.append((value, position))
+            alias = context.alias_value(module, value)
+            if alias is None or value in expanding:
+                continue
+            inner = self.mentions(alias, position)
+            out.extend(self.expand_aliases(context, module, inner, expanding | {value}))
+        return out
+
     def expose(
         self,
         context: BuildContext,
@@ -468,7 +497,10 @@ class DeclarationProducer(Producer):
             )
             graph.edges.append(site.edge("", UNRESOLVED, attrs))
             return
-        for value, position in self.mentions(annotation, "whole"):
+        mentions = self.mentions(annotation, "whole")
+        if contract:
+            mentions = self.expand_aliases(context, lookup.scope.module, mentions, frozenset())
+        for value, position in mentions:
             head = value.split(".")[0]
             found = context.value_lookup(lookup.scope, value, lookup.at_scope, lookup.line)
             if found is None or (not contract and found.hit is None and found.surface == f"builtins.{head}"):
@@ -493,7 +525,7 @@ class DeclarationProducer(Producer):
         for param in node.get("params", ()):
             annotation = param[2] if len(param) > 2 else None
             in_slot = contract and param[0] not in ("self", "cls")
-            if annotation is None and not in_slot:
+            if not in_slot and (annotation is None or handed):
                 continue
             slot = f"param:{param[0]}"
             self.expose(context, graph, site, lookup, annotation, slot, callable_name, in_slot, handed)
