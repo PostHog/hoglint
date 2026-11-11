@@ -626,6 +626,8 @@ class Traces(Mode):
             if missed:
                 found.append(f"{kind}:{len({item.home for item in missed})}")
         return "gaps " + (" ".join(found) or "none")
+
+
 class PackMemoMiss(Mode):
     """Test only: every pack item's trace leaves out its reads (`HOGLINT_PACK_MEMO_DROP`), as a
     pack memo that stopped checking them would. A pair that changes a stored item's output then
