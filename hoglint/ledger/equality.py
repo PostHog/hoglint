@@ -1,7 +1,7 @@
 """Equality: the scan of the code and the ledger file match line by line, with counts.
 
-A new line fails (fix the code or regenerate and face the growth check). A stale line fails
-too, so fixed debt leaves the file in the same change.
+A new line fails: fix the code, or record a reviewed exception. A stale line fails too, so fixed
+debt leaves the file in the same change.
 """
 
 from __future__ import annotations
@@ -32,10 +32,14 @@ class EqualityResult:
 def check_equality(scan: dict[LineKey, int], ledger: LedgerFile, schema: int, policy: str) -> EqualityResult:
     result = EqualityResult()
     if ledger.exists and ledger.schema != schema:
-        result.header.append(f"ledger schema {ledger.schema} differs from {schema}; regenerate with --write-ledger")
+        result.header.append(
+            f"ledger schema {ledger.schema} differs from {schema}: the change that moves to the new"
+            " schema rewrites the ledger, and its review reads every line"
+        )
     if ledger.exists and ledger.policy != policy:
         result.header.append(
-            f"ledger was written under policy {ledger.policy or '?'}, current is {policy}; regenerate with --write-ledger"
+            f"ledger was written under policy {ledger.policy or '?'}, current is {policy}: a policy change"
+            " is a change of its own, reviewed with the ledger lines it moves"
         )
     result.header.extend(ledger.problems)
     for key in sorted(set(scan) | set(ledger.lines)):

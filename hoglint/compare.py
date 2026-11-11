@@ -295,10 +295,15 @@ class Comparer:
         added = [(key, head[key] - base.get(key, 0)) for key in sorted(head) if head[key] > base.get(key, 0)]
         removed = [(key, base[key] - head.get(key, 0)) for key in sorted(base) if base[key] > head.get(key, 0)]
         growth = self.scans.head.growth
+        # A removed line's module may be gone from the head, so the base scan knows its labels.
+        base_labels = self.scans.base.labels if self.scans.base is not None else {}
+        labels = {name: {**base_labels.get(name, {}), **values} for name, values in self.scans.head.labels.items()}
         unmatched_removed = list(removed)
         for key, count in added:
-            gkey = growth_key(key, growth)
-            partner = next((r for r in unmatched_removed if growth_key(r[0], growth) == gkey and r[1] == count), None)
+            gkey = growth_key(key, growth, labels)
+            partner = next(
+                (r for r in unmatched_removed if growth_key(r[0], growth, labels) == gkey and r[1] == count), None
+            )
             if gkey is not None and partner is not None:
                 unmatched_removed.remove(partner)
                 report.swaps.append(Swap(gkey, partner[0], key, count))

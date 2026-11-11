@@ -317,6 +317,11 @@ def finding_line(finding: Finding) -> str:
     return f"{finding.rule}  {' '.join(finding.identity)}\n    {finding.message}  {where(finding)}{owners}"
 
 
+# What `check` tells the reader of a new finding: never to rewrite the ledger to pass.
+WAY_OUT = (
+    "the way out: change the code so the finding goes, or record a reviewed exception with its reason"
+    " and review date; rewriting the ledger to pass hides new debt from review"
+)
 # The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
 
@@ -386,6 +391,15 @@ class CheckReport:
         listed = f"  [{', '.join(owners)}]" if owners else ""
         return f"{finding.rule}  {' '.join(finding.identity)}\n    {shown.message}  {site}{listed}"
 
+    def way_out(self, violations: list[FindingRecord]) -> list[str]:
+        """What each violated rule asks for, and the allowed way past a new finding."""
+        if not violations:
+            return []
+        rules = sorted({finding.rule for finding in violations})
+        out = [f"  {rule}: {self.summary.docs[rule]}" for rule in rules if self.summary.docs.get(rule)]
+        out.append(f"  {WAY_OUT}")
+        return out
+
     def incomplete_lines(self) -> list[str]:
         items = self.summary.incomplete
         if self.attributed is None:
@@ -410,6 +424,7 @@ class CheckReport:
         violations = self.violations()
         out.append(f"violations ({len(violations)})")
         out.extend(f"  {self.finding_line(f)}" for f in violations)
+        out.extend(self.way_out(violations))
         advisory = self.advisory()
         if advisory:
             out.append(f"advisory ({len(advisory)})")

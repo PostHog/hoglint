@@ -5,7 +5,8 @@ query read. It is hoglint's one cached artifact (see `store.py`).
 and process. The file carries a protocol version and its envelope (see `envelope.py`); a reader
 refuses any other protocol instead of guessing. It holds:
 - lines and growth: the scan's ledger line counts, level lines included, and each ledgered
-  rule's growth-key columns;
+  rule's growth-key columns; a column the identity does not hold is a label of the line's source
+  module, and `labels` keeps that label, and the group field's, of every source module a line names;
 - findings: every finding with its identity, status, witnesses, owner module and subjects,
   allowed ones included (owners themselves are read at render time), and the message, site and
   remedies of each finding `check` prints;
@@ -61,14 +62,19 @@ from hoglint.rules.findings import FindingTable
 ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a few hundredths of a second
 # The parts a reader loads on their own (see store.py), and the fields each part holds.
 SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
-    "envelope": ("protocol", "envelope", "schema", "growth", "scope", "with_triples", "advisory", "ledger"),
+    "envelope": ("protocol", "envelope", "schema", "growth", "docs", "scope", "with_triples", "advisory", "ledger"),
     "incompletes": ("incomplete",),
-    "findings": ("findings", "lines", "equality", "exceptions", "modules"),
+    "findings": ("findings", "lines", "labels", "equality", "exceptions", "modules"),
     "couplings": ("triples", "couplings", "witnesses"),
     "levels": ("levels", "level_failures"),
 }
 ALL_SECTIONS = frozenset(SUMMARY_SECTIONS)
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
+# A rule's growth-key columns: an identity index, or (field, index) for that field's label of the
+# module at an identity index.
+GrowthColumns = tuple[int | tuple[str, int], ...]
+ModuleLabels = dict[str, dict[str, str]]  # field -> source module -> its label ("" when none)
+SOURCE_MODULE = "src.module"
 Obligation = tuple[str, str, str]  # (rule, key, reason)
 
 
@@ -140,12 +146,41 @@ def fingerprint(edge: Edge | None) -> str:
     return short_digest([edge.site.scope, edge.kind, edge.surface, edge.use, edge.shape, edge.shape_detail, attrs])
 
 
+def growth_columns(identity: tuple[str, ...], growth_key: tuple[str, ...]) -> GrowthColumns:
+    """A growth key as columns: an identity column by its index, any other `src.<field>` as that
+    field's label of the module the identity's `src.module` names (the schema allows no other)."""
+    return tuple(
+        identity.index(column) if column in identity else (column.removeprefix("src."), identity.index(SOURCE_MODULE))
+        for column in growth_key
+    )
+
+
+def source_labels(result: RunResult, growth: dict[str, GrowthColumns]) -> ModuleLabels:
+    """The labels a growth key reads of a line's source module: each derived field's, and the group
+    field's, so a policy that starts to derive the group judges the base scan by the same key.
+    Every source module a ledgered line names gets them."""
+    names = {column[0] for columns in growth.values() for column in columns if not isinstance(column, int)}
+    if result.config.roles.group:
+        names.add(result.config.roles.group)
+    modules: set[str] = set()
+    for rule, identity in result.scan:
+        spec = result.config.rules.get(rule)
+        if spec is not None and SOURCE_MODULE in spec.identity:
+            modules.add(identity[spec.identity.index(SOURCE_MODULE)])
+    labeler = result.labeler
+    return {
+        name: {module: labeler.known_text(module, name) or "" for module in sorted(modules)} for name in sorted(names)
+    }
+
+
 @dataclass(frozen=False, slots=True)
 class ScanSummary:
     envelope: Envelope = field(default_factory=Envelope)
     schema: int = 0
     lines: dict[LineKey, int] = field(default_factory=dict)
-    growth: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    growth: dict[str, GrowthColumns] = field(default_factory=dict)
+    labels: ModuleLabels = field(default_factory=dict)
+    docs: dict[str, str] = field(default_factory=dict)  # rule -> its doc, for what `check` prints
     findings: StoredFindings = field(default_factory=StoredFindings)
     incomplete: list[IncompleteRecord] = field(default_factory=list)
     triples: set[Triple] = field(default_factory=set)
@@ -185,7 +220,9 @@ class ScanSummary:
         summary.ledger = ledger.source if ledger is not None else ""
         for rule in config.rules.values():
             if rule.ledger and rule.identity:
-                summary.growth[rule.id] = tuple(rule.identity.index(column) for column in rule.growth_key)
+                summary.growth[rule.id] = growth_columns(rule.identity, rule.growth_key)
+        summary.labels = source_labels(result, summary.growth)
+        summary.docs = {rule.id: rule.doc for rule in config.rules.values() if rule.doc}
         summary.findings = StoredFindings(finding_rows(result, portable, touched))
         summary.incomplete = [
             IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
@@ -235,7 +272,12 @@ class ScanSummary:
             "envelope": self.envelope.to_json(),
             "schema": self.schema,
             "lines": {render_key(key): count for key, count in sorted(self.lines.items())},
-            "growth": {rule: list(indexes) for rule, indexes in sorted(self.growth.items())},
+            "growth": {
+                rule: [column if isinstance(column, int) else list(column) for column in columns]
+                for rule, columns in sorted(self.growth.items())
+            },
+            "labels": {name: dict(sorted(values.items())) for name, values in sorted(self.labels.items())},
+            "docs": dict(sorted(self.docs.items())),
             "findings": self.findings.to_json(),
             "incomplete": [item.to_json() for item in self.incomplete],
             "triples": sorted(list(triple) for triple in self.triples),
@@ -270,7 +312,12 @@ class ScanSummary:
             envelope=Envelope.from_json(data.get("envelope", {})),
             schema=int(data.get("schema", 0)),
             lines={parse_key(text): int(count) for text, count in data.get("lines", {}).items()},
-            growth={rule: tuple(indexes) for rule, indexes in data.get("growth", {}).items()},
+            growth={
+                rule: tuple(column if isinstance(column, int) else (column[0], column[1]) for column in columns)
+                for rule, columns in data.get("growth", {}).items()
+            },
+            labels={name: dict(values) for name, values in data.get("labels", {}).items()},
+            docs=dict(data.get("docs", {})),
             findings=StoredFindings.loaded(data.get("findings", [])),
             incomplete=[IncompleteRecord.from_json(item) for item in data.get("incomplete", [])],
             triples={(a, b, c, d) for a, b, c, d in data.get("triples", [])},

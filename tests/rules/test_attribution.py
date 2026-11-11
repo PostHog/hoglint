@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from core.support import set_modified
-from hoglint.cli import Commands, Snapshots
+from hoglint.cli import WAY_OUT, Commands, Snapshots
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
@@ -792,6 +792,8 @@ def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored
     (repo / "products/alerts/new.py").write_text("X = 1\n")
     dirty = hoglint(repo, "--engine", engine, "check")
     assert "violations (1)" in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
+    # A failed check names the allowed way past a new finding, never a ledger rewrite.
+    assert WAY_OUT in dirty.stdout and "write-ledger" not in dirty.stdout
     assert stored_manifests(cache) == reports[0][2]
 
 

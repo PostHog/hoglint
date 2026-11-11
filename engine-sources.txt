@@ -14,7 +14,7 @@
 # named `target` or starting with `.` are never searched.
 #
 # An id is the first 8 bytes, in hex, of the sha256 of: for [engine] only, the protocol line
-# (`protocol 3`) and a NUL byte; then, for each of the section's files sorted by path (bytewise),
+# (`protocol 4`) and a NUL byte; then, for each of the section's files sorted by path (bytewise),
 # the path, NUL, the file's bytes, NUL. build.rs and envelope.py both compute them from this file.
 # The protocol is the run summary format version (PROTOCOL in hoglint/ledger/envelope.py).
 
@@ -40,7 +40,7 @@ src/link/**
 binding/**
 
 [engine]
-protocol 3
+protocol 4
 hoglint/**/*.py
 hoglint/**/*.toml
 presets/**/*.toml

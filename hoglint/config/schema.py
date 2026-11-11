@@ -729,6 +729,12 @@ class SchemaBuilder:
             out.append(values)
         return out[0], out[1] if "exclude" in raw else None
 
+    def source_label(self, column: str, identity: tuple[str, ...]) -> bool:
+        """Whether a growth column is a label of the source module the identity names: the growth
+        check derives it when the summary is written (`ledger.scan.growth_columns`)."""
+        name = column.removeprefix("src.")
+        return column.startswith("src.") and "src.module" in identity and name in self.fields
+
     def read_covers(self, key: str, raw: Any, rule_ids: set[str]) -> tuple[CoverSpec, ...]:
         out: list[CoverSpec] = []
         for text in as_tuple(raw):
@@ -820,8 +826,12 @@ class SchemaBuilder:
         if ledgered and not growth_key:
             self.fail(key, "a ledgered rule needs `growth_key`: the identity columns the growth check sums over")
         for column in growth_key:
-            if identity and column not in identity:
-                self.fail(key, f"growth_key column {column!r} is not an identity column ({', '.join(identity)})")
+            if identity and column not in identity and not self.source_label(column, identity):
+                self.fail(
+                    key,
+                    f"growth_key column {column!r} is not an identity column ({', '.join(identity)}),"
+                    " nor `src.<field>` of an identity with `src.module`",
+                )
         for shape in (*as_tuple(table.get("allow_shapes")), *as_tuple(table.get("deny_shapes"))):
             base = shape.split("(", 1)[0]
             if base not in self.use_shapes:

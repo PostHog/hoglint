@@ -47,6 +47,7 @@ def scan(lines: dict[tuple[str, str, str], int], envelope: Envelope | None = Non
 
 INVOICE = "billing.models.Invoice"
 MOVED = {"alerts.util": "billing.util"}
+MOVED_BACK = {"billing.util": "alerts.util"}
 
 
 @pytest.mark.parametrize(
@@ -80,6 +81,47 @@ def test_growth_by_attribution_and_move_admission(
     base_scan.couplings[coupling((INVOICE, "billing.util", base_use))] = 1
     head_base_scan = scan(head_base)
     result = AttributionCheck(base_scan, head_base_scan, head_base_scan, Renames(renames)).run()
+    assert (len(result.code_growth), len(result.admitted_moves)) == (code, admitted)
+
+
+# Growth by (target, consumer's package, shape): the package is derived from the consumer module.
+GROWTH_BY_PACKAGE = {RULE: (0, ("package", 1), 2)}
+PACKAGES = {
+    "alerts.a": "alerts",
+    "alerts.b": "alerts",
+    "crm.b": "crm",
+    "alerts.util": "alerts",
+    "billing.util": "billing",
+}
+
+
+def package_scan(lines: dict[tuple[str, str, str], int]) -> ScanSummary:
+    summary = scan(lines)
+    summary.growth = GROWTH_BY_PACKAGE
+    summary.labels = {"package": {key[1]: PACKAGES[key[1]] for key in lines}}
+    return summary
+
+
+@pytest.mark.parametrize(
+    "base, head_base, renames, code, admitted",
+    [
+        # a coupling removed in one product no longer pays for a new one in another
+        ({(INVOICE, "alerts.a", "write"): 1}, {(INVOICE, "crm.b", "write"): 1}, {}, 1, 0),
+        # the same swap inside one product passes
+        ({(INVOICE, "alerts.a", "write"): 1}, {(INVOICE, "alerts.b", "write"): 1}, {}, 0, 0),
+        # a module moved inside a product passes
+        ({(INVOICE, "alerts.a", "write"): 1}, {(INVOICE, "alerts.b", "write"): 1}, {"alerts.b": "alerts.a"}, 0, 0),
+        # a module moved to another product with its couplings is an admitted move
+        ({(INVOICE, "alerts.util", "write"): 1}, {(INVOICE, "billing.util", "write"): 1}, MOVED_BACK, 0, 1),
+        # a new use bundled into that move fails
+        ({(INVOICE, "alerts.util", "write"): 1}, {(INVOICE, "billing.util", "write"): 2}, MOVED_BACK, 1, 0),
+    ],
+)
+def test_growth_is_judged_per_source_package(
+    base: dict, head_base: dict, renames: dict[str, str], code: int, admitted: int
+) -> None:
+    head_base_scan = package_scan(head_base)
+    result = AttributionCheck(package_scan(base), head_base_scan, head_base_scan, Renames(renames)).run()
     assert (len(result.code_growth), len(result.admitted_moves)) == (code, admitted)
 
 

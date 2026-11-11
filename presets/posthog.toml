@@ -246,13 +246,13 @@ endpoint      = "surface"
 allow         = "dst.exported"
 on_unresolved = "finding"
 identity      = ["dst.symbol", "src.module", "edge.kind"]
-growth_key    = ["dst.symbol", "edge.kind"]
+growth_key    = ["dst.symbol", "edge.kind", "src.package"]
 
 [rules.export-shape]
 primitive  = "export"
 doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a signature, a base or a re-export."
 identity   = "module-symbol"
-growth_key = ["dst.symbol", "edge.label"]
+growth_key = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.facade-signature]
 primitive  = "signature"
@@ -261,7 +261,7 @@ select     = "src.zone == 'facade'"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
 identity   = "facade-slot"
-growth_key = ["dst.symbol"]
+growth_key = ["dst.symbol", "src.package"]
 
 [rules.facade-logic]
 primitive  = "edge"
@@ -282,7 +282,7 @@ view       = "zones"
 from       = "src.zone == 'presentation'"
 deny       = "dst.tier == 'product' and dst.zone not in ['facade', 'presentation', 'tests']"
 identity   = "module-pair"
-growth_key = ["dst.module"]
+growth_key = ["dst.module", "src.package"]
 
 [rules.facade-no-drf]
 primitive  = "edge"
@@ -291,7 +291,7 @@ view       = "zones"
 from       = "src.zone == 'facade'"
 deny       = "dst.external == 'rest_framework' or dst.module startswith 'django.http' or dst.zone == 'presentation'"
 identity   = "module-pair"
-growth_key = ["dst.module"]
+growth_key = ["dst.module", "src.package"]
 
 [rules.contracts-no-django]
 primitive     = "reach"
@@ -311,7 +311,7 @@ view       = "zones"
 from       = "src.zone == 'commands'"
 deny       = "dst.package == src.package and dst.zone in ['models', 'logic', 'tasks']"
 identity   = "module-pair"
-growth_key = ["dst.module"]
+growth_key = ["dst.module", "src.package"]
 
 [rules.atomic-outside-views]
 primitive   = "use-shape"
@@ -321,7 +321,7 @@ select      = "src.zone == 'presentation' and dst.symbol == 'django.db.transacti
 deny_shapes = ["call", "with", "decorator"]
 identity    = "scope-symbol"
 counted     = true
-growth_key  = ["dst.symbol", "edge.label"]
+growth_key  = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.prod-imports-test]
 primitive  = "edge"
@@ -331,7 +331,7 @@ contexts   = { exclude = ["test"] }
 from       = "src.testcode != true"
 deny       = "dst.testcode == true"
 identity   = "module-pair"
-growth_key = ["dst.module"]
+growth_key = ["dst.module", "src.package"]
 
 # ── Model crossings, relations, signals, drives ────────────────
 
@@ -347,7 +347,7 @@ flow         = "def-use"
 requires     = ["django.uses"]
 identity     = "crossing"
 counted      = true
-growth_key   = ["dst.symbol", "edge.label"]
+growth_key   = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.get-model]
 primitive  = "edge"
@@ -357,7 +357,7 @@ select     = "edge.shape == 'get_model' and dst.tier == 'product' and src.packag
 contexts   = { exclude = ["test", "migration"] }
 identity   = "crossing"
 counted    = true
-growth_key = ["dst.symbol", "edge.label"]
+growth_key = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.reverse-accessor]
 primitive     = "edge"
@@ -384,7 +384,7 @@ kinds      = ["installs"]
 select     = "src.package != dst.package"
 identity   = "module-symbol"
 counted    = true
-growth_key = ["dst.symbol"]
+growth_key = ["dst.symbol", "src.package"]
 
 [rules.drives]
 primitive     = "edge"
@@ -395,7 +395,7 @@ select        = "src.package != dst.package and edge.execution != 'none'"
 resolve_calls = "bare-name"
 identity      = "location-module-trigger"
 counted       = true
-growth_key    = ["edge.location", "edge.label"]
+growth_key    = ["edge.location", "edge.label", "src.package"]
 
 [rules.wiring-watched]
 primitive  = "coverage"
@@ -459,7 +459,7 @@ deny       = "dst.tier == 'product'"
 unless     = "src.zone == 'composition' and dst.exported"
 contexts   = { exclude = ["test", "type_only"] }
 identity   = "module-pair"
-growth_key = ["dst.module"]
+growth_key = ["dst.module", "src.package"]
 
 [rules.leaves-stay-leaves]
 primitive     = "edge"
@@ -479,7 +479,7 @@ select     = "src.django == 'framework'"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model'"
 on_unknown = "finding"
 identity   = "facade-slot"
-growth_key = ["dst.symbol"]
+growth_key = ["dst.symbol", "src.package"]
 
 # ── Django invariants ──────────────────────────────────────────
 

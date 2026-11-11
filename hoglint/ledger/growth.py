@@ -5,7 +5,9 @@ Three scans decide where new debt came from:
 - head_base: head code under the base engine and base policy,
 - head: head code under the head engine and head policy.
 
-Sums run per growth key, never one grand total. More debt in head_base than in base is code
+Sums run per growth key, never one grand total. A growth key may name a label of the line's
+source module that the identity does not hold (`src.package` beside `src.module`), so a coupling
+removed in one product never pays for a new one in another. More debt in head_base than in base is code
 growth and fails. More debt only in head than in head_base is rule growth: better detection found
 old debt, so it passes and the change lists it. Less debt in head than in head_base is shrink:
 the new engine, policy or environment no longer sees debt that the head code still has. It
@@ -23,7 +25,7 @@ from dataclasses import dataclass, field
 
 from hoglint.ledger.couplings import Coupling
 from hoglint.ledger.file import LineKey, is_level_line
-from hoglint.ledger.scan import ScanSummary
+from hoglint.ledger.scan import GrowthColumns, ModuleLabels, ScanSummary
 
 GrowthKey = tuple[str, tuple[str, ...]]  # (rule, growth columns)
 
@@ -50,20 +52,31 @@ class GrowthResult:
         return bool(self.code_growth)
 
 
-def growth_key(line: LineKey, growth: dict[str, tuple[int, ...]]) -> GrowthKey | None:
+def growth_key(line: LineKey, growth: dict[str, GrowthColumns], labels: ModuleLabels) -> GrowthKey | None:
+    """A line's growth key: its identity columns the rule names, and for a (field, index) column
+    the field's label of the module at that identity column, as the summary recorded it."""
     rule, identity = line
-    indexes = growth.get(rule)
-    if indexes is None:
+    columns = growth.get(rule)
+    if columns is None:
         if is_level_line(line):
             return None
         return rule, identity
-    return rule, tuple(identity[i] for i in indexes if i < len(identity))
+    out: list[str] = []
+    for column in columns:
+        if isinstance(column, int):
+            if column < len(identity):
+                out.append(identity[column])
+            continue
+        name, index = column
+        module = identity[index] if index < len(identity) else ""
+        out.append(labels.get(name, {}).get(module, ""))
+    return rule, tuple(out)
 
 
-def sums(lines: dict[LineKey, int], growth: dict[str, tuple[int, ...]]) -> dict[GrowthKey, int]:
+def sums(lines: dict[LineKey, int], growth: dict[str, GrowthColumns], labels: ModuleLabels) -> dict[GrowthKey, int]:
     out: dict[GrowthKey, int] = {}
     for line, count in lines.items():
-        key = growth_key(line, growth)
+        key = growth_key(line, growth, labels)
         if key is not None:
             out[key] = out.get(key, 0) + count
     return out
@@ -97,14 +110,14 @@ class AttributionCheck:
         self.renames = renames
         self.grown: dict[GrowthKey, list[LineKey]] = {}
         for line, count in head_base.lines.items():
-            key = growth_key(line, base.growth)
+            key = growth_key(line, base.growth, head_base.labels)
             if key is not None and count > base.lines.get(line, 0):
                 self.grown.setdefault(key, []).append(line)
 
     def run(self) -> GrowthResult:
         result = GrowthResult()
-        base_sums = sums(self.base.lines, self.base.growth)
-        head_base_sums = sums(self.head_base.lines, self.base.growth)
+        base_sums = sums(self.base.lines, self.base.growth, self.base.labels)
+        head_base_sums = sums(self.head_base.lines, self.base.growth, self.head_base.labels)
         for key, after in sorted(head_base_sums.items()):
             before = base_sums.get(key, 0)
             if after <= before:
@@ -139,8 +152,8 @@ class AttributionCheck:
     def engine_and_policy_change(self) -> tuple[list[GrowthItem], list[GrowthItem]]:
         """Head code under both engines and policies, per growth key of the head policy: debt only
         the head sees (rule growth), and debt only the base engine and policy see (shrink)."""
-        head_sums = sums(self.head.lines, self.head.growth)
-        before_sums = sums(self.head_base.lines, self.head.growth)
+        head_sums = sums(self.head.lines, self.head.growth, self.head.labels)
+        before_sums = sums(self.head_base.lines, self.head.growth, self.head_base.labels)
         grown, shrunk = [], []
         for key in sorted(set(head_sums) | set(before_sums)):
             before, after = before_sums.get(key, 0), head_sums.get(key, 0)
