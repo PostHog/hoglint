@@ -1227,7 +1227,7 @@ impl Producers<'_> {
         let receiver = contract && self.has_receiver(lookup, node);
         for (position, param) in node.params.iter().enumerate() {
             let in_slot = contract && !(receiver && position == 0);
-            if !in_slot && (param.annotation.is_none() || rows.handed != EMPTY) {
+            if !in_slot && param.annotation.is_none() {
                 continue;
             }
             let slot = self

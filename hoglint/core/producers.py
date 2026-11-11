@@ -746,7 +746,7 @@ class DeclarationProducer(Producer):
         for position, param in enumerate(node.get("params", ())):
             annotation = param[2] if len(param) > 2 else None
             in_slot = contract and not (receiver and position == 0)
-            if not in_slot and (annotation is None or rows.handed):
+            if not in_slot and annotation is None:
                 continue
             self.expose(context, graph, rows, lookup, annotation, f"param:{param[0]}", in_slot)
         if node.get("ret") is not None:
