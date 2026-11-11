@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hoglint.config.loader import PACK_PREFIX
+from hoglint.ledger.envelope import PolicyFiles
 from hoglint.ledger.inputs import InputPatterns, RunInputs
 from hoglint.rules.engine import primitive_of
 
@@ -88,8 +90,9 @@ def module_ancestors(module: str) -> list[str]:
 @dataclass(frozen=True)
 class TraceConfig:
     """What a run's config says about its inputs, written next to its trace dump: the patterns of
-    the files label providers and coverage adapters read, the policy files, and the rules whose
-    rows fold many edges."""
+    the files label providers and coverage adapters read, the policy files (every config file of
+    the repo, each rule's `classify` file and each pack's policy files), and the rules whose rows
+    fold many edges."""
 
     side: tuple[str, ...]
     policy: tuple[str, ...]
@@ -102,7 +105,8 @@ class TraceConfig:
             mode = primitive_of(spec).NATIVE_MODE
             if mode != ROW_MODE or spec.view in FOLDING_VIEWS:
                 folded.append(spec.id)
-        policy = tuple(sorted({str(path) for path in config.provenance.values()}))
+        configs = [label for label in config.files if not label.startswith(PACK_PREFIX)]
+        policy = tuple(sorted({*configs, *PolicyFiles(config).paths()}))
         return TraceConfig(RunInputs.of(config).side(), policy, tuple(sorted(folded)))
 
     def write(self, out: Path) -> None:

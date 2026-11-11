@@ -308,7 +308,7 @@ class TreeCheck:
         tables.write_lines("finding-files", [finding_files(f, modules) for f in run.result.findings()])
         tables.write_lines("incomplete-files", [incomplete_files(i, modules) for i in run.result.incomplete()])
         if os.environ.get(TRACE_ENV) == "1" and isinstance(graph, NativeGraph):
-            write_trace_dump(graph.link, run.result.config, self.out)
+            write_trace_dump(graph.link, run.config, self.out)
 
 
 # ── dumps and their comparison ────────────────────────────────────

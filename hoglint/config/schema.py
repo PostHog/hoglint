@@ -336,6 +336,7 @@ class SchemaBuilder:
             pack_sections=pack_sections,
             policy_hash=policy_hash(self.raw),
             provenance=dict(self.merged.provenance),
+            files=tuple(self.merged.files),
             expanded=self.raw,
         )
 

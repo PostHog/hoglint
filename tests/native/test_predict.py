@@ -295,6 +295,23 @@ def test_an_export_module_that_stops_handing_out_a_name_moves_its_importers_rows
     assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files
 
 
+def patch_config(base: str) -> str:
+    return f'schema = 1\nextends = ["base.toml"]\n\n[kinds.model]\nsubclass_of = {{ add = ["{base}"] }}\n'
+
+
+def test_a_config_file_that_only_patches_a_key_predicts_everything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_module()
+    parent_files = {**BASE, "base.toml": CONFIG, "hoglint.toml": patch_config("app.lib.Other")}
+    child_files = {**parent_files, "hoglint.toml": patch_config("app.lib.Third")}
+    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    prediction = predict(parent, child, {"hoglint.toml"})
+    assert prediction.labels is None
+    assert "app/base.py" in prediction.files
+
+
 DRIVES_CONFIG = """
 schema = 1
 

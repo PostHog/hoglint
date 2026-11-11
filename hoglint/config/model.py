@@ -271,6 +271,7 @@ class Config:
     pack_sections: tuple[str, ...] = ()  # sections a pack owns, in extends order
     policy_hash: str = ""
     provenance: dict[str, str] = field(default_factory=dict)
+    files: tuple[str, ...] = ()  # the config files loaded, by label: a repo path, or `hoglint:<pack>`
     expanded: dict[str, Any] = field(default_factory=dict)
 
     @property
