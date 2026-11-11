@@ -29,6 +29,8 @@ from hoglint.plugins import AttributeUse, EdgeBatch
 
 # Where the callee text sits in a row of each call kind.
 CALLEE_FIELD = {"calls": 5, "callees": 2}
+# Up to this many files, a native rows query decodes each file's rows instead of scanning all.
+FEW_FILES = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +252,14 @@ class NativePackQueries(PackQueries):
 
     def calls_named(
         self, scopes: Iterable[FileScope], kind: str, names: Collection[str]
+    ) -> Iterator[tuple[FileScope, list[list]]]:
+        scopes = list(scopes)
+        if len(scopes) <= FEW_FILES:
+            return super().calls_named(scopes, kind, names)
+        return self.calls_named_in_all(scopes, kind, names)
+
+    def calls_named_in_all(
+        self, scopes: list[FileScope], kind: str, names: Collection[str]
     ) -> Iterator[tuple[FileScope, list[list]]]:
         by_file: dict[int, list[list]] = defaultdict(list)
         for file, row in self.link.rows_named(kind, sorted(names)):

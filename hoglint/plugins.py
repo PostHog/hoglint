@@ -74,8 +74,16 @@ class PackReader(Protocol):
     """What a pack reads of one snapshot. Bulk reads are candidate queries; `record` is the
     escape hatch for one file's whole record, and the run counts its uses (`records_read`)."""
 
-    files: list[FileScope]  # the analyzed files, in order
-    paths: list[str]  # every record's path, analyzed or not, third-party files included
+    @property
+    def files(self) -> list[FileScope]:
+        """The analyzed files, in order."""
+        ...
+
+    @property
+    def paths(self) -> list[str]:
+        """Every record's path, analyzed or not, third-party files included."""
+        ...
+
     index: ModuleIndex
     first_party: FirstParty
     tables: Tables

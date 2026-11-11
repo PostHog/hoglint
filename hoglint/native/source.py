@@ -8,6 +8,7 @@ from pathlib import Path
 
 from hoglint.config import Config
 from hoglint.core.analysis import AnalysisOptions
+from hoglint.core.memo import TRACER, PackMemo
 from hoglint.core.reader import BuildReader
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
@@ -46,8 +47,15 @@ class NativeGraphSource(GraphSource):
         analysis = NativeAnalysis(options).run()
         graph = analysis.graph
         build = analysis.build
-        reader = BuildReader(build, NativePackQueries(build, graph, graph.link))
-        run_packs(packs, reader, StepReleasingSink(graph, build), self.listing_of(code_root, tree))
+        memo = PackMemo.from_environment()
+        reader = BuildReader(build, NativePackQueries(build, graph, graph.link), memo)
+        TRACER.reset()
+        try:
+            run_packs(packs, reader, StepReleasingSink(graph, build), self.listing_of(code_root, tree))
+        finally:
+            TRACER.reset()
+        if memo is not None:
+            memo.write_stats()
         build.release()
         return graph
 
