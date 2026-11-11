@@ -47,7 +47,17 @@ import orjson
 from compression import zstd
 
 from hoglint.facts import BINARY_NAME
-from hoglint.ledger.cache import CacheWarning, cache_root, write_atomic
+from hoglint.ledger.cache import (
+    EXTRACTOR_STORE,
+    EXTRACTORS,
+    STORES,
+    SUMMARIES,
+    SUMMARY_STORE,
+    RunStores,
+    StoreList,
+    cache_root,
+    write_atomic,
+)
 from hoglint.ledger.envelope import NATIVE, PROTOCOL, BinaryIds, EngineError, Envelope
 from hoglint.ledger.scan import ALL_SECTIONS, ZSTD_LEVEL, ProtocolError, ScanSummary
 
@@ -56,8 +66,6 @@ SECTION_DIGEST_CHARS = 32
 MAX_BYTES = 1024**3
 MAX_AGE = datetime.timedelta(days=30)
 PRUNED_MARK = ".pruned-"  # then the day, one mark per day
-FACTS = "facts"  # the fact cache, pruned by its own pruner
-MEMO = "memo"  # the pack memo, pruned as the fact cache is (hoglint/native/memo_store.py)
 
 
 @dataclass(frozen=True)
@@ -107,14 +115,21 @@ class Walk:
 
 
 class CacheRoot:
-    """Keeps the cache root within its age and size bounds, once a day. `facts/` and `memo/` have
-    a pruner of their own (`hoglint/native/factdb.py`), which deletes a database only with its
-    `-wal` and `-shm` files, so this one never walks them."""
+    """Keeps the cache root within its age and size bounds, once a day. A store that prunes
+    itself (`StoreList.pruned_apart`: the fact cache and the pack memo, `hoglint/native/factdb.py`)
+    deletes a database only with its `-wal` and `-shm` files, so this one never walks it."""
 
-    def __init__(self, root: Path, max_bytes: int = MAX_BYTES, max_age: datetime.timedelta = MAX_AGE) -> None:
+    def __init__(
+        self,
+        root: Path,
+        max_bytes: int = MAX_BYTES,
+        max_age: datetime.timedelta = MAX_AGE,
+        listed: StoreList = STORES,
+    ) -> None:
         self.root = root
         self.max_bytes = max_bytes
         self.max_age = max_age
+        self.listed = listed
 
     def claim(self, stamp: str) -> bool:
         """Creates the day's mark; False when another run created it first, or when a run of a
@@ -144,7 +159,7 @@ class CacheRoot:
         """Deletes the files older than the age bound, then the oldest until the root is within
         the size bound, then the empty directories made before the age bound. The marks stay."""
         cutoff = (now or time.time()) - self.max_age.total_seconds()
-        walk = Walk.of(self.root, skipped=(self.root / FACTS, self.root / MEMO))
+        walk = Walk.of(self.root, skipped=tuple(self.root / directory for directory in self.listed.pruned_apart()))
         kept = []
         for modified, size, path in walk.files:
             if path.parent == self.root and path.name.startswith(PRUNED_MARK):
@@ -166,9 +181,10 @@ class SummaryStore:
     """`broken` is set by the first I/O error: from then on every read misses and nothing is
     written."""
 
-    def __init__(self, root: Path | None = None) -> None:
-        self.cache = CacheRoot(root or cache_root())
-        self.root = self.cache.root / "summaries"
+    def __init__(self, root: Path | None = None, stores: RunStores | None = None) -> None:
+        self.stores = stores or RunStores.current()
+        self.cache = CacheRoot(root or cache_root(), listed=self.stores.listed)
+        self.root = self.cache.root / SUMMARIES
         self.pruned = False
         self.broken = False
         # Sections decoded in this process by file, whose name is their digest: a check reads
@@ -177,7 +193,7 @@ class SummaryStore:
 
     def fail(self, what: str, error: OSError) -> None:
         self.broken = True
-        CacheWarning.warn(what, error)
+        self.stores.fail(SUMMARY_STORE.name, error, what)
 
     def prune_once(self) -> None:
         if self.pruned or self.broken:
@@ -207,6 +223,7 @@ class SummaryStore:
         self.prune_once()
         if not key.inputs or self.broken:
             return None
+        self.stores.opened(SUMMARY_STORE.name)
         path = self.path(key)
         try:
             manifest = orjson.loads(path.read_bytes())
@@ -250,6 +267,7 @@ class SummaryStore:
         self.prune_once()
         if not key.inputs or summary.unread or self.broken:
             return None
+        self.stores.opened(SUMMARY_STORE.name)
         try:
             return self.write(key, summary)
         except OSError as error:
@@ -274,14 +292,16 @@ class SummaryStore:
 
 
 class ExtractorStore:
-    def __init__(self, root: Path | None = None) -> None:
-        self.root = root or cache_root() / "extractors"
+    def __init__(self, root: Path | None = None, stores: RunStores | None = None) -> None:
+        self.root = root or cache_root() / EXTRACTORS
+        self.stores = stores or RunStores.current()
 
     def path(self, native_id: str) -> Path:
         return self.root / native_id / BINARY_NAME
 
     def find(self, native_id: str) -> Path | None:
         path = self.path(native_id)
+        self.stores.opened(EXTRACTOR_STORE.name)
         if not path.is_file():
             return None
         try:
@@ -296,6 +316,7 @@ class ExtractorStore:
         """Copies a binary in under its native id, unless one is already there. A cache that
         cannot take it only means a later base engine is not found there."""
         path = self.path(native_id)
+        self.stores.opened(EXTRACTOR_STORE.name)
         if path.is_file():
             return
         try:
@@ -305,4 +326,4 @@ class ExtractorStore:
             shutil.copy(binary, temporary)
             Path(temporary).replace(path)
         except OSError as error:
-            CacheWarning.warn("keeping the extractor", error)
+            self.stores.fail(EXTRACTOR_STORE.name, error, "keeping the extractor")

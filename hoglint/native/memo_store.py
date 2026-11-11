@@ -36,10 +36,10 @@ from typing import Any, ClassVar
 import orjson
 
 from hoglint.core.memo import Written
+from hoglint.ledger.cache import MEMO, MEMO_STORE, RunStores
 from hoglint.ledger.envelope import EngineId, EngineSources
-from hoglint.ledger.store import MEMO
 from hoglint.native import bridge
-from hoglint.native.factdb import EPOCH, CacheWarning, FactDatabase, is_corrupt
+from hoglint.native.factdb import EPOCH, FactDatabase, is_corrupt
 
 CRATE = bridge.CRATE
 PACKAGE = CRATE / "hoglint"
@@ -78,19 +78,11 @@ def decoded(found: str, body: object) -> Any:
         return None
 
 
-class MemoWarning(CacheWarning):
-    """Logs that the pack memo is not usable, once per process. It has its own flag and text, so
-    stderr tells it from the fact cache, and a later fact cache failure still logs."""
-
-    logged = False
-    text = "the pack memo is not usable, so this run runs every pack item and stores none"
-
-
 @dataclass(frozen=True)
 class MemoDatabase(FactDatabase):
     """The memo's database; the fact database's prune with the memo's tables."""
 
-    warning: ClassVar[type[CacheWarning]] = MemoWarning
+    store: ClassVar[str] = MEMO_STORE.name
 
     @staticmethod
     def delete(conn: sqlite3.Connection, ids: list[int]) -> None:
@@ -107,14 +99,15 @@ class MemoDatabase(FactDatabase):
 class MemoStore:
     """Step states by step key. Every method is a cache operation: it never raises."""
 
-    def __init__(self, root: Path, engine: str) -> None:
+    def __init__(self, root: Path, engine: str, stores: RunStores | None = None) -> None:
         self.database = MemoDatabase(root / MEMO, engine, LAYOUT)
+        self.stores = stores or RunStores.current()
         self.conn: sqlite3.Connection | None = None
         self.broken = False
 
     def fail(self, error: Exception) -> None:
         self.broken = True
-        MemoWarning.log(error)
+        self.stores.fail(MEMO_STORE.name, error)
         if is_corrupt(error):
             self.close()
             self.database.move_aside()
@@ -149,7 +142,7 @@ class MemoStore:
         except (OSError, sqlite3.Error) as error:
             self.fail(error)
             return None
-        if not self.database.open_for_run():
+        if not self.database.open_for_run(stores=self.stores):
             self.close()
             self.broken = True
             return None

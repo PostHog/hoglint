@@ -19,7 +19,7 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.memo import TRACER
 from hoglint.core.reader import BuildReader
 from hoglint.core.symbols import FUNC
-from hoglint.ledger.store import CacheWarning
+from hoglint.ledger.cache import RunStores
 from hoglint.model import Graph, Resolution
 from hoglint.native.queries import PackQueries
 from hoglint.packs.django.apps import AppReader
@@ -325,7 +325,7 @@ def test_a_migration_summary_cache_that_cannot_be_used_changes_no_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fault: str
 ) -> None:
     expected = migration_parents("billing.Invoice", SummaryCache(tmp_path / "healthy"))
-    monkeypatch.setattr(CacheWarning, "warned", False)
+    monkeypatch.setattr(RunStores, "warned", set())
     stored = next((tmp_path / "healthy").glob("migrations-*.json"))
     broken = tmp_path / "broken"
     broken.mkdir()

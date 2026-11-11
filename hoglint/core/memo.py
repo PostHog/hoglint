@@ -668,7 +668,9 @@ class PackMemo:
 
     @staticmethod
     def mode() -> str:
-        return os.environ.get(MODE_ENV, "")
+        from hoglint.ledger.cache import RunStores  # noqa: PLC0415 - the store list imports this module's switches
+
+        return RunStores.current().memo_mode()
 
     def step(self, name: str, stored: bool = True) -> StepMemo:
         """A step's memo; one that is not `stored` traces its items and keeps nothing."""

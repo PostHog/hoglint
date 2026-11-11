@@ -35,6 +35,7 @@ from hoglint.config.schema import as_tuple
 from hoglint.facts import Extractor
 from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
+from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import (
     ENGINE,
     ENGINE_PYTHON,
@@ -472,10 +473,12 @@ class CheckReport:
 class LocalEngine:
     """The engine this process runs: its id, its extractor, and the envelope of one of its runs."""
 
-    def __init__(self, name: str = ENGINE_PYTHON, digests: InputDigests | None = None) -> None:
+    def __init__(
+        self, name: str = ENGINE_PYTHON, digests: InputDigests | None = None, stores: RunStores | None = None
+    ) -> None:
         self.name = name
         self.frameworks: dict[tuple[str, ...], str] = {}
-        self.digests = digests or InputDigests(cache_root())
+        self.digests = digests or InputDigests(cache_root(), stores)
 
     @cached_property
     def binary(self) -> Path:
@@ -690,7 +693,7 @@ class Baselines:
         except subprocess.CalledProcessError:
             ledger = LedgerFile(source=ABSENT)
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
-        runner = Runner(graph_source(self.engine.name, work))
+        runner = Runner(graph_source(self.engine.name, work, self.store.stores))
         run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
@@ -758,7 +761,8 @@ class ReadTimeOwners:
 
 
 class Commands:
-    """`today` replaces the date in output that depends on it. With `memo` off, every check runs live."""
+    """`today` replaces the date in output that depends on it. With `memo` off, every check runs live.
+    `stores` are the run's stores, read from the environment once here and passed down."""
 
     def __init__(
         self,
@@ -770,13 +774,14 @@ class Commands:
     ) -> None:
         self.repo = repo
         self.work_dir = work_dir
-        self.source: GraphSource = graph_source(engine, work_dir)
+        self.stores = RunStores.of_environment()
+        self.source: GraphSource = graph_source(engine, work_dir, self.stores)
         self.runner = Runner(self.source, today)
         self.snapshots = Snapshots(repo, work_dir)
-        self.engine = LocalEngine(engine)
-        self.summaries = SummaryStore()
+        self.engine = LocalEngine(engine, stores=self.stores)
+        self.summaries = SummaryStore(stores=self.stores)
         self.baselines = Baselines(self.snapshots, self.engine, self.summaries)
-        self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore())
+        self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore(stores=self.stores))
         self.memo = RunMemo(self.snapshots, self.summaries) if memo else None
 
     def worktree_tree(self, config: Config) -> str:
@@ -1177,7 +1182,8 @@ def command(argv: list[str] | None) -> int:
         commands = Commands(repo, Path(work), args.engine)
         try:
             check_root(repo)
-            return args.handler(commands, args)
+            with commands.stores.as_current():
+                return args.handler(commands, args)
         except (ConfigError, RepoRootError) as error:
             sys.stderr.write("config error:\n" + "".join(f"  {problem}\n" for problem in error.problems))
             return 2

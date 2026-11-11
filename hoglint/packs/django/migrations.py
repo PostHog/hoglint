@@ -25,8 +25,8 @@ from hoglint.core import records as records_module
 from hoglint.core.harness import PRODUCER_ERROR, failure_text
 from hoglint.core.memo import TRACER
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
+from hoglint.ledger.cache import PACKS_STORE, RunStores
 from hoglint.ledger.scan import write_atomic
-from hoglint.ledger.store import CacheWarning
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
@@ -157,7 +157,7 @@ class SummaryCache:
 
     def fail(self, what: str, error: OSError) -> None:
         self.broken = True
-        CacheWarning.warn(what, error)
+        RunStores.current().fail(PACKS_STORE.name, error, what)
 
     @cached_property
     def stored(self) -> dict[str, Summary]:

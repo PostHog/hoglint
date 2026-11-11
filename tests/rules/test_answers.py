@@ -9,7 +9,7 @@ import pytest
 from hoglint import facts
 from hoglint.adapters.turbo import TurboAdapter, TurboInputs
 from hoglint.facts import SitePackagesFiles, site_packages_files
-from hoglint.ledger.cache import OFF_SWITCH, AnswerStore
+from hoglint.ledger.cache import OFF_SWITCH
 from hoglint.ledger.inputs import InputPatterns, TreeFiles
 from hoglint.ledger.listing import TreeListing
 from hoglint.plugins import PLUGIN_ROOTS
@@ -43,6 +43,7 @@ class SiteCase:
     """The stored site-packages listing: an answer is the listing's items, in order."""
 
     kind = "site-packages"
+    answers = SitePackagesFiles.STORE
     body = (b"alpha/core.py", b"alpha/kore.py")
 
     def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,6 +104,7 @@ class TurboCase:
     """The stored turbo task table: an answer is the table and what it says of each asked path."""
 
     kind = "turbo"
+    answers = TurboAdapter.STORE
     body = (b"products/a", b"products/z")
 
     def __init__(self, tmp_path: Path) -> None:
@@ -160,7 +162,7 @@ def test_a_damaged_entry_is_a_miss_and_is_replaced(store: StoreCase, tmp_path: P
     [entry] = entries(tmp_path / "cache", store.kind)
     damage(entry, how, store.body)
     assert store.lookup() == store.fresh()
-    assert AnswerStore(store.kind).get(entry.stem) is not None
+    assert store.answers.get(entry.stem) is not None
 
 
 def test_lookups_at_once_agree_and_leave_one_whole_entry(store: StoreCase, tmp_path: Path) -> None:
@@ -172,7 +174,7 @@ def test_lookups_at_once_agree_and_leave_one_whole_entry(store: StoreCase, tmp_p
         thread.join()
     assert found == [store.fresh()] * 8
     [entry] = entries(tmp_path / "cache", store.kind)
-    assert AnswerStore(store.kind).get(entry.stem) is not None
+    assert store.answers.get(entry.stem) is not None
 
 
 @pytest.mark.parametrize(

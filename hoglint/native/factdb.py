@@ -27,13 +27,13 @@ Each one is checked again right before it is deleted, so a run that opened it af
 listed the cache keeps it. What remains is the moment between that check and the unlink: a run
 that opens the unit inside it loses its cache files and extracts again.
 
-The cache root's own prune (`hoglint/ledger/store.py`) leaves `facts/` to this one.
+The cache root's own prune (`hoglint/ledger/store.py`) leaves `facts/` to this one: the store
+list (`hoglint/ledger/cache.py`) says so.
 """
 
 from __future__ import annotations
 
 import re
-import sys
 import time
 import shutil
 import sqlite3
@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+from hoglint.ledger.cache import FACT_STORE, RunStores
 from hoglint.ledger.store import Walk
 
 MAX_BYTES = 1024**3
@@ -142,19 +143,6 @@ def delete_if_idle(item: Unit | Namespace, in_use: float) -> bool:
     return True
 
 
-class CacheWarning:
-    """Logs that the fact cache is not usable, once per process: the run goes on without it."""
-
-    logged = False
-    text = "the fact cache is not usable, so this run extracts without it"
-
-    @classmethod
-    def log(cls, error: Exception) -> None:
-        if not cls.logged:
-            cls.logged = True
-            sys.stderr.write(f"hoglint: {cls.text}: {error}\n")
-
-
 @dataclass(frozen=True)
 class FactDatabase:
     """`directory` is the cache root's `facts/` directory; its parent is the root the size bound
@@ -163,8 +151,8 @@ class FactDatabase:
     directory: Path
     facts_id: str
     layout: int
-    # The warning of the store this database holds.
-    warning: ClassVar[type[CacheWarning]] = CacheWarning
+    # The store this database holds, in the run's store list.
+    store: ClassVar[str] = FACT_STORE.name
 
     @property
     def path(self) -> Path:
@@ -339,17 +327,19 @@ class FactDatabase:
         self.prune(day)
         return True
 
-    def open_for_run(self, today: datetime.date | None = None) -> bool:
+    def open_for_run(self, today: datetime.date | None = None, stores: RunStores | None = None) -> bool:
         """Marks the database opened and prunes once a day. False when the cache is not usable:
         the error is logged once, a damaged database is moved aside, and the run goes on
-        without the cache."""
+        without the cache. `stores` are the run's (`RunStores.current` by default)."""
+        stores = stores or RunStores.current()
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             self.opened_mark.touch()
             self.prune_daily(today)
         except (OSError, sqlite3.Error) as error:
-            self.warning.log(error)
+            stores.fail(self.store, error)
             if is_corrupt(error):
                 self.move_aside()
             return False
+        stores.opened(self.store)
         return True

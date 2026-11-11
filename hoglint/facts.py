@@ -16,7 +16,7 @@ from typing import Any
 
 import orjson
 
-from hoglint.ledger.cache import AnswerStore, answer_key
+from hoglint.ledger.cache import FACTS, SITE_PACKAGES_ANSWERS, AnswerStore, cache_root
 
 BINARY_NAME = "hoglint-facts"
 # Where bin/build puts the binary when CARGO_TARGET_DIR is not set.
@@ -103,12 +103,12 @@ class SitePackagesFiles:
     stored state, and each package root that was no directory is still none, the walk would list
     the same files, and the stored list is the answer."""
 
-    STORE = AnswerStore("site-packages")
+    STORE = AnswerStore(SITE_PACKAGES_ANSWERS, __file__)
 
     @staticmethod
     def of(packages: tuple[str, ...]) -> dict[str, str]:
         site = site_packages()
-        key = answer_key(Path(__file__).read_bytes(), sys.version, str(site), *packages)
+        key = SitePackagesFiles.STORE.key(str(site), *packages)
         stored = SitePackagesFiles.STORE.get(key)
         if stored is not None:
             files = SitePackagesFiles.unchanged(site, stored)
@@ -264,5 +264,4 @@ class FactStore:
 
 
 def default_cache_dir() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "hoglint" / "facts"
+    return cache_root() / FACTS

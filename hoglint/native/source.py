@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gc
-import os
 import sys
 import tempfile
 from collections.abc import Mapping
@@ -13,8 +12,9 @@ from typing import Any
 from hoglint.config import Config
 from hoglint.config.schema import canonical
 from hoglint.core.analysis import AnalysisOptions
-from hoglint.core.memo import OFF, STATS_ENV, TRACE, TRACER, PackMemo, digest
+from hoglint.core.memo import OFF, TRACE, TRACER, PackMemo, digest
 from hoglint.core.reader import BuildReader
+from hoglint.ledger.cache import RunStores
 from hoglint.ledger.listing import Listing
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
@@ -100,12 +100,11 @@ class NativeGraphSource(GraphSource):
         exports = [(surface.within, surface.paths) for surface in self.export_surfaces(config)]
         return canonical({"sections": sections, "contract_surfaces": surfaces, "export_surfaces": exports})
 
-    @staticmethod
-    def pack_memo(options: AnalysisOptions, build: NativeBuild, config_key: str) -> PackMemo | None:
+    def pack_memo(self, options: AnalysisOptions, build: NativeBuild, config_key: str) -> PackMemo | None:
         """The run's pack memo (hoglint/core/memo.py), keyed by every input outside the snapshot
         that a pack item depends on: the engine, the extractor and its options, the config, the
         third-party files and the first-party roots. None when it is switched off."""
-        mode = PackMemo.mode()
+        mode = self.stores.memo_mode()
         if mode == OFF:
             return None
         policy = digest(
@@ -120,8 +119,8 @@ class NativeGraphSource(GraphSource):
         )
         store = None
         if mode != TRACE and options.cache_dir is not None:
-            store = MemoStore(options.cache_dir.parent, engine_id())
-        return PackMemo(store, policy, os.environ.get(STATS_ENV, ""))
+            store = MemoStore(options.cache_dir.parent, engine_id(), self.stores)
+        return PackMemo(store, policy, self.stores.memo_stats())
 
 
 def batch_mode(engine: str) -> None:
@@ -132,5 +131,5 @@ def batch_mode(engine: str) -> None:
         gc.disable()
 
 
-def graph_source(engine: str, work_dir: Path) -> GraphSource:
-    return NativeGraphSource(work_dir) if engine == "native" else GraphSource(work_dir)
+def graph_source(engine: str, work_dir: Path, stores: RunStores | None = None) -> GraphSource:
+    return NativeGraphSource(work_dir, stores) if engine == "native" else GraphSource(work_dir, stores)

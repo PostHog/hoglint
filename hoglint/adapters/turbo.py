@@ -20,7 +20,6 @@ the path out.
 from __future__ import annotations
 
 import re
-import sys
 import json
 import posixpath
 import subprocess
@@ -31,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.globs import Braces, compile_glob
-from hoglint.ledger.cache import AnswerStore, answer_key
+from hoglint.ledger.cache import TURBO_ANSWERS, AnswerStore
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 
 DEFAULT_MARKER = "$TURBO_DEFAULT$"
@@ -305,7 +304,7 @@ class TurboAdapter:
 
     name = "turbo"
     allowed_options = frozenset({"task"})
-    STORE = AnswerStore("turbo")
+    STORE = AnswerStore(TURBO_ANSWERS, __file__)
 
     def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]:
         return ("**/turbo.json", "**/package.json")
@@ -321,7 +320,7 @@ class TurboAdapter:
         if not inputs:
             return self.open(options, PLUGIN_ROOTS.of(run_root, self, options))
         task = str(options.get("task", ""))
-        key = answer_key(Path(__file__).read_bytes(), sys.version, task, inputs)
+        key = self.STORE.key(task, inputs)
         table = TaskTable.from_json(self.STORE.get(key))
         if table is not None:
             return TurboInputs(run_root.resolve(), task, table)

@@ -17,6 +17,7 @@ from hoglint.cli import WAY_OUT, Commands, Snapshots
 from hoglint.facts import Extractor
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
+from hoglint.ledger.cache import RunStores
 from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
     ENGINE,
@@ -38,7 +39,7 @@ from hoglint.ledger.listing import TreeListing, WorktreeListing, WorktreeStatus,
 from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord, StoredFindings
 from hoglint.ledger.scan import ProtocolError, ScanSummary
-from hoglint.ledger.store import CacheRoot, CacheWarning, SummaryStore
+from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause
 from hoglint.presets_py.posthog.owners import OWNERS_YAML
 from hoglint.rules.engine import Engine
@@ -342,7 +343,7 @@ def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
 
     healthy = check(tmp_path / "healthy")
     expected = capfd.readouterr().out
-    monkeypatch.setattr(CacheWarning, "warned", False)
+    monkeypatch.setattr(RunStores, "warned", set())
     broken = tmp_path / "broken"
     (broken / "hoglint").mkdir(parents=True)
     if fault == "unwritable":

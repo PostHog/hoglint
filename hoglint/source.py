@@ -18,6 +18,7 @@ from hoglint.config import Config
 from hoglint.config.schema import as_tuple, canonical
 from hoglint.facts import FACT_KINDS, FactNeeds
 from hoglint.globs import ExportPaths
+from hoglint.ledger.cache import RunStores
 from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Pack, PackReader, PackSink, ProducerFailure
@@ -98,10 +99,12 @@ def run_packs(
 class GraphSource:
     """Builds and caches one Graph per (code root, staged or git tree, config sections).
 
-    `tree` names a git tree whose blobs are the code, read by id with no checkout."""
+    `tree` names a git tree whose blobs are the code, read by id with no checkout. `stores` are
+    the run's stores (`RunStores.current` by default)."""
 
-    def __init__(self, work_dir: Path) -> None:
+    def __init__(self, work_dir: Path, stores: RunStores | None = None) -> None:
         self.work_dir = work_dir
+        self.stores = stores or RunStores.current()
         self.cache: dict[tuple[str, str], Graph] = {}
 
     @staticmethod

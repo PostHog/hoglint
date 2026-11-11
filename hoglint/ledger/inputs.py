@@ -23,9 +23,9 @@ from typing import ClassVar
 
 from hoglint.config.model import Config
 from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
+from hoglint.ledger.cache import INPUTS, INPUTS_STORE, RunStores, write_atomic
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import SOURCE_SUFFIXES, Listing, TreeListing
-from hoglint.ledger.scan import write_atomic
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, declared_inputs
 
 SOURCE_INPUTS = tuple(f"**/*{suffix}" for suffix in SOURCE_SUFFIXES)
@@ -196,8 +196,9 @@ class InputDigests:
     (tree, patterns) pair is kept under `<cache>/inputs`, and a tree seen before needs no listing.
     That file is a cache: one that does not read is computed again."""
 
-    def __init__(self, cache: Path) -> None:
-        self.root = cache / "inputs"
+    def __init__(self, cache: Path, stores: RunStores | None = None) -> None:
+        self.root = cache / INPUTS
+        self.stores = stores or RunStores.current()
         self.known: dict[tuple[str, str], str] = {}
 
     @staticmethod
@@ -216,6 +217,7 @@ class InputDigests:
         if found is not None:
             return found
         path = self.root / f"{tree}-{key[1]}-{DIGEST_LAYOUT}"
+        self.stores.opened(INPUTS_STORE.name)
         try:
             found = path.read_text().strip()
         except (OSError, UnicodeDecodeError):

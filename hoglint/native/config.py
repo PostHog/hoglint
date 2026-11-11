@@ -3,15 +3,15 @@ paths and the interpreter's builtin names."""
 
 from __future__ import annotations
 
-import os
 import builtins
 from collections.abc import Mapping
 from typing import Any
 
 from hoglint.core.config import CoreConfig
+from hoglint.ledger.cache import TRACE_ENV, RunStores
 
-# Set to 1, the link records what each file's edges read from other files (`Link.write_traces`).
-TRACE_ENV = "HOGLINT_LINK_TRACE"
+# The trace switch is declared with the run's stores; its name stays importable here.
+__all__ = ["TRACE_ENV", "link_config"]
 
 
 def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping[str, str]) -> dict[str, Any]:
@@ -35,5 +35,5 @@ def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping
         "builtins": sorted(dir(builtins)),
         "external": sorted(external.items()),
         "analyzed": list(analyzed),
-        "trace": os.environ.get(TRACE_ENV) == "1",
+        "trace": RunStores.current().trace_on(),
     }
