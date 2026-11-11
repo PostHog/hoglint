@@ -15,6 +15,7 @@ from hoglint.config.schema import canonical
 from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.memo import OFF, STATS_ENV, TRACE, TRACER, PackMemo, digest
 from hoglint.core.reader import BuildReader
+from hoglint.ledger.listing import Listing
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
 from hoglint.native.answers import ReaderAnswers, file_keys
@@ -23,7 +24,7 @@ from hoglint.native.graph import NativeGraph, NativeSink
 from hoglint.native.memo_store import MemoStore, engine_id
 from hoglint.native.queries import NativePackQueries
 from hoglint.plugins import Pack
-from hoglint.source import GraphSource, active_packs, run_packs
+from hoglint.source import GraphSource, PackRoot, active_packs, run_packs
 
 ENGINES = ("python", "native")
 
@@ -55,14 +56,15 @@ class NativeGraphSource(GraphSource):
         analysis = NativeAnalysis(options).run()
         graph = analysis.graph
         build = analysis.build
-        memo = self.pack_memo(options, build, self.memo_config(config, packs))
+        listing = self.listing_of(code_root, tree)
+        memo = self.pack_memo(options, build, self.memo_config(config, packs, listing))
         reader = BuildReader(build, NativePackQueries(build, graph, graph.link), memo)
         TRACER.reset()
         try:
             if memo is not None:
                 TRACER.files = file_keys(graph.link)
                 ReaderAnswers(reader, build).register()
-            run_packs(packs, reader, StepReleasingSink(graph, build), self.listing_of(code_root, tree))
+            run_packs(packs, reader, StepReleasingSink(graph, build), listing)
             if memo is not None:
                 memo.flush()
         finally:
@@ -70,19 +72,33 @@ class NativeGraphSource(GraphSource):
         build.release()
         return graph
 
-    def memo_config(self, config: Config, packs: list[tuple[Pack, Mapping[str, Any]]]) -> str:
-        """The config as the pack memo keys on it. A pack's policy file is named by a path that
-        may be a new scratch copy each run, so the key holds the file's bytes' digest instead."""
+    def policy_digests(self, pack: Pack, section: Mapping[str, Any], listing: Listing) -> dict[str, Any]:
+        """A pack's section with each policy file named by the digest of the bytes the pack reads:
+        the copy its own root makes from the run's snapshot (`PackRoot`). The path may name a new
+        scratch copy each run, and a relative one names a file of the snapshot, not of the
+        working directory."""
+        own = dict(section)
+        keys = [key for key in getattr(pack, "policy_file_keys", ()) if isinstance(own.get(key), str) and own[key]]
+        if not keys:
+            return own
+        with tempfile.TemporaryDirectory(prefix=f"memo-{pack.name}-", dir=self.work_dir) as scratch:
+            try:
+                copies = PackRoot(pack, section, listing, Path(scratch)).section_of_copies()
+            except Exception as error:  # noqa: BLE001 - the pack fails on the same error, so no item runs
+                return {**own, "unreadable": type(error).__name__}
+            for key in keys:
+                own[key] = digest((Path(scratch) / copies[key]).read_bytes())
+        return own
+
+    def memo_config(self, config: Config, packs: list[tuple[Pack, Mapping[str, Any]]], listing: Listing) -> str:
+        """The config as the pack memo keys on it: every config input `GraphSource.key` holds,
+        with each pack's policy files by the bytes the pack reads (`policy_digests`)."""
         sections: dict[str, Any] = {name: config.sections.get(name) for name in sorted(config.sections)}
         for pack, section in packs:
-            own = dict(section)
-            for key in getattr(pack, "policy_file_keys", ()):
-                value = own.get(key)
-                if isinstance(value, str) and value and Path(value).is_file():
-                    own[key] = digest(Path(value).read_bytes())
-            sections[pack.name] = own
-        surfaces = [(surface.within, surface.paths) for surface in self.core_config(config).contract_surfaces]
-        return canonical({"sections": sections, "contract_surfaces": surfaces})
+            sections[pack.name] = self.policy_digests(pack, section, listing)
+        surfaces = [(surface.within, surface.paths) for surface in self.contract_surfaces(config)]
+        exports = [(surface.within, surface.paths) for surface in self.export_surfaces(config)]
+        return canonical({"sections": sections, "contract_surfaces": surfaces, "export_surfaces": exports})
 
     @staticmethod
     def pack_memo(options: AnalysisOptions, build: NativeBuild, config_key: str) -> PackMemo | None:

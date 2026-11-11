@@ -6,7 +6,10 @@ from typing import Any, cast
 
 import pytest
 
+from hoglint.config import load_config
+from hoglint.config.model import Config
 from hoglint.facts import FACT_KINDS, FactNeeds
+from hoglint.native.source import NativeGraphSource
 from hoglint.plugins import PackReader, PackSink, ProducerFailure
 from hoglint.source import GraphSource, run_packs
 from rules.test_compare import git_in, write_files
@@ -92,3 +95,42 @@ def test_a_pack_reads_only_the_policy_files_it_names_from_the_runs_snapshot(
     run_packs([(pack, section)], cast(PackReader, None), cast(PackSink, sink), listing)
     assert pack.read == ["anchored routes" if anchored else "routes"]
     assert bool(sink.failed) is fails, sink.failed
+
+
+def export_config(root: Path, paths: str) -> Config:
+    write_files(
+        root,
+        {
+            "hoglint.toml": (
+                'schema = 1\n\n[discovery]\nsource_roots = ["."]\n\n[shapes.loose]\nallow = ["class"]\n\n'
+                f'[exports.api]\nwithin = "app"\npaths = ["{paths}"]\nshape = "loose"\n'
+            )
+        },
+    )
+    return load_config(root)
+
+
+def test_the_pack_memo_key_holds_the_policy_file_of_the_snapshot_and_every_config_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, {"conf/routing.yaml": "first"})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    first = git_in(repo, "write-tree").strip()
+    (repo / "conf/routing.yaml").write_text("second")
+    git_in(repo, "add", "-A")
+    second = git_in(repo, "write-tree").strip()
+    (repo / "conf/routing.yaml").write_text("on disk only")
+    monkeypatch.chdir(repo)
+    packs = [(ReadingPack(), {"routing": "conf/routing.yaml"})]
+    api, facade = export_config(tmp_path / "api", "api/**"), export_config(tmp_path / "facade", "facade/**")
+    (tmp_path / "work").mkdir()
+    source = NativeGraphSource(tmp_path / "work")
+
+    def key(config: Config, tree: str) -> str:
+        return source.memo_config(config, cast(Any, packs), GraphSource.listing_of(repo, tree))
+
+    assert key(api, first) == key(api, first)
+    assert key(api, first) != key(api, second)
+    assert key(api, first) != key(facade, first)
