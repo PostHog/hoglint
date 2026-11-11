@@ -33,6 +33,8 @@ INPUTS_DIGEST_CHARS = 40
 PATTERN_DIGEST_CHARS = 16
 # What an inputs digest hashes; a cached digest of another layout is never read.
 DIGEST_LAYOUT = "l2"
+# A stored digest of any other form is damaged, so it is a miss.
+STORED_DIGEST = re.compile(f"[0-9a-f]{{{INPUTS_DIGEST_CHARS}}}")
 
 
 class InputPatterns:
@@ -203,9 +205,9 @@ class InputDigests:
         path = self.root / f"{tree}-{key[1]}-{DIGEST_LAYOUT}"
         try:
             found = path.read_text().strip()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             found = ""
-        if len(found) != INPUTS_DIGEST_CHARS:
+        if not STORED_DIGEST.fullmatch(found):
             found = self.compute(TreeListing.of(repo, tree), patterns)
             self.keep(path, found)
         self.known[key] = found

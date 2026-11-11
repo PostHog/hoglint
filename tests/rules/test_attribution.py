@@ -653,6 +653,25 @@ def test_a_commit_that_changes_no_input_keeps_the_summary_key(tmp_path: Path) ->
     assert keys[0] == keys[1] != keys[2]
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [b"\x86\x00not text", b"z" * 40, b"", b"0123456789abcdef0123"],
+    ids=["not-utf8", "not-hex", "empty", "truncated"],
+)
+def test_a_stored_inputs_digest_that_is_not_one_is_computed_again_and_replaced(tmp_path: Path, stored: bytes) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, FILES)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    tree = git_in(repo, "write-tree").strip()
+    patterns = InputPatterns(SOURCE_INPUTS)
+    digest = InputDigests(tmp_path / "cache").of(repo, tree, patterns)
+    (stored_file,) = (tmp_path / "cache" / "inputs").iterdir()
+    stored_file.write_bytes(stored)
+    assert InputDigests(tmp_path / "cache").of(repo, tree, patterns) == digest
+    assert stored_file.read_text() == digest
+
+
 COVERED = (
     CONFIG
     + """
