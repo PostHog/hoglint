@@ -6,7 +6,7 @@ use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{Binding, CLASS, Core, Ent, HitKind, MODULE_LEVEL_FLAGS, absolute_import};
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
-use super::surface::handed_out;
+use super::surface::{ALL_CLAUSE, handed_out, listing};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const KIND_NAMES: [&str; 9] = [
@@ -339,6 +339,8 @@ struct Keys {
     ret: Sid,
     alias: Sid,
     too_deep: Sid,
+    dunder_all: Sid,
+    names: Sid,
 }
 
 impl Producing {
@@ -400,6 +402,8 @@ impl Producing {
             ret: it.intern("return"),
             alias: it.intern("alias"),
             too_deep: it.intern("too-deep"),
+            dunder_all: it.intern("__all__"),
+            names: it.intern("names"),
         };
         Producing {
             names: LookupNames {
@@ -1280,10 +1284,30 @@ impl Producers<'_> {
     }
 
     /// The slots of the functions and dataclass fields a contract surface hands out from other
-    /// modules, at the import that hands each one out.
+    /// modules, at the import that hands each one out. An `__all__` it cannot read is one
+    /// unresolved row: what the module hands out is unknown.
     fn hand_out(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
-        let handed = handed_out(self.core, &self.scopes[owner]);
+        let listing = listing(self.core, &self.scopes[owner]);
+        if let Some((line, col)) = listing.as_ref().and_then(|found| found.unread) {
+            let k = &self.settings.k;
+            let rows = SlotRows {
+                site: SlotSite {
+                    owner,
+                    scope: -1,
+                    line,
+                    col,
+                    ctx: self.scopes[owner].base_ctx,
+                },
+                callable: k.dunder_all,
+                slot: k.names,
+                contract: true,
+                handed: self.core.it.intern(ALL_CLAUSE),
+            };
+            let attrs = self.slot_attrs(rows, k.whole, &[]);
+            self.push_slot(rows, k.dunder_all, UNRESOLVED, &attrs);
+        }
+        let handed = handed_out(self.core, &self.scopes[owner], listing.as_ref());
         for item in handed {
             let Some((origin, idx)) = self.handed_def(item.target) else {
                 continue;

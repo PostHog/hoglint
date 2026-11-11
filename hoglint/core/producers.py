@@ -14,7 +14,7 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import chain_last
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
-from hoglint.core.surfaces import HandedOut
+from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
 from hoglint.core.symbols import CLASS, MODULE_LEVEL_FLAGS, Hit, Resolver, Tables, absolute_import, entity
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
@@ -479,6 +479,7 @@ class DeclarationProducer(Producer):
 
     kind = "declaration"
     kinds = ("inherit", "decorate", "exposes", "declares")
+    reads = frozenset({"callees"})  # a call on `__all__` makes a contract's hand-out unknown
 
     @property
     def edge_kinds(self) -> frozenset[str]:
@@ -759,8 +760,16 @@ class DeclarationProducer(Producer):
 
     def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
         """The slots of the functions and dataclass fields a contract surface hands out from other
-        modules, at the import that hands each one out."""
-        for item in HandedOut(scope, context.resolver.tables.get(scope.module)).names():
+        modules, at the import that hands each one out. An `__all__` it cannot read is one
+        unresolved row: what the module hands out is unknown."""
+        handed = HandedOut(scope, context.resolver.tables.get(scope.module))
+        listing = handed.listing()
+        if listing is not None and listing.unread is not None:
+            line, column = listing.unread
+            site = SlotSite(scope, -1, line, column, scope.base_contexts)
+            rows = SlotRows(site, "__all__", "names", True, (("handed", ALL_CLAUSE),))
+            graph.edges.append(site.edge("__all__", UNRESOLVED, rows.attrs("whole")))
+        for item in handed.names(listing):
             found = context.handed_def(item.target)
             if found is None:
                 continue

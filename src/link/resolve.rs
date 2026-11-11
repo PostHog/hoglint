@@ -384,7 +384,8 @@ impl Core {
             }
         }
         for row in &record.assigns {
-            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || row.op == Op::Other {
+            let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
+            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || !assigned {
                 continue;
             }
             for target in &row.targets {

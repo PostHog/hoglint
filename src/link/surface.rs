@@ -4,6 +4,10 @@
 //! it under its own name (`from x import f as f`), when it is a lazy (PEP 562) name, or when the
 //! module has no top-level function. This is not the export primitive's notion of what a module
 //! exports (every module-level import): a surface also imports the code it calls.
+//!
+//! `__all__` is read in every form whose names a reader can list: `__all__ = [...]`, annotated
+//! or not, `+=` with a literal, and a sum of literals. One built by code, changed by a method or
+//! set under a condition cannot be read: what the module hands out is then unknown.
 
 use super::facts::{Op, V};
 use super::intern::{EMPTY, Sid};
@@ -33,43 +37,92 @@ fn has_functions(core: &Core, file: usize) -> bool {
         .any(|d| d.s == -1 && d.f == 0 && !d.is_class())
 }
 
-/// The names of the last plain `__all__ = [...]` in the module body.
-fn dunder_all(core: &mut Core, file: usize) -> Option<FxHashSet<Sid>> {
+/// The names a module's `__all__` lists, or where it first cannot be read (`unread`).
+pub struct DunderAll {
+    pub names: Option<FxHashSet<Sid>>,
+    pub unread: Option<(u32, u32)>,
+}
+
+/// The strings a list or tuple literal holds, or a sum of such literals; None for any other
+/// value, and for a literal with an item that is no string.
+fn listed_names(value: Option<&V>) -> Option<FxHashSet<Sid>> {
+    match value? {
+        V::Bin(false, left, right) => {
+            let mut names = listed_names(Some(left))?;
+            names.extend(listed_names(Some(right))?);
+            Some(names)
+        }
+        V::List(items) | V::Tuple(items) => items
+            .iter()
+            .map(|item| match item {
+                V::Str(text, None) => Some(*text),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+/// Whether a callee is a method of `__all__`: `__all__.extend`.
+fn method_of_all(callee: &str) -> bool {
+    callee.strip_prefix("__all__.").is_some_and(|rest| {
+        !rest.is_empty() && rest.chars().all(|c| c == '_' || c.is_alphanumeric())
+    })
+}
+
+/// The module body's `__all__`, statement by statement in source order.
+fn dunder_all(core: &mut Core, file: usize) -> DunderAll {
     let facts = core.facts.clone();
     let all = core.it.intern("__all__");
-    let mut found = None;
+    let mut names: Option<FxHashSet<Sid>> = None;
+    let mut unread: Vec<(u32, u32)> = Vec::new();
     for row in &facts.files[file].assigns {
         let listed = row
             .targets
             .iter()
             .any(|target| matches!(target, V::Chain(name) if *name == all));
-        if row.s != -1 || row.f != 0 || row.op != Op::Assign || !listed {
+        if row.s != -1 || !listed {
             continue;
         }
-        if let Some(V::List(items) | V::Tuple(items)) = &row.value {
-            found = Some(
-                items
-                    .iter()
-                    .filter_map(|item| match item {
-                        V::Str(text, None) => Some(*text),
-                        _ => None,
-                    })
-                    .collect(),
-            );
+        if row.op == Op::Annotated && row.value.is_none() {
+            continue;
+        }
+        let found = listed_names(row.value.as_ref());
+        match (found, row.op) {
+            (Some(found), Op::Assign | Op::Annotated) if row.f == 0 => names = Some(found),
+            (Some(found), Op::AddAssign) if row.f == 0 && names.is_some() => {
+                names.get_or_insert_with(FxHashSet::default).extend(found);
+            }
+            _ => unread.push((row.l, row.c)),
         }
     }
-    found
+    for row in &facts.files[file].callees {
+        if row.scope == -1 && row.header == -1 && method_of_all(core.it.s(row.text)) {
+            unread.push((row.line, row.col));
+        }
+    }
+    DunderAll {
+        names,
+        unread: unread.into_iter().min(),
+    }
+}
+
+/// The module's `__all__`; None for a module with no top-level function, which hands out every
+/// import whatever `__all__` says.
+pub fn listing(core: &mut Core, scope: &Scope) -> Option<DunderAll> {
+    let file = scope.file as usize;
+    if has_functions(core, file) {
+        Some(dunder_all(core, file))
+    } else {
+        None
+    }
 }
 
 /// The names one module hands out, in import order and then lazy-name order.
-pub fn handed_out(core: &mut Core, scope: &Scope) -> Vec<Handed> {
+pub fn handed_out(core: &mut Core, scope: &Scope, listing: Option<&DunderAll>) -> Vec<Handed> {
     let file = scope.file as usize;
-    let no_functions = !has_functions(core, file);
-    let listed = if no_functions {
-        None
-    } else {
-        dunder_all(core, file)
-    };
+    let no_functions = listing.is_none();
+    let listed = listing.and_then(|found| found.names.as_ref());
     let facts = core.facts.clone();
     let mut out = Vec::new();
     let mut seen: FxHashSet<(Sid, Sid)> = FxHashSet::default();
@@ -92,7 +145,7 @@ pub fn handed_out(core: &mut Core, scope: &Scope) -> Vec<Handed> {
         let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
         let clause = if no_functions {
             NO_FUNCTIONS_CLAUSE
-        } else if listed.as_ref().is_some_and(|names| names.contains(&bound)) {
+        } else if listed.is_some_and(|names| names.contains(&bound)) {
             ALL_CLAUSE
         } else if row.asname == Some(name) {
             ALIAS_CLAUSE

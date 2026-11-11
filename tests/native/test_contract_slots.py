@@ -340,6 +340,40 @@ def test_an_alias_chain_deeper_than_the_limit_leaves_an_unresolved_row(
     assert ("orders", "return", "products.shop.backend.types.A33", "resolved", "") not in rows
 
 
+CHARGE_LOGIC = {f"{LOGIC}.py": "def charge(amount: int) -> str:\n    return ''\n"}
+IMPORTS_CHARGE = "from products.shop.backend.logic import charge\n\n\ndef ping() -> None:\n    pass\n\n\n"
+PING = [("ping", "return", "builtins.None", "external", "")]
+CHARGE_BY_ALL = [
+    ("charge", "param:amount", "builtins.int", "external", "all"),
+    ("charge", "return", "builtins.str", "external", "all"),
+]
+ALL_UNKNOWN = [("__all__", "names", "__all__", "unresolved", "all")]
+# Every `__all__` form whose names a reader can list hands them out; one built by code or set
+# under a condition makes what the module hands out unknown, and an unknown is never clean.
+DUNDER_ALL_CASES = {
+    "annotated": ('__all__: list[str] = ["charge"]\n', CHARGE_BY_ALL),
+    "extended with a literal": ('__all__ = ["ping"]\n__all__ += ["charge"]\n', CHARGE_BY_ALL),
+    "a sum of literals": ('__all__ = ["ping"] + ("charge",)\n', CHARGE_BY_ALL),
+    "built by a comprehension": ('__all__ = [name for name in ("charge",)]\n', ALL_UNKNOWN),
+    "set under a condition": ('if ping:\n    __all__ = ["charge"]\n', ALL_UNKNOWN),
+    "extended with a name": ('__all__ = ["ping"]\n__all__ += NAMES\n', ALL_UNKNOWN),
+    "an item that is no string": ('__all__ = ["ping", charge.__name__]\n', ALL_UNKNOWN),
+    "changed by a method": ('__all__ = ["ping"]\n__all__.extend(["charge"])\n', ALL_UNKNOWN),
+}
+
+
+@pytest.mark.parametrize("case", DUNDER_ALL_CASES)
+def test_every_readable_dunder_all_hands_out_and_an_unreadable_one_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    dunder_all, expected = DUNDER_ALL_CASES[case]
+    files = {**CHARGE_LOGIC, "products/shop/backend/facade/api.py": IMPORTS_CHARGE + dunder_all}
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(PING + expected)
+    findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "facade-signature"]
+    assert ([FACADE, "__all__", "names", "__all__"] in findings) == (expected == ALL_UNKNOWN)
+
+
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)
 def test_an_alias_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str

@@ -98,6 +98,8 @@ pub enum Op {
     Annotated,
     TypeAlias,
     Other,
+    /// `+=`, the one augmented assignment a reader of `__all__` follows.
+    AddAssign,
 }
 
 pub struct Assign {
@@ -610,6 +612,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 "=" => Op::Assign,
                 ":" => Op::Annotated,
                 "type" => Op::TypeAlias,
+                "+=" => Op::AddAssign,
                 _ => Op::Other,
             };
             let object = a.as_object();
