@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMapping, TracedMemo, key_of
+from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedMapping, TracedMemo, key_of
 from hoglint.core.producers import chain_tokens
 from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
 from hoglint.core.sites import FileScope
@@ -129,12 +129,10 @@ class FileFacts:
         self.rel = reader.rel
         self.dotted = reader.scope.module
         self.is_test = reader.is_test
-        self.file: int | None = getattr(reader.scope.record, "file", None)
-        self.lazy: TracedMemo[str, dict[str, str]] = TracedMemo()
+        self.lazy: TracedMemo[str, dict[str, str]] = TracedMemo(reader.snapshot.tracer)
 
     def touch(self) -> None:
-        if TRACER.frames and self.file is not None:
-            TRACER.note_file(self.file)
+        self.reader.snapshot.note_file(self.reader.scope)
 
     @property
     def import_facts(self) -> tuple[list[ImportEdge], list[tuple[str, str]], set[str]]:
@@ -677,9 +675,9 @@ class CallView:
 
     def __init__(self, facts: TracedMapping[str, FileFacts]) -> None:
         self.facts = facts
-        self.memo: TracedMemo[tuple[str, str, frozenset[str]], Reach] = TracedMemo()
-        self.found_targets: TracedMemo[Node, list[tuple[str, Body]]] = TracedMemo()
-        self.imports_by_bound: TracedMemo[str, dict[str, list[ImportEdge]]] = TracedMemo()
+        self.memo: TracedMemo[tuple[str, str, frozenset[str]], Reach] = TracedMemo(facts.tracer)
+        self.found_targets: TracedMemo[Node, list[tuple[str, Body]]] = TracedMemo(facts.tracer)
+        self.imports_by_bound: TracedMemo[str, dict[str, list[ImportEdge]]] = TracedMemo(facts.tracer)
 
     @staticmethod
     def imports_by_name(ff: FileFacts) -> dict[str, list[ImportEdge]]:
@@ -778,10 +776,9 @@ class Deriver:
     IMPORTER_PRODUCTS = "posthog.drives.importer-products"
 
     def __init__(self, facts: dict[str, FileFacts], snapshot: PackReader) -> None:
-        self.facts: TracedMapping[str, FileFacts] = TracedMapping(self.MODULE, facts, form=file_rel)
-        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
-        if TRACER.frames:
-            self.facts.answer_reads()
+        self.tracer = snapshot.tracer
+        self.facts: TracedMapping[str, FileFacts] = TracedMapping(self.tracer, self.MODULE, facts, form=file_rel)
+        self.facts.answer_reads()
         self.snapshot = snapshot
         self.by_rel = {f.rel: f for f in facts.values()}
         self.view = CallView(self.facts)
@@ -844,23 +841,21 @@ class Deriver:
         self.test_filter = TestFilter(self.snapshot, labelled, self.members)
         self.registry = [state["kinds"], state["members"], state["enums"], state["query_products"]]
         origins = {(module, name): label for module, name, label in state["origins"]}
-        self.origins = TracedMapping(self.ORIGIN, origins, key=pair_key)
-        self.origin_modules = TracedMapping(self.ORIGIN_MODULE, dict.fromkeys((m for m, _ in origins), True))
+        tracer = self.tracer
+        self.origins = TracedMapping(tracer, self.ORIGIN, origins, key=pair_key)
+        self.origin_modules = TracedMapping(tracer, self.ORIGIN_MODULE, dict.fromkeys((m for m, _ in origins), True))
         products = {module: set(found) for module, found in state["origin_products"]}
-        self.origin_products = TracedMapping(self.ORIGIN_PRODUCTS, products, form=sorted)
+        self.origin_products = TracedMapping(tracer, self.ORIGIN_PRODUCTS, products, form=sorted)
         importers = {module: set(found) for module, found in state["importer_products"]}
-        self.importer_products = TracedMapping(self.IMPORTER_PRODUCTS, importers, form=sorted)
-        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
-        if not TRACER.frames:
-            return
+        self.importer_products = TracedMapping(tracer, self.IMPORTER_PRODUCTS, importers, form=sorted)
         for mapping in (self.origins, self.origin_modules, self.origin_products, self.importer_products):
             mapping.answer_reads()
-        TRACER.answer_with(self.REGISTRY, lambda key: self.registry)
+        tracer.answer_with(self.REGISTRY, lambda key: self.registry)
 
     def note_registry(self) -> None:
         """A test item reads the registry: the query kinds, their products and the enum members."""
-        if TRACER.frames:
-            TRACER.note(self.REGISTRY, "*", self.registry)
+        if self.tracer.frames:
+            self.tracer.note(self.REGISTRY, "*", self.registry)
 
     def module_exists(self, dotted: str) -> bool:
         return dotted in self.facts

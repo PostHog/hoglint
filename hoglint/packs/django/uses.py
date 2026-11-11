@@ -15,7 +15,6 @@ from typing import NamedTuple
 
 from hoglint.core.harness import Output, each_item, failure_edge
 from hoglint.core.memo import ItemOutput, ItemRun, Items
-from hoglint.core.reader import note_file_of
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge, Resolution
@@ -294,7 +293,7 @@ class GetModelItems(Items):
 
     def run_item(self, key: str) -> ItemOutput:
         scope = self.files[key]
-        note_file_of(scope)
+        self.producer.reader.note_file(scope)
         rows = self.calls.get(key)
         if not rows:
             return ItemOutput([])

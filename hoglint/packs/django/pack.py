@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items
+from hoglint.core.memo import ItemOutput, ItemRun, Items
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.ledger.store import cache_root
@@ -60,10 +60,8 @@ class AppItems(Items):
         return ItemOutput([], AppReader(self.run.reader).read(self.run.config).data())
 
     def take(self, key: str, data: Any) -> None:
-        self.run.apps = AppRegistry.restore(data)
-        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
-        if TRACER.frames:
-            self.run.apps.answer_reads()
+        self.run.apps = AppRegistry.restore(data, self.run.reader.tracer)
+        self.run.apps.answer_reads()
 
     def finish(self) -> Iterable[Output]:
         self.run.files = self.run.scan_files()
@@ -80,8 +78,7 @@ class ModelStepItems(ModelItems):
         self.run = run
 
     def finish(self) -> Iterable[Output]:
-        if TRACER.frames:
-            self.registry.answer_reads()
+        self.registry.answer_reads()
         if not self.registry.models:
             raise NoModels("no first-party model found")
         failures = self.registry.failures
@@ -97,9 +94,7 @@ class MigrationItems(Items):
 
     def __init__(self, run: DjangoRun) -> None:
         self.run = run
-        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
-        if TRACER.frames:
-            TRACER.answer_with(AliasProjection.ROUTING, self.routes)
+        run.reader.tracer.answer_with(AliasProjection.ROUTING, self.routes)
 
     def routes(self, key: str) -> object:
         return sorted(AliasProjection(self.run.repo_root, self.run.config.routing).route.items())
@@ -111,6 +106,10 @@ class MigrationItems(Items):
         run = self.run
         assert run.apps is not None
         projection = AliasProjection(run.repo_root, run.config.routing)
+        if run.config.routing is not None:
+            run.reader.tracer.note(
+                AliasProjection.ROUTING, str(run.config.routing.path), sorted(projection.route.items())
+            )
         cache = SummaryCache(cache_root() / "packs")
         graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
         aliases = {app: sorted(found) for app, found in graph.aliases.items()}
@@ -269,7 +268,7 @@ class DjangoPack:
 
     @staticmethod
     def run(reader: PackReader, config: DjangoPackConfig, sink: PackSink, root: Path) -> None:
-        DjangoRun(reader, config, root, sink).plan().run(sink, getattr(reader, "memo", None))
+        DjangoRun(reader, config, root, sink).plan().run(sink, reader)
 
 
 DJANGO_PACK = DjangoPack()

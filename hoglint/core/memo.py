@@ -15,7 +15,9 @@ With a store (hoglint/native/memo_store.py), each item is kept with its reads an
 later run takes the stored output when every read has the same answer again (`Tracer.current`):
 the reader answers its own reads again, a fold answers the reads of its state.
 
-The tracer is one per process (`TRACER`). With no frame open, a read costs one check.
+The tracer belongs to the run's pack memo, and the pack reader hands it out (`reader.tracer`).
+With no memo it is a `NullTracer`, which notes and answers nothing. With no frame open, a read
+costs one check.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ import sys
 import time
 import zlib
 import hashlib
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -97,6 +99,7 @@ class Frame:
 
     reads: set[Read] = field(default_factory=set)
     files: set[int] = field(default_factory=set)
+    step: str = ""  # the step a step's own frame runs
 
     def add(self, other: Frame) -> None:
         self.reads |= other.reads
@@ -150,18 +153,24 @@ class Tracer:
         self.answers: dict[Read, str] = {}
         dropped = os.environ.get(DROP_ENV, "")
         self.dropped = ALL_DROPPED if dropped == ALL_KINDS else frozenset(filter(None, dropped.split(",")))
-        self.step = ""  # the running step, which an edge query's key names
         self.verifiers: dict[str, Callable[[str], str | None]] = {}
         self.maps: dict[str, tuple[dict[str, str], str]] = {}
         self.files: FileKeys | None = None
+
+    @property
+    def step_name(self) -> str:
+        """The running step, which an edge query's key names."""
+        return self.frames[0].step if self.frames else ""
 
     def answer_with(self, kind: str, answer: Callable[[str], object]) -> None:
         """Answers reads of `kind` again by `answer(key)`, the same answer its note digests."""
         self.verifiers[kind] = lambda key: digest(answer(key))
 
-    def verify_by_map(self, kind: str, digests: dict[str, str], default: str) -> None:
-        """Answers reads of `kind` again from a map of digests by key, `default` for a key it
-        lacks: what a part checks without a call per read."""
+    def verify_by_map(self, kind: str, values: Mapping[str, Any], form: Callable[[Any], object], empty: object) -> None:
+        """Answers reads of `kind` again from a digest of `form(value)` per key, of `form(empty)`
+        for a key `values` lacks: what a part checks without a call per read."""
+        digests = {key: digest(form(value)) for key, value in values.items()}
+        default = digest(form(empty))
         self.maps[kind] = (digests, default)
         self.verifiers[kind] = lambda key: digests.get(key, default)
 
@@ -240,23 +249,48 @@ class Tracer:
             self.frames.pop()
             self.merge(frame)
 
-    def reset(self) -> None:
-        self.frames.clear()
-        self.answers.clear()
-        self.verifiers.clear()
-        self.maps.clear()
-        self.files = None
-        self.step = ""
+    @contextmanager
+    def step(self, name: str) -> Iterator[None]:
+        """The frame of one step, around its items: it names the step for edge queries."""
+        self.frames.append(Frame(step=name))
+        try:
+            yield
+        finally:
+            self.frames.pop()
 
 
-TRACER = Tracer()
+class NullTracer(Tracer):
+    """The tracer of a run with no pack memo: it opens no frame, so it notes nothing, and it
+    keeps no answer."""
+
+    def answer_with(self, kind: str, answer: Callable[[str], object]) -> None:
+        return None
+
+    def verify_by_map(self, kind: str, values: Mapping[str, Any], form: Callable[[Any], object], empty: object) -> None:
+        return None
+
+    def current(self, kind: str, key: str) -> str | None:
+        return None
+
+    @contextmanager
+    def frame(self) -> Iterator[Frame]:
+        yield Frame()
+
+    @contextmanager
+    def step(self, name: str) -> Iterator[None]:
+        yield
+
+
+# Never changes: it holds no frame and no answer.
+NULL_TRACER = NullTracer()
 
 
 class TracedMemo[K, V]:
     """A memo that items share. An entry keeps the reads it was computed from, and an item that
     takes the entry gets those reads too, so the memo hides no read."""
 
-    def __init__(self) -> None:
+    def __init__(self, tracer: Tracer) -> None:
+        self.tracer = tracer
         self.entries: dict[K, tuple[V, Frame | None]] = {}
 
     def get(self, key: K, compute: Callable[[], V]) -> V:
@@ -264,19 +298,16 @@ class TracedMemo[K, V]:
         if found is not None:
             value, reads = found
             if reads is not None:
-                TRACER.merge(reads)
+                self.tracer.merge(reads)
             return value
-        if not TRACER.frames:
+        if not self.tracer.frames:
             value = compute()
             self.entries[key] = (value, None)
             return value
-        with TRACER.frame() as reads:
+        with self.tracer.frame() as reads:
             value = compute()
         self.entries[key] = (value, reads)
         return value
-
-    def __contains__(self, key: object) -> bool:
-        return key in self.entries
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,12 +474,12 @@ class Part:
         self.items: dict[str, list[Any]] = part["items"]
         self.failing: set[int] | None = None
 
-    def failed_reads(self) -> set[int]:
+    def failed_reads(self, tracer: Tracer) -> set[int]:
         """The indices of the reads whose answer changed: file reads and reads answered by a map
         of digests are checked with no call per read."""
         if self.failing is None:
-            files = TRACER.files.keys if isinstance(TRACER.files, FileKeysMap) else None
-            maps, current = TRACER.maps, TRACER.current
+            files = tracer.files.keys if isinstance(tracer.files, FileKeysMap) else None
+            maps, current = tracer.maps, tracer.current
             failing = set()
             for at, (kind, key, wanted) in enumerate(self.reads):
                 if kind == FILE and files is not None:
@@ -477,13 +508,13 @@ class Part:
         except Exception:  # noqa: BLE001 - a damaged entry is a miss: the item runs again
             return None
 
-    def reused(self, key: str) -> ItemOutput | None:
+    def reused(self, key: str, tracer: Tracer) -> ItemOutput | None:
         """One item's stored output, its own reads checked now: a fold is checked before the
         state it builds is taken, and the other items of its part read that state."""
         entry = self.items.get(key)
         try:
             indices = entry[0] if isinstance(entry, list) else []
-            failing = {at for at in indices if TRACER.current(*self.reads[at][:2]) != self.reads[at][2]}
+            failing = {at for at in indices if tracer.current(*self.reads[at][:2]) != self.reads[at][2]}
         except Exception:  # noqa: BLE001 - a damaged read table is a miss
             return None
         return self.output(entry, failing)
@@ -522,8 +553,9 @@ class StepMemo:
     item that ran, with its reads, to store. Its state is split in parts by item key, so a run
     that changes a few items writes only their parts. It reads the newest state only."""
 
-    def __init__(self, name: str, key: str, store: MemoStore | None, stats: StepStats | None) -> None:
+    def __init__(self, name: str, key: str, store: MemoStore | None, stats: StepStats | None, tracer: Tracer) -> None:
         self.name = name
+        self.tracer = tracer
         self.key = key
         self.store = store
         self.stats = stats
@@ -548,7 +580,7 @@ class StepMemo:
 
     def stored(self, key: str) -> ItemOutput | None:
         part = self.parts().get(part_of(key))
-        found = part.reused(key) if part is not None else None
+        found = part.reused(key, self.tracer) if part is not None else None
         if found is not None:
             assert part is not None
             self.reused[key] = part
@@ -560,7 +592,7 @@ class StepMemo:
         wanted = set(keys)
         for part in self.parts().values():
             try:
-                failing = part.failed_reads()
+                failing = part.failed_reads(self.tracer)
             except Exception:  # noqa: BLE001 - a damaged read table is a miss for the whole part
                 continue
             if self.stats is not None:
@@ -586,7 +618,7 @@ class StepMemo:
         if self.store is None:
             return result
         self.dirty.add(part_of(key))
-        stored = TRACER.stored_reads(reads)
+        stored = self.tracer.stored_reads(reads)
         outputs = encode_outputs(result.outputs)
         try:
             data = orjson.loads(orjson.dumps(result.data))
@@ -654,12 +686,14 @@ class StepMemo:
 
 
 class PackMemo:
-    """The memo of one run's packs. A step's states are stored under its name and `policy`, the
-    digest of everything outside the snapshot its items depend on. `HOGLINT_PACK_MEMO=off` runs
-    items with no frames, reads and writes nothing; `trace` runs them in frames and stores
-    nothing. `stats` names a file that gets one JSON line per step."""
+    """The memo of one run's packs, and the tracer of its items' reads. A step's states are stored
+    under its name and `policy`, the digest of everything outside the snapshot its items depend
+    on. `HOGLINT_PACK_MEMO=off` runs items with no memo, so with no frames, and reads and writes
+    nothing; `trace` runs them in frames and stores nothing. `stats` names a file that gets one
+    JSON line per step."""
 
     def __init__(self, store: MemoStore | None, policy: str, stats: str = "") -> None:
+        self.tracer = Tracer()
         self.store = store
         self.policy = policy
         self.stats_path = stats
@@ -678,7 +712,7 @@ class PackMemo:
         if self.stats_path:
             stats = StepStats(name)
             self.stats.append(stats)
-        return StepMemo(name, digest([self.policy, name]), self.store if stored else None, stats)
+        return StepMemo(name, digest([self.policy, name]), self.store if stored else None, stats, self.tracer)
 
     def end_step(self, step: StepMemo) -> None:
         """Makes a step's new state once its items ran, so the parts it read are let go before
@@ -720,7 +754,7 @@ class ItemRun:
             return self.items.run_item(key)
         stats = self.memo.stats
         wall, cpu = (time.perf_counter(), time.process_time()) if stats is not None else (0.0, 0.0)
-        with TRACER.frame() as reads:
+        with self.memo.tracer.frame() as reads:
             result = self.items.run_item(key)
         result = self.memo.keep(key, reads, result)
         if stats is not None:
@@ -776,11 +810,13 @@ class TracedMapping[K, V]:
 
     def __init__(
         self,
+        tracer: Tracer,
         kind: str,
         entries: dict[K, V],
         key: Callable[[K], str] = str,
         form: Callable[[V], object] | None = None,
     ) -> None:
+        self.tracer = tracer
         self.kind = kind
         self.entries = entries
         self.key = key
@@ -798,7 +834,7 @@ class TracedMapping[K, V]:
 
     def answer_reads(self) -> None:
         """Answers this map's reads again in this run (`Tracer.answer_with`)."""
-        TRACER.answer_with(self.kind, self.answer_again)
+        self.tracer.answer_with(self.kind, self.answer_again)
 
     def answer(self, found: V | None) -> object:
         if found is None or self.form is None:
@@ -807,8 +843,8 @@ class TracedMapping[K, V]:
 
     def get(self, key: K, default: V | None = None) -> V | None:
         found = self.entries.get(key)
-        if TRACER.frames:
-            TRACER.note(self.kind, self.key(key), self.answer(found))
+        if self.tracer.frames:
+            self.tracer.note(self.kind, self.key(key), self.answer(found))
         return default if found is None else found
 
     def __contains__(self, key: K) -> bool:
@@ -821,8 +857,10 @@ class TracedMapping[K, V]:
         return found
 
     def note_all(self) -> None:
-        if TRACER.frames:
-            TRACER.note_lazy(self.kind, "*", lambda: [(self.key(k), self.answer(v)) for k, v in self.entries.items()])
+        if self.tracer.frames:
+            self.tracer.note_lazy(
+                self.kind, "*", lambda: [(self.key(k), self.answer(v)) for k, v in self.entries.items()]
+            )
 
     def keys(self) -> Iterable[K]:
         self.note_all()

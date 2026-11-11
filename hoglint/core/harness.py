@@ -7,9 +7,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
-from hoglint.core.memo import TRACER, ItemRun, Output, PackMemo, StepItems
+from hoglint.core.memo import NULL_TRACER, ItemRun, Output, PackMemo, StepItems, Tracer
 from hoglint.model import Context, Edge, Graph, Resolution, Site, refined_edge
-from hoglint.plugins import PackSink, ProducerFailure, RefinedFields, Refinements
+from hoglint.plugins import PackReader, PackSink, ProducerFailure, RefinedFields, Refinements
 
 PRODUCER_ERROR = "producer-error"
 
@@ -76,8 +76,8 @@ class ProducerPlan:
     may also record a partial failure itself and return its output; the steps that need it
     still run.
 
-    With a memo, a step runs inside a frame of the tracer, so what it computes outside its items
-    has its reads noted too (`TracedMemo`), and each item runs in a frame of its own."""
+    A step runs inside a frame of the reader's tracer, so what it computes outside its items has
+    its reads noted too (`TracedMemo`); with a memo each item runs in a frame of its own."""
 
     def __init__(self, steps: Iterable[ProducerStep]) -> None:
         self.steps = list(steps)
@@ -96,15 +96,11 @@ class ProducerPlan:
         return output
 
     @staticmethod
-    def run_step(step: ProducerStep, sink: PackSink, memo: PackMemo | None = None) -> bool:
+    def run_step(step: ProducerStep, sink: PackSink, tracer: Tracer, memo: PackMemo | None) -> bool:
         """One step into the sink; False when it raised. Its output is freed on return."""
         try:
-            if memo is None:
-                output = ProducerPlan.outputs(step, None)
-            else:
-                TRACER.step = step.name
-                with TRACER.frame():
-                    output = ProducerPlan.outputs(step, memo)
+            with tracer.step(step.name):
+                output = ProducerPlan.outputs(step, memo)
         except Exception as error:  # noqa: BLE001 - a failed producer makes its rules incomplete, never clean
             sink.fail(step.name, ProducerFailure(failure_text(error), step.kinds))
             return False
@@ -116,7 +112,10 @@ class ProducerPlan:
             sink.refine(step.name, step.kinds, refinements)
         return True
 
-    def run(self, sink: PackSink, memo: PackMemo | None = None) -> None:
+    def run(self, sink: PackSink, reader: PackReader | None = None) -> None:
+        """Runs the steps with the tracer and memo of the pack reader; core producers have none."""
+        tracer = reader.tracer if reader is not None else NULL_TRACER
+        memo = reader.memo if reader is not None else None
         broken: set[str] = set()
         for step in self.steps:
             missing = next((dep for dep in step.after if dep in broken), None)
@@ -124,7 +123,7 @@ class ProducerPlan:
                 broken.add(step.name)
                 sink.fail(step.name, ProducerFailure(f"{missing} failed", step.kinds))
                 continue
-            if not self.run_step(step, sink, memo):
+            if not self.run_step(step, sink, tracer, memo):
                 broken.add(step.name)
             # A sink may drop what the step read (the native engine's decoded records), so the
             # next step does not start on top of it.

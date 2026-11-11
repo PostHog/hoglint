@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from core.support import Repo, class_def, func_def, import_row
+from django_facts import FactRepo
+from hoglint.core import memo
 from hoglint.core.config import CoreConfig
-from hoglint.core.memo import TRACER
+from hoglint.core.harness import PRODUCER_ERROR, GraphSink
 from hoglint.core.reader import python_pack_io
 from hoglint.model import Graph, Resolution
 from hoglint.presets_py.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
+from hoglint.presets_py.posthog.pack import PosthogPack
 
 DISPATCH = sorted(DISPATCH_CALLS)[0]
 HELPERS = MAX_CALL_DEPTH + 1  # h1 -> ... -> h<last> -> dispatcher: one hop past the limit from h1
@@ -57,12 +62,37 @@ def repo() -> Repo:
 @pytest.mark.parametrize("shuffle_seed", [0, 1])
 def test_a_walk_the_depth_limit_stops_is_unknown_whichever_test_walks_first(shuffle_seed: int) -> None:
     build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
-    TRACER.reset()
 
     edges = DrivesProducer(python_pack_io(build, Graph())[0], shuffle_seed).produce()
-    assert TRACER.verifiers == {}, "the drives pack registers no answer with no memo"
 
     assert [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges] == [
         ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, HELPERS - MIDDLE),
         ("posthog.test.test_from_the_start", "unknown", Resolution.UNRESOLVED, 0),
     ]
+
+
+def django_run() -> Graph:
+    return FactRepo().graph(hooks=("billing.hooks.register_refund_hook",))
+
+
+def posthog_run() -> Graph:
+    build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
+    graph = Graph()
+    reader, _ = python_pack_io(build, graph)
+    PosthogPack.run(reader, GraphSink(graph))
+    return graph
+
+
+@pytest.mark.parametrize("run", [django_run, posthog_run])
+def test_a_run_with_no_pack_memo_digests_no_answer_and_registers_none(
+    run: Callable[[], Graph], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_digest(text: str) -> str:
+        raise AssertionError("a run with no pack memo digests an answer")
+
+    monkeypatch.setattr(memo, "text_digest", no_digest)
+    graph = run()
+    assert graph.edges
+    assert graph.failed_producers == {}
+    assert [edge for edge in graph.edges if edge.attr("reason") == PRODUCER_ERROR] == []
+    assert memo.NULL_TRACER.answers == {} and memo.NULL_TRACER.verifiers == {}

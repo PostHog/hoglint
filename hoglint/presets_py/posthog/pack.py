@@ -47,7 +47,7 @@ class PosthogPack:
             return DriveItems(DrivesProducer(reader))
 
         step = ProducerStep(DRIVES_PRODUCER, EDGE_KINDS, nothing, items=items)
-        ProducerPlan([step]).run(sink, getattr(reader, "memo", None))
+        ProducerPlan([step]).run(sink, reader)
 
 
 POSTHOG_PACK = PosthogPack()

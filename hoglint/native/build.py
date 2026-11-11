@@ -15,7 +15,7 @@ from typing import Any
 import orjson
 
 from hoglint.core.config import CoreConfig
-from hoglint.core.memo import TRACER, key_of
+from hoglint.core.memo import NULL_TRACER, FileKeysMap, Tracer, key_of
 from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
 from hoglint.core.records import RecordBodies
 from hoglint.core.sites import MODULE_SCOPE, FileScope, Lookup
@@ -38,12 +38,13 @@ class NativeRecord(dict[str, Any]):
     reads the text of that one record, never the snapshot's. `path` is the snapshot's: a cached
     record holds an empty one."""
 
-    __slots__ = ("file", "link")
+    __slots__ = ("file", "link", "tracer")
 
     def __init__(self, link: Any, file: int, path: str) -> None:
         super().__init__()
         self.link = link
         self.file = file
+        self.tracer: Tracer = NULL_TRACER
         dict.__setitem__(self, "path", path)
 
     def load(self, key: str) -> Any:
@@ -52,9 +53,14 @@ class NativeRecord(dict[str, Any]):
         dict.__setitem__(self, key, value)
         return value
 
+    def touch(self) -> None:
+        """Notes a read of this record's file in the running item."""
+        if self.tracer.frames:
+            self.tracer.note_file(self.file)
+
     def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
-        if TRACER.frames:
-            TRACER.note_file(self.file)
+        if self.tracer.frames:
+            self.tracer.note_file(self.file)
         value = dict.get(self, key, ABSENT)
         if value is ABSENT and not dict.__contains__(self, key):
             value = self.load(key)
@@ -70,13 +76,11 @@ class NativeRecord(dict[str, Any]):
         return isinstance(key, str) and self.get(key, ABSENT) is not ABSENT
 
     def __iter__(self) -> Iterator[str]:
-        if TRACER.frames:
-            TRACER.note_file(self.file)
+        self.touch()
         return iter(self.link.keys(self.file))
 
     def __len__(self) -> int:
-        if TRACER.frames:
-            TRACER.note_file(self.file)
+        self.touch()
         return len(self.link.keys(self.file))
 
 
@@ -148,27 +152,28 @@ class TracedDict(dict[str, str]):
     def __init__(self, kind: str, values: dict[str, str]) -> None:
         super().__init__(values)
         self.kind = kind
+        self.tracer: Tracer = NULL_TRACER
 
     def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         found = dict.get(self, key)
-        if TRACER.frames:
-            TRACER.note(self.kind, key, found)
+        if self.tracer.frames:
+            self.tracer.note(self.kind, key, found)
         return default if found is None else found
 
     def __getitem__(self, key: str) -> str:
-        if TRACER.frames:
-            TRACER.note(self.kind, key, dict.get(self, key))
+        if self.tracer.frames:
+            self.tracer.note(self.kind, key, dict.get(self, key))
         return dict.__getitem__(self, key)
 
     def __contains__(self, key: object) -> bool:
         found = dict.get(self, key) if isinstance(key, str) else None  # type: ignore[call-overload]
-        if TRACER.frames and isinstance(key, str):
-            TRACER.note(self.kind, key, found)
+        if self.tracer.frames and isinstance(key, str):
+            self.tracer.note(self.kind, key, found)
         return found is not None
 
     def note_all(self) -> None:
-        if TRACER.frames:
-            TRACER.note_lazy(self.kind, "*", lambda: sorted(dict.items(self)))
+        if self.tracer.frames:
+            self.tracer.note_lazy(self.kind, "*", lambda: sorted(dict.items(self)))
 
     def __iter__(self) -> Iterator[str]:
         self.note_all()
@@ -196,13 +201,19 @@ class TracedModuleIndex(ModuleIndex):
 
     def __init__(self, paths: list[str], namer: ModuleNamer, first_party: tuple[str, ...]) -> None:
         super().__init__(paths, namer, first_party)
-        self.path_of = TracedDict("module-path", self.path_of)
-        self.module_of = TracedDict("path-module", self.module_of)
+        self.maps = (TracedDict("module-path", self.path_of), TracedDict("path-module", self.module_of))
+        self.path_of, self.module_of = self.maps
+        self.tracer: Tracer = NULL_TRACER
+
+    def trace_with(self, tracer: Tracer) -> None:
+        self.tracer = tracer
+        for traced in self.maps:
+            traced.tracer = tracer
 
     def exists(self, module: str) -> bool:
         found = dict.__contains__(self.path_of, module) or module in self.dirs
-        if TRACER.frames:
-            TRACER.note("module-exists", module, found)
+        if self.tracer.frames:
+            self.tracer.note("module-exists", module, found)
         return found
 
     def is_file_module(self, module: str) -> bool:
@@ -210,14 +221,14 @@ class TracedModuleIndex(ModuleIndex):
 
     def is_package(self, module: str) -> bool:
         found = self.package.get(module, module in self.dirs)
-        if TRACER.frames:
-            TRACER.note("module-package", module, found)
+        if self.tracer.frames:
+            self.tracer.note("module-package", module, found)
         return found
 
     def is_external(self, module: str) -> bool:
         found = super().is_external(module)
-        if TRACER.frames:
-            TRACER.note("module-external", module, found)
+        if self.tracer.frames:
+            self.tracer.note("module-external", module, found)
         return found
 
 
@@ -228,6 +239,7 @@ class NativeTables(Tables):
     def __init__(self, link: Any, store: NativeStore, index: ModuleIndex) -> None:
         super().__init__(store, index)  # type: ignore[arg-type]
         self.link = link
+        self.tracer: Tracer = NULL_TRACER
 
     def build(self, module: str) -> ModuleTable | None:
         found = self.link.table(module)
@@ -245,22 +257,22 @@ class NativeTables(Tables):
         """A module's table, a read of its names; its `values` come from the module's record,
         whose reads note the file."""
         table = super().get(module)
-        if TRACER.frames:
+        if self.tracer.frames:
             if table is None:
-                TRACER.note("table", module, None)
+                self.tracer.note("table", module, None)
             else:
-                TRACER.note(
+                self.tracer.note(
                     "table", module, (table.path, table.is_package, table.names, table.star_imports, table.lazy)
                 )
                 record: Any = self.record(module)
                 if record is not None:
-                    TRACER.note_file(record.file)
+                    record.touch()
         return table
 
     def record(self, module: str) -> dict | None:
         found = super().record(module)
-        if TRACER.frames:
-            TRACER.note("module-path", module, self.index.path_of.get(module))
+        if self.tracer.frames:
+            self.tracer.note("module-path", module, self.index.path_of.get(module))
         return found
 
 
@@ -279,9 +291,8 @@ class NativeFileScope(FileScope):
 
     def touch(self) -> None:
         """Notes a read of the file: what these properties keep comes from its facts."""
-        if TRACER.frames:
-            record: Any = self.record
-            TRACER.note_file(record.file)
+        record: Any = self.record
+        record.touch()
 
     @property
     def defs(self) -> list[dict]:  # type: ignore[override]
@@ -352,29 +363,30 @@ class NativeResolver:
     def __init__(self, link: Any, entities: Entities) -> None:
         self.link = link
         self.entities = entities
+        self.tracer: Tracer = NULL_TRACER
 
     def resolve_name(self, module: str, name: str) -> Hit | None:
         found = self.link.resolve_name(module, name)
-        if TRACER.frames:
-            TRACER.note("resolve-name", key_of(module, name), found)
+        if self.tracer.frames:
+            self.tracer.note("resolve-name", key_of(module, name), found)
         return self.entities.hit(found)
 
     def resolve_dotted(self, dotted: str) -> tuple[Hit | None, list[str]]:
         found, rest = self.link.resolve_dotted(dotted)
-        if TRACER.frames:
-            TRACER.note("resolve-dotted", dotted, (found, rest))
+        if self.tracer.frames:
+            self.tracer.note("resolve-dotted", dotted, (found, rest))
         return self.entities.hit(found), rest
 
     def resolve_value(self, module: str, value: object) -> Hit | None:
         found = self.link.resolve_value(module, value)
-        if TRACER.frames:
-            TRACER.note("resolve-value", key_of(module, value), found)
+        if self.tracer.frames:
+            self.tracer.note("resolve-value", key_of(module, value), found)
         return self.entities.hit(found)
 
     def resolve_class(self, module: str, value: object) -> EntityId | None:
         found = self.link.resolve_class(module, value)
-        if TRACER.frames:
-            TRACER.note("resolve-class", key_of(module, value), found)
+        if self.tracer.frames:
+            self.tracer.note("resolve-class", key_of(module, value), found)
         return self.entities.entity(found) if found is not None else None
 
 
@@ -386,11 +398,12 @@ class NativeClassIndex:
         self.entities = entities
         self.store = store
         self.paths = paths
+        self.tracer: Tracer = NULL_TRACER
 
     def located(self, ref: EntityId) -> tuple[NativeRecord, int] | None:
         found = self.link.located(ref.module, ref.symbol)
-        if TRACER.frames:
-            TRACER.note(
+        if self.tracer.frames:
+            self.tracer.note(
                 "located", key_of(ref.module, ref.symbol), None if found is None else (self.paths[found[0]], found[1])
             )
         if found is None:
@@ -404,20 +417,20 @@ class NativeClassIndex:
 
     def bases(self, ref: EntityId) -> list[EntityId]:
         found = self.link.bases(ref.module, ref.symbol)
-        if TRACER.frames:
-            TRACER.note("bases", key_of(ref.module, ref.symbol), found)
+        if self.tracer.frames:
+            self.tracer.note("bases", key_of(ref.module, ref.symbol), found)
         return [self.entities.entity(pair) for pair in found]
 
     def mro(self, ref: EntityId) -> list[EntityId]:
         found = self.link.mro(ref.module, ref.symbol)
-        if TRACER.frames:
-            TRACER.note("mro", key_of(ref.module, ref.symbol), found)
+        if self.tracer.frames:
+            self.tracer.note("mro", key_of(ref.module, ref.symbol), found)
         return [self.entities.entity(pair) for pair in found]
 
     def is_subclass(self, ref: EntityId, qualified: str) -> bool:
         found = self.link.is_subclass(ref.module, ref.symbol, qualified)
-        if TRACER.frames:
-            TRACER.note("is-subclass", key_of(ref.module, ref.symbol, qualified), found)
+        if self.tracer.frames:
+            self.tracer.note("is-subclass", key_of(ref.module, ref.symbol, qualified), found)
         return found
 
 
@@ -427,6 +440,7 @@ class NativeContext:
     def __init__(self, link: Any, entities: Entities) -> None:
         self.link = link
         self.entities = entities
+        self.tracer: Tracer = NULL_TRACER
 
     def lookup(self, found: tuple[str, Hits | None, bool]) -> Lookup:
         surface, hit, local = found
@@ -435,15 +449,15 @@ class NativeContext:
     def value_lookup(self, scope: FileScope, value: object, at_scope: int, line: int) -> Lookup | None:
         assert isinstance(scope, NativeFileScope)
         found = self.link.value_lookup(scope.scope, value, at_scope, line)
-        if TRACER.frames:
-            TRACER.note("value-lookup", key_of(scope.path, value, at_scope, line), found)
+        if self.tracer.frames:
+            self.tracer.note("value-lookup", key_of(scope.path, value, at_scope, line), found)
         return self.lookup(found) if found is not None else None
 
     def chain_lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> tuple[Lookup, list[str]]:
         assert isinstance(scope, NativeFileScope)
         found, rest = self.link.chain_lookup(scope.scope, chain, at_scope, line)
-        if TRACER.frames:
-            TRACER.note("chain-lookup", key_of(scope.path, chain, at_scope, line), (found, rest))
+        if self.tracer.frames:
+            self.tracer.note("chain-lookup", key_of(scope.path, chain, at_scope, line), (found, rest))
         return self.lookup(found), rest
 
 
@@ -459,6 +473,7 @@ class NativeBuild:
         self.extracted_by = extracted_by
         self.external = dict(external)
         paths: list[str] = link.paths()
+        self.paths = paths
         self.store = NativeStore(link, paths)
         self.namer = ModuleNamer(config.source_roots, self.external)
         self.index = TracedModuleIndex(paths, self.namer, config.first_party)
@@ -475,10 +490,19 @@ class NativeBuild:
         self.scope_of = {scope.path: scope for scope in self.files}
         self.bodies_cache: dict[str, RecordBodies] = {}
 
+    def trace_with(self, tracer: Tracer) -> None:
+        """Notes what packs read of this build on `tracer`, the run's pack memo's: the files by
+        id and content key, and each query the build answers."""
+        tracer.files = FileKeysMap(self.paths, dict(zip(self.paths, self.link.blob_keys(), strict=True)))
+        for record in self.store.records.values():
+            record.tracer = tracer
+        self.index.trace_with(tracer)
+        for traced in (self.tables, self.resolver, self.classes, self.context):
+            traced.tracer = tracer
+
     def bodies(self, record: Mapping[str, Any]) -> RecordBodies:
-        file = getattr(record, "file", None)
-        if TRACER.frames and file is not None:
-            TRACER.note_file(file)
+        if isinstance(record, NativeRecord):
+            record.touch()
         path = record["path"]
         found = self.bodies_cache.get(path)
         if found is None:

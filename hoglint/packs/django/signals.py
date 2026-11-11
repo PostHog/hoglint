@@ -15,8 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo, digest
-from hoglint.core.reader import note_file_of
+from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedMemo
 from hoglint.core.records import sequence_items, str_literal, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import Hit
@@ -56,7 +55,7 @@ class SignalProducer:
         self.registry = registry
         self.receivers = frozenset(config.receiver_decorators)
         self.signal_bases = config.signal_bases
-        self.signal_cache: TracedMemo[EntityId, bool] = TracedMemo()
+        self.signal_cache: TracedMemo[EntityId, bool] = TracedMemo(reader.tracer)
 
     def lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> Hit | None:
         found = self.reader.context.value_lookup(scope, chain, at_scope, line)
@@ -283,14 +282,8 @@ class SignalItems(Items):
         self.decorated = producer.decorated(files)
         self.calls: dict[str, list[list]] = {}
         self.callees: dict[str, list[list]] = {}
-        # Only a step the memo runs opens a frame; a run with no memo digests nothing.
-        if TRACER.frames:
-            self.answer_reads()
-
-    def answer_reads(self) -> None:
-        """Answers this step's reads of decorated defs again from a digest per file."""
-        digests = {path: digest(sorted(found)) for path, found in self.decorated.items()}
-        TRACER.verify_by_map(self.DECORATED, digests, digest([]))
+        self.tracer = producer.reader.tracer
+        self.tracer.verify_by_map(self.DECORATED, self.decorated, sorted, set())
 
     def keys(self) -> list[str]:
         return list(self.files)
@@ -303,9 +296,9 @@ class SignalItems(Items):
 
     def run_item(self, key: str) -> ItemOutput:
         scope = self.files[key]
-        note_file_of(scope)
+        self.producer.reader.note_file(scope)
         decorated = self.decorated.get(key, set())
-        TRACER.note(self.DECORATED, key, sorted(decorated))
+        self.tracer.note(self.DECORATED, key, sorted(decorated))
         found = self.producer.candidates(scope, decorated, self.calls.get(key, []), self.callees.get(key, []))
         if found is None:
             return ItemOutput([])

@@ -21,6 +21,7 @@ from hoglint.ledger.listing import WorktreeListing
 from hoglint.model import Edge, EntityId
 
 if TYPE_CHECKING:
+    from hoglint.core.memo import PackMemo, Tracer
     from hoglint.core.modules import FirstParty, ModuleIndex
     from hoglint.core.records import RecordBodies
     from hoglint.core.sites import FileScope, Lookup
@@ -72,7 +73,10 @@ class AttributeUse:
 
 class PackReader(Protocol):
     """What a pack reads of one snapshot. Bulk reads are candidate queries; `record` is the
-    escape hatch for one file's whole record, and the run counts its uses (`records_read`)."""
+    escape hatch for one file's whole record, and the run counts its uses (`records_read`).
+
+    `memo` is the run's pack memo, None when it is off, and `tracer` notes what the running item
+    reads (hoglint/core/memo.py): the memo's tracer, or one that notes nothing."""
 
     @property
     def files(self) -> list[FileScope]:
@@ -92,8 +96,14 @@ class PackReader(Protocol):
     context: Any  # value_lookup, chain_lookup at a file scope's sites
     external: dict[str, str]
     records_read: int
+    memo: PackMemo | None
+    tracer: Tracer
 
     def record(self, path: str) -> Mapping[str, Any]: ...
+
+    def note_file(self, scope: FileScope) -> None:
+        """Notes a read of one file's facts in the running item."""
+        ...
 
     def bodies(self, record: Mapping[str, Any]) -> RecordBodies: ...
 

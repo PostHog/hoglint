@@ -16,7 +16,6 @@ from core.support import (
 )
 from django_facts import FIRST_PARTY, FactRepo
 from hoglint.core.config import CoreConfig
-from hoglint.core.memo import TRACER
 from hoglint.core.reader import BuildReader
 from hoglint.core.symbols import FUNC
 from hoglint.ledger.cache import RunStores
@@ -24,10 +23,8 @@ from hoglint.model import Graph, Resolution
 from hoglint.native.queries import PackQueries
 from hoglint.packs.django.apps import AppReader
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
-from hoglint.packs.django.installs import InstallsItems
 from hoglint.packs.django.migrations import AliasProjection, MigrationReader, SummaryCache
 from hoglint.packs.django.pack import MODEL_KINDS
-from hoglint.packs.django.signals import SignalItems
 
 RECEIVERS = {
     "shop/receivers.py": {
@@ -128,15 +125,6 @@ def test_installs_edges_see_imports_only_where_they_are_bound_follow_aliases_and
         ("wire", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
         ("wire_aliased", "call", "billing.hooks.register_refund_hook", Resolution.RESOLVED, ""),
     ]
-
-
-def test_a_run_with_no_pack_memo_registers_no_answers_on_the_tracer() -> None:
-    TRACER.reset()
-    graph = FactRepo({**RECEIVERS, **HOOKS}).graph(hooks=("billing.hooks.register_refund_hook",))
-    assert graph.by_kind("installs") and graph.by_kind("signal")
-    assert InstallsItems.ALIASES not in TRACER.maps
-    assert SignalItems.DECORATED not in TRACER.maps
-    assert TRACER.verifiers == {}, "no step of the pack registers an answer with no memo"
 
 
 @pytest.mark.parametrize("scan_roots, installs", [((), 0), (("proj",), 3)])

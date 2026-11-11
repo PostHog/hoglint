@@ -10,8 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo, key_of, parts_of
-from hoglint.core.reader import note_file_of
+from hoglint.core.memo import ItemOutput, Items, TracedMemo, Tracer, key_of, parts_of
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import entity
@@ -68,10 +67,10 @@ class ModelIndex:
         self.reader = reader
         self.resolver = reader.resolver
         self.classes = reader.classes
-        self.body_cache: TracedMemo[tuple[str, int], ClassBody] = TracedMemo()
-        self.model_cache: TracedMemo[EntityId, bool] = TracedMemo()
-        self.abstract_cache: TracedMemo[EntityId, bool] = TracedMemo()
-        self.meta_cache: TracedMemo[EntityId, dict[str, object]] = TracedMemo()
+        self.body_cache: TracedMemo[tuple[str, int], ClassBody] = TracedMemo(reader.tracer)
+        self.model_cache: TracedMemo[EntityId, bool] = TracedMemo(reader.tracer)
+        self.abstract_cache: TracedMemo[EntityId, bool] = TracedMemo(reader.tracer)
+        self.meta_cache: TracedMemo[EntityId, dict[str, object]] = TracedMemo(reader.tracer)
 
     def body_of(self, record: dict, idx: int) -> ClassBody:
         return self.body_cache.get((record["path"], idx), lambda: ClassBody(self.reader.bodies(record), idx))
@@ -293,31 +292,35 @@ class TracedModels(dict[EntityId, ModelEntry]):
 
     MODEL = "django.model"
 
+    def __init__(self, tracer: Tracer) -> None:
+        super().__init__()
+        self.tracer = tracer
+
     def get(self, key: EntityId, default: Any = None) -> Any:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         found = dict.get(self, key)
-        if TRACER.frames:
-            TRACER.note(self.MODEL, str(key), found)
+        if self.tracer.frames:
+            self.tracer.note(self.MODEL, str(key), found)
         return default if found is None else found
 
     def __getitem__(self, key: EntityId) -> ModelEntry:
-        if TRACER.frames:
-            TRACER.note(self.MODEL, str(key), dict.get(self, key))
+        if self.tracer.frames:
+            self.tracer.note(self.MODEL, str(key), dict.get(self, key))
         return dict.__getitem__(self, key)
 
     def __contains__(self, key: object) -> bool:
         found = dict.get(self, key) if isinstance(key, EntityId) else None  # type: ignore[call-overload]
-        if TRACER.frames and isinstance(key, EntityId):
-            TRACER.note(self.MODEL, str(key), found)
+        if self.tracer.frames and isinstance(key, EntityId):
+            self.tracer.note(self.MODEL, str(key), found)
         return found is not None
 
     def note_all(self) -> None:
-        if TRACER.frames:
-            TRACER.note_lazy(self.MODEL, "*", lambda: list(dict.values(self)))
+        if self.tracer.frames:
+            self.tracer.note_lazy(self.MODEL, "*", lambda: list(dict.values(self)))
 
     def answer_reads(self) -> None:
         by_name = {str(ref): entry for ref, entry in dict.items(self)}
         whole = list(dict.values(self))
-        TRACER.answer_with(self.MODEL, lambda key: whole if key == "*" else by_name.get(key))
+        self.tracer.answer_with(self.MODEL, lambda key: whole if key == "*" else by_name.get(key))
 
     def __iter__(self) -> Iterator[EntityId]:
         self.note_all()
@@ -354,9 +357,7 @@ class ModelItems(Items):
             if str(ref) != MODEL_BASE:
                 self.by_module.setdefault(ref.module, []).append(ref)
         self.files = {scope.path: scope for scope in files if scope.module in self.by_module}
-        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
-        if TRACER.frames:
-            TRACER.answer_with(self.FOUND, self.found_again)
+        registry.reader.tracer.answer_with(self.FOUND, self.found_again)
 
     def found_again(self, key: str) -> object:
         scope = self.files.get(key)
@@ -367,12 +368,12 @@ class ModelItems(Items):
 
     def run_item(self, key: str) -> ItemOutput:
         scope = self.files[key]
-        note_file_of(scope)
+        reader = self.registry.reader
+        reader.note_file(scope)
         refs = self.by_module[scope.module]
-        TRACER.note(self.FOUND, key, [str(ref) for ref in refs])
+        reader.tracer.note(self.FOUND, key, [str(ref) for ref in refs])
         if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
             return ItemOutput([])
-        reader = self.registry.reader
         if reader.index.path_of.get(scope.module) != scope.path:
             return ItemOutput([])
         table = reader.tables.get(scope.module)
@@ -407,13 +408,9 @@ class ModelRegistry:
         self.reader = reader
         self.apps = apps
         self.index = ModelIndex(reader)
-        self.models = TracedModels()
+        self.models = TracedModels(reader.tracer)
         self.by_label: dict[str, EntityId] = {}
         self.failures: list[str] = []
-
-    def discover(self, files: list[FileScope]) -> None:
-        """Models in the given prod files: classes whose MRO reaches Django's Model."""
-        ItemRun(ModelItems(self, files), None).outputs()
 
     def entry_of(self, ref: EntityId, path: str, line: int) -> ModelEntry | None:
         meta = self.index.meta(ref)
@@ -435,7 +432,7 @@ class ModelRegistry:
     def answer_reads(self) -> None:
         """Answers the registry's reads again in this run, once every model is in."""
         self.models.answer_reads()
-        TRACER.answer_with(self.LABEL, self.label_again)
+        self.reader.tracer.answer_with(self.LABEL, self.label_again)
 
     def label_again(self, key: str) -> object:
         value, app_label, own = parts_of(key)
@@ -458,9 +455,10 @@ class ModelRegistry:
     def resolve_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
         """`app.Model`, `Model` (same app) or `self` to a model class, as Django's registry would."""
         found = self.read_label(value, app_label, self_ref)
-        if TRACER.frames:
+        tracer = self.reader.tracer
+        if tracer.frames:
             own = None if self_ref is None else [self_ref.module, self_ref.symbol]
-            TRACER.note(self.LABEL, key_of(value, app_label, own), None if found is None else str(found))
+            tracer.note(self.LABEL, key_of(value, app_label, own), None if found is None else str(found))
         return found
 
     def read_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
@@ -500,9 +498,9 @@ class RelationBuilder:
         self.reader = registry.reader
         self.apps = registry.apps
         self.config = config
-        self.field_class_kind: TracedMemo[EntityId, tuple[str, str | None] | None] = TracedMemo()
+        self.field_class_kind: TracedMemo[EntityId, tuple[str, str | None] | None] = TracedMemo(self.reader.tracer)
         self.label_refs: dict[tuple[str, str], LabelRef] = {}
-        self.local_cache: TracedMemo[EntityId, dict[str, FieldDecl]] = TracedMemo()
+        self.local_cache: TracedMemo[EntityId, dict[str, FieldDecl]] = TracedMemo(self.reader.tracer)
 
     def field_kind(self, ref: EntityId) -> tuple[str, str | None] | None:
         return self.field_class_kind.get(ref, lambda: self.read_field_kind(ref))

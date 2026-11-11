@@ -23,7 +23,6 @@ import orjson
 
 from hoglint.core import records as records_module
 from hoglint.core.harness import PRODUCER_ERROR, failure_text
-from hoglint.core.memo import TRACER
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
 from hoglint.ledger.cache import PACKS_STORE, RunStores
 from hoglint.ledger.scan import write_atomic
@@ -394,7 +393,6 @@ class AliasProjection:
         path = routing.path if routing.path.is_absolute() else repo_root / routing.path
         routes = (yaml.safe_load(path.read_text()) or {}).get("routes", [])
         self.route = {r["app_label"]: r["database"] for r in routes}
-        TRACER.note(self.ROUTING, str(routing.path), sorted(self.route.items()))
 
     def aliases(self, app: str) -> frozenset[str]:
         if self.routing is None:

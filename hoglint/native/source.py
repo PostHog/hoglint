@@ -11,14 +11,14 @@ from typing import Any
 
 from hoglint.config import Config
 from hoglint.core.analysis import AnalysisOptions
-from hoglint.core.memo import OFF, TRACE, TRACER, PackMemo, digest
+from hoglint.core.memo import OFF, TRACE, PackMemo, digest
 from hoglint.core.reader import BuildReader
 from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.listing import Listing
 from hoglint.model import Graph
 from hoglint.native.analysis import NativeAnalysis
-from hoglint.native.answers import ReaderAnswers, file_keys
+from hoglint.native.answers import ReaderAnswers
 from hoglint.native.build import NativeBuild
 from hoglint.native.graph import NativeGraph, NativeSink
 from hoglint.native.memo_store import MemoStore, engine_id
@@ -58,17 +58,13 @@ class NativeGraphSource(GraphSource):
         build = analysis.build
         listing = self.listing_of(code_root, tree)
         memo = self.pack_memo(options, build, self.memo_config(config, packs, listing))
+        if memo is not None:
+            build.trace_with(memo.tracer)
         reader = BuildReader(build, NativePackQueries(build, graph, graph.link), memo)
-        TRACER.reset()
-        try:
-            if memo is not None:
-                TRACER.files = file_keys(graph.link)
-                ReaderAnswers(reader, build).register()
-            run_packs(packs, reader, StepReleasingSink(graph, build), listing)
-            if memo is not None:
-                memo.flush()
-        finally:
-            TRACER.reset()
+        ReaderAnswers(reader, build).register()
+        run_packs(packs, reader, StepReleasingSink(graph, build), listing)
+        if memo is not None:
+            memo.flush()
         build.release()
         return graph
 

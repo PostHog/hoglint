@@ -10,7 +10,7 @@ import fnmatch
 from dataclasses import astuple, dataclass, field
 from typing import Any
 
-from hoglint.core.memo import TRACER
+from hoglint.core.memo import Tracer
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.symbols import entity
 from hoglint.model import EntityId
@@ -133,7 +133,10 @@ class AppRegistry:
     SETTING = "django.setting"
     APP_LABEL = "django.app-label"
 
-    def __init__(self, settings_modules: list[str], settings: SettingsValues, apps: list[InstalledApp]) -> None:
+    def __init__(
+        self, settings_modules: list[str], settings: SettingsValues, apps: list[InstalledApp], tracer: Tracer
+    ) -> None:
+        self.tracer = tracer
         self.read_settings_modules = settings_modules
         self.settings = settings
         self.installed = apps
@@ -149,33 +152,33 @@ class AppRegistry:
         ]
 
     @staticmethod
-    def restore(data: list[Any]) -> AppRegistry:
+    def restore(data: list[Any], tracer: Tracer) -> AppRegistry:
         settings_modules, strings, lists, apps = data
         settings = SettingsValues(dict(strings), {name: list(values) for name, values in lists.items()})
-        return AppRegistry(list(settings_modules), settings, [InstalledApp(*app) for app in apps])
+        return AppRegistry(list(settings_modules), settings, [InstalledApp(*app) for app in apps], tracer)
 
     def answer_reads(self) -> None:
         """Answers the registry's reads again in this run (`Tracer.answer_with`)."""
-        TRACER.answer_with(self.APPS, lambda key: self.installed if key == "apps" else self.read_settings_modules)
-        TRACER.answer_with(self.SETTING, self.settings.strings.get)
-        TRACER.answer_with(self.APP_LABEL, self.label_for_module)
+        self.tracer.answer_with(self.APPS, lambda key: self.installed if key == "apps" else self.read_settings_modules)
+        self.tracer.answer_with(self.SETTING, self.settings.strings.get)
+        self.tracer.answer_with(self.APP_LABEL, self.label_for_module)
 
     @property
     def apps(self) -> list[InstalledApp]:
-        if TRACER.frames:
-            TRACER.note(self.APPS, "apps", self.installed)
+        if self.tracer.frames:
+            self.tracer.note(self.APPS, "apps", self.installed)
         return self.installed
 
     @property
     def settings_modules(self) -> list[str]:
-        if TRACER.frames:
-            TRACER.note(self.APPS, "settings_modules", self.read_settings_modules)
+        if self.tracer.frames:
+            self.tracer.note(self.APPS, "settings_modules", self.read_settings_modules)
         return self.read_settings_modules
 
     def setting(self, name: str) -> str | None:
         found = self.settings.strings.get(name)
-        if TRACER.frames:
-            TRACER.note(self.SETTING, name, found)
+        if self.tracer.frames:
+            self.tracer.note(self.SETTING, name, found)
         return found
 
     def app_for_module(self, module: str) -> InstalledApp | None:
@@ -189,8 +192,8 @@ class AppRegistry:
             app = self.app_for_module(module)
             self.module_labels[module] = app.label if app is not None else None
         found = self.module_labels[module]
-        if TRACER.frames:
-            TRACER.note(self.APP_LABEL, module, found)
+        if self.tracer.frames:
+            self.tracer.note(self.APP_LABEL, module, found)
         return found
 
 
@@ -204,7 +207,7 @@ class AppReader:
         settings_modules = SettingsReader(self.reader).modules(config.settings_modules)
         settings = SettingsReader(self.reader).read(settings_modules)
         apps = [self.app_for_entry(e) for e in settings.lists.get(INSTALLED_APPS, [])]
-        return AppRegistry(settings_modules, settings, apps)
+        return AppRegistry(settings_modules, settings, apps, self.reader.tracer)
 
     def config_attrs(self, ref: EntityId) -> dict[str, object]:
         attrs: dict[str, object] = {}

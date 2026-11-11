@@ -11,16 +11,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from hoglint.core.memo import TRACER, FileKeysMap, parts_of
+from hoglint.core.memo import parts_of
 from hoglint.core.reader import BuildReader
 from hoglint.native.build import NativeBuild
-
-
-def file_keys(link: Any) -> FileKeysMap:
-    """Files by id, and the content key of each path: the blob oid of a repo file, the content
-    hash of a third-party file; None for a file read from no stable content."""
-    paths: list[str] = link.paths()
-    return FileKeysMap(paths, dict(zip(paths, link.blob_keys(), strict=True)))
 
 
 class ReaderAnswers:
@@ -30,7 +23,7 @@ class ReaderAnswers:
         self.reader = reader
         self.build = build
         self.link = build.link
-        self.paths: list[str] = build.link.paths()
+        self.paths = build.paths
 
     def table(self, module: str) -> object:
         table = self.build.tables.get(module)
@@ -96,4 +89,4 @@ class ReaderAnswers:
             "subclasses": lambda qualified: [str(ref) for ref in self.reader.queries.subclasses(qualified)],
         }
         for kind, answer in answers.items():
-            TRACER.answer_with(kind, answer)
+            self.reader.tracer.answer_with(kind, answer)

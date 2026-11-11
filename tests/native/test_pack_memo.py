@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, PackMemo, part_of
+from hoglint.core.memo import ItemOutput, ItemRun, Items, PackMemo, Tracer, part_of
 from hoglint.ledger.cache import FACT_STORE, MEMO, RunStores
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.native.answers import ReaderAnswers
@@ -25,8 +25,9 @@ KIND = "test.answer"
 class World(Items):
     """One item per name; an item reads its name's answer and makes one edge that names it."""
 
-    def __init__(self, answers: dict[str, str]) -> None:
+    def __init__(self, answers: dict[str, str], tracer: Tracer) -> None:
         self.answers = answers
+        self.tracer = tracer
         self.ran: list[str] = []
         self.taken: list[Any] = []
 
@@ -36,7 +37,7 @@ class World(Items):
     def run_item(self, key: str) -> ItemOutput:
         self.ran.append(key)
         answer = self.answers[key]
-        TRACER.note(KIND, key, answer)
+        self.tracer.note(KIND, key, answer)
         edge = Edge(
             "reference",
             Site(f"{key}.py", key, "<module>", 1),
@@ -54,16 +55,14 @@ class World(Items):
 
 def check(store: MemoStore, answers: dict[str, str]) -> tuple[World, list[Any]]:
     """One run of the step through the memo, as a pack phase runs it."""
-    TRACER.reset()
-    TRACER.answer_with(KIND, answers.get)
-    world = World(answers)
     memo = PackMemo(store, "policy")
+    memo.tracer.answer_with(KIND, answers.get)
+    world = World(answers, memo.tracer)
     step = memo.step("test@1")
-    with TRACER.frame():
+    with memo.tracer.step("test@1"):
         outputs = ItemRun(world, step).outputs()
     memo.end_step(step)
     memo.flush()
-    TRACER.reset()
     return world, outputs
 
 
@@ -122,26 +121,24 @@ class Folded(World):
         self.ran.append(key)
         if key == "fold":
             return ItemOutput([], {"state": "s"})
-        TRACER.note(self.STATE, "state", self.answers["state"])
+        self.tracer.note(self.STATE, "state", self.answers["state"])
         return ItemOutput([])
 
     def take(self, key: str, data: Any) -> None:
         if key == "fold":
-            TRACER.answer_with(self.STATE, lambda _: data["state"])
+            self.tracer.answer_with(self.STATE, lambda _: data["state"])
 
 
 def test_items_that_read_a_fold_of_their_own_part_are_reused(tmp_path: Path) -> None:
     store = MemoStore(tmp_path, "engine")
     for _ in range(2):
-        TRACER.reset()
-        world = Folded({"state": "s"})
         memo = PackMemo(store, "policy")
+        world = Folded({"state": "s"}, memo.tracer)
         step = memo.step("test@1")
-        with TRACER.frame():
+        with memo.tracer.step("test@1"):
             ItemRun(world, step).outputs()
         memo.end_step(step)
         memo.flush()
-        TRACER.reset()
     assert world.ran == []
 
 
@@ -165,13 +162,15 @@ def model(name: str) -> tuple[EntityId, ModelEntry]:
     return ref, ModelEntry(ref, "app/models.py", 1, "app", False, False, ref, {})
 
 
-def module_index(names: list[str]) -> tuple[TracedDict, Callable[[], None]]:
+def module_index(names: list[str], tracer: Tracer) -> tuple[TracedDict, Callable[[], None]]:
     found = TracedDict("module-path", {name: f"{name}.py" for name in names})
-    return found, lambda: TRACER.answer_with("module-path", lambda key: ReaderAnswers.index_answer(found, key))
+    found.tracer = tracer
+    return found, lambda: tracer.answer_with("module-path", lambda key: ReaderAnswers.index_answer(found, key))
 
 
-def models(names: list[str]) -> tuple[TracedModels, Callable[[], None]]:
-    found = TracedModels(dict(model(name) for name in names))
+def models(names: list[str], tracer: Tracer) -> tuple[TracedModels, Callable[[], None]]:
+    found = TracedModels(tracer)
+    found.update(dict(model(name) for name in names))
     return found, found.answer_reads
 
 
@@ -190,17 +189,15 @@ def test_an_item_that_reads_a_whole_traced_map_runs_again_when_the_map_gains_a_k
     store = MemoStore(tmp_path, "engine")
     ran = []
     for names in (["a"], ["a", "b"]):
-        TRACER.reset()
-        found, answer = make(names)
+        memo = PackMemo(store, "policy")
+        found, answer = make(names, memo.tracer)
         answer()
         items = WholeMap(lambda found=found: read(found))
-        memo = PackMemo(store, "policy")
         step = memo.step("whole@1")
-        with TRACER.frame():
+        with memo.tracer.step("whole@1"):
             ItemRun(items, step).outputs()
         memo.end_step(step)
         memo.flush()
-        TRACER.reset()
         ran.append(items.ran)
     assert ran == [["a"], ["a"]]
 
