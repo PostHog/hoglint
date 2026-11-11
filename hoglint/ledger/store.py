@@ -38,6 +38,7 @@ import shutil
 import hashlib
 import datetime
 import tempfile
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,7 @@ MAX_BYTES = 1024**3
 MAX_AGE = datetime.timedelta(days=30)
 PRUNED_MARK = ".pruned-"  # then the day, one mark per day
 FACTS = "facts"  # the fact cache, pruned by its own pruner
+MEMO = "memo"  # the pack memo, pruned as the fact cache is (hoglint/native/memo_store.py)
 
 
 @dataclass(frozen=True)
@@ -68,14 +70,14 @@ class Walk:
     directories: list[Path]
 
     @staticmethod
-    def of(top: Path, skipped: Path | None = None) -> Walk:
-        """The walk of `top`, without `skipped` and everything under it."""
+    def of(top: Path, skipped: Collection[Path] = ()) -> Walk:
+        """The walk of `top`, without the `skipped` directories and everything under them."""
         files = []
         directories = []
         for parent, subdirectories, names in os.walk(top):
             here = Path(parent)
             directories.append(here)
-            subdirectories[:] = [name for name in subdirectories if here / name != skipped]
+            subdirectories[:] = [name for name in subdirectories if here / name not in skipped]
             for name in names:
                 path = here / name
                 try:
@@ -105,9 +107,9 @@ class Walk:
 
 
 class CacheRoot:
-    """Keeps the cache root within its age and size bounds, once a day. `facts/` has a pruner of
-    its own (`hoglint/native/factdb.py`), which deletes a database only with its `-wal` and
-    `-shm` files, so this one never walks it."""
+    """Keeps the cache root within its age and size bounds, once a day. `facts/` and `memo/` have
+    a pruner of their own (`hoglint/native/factdb.py`), which deletes a database only with its
+    `-wal` and `-shm` files, so this one never walks them."""
 
     def __init__(self, root: Path, max_bytes: int = MAX_BYTES, max_age: datetime.timedelta = MAX_AGE) -> None:
         self.root = root
@@ -142,7 +144,7 @@ class CacheRoot:
         """Deletes the files older than the age bound, then the oldest until the root is within
         the size bound, then the empty directories made before the age bound. The marks stay."""
         cutoff = (now or time.time()) - self.max_age.total_seconds()
-        walk = Walk.of(self.root, skipped=self.root / FACTS)
+        walk = Walk.of(self.root, skipped=(self.root / FACTS, self.root / MEMO))
         kept = []
         for modified, size, path in walk.files:
             if path.parent == self.root and path.name.startswith(PRUNED_MARK):

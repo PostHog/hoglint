@@ -59,13 +59,15 @@ class ProducerStep:
     of the edges it makes, and those of the edges it refines.
 
     A step may also run as items (`items`, see hoglint/core/memo.py): its output is then what
-    `run` makes, followed by its items' output."""
+    `run` makes, followed by its items' output. `stored` says whether the memo keeps its items:
+    a step whose items cost less to run than to check runs them, traced, every time."""
 
     name: str
     kinds: frozenset[str]
     run: Callable[[], Iterable[Output]]
     after: tuple[str, ...] = ()
     items: Callable[[], StepItems] | None = None
+    stored: bool = True
 
 
 class ProducerPlan:
@@ -83,8 +85,14 @@ class ProducerPlan:
     @staticmethod
     def outputs(step: ProducerStep, memo: PackMemo | None) -> list[Output]:
         output = list(step.run())
-        if step.items is not None:
-            output.extend(ItemRun(step.items(), memo.step(step.name) if memo is not None else None).outputs())
+        if step.items is None:
+            return output
+        if memo is None:
+            output.extend(ItemRun(step.items(), None).outputs())
+            return output
+        step_memo = memo.step(step.name, step.stored)
+        output.extend(ItemRun(step.items(), step_memo).outputs())
+        memo.end_step(step_memo)
         return output
 
     @staticmethod

@@ -278,7 +278,7 @@ class FactDatabase:
         kept = sum(size for _, size, path in walk.files if path in own)
         kept += sum(unit.size for unit in units) + sum(space.size for space in namespaces)
         kept += sum(size for _, size, _ in files)
-        rest = Walk.of(self.directory.parent, skipped=self.directory)
+        rest = Walk.of(self.directory.parent, skipped=(self.directory,))
         return kept + sum(size for _, size, _ in rest.files)
 
     def prune(self, day: datetime.date, now: float | None = None) -> None:
