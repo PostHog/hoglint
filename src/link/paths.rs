@@ -3,6 +3,7 @@
 
 use super::facts::FactSet;
 use super::intern::{Interner, Sid};
+use super::trace::Kind;
 use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -252,20 +253,35 @@ impl ModuleIndex {
         }
     }
 
-    /// Third-party: loaded from site-packages, or named under a head no repo file has.
-    pub fn is_external(&self, it: &mut Interner, module: Sid) -> bool {
+    /// Third-party: loaded from site-packages, or named under a head no repo file has. `read`
+    /// sees each module and head the answer looks at, so a caller can record them.
+    pub fn is_external(
+        &self,
+        it: &mut Interner,
+        module: Sid,
+        read: &mut impl FnMut(Kind, Sid),
+    ) -> bool {
+        read(Kind::Module, module);
         if let Some(&file) = self.path_of.get(&module) {
             return self.site[file as usize];
         }
         let head = it.head(module);
+        read(Kind::Head, head);
         !self.repo_heads.contains(&head)
     }
 
     /// The longest dotted prefix (itself included) that is a module or namespace package.
-    pub fn longest_module(&self, it: &mut Interner, dotted: Sid) -> Option<(Sid, usize)> {
+    /// `read` sees each prefix the answer looks at, as in `is_external`.
+    pub fn longest_module(
+        &self,
+        it: &mut Interner,
+        dotted: Sid,
+        read: &mut impl FnMut(Kind, Sid),
+    ) -> Option<(Sid, usize)> {
         let parts = it.segs(dotted);
         for end in (1..=parts.len()).rev() {
             let candidate = it.from_segs(&parts[..end]);
+            read(Kind::Module, candidate);
             if self.exists(candidate) {
                 return Some((candidate, end));
             }

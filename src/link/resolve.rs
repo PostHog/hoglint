@@ -417,26 +417,21 @@ impl Core {
     /// Third-party: loaded from site-packages, or named under a head no repo file has
     /// (`ModuleIndex::is_external`).
     pub fn is_external(&mut self, module: Sid) -> bool {
-        self.rec.read(Kind::Module, module, EMPTY);
-        if let Some(&file) = self.index.path_of.get(&module) {
-            return self.index.site[file as usize];
-        }
-        let head = self.it.head(module);
-        self.rec.read(Kind::Head, head, EMPTY);
-        !self.index.repo_heads.contains(&head)
+        let rec = &mut self.rec;
+        self.index
+            .is_external(&mut self.it, module, &mut |kind, read| {
+                rec.read(kind, read, EMPTY)
+            })
     }
 
     /// The longest dotted prefix (itself included) that is a module or namespace package
     /// (`ModuleIndex::longest_module`).
     pub fn longest_module(&mut self, dotted: Sid) -> Option<(Sid, usize)> {
-        let parts = self.it.segs(dotted);
-        for end in (1..=parts.len()).rev() {
-            let candidate = self.it.from_segs(&parts[..end]);
-            if self.exists(candidate) {
-                return Some((candidate, end));
-            }
-        }
-        None
+        let rec = &mut self.rec;
+        self.index
+            .longest_module(&mut self.it, dotted, &mut |kind, read| {
+                rec.read(kind, read, EMPTY)
+            })
     }
 
     // ── tables ──

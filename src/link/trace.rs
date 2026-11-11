@@ -605,7 +605,10 @@ impl Link {
                 continue;
             }
             let core = &mut self.core;
-            let Some((module, end)) = core.index.longest_module(&mut core.it, surface) else {
+            let found = core
+                .index
+                .longest_module(&mut core.it, surface, &mut |_, _| {});
+            let Some((module, end)) = found else {
                 continue;
             };
             let after = core.it.segs(surface).get(end).copied().unwrap_or(EMPTY);
