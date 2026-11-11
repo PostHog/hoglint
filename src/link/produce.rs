@@ -1352,18 +1352,10 @@ impl Producers<'_> {
             .unwrap_or_default()
     }
 
-    /// The analyzed file and def index of a class the link resolved to.
-    fn class_def(&mut self, class: Ent) -> Option<(usize, u32)> {
-        let Binding::Class(idx, stub) = self.core.binding_of(class.m, class.s)? else {
-            return None;
-        };
-        let table = self.core.table(class.m)?;
-        let table = self.core.table_at(table);
-        let file = if stub {
-            table.stub_record
-        } else {
-            table.record
-        }?;
+    /// The analyzed file's scope and def index of the def or class (`kind`) a module table binds
+    /// a name to.
+    fn def_of(&mut self, module: Sid, name: Sid, kind: HitKind) -> Option<(usize, u32)> {
+        let (file, idx) = self.core.located_def(module, name, kind)?;
         Some((*self.owner_of.get(&file)?, idx))
     }
 
@@ -1390,7 +1382,7 @@ impl Producers<'_> {
             if class == own {
                 continue;
             }
-            if let Some(found) = self.class_def(class) {
+            if let Some(found) = self.def_of(class.m, class.s, HitKind::Class) {
                 out.push(found);
             }
         }
@@ -1595,22 +1587,8 @@ impl Producers<'_> {
             }
         }
         let origin = core.origin(hit);
-        let (idx, stub) = match (kind, core.binding_of(origin.m, origin.s)) {
-            (HitKind::Def, Some(Binding::Def(idx, stub)))
-            | (HitKind::Class, Some(Binding::Class(idx, stub))) => (idx, stub),
-            _ => return Some(Followed::Unfollowed),
-        };
-        let Some(table) = core.table(origin.m) else {
-            return Some(Followed::Unfollowed);
-        };
-        let table = core.table_at(table);
-        let file = if stub {
-            table.stub_record
-        } else {
-            table.record
-        };
-        match file.and_then(|file| self.owner_of.get(&file)) {
-            Some(&owner) => Some(Followed::Def(owner, idx)),
+        match self.def_of(origin.m, origin.s, kind) {
+            Some((owner, idx)) => Some(Followed::Def(owner, idx)),
             None => Some(Followed::Unfollowed),
         }
     }

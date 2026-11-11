@@ -239,6 +239,18 @@ class Tables:
             self.cache[module] = self.build(module)
         return self.cache[module]
 
+    def binding(self, module: str, name: str) -> Binding | None:
+        table = self.get(module)
+        return table.names.get(name) if table is not None else None
+
+    def binding_path(self, module: str, name: str) -> str | None:
+        """The file a module table reads a name's binding from: the `.pyi` for a name only the
+        stub binds, else the module's own file."""
+        table = self.get(module)
+        if table is None:
+            return None
+        return (self.index.stub_of if name in table.stub_names else self.index.path_of).get(module)
+
 
 class Resolver:
     """Names and dotted chains to symbols or modules, following re-exports."""
@@ -395,13 +407,11 @@ class ClassIndex:
 
     def located(self, ref: EntityId) -> tuple[dict, int] | None:
         """The record that defines a class and the class's def index in it."""
-        table = self.tables.get(ref.module)
-        if table is None:
-            return None
-        binding = table.names.get(ref.symbol)
+        binding = self.tables.binding(ref.module, ref.symbol)
         if binding is None or binding[0] != "class":
             return None
-        record = self.tables.stub_record(ref.module) if binding[2] == "stub" else self.tables.record(ref.module)
+        path = self.tables.binding_path(ref.module, ref.symbol)
+        record = self.tables.store.records.get(path) if path is not None else None
         return (record, binding[1]) if record is not None else None
 
     def node(self, ref: EntityId) -> dict | None:

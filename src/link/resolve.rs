@@ -855,21 +855,31 @@ impl Core {
 
     // ── classes ──
 
+    /// The file a module table reads a name's binding from: the `.pyi` for a name only the stub
+    /// binds, else the module's own file.
+    pub fn binding_file(&mut self, module: Sid, name: Sid) -> Option<u32> {
+        let table = self.table(module)?;
+        let table = &self.tables[table as usize];
+        if table.stub_names.contains(&name) {
+            table.stub_record
+        } else {
+            table.record
+        }
+    }
+
+    /// The record that defines the def or class (`kind`) a module table binds a name to, and the
+    /// def's index in it.
+    pub fn located_def(&mut self, module: Sid, name: Sid, kind: HitKind) -> Option<(u32, u32)> {
+        let idx = match (kind, self.binding_of(module, name)?) {
+            (HitKind::Class, Binding::Class(idx, _)) | (HitKind::Def, Binding::Def(idx, _)) => idx,
+            _ => return None,
+        };
+        Some((self.binding_file(module, name)?, idx))
+    }
+
     /// The record that defines a class and the class's def index in it.
     pub fn located(&mut self, class: Ent) -> Option<(u32, u32)> {
-        let table = self.table(class.m)? as usize;
-        let table = &self.tables[table];
-        match table.names.get(&class.s) {
-            Some(Binding::Class(idx, stub)) => {
-                let record = if *stub {
-                    table.stub_record
-                } else {
-                    table.record
-                };
-                record.map(|file| (file, *idx))
-            }
-            _ => None,
-        }
+        self.located_def(class.m, class.s, HitKind::Class)
     }
 
     pub fn bases(&mut self, class: Ent) -> Vec<Ent> {

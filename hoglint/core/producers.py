@@ -17,7 +17,7 @@ from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolv
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
 from hoglint.core.symbols import CLASS, MODULE_LEVEL_FLAGS, ClassIndex, Hit, Resolver, Tables, absolute_import, entity
 from hoglint.facts import FactStore
-from hoglint.model import Context, Edge, EntityId, Graph, Resolution
+from hoglint.model import Context, Edge, Graph, Resolution
 
 PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
@@ -205,12 +205,20 @@ class BuildContext:
         self.aliases = AliasValues(self.resolver.tables)
         self.classes = ClassIndex(self.resolver)
 
-    def table_scope(self, module: str, stub: bool = False) -> FileScope | None:
-        """The analyzed file a module table reads a binding from: the `.pyi` for a name only the
-        stub binds, else the one file the index names for the module (never a stub twin or a
+    def binding_scope(self, module: str, name: str) -> FileScope | None:
+        """The analyzed file a module table reads a name's binding from (never a stub twin or a
         package of the same name)."""
-        path = (self.index.stub_of if stub else self.index.path_of).get(module)
+        path = self.resolver.tables.binding_path(module, name)
         return self.scope_of_path.get(path) if path is not None else None
+
+    def def_of(self, module: str, name: str, kind: str) -> tuple[FileScope, int] | None:
+        """The analyzed file and def index of the def or class (`kind`) a module table binds a
+        name to."""
+        binding = self.resolver.tables.binding(module, name)
+        if binding is None or binding[0] != kind:
+            return None
+        scope = self.binding_scope(module, name)
+        return (scope, binding[1]) if scope is not None else None
 
     def is_builtin(self, name: str) -> bool:
         return name in BUILTIN_NAMES
@@ -262,24 +270,8 @@ class BuildContext:
             return None
         if hit.kind not in ("def", "class") or not all(self.first_party.contains(str(step)) for step in hit.chain):
             return UNFOLLOWED
-        origin = hit.origin
-        table = self.resolver.tables.get(origin.module)
-        binding = table.names.get(origin.symbol) if table is not None else None
-        if binding is None or binding[0] != hit.kind:
-            return UNFOLLOWED
-        scope = self.table_scope(origin.module, binding[2] == "stub")
-        if scope is None:
-            return UNFOLLOWED
-        return Followed(scope, binding[1])
-
-    def class_def(self, ref: EntityId) -> tuple[FileScope, int] | None:
-        """The analyzed file and def index of a class the link resolved to."""
-        table = self.resolver.tables.get(ref.module)
-        binding = table.names.get(ref.symbol) if table is not None else None
-        if binding is None or binding[0] != "class":
-            return None
-        scope = self.table_scope(ref.module, binding[2] == "stub")
-        return (scope, binding[1]) if scope is not None else None
+        found = self.def_of(hit.origin.module, hit.origin.symbol, hit.kind)
+        return Followed(*found) if found is not None else UNFOLLOWED
 
     def alias_value(self, module: str, name: str) -> object:
         """The value of a module-level type alias the bare name binds (`X = dict[str, Any]`),
@@ -299,11 +291,8 @@ class BuildContext:
     def alias_site(self, module: str, name: str) -> tuple[FileScope, int] | None:
         """The file and line of the assignment `alias_value` reads."""
         row = self.aliases.of(module).get(name)
-        table = self.resolver.tables.get(module)
-        if row is None or table is None:
-            return None
-        scope = self.table_scope(module, name in table.stub_names)
-        return (scope, row["l"]) if scope is not None else None
+        scope = self.binding_scope(module, name) if row is not None else None
+        return (scope, row["l"]) if row is not None and scope is not None else None
 
     def resolve_dotted(self, dotted: str) -> tuple[Resolved, str] | None:
         """A dotted path in a string. None unless its head names repo code."""
@@ -802,7 +791,7 @@ class DeclarationProducer(Producer):
         order = ClassIndex.merge([list(context.classes.mro(base)) for base in bases] + [list(bases)])
         out = [(scope, idx)]
         for ref in order:
-            found = context.class_def(ref) if ref != own else None
+            found = context.def_of(ref.module, ref.symbol, "class") if ref != own else None
             if found is not None:
                 out.append(found)
         return out
