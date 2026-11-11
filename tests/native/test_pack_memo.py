@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, PackMemo
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, PackMemo, part_of
 from hoglint.model import Context, Edge, Resolution, Site
 from hoglint.native.memo_store import MemoStore
 
@@ -100,3 +100,41 @@ def test_a_damaged_store_is_a_miss(tmp_path: Path, damage: str) -> None:
     world, outputs = check(MemoStore(tmp_path, "engine"), {"a": "1"})
     assert world.ran == ["a"]
     assert [edge.surface for edge in outputs] == ["1", "1"]
+
+
+class Folded(World):
+    """A fold that builds a state, and items in the fold's own part that read it."""
+
+    STATE = "test.state"
+
+    def folds(self) -> list[str]:
+        return ["fold"]
+
+    def keys(self) -> list[str]:
+        return [key for key in (f"item{at}" for at in range(400)) if part_of(key) == part_of("fold")]
+
+    def run_item(self, key: str) -> ItemOutput:
+        self.ran.append(key)
+        if key == "fold":
+            return ItemOutput([], {"state": "s"})
+        TRACER.note(self.STATE, "state", self.answers["state"])
+        return ItemOutput([])
+
+    def take(self, key: str, data: Any) -> None:
+        if key == "fold":
+            TRACER.answer_with(self.STATE, lambda _: data["state"])
+
+
+def test_items_that_read_a_fold_of_their_own_part_are_reused(tmp_path: Path) -> None:
+    store = MemoStore(tmp_path, "engine")
+    for _ in range(2):
+        TRACER.reset()
+        world = Folded({"state": "s"})
+        memo = PackMemo(store, "policy")
+        step = memo.step("test@1")
+        with TRACER.frame():
+            ItemRun(world, step).outputs()
+        memo.end_step(step)
+        memo.flush()
+        TRACER.reset()
+    assert world.ran == []

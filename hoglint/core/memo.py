@@ -465,11 +465,15 @@ class Part:
             return None
 
     def reused(self, key: str) -> ItemOutput | None:
+        """One item's stored output, its own reads checked now: a fold is checked before the
+        state it builds is taken, and the other items of its part read that state."""
+        entry = self.items.get(key)
         try:
-            failing = self.failed_reads()
-        except Exception:  # noqa: BLE001 - a damaged read table is a miss for the whole part
+            indices = entry[0] if isinstance(entry, list) else []
+            failing = {at for at in indices if TRACER.current(*self.reads[at][:2]) != self.reads[at][2]}
+        except Exception:  # noqa: BLE001 - a damaged read table is a miss
             return None
-        return self.output(self.items.get(key), failing)
+        return self.output(entry, failing)
 
 
 def part_of(key: str) -> str:
