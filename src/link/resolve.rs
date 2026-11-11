@@ -34,10 +34,15 @@ pub const MODULE_ATTRIBUTES: [&str; 9] = [
     "__all__",
 ];
 
+/// Whether a row sits in the module body, in no block but the ones the `allowed` flags name.
+pub fn module_level(scope: i32, flags: u32, allowed: u32) -> bool {
+    scope == -1 && flags & !allowed == 0
+}
+
 /// Whether an assigns row binds module-level names: `=`, `:` or `type` at module level.
 pub fn is_module_assign(row: &Assign) -> bool {
     let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
-    row.s == -1 && row.f & !MODULE_LEVEL_FLAGS == 0 && assigned
+    module_level(row.s, row.f, MODULE_LEVEL_FLAGS) && assigned
 }
 
 /// name -> row index of the last module-level assignment with a value of each bare name, in one
@@ -445,12 +450,12 @@ impl Core {
         let record = &facts.files[file as usize];
         let mut events: Vec<BindingEvent> = Vec::new();
         for (i, d) in record.defs.iter().enumerate() {
-            if d.s == -1 && d.f & !MODULE_LEVEL_FLAGS == 0 {
+            if module_level(d.s, d.f, MODULE_LEVEL_FLAGS) {
                 events.push((d.l, d.c, 0, d.f, Some(def_binding(i, d, stub)), d.n, None));
             }
         }
         for row in &record.imports {
-            if row.scope != -1 || row.flags & !MODULE_LEVEL_FLAGS != 0 {
+            if !module_level(row.scope, row.flags, MODULE_LEVEL_FLAGS) {
                 continue;
             }
             if row.name == Some(star) {

@@ -21,7 +21,7 @@
 
 use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
-use super::resolve::{Core, RUN_TIME_MODULE_FLAGS, absolute_import};
+use super::resolve::{Core, RUN_TIME_MODULE_FLAGS, absolute_import, module_level};
 use super::scope::Scope;
 use super::trace::Kind;
 use rustc_hash::FxHashSet;
@@ -201,7 +201,7 @@ fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
 /// `if TYPE_CHECKING:` binds nothing at run time, and one in a function or class binds no module
 /// name.
 fn binds_at_run_time(row: &Import) -> bool {
-    row.scope == -1 && row.flags & !RUN_TIME_MODULE_FLAGS == 0
+    module_level(row.scope, row.flags, RUN_TIME_MODULE_FLAGS)
 }
 
 /// The names one module hands out, in import order and then lazy-name order.

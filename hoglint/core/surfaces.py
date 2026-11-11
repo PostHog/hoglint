@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import RUN_TIME_MODULE_FLAGS, ModuleTable, Tables, absolute_import
+from hoglint.core.symbols import RUN_TIME_MODULE_FLAGS, ModuleTable, Tables, absolute_import, module_level
 from hoglint.model import HandOut
 
 ALL_CLAUSE = "all"
@@ -153,7 +153,7 @@ def binds_at_run_time(scope: int, flags: int) -> bool:
     """An import of the module body that runs at run time, in whatever block it sits: one under
     `if TYPE_CHECKING:` binds nothing at run time, and one in a function or class binds no
     module name."""
-    return scope == -1 and not flags & ~RUN_TIME_MODULE_FLAGS
+    return module_level(scope, flags, RUN_TIME_MODULE_FLAGS)
 
 
 class HandedOut:

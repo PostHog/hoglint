@@ -35,9 +35,14 @@ MODULE_ATTRIBUTES = frozenset(
 )
 
 
+def module_level(scope: int, flags: int, allowed: int) -> bool:
+    """Whether a row sits in the module body, in no block but the ones the `allowed` flags name."""
+    return scope == -1 and not flags & ~allowed
+
+
 def is_module_assign(row: dict) -> bool:
     """Whether an assigns row binds module-level names: `=`, `:` or `type` at module level."""
-    return row["s"] == -1 and not row.get("f", 0) & ~MODULE_LEVEL_FLAGS and row["op"] in ("=", ":", "type")
+    return module_level(row["s"], row.get("f", 0), MODULE_LEVEL_FLAGS) and row["op"] in ("=", ":", "type")
 
 
 def module_assigns(record: Mapping[str, Any] | None) -> dict[str, dict]:
@@ -169,11 +174,11 @@ class Tables:
         events: list[tuple[int, int, int, int, Binding | None, str, object]] = []
         for i, d in enumerate(record.get("defs", ())):
             flags = d.get("f", 0)
-            if d["s"] == -1 and not flags & ~MODULE_LEVEL_FLAGS:
+            if module_level(d["s"], flags, MODULE_LEVEL_FLAGS):
                 kind = "class" if d["k"] == "class" else "def"
                 events.append((d["l"], d["c"], 0, flags, (kind, i, marker), d["n"], None))
         for row in record.get("imports", ()):
-            if row[0] != -1 or row[3] & ~MODULE_LEVEL_FLAGS:
+            if not module_level(row[0], row[3], MODULE_LEVEL_FLAGS):
                 continue
             if row[6] == "*":
                 source = absolute_import(module, table.is_package, row[4], row[5])
