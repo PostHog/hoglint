@@ -465,16 +465,18 @@ class Expanded:
 
 @dataclass(frozen=True, slots=True)
 class SlotRows:
-    """What every `exposes` row of one slot shares."""
+    """What every `exposes` row of one callable shares. `handed` is the clause a handed-out
+    callable comes by, empty for the module's own."""
 
     site: SlotSite
     callable_name: str
-    slot: str
-    contract: bool
-    tail: tuple[tuple[str, str], ...]
+    handed: str = ""
 
-    def attrs(self, position: str, *extra: tuple[str, str]) -> tuple[tuple[str, str], ...]:
-        return (("callable", self.callable_name), ("slot", self.slot), ("position", position), *extra, *self.tail)
+    def edge(self, surface: str, resolved: Resolved, slot: str, position: str, *extra: tuple[str, str]) -> Edge:
+        attrs = (("callable", self.callable_name), ("slot", slot), ("position", position), *extra)
+        if self.handed:
+            attrs = (*attrs, ("handed", self.handed))
+        return self.site.edge(surface, resolved, attrs)
 
 
 class DeclarationProducer(Producer):
@@ -639,7 +641,9 @@ class DeclarationProducer(Producer):
             self.expand_into(context, value, where, True, [key], (set(), set()), found)
         return found
 
-    def expose_mentions(self, context: BuildContext, graph: Graph, rows: SlotRows, mentions: list[Mention]) -> None:
+    def expose_mentions(
+        self, context: BuildContext, graph: Graph, rows: SlotRows, slot: str, contract: bool, mentions: list[Mention]
+    ) -> None:
         """One row per mention, each followed (in a contract only) by a row per name of the type
         alias it is, when it is one. A slot names each name an alias expands to once per
         position, however often its aliases repeat it."""
@@ -650,10 +654,10 @@ class DeclarationProducer(Producer):
             found = context.value_lookup(lookup.scope, mention.value, lookup.at_scope, lookup.line)
             if found is None:
                 continue
-            if rows.contract or found.hit is not None or found.surface != f"builtins.{head}":
+            if contract or found.hit is not None or found.surface != f"builtins.{head}":
                 resolved = context.classifier.classify_lookup(found)
-                graph.edges.append(rows.site.edge(found.surface, resolved, rows.attrs(mention.position)))
-            if not rows.contract:
+                graph.edges.append(rows.edge(found.surface, resolved, slot, mention.position))
+            if not contract:
                 continue
             alias = self.alias_of(context, mention, found)
             if alias is None:
@@ -668,32 +672,28 @@ class DeclarationProducer(Producer):
                     continue
                 written.add((surface, position, item.too_deep))
                 if item.too_deep:
-                    attrs = rows.attrs(position, ("alias", "too-deep"))
-                    graph.edges.append(rows.site.edge(surface, UNRESOLVED, attrs))
+                    graph.edges.append(rows.edge(surface, UNRESOLVED, slot, position, ("alias", "too-deep")))
                     continue
                 resolved = context.classifier.classify_lookup(inner)
-                graph.edges.append(rows.site.edge(surface, resolved, rows.attrs(position)))
+                graph.edges.append(rows.edge(surface, resolved, slot, position))
 
     def expose(
         self,
         context: BuildContext,
         graph: Graph,
-        site: SlotSite,
+        rows: SlotRows,
         lookup: SlotLookup,
         annotation: object,
         slot: str,
-        callable_name: str,
         contract: bool,
-        handed: str = "",
     ) -> None:
         """One `exposes` edge per type name in a slot. Builtin types count only in a contract,
         and there an unannotated slot (annotation None) is an edge of its own."""
-        rows = SlotRows(site, callable_name, slot, contract, (("handed", handed),) if handed else ())
         if annotation is None:
-            graph.edges.append(site.edge("", UNRESOLVED, rows.attrs("whole", ("annotation", "missing"))))
+            graph.edges.append(rows.edge("", UNRESOLVED, slot, "whole", ("annotation", "missing")))
             return
         mentions = [Mention(value, position, lookup) for value, position in self.mentions(annotation, "whole")]
-        self.expose_mentions(context, graph, rows, mentions)
+        self.expose_mentions(context, graph, rows, slot, contract, mentions)
 
     @staticmethod
     def has_receiver(context: BuildContext, lookup: SlotLookup, node: dict) -> bool:
@@ -715,12 +715,10 @@ class DeclarationProducer(Producer):
         self,
         context: BuildContext,
         graph: Graph,
-        site: SlotSite,
+        rows: SlotRows,
         lookup: SlotLookup,
         node: dict,
-        callable_name: str,
         contract: bool,
-        handed: str = "",
     ) -> None:
         """The parameter and return slots of a function. In a contract a method's receiver and an
         unannotated return are no slots, and an unannotated parameter is one."""
@@ -728,22 +726,19 @@ class DeclarationProducer(Producer):
         for position, param in enumerate(node.get("params", ())):
             annotation = param[2] if len(param) > 2 else None
             in_slot = contract and not (receiver and position == 0)
-            if not in_slot and (annotation is None or handed):
+            if not in_slot and (annotation is None or rows.handed):
                 continue
-            slot = f"param:{param[0]}"
-            self.expose(context, graph, site, lookup, annotation, slot, callable_name, in_slot, handed)
+            self.expose(context, graph, rows, lookup, annotation, f"param:{param[0]}", in_slot)
         if node.get("ret") is not None:
-            self.expose(context, graph, site, lookup, node["ret"], "return", callable_name, contract, handed)
+            self.expose(context, graph, rows, lookup, node["ret"], "return", contract)
 
     def expose_fields(
         self,
         context: BuildContext,
         graph: Graph,
-        site: SlotSite,
+        rows: SlotRows,
         fields: list[Field],
-        callable_name: str,
         contract: bool,
-        handed: str = "",
     ) -> None:
         """The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
         only fields directly in a class body count, and a `ClassVar` is no field. A field the
@@ -753,12 +748,12 @@ class DeclarationProducer(Producer):
             if row.get("ann") is None:
                 continue
             in_slot = contract and row.get("f", 0) == CLASS and not self.is_class_var(row["ann"])
-            if handed and not in_slot:
+            if rows.handed and not in_slot:
                 continue
-            line_site = replace(site, line=row["l"]) if member.own and not handed else site
+            own = member.own and not rows.handed
+            line_rows = SlotRows(replace(rows.site, line=row["l"]), rows.callable_name) if own else rows
             line_lookup = replace(member.lookup, line=row["l"])
-            slot = f"field:{row['t'][0]}"
-            self.expose(context, graph, line_site, line_lookup, row["ann"], slot, callable_name, in_slot, handed)
+            self.expose(context, graph, line_rows, line_lookup, row["ann"], f"field:{row['t'][0]}", in_slot)
 
     def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
         """A class and its ancestors in MRO order, through the link's own class resolution, each
@@ -809,39 +804,33 @@ class DeclarationProducer(Producer):
         self,
         context: BuildContext,
         graph: Graph,
-        site: SlotSite,
+        rows: SlotRows,
         lineage: list[tuple[FileScope, int]],
-        callable_name: str,
-        handed: str = "",
     ) -> None:
         """One unresolved row per base along the MRO that does not resolve: the fields it adds
         to the generated `__init__` are unknown."""
-        rows = SlotRows(site, callable_name, "fields", True, (("handed", handed),) if handed else ())
         for scope, idx in lineage:
             node = scope.defs[idx]
             for base in node.get("bases", ()):
                 found = context.value_lookup(scope, base, node["s"], node["l"])
                 if found is not None and context.classifier.classify_lookup(found).resolution != Resolution.UNRESOLVED:
                     continue
-                graph.edges.append(site.edge(found.surface if found else "", UNRESOLVED, rows.attrs("whole")))
+                graph.edges.append(rows.edge(found.surface if found else "", UNRESOLVED, "fields", "whole"))
 
     def expose_dataclass(
         self,
         context: BuildContext,
         graph: Graph,
-        site: SlotSite,
+        rows: SlotRows,
         lookup: SlotLookup,
         idx: int,
-        callable_name: str,
-        handed: str = "",
     ) -> None:
         """The `__init__` slots of a contract dataclass (its def index in the file `lookup` names):
         a row per unresolved base along its MRO, then its fields as the dataclass machinery
         collects them."""
         lineage = self.lineage(context, lookup.scope, idx)
-        self.expose_unresolved_bases(context, graph, site, lineage, callable_name, handed)
-        fields = self.mro_fields(context, lineage, lookup)
-        self.expose_fields(context, graph, site, fields, callable_name, True, handed)
+        self.expose_unresolved_bases(context, graph, rows, lineage)
+        self.expose_fields(context, graph, rows, self.mro_fields(context, lineage, lookup), True)
 
     def declare(
         self,
@@ -914,16 +903,16 @@ class DeclarationProducer(Producer):
                     )
                 )
             if not nested and dataclass:
-                init = f"{qualname}.__init__"
+                rows = SlotRows(site, f"{qualname}.__init__")
                 if not in_contract:
                     own = [Field(row, lookup, True) for row in fields.get(idx, [])]
-                    self.expose_fields(context, graph, site, own, init, False)
+                    self.expose_fields(context, graph, rows, own, False)
                     return
-                self.expose_dataclass(context, graph, site, lookup, idx, init)
+                self.expose_dataclass(context, graph, rows, lookup, idx)
             return
         if nested:
             return
-        self.expose_signature(context, graph, site, lookup, node, qualname, in_contract)
+        self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
 
     def used_names(self, scope: FileScope) -> frozenset[str]:
         """The import-bound names a module's own code refers to: every `refs` and `uses` row, in
@@ -951,17 +940,16 @@ class DeclarationProducer(Producer):
         if not handed.no_functions and unread is not None:
             line, column = unread
             site = SlotSite(scope, -1, line, column, scope.base_contexts)
-            rows = SlotRows(site, "__all__", "names", True, (("handed", ALL_CLAUSE),))
-            graph.edges.append(site.edge("__all__", UNRESOLVED, rows.attrs("whole")))
+            rows = SlotRows(site, "__all__", ALL_CLAUSE)
+            graph.edges.append(rows.edge("__all__", UNRESOLVED, "names", "whole"))
         used = self.used_names(scope) if handed.no_functions else frozenset()
         for item in handed.names(used):
             found = context.handed_def(item.target)
             if found is None:
                 continue
-            site = SlotSite(scope, -1, item.line, item.column, scope.base_contexts)
+            rows = SlotRows(SlotSite(scope, -1, item.line, item.column, scope.base_contexts), item.bound, item.clause)
             if found.scope is None:
-                rows = SlotRows(site, item.bound, "signature", True, (("handed", item.clause),))
-                graph.edges.append(site.edge(item.target, UNRESOLVED, rows.attrs("whole")))
+                graph.edges.append(rows.edge(item.target, UNRESOLVED, "signature", "whole"))
                 continue
             origin, idx = found.scope, found.idx
             if roots & self.contract_roots(context, origin):
@@ -969,12 +957,12 @@ class DeclarationProducer(Producer):
             node = origin.defs[idx]
             lookup = SlotLookup(origin, node["s"], node["l"])
             if node["k"] != "class":
-                self.expose_signature(context, graph, site, lookup, node, item.bound, True, item.clause)
+                self.expose_signature(context, graph, rows, lookup, node, True)
                 continue
             if not self.is_dataclass_like(context, origin, node):
                 continue
-            init = f"{item.bound}.__init__"
-            self.expose_dataclass(context, graph, site, lookup, idx, init, item.clause)
+            init = SlotRows(rows.site, f"{item.bound}.__init__", item.clause)
+            self.expose_dataclass(context, graph, init, lookup, idx)
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:

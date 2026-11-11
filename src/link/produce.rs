@@ -630,14 +630,12 @@ struct ExpandState {
     seen: FxHashSet<Expanded>,
 }
 
-/// What every `exposes` row of one slot shares. `handed` is the clause a handed-out callable
+/// What every `exposes` row of one callable shares. `handed` is the clause a handed-out callable
 /// comes by, EMPTY for the module's own.
 #[derive(Clone, Copy)]
 struct SlotRows {
     site: SlotSite,
     callable: Sid,
-    slot: Sid,
-    contract: bool,
     handed: Sid,
 }
 
@@ -995,33 +993,31 @@ impl Producers<'_> {
         Some(((origin.m, origin.s), row.value.clone()?, lookup))
     }
 
-    /// The attrs of one `exposes` row of a slot.
-    fn slot_attrs(&self, rows: SlotRows, position: Sid, extra: &[(Sid, Sid)]) -> Vec<(Sid, Sid)> {
+    /// One `exposes` row of a callable's slot.
+    fn push_slot(
+        &mut self,
+        rows: SlotRows,
+        surface: Sid,
+        resolved: Resolved,
+        slot: Sid,
+        position: Sid,
+        extra: &[(Sid, Sid)],
+    ) {
         let k = &self.settings.k;
         let mut attrs = vec![
             (k.callable, rows.callable),
-            (k.slot, rows.slot),
+            (k.slot, slot),
             (k.position, position),
         ];
         attrs.extend_from_slice(extra);
         if rows.handed != EMPTY {
             attrs.push((k.handed, rows.handed));
         }
-        attrs
-    }
-
-    fn push_slot(
-        &mut self,
-        rows: SlotRows,
-        surface: Sid,
-        resolved: Resolved,
-        attrs: &[(Sid, Sid)],
-    ) {
         let site = rows.site;
-        let use_ = self.settings.k.use_annotation;
+        let use_ = k.use_annotation;
         self.push(
             EXPOSES, site.owner, site.scope, site.line, site.col, site.ctx, surface, resolved,
-            use_, attrs,
+            use_, &attrs,
         );
     }
 
@@ -1101,7 +1097,13 @@ impl Producers<'_> {
     /// One row per mention, each followed (in a contract only) by a row per name of the type
     /// alias it is, when it is one. A slot names each name an alias expands to once per
     /// position, however often its aliases repeat it.
-    fn expose_mentions(&mut self, rows: SlotRows, mentions: Vec<Mention>) {
+    fn expose_mentions(
+        &mut self,
+        rows: SlotRows,
+        slot: Sid,
+        contract: bool,
+        mentions: Vec<Mention>,
+    ) {
         let mut written: FxHashSet<(Sid, bool, bool)> = FxHashSet::default();
         for mention in mentions {
             let lookup = mention.lookup;
@@ -1117,16 +1119,15 @@ impl Producers<'_> {
             };
             let k = &self.settings.k;
             let position = if mention.whole { k.whole } else { k.nested };
-            let builtin = !rows.contract && found.hit.is_none() && {
+            let builtin = !contract && found.hit.is_none() && {
                 let head = core.it.head(mention.value);
                 found.surface == core.it.join(self.settings.names.builtins_module, head)
             };
             if !builtin {
                 let resolved = core.classify_lookup(found);
-                let attrs = self.slot_attrs(rows, position, &[]);
-                self.push_slot(rows, found.surface, resolved, &attrs);
+                self.push_slot(rows, found.surface, resolved, slot, position, &[]);
             }
-            if !rows.contract {
+            if !contract {
                 continue;
             }
             let Some((key, value, at)) = self.alias_of(mention, found) else {
@@ -1155,13 +1156,11 @@ impl Producers<'_> {
                 let position = if whole { k.whole } else { k.nested };
                 if item.too_deep {
                     let marker = [(k.alias, k.too_deep)];
-                    let attrs = self.slot_attrs(rows, position, &marker);
-                    self.push_slot(rows, surface, UNRESOLVED, &attrs);
+                    self.push_slot(rows, surface, UNRESOLVED, slot, position, &marker);
                     continue;
                 }
                 let resolved = self.core.classify_lookup(inner);
-                let attrs = self.slot_attrs(rows, position, &[]);
-                self.push_slot(rows, surface, resolved, &attrs);
+                self.push_slot(rows, surface, resolved, slot, position, &[]);
             }
         }
     }
@@ -1169,29 +1168,18 @@ impl Producers<'_> {
     /// One `exposes` edge per type name in a slot. Builtin types count only in a contract, and
     /// there an unannotated slot (annotation None) is an edge of its own. `handed` is the clause
     /// a handed-out callable comes by, EMPTY for the module's own.
-    #[allow(clippy::too_many_arguments)]
     fn expose(
         &mut self,
-        site: SlotSite,
+        rows: SlotRows,
         lookup: SlotLookup,
         annotation: Option<&V>,
         slot: Sid,
-        callable: Sid,
         contract: bool,
-        handed: Sid,
     ) {
-        let rows = SlotRows {
-            site,
-            callable,
-            slot,
-            contract,
-            handed,
-        };
         let Some(annotation) = annotation else {
             let k = &self.settings.k;
-            let missing = [(k.annotation, k.missing)];
-            let attrs = self.slot_attrs(rows, k.whole, &missing);
-            self.push_slot(rows, EMPTY, UNRESOLVED, &attrs);
+            let (whole, missing) = (k.whole, [(k.annotation, k.missing)]);
+            self.push_slot(rows, EMPTY, UNRESOLVED, slot, whole, &missing);
             return;
         };
         let mut found = Vec::new();
@@ -1204,7 +1192,7 @@ impl Producers<'_> {
                 lookup,
             })
             .collect();
-        self.expose_mentions(rows, mentions);
+        self.expose_mentions(rows, slot, contract, mentions);
     }
 
     /// Whether a def's first parameter is bound by the call, whatever its name: a method's first
@@ -1229,39 +1217,22 @@ impl Producers<'_> {
 
     /// The parameter and return slots of a function. In a contract a method's receiver and an
     /// unannotated return are no slots, and an unannotated parameter is one.
-    #[allow(clippy::too_many_arguments)]
-    fn expose_signature(
-        &mut self,
-        site: SlotSite,
-        lookup: SlotLookup,
-        node: &Def,
-        callable: Sid,
-        contract: bool,
-        handed: Sid,
-    ) {
+    fn expose_signature(&mut self, rows: SlotRows, lookup: SlotLookup, node: &Def, contract: bool) {
         let receiver = contract && self.has_receiver(lookup, node);
         for (position, param) in node.params.iter().enumerate() {
             let in_slot = contract && !(receiver && position == 0);
-            if !in_slot && (param.annotation.is_none() || handed != EMPTY) {
+            if !in_slot && (param.annotation.is_none() || rows.handed != EMPTY) {
                 continue;
             }
             let slot = self
                 .core
                 .it
                 .intern(&format!("param:{}", self.core.it.s(param.name)));
-            self.expose(
-                site,
-                lookup,
-                param.annotation.as_ref(),
-                slot,
-                callable,
-                in_slot,
-                handed,
-            );
+            self.expose(rows, lookup, param.annotation.as_ref(), slot, in_slot);
         }
         if let Some(ret) = &node.ret {
             let slot = self.settings.k.ret;
-            self.expose(site, lookup, Some(ret), slot, callable, contract, handed);
+            self.expose(rows, lookup, Some(ret), slot, contract);
         }
     }
 
@@ -1281,14 +1252,7 @@ impl Producers<'_> {
     /// The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
     /// only fields directly in a class body count, and a `ClassVar` is no field. A field the class
     /// itself declares sits at its own line, unless the class is handed out.
-    fn expose_fields(
-        &mut self,
-        site: SlotSite,
-        fields: &[FieldRow],
-        callable: Sid,
-        contract: bool,
-        handed: Sid,
-    ) {
+    fn expose_fields(&mut self, rows: SlotRows, fields: &[FieldRow], contract: bool) {
         let facts = self.core.facts.clone();
         for field in fields {
             let row = &facts.files[field.file as usize].assigns[field.at as usize];
@@ -1296,7 +1260,7 @@ impl Producers<'_> {
                 continue;
             };
             let in_slot = contract && row.f == CLASS && !self.is_class_var(annotation);
-            if handed != EMPTY && !in_slot {
+            if rows.handed != EMPTY && !in_slot {
                 continue;
             }
             let V::Chain(name) = &row.targets[0] else {
@@ -1306,27 +1270,22 @@ impl Producers<'_> {
                 .core
                 .it
                 .intern(&format!("field:{}", self.core.it.s(*name)));
-            let line_site = if field.own && handed == EMPTY {
-                SlotSite {
-                    line: row.l,
-                    ..site
+            let line_rows = if field.own && rows.handed == EMPTY {
+                SlotRows {
+                    site: SlotSite {
+                        line: row.l,
+                        ..rows.site
+                    },
+                    ..rows
                 }
             } else {
-                site
+                rows
             };
             let line_lookup = SlotLookup {
                 line: row.l,
                 ..field.lookup
             };
-            self.expose(
-                line_site,
-                line_lookup,
-                Some(annotation),
-                slot,
-                callable,
-                in_slot,
-                handed,
-            );
+            self.expose(line_rows, line_lookup, Some(annotation), slot, in_slot);
         }
     }
 
@@ -1432,21 +1391,8 @@ impl Producers<'_> {
 
     /// One unresolved row per base along the MRO that does not resolve: the fields it adds to
     /// the generated `__init__` are unknown.
-    fn expose_unresolved_bases(
-        &mut self,
-        site: SlotSite,
-        lineage: &[(usize, u32)],
-        callable: Sid,
-        handed: Sid,
-    ) {
+    fn expose_unresolved_bases(&mut self, rows: SlotRows, lineage: &[(usize, u32)]) {
         let facts = self.core.facts.clone();
-        let rows = SlotRows {
-            site,
-            callable,
-            slot: self.settings.k.fields,
-            contract: true,
-            handed,
-        };
         for &(owner, idx) in lineage {
             let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
             for base in &node.bases {
@@ -1454,8 +1400,8 @@ impl Producers<'_> {
                 if resolved.res != Res::Unresolved {
                     continue;
                 }
-                let attrs = self.slot_attrs(rows, self.settings.k.whole, &[]);
-                self.push_slot(rows, surface, UNRESOLVED, &attrs);
+                let (slot, whole) = (self.settings.k.fields, self.settings.k.whole);
+                self.push_slot(rows, surface, UNRESOLVED, slot, whole, &[]);
             }
         }
     }
@@ -1463,18 +1409,11 @@ impl Producers<'_> {
     /// The `__init__` slots of a contract dataclass (its def index in the file `lookup` names): a
     /// row per unresolved base along its MRO, then its fields as the dataclass machinery collects
     /// them.
-    fn expose_dataclass(
-        &mut self,
-        site: SlotSite,
-        lookup: SlotLookup,
-        idx: u32,
-        callable: Sid,
-        handed: Sid,
-    ) {
+    fn expose_dataclass(&mut self, rows: SlotRows, lookup: SlotLookup, idx: u32) {
         let lineage = self.lineage(lookup.owner, idx);
-        self.expose_unresolved_bases(site, &lineage, callable, handed);
+        self.expose_unresolved_bases(rows, &lineage);
         let fields = self.mro_fields(&lineage, lookup);
-        self.expose_fields(site, &fields, callable, true, handed);
+        self.expose_fields(rows, &fields, true);
     }
 
     fn lookup_value(&mut self, owner: usize, value: &V, at: i32, line: u32) -> (Sid, Resolved) {
@@ -1613,12 +1552,10 @@ impl Producers<'_> {
                     ctx: self.scopes[owner].base_ctx,
                 },
                 callable: k.dunder_all,
-                slot: k.names,
-                contract: true,
                 handed: self.core.it.intern(ALL_CLAUSE),
             };
-            let attrs = self.slot_attrs(rows, k.whole, &[]);
-            self.push_slot(rows, k.dunder_all, UNRESOLVED, &attrs);
+            let (names, whole) = (k.names, k.whole);
+            self.push_slot(rows, k.dunder_all, UNRESOLVED, names, whole, &[]);
         }
         let roots = self.contract_roots(owner).to_vec();
         let used = if handed.no_functions {
@@ -1631,23 +1568,20 @@ impl Producers<'_> {
                 continue;
             };
             let clause = self.core.it.intern(item.clause);
-            let site = SlotSite {
-                owner,
-                scope: -1,
-                line: item.line,
-                col: item.col,
-                ctx: self.scopes[owner].base_ctx,
+            let rows = SlotRows {
+                site: SlotSite {
+                    owner,
+                    scope: -1,
+                    line: item.line,
+                    col: item.col,
+                    ctx: self.scopes[owner].base_ctx,
+                },
+                callable: item.bound,
+                handed: clause,
             };
             let Followed::Def(origin, idx) = found else {
-                let rows = SlotRows {
-                    site,
-                    callable: item.bound,
-                    slot: self.settings.k.signature,
-                    contract: true,
-                    handed: clause,
-                };
-                let attrs = self.slot_attrs(rows, self.settings.k.whole, &[]);
-                self.push_slot(rows, item.target, UNRESOLVED, &attrs);
+                let (signature, whole) = (self.settings.k.signature, self.settings.k.whole);
+                self.push_slot(rows, item.target, UNRESOLVED, signature, whole, &[]);
                 continue;
             };
             if self
@@ -1665,14 +1599,17 @@ impl Producers<'_> {
                 line: node.l,
             };
             if !node.is_class() {
-                self.expose_signature(site, lookup, node, item.bound, true, clause);
+                self.expose_signature(rows, lookup, node, true);
                 continue;
             }
             if !self.is_dataclass_like(origin, node) {
                 continue;
             }
-            let init = self.core.it.join(item.bound, self.settings.k.init);
-            self.expose_dataclass(site, lookup, idx, init, clause);
+            let init = SlotRows {
+                callable: self.core.it.join(item.bound, self.settings.k.init),
+                ..rows
+            };
+            self.expose_dataclass(init, lookup, idx);
         }
     }
 
@@ -1754,7 +1691,11 @@ impl Producers<'_> {
                     );
                 }
                 if !nested && dataclass {
-                    let init = self.core.it.join(qualname, self.settings.k.init);
+                    let rows = SlotRows {
+                        site,
+                        callable: self.core.it.join(qualname, self.settings.k.init),
+                        handed: EMPTY,
+                    };
                     if !in_contract {
                         let own: Vec<FieldRow> = self
                             .class_fields(file as u32, idx as u32)
@@ -1766,17 +1707,22 @@ impl Producers<'_> {
                                 own: true,
                             })
                             .collect();
-                        self.expose_fields(site, &own, init, false, EMPTY);
+                        self.expose_fields(rows, &own, false);
                         continue;
                     }
-                    self.expose_dataclass(site, lookup, idx as u32, init, EMPTY);
+                    self.expose_dataclass(rows, lookup, idx as u32);
                 }
                 continue;
             }
             if nested {
                 continue;
             }
-            self.expose_signature(site, lookup, node, qualname, in_contract, EMPTY);
+            let rows = SlotRows {
+                site,
+                callable: qualname,
+                handed: EMPTY,
+            };
+            self.expose_signature(rows, lookup, node, in_contract);
         }
         if contract {
             self.hand_out(owner);
