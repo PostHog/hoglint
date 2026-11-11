@@ -745,12 +745,14 @@ impl Producers<'_> {
         for owner in 0..self.scopes.len() {
             self.references(owner);
         }
-        self.owner_of = self
-            .scopes
-            .iter()
-            .enumerate()
-            .map(|(owner, scope)| (scope.file, owner))
-            .collect();
+        if !self.settings.contract_surfaces.is_empty() {
+            self.owner_of = self
+                .scopes
+                .iter()
+                .enumerate()
+                .map(|(owner, scope)| (scope.file, owner))
+                .collect();
+        }
         for owner in 0..self.scopes.len() {
             self.declarations(owner);
         }
@@ -1024,28 +1026,48 @@ impl Producers<'_> {
         resolved: Resolved,
         slot: Sid,
         position: Sid,
-        extra: &[(Sid, Sid)],
+        extra: Option<(Sid, Sid)>,
     ) {
         let k = &self.settings.k;
-        let mut attrs = vec![
+        let mut attrs = [
             (k.callable, rows.callable),
             (k.slot, slot),
             (k.position, position),
+            (EMPTY, EMPTY),
+            (EMPTY, EMPTY),
         ];
-        attrs.extend_from_slice(extra);
-        if rows.handed != EMPTY {
-            attrs.push((k.handed, rows.handed));
+        let mut len = 3;
+        for pair in extra
+            .into_iter()
+            .chain((rows.handed != EMPTY).then_some((k.handed, rows.handed)))
+        {
+            attrs[len] = pair;
+            len += 1;
         }
         let site = rows.site;
         let use_ = k.use_annotation;
         self.push(
-            EXPOSES, site.owner, site.scope, site.line, site.col, site.ctx, surface, resolved,
-            use_, &attrs,
+            EXPOSES,
+            site.owner,
+            site.scope,
+            site.line,
+            site.col,
+            site.ctx,
+            surface,
+            resolved,
+            use_,
+            &attrs[..len],
         );
     }
 
     /// A row for a whole slot whose types are unknown.
-    fn push_unresolved(&mut self, rows: SlotRows, surface: Sid, slot: Sid, extra: &[(Sid, Sid)]) {
+    fn push_unresolved(
+        &mut self,
+        rows: SlotRows,
+        surface: Sid,
+        slot: Sid,
+        extra: Option<(Sid, Sid)>,
+    ) {
         let whole = self.settings.k.whole;
         self.push_slot(rows, surface, UNRESOLVED, slot, whole, extra);
     }
@@ -1125,10 +1147,16 @@ impl Producers<'_> {
         rows: SlotRows,
         slot: Sid,
         contract: bool,
-        mentions: Vec<Mention>,
+        lookup: SlotLookup,
+        names: Vec<(Sid, bool)>,
     ) {
         let mut written: FxHashSet<(Sid, bool, bool)> = FxHashSet::default();
-        for mention in mentions {
+        for (value, whole) in names {
+            let mention = Mention {
+                value,
+                whole,
+                lookup,
+            };
             let found = self.lookup_at(mention.lookup, mention.value);
             let core = &mut *self.core;
             let k = &self.settings.k;
@@ -1139,7 +1167,7 @@ impl Producers<'_> {
             };
             if !builtin {
                 let resolved = core.classify_lookup(found);
-                self.push_slot(rows, found.surface, resolved, slot, position, &[]);
+                self.push_slot(rows, found.surface, resolved, slot, position, None);
             }
             if !contract {
                 continue;
@@ -1161,12 +1189,12 @@ impl Producers<'_> {
                 let k = &self.settings.k;
                 let position = if whole { k.whole } else { k.nested };
                 if item.too_deep {
-                    let marker = [(k.alias, k.too_deep)];
-                    self.push_slot(rows, surface, UNRESOLVED, slot, position, &marker);
+                    let marker = Some((k.alias, k.too_deep));
+                    self.push_slot(rows, surface, UNRESOLVED, slot, position, marker);
                     continue;
                 }
                 let resolved = self.core.classify_lookup(inner);
-                self.push_slot(rows, surface, resolved, slot, position, &[]);
+                self.push_slot(rows, surface, resolved, slot, position, None);
             }
         }
     }
@@ -1184,21 +1212,13 @@ impl Producers<'_> {
     ) {
         let Some(annotation) = annotation else {
             let k = &self.settings.k;
-            let missing = [(k.annotation, k.missing)];
-            self.push_unresolved(rows, EMPTY, slot, &missing);
+            let missing = Some((k.annotation, k.missing));
+            self.push_unresolved(rows, EMPTY, slot, missing);
             return;
         };
-        let mut found = Vec::new();
-        self.mentions(annotation, true, &mut found);
-        let mentions = found
-            .into_iter()
-            .map(|(value, whole)| Mention {
-                value,
-                whole,
-                lookup,
-            })
-            .collect();
-        self.expose_mentions(rows, slot, contract, mentions);
+        let mut names = Vec::new();
+        self.mentions(annotation, true, &mut names);
+        self.expose_mentions(rows, slot, contract, lookup, names);
     }
 
     /// Whether a def's first parameter is bound by the call, whatever its name: a method's first
@@ -1406,7 +1426,7 @@ impl Producers<'_> {
                 if resolved.res != Res::Unresolved {
                     continue;
                 }
-                self.push_unresolved(rows, surface, self.settings.k.fields, &[]);
+                self.push_unresolved(rows, surface, self.settings.k.fields, None);
             }
         }
     }
@@ -1549,7 +1569,7 @@ impl Producers<'_> {
                 handed: self.core.it.intern(ALL_CLAUSE),
             };
             let k = &self.settings.k;
-            self.push_unresolved(rows, k.dunder_all, k.names, &[]);
+            self.push_unresolved(rows, k.dunder_all, k.names, None);
         }
         let roots = self.contract_roots(owner).to_vec();
         let used = if handed.no_functions {
@@ -1568,7 +1588,7 @@ impl Producers<'_> {
                 handed: clause,
             };
             let Followed::Def(origin, idx) = found else {
-                self.push_unresolved(rows, item.target, self.settings.k.signature, &[]);
+                self.push_unresolved(rows, item.target, self.settings.k.signature, None);
                 continue;
             };
             if self
@@ -1652,6 +1672,22 @@ impl Producers<'_> {
                 );
                 dataclass |= self.is_dataclass_decorator(surface, resolved);
             }
+            if node.is_class() {
+                for (position, base) in node.bases.iter().enumerate() {
+                    let (surface, resolved) = self.lookup_value(owner, base, enclosing, node.l);
+                    let k = &self.settings.k;
+                    let index = self.core.it.intern(&position.to_string());
+                    let attrs = [(k.class, qualname), (k.index, index)];
+                    let use_ = k.use_base;
+                    self.push(
+                        INHERIT, owner, enclosing, node.l, node.c, ctx, surface, resolved, use_,
+                        &attrs,
+                    );
+                }
+            }
+            if nested || (node.is_class() && !dataclass) {
+                continue;
+            }
             let site = SlotSite {
                 owner,
                 scope: enclosing,
@@ -1665,51 +1701,35 @@ impl Producers<'_> {
                 line: node.l,
             };
             let in_contract = contract && self.in_contract(&record.defs, idx);
-            if node.is_class() {
-                for (position, base) in node.bases.iter().enumerate() {
-                    let (surface, resolved) = self.lookup_value(owner, base, enclosing, node.l);
-                    let k = &self.settings.k;
-                    let index = self.core.it.intern(&position.to_string());
-                    let attrs = [(k.class, qualname), (k.index, index)];
-                    let use_ = k.use_base;
-                    self.push(
-                        INHERIT, owner, enclosing, node.l, node.c, ctx, surface, resolved, use_,
-                        &attrs,
-                    );
-                }
-                if !nested && dataclass {
-                    let rows = SlotRows {
-                        site,
-                        callable: self.core.it.join(qualname, self.settings.k.init),
-                        handed: EMPTY,
-                    };
-                    if !in_contract {
-                        let own: Vec<FieldRow> = self
-                            .class_fields(file as u32, idx as u32)
-                            .into_iter()
-                            .map(|at| FieldRow {
-                                file: file as u32,
-                                at,
-                                lookup,
-                                own: true,
-                            })
-                            .collect();
-                        self.expose_fields(rows, &own, false);
-                        continue;
-                    }
-                    self.expose_dataclass(rows, lookup, idx as u32);
-                }
-                continue;
-            }
-            if nested {
+            if !node.is_class() {
+                let rows = SlotRows {
+                    site,
+                    callable: qualname,
+                    handed: EMPTY,
+                };
+                self.expose_signature(rows, lookup, node, in_contract);
                 continue;
             }
             let rows = SlotRows {
                 site,
-                callable: qualname,
+                callable: self.core.it.join(qualname, self.settings.k.init),
                 handed: EMPTY,
             };
-            self.expose_signature(rows, lookup, node, in_contract);
+            if !in_contract {
+                let own: Vec<FieldRow> = self
+                    .class_fields(file as u32, idx as u32)
+                    .into_iter()
+                    .map(|at| FieldRow {
+                        file: file as u32,
+                        at,
+                        lookup,
+                        own: true,
+                    })
+                    .collect();
+                self.expose_fields(rows, &own, false);
+                continue;
+            }
+            self.expose_dataclass(rows, lookup, idx as u32);
         }
         if contract {
             self.hand_out(owner);

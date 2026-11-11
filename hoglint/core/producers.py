@@ -288,6 +288,11 @@ class Producer:
     kind = ""
     reads: frozenset[str] = frozenset()  # fact kinds it reads besides TABLE_KINDS
 
+    @classmethod
+    def fact_kinds(cls, config: CoreConfig) -> frozenset[str]:
+        """The fact kinds it reads besides TABLE_KINDS under a config."""
+        return cls.reads
+
     @property
     def name(self) -> str:
         return producer_id(self.kind)
@@ -522,7 +527,12 @@ class DeclarationProducer(Producer):
     kinds = ("inherit", "decorate", "exposes", "declares")
     # `callees`: a call on `__all__` makes a contract's hand-out unknown. `refs` and `uses`: the
     # names a contract module refers to itself.
-    reads = frozenset({"callees", "refs", "uses"})
+    contract_reads = frozenset({"callees", "refs", "uses"})
+
+    @classmethod
+    def fact_kinds(cls, config: CoreConfig) -> frozenset[str]:
+        """Only a contract surface reads facts besides the tables."""
+        return cls.contract_reads if config.contract_surfaces else frozenset()
 
     def __init__(self) -> None:
         self.expansions: dict[tuple[tuple[str, str], SlotLookup], list[Expanded]] = {}
@@ -667,25 +677,32 @@ class DeclarationProducer(Producer):
         return found
 
     def expose_mentions(
-        self, context: BuildContext, graph: Graph, rows: SlotRows, slot: str, contract: bool, mentions: list[Mention]
+        self,
+        context: BuildContext,
+        graph: Graph,
+        rows: SlotRows,
+        slot: str,
+        contract: bool,
+        lookup: SlotLookup,
+        names: list[tuple[str, str]],
     ) -> None:
         """One row per mention, each followed (in a contract only) by a row per name of the type
         alias it is, when it is one. A slot names each name an alias expands to once per
         position, however often its aliases repeat it."""
         written: set[tuple[str, str, bool]] = set()
-        for mention in mentions:
-            head = mention.value.split(".")[0]
-            found = self.lookup_at(context, mention.lookup, mention.value)
+        for value, mentioned in names:
+            head = value.split(".")[0]
+            found = self.lookup_at(context, lookup, value)
             if contract or found.hit is not None or found.surface != f"builtins.{head}":
                 resolved = context.classifier.classify_lookup(found)
-                graph.edges.append(rows.edge(found.surface, resolved, slot, mention.position))
+                graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned))
             if not contract:
                 continue
-            alias = self.alias_of(context, mention, found)
+            alias = self.alias_of(context, Mention(value, mentioned, lookup), found)
             if alias is None:
                 continue
             for item in self.expansion(context, *alias):
-                position = "whole" if mention.position == "whole" and item.top else "nested"
+                position = "whole" if mentioned == "whole" and item.top else "nested"
                 inner = self.lookup_at(context, item.lookup, item.value)
                 surface = item.value if item.too_deep else inner.surface
                 if (surface, position, item.too_deep) in written:
@@ -712,8 +729,7 @@ class DeclarationProducer(Producer):
         if annotation is None:
             graph.edges.append(rows.unresolved("", slot, ("annotation", "missing")))
             return
-        mentions = [Mention(value, position, lookup) for value, position in self.mentions(annotation, "whole")]
-        self.expose_mentions(context, graph, rows, slot, contract, mentions)
+        self.expose_mentions(context, graph, rows, slot, contract, lookup, self.mentions(annotation, "whole"))
 
     @staticmethod
     def has_receiver(context: BuildContext, lookup: SlotLookup, node: dict) -> bool:
@@ -770,9 +786,13 @@ class DeclarationProducer(Producer):
             in_slot = contract and row.get("f", 0) == CLASS and not is_class_var(row["ann"])
             if rows.handed and not in_slot:
                 continue
-            own = member.own and not rows.handed
-            line_rows = SlotRows(replace(rows.site, line=row["l"]), rows.callable_name) if own else rows
-            line_lookup = replace(member.lookup, line=row["l"])
+            line_rows = rows
+            if member.own and not rows.handed:
+                site = rows.site
+                line_site = SlotSite(site.scope, site.at_scope, row["l"], site.column, site.contexts)
+                line_rows = SlotRows(line_site, rows.callable_name)
+            place = member.lookup
+            line_lookup = SlotLookup(place.scope, place.at_scope, row["l"])
             self.expose(context, graph, line_rows, line_lookup, row["ann"], f"field:{row['t'][0]}", in_slot)
 
     def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
@@ -907,10 +927,8 @@ class DeclarationProducer(Producer):
                 )
             )
             dataclass |= self.is_dataclass_decorator(context, surface, resolved)
-        site = SlotSite(scope, enclosing, line, column, contexts)
-        lookup = SlotLookup(scope, enclosing, line)
-        in_contract = contract and self.in_contract(scope, idx)
-        if node["k"] == "class":
+        is_class = node["k"] == "class"
+        if is_class:
             for position, base in enumerate(node.get("bases", ())):
                 found = context.value_lookup(scope, base, enclosing, line)
                 surface = found.surface if found else ""
@@ -921,17 +939,20 @@ class DeclarationProducer(Producer):
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs
                     )
                 )
-            if not nested and dataclass:
-                rows = SlotRows(site, f"{qualname}.__init__")
-                if not in_contract:
-                    own = [Field(row, lookup, True) for row in self.fields_by_class(scope).get(idx, [])]
-                    self.expose_fields(context, graph, rows, own, False)
-                    return
-                self.expose_dataclass(context, graph, rows, lookup, idx)
+        if nested or (is_class and not dataclass):
             return
-        if nested:
+        site = SlotSite(scope, enclosing, line, column, contexts)
+        lookup = SlotLookup(scope, enclosing, line)
+        in_contract = contract and self.in_contract(scope, idx)
+        if not is_class:
+            self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
             return
-        self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
+        rows = SlotRows(site, f"{qualname}.__init__")
+        if not in_contract:
+            own = [Field(row, lookup, True) for row in self.fields_by_class(scope).get(idx, [])]
+            self.expose_fields(context, graph, rows, own, False)
+            return
+        self.expose_dataclass(context, graph, rows, lookup, idx)
 
     def used_names(self, scope: FileScope) -> frozenset[str]:
         """The import-bound names a module's own code refers to: every `refs` and `uses` row, in

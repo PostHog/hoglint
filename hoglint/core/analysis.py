@@ -84,7 +84,7 @@ class CoreAnalysis:
 
     def needs(self) -> FactNeeds:
         options = self.options
-        reads = frozenset(TABLE_KINDS).union(*(producer.reads for producer in options.producers))
+        reads = frozenset(TABLE_KINDS).union(*(producer.fact_kinds(options.config) for producer in options.producers))
         core = FactNeeds(kinds=reads, watch_callees=frozenset(options.config.loader_callee_names()))
         return core | (options.needs if options.needs is not None else registered_needs())
 
