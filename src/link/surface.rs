@@ -15,7 +15,7 @@
 //! such as `sorted(_LAZY)`. One built by other code, changed by a method or set under a condition
 //! cannot be read: what the module hands out is then unknown.
 
-use super::facts::{Assign, Op, V};
+use super::facts::{Assign, COPY_CALLEES, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{Core, absolute_import};
 use super::scope::Scope;
@@ -51,8 +51,6 @@ struct ListedNames<'a> {
 }
 
 impl ListedNames<'_> {
-    const COPIES: [&'static str; 4] = ["sorted", "list", "tuple", "set"];
-
     /// The strings a module-level name holds, when one unconditional assignment binds it to a
     /// literal list, tuple, set or dict of string literals.
     fn literal(&self, name: Sid) -> Option<FxHashSet<Sid>> {
@@ -89,7 +87,7 @@ impl ListedNames<'_> {
                 Some(names)
             }
             V::Call(callee, _, Some(sole)) => match &**callee {
-                V::Chain(name) if Self::COPIES.contains(&self.it.s(*name)) => self.of(sole),
+                V::Chain(name) if COPY_CALLEES.contains(&self.it.s(*name)) => self.of(sole),
                 _ => None,
             },
             V::List(items) | V::Tuple(items) | V::Set(items) => {

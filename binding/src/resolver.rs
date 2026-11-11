@@ -3,7 +3,7 @@
 
 use crate::link::Link;
 use crate::{HitTuple, Pair};
-use hoglint_facts::link::facts::V;
+use hoglint_facts::link::facts::{COPY_CALLEES, V};
 use hoglint_facts::link::intern::Interner;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyString};
@@ -62,8 +62,13 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
             Some(keywords) => frozen_keyword(&keywords)?,
             None => false,
         };
+        let copy = callee
+            .extract::<String>()
+            .is_ok_and(|name| COPY_CALLEES.contains(&name.as_str()));
         let sole = match get("args")? {
-            Some(args) if args.len()? == 1 => Some(Box::new(py_value(it, &args.get_item(0)?)?)),
+            Some(args) if copy && args.len()? == 1 => {
+                Some(Box::new(py_value(it, &args.get_item(0)?)?))
+            }
             _ => None,
         };
         return Ok(V::Call(Box::new(py_value(it, &callee)?), frozen, sole));

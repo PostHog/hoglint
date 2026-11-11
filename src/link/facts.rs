@@ -259,6 +259,10 @@ pub struct FactSet {
 
 /// The kinds of rows the link keeps that only the core producers and pack queries read:
 /// resolution reads imports, defs and assigns, so those stay until `release_rows`.
+/// The callees whose one positional argument a call value keeps: the copies of a sequence a
+/// module's `__all__` can be made with (`sorted(_NAMES)`), the only reader of that argument.
+pub const COPY_CALLEES: [&str; 4] = ["sorted", "list", "tuple", "set"];
+
 pub const QUERY_KINDS: [&str; 7] = ["refs", "strs", "calls", "uses", "callees", "names", "tags"];
 
 impl FactSet {
@@ -402,8 +406,12 @@ pub fn value(it: &mut Interner, json: &J) -> V {
                 return V::Str(it.intern(text(s)), parsed);
             }
             if let Some(callee) = map.get("call") {
+                let copy =
+                    matches!(callee, J::String(name) if COPY_CALLEES.contains(&name.as_str()));
                 let sole = match map.get("args") {
-                    Some(J::Array(args)) if args.len() == 1 => Some(Box::new(value(it, &args[0]))),
+                    Some(J::Array(args)) if copy && args.len() == 1 => {
+                        Some(Box::new(value(it, &args[0])))
+                    }
                     _ => None,
                 };
                 return V::Call(
