@@ -494,6 +494,7 @@ class DeclarationProducer(Producer):
     def __init__(self) -> None:
         self.expansions: dict[tuple[tuple[str, str], SlotLookup], list[Expanded]] = {}
         self.fields: dict[str, dict[int, list[dict]]] = {}
+        self.roots: dict[str, frozenset[tuple[int, str]]] = {}
 
     @property
     def edge_kinds(self) -> frozenset[str]:
@@ -512,10 +513,17 @@ class DeclarationProducer(Producer):
         self.fields[scope.path] = out
         return out
 
-    @staticmethod
-    def is_contract(context: BuildContext, scope: FileScope) -> bool:
-        """A test file hands nothing out, so it is no contract surface."""
-        return Context.TEST not in scope.base_contexts and context.config.is_contract_surface(scope.path)
+    def contract_roots(self, context: BuildContext, scope: FileScope) -> frozenset[tuple[int, str]]:
+        """(export, root) of every contract surface that covers a file, read once per file; none
+        for a test file, which hands nothing out. A file is a contract surface when one covers
+        it, and two files that share one belong to the same export of the same captured root."""
+        if not context.config.contract_surfaces:
+            return frozenset()
+        found = self.roots.get(scope.path)
+        if found is None:
+            test = Context.TEST in scope.base_contexts
+            found = self.roots[scope.path] = frozenset() if test else context.config.surface_roots(scope.path)
+        return found
 
     @staticmethod
     def in_contract(scope: FileScope, idx: int) -> bool:
@@ -937,7 +945,7 @@ class DeclarationProducer(Producer):
         unresolved row: what the module hands out is unknown. So is a handed-out name the engine
         cannot follow to a def. A def in a file of the same export and root (the same product's
         facade) gets no rows here: that file reports it."""
-        roots = context.config.surface_roots(scope.path)
+        roots = self.contract_roots(context, scope)
         handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
         listing = handed.listing()
         if listing is not None and listing.unread is not None:
@@ -956,7 +964,7 @@ class DeclarationProducer(Producer):
                 graph.edges.append(site.edge(item.target, UNRESOLVED, rows.attrs("whole")))
                 continue
             origin, idx = found.scope, found.idx
-            if self.is_contract(context, origin) and roots & context.config.surface_roots(origin.path):
+            if roots & self.contract_roots(context, origin):
                 continue
             node = origin.defs[idx]
             lookup = SlotLookup(origin, node["s"], node["l"])
@@ -971,7 +979,7 @@ class DeclarationProducer(Producer):
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
             fields = self.fields_by_class(scope)
-            contract = self.is_contract(context, scope)
+            contract = bool(self.contract_roots(context, scope))
             for idx, node in enumerate(scope.defs):
                 self.declare(context, graph, scope, idx, node, fields, contract)
             if contract:

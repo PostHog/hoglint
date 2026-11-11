@@ -130,12 +130,8 @@ class CoreConfig:
     def migration_globs(self) -> PathGlobs:
         return PathGlobs(self.migration_paths)
 
-    def is_contract_surface(self, path: str) -> bool:
-        return any(surface.covers(path) for surface in self.contract_surfaces)
-
     def surface_roots(self, path: str) -> frozenset[tuple[int, str]]:
-        """(export, root) of every contract surface that covers a path: two files with one in
-        common belong to the same export of the same captured root."""
+        """(export, root) of every contract surface that covers a path."""
         found = ((at, surface.covered_root(path)) for at, surface in enumerate(self.contract_surfaces))
         return frozenset((at, root) for at, root in found if root is not None)
 

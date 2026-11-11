@@ -349,6 +349,15 @@ struct Keys {
 }
 
 impl Producing {
+    /// (export, root) of every contract surface that covers a path.
+    fn surface_roots(&self, path: &str) -> Vec<(usize, String)> {
+        self.contract_surfaces
+            .iter()
+            .enumerate()
+            .filter_map(|(at, surface)| surface.covered_root(path).map(|root| (at, root)))
+            .collect()
+    }
+
     pub fn new(
         it: &mut Interner,
         builtins: &[String],
@@ -676,6 +685,8 @@ pub struct Producers<'p> {
     pub expansions: FxHashMap<((Sid, Sid), SlotLookup), Vec<Expanded>>,
     /// The candidate dataclass fields of each file, by file (`fields_by_class`).
     pub fields: FxHashMap<u32, FxHashMap<i32, Vec<u32>>>,
+    /// The contract roots of each file, by its scope (`contract_roots`).
+    pub roots: FxHashMap<usize, Vec<(usize, String)>>,
 }
 
 impl Producers<'_> {
@@ -1480,16 +1491,24 @@ impl Producers<'_> {
         }
     }
 
-    /// (export, root) of every contract surface that covers a file: two files with one in
-    /// common belong to the same export of the same captured root.
-    fn surface_roots(&self, owner: usize) -> Vec<(usize, String)> {
-        let path = &self.core.facts.files[self.scopes[owner].file as usize].path;
-        self.settings
-            .contract_surfaces
-            .iter()
-            .enumerate()
-            .filter_map(|(at, surface)| surface.covered_root(path).map(|root| (at, root)))
-            .collect()
+    /// (export, root) of every contract surface that covers a file, read once per file; none for
+    /// a test file, which hands nothing out. A file is a contract surface when one covers it, and
+    /// two files that share one belong to the same export of the same captured root.
+    fn contract_roots(&mut self, owner: usize) -> &[(usize, String)] {
+        if self.settings.contract_surfaces.is_empty() {
+            return &[];
+        }
+        if !self.roots.contains_key(&owner) {
+            let scope = &self.scopes[owner];
+            let found = if scope.base_ctx & ctx::TEST != 0 {
+                Vec::new()
+            } else {
+                let path = &self.core.facts.files[scope.file as usize].path;
+                self.settings.surface_roots(path)
+            };
+            self.roots.insert(owner, found);
+        }
+        &self.roots[&owner]
     }
 
     /// The import-bound names a module's own code refers to: every `refs` and `uses` row, in any
@@ -1520,19 +1539,6 @@ impl Producers<'_> {
             names.insert(self.core.it.head(value));
         }
         names
-    }
-
-    /// A test file hands nothing out, so it is no contract surface.
-    fn is_contract(&self, owner: usize) -> bool {
-        let scope = &self.scopes[owner];
-        if scope.base_ctx & ctx::TEST != 0 {
-            return false;
-        }
-        let path = &self.core.facts.files[scope.file as usize].path;
-        self.settings
-            .contract_surfaces
-            .iter()
-            .any(|surface| surface.covers(path))
     }
 
     /// Whether a def is a public callable of the module's contract: a top-level function or
@@ -1614,7 +1620,7 @@ impl Producers<'_> {
             let attrs = self.slot_attrs(rows, k.whole, &[]);
             self.push_slot(rows, k.dunder_all, UNRESOLVED, &attrs);
         }
-        let roots = self.surface_roots(owner);
+        let roots = self.contract_roots(owner).to_vec();
         let used = if listing.is_none() {
             self.used_names(owner)
         } else {
@@ -1645,11 +1651,10 @@ impl Producers<'_> {
                 self.push_slot(rows, item.target, UNRESOLVED, &attrs);
                 continue;
             };
-            if self.is_contract(origin)
-                && self
-                    .surface_roots(origin)
-                    .iter()
-                    .any(|root| roots.contains(root))
+            if self
+                .contract_roots(origin)
+                .iter()
+                .any(|root| roots.contains(root))
             {
                 continue;
             }
@@ -1676,7 +1681,7 @@ impl Producers<'_> {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];
-        let contract = self.is_contract(owner);
+        let contract = !self.contract_roots(owner).is_empty();
         for (idx, node) in record.defs.iter().enumerate() {
             let k = &self.settings.k;
             let module = self.scopes[owner].module;

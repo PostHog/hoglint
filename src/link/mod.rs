@@ -352,6 +352,7 @@ impl Link {
             owner_of: FxHashMap::default(),
             expansions: FxHashMap::default(),
             fields: FxHashMap::default(),
+            roots: FxHashMap::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
