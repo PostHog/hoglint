@@ -169,6 +169,10 @@ def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pyt
     assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "NO PREDICTION"
 
 
+def test_a_replay_that_compared_no_pair_fails() -> None:
+    assert PairsReport().close() is False
+
+
 def test_a_check_takes_no_reuse_switch_from_the_callers_shell() -> None:
     caller = {"PATH": "/bin", "HOGLINT_PACK_MEMO": "off", "HOGLINT_NO_ANSWER_CACHE": "1", "HOGLINT_LINK_TRACE": "1"}
     assert check_env(caller, {}) == {"PATH": "/bin"}

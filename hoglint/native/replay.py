@@ -1287,7 +1287,8 @@ class PairsReport:
         sys.stdout.write(f"prediction: no miss in {len(clean)} of {len(predictions)} pairs; misses in {missed}\n")
         by_key = [r.pair.name for r in predictions if r.prediction is not None and r.prediction.missed_by_key]
         sys.stdout.write(f"prediction, findings by key: misses in {len(by_key)} pairs: {by_key}\n")
-        return equal == len(self.results)
+        # A run that compared no pair proves nothing, so it fails.
+        return bool(self.results) and equal == len(self.results)
 
 
 class Determinism:
@@ -1392,7 +1393,7 @@ def main() -> None:
     checker = Checker(repo, args.engine, MODES[args.mode](), work, today)
     if args.command == "determinism":
         results = [Determinism(checker).run(tree) for tree in args.tree]
-        ok = all(results)
+        ok = bool(results) and all(results)
     else:
         ok = run_pairs(args, checker)
     sys.exit(0 if ok else 1)
