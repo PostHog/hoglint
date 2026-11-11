@@ -435,8 +435,11 @@ class Verdict:
 
     @staticmethod
     def predicted(prediction: Prediction | None) -> Verdict:
-        """A certificate's verdict: its prediction must hold every item of the truth set."""
-        if prediction is None or not prediction.missed:
+        """A certificate's verdict: its prediction must hold every item of the truth set. A mode
+        that made no prediction certified nothing."""
+        if prediction is None:
+            return Verdict("prediction", (), (), "the mode made no prediction", "NO PREDICTION")
+        if not prediction.missed:
             return Verdict("prediction", (), ())
         files = sorted({item.home for item in prediction.missed})
         return Verdict("prediction", (), (), f"{len(files)} files of the truth set not predicted", "MISSED")

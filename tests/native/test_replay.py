@@ -164,7 +164,9 @@ def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pyt
     report.add(result)
     assert report.close() is False
     assert "p  MISSED  prediction: MISSED (1 files" in capsys.readouterr().out
-    assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "EQUAL"
+    held = Prediction(frozenset({"core/t.py"}), frozenset({"core/t.py"}), (), ())
+    assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(held)]).status() == "EQUAL"
+    assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "NO PREDICTION"
 
 
 def test_a_check_takes_no_reuse_switch_from_the_callers_shell() -> None:
