@@ -16,6 +16,15 @@ DEFAULT_DATACLASS_DECORATORS = ("dataclasses.dataclass",)
 DEFAULT_PATCH_CALLEES = ("patch",)
 
 
+def as_tuple(value: Any) -> tuple[str, ...]:
+    """A config list of names; a bare string is a list of one name."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in value)
+
+
 @dataclass(frozen=True, slots=True)
 class DataclassDecorators:
     """The decorators that make a dataclass (`make`), and those of them that always make it frozen
@@ -27,8 +36,10 @@ class DataclassDecorators:
     @classmethod
     def from_discovery(cls, discovery: Mapping[str, Any]) -> DataclassDecorators:
         """The two lists of a config's `[discovery]`, with core's default for the first."""
-        make = discovery.get("dataclass_decorators", DEFAULT_DATACLASS_DECORATORS)
-        return cls(frozenset(make), frozenset(discovery.get("frozen_dataclass_decorators", ())))
+        make = DEFAULT_DATACLASS_DECORATORS
+        if "dataclass_decorators" in discovery:
+            make = as_tuple(discovery["dataclass_decorators"])
+        return cls(frozenset(make), frozenset(as_tuple(discovery.get("frozen_dataclass_decorators"))))
 
 
 class PathGlobs:

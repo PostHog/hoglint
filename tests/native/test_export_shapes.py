@@ -279,3 +279,19 @@ def test_a_module_level_import_in_a_block_is_handed_out(
     out = both_engines(tmp_path, files, monkeypatch)
     expected = [[f"{SHOP}.logic.Order", API, "export-shape(class)"]] if flagged else []
     assert export_shape_findings(out["native"]) == expected
+
+
+def test_a_bare_string_names_one_dataclass_decorator_in_both_engines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kit = "products.shop.backend.kit"
+    config = CONFIG.replace(
+        f'dataclass_decorators = [\n  "dataclasses.dataclass", "{kit}.frozen", "{kit}.model",\n]\n'
+        f'frozen_dataclass_decorators = ["{kit}.frozen"]\n',
+        f'dataclass_decorators = "{kit}.frozen"\nfrozen_dataclass_decorators = "{kit}.frozen"\n',
+    )
+    assert config != CONFIG
+    contracts = IMPORTS + "@frozen\nclass Order:\n    id: int\n"
+    files = {"hoglint.toml": config, "products/shop/backend/facade/contracts.py": contracts}
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert export_shape_findings(out["native"]) == []

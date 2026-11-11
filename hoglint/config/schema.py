@@ -34,7 +34,7 @@ from hoglint.config.model import (
     ZoneSpec,
     ZoneTable,
 )
-from hoglint.core.config import DataclassDecorators
+from hoglint.core.config import DataclassDecorators, as_tuple
 from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
@@ -185,14 +185,6 @@ def unread_keys(rule: type[RuleType]) -> frozenset[str]:
     no meaning, so each engine would give it one of its own (D52)."""
     unread = RULE_KEYS[rule.PRIMITIVE] - rule.READS - EVERY_RULE_READS
     return unread - UNREAD_ACCEPTED.get(rule.MODE, frozenset())
-
-
-def as_tuple(value: Any) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        return (value,)
-    return tuple(str(item) for item in value)
 
 
 class SchemaBuilder:
