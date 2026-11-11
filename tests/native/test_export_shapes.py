@@ -213,3 +213,42 @@ def test_an_expanded_alias_is_judged_by_what_it_expands_to(
     out = both_engines(tmp_path, files, monkeypatch)
     findings = sorted([row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl"))
     assert [row for row in findings if row[0] == "facade-signature"] == sorted(expected)
+
+
+BARE_DICT_CONFIG = (
+    CONFIG.replace('unknown = "error"\n', 'unknown = "error"\nsignatures = true\n', 1)
+    + """
+[rules.bare-dict]
+primitive = "edge"
+kinds = ["exposes"]
+select = "edge.surface == 'builtins.dict'"
+deny = "edge.subscripted == none"
+identity = ["src.module", "edge.callable", "edge.slot"]
+ledger = false
+"""
+)
+# A slot row says whether its generic type has arguments (`subscripted`), so a rule can tell a
+# bare `dict` from `dict[str, str]`, in the slot itself or in the alias it names.
+SUBSCRIPT_CASES = {
+    "a bare dict": ("dict", True),
+    "a dict with arguments": ("dict[str, str]", False),
+    "a bare dict inside a list": ("list[dict]", True),
+    "an optional dict with arguments": ("Optional[dict[str, int]]", False),
+    "an alias of a dict with arguments": ("Totals", False),
+    "an alias of a bare dict": ("Loose", True),
+}
+
+
+@pytest.mark.parametrize("case", SUBSCRIPT_CASES)
+def test_a_rule_tells_a_bare_generic_from_one_with_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    annotation, flagged = SUBSCRIPT_CASES[case]
+    api = (
+        "from typing import Optional\n\nTotals = dict[str, int]\nLoose = dict\n\n\n"
+        f"def charge(amount: {annotation}) -> None:\n    pass\n"
+    )
+    files = {"hoglint.toml": BARE_DICT_CONFIG, "products/shop/backend/facade/api.py": api}
+    out = both_engines(tmp_path, files, monkeypatch)
+    findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "bare-dict"]
+    assert findings == ([[API, "charge", "param:amount"]] if flagged else [])

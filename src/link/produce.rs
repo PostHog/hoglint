@@ -345,6 +345,7 @@ struct Keys {
     alias: Sid,
     too_deep: Sid,
     expanded: Sid,
+    subscripted: Sid,
     dunder_all: Sid,
     names: Sid,
     signature: Sid,
@@ -423,6 +424,7 @@ impl Producing {
             alias: it.intern("alias"),
             too_deep: it.intern("too-deep"),
             expanded: it.intern("expanded"),
+            subscripted: it.intern("subscripted"),
             dunder_all: it.intern("__all__"),
             names: it.intern("names"),
             signature: it.intern("signature"),
@@ -622,14 +624,15 @@ struct Mention {
 }
 
 /// A name a type alias expands to: whether it sits at the top of the expansion (the whole
-/// annotation, when the alias is), where it is looked up, and whether the expansion stopped at
-/// it because the alias it names is too deep to follow.
+/// annotation, when the alias is), where it is looked up, whether the expansion stopped at it
+/// because the alias it names is too deep to follow, and whether it is given arguments.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Expanded {
     value: Sid,
     top: bool,
     lookup: SlotLookup,
     too_deep: bool,
+    subscripted: bool,
 }
 
 /// A type alias, as (module, name).
@@ -913,13 +916,17 @@ impl Producers<'_> {
     }
 
     /// Every dotted name in a type expression, with whether it is the whole annotation.
-    fn mentions(&mut self, value: &V, whole: bool, out: &mut Vec<(Sid, bool)>) {
+    fn mentions(&mut self, value: &V, whole: bool, out: &mut Vec<(Sid, bool, bool)>) {
         let k = &self.settings.k;
         match value {
-            V::Chain(chain) => out.push((*chain, whole)),
+            V::Chain(chain) => out.push((*chain, whole, false)),
             V::Str(_, Some(parsed)) => self.mentions(parsed, whole, out),
             V::Sub(inner, index) => {
+                let start = out.len();
                 self.mentions(inner, whole, out);
+                for found in &mut out[start..] {
+                    found.2 = true;
+                }
                 let last = match &**inner {
                     V::Chain(chain) => self.core.it.last(*chain),
                     _ => EMPTY,
@@ -1050,7 +1057,7 @@ impl Producers<'_> {
         resolved: Resolved,
         slot: Sid,
         position: Sid,
-        extra: Option<(Sid, Sid)>,
+        extra: &[(Sid, Sid)],
     ) {
         let k = &self.settings.k;
         let mut attrs = [
@@ -1059,10 +1066,12 @@ impl Producers<'_> {
             (k.position, position),
             (EMPTY, EMPTY),
             (EMPTY, EMPTY),
+            (EMPTY, EMPTY),
         ];
         let mut len = 3;
         for pair in extra
-            .into_iter()
+            .iter()
+            .copied()
             .chain((rows.handed != EMPTY).then_some((k.handed, rows.handed)))
         {
             attrs[len] = pair;
@@ -1093,7 +1102,8 @@ impl Producers<'_> {
         extra: Option<(Sid, Sid)>,
     ) {
         let whole = self.settings.k.whole;
-        self.push_slot(rows, surface, UNRESOLVED, slot, whole, extra);
+        let extra: Vec<(Sid, Sid)> = extra.into_iter().collect();
+        self.push_slot(rows, surface, UNRESOLVED, slot, whole, &extra);
     }
 
     /// A site in a file's module body.
@@ -1113,12 +1123,13 @@ impl Producers<'_> {
     fn expand_into(&mut self, value: &V, at: SlotLookup, top: bool, expansion: &mut Expansion) {
         let mut names = Vec::new();
         self.mentions(value, true, &mut names);
-        for (name, whole) in names {
+        for (name, whole, subscripted) in names {
             let item = Expanded {
                 value: name,
                 top: top && whole,
                 lookup: at,
                 too_deep: false,
+                subscripted,
             };
             expansion.write(item);
             let found = self.lookup_at(at, name);
@@ -1216,10 +1227,10 @@ impl Producers<'_> {
         slot: Sid,
         contract: bool,
         lookup: SlotLookup,
-        names: Vec<(Sid, bool)>,
+        names: Vec<(Sid, bool, bool)>,
     ) {
         let mut written: FxHashSet<(Sid, bool, bool)> = FxHashSet::default();
-        for (value, whole) in names {
+        for (value, whole, subscripted) in names {
             let mention = Mention {
                 value,
                 whole,
@@ -1241,11 +1252,14 @@ impl Producers<'_> {
             };
             if !builtin {
                 let resolved = core.classify_lookup(found);
-                let marker = expansion
-                    .as_ref()
-                    .filter(|items| !items.is_empty())
-                    .map(|_| (k.alias, k.expanded));
-                self.push_slot(rows, found.surface, resolved, slot, position, marker);
+                let mut extra = Vec::new();
+                if expansion.as_ref().is_some_and(|items| !items.is_empty()) {
+                    extra.push((k.alias, k.expanded));
+                }
+                if subscripted {
+                    extra.push((k.subscripted, k.one));
+                }
+                self.push_slot(rows, found.surface, resolved, slot, position, &extra);
             }
             let Some(expansion) = expansion else {
                 continue;
@@ -1264,15 +1278,19 @@ impl Producers<'_> {
                 let k = &self.settings.k;
                 let position = if whole { k.whole } else { k.nested };
                 if item.too_deep {
-                    let marker = Some((k.alias, k.too_deep));
-                    self.push_slot(rows, surface, UNRESOLVED, slot, position, marker);
+                    let marker = [(k.alias, k.too_deep)];
+                    self.push_slot(rows, surface, UNRESOLVED, slot, position, &marker);
                     continue;
                 }
-                let marker = self
-                    .expanded_in(&expansion, item, inner)
-                    .then_some((self.settings.k.alias, self.settings.k.expanded));
+                let mut extra = Vec::new();
+                if self.expanded_in(&expansion, item, inner) {
+                    extra.push((self.settings.k.alias, self.settings.k.expanded));
+                }
+                if item.subscripted {
+                    extra.push((self.settings.k.subscripted, self.settings.k.one));
+                }
                 let resolved = self.core.classify_lookup(inner);
-                self.push_slot(rows, surface, resolved, slot, position, marker);
+                self.push_slot(rows, surface, resolved, slot, position, &extra);
             }
         }
     }
@@ -1577,7 +1595,7 @@ impl Producers<'_> {
         for annotation in annotations {
             self.mentions(annotation, true, &mut mentioned);
         }
-        for (value, _) in mentioned {
+        for (value, _, _) in mentioned {
             names.insert(self.core.it.head(value));
         }
         names
