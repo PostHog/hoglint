@@ -60,12 +60,6 @@ pub const KIND_NAMES: [&str; 14] = [
     "lines", "target", "spelled", "label",
 ];
 
-impl Kind {
-    pub fn name(self) -> &'static str {
-        KIND_NAMES[self as usize]
-    }
-}
-
 /// A cached answer whose reads `Recorder` keeps.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Memo {
@@ -204,16 +198,6 @@ impl Recorder {
             .map_or(&[][..], Vec::as_slice)
             .iter()
             .map(|&read| unpack(read))
-    }
-
-    pub fn heap(&self) -> usize {
-        use super::heap;
-        let traces: usize = self.traces.iter().map(heap::vec).sum();
-        heap::vec(&self.buf)
-            + heap::vec(&self.arena)
-            + heap::map(&self.memos)
-            + heap::vec(&self.traces)
-            + traces
     }
 }
 
@@ -638,6 +622,9 @@ impl Link {
     /// repo file. A read of the file's own module is left out: a change to the module's files
     /// makes the file recompute anyway.
     pub fn write_traces(&mut self, path: &Path) -> Result<DumpCounts, String> {
+        if self.core.it.len() as u64 > ID_MASK {
+            return Err("too many strings to pack the reads of a trace".to_string());
+        }
         let edge_reads = self.edge_reads();
         let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut out = BufWriter::new(file);
