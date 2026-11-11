@@ -577,6 +577,21 @@ def test_a_surface_hands_out_nothing_its_own_export_already_reports(
     assert slot_rows(out["native"], "products.other.backend.facade.contracts") == charge_by("no-functions")
 
 
+@pytest.mark.parametrize("depth", [4, 30])
+def test_an_alias_chain_that_doubles_at_every_step_gives_each_type_name_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    chain = "".join(f"A{at} = tuple[A{at + 1}, A{at + 1}]\n" for at in range(depth)) + f"A{depth} = int\n"
+    files = {
+        "products/shop/backend/types.py": chain,
+        "products/shop/backend/facade/api.py": "from ..types import A0\n\n\ndef orders(x: list[A0]) -> None:\n    pass\n",
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    names = [row[2] for row in slot_rows(out["native"], FACADE) if row[1] == "param:x"]
+    chained = [f"products.shop.backend.types.A{at}" for at in range(depth + 1)]
+    assert sorted(names) == sorted(["builtins.list", "builtins.tuple", "builtins.int", *chained])
+
+
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)
 def test_an_alias_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str

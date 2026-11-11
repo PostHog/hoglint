@@ -577,8 +577,8 @@ struct SlotSite {
 }
 
 /// Where the names of a slot's annotation are looked up: the def's file, scope and line.
-#[derive(Clone, Copy)]
-struct SlotLookup {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SlotLookup {
     owner: usize,
     scope: i32,
     line: u32,
@@ -601,6 +601,24 @@ struct Mention {
     value: Sid,
     whole: bool,
     lookup: SlotLookup,
+}
+
+/// A name a type alias expands to: whether it sits at the top of the expansion (the whole
+/// annotation, when the alias is), where it is looked up, and whether the expansion stopped at
+/// it because the alias it names is too deep to follow.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Expanded {
+    value: Sid,
+    top: bool,
+    lookup: SlotLookup,
+    too_deep: bool,
+}
+
+/// What one expansion has followed so far: (alias, top) pairs, and the names it has written.
+#[derive(Default)]
+struct ExpandState {
+    followed: FxHashSet<((Sid, Sid), bool)>,
+    seen: FxHashSet<Expanded>,
 }
 
 /// What every `exposes` row of one slot shares. `handed` is the clause a handed-out callable
@@ -654,6 +672,10 @@ pub struct Producers<'p> {
     pub aliases: FxHashMap<Sid, FxHashMap<Sid, (u32, u32)>>,
     /// The scope of each analyzed file, by file.
     pub owner_of: FxHashMap<u32, usize>,
+    /// What each type alias expands to, by alias and the place its names are looked up.
+    pub expansions: FxHashMap<((Sid, Sid), SlotLookup), Vec<Expanded>>,
+    /// The candidate dataclass fields of each file, by file (`fields_by_class`).
+    pub fields: FxHashMap<u32, FxHashMap<i32, Vec<u32>>>,
 }
 
 impl Producers<'_> {
@@ -1012,15 +1034,84 @@ impl Producers<'_> {
         );
     }
 
-    /// One row per mention, each followed by the rows of the type alias it is, when it is one
-    /// (in a contract only). A cycle stops at the alias it closes; an expansion deeper than
-    /// MAX_ALIAS_DEPTH stops with an unresolved row, because a type left unread is unknown.
-    fn expose_mentions(
+    /// Depth first, the names in an alias's value, each alias in it followed once per place (top
+    /// or nested). A cycle stops at the alias that closes it; an alias deeper than
+    /// MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown.
+    fn expand_into(
         &mut self,
-        rows: SlotRows,
-        mentions: Vec<Mention>,
-        expanding: &mut Vec<(Sid, Sid)>,
+        value: &V,
+        at: SlotLookup,
+        top: bool,
+        stack: &mut Vec<(Sid, Sid)>,
+        state: &mut ExpandState,
+        out: &mut Vec<Expanded>,
     ) {
+        let mut names = Vec::new();
+        self.mentions(value, true, &mut names);
+        for (name, whole) in names {
+            let item = Expanded {
+                value: name,
+                top: top && whole,
+                lookup: at,
+                too_deep: false,
+            };
+            if state.seen.insert(item) {
+                out.push(item);
+            }
+            let found = self.core.value_lookup(
+                &self.settings.names,
+                &mut self.scopes[at.owner],
+                &V::Chain(name),
+                at.scope,
+                at.line,
+            );
+            let mention = Mention {
+                value: name,
+                whole,
+                lookup: at,
+            };
+            let Some((key, inner, inner_at)) =
+                found.and_then(|found| self.alias_of(mention, found))
+            else {
+                continue;
+            };
+            if stack.contains(&key) || !state.followed.insert((key, item.top)) {
+                continue;
+            }
+            if stack.len() >= MAX_ALIAS_DEPTH {
+                let marker = Expanded {
+                    too_deep: true,
+                    ..item
+                };
+                if state.seen.insert(marker) {
+                    out.push(marker);
+                }
+                continue;
+            }
+            stack.push(key);
+            self.expand_into(&inner, inner_at, item.top, stack, state, out);
+            stack.pop();
+        }
+    }
+
+    /// The names a type alias expands to, worked out once per alias and place its names are
+    /// looked up: the alias decides them, never the slot that names it.
+    fn expansion(&mut self, key: (Sid, Sid), value: &V, at: SlotLookup) -> Vec<Expanded> {
+        if let Some(found) = self.expansions.get(&(key, at)) {
+            return found.clone();
+        }
+        let mut out = Vec::new();
+        let mut state = ExpandState::default();
+        self.expand_into(value, at, true, &mut vec![key], &mut state, &mut out);
+        self.expansions.insert((key, at), out.clone());
+        out
+    }
+
+    /// One row per mention, each followed (in a contract only) by a row per name of the type
+    /// alias it is, when it is one. A slot names each name an alias expands to once per
+    /// position, however often its aliases repeat it.
+    fn expose_mentions(&mut self, rows: SlotRows, mentions: Vec<Mention>) {
+        let mut written: FxHashSet<(Sid, bool, bool)> = FxHashSet::default();
         for mention in mentions {
             let lookup = mention.lookup;
             let core = &mut *self.core;
@@ -1050,29 +1141,37 @@ impl Producers<'_> {
             let Some((key, value, at)) = self.alias_of(mention, found) else {
                 continue;
             };
-            if expanding.contains(&key) {
-                continue;
-            }
-            if expanding.len() >= MAX_ALIAS_DEPTH {
+            for item in self.expansion(key, &value, at) {
+                let whole = mention.whole && item.top;
+                let Some(inner) = self.core.value_lookup(
+                    &self.settings.names,
+                    &mut self.scopes[item.lookup.owner],
+                    &V::Chain(item.value),
+                    item.lookup.scope,
+                    item.lookup.line,
+                ) else {
+                    continue;
+                };
+                let surface = if item.too_deep {
+                    item.value
+                } else {
+                    inner.surface
+                };
+                if !written.insert((surface, whole, item.too_deep)) {
+                    continue;
+                }
                 let k = &self.settings.k;
-                let marker = [(k.alias, k.too_deep)];
-                let attrs = self.slot_attrs(rows, position, &marker);
-                self.push_slot(rows, mention.value, UNRESOLVED, &attrs);
-                continue;
+                let position = if whole { k.whole } else { k.nested };
+                if item.too_deep {
+                    let marker = [(k.alias, k.too_deep)];
+                    let attrs = self.slot_attrs(rows, position, &marker);
+                    self.push_slot(rows, surface, UNRESOLVED, &attrs);
+                    continue;
+                }
+                let resolved = self.core.classify_lookup(inner);
+                let attrs = self.slot_attrs(rows, position, &[]);
+                self.push_slot(rows, surface, resolved, &attrs);
             }
-            let mut inner = Vec::new();
-            self.mentions(&value, mention.whole, &mut inner);
-            let inner = inner
-                .into_iter()
-                .map(|(value, whole)| Mention {
-                    value,
-                    whole,
-                    lookup: at,
-                })
-                .collect();
-            expanding.push(key);
-            self.expose_mentions(rows, inner, expanding);
-            expanding.pop();
         }
     }
 
@@ -1114,7 +1213,7 @@ impl Producers<'_> {
                 lookup,
             })
             .collect();
-        self.expose_mentions(rows, mentions, &mut Vec::new());
+        self.expose_mentions(rows, mentions);
     }
 
     /// Whether a def's first parameter is bound by the call, whatever its name: a method's first
@@ -1240,6 +1339,19 @@ impl Producers<'_> {
         }
     }
 
+    /// The candidate dataclass fields of one class, as assign indexes; each file is read once.
+    fn class_fields(&mut self, file: u32, idx: u32) -> Vec<u32> {
+        if !self.fields.contains_key(&file) {
+            let record = &self.core.facts.files[file as usize];
+            let found = fields_by_class(&self.core.it, &record.assigns);
+            self.fields.insert(file, found);
+        }
+        self.fields[&file]
+            .get(&(idx as i32))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// The analyzed file and def index of a class the link resolved to.
     fn class_def(&mut self, class: Ent) -> Option<(usize, u32)> {
         let Binding::Class(idx, stub) = self.core.binding_of(class.m, class.s)? else {
@@ -1308,8 +1420,7 @@ impl Producers<'_> {
                     line: node.l,
                 }
             };
-            let rows = fields_by_class(&self.core.it, &record.assigns);
-            for &at in rows.get(&(idx as i32)).map_or(&[][..], Vec::as_slice) {
+            for at in self.class_fields(file, idx) {
                 let V::Chain(name) = &record.assigns[at as usize].targets[0] else {
                     continue;
                 };
@@ -1560,7 +1671,6 @@ impl Producers<'_> {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];
-        let fields = fields_by_class(&self.core.it, &record.assigns);
         let contract = self.is_contract(owner);
         for (idx, node) in record.defs.iter().enumerate() {
             let k = &self.settings.k;
@@ -1643,11 +1753,10 @@ impl Producers<'_> {
                 if !nested && dataclass {
                     let init = self.core.it.join(qualname, self.settings.k.init);
                     if !in_contract {
-                        let own: Vec<FieldRow> = fields
-                            .get(&(idx as i32))
-                            .map_or(&[][..], Vec::as_slice)
-                            .iter()
-                            .map(|&at| FieldRow {
+                        let own: Vec<FieldRow> = self
+                            .class_fields(file as u32, idx as u32)
+                            .into_iter()
+                            .map(|at| FieldRow {
                                 file: file as u32,
                                 at,
                                 lookup,

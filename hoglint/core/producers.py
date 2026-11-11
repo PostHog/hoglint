@@ -491,6 +491,18 @@ class Mention:
 
 
 @dataclass(frozen=True, slots=True)
+class Expanded:
+    """A name a type alias expands to: whether it sits at the top of the expansion (the whole
+    annotation, when the alias is), where it is looked up, and whether the expansion stopped at
+    it because the alias it names is too deep to follow."""
+
+    value: str
+    top: bool
+    lookup: SlotLookup
+    too_deep: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class SlotRows:
     """What every `exposes` row of one slot shares."""
 
@@ -516,16 +528,25 @@ class DeclarationProducer(Producer):
     kinds = ("inherit", "decorate", "exposes", "declares")
     reads = frozenset({"callees"})  # a call on `__all__` makes a contract's hand-out unknown
 
+    def __init__(self) -> None:
+        self.expansions: dict[tuple[tuple[str, str], SlotLookup], list[Expanded]] = {}
+        self.fields: dict[str, dict[int, list[dict]]] = {}
+
     @property
     def edge_kinds(self) -> frozenset[str]:
         return frozenset(self.kinds)
 
-    @staticmethod
-    def fields_by_class(scope: FileScope) -> dict[int, list[dict]]:
+    def fields_by_class(self, scope: FileScope) -> dict[int, list[dict]]:
+        """Annotated single-name assignments by the def they sit in, read once per file: the
+        candidate dataclass fields."""
+        found = self.fields.get(scope.path)
+        if found is not None:
+            return found
         out: dict[int, list[dict]] = {}
         for row in scope.record.get("assigns", ()):
             if row["op"] == ":" and len(row["t"]) == 1 and isinstance(row["t"][0], str) and "." not in row["t"][0]:
                 out.setdefault(row["s"], []).append(row)
+        self.fields[scope.path] = out
         return out
 
     @staticmethod
@@ -600,17 +621,56 @@ class DeclarationProducer(Producer):
             return None
         return (origin.module, origin.symbol), value, SlotLookup(site[0], -1, site[1])
 
-    def expose_mentions(
+    def expand_into(
         self,
         context: BuildContext,
-        graph: Graph,
-        rows: SlotRows,
-        mentions: list[Mention],
-        expanding: frozenset[tuple[str, str]],
+        value: object,
+        where: SlotLookup,
+        top: bool,
+        stack: list[tuple[str, str]],
+        state: tuple[set[tuple[tuple[str, str], bool]], set[Expanded]],
+        out: list[Expanded],
     ) -> None:
-        """One row per mention, each followed by the rows of the type alias it is, when it is one
-        (in a contract only). A cycle stops at the alias it closes; an expansion deeper than
-        MAX_ALIAS_DEPTH stops with an unresolved row, because a type left unread is unknown."""
+        """Depth first, the names in an alias's value, each alias in it followed once per place
+        (top or nested). A cycle stops at the alias that closes it; an alias deeper than
+        MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown."""
+        followed, seen = state
+        for name, position in self.mentions(value, "whole"):
+            item = Expanded(name, top and position == "whole", where)
+            if item not in seen:
+                seen.add(item)
+                out.append(item)
+            found = context.value_lookup(where.scope, name, where.at_scope, where.line)
+            alias = self.alias_of(context, Mention(name, position, where), found) if found is not None else None
+            if alias is None or alias[0] in stack or (alias[0], item.top) in followed:
+                continue
+            followed.add((alias[0], item.top))
+            if len(stack) >= MAX_ALIAS_DEPTH:
+                marker = replace(item, too_deep=True)
+                if marker not in seen:
+                    seen.add(marker)
+                    out.append(marker)
+                continue
+            stack.append(alias[0])
+            self.expand_into(context, alias[1], alias[2], item.top, stack, state, out)
+            stack.pop()
+
+    def expansion(
+        self, context: BuildContext, key: tuple[str, str], value: object, where: SlotLookup
+    ) -> list[Expanded]:
+        """The names a type alias expands to, worked out once per alias and place its names are
+        looked up: the alias decides them, never the slot that names it."""
+        found = self.expansions.get((key, where))
+        if found is None:
+            found = self.expansions[(key, where)] = []
+            self.expand_into(context, value, where, True, [key], (set(), set()), found)
+        return found
+
+    def expose_mentions(self, context: BuildContext, graph: Graph, rows: SlotRows, mentions: list[Mention]) -> None:
+        """One row per mention, each followed (in a contract only) by a row per name of the type
+        alias it is, when it is one. A slot names each name an alias expands to once per
+        position, however often its aliases repeat it."""
+        written: set[tuple[str, str, bool]] = set()
         for mention in mentions:
             lookup = mention.lookup
             head = mention.value.split(".")[0]
@@ -623,15 +683,23 @@ class DeclarationProducer(Producer):
             if not rows.contract:
                 continue
             alias = self.alias_of(context, mention, found)
-            if alias is None or alias[0] in expanding:
+            if alias is None:
                 continue
-            key, value, where = alias
-            if len(expanding) >= MAX_ALIAS_DEPTH:
-                attrs = rows.attrs(mention.position, ("alias", "too-deep"))
-                graph.edges.append(rows.site.edge(mention.value, UNRESOLVED, attrs))
-                continue
-            inner = [Mention(name, position, where) for name, position in self.mentions(value, mention.position)]
-            self.expose_mentions(context, graph, rows, inner, expanding | {key})
+            for item in self.expansion(context, *alias):
+                position = "whole" if mention.position == "whole" and item.top else "nested"
+                inner = context.value_lookup(item.lookup.scope, item.value, item.lookup.at_scope, item.lookup.line)
+                if inner is None:
+                    continue
+                surface = item.value if item.too_deep else inner.surface
+                if (surface, position, item.too_deep) in written:
+                    continue
+                written.add((surface, position, item.too_deep))
+                if item.too_deep:
+                    attrs = rows.attrs(position, ("alias", "too-deep"))
+                    graph.edges.append(rows.site.edge(surface, UNRESOLVED, attrs))
+                    continue
+                resolved = context.classifier.classify_lookup(inner)
+                graph.edges.append(rows.site.edge(surface, resolved, rows.attrs(position)))
 
     def expose(
         self,
@@ -652,7 +720,7 @@ class DeclarationProducer(Producer):
             graph.edges.append(site.edge("", UNRESOLVED, rows.attrs("whole", ("annotation", "missing"))))
             return
         mentions = [Mention(value, position, lookup) for value, position in self.mentions(annotation, "whole")]
-        self.expose_mentions(context, graph, rows, mentions, frozenset())
+        self.expose_mentions(context, graph, rows, mentions)
 
     @staticmethod
     def has_receiver(context: BuildContext, lookup: SlotLookup, node: dict) -> bool:

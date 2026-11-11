@@ -347,6 +347,8 @@ impl Link {
             symbols: Symbols::default(),
             aliases: FxHashMap::default(),
             owner_of: FxHashMap::default(),
+            expansions: FxHashMap::default(),
+            fields: FxHashMap::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
