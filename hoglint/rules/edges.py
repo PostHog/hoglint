@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from hoglint.config.model import RuleSpec
-from hoglint.index import is_core
-from hoglint.model import Edge, EntityId, Remedy
+from hoglint.model import Edge, Remedy
 from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext
 from hoglint.selectors import Selector, Truth
 
@@ -134,14 +133,6 @@ class UseShapePrimitive(EdgeRule):
         }
 
 
-SlotKey = tuple[str, str, tuple[EntityId, ...]]
-
-
-def slot_key(edge: Edge) -> SlotKey:
-    """(callable, slot, targets) of an `exposes` edge; a pack names the callable by its site."""
-    return edge.attr("callable") or edge.site.scope, edge.attr("slot"), edge.targets
-
-
 def is_private(callable_name: str) -> bool:
     """A callable is private when any part of its qualname starts with `_` (dunders excepted)."""
     return any(part.startswith("_") and not part.endswith("__") for part in callable_name.split("."))
@@ -171,24 +162,8 @@ class SignaturePrimitive(EdgeRule):
         }
     )
 
-    def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
-        super().__init__(ctx, spec)
-        self.core_slots: dict[str, set[SlotKey]] = {}
-
     def sees(self, edge: Edge) -> bool:
-        return super().sees(edge) and not is_private(edge.attr("callable")) and not self.named_by_core(edge)
-
-    def named_by_core(self, edge: Edge) -> bool:
-        """A pack's edge for a slot a core edge already names: the slot is judged once, from the
-        core edge."""
-        if is_core(edge):
-            return False
-        module = edge.site.module
-        slots = self.core_slots.get(module)
-        if slots is None:
-            exposes = self.ctx.index.exposes.get(module, [])
-            slots = self.core_slots[module] = {slot_key(other) for _, other in exposes if is_core(other)}
-        return slot_key(edge) in slots
+        return super().sees(edge) and not is_private(edge.attr("callable"))
 
     def decide(self, env: EdgeEnv) -> Judgment:
         if self.selection(env) is Truth.FALSE:
