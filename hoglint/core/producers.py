@@ -136,6 +136,18 @@ def frozen_keyword(call: dict) -> bool:
     return any(pair == ["frozen", True] for pair in call.get("kw", ()))
 
 
+@dataclass(frozen=True, slots=True)
+class Followed:
+    """Where a handed-out name leads: a def in an analyzed file, or (scope None) nowhere the
+    engine can follow."""
+
+    scope: FileScope | None
+    idx: int
+
+
+UNFOLLOWED = Followed(None, -1)
+
+
 class AliasValues:
     """The value of each module-level name a module table binds by assignment, read once per
     module from the file the table reads the name from: the `.py`, or the stub for a name only
@@ -236,25 +248,28 @@ class BuildContext:
                 return self.value_lookup(scope, value[key], at_scope, line)
         return None
 
-    def handed_def(self, target: str) -> tuple[FileScope, int] | None:
-        """The top-level function or class a handed-out name leads to, in an analyzed
-        first-party file: every step of the way stays inside first-party code."""
+    def handed_def(self, target: str) -> Followed | None:
+        """Where a handed-out name leads: the top-level function or class in an analyzed
+        first-party file, every step of the way inside first-party code, or `UNFOLLOWED`. None
+        for a name that needs no row: a third-party name, a constant, a module."""
         if not self.first_party.contains(target):
             return None
         hit, rest = self.resolver.resolve_dotted(target)
-        if hit is None or rest or hit.kind not in ("def", "class"):
+        if hit is None or rest:
+            return UNFOLLOWED
+        if hit.kind in ("variable", "module"):
             return None
-        if not all(self.first_party.contains(str(step)) for step in hit.chain):
-            return None
+        if hit.kind not in ("def", "class") or not all(self.first_party.contains(str(step)) for step in hit.chain):
+            return UNFOLLOWED
         origin = hit.origin
         table = self.resolver.tables.get(origin.module)
         binding = table.names.get(origin.symbol) if table is not None else None
-        if binding is None or binding[0] != hit.kind or binding[2]:
-            return None
-        scope = self.table_scope(origin.module)
+        if binding is None or binding[0] != hit.kind:
+            return UNFOLLOWED
+        scope = self.table_scope(origin.module, binding[2] == "stub")
         if scope is None:
-            return None
-        return scope, binding[1]
+            return UNFOLLOWED
+        return Followed(scope, binding[1])
 
     def alias_value(self, module: str, name: str) -> object:
         """The value of a module-level type alias the bare name binds (`X = dict[str, Any]`),
@@ -761,8 +776,9 @@ class DeclarationProducer(Producer):
     def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
         """The slots of the functions and dataclass fields a contract surface hands out from other
         modules, at the import that hands each one out. An `__all__` it cannot read is one
-        unresolved row: what the module hands out is unknown."""
-        handed = HandedOut(scope, context.resolver.tables.get(scope.module))
+        unresolved row: what the module hands out is unknown. So is a handed-out name the engine
+        cannot follow to a def."""
+        handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
         listing = handed.listing()
         if listing is not None and listing.unread is not None:
             line, column = listing.unread
@@ -773,9 +789,13 @@ class DeclarationProducer(Producer):
             found = context.handed_def(item.target)
             if found is None:
                 continue
-            origin, idx = found
-            node = origin.defs[idx]
             site = SlotSite(scope, -1, item.line, item.column, scope.base_contexts)
+            if found.scope is None:
+                rows = SlotRows(site, item.bound, "signature", True, (("handed", item.clause),))
+                graph.edges.append(site.edge(item.target, UNRESOLVED, rows.attrs("whole")))
+                continue
+            origin, idx = found.scope, found.idx
+            node = origin.defs[idx]
             lookup = SlotLookup(origin, node["s"], node["l"])
             if node["k"] != "class":
                 self.expose_signature(context, graph, site, lookup, node, item.bound, True, item.clause)

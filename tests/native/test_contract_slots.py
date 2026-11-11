@@ -374,6 +374,100 @@ def test_every_readable_dunder_all_hands_out_and_an_unreadable_one_is_unknown(
     assert ([FACADE, "__all__", "names", "__all__"] in findings) == (expected == ALL_UNKNOWN)
 
 
+def unfollowed(bound: str, target: str, clause: str) -> tuple[str, str, str, str, str]:
+    return (bound, "signature", f"products.shop.backend.{target}", "unresolved", clause)
+
+
+def charge_by(clause: str) -> list[tuple[str, str, str, str, str]]:
+    return [
+        ("charge", "param:amount", "builtins.int", "external", clause),
+        ("charge", "return", "builtins.str", "external", clause),
+    ]
+
+
+PING_DEF = "\n\ndef ping() -> None:\n    pass\n"
+# A handed-out name the engine cannot follow to a def is an unresolved row, never no row; a
+# constant or a module needs none. A star import hands out the public names of its source.
+UNFOLLOWED_CASES = {
+    "a file discovery excludes": (
+        {
+            "hoglint.toml": CONFIG.replace(
+                'first_party = ["products"]',
+                'first_party = ["products"]\nexclude = ["products/shop/backend/hidden.py"]',
+            ),
+            "products/shop/backend/hidden.py": "def charge(amount: int) -> str:\n    return ''\n",
+            "products/shop/backend/facade/api.py": "from ..hidden import charge as charge\n" + PING_DEF,
+        },
+        [*PING, unfollowed("charge", "hidden.charge", "alias")],
+    ),
+    "a re-export cycle": (
+        {
+            "products/shop/backend/a.py": "from .b import charge as charge\n",
+            "products/shop/backend/b.py": "from .a import charge as charge\n",
+            "products/shop/backend/facade/api.py": "from ..a import charge as charge\n" + PING_DEF,
+        },
+        [*PING, unfollowed("charge", "a.charge", "alias")],
+    ),
+    "a chain through an external step": (
+        {
+            "products/shop/backend/ext.py": "from requests import Session\n",
+            "products/shop/backend/facade/api.py": "from ..ext import Session as Session\n" + PING_DEF,
+        },
+        [*PING, unfollowed("Session", "ext.Session", "alias")],
+    ),
+    "a constant and a module": (
+        {
+            "products/shop/backend/consts.py": "LIMIT = 3\n",
+            "products/shop/backend/facade/api.py": (
+                "from .. import consts as consts\nfrom ..consts import LIMIT as LIMIT\n" + PING_DEF
+            ),
+        },
+        PING,
+    ),
+    "a name only a stub defines": (
+        {
+            f"{LOGIC}.py": "def __getattr__(name):\n    raise AttributeError(name)\n",
+            f"{LOGIC}.pyi": "def charge(amount: int) -> str: ...\n",
+            "products/shop/backend/facade/api.py": "from ..logic import charge as charge\n" + PING_DEF,
+        },
+        [*PING, *charge_by("alias")],
+    ),
+    "a star import listed in __all__": (
+        {
+            f"{LOGIC}.py": (
+                '__all__ = ["charge", "refund"]\n\n\ndef charge(amount: int) -> str:\n    return ""\n\n\n'
+                "def refund(x: float) -> None:\n    pass\n"
+            ),
+            "products/shop/backend/facade/api.py": 'from ..logic import *\n\n__all__ = ["charge", "ping"]\n' + PING_DEF,
+        },
+        [*PING, *charge_by("all")],
+    ),
+    "a star import in a module with no function": (
+        {
+            f"{LOGIC}.py": "def charge(amount: int) -> str:\n    return ''\n\n\ndef _helper(x: float) -> None:\n    pass\n",
+            "products/shop/backend/facade/api.py": "from ..logic import *\n",
+        },
+        charge_by("no-functions"),
+    ),
+    "a star import of a source whose __all__ is unreadable": (
+        {
+            f"{LOGIC}.py": "__all__ = sorted(NAMES)\n\n\ndef charge(amount: int) -> str:\n    return ''\n",
+            "products/shop/backend/facade/api.py": "from ..logic import *\n",
+        },
+        [unfollowed("*", "logic.*", "no-functions")],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", UNFOLLOWED_CASES)
+def test_a_handed_out_name_the_engine_cannot_follow_is_an_unresolved_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = UNFOLLOWED_CASES[case]
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(expected)
+
+
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)
 def test_an_alias_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str

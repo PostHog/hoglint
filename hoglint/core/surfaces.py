@@ -7,6 +7,9 @@ A module hands out a name it binds by import when one of these clauses holds:
 - it is a lazy (PEP 562) name;
 - the module has no top-level function, so every import is there to be handed on.
 
+A star import hands out the names it binds (the source's `__all__`, else its public top-level
+names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
+
 This is not the export primitive's notion of what a module exports (every module-level import).
 A surface also imports the code it calls, and that code is not part of its contract.
 
@@ -22,7 +25,7 @@ from dataclasses import dataclass
 
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import ModuleTable, absolute_import
+from hoglint.core.symbols import ModuleTable, Tables, absolute_import
 
 ALL_CLAUSE = "all"
 ALIAS_CLAUSE = "alias"
@@ -68,39 +71,41 @@ def listed_names(value: object) -> frozenset[str] | None:
     return frozenset(name for name in names if name is not None)
 
 
+def read_dunder_all(record: dict) -> DunderAll:
+    """A module body's `__all__`, statement by statement in source order."""
+    names: frozenset[str] | None = None
+    unread: list[tuple[int, int]] = []
+    for row in record.get("assigns", ()):
+        if row["s"] != -1 or "__all__" not in row["t"]:
+            continue
+        if row["op"] == ":" and "v" not in row:
+            continue
+        listed = listed_names(row.get("v"))
+        if row.get("f", 0) != 0 or listed is None:
+            unread.append((row["l"], row["c"]))
+        elif row["op"] in ("=", ":"):
+            names = listed
+        elif row["op"] == "+=" and names is not None:
+            names = names | listed
+        else:
+            unread.append((row["l"], row["c"]))
+    for at_scope, header, callee, _count, line, column in record.get("callees", ()):
+        if at_scope == -1 and header == -1 and METHOD_CALL.fullmatch(callee):
+            unread.append((line, column))
+    return DunderAll(names, min(unread) if unread else None)
+
+
 class HandedOut:
     """The names one module hands out, in import order and then lazy-name order."""
 
-    def __init__(self, scope: FileScope, table: ModuleTable | None) -> None:
+    def __init__(self, scope: FileScope, table: ModuleTable | None, tables: Tables) -> None:
         self.scope = scope
         self.table = table
+        self.tables = tables
 
     def has_functions(self) -> bool:
         """Whether the module body defines a function outside any block."""
         return any(d["s"] == -1 and d.get("f", 0) == 0 and d["k"] != "class" for d in self.scope.defs)
-
-    def dunder_all(self) -> DunderAll:
-        """The module body's `__all__`, statement by statement in source order."""
-        names: frozenset[str] | None = None
-        unread: list[tuple[int, int]] = []
-        for row in self.scope.record.get("assigns", ()):
-            if row["s"] != -1 or "__all__" not in row["t"]:
-                continue
-            if row["op"] == ":" and "v" not in row:
-                continue
-            listed = listed_names(row.get("v"))
-            if row.get("f", 0) != 0 or listed is None:
-                unread.append((row["l"], row["c"]))
-            elif row["op"] in ("=", ":"):
-                names = listed
-            elif row["op"] == "+=" and names is not None:
-                names = names | listed
-            else:
-                unread.append((row["l"], row["c"]))
-        for at_scope, header, callee, _count, line, column in self.scope.record.get("callees", ()):
-            if at_scope == -1 and header == -1 and METHOD_CALL.fullmatch(callee):
-                unread.append((line, column))
-        return DunderAll(names, min(unread) if unread else None)
 
     def clause(
         self, bound: str, name: str, asname: str | None, no_functions: bool, listed: frozenset[str] | None
@@ -116,7 +121,34 @@ class HandedOut:
     def listing(self) -> DunderAll | None:
         """The module's `__all__`; None for a module with no top-level function, which hands out
         every import whatever `__all__` says."""
-        return self.dunder_all() if self.has_functions() else None
+        return read_dunder_all(self.scope.record) if self.has_functions() else None
+
+    def star_names(self, source: str) -> list[str] | None:
+        """The names `from source import *` binds: the source's `__all__`, else its public
+        top-level names; None when the source cannot be read."""
+        table = self.tables.get(source)
+        record = self.tables.record(source)
+        if table is None or record is None or record.get("status") != "ok":
+            return None
+        listing = read_dunder_all(record)
+        if listing.unread is not None:
+            return None
+        if listing.names is not None:
+            return sorted(listing.names)
+        return sorted(name for name in table.names if not name.startswith("_"))
+
+    def star(self, source: str, no_functions: bool, listed: frozenset[str] | None) -> list[tuple[str, str, str]]:
+        """(bound, target, clause) of each name a star import hands out. A source that cannot be
+        read hands out `*`, a name nothing can follow."""
+        if not no_functions and listed is None:
+            return []
+        clause = NO_FUNCTIONS_CLAUSE if no_functions else ALL_CLAUSE
+        found = self.star_names(source)
+        if found is None:
+            return [("*", f"{source}.*", clause)]
+        if listed is not None:
+            found = [name for name in found if name in listed]
+        return [(name, f"{source}.{name}", clause) for name in found]
 
     def names(self, listing: DunderAll | None) -> list[Handed]:
         scope = self.scope
@@ -125,18 +157,21 @@ class HandedOut:
         out: list[Handed] = []
         seen: set[tuple[str, str]] = set()
         for _, line, column, flags, target, level, name, asname in scope.record.get("imports", ()):
-            if name is None or name == "*" or flags != 0:
+            if name is None or flags != 0:
                 continue
             source = absolute_import(scope.module, scope.is_package, target, level)
             if source is None:
                 continue
-            bound = asname or name
-            clause = self.clause(bound, name, asname, no_functions, listed)
-            key = (bound, f"{source}.{name}")
-            if not clause or key in seen:
-                continue
-            seen.add(key)
-            out.append(Handed(bound, key[1], clause, line, column))
+            if name == "*":
+                handed = self.star(source, no_functions, listed)
+            else:
+                bound = asname or name
+                handed = [(bound, f"{source}.{name}", self.clause(bound, name, asname, no_functions, listed))]
+            for bound, target_name, clause in handed:
+                if not clause or (bound, target_name) in seen:
+                    continue
+                seen.add((bound, target_name))
+                out.append(Handed(bound, target_name, clause, line, column))
         lazy = self.table.lazy if self.table is not None else {}
         for name, module in lazy.items():
             key = (name, f"{module}.{name}")

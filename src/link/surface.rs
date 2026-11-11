@@ -5,6 +5,10 @@
 //! module has no top-level function. This is not the export primitive's notion of what a module
 //! exports (every module-level import): a surface also imports the code it calls.
 //!
+//! A star import hands out the names it binds (the source's `__all__`, else its public top-level
+//! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
+//! follows.
+//!
 //! `__all__` is read in every form whose names a reader can list: `__all__ = [...]`, annotated
 //! or not, `+=` with a literal, and a sum of literals. One built by code, changed by a method or
 //! set under a condition cannot be read: what the module hands out is then unknown.
@@ -107,6 +111,32 @@ fn dunder_all(core: &mut Core, file: usize) -> DunderAll {
     }
 }
 
+/// The names `from source import *` binds: the source's `__all__`, else its public top-level
+/// names, sorted; None when the source cannot be read.
+fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
+    let table = core.table(source)?;
+    let file = core.table_at(table).record?;
+    if !core.facts.files[file as usize].ok() {
+        return None;
+    }
+    let listing = dunder_all(core, file as usize);
+    if listing.unread.is_some() {
+        return None;
+    }
+    let mut names: Vec<Sid> = match listing.names {
+        Some(names) => names.into_iter().collect(),
+        None => core
+            .table_at(table)
+            .names
+            .iter()
+            .map(|(name, _)| name)
+            .filter(|name| !core.it.s(*name).starts_with('_'))
+            .collect(),
+    };
+    names.sort_by(|a, b| core.it.s(*a).cmp(core.it.s(*b)));
+    Some(names)
+}
+
 /// The module's `__all__`; None for a module with no top-level function, which hands out every
 /// import whatever `__all__` says.
 pub fn listing(core: &mut Core, scope: &Scope) -> Option<DunderAll> {
@@ -126,11 +156,12 @@ pub fn handed_out(core: &mut Core, scope: &Scope, listing: Option<&DunderAll>) -
     let facts = core.facts.clone();
     let mut out = Vec::new();
     let mut seen: FxHashSet<(Sid, Sid)> = FxHashSet::default();
+    let star = core.star();
     for row in &facts.files[file].imports {
         let Some(name) = row.name else {
             continue;
         };
-        if core.it.s(name) == "*" || row.flags != 0 {
+        if row.flags != 0 {
             continue;
         }
         let Some(source) = absolute_import(
@@ -142,25 +173,49 @@ pub fn handed_out(core: &mut Core, scope: &Scope, listing: Option<&DunderAll>) -
         ) else {
             continue;
         };
-        let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
-        let clause = if no_functions {
-            NO_FUNCTIONS_CLAUSE
-        } else if listed.is_some_and(|names| names.contains(&bound)) {
-            ALL_CLAUSE
-        } else if row.asname == Some(name) {
-            ALIAS_CLAUSE
+        let mut handed: Vec<(Sid, Sid, &'static str)> = Vec::new();
+        if name == star {
+            if !no_functions && listed.is_none() {
+                continue;
+            }
+            let clause = if no_functions {
+                NO_FUNCTIONS_CLAUSE
+            } else {
+                ALL_CLAUSE
+            };
+            match star_names(core, source) {
+                None => handed.push((star, core.it.join(source, star), clause)),
+                Some(found) => {
+                    for name in found {
+                        if listed.is_none_or(|names| names.contains(&name)) {
+                            handed.push((name, core.it.join(source, name), clause));
+                        }
+                    }
+                }
+            }
         } else {
-            continue;
-        };
-        let target = core.it.join(source, name);
-        if seen.insert((bound, target)) {
-            out.push(Handed {
-                bound,
-                target,
-                clause,
-                line: row.line,
-                col: row.col,
-            });
+            let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
+            let clause = if no_functions {
+                NO_FUNCTIONS_CLAUSE
+            } else if listed.is_some_and(|names| names.contains(&bound)) {
+                ALL_CLAUSE
+            } else if row.asname == Some(name) {
+                ALIAS_CLAUSE
+            } else {
+                continue;
+            };
+            handed.push((bound, core.it.join(source, name), clause));
+        }
+        for (bound, target, clause) in handed {
+            if seen.insert((bound, target)) {
+                out.push(Handed {
+                    bound,
+                    target,
+                    clause,
+                    line: row.line,
+                    col: row.col,
+                });
+            }
         }
     }
     let lazy: Vec<(Sid, Sid)> = match core.table(scope.module) {

@@ -341,6 +341,7 @@ struct Keys {
     too_deep: Sid,
     dunder_all: Sid,
     names: Sid,
+    signature: Sid,
 }
 
 impl Producing {
@@ -404,6 +405,7 @@ impl Producing {
             too_deep: it.intern("too-deep"),
             dunder_all: it.intern("__all__"),
             names: it.intern("names"),
+            signature: it.intern("signature"),
         };
         Producing {
             names: LookupNames {
@@ -574,6 +576,13 @@ struct SlotLookup {
     owner: usize,
     scope: i32,
     line: u32,
+}
+
+/// Where a handed-out name leads: a def (the file's scope and the def's index), or nowhere the
+/// engine can follow.
+enum Followed {
+    Def(usize, u32),
+    Unfollowed,
 }
 
 /// How many type aliases deep one slot's names are followed.
@@ -1249,43 +1258,58 @@ impl Producers<'_> {
         false
     }
 
-    /// The top-level function or class a handed-out name leads to, in an analyzed first-party
-    /// file: every step of the way stays inside first-party code.
-    fn handed_def(&mut self, target: Sid) -> Option<(usize, u32)> {
+    /// Where a handed-out name leads: the top-level function or class in an analyzed first-party
+    /// file, every step of the way inside first-party code, or `Unfollowed`. None for a name
+    /// that needs no row: a third-party name, a constant, a module.
+    fn handed_def(&mut self, target: Sid) -> Option<Followed> {
         let core = &mut *self.core;
         let head = core.it.head(target);
         if !self.first_party.contains(&head) {
             return None;
         }
         let (hit, rest) = core.resolve_dotted(target);
-        let hit = hit?;
+        let Some(hit) = hit.filter(|_| rest.is_empty()) else {
+            return Some(Followed::Unfollowed);
+        };
         let kind = core.kind(hit);
-        if !rest.is_empty() || !matches!(kind, HitKind::Def | HitKind::Class) {
+        if matches!(kind, HitKind::Variable | HitKind::Module) {
             return None;
+        }
+        if !matches!(kind, HitKind::Def | HitKind::Class) {
+            return Some(Followed::Unfollowed);
         }
         let chain = core.chain(hit).to_vec();
         for step in chain {
             let head = core.it.head(step.m);
             if !self.first_party.contains(&head) {
-                return None;
+                return Some(Followed::Unfollowed);
             }
         }
         let origin = core.origin(hit);
-        let idx = match (kind, core.binding_of(origin.m, origin.s)?) {
-            (HitKind::Def, Binding::Def(idx, false))
-            | (HitKind::Class, Binding::Class(idx, false)) => idx,
-            _ => return None,
+        let (idx, stub) = match (kind, core.binding_of(origin.m, origin.s)) {
+            (HitKind::Def, Some(Binding::Def(idx, stub)))
+            | (HitKind::Class, Some(Binding::Class(idx, stub))) => (idx, stub),
+            _ => return Some(Followed::Unfollowed),
         };
-        // The module table reads its own bindings from one file: never a stub twin or a package
-        // of the same name.
-        let table = core.table(origin.m)?;
-        let file = core.table_at(table).record?;
-        Some((*self.owner_of.get(&file)?, idx))
+        let Some(table) = core.table(origin.m) else {
+            return Some(Followed::Unfollowed);
+        };
+        let table = core.table_at(table);
+        let file = if stub {
+            table.stub_record
+        } else {
+            table.record
+        };
+        match file.and_then(|file| self.owner_of.get(&file)) {
+            Some(&owner) => Some(Followed::Def(owner, idx)),
+            None => Some(Followed::Unfollowed),
+        }
     }
 
     /// The slots of the functions and dataclass fields a contract surface hands out from other
     /// modules, at the import that hands each one out. An `__all__` it cannot read is one
-    /// unresolved row: what the module hands out is unknown.
+    /// unresolved row: what the module hands out is unknown. So is a handed-out name the engine
+    /// cannot follow to a def.
     fn hand_out(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let listing = listing(self.core, &self.scopes[owner]);
@@ -1309,11 +1333,9 @@ impl Producers<'_> {
         }
         let handed = handed_out(self.core, &self.scopes[owner], listing.as_ref());
         for item in handed {
-            let Some((origin, idx)) = self.handed_def(item.target) else {
+            let Some(found) = self.handed_def(item.target) else {
                 continue;
             };
-            let record = &facts.files[self.scopes[origin].file as usize];
-            let node = &record.defs[idx as usize];
             let clause = self.core.it.intern(item.clause);
             let site = SlotSite {
                 owner,
@@ -1322,6 +1344,20 @@ impl Producers<'_> {
                 col: item.col,
                 ctx: self.scopes[owner].base_ctx,
             };
+            let Followed::Def(origin, idx) = found else {
+                let rows = SlotRows {
+                    site,
+                    callable: item.bound,
+                    slot: self.settings.k.signature,
+                    contract: true,
+                    handed: clause,
+                };
+                let attrs = self.slot_attrs(rows, self.settings.k.whole, &[]);
+                self.push_slot(rows, item.target, UNRESOLVED, &attrs);
+                continue;
+            };
+            let record = &facts.files[self.scopes[origin].file as usize];
+            let node = &record.defs[idx as usize];
             let lookup = SlotLookup {
                 owner: origin,
                 scope: node.s,
