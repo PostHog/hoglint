@@ -14,7 +14,7 @@ use super::intern::{EMPTY, Interner, Sid};
 use super::produce::NO_FILE;
 use super::resolve::{Core, Ent};
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
 use std::fs::File;
 use std::hash::Hasher;
@@ -619,7 +619,8 @@ impl Link {
     /// array per line: `["kinds", [names]]` first, then `["trace", path, module, [[module,
     /// name, kinds], ...]]` per analyzed file, where `kinds` has bit k set for each kind k
     /// that read (module, name), and `["interface", path, module, [[name, digest], ...]]` per
-    /// repo file. A read of the file's own module is left out: a change to the module's files
+    /// repo file, then `["handout", module, [handed], [kept], unread]` per export module: what its
+    /// rule rows' `dst.exported` reads. A read of the file's own module is left out: a change to the module's files
     /// makes the file recompute anyway.
     pub fn write_traces(&mut self, path: &Path) -> Result<DumpCounts, String> {
         if self.core.it.len() as u64 > ID_MASK {
@@ -668,6 +669,24 @@ impl Link {
             counts.interfaces += 1;
             counts.digests += rows.len();
             writeln!(out, "{}", json!(["interface", path, module, rows])).map_err(fail)?;
+        }
+        let mut modules: Vec<Sid> = self.hand_outs.keys().copied().collect();
+        modules.sort_by(|a, b| it.s(*a).cmp(it.s(*b)));
+        for module in modules {
+            let found = &self.hand_outs[&module];
+            let names = |set: &FxHashSet<Sid>| -> Vec<&str> {
+                let mut out: Vec<&str> = set.iter().map(|&name| it.s(name)).collect();
+                out.sort_unstable();
+                out
+            };
+            let row = json!([
+                "handout",
+                it.s(module),
+                names(&found.handed),
+                names(&found.kept),
+                found.unread
+            ]);
+            writeln!(out, "{row}").map_err(fail)?;
         }
         out.flush().map_err(fail)?;
         Ok(counts)

@@ -239,3 +239,57 @@ def test_an_ownership_file_relabels_the_modules_it_owns(tmp_path: Path, monkeypa
     assert "app/lib.py" in prediction.files, "its own rule rows carry its owners"
     assert "app/use.py" in prediction.files, "its rule rows read the owners of app.lib"
     assert "app/use.py" not in predict(parent, child, {"CODEOWNERS"}, ignored_kinds=["label"]).files
+
+
+EXPORT_CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["app"]
+
+[fields]
+package = { type = "id" }
+
+[[assign]]
+match = "app/{package}/**"
+set = { package = "{package}" }
+
+[shapes.loose]
+allow = ["class", "function"]
+
+[exports.api]
+within = "app"
+paths = ["api/**"]
+shape = "loose"
+
+[rules.public-surface]
+primitive = "entrypoint"
+kinds = ["import"]
+select = "src.package != dst.package"
+identity = ["dst.symbol"]
+ledger = false
+"""
+
+
+def test_an_export_module_that_stops_handing_out_a_name_moves_its_importers_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_module()
+    parent_files = {
+        "hoglint.toml": EXPORT_CONFIG,
+        "app/__init__.py": "",
+        "app/lib.py": "def other():\n    pass\n",
+        "app/api/__init__.py": "from app.lib import other\n",
+        "app/views/__init__.py": "",
+        "app/views/page.py": "from app.api import other\n",
+    }
+    # A module with a function of its own keeps the imports it does not hand out by a clause.
+    child_files = {**parent_files, "app/api/__init__.py": "from app.lib import other\n\n\ndef helper():\n    pass\n"}
+    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    reader = "app/views/page.py"
+    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
+    changed = {"app/api/__init__.py"}
+    assert reader in predict(parent, child, changed).files
+    assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files

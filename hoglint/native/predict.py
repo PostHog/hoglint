@@ -130,6 +130,8 @@ class TraceDump:
         self.traces: dict[str, tuple[str, list[Read]]] = {}
         self.interfaces: dict[str, tuple[str, dict[str, str]]] = {}
         self.modules: dict[str, str] = {}
+        # What each export module hands out by import, as a row rule rows read through `dst.exported`.
+        self.hand_outs: dict[str, list[Any]] = {}
         for line in path.open():
             row = json.loads(line)
             if row[0] == "kinds":
@@ -139,6 +141,8 @@ class TraceDump:
                 self.modules[file] = module
                 if traces:
                     self.traces[file] = (module, [Read(m, n, mask) for m, n, mask in reads])
+            elif row[0] == "handout":
+                self.hand_outs[row[1]] = row[2:]
             elif row[0] == "interface":
                 _, file, module, digests = row
                 self.modules[file] = module
@@ -360,6 +364,7 @@ class Moved:
     """What step 2 found moved among the recomputed files."""
 
     symbols: set[tuple[str, str]] = field(default_factory=set)
+    # Modules whose labels or hand-outs moved: what a rule row reads of a module, not a symbol.
     labels: set[str] = field(default_factory=set)
     edges: bool = False
 
@@ -438,6 +443,10 @@ class PairPrediction:
                 out.symbols.add(symbol_key(owner, modules))
         for module in set(before.labels) | set(after.labels):
             if before.labels.get(module) != after.labels.get(module):
+                out.labels.add(module)
+        recomputed = {module for path, module in {**self.parent.modules, **self.child.modules}.items() if path in files}
+        for module in recomputed:
+            if self.parent.hand_outs.get(module) != self.child.hand_outs.get(module):
                 out.labels.add(module)
         for path in files:
             if sorted(before.edges.get(path, [])) != sorted(after.edges.get(path, [])):
