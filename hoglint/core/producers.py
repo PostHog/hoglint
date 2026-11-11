@@ -475,6 +475,22 @@ class Expanded:
     too_deep: bool = False
 
 
+@dataclass(frozen=False, slots=True)
+class Expansion:
+    """One alias's expansion while it is worked out: the aliases above the current one
+    (`stack`), the (alias, top) pairs followed, and the names written, each once, in order."""
+
+    stack: list[tuple[str, str]]
+    followed: set[tuple[tuple[str, str], bool]] = field(default_factory=set)
+    seen: set[Expanded] = field(default_factory=set)
+    out: list[Expanded] = field(default_factory=list)
+
+    def write(self, item: Expanded) -> None:
+        if item not in self.seen:
+            self.seen.add(item)
+            self.out.append(item)
+
+
 @dataclass(frozen=True, slots=True)
 class SlotRows:
     """What every `exposes` row of one callable shares. `handed` is the clause a handed-out
@@ -619,33 +635,25 @@ class DeclarationProducer(Producer):
         value: object,
         where: SlotLookup,
         top: bool,
-        stack: list[tuple[str, str]],
-        state: tuple[set[tuple[tuple[str, str], bool]], set[Expanded]],
-        out: list[Expanded],
+        expansion: Expansion,
     ) -> None:
         """Depth first, the names in an alias's value, each alias in it followed once per place
         (top or nested). A cycle stops at the alias that closes it; an alias deeper than
         MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown."""
-        followed, seen = state
         for name, position in self.mentions(value, "whole"):
             item = Expanded(name, top and position == "whole", where)
-            if item not in seen:
-                seen.add(item)
-                out.append(item)
+            expansion.write(item)
             found = self.lookup_at(context, where, name)
             alias = self.alias_of(context, Mention(name, position, where), found)
-            if alias is None or alias[0] in stack or (alias[0], item.top) in followed:
+            if alias is None or alias[0] in expansion.stack or (alias[0], item.top) in expansion.followed:
                 continue
-            followed.add((alias[0], item.top))
-            if len(stack) >= MAX_ALIAS_DEPTH:
-                marker = replace(item, too_deep=True)
-                if marker not in seen:
-                    seen.add(marker)
-                    out.append(marker)
+            expansion.followed.add((alias[0], item.top))
+            if len(expansion.stack) >= MAX_ALIAS_DEPTH:
+                expansion.write(replace(item, too_deep=True))
                 continue
-            stack.append(alias[0])
-            self.expand_into(context, alias[1], alias[2], item.top, stack, state, out)
-            stack.pop()
+            expansion.stack.append(alias[0])
+            self.expand_into(context, alias[1], alias[2], item.top, expansion)
+            expansion.stack.pop()
 
     def expansion(
         self, context: BuildContext, key: tuple[str, str], value: object, where: SlotLookup
@@ -654,8 +662,9 @@ class DeclarationProducer(Producer):
         looked up: the alias decides them, never the slot that names it."""
         found = self.expansions.get((key, where))
         if found is None:
-            found = self.expansions[(key, where)] = []
-            self.expand_into(context, value, where, True, [key], (set(), set()), found)
+            expansion = Expansion([key])
+            self.expand_into(context, value, where, True, expansion)
+            found = self.expansions[(key, where)] = expansion.out
         return found
 
     def expose_mentions(

@@ -625,11 +625,21 @@ pub struct Expanded {
     too_deep: bool,
 }
 
-/// What one expansion has followed so far: (alias, top) pairs, and the names it has written.
-#[derive(Default)]
-struct ExpandState {
+/// One alias's expansion while it is worked out: the aliases above the current one (`stack`),
+/// the (alias, top) pairs followed, and the names written, each once, in order.
+struct Expansion {
+    stack: Vec<(Sid, Sid)>,
     followed: FxHashSet<((Sid, Sid), bool)>,
     seen: FxHashSet<Expanded>,
+    out: Vec<Expanded>,
+}
+
+impl Expansion {
+    fn write(&mut self, item: Expanded) {
+        if self.seen.insert(item) {
+            self.out.push(item);
+        }
+    }
 }
 
 /// What every `exposes` row of one callable shares. `handed` is the clause a handed-out callable
@@ -1054,15 +1064,7 @@ impl Producers<'_> {
     /// Depth first, the names in an alias's value, each alias in it followed once per place (top
     /// or nested). A cycle stops at the alias that closes it; an alias deeper than
     /// MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown.
-    fn expand_into(
-        &mut self,
-        value: &V,
-        at: SlotLookup,
-        top: bool,
-        stack: &mut Vec<(Sid, Sid)>,
-        state: &mut ExpandState,
-        out: &mut Vec<Expanded>,
-    ) {
+    fn expand_into(&mut self, value: &V, at: SlotLookup, top: bool, expansion: &mut Expansion) {
         let mut names = Vec::new();
         self.mentions(value, true, &mut names);
         for (name, whole) in names {
@@ -1072,9 +1074,7 @@ impl Producers<'_> {
                 lookup: at,
                 too_deep: false,
             };
-            if state.seen.insert(item) {
-                out.push(item);
-            }
+            expansion.write(item);
             let found = self.lookup_at(at, name);
             let mention = Mention {
                 value: name,
@@ -1084,22 +1084,19 @@ impl Producers<'_> {
             let Some((key, inner, inner_at)) = self.alias_of(mention, found) else {
                 continue;
             };
-            if stack.contains(&key) || !state.followed.insert((key, item.top)) {
+            if expansion.stack.contains(&key) || !expansion.followed.insert((key, item.top)) {
                 continue;
             }
-            if stack.len() >= MAX_ALIAS_DEPTH {
-                let marker = Expanded {
+            if expansion.stack.len() >= MAX_ALIAS_DEPTH {
+                expansion.write(Expanded {
                     too_deep: true,
                     ..item
-                };
-                if state.seen.insert(marker) {
-                    out.push(marker);
-                }
+                });
                 continue;
             }
-            stack.push(key);
-            self.expand_into(&inner, inner_at, item.top, stack, state, out);
-            stack.pop();
+            expansion.stack.push(key);
+            self.expand_into(&inner, inner_at, item.top, expansion);
+            expansion.stack.pop();
         }
     }
 
@@ -1109,11 +1106,15 @@ impl Producers<'_> {
         if let Some(found) = self.expansions.get(&(key, at)) {
             return found.clone();
         }
-        let mut out = Vec::new();
-        let mut state = ExpandState::default();
-        self.expand_into(value, at, true, &mut vec![key], &mut state, &mut out);
-        self.expansions.insert((key, at), out.clone());
-        out
+        let mut expansion = Expansion {
+            stack: vec![key],
+            followed: FxHashSet::default(),
+            seen: FxHashSet::default(),
+            out: Vec::new(),
+        };
+        self.expand_into(value, at, true, &mut expansion);
+        self.expansions.insert((key, at), expansion.out.clone());
+        expansion.out
     }
 
     /// One row per mention, each followed (in a contract only) by a row per name of the type
