@@ -155,11 +155,15 @@ def dumps(
     return out
 
 
+def same_in_both_engines(out: dict[str, Path]) -> None:
+    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+
+
 def test_grouped_findings_take_owners_and_subjects_from_their_own_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = dumps(tmp_path, OWNERS_REPO, monkeypatch)
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    same_in_both_engines(out)
     findings = read_lines(out["native"] / "findings.jsonl")
     owners = {row[3][1]: (row[6], row[8]) for row in findings}
     assert owners == {
@@ -172,7 +176,7 @@ def test_a_source_no_engine_can_read_is_the_same_incomplete_item_in_both(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = dumps(tmp_path, OWNERS_REPO, monkeypatch, unreadable=("core/a.py",))
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    same_in_both_engines(out)
     reason = "core/a.py could not be read, so its facts are missing"
     assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out["native"] / "incomplete.jsonl")
 
@@ -220,7 +224,7 @@ def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = dumps(tmp_path, ADAPTER_REPO, monkeypatch)
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    same_in_both_engines(out)
     flagged = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "public-surface"]
     assert sorted(flagged) == [
         ["products.billing.presentation.views.Plain"],
@@ -251,7 +255,7 @@ on_unresolved = "block"
 
 def test_grouped_findings_keep_the_flags_their_judgment_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = dumps(tmp_path, BLOCK_REPO, monkeypatch)
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    same_in_both_engines(out)
     flags = {
         (row[1][0], row[1][1]): (row[9], row[10])
         for row in read_lines(out["native"] / "findings.jsonl")

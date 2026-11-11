@@ -11,10 +11,10 @@ import pytest
 
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.model import Context, Edge
-from hoglint.native.parity import compare_dumps, read_lines
+from hoglint.native.parity import read_lines
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 
-from native.test_parity import dumps
+from native.test_parity import dumps, same_in_both_engines
 
 SECTION = "refiner"
 PRODUCER = "refiner.{}@1"
@@ -118,10 +118,6 @@ def findings(out: dict[str, Path], rule: str) -> list[list[str]]:
 
 def failed(out: dict[str, Path]) -> dict[str, str]:
     return {row[0]: row[1] for row in read_lines(out["native"] / "failed.jsonl")}
-
-
-def same_in_both_engines(out: dict[str, Path]) -> None:
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
 
 
 def test_a_refined_field_read_only_by_an_identity_is_the_refined_value(

@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.native.parity import compare_dumps, read_lines
+from hoglint.native.parity import read_lines
 
-from native.test_parity import dumps
+from native.test_parity import dumps, same_in_both_engines
 
 CONFIG = """
 schema = 1
@@ -57,12 +57,19 @@ identity = "module-symbol"
 ledger = false
 """
 
-REPO = {
+# The files every repo below shares: a product with a facade package.
+BASE = {
     "hoglint.toml": CONFIG,
     "products/__init__.py": "",
     "products/shop/__init__.py": "",
     "products/shop/backend/__init__.py": "",
     "products/shop/backend/kit.py": "def frozen(cls):\n    return cls\n",
+    "products/shop/backend/facade/__init__.py": "",
+}
+CHARGE = "def charge(amount: int) -> str:\n    return ''\n"
+
+REPO = {
+    **BASE,
     "products/shop/backend/logic.py": (
         "from typing import ClassVar\n\n"
         "from products.shop.backend.kit import frozen\n\n\n"
@@ -73,7 +80,6 @@ REPO = {
         "@frozen\nclass Base:\n    id: int\n"
     ),
     "products/shop/backend/routes.py": "def register(router):\n    pass\n",
-    "products/shop/backend/facade/__init__.py": "",
     "products/shop/backend/facade/api.py": (
         "from products.shop.backend.logic import Receipt\n"
         "from products.shop.backend.logic import charge as charge\n"
@@ -125,7 +131,7 @@ def out(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
 
 
 def test_both_engines_agree_on_a_contract_surface(out: dict[str, Path]) -> None:
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    same_in_both_engines(out)
 
 
 @pytest.mark.parametrize("engine", ["python", "native"])
@@ -161,15 +167,6 @@ def test_the_rules_read_an_unannotated_slot_and_a_builtin_as_unknown(
     assert [rule, identity] in findings
 
 
-# The files every case below shares: a product with a facade package.
-BASE = {
-    "hoglint.toml": CONFIG,
-    "products/__init__.py": "",
-    "products/shop/__init__.py": "",
-    "products/shop/backend/__init__.py": "",
-    "products/shop/backend/kit.py": "def frozen(cls):\n    return cls\n",
-    "products/shop/backend/facade/__init__.py": "",
-}
 FACADE = "products.shop.backend.facade.api"
 HANDS_OUT_CHARGE = "from products.shop.backend.logic import charge as charge\n\n\ndef ping() -> None:\n    pass\n"
 LOGIC = "products/shop/backend/logic"
@@ -188,7 +185,7 @@ def slot_rows(out: Path, module: str) -> list[tuple[str, str, str, str, str]]:
 
 def both_engines(tmp_path: Path, files: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     out = dumps(tmp_path, {**BASE, **files}, monkeypatch)
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
+    same_in_both_engines(out)
     assert read_lines(out["native"] / "failed.jsonl") == []
     return out
 
@@ -197,15 +194,15 @@ def both_engines(tmp_path: Path, files: dict[str, str], monkeypatch: pytest.Monk
 # twin or a module of the same name that the table does not read.
 TWIN_CASES = {
     "stub twin with fewer defs": {
-        f"{LOGIC}.py": "def helper(x: bytes) -> None:\n    pass\n\n\ndef charge(amount: int) -> str:\n    return ''\n",
+        f"{LOGIC}.py": "def helper(x: bytes) -> None:\n    pass\n\n\n" + CHARGE,
         f"{LOGIC}.pyi": "def charge(amount: int) -> str: ...\n",
     },
     "stub twin in another order": {
-        f"{LOGIC}.py": "def refund(x: float) -> None:\n    pass\n\n\ndef charge(amount: int) -> str:\n    return ''\n",
+        f"{LOGIC}.py": "def refund(x: float) -> None:\n    pass\n\n\n" + CHARGE,
         f"{LOGIC}.pyi": "def charge(amount: int) -> str: ...\ndef refund(x: float) -> None: ...\n",
     },
     "package of the same name": {
-        f"{LOGIC}.py": "def refund(x: float) -> None:\n    pass\n\n\ndef charge(amount: int) -> str:\n    return ''\n",
+        f"{LOGIC}.py": "def refund(x: float) -> None:\n    pass\n\n\n" + CHARGE,
         f"{LOGIC}/__init__.py": "def charge(total: bytes) -> bytes:\n    return b''\n\n\ndef other() -> None:\n    pass\n",
     },
 }
@@ -222,6 +219,185 @@ def test_a_handed_out_def_is_read_from_the_file_the_module_table_reads(
         ("charge", "param:amount", "builtins.int", "external", "alias"),
         ("charge", "return", "builtins.str", "external", "alias"),
     ]
+
+
+MODELS = {"products/shop/backend/models.py": "class OrderModel:\n    pass\n"}
+ORDERS_USES_ORDER_MAP = "from ..types import OrderMap\n\n\ndef orders() -> OrderMap:\n    return {}\n"
+ORDER_MAP = ("orders", "return", "products.shop.backend.types.OrderMap", "resolved", "")
+ORDER_MODEL = ("orders", "return", "products.shop.backend.models.OrderModel", "resolved", "")
+DICT, STR, INT, LIST = (
+    ("orders", "return", f"builtins.{name}", "external", "") for name in ("dict", "str", "int", "list")
+)
+
+
+def test_an_alias_chain_deeper_than_the_limit_leaves_an_unresolved_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = "".join(f"A{at} = list[A{at + 1}]\n" for at in range(40)) + "A40 = int\n"
+    files = {
+        "products/shop/backend/types.py": chain + "OrderMap = A0\n",
+        "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP,
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    rows = slot_rows(out["native"], FACADE)
+    assert [row for row in rows if row[3] == "unresolved"] == [("orders", "return", "A32", "unresolved", "")]
+    assert ("orders", "return", "products.shop.backend.types.A31", "resolved", "") in rows
+    assert ("orders", "return", "products.shop.backend.types.A33", "resolved", "") not in rows
+
+
+def charge_by(clause: str) -> list[tuple[str, str, str, str, str]]:
+    return [
+        ("charge", "param:amount", "builtins.int", "external", clause),
+        ("charge", "return", "builtins.str", "external", clause),
+    ]
+
+
+CHARGE_LOGIC = {f"{LOGIC}.py": CHARGE}
+IMPORTS_CHARGE = "from products.shop.backend.logic import charge\n\n\ndef ping() -> None:\n    pass\n\n\n"
+PING = [("ping", "return", "builtins.None", "external", "")]
+ALL_UNKNOWN = [("__all__", "names", "__all__", "unresolved", "all")]
+# Every `__all__` form whose names a reader can list hands them out; one built by code or set
+# under a condition makes what the module hands out unknown, and an unknown is never clean.
+DUNDER_ALL_CASES = {
+    "annotated": ('__all__: list[str] = ["charge"]\n', charge_by("all")),
+    "extended with a literal": ('__all__ = ["ping"]\n__all__ += ["charge"]\n', charge_by("all")),
+    "a sum of literals": ('__all__ = ["ping"] + ("charge",)\n', charge_by("all")),
+    "built by a comprehension": ('__all__ = [name for name in ("charge",)]\n', ALL_UNKNOWN),
+    "set under a condition": ('if ping:\n    __all__ = ["charge"]\n', ALL_UNKNOWN),
+    "extended with a name": ('__all__ = ["ping"]\n__all__ += NAMES\n', ALL_UNKNOWN),
+    "an item that is no string": ('__all__ = ["ping", charge.__name__]\n', ALL_UNKNOWN),
+    "changed by a method": ('__all__ = ["ping"]\n__all__.extend(["charge"])\n', ALL_UNKNOWN),
+    "sorted keys of a module-level dict": ('_LAZY = {"charge": "logic"}\n__all__ = sorted(_LAZY)\n', charge_by("all")),
+    "list of a module-level tuple": ('_NAMES = ("charge", "ping")\n__all__ = list(_NAMES)\n', charge_by("all")),
+    "a starred module-level set": ('_NAMES = {"charge"}\n__all__ = [*_NAMES]\n', charge_by("all")),
+    "a starred sorted name beside literals": (
+        '_LAZY = {"charge": "logic"}\n__all__ = [*sorted(_LAZY), "ping"]\n',
+        charge_by("all"),
+    ),
+    "sorted over a starred name in a tuple": (
+        '_LAZY = {"charge": "logic"}\n__all__ = sorted((*_LAZY, "ping"))\n',
+        charge_by("all"),
+    ),
+    "a name assigned twice": ('_LAZY = {"charge": "logic"}\n_LAZY = {}\n__all__ = sorted(_LAZY)\n', ALL_UNKNOWN),
+    "a name assigned under a condition": (
+        'if ping:\n    _LAZY = {"charge": "logic"}\n__all__ = sorted(_LAZY)\n',
+        ALL_UNKNOWN,
+    ),
+    "a name holding no strings": ("_LAZY = {1: 2}\n__all__ = sorted(_LAZY)\n", ALL_UNKNOWN),
+    "a call of anything else": ('_LAZY = {"charge": "logic"}\n__all__ = names(_LAZY)\n', ALL_UNKNOWN),
+}
+
+
+@pytest.mark.parametrize("case", DUNDER_ALL_CASES)
+def test_every_readable_dunder_all_hands_out_and_an_unreadable_one_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    dunder_all, expected = DUNDER_ALL_CASES[case]
+    files = {**CHARGE_LOGIC, "products/shop/backend/facade/api.py": IMPORTS_CHARGE + dunder_all}
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(PING + expected)
+    findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "facade-signature"]
+    assert ([FACADE, "__all__", "names", "__all__"] in findings) == (expected == ALL_UNKNOWN)
+
+
+def test_only_a_method_leaves_out_its_first_parameter_whatever_its_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        f"{LOGIC}.py": "def frozen(cls: type) -> type:\n    return cls\n",
+        "products/shop/backend/facade/api.py": (
+            "from ..logic import frozen as frozen\n\n\n"
+            "def build(cls: int, data: str) -> None:\n    pass\n\n\n"
+            "class Orders:\n"
+            "    def meta(mcs, key: str) -> None:\n        pass\n\n"
+            "    @classmethod\n    def load(klass, key: str) -> None:\n        pass\n\n"
+            "    @staticmethod\n    def make(self: int) -> None:\n        pass\n"
+        ),
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(
+        [
+            ("frozen", "param:cls", "builtins.type", "external", "alias"),
+            ("frozen", "return", "builtins.type", "external", "alias"),
+            ("build", "param:cls", "builtins.int", "external", ""),
+            ("build", "param:data", "builtins.str", "external", ""),
+            ("build", "return", "builtins.None", "external", ""),
+            ("Orders.meta", "param:key", "builtins.str", "external", ""),
+            ("Orders.meta", "return", "builtins.None", "external", ""),
+            ("Orders.load", "param:key", "builtins.str", "external", ""),
+            ("Orders.load", "return", "builtins.None", "external", ""),
+            ("Orders.make", "param:self", "builtins.int", "external", ""),
+            ("Orders.make", "return", "builtins.None", "external", ""),
+        ]
+    )
+
+
+def test_a_surface_hands_out_nothing_its_own_export_already_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        "products/shop/backend/facade/__init__.py": "from .api import charge\n",
+        "products/shop/backend/facade/api.py": CHARGE,
+        "products/other/__init__.py": "",
+        "products/other/backend/__init__.py": "",
+        "products/other/backend/facade/__init__.py": "",
+        "products/other/backend/facade/contracts.py": "from products.shop.backend.facade.api import charge\n",
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], "products.shop.backend.facade") == []
+    assert slot_rows(out["native"], FACADE) == charge_by("")
+    assert slot_rows(out["native"], "products.other.backend.facade.contracts") == charge_by("no-functions")
+
+
+@pytest.mark.parametrize("depth", [4, 30])
+def test_an_alias_chain_that_doubles_at_every_step_gives_each_type_name_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    chain = "".join(f"A{at} = tuple[A{at + 1}, A{at + 1}]\n" for at in range(depth)) + f"A{depth} = int\n"
+    files = {
+        "products/shop/backend/types.py": chain,
+        "products/shop/backend/facade/api.py": "from ..types import A0\n\n\ndef orders(x: list[A0]) -> None:\n    pass\n",
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    names = [row[2] for row in slot_rows(out["native"], FACADE) if row[1] == "param:x"]
+    chained = [f"products.shop.backend.types.A{at}" for at in range(depth + 1)]
+    assert sorted(names) == sorted(["builtins.list", "builtins.tuple", "builtins.int", *chained])
+
+
+def test_a_module_with_no_function_hands_out_only_the_imports_it_does_not_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        f"{LOGIC}.py": (
+            "from .kit import frozen\n\n\n" + CHARGE + "\n\n"
+            "def refund(x: float) -> None:\n    pass\n\n\n"
+            "def ping_target() -> None:\n    pass\n\n\n"
+            "def untouched(y: bytes) -> None:\n    pass\n\n\n"
+            "def rebound(z: int) -> None:\n    pass\n\n\n"
+            "@frozen\nclass Base:\n    id: int\n\n\n"
+            "@frozen\nclass Receipt:\n    total: int\n"
+        ),
+        "products/shop/backend/facade/api.py": (
+            "from ..kit import frozen\n"
+            "from ..logic import Base, Receipt, charge, rebound, refund, untouched\n"
+            "from ..logic import ping_target as ping_target\n\n"
+            '__all__ = ["refund"]\n\n'
+            "other = rebound\n\n\n"
+            "@frozen\nclass Order(Base):\n    note: 'Receipt'\n\n"
+            "    def total(self) -> None:\n        charge(1)\n        refund(2)\n        ping_target()\n"
+        ),
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
+    assert handed == sorted(
+        [
+            ("refund", "param:x", "builtins.float", "external", "all"),
+            ("refund", "return", "builtins.None", "external", "all"),
+            ("ping_target", "return", "builtins.None", "external", "alias"),
+            ("untouched", "param:y", "builtins.bytes", "external", "no-functions"),
+            ("untouched", "return", "builtins.None", "external", "no-functions"),
+        ]
+    )
 
 
 TOTALS_IN_PY = "Totals = dict[str, int]\n\n\ndef charge(amount: Totals) -> None:\n    pass\n"
@@ -263,33 +439,35 @@ ALIAS_FILE_CASES = {
 }
 
 
-MODELS = {"products/shop/backend/models.py": "class OrderModel:\n    pass\n"}
-ORDERS_USES_ORDER_MAP = "from ..types import OrderMap\n\n\ndef orders() -> OrderMap:\n    return {}\n"
-ORDER_MAP = ("orders", "return", "products.shop.backend.types.OrderMap", "resolved", "")
-ORDER_MODEL = ("orders", "return", "products.shop.backend.models.OrderModel", "resolved", "")
-DICT, STR, INT, LIST = (
-    ("orders", "return", f"builtins.{name}", "external", "") for name in ("dict", "str", "int", "list")
-)
 # An alias assigned in another first-party module is followed there, through the link's own
 # resolution, and the names in it are looked up where it is assigned.
+def orders_with(files: dict[str, str]) -> dict[str, str]:
+    """A facade whose `orders` returns `OrderMap`, from the given types modules."""
+    return {**MODELS, **files, "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP}
+
+
 IMPORTED_ALIAS_CASES = {
     "imported": (
-        {
-            "products/shop/backend/types.py": (
-                "from products.shop.backend.models import OrderModel\n\nOrderMap = dict[str, OrderModel]\n"
-            ),
-        },
+        orders_with(
+            {
+                "products/shop/backend/types.py": (
+                    "from products.shop.backend.models import OrderModel\n\nOrderMap = dict[str, OrderModel]\n"
+                ),
+            }
+        ),
         [ORDER_MAP, DICT, STR, ORDER_MODEL],
     ),
     "re-exported, then imported again in the alias's module": (
-        {
-            "products/shop/backend/types.py": "from products.shop.backend.more import OrderMap as OrderMap\n",
-            "products/shop/backend/more.py": (
-                "from products.shop.backend.models import OrderModel\nfrom .ids import Id\n\n"
-                "OrderMap = dict[Id, OrderModel]\n"
-            ),
-            "products/shop/backend/ids.py": "Id = tuple[int, str]\n",
-        },
+        orders_with(
+            {
+                "products/shop/backend/types.py": "from products.shop.backend.more import OrderMap as OrderMap\n",
+                "products/shop/backend/more.py": (
+                    "from products.shop.backend.models import OrderModel\nfrom .ids import Id\n\n"
+                    "OrderMap = dict[Id, OrderModel]\n"
+                ),
+                "products/shop/backend/ids.py": "Id = tuple[int, str]\n",
+            }
+        ),
         [
             ("orders", "return", "products.shop.backend.types.OrderMap", "resolved", ""),
             DICT,
@@ -301,10 +479,12 @@ IMPORTED_ALIAS_CASES = {
         ],
     ),
     "a cycle": (
-        {
-            "products/shop/backend/types.py": "from .other import Other\n\nOrderMap = list[Other]\n",
-            "products/shop/backend/other.py": "from .types import OrderMap\n\nOther = list[OrderMap]\n",
-        },
+        orders_with(
+            {
+                "products/shop/backend/types.py": "from .other import Other\n\nOrderMap = list[Other]\n",
+                "products/shop/backend/other.py": "from .types import OrderMap\n\nOther = list[OrderMap]\n",
+            }
+        ),
         [
             ORDER_MAP,
             ORDER_MAP,
@@ -316,92 +496,8 @@ IMPORTED_ALIAS_CASES = {
 }
 
 
-@pytest.mark.parametrize("case", IMPORTED_ALIAS_CASES)
-def test_an_imported_alias_is_expanded_where_it_is_assigned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
-) -> None:
-    files, expected = IMPORTED_ALIAS_CASES[case]
-    files = {**MODELS, **files, "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP}
-    out = both_engines(tmp_path, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(expected)
-
-
-def test_an_alias_chain_deeper_than_the_limit_leaves_an_unresolved_row(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    chain = "".join(f"A{at} = list[A{at + 1}]\n" for at in range(40)) + "A40 = int\n"
-    files = {
-        "products/shop/backend/types.py": chain + "OrderMap = A0\n",
-        "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP,
-    }
-    out = both_engines(tmp_path, files, monkeypatch)
-    rows = slot_rows(out["native"], FACADE)
-    assert [row for row in rows if row[3] == "unresolved"] == [("orders", "return", "A32", "unresolved", "")]
-    assert ("orders", "return", "products.shop.backend.types.A31", "resolved", "") in rows
-    assert ("orders", "return", "products.shop.backend.types.A33", "resolved", "") not in rows
-
-
-CHARGE_LOGIC = {f"{LOGIC}.py": "def charge(amount: int) -> str:\n    return ''\n"}
-IMPORTS_CHARGE = "from products.shop.backend.logic import charge\n\n\ndef ping() -> None:\n    pass\n\n\n"
-PING = [("ping", "return", "builtins.None", "external", "")]
-CHARGE_BY_ALL = [
-    ("charge", "param:amount", "builtins.int", "external", "all"),
-    ("charge", "return", "builtins.str", "external", "all"),
-]
-ALL_UNKNOWN = [("__all__", "names", "__all__", "unresolved", "all")]
-# Every `__all__` form whose names a reader can list hands them out; one built by code or set
-# under a condition makes what the module hands out unknown, and an unknown is never clean.
-DUNDER_ALL_CASES = {
-    "annotated": ('__all__: list[str] = ["charge"]\n', CHARGE_BY_ALL),
-    "extended with a literal": ('__all__ = ["ping"]\n__all__ += ["charge"]\n', CHARGE_BY_ALL),
-    "a sum of literals": ('__all__ = ["ping"] + ("charge",)\n', CHARGE_BY_ALL),
-    "built by a comprehension": ('__all__ = [name for name in ("charge",)]\n', ALL_UNKNOWN),
-    "set under a condition": ('if ping:\n    __all__ = ["charge"]\n', ALL_UNKNOWN),
-    "extended with a name": ('__all__ = ["ping"]\n__all__ += NAMES\n', ALL_UNKNOWN),
-    "an item that is no string": ('__all__ = ["ping", charge.__name__]\n', ALL_UNKNOWN),
-    "changed by a method": ('__all__ = ["ping"]\n__all__.extend(["charge"])\n', ALL_UNKNOWN),
-    "sorted keys of a module-level dict": ('_LAZY = {"charge": "logic"}\n__all__ = sorted(_LAZY)\n', CHARGE_BY_ALL),
-    "list of a module-level tuple": ('_NAMES = ("charge", "ping")\n__all__ = list(_NAMES)\n', CHARGE_BY_ALL),
-    "a starred module-level set": ('_NAMES = {"charge"}\n__all__ = [*_NAMES]\n', CHARGE_BY_ALL),
-    "a starred sorted name beside literals": (
-        '_LAZY = {"charge": "logic"}\n__all__ = [*sorted(_LAZY), "ping"]\n',
-        CHARGE_BY_ALL,
-    ),
-    "sorted over a starred name in a tuple": (
-        '_LAZY = {"charge": "logic"}\n__all__ = sorted((*_LAZY, "ping"))\n',
-        CHARGE_BY_ALL,
-    ),
-    "a name assigned twice": ('_LAZY = {"charge": "logic"}\n_LAZY = {}\n__all__ = sorted(_LAZY)\n', ALL_UNKNOWN),
-    "a name assigned under a condition": (
-        'if ping:\n    _LAZY = {"charge": "logic"}\n__all__ = sorted(_LAZY)\n',
-        ALL_UNKNOWN,
-    ),
-    "a name holding no strings": ("_LAZY = {1: 2}\n__all__ = sorted(_LAZY)\n", ALL_UNKNOWN),
-    "a call of anything else": ('_LAZY = {"charge": "logic"}\n__all__ = names(_LAZY)\n', ALL_UNKNOWN),
-}
-
-
-@pytest.mark.parametrize("case", DUNDER_ALL_CASES)
-def test_every_readable_dunder_all_hands_out_and_an_unreadable_one_is_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
-) -> None:
-    dunder_all, expected = DUNDER_ALL_CASES[case]
-    files = {**CHARGE_LOGIC, "products/shop/backend/facade/api.py": IMPORTS_CHARGE + dunder_all}
-    out = both_engines(tmp_path, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(PING + expected)
-    findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "facade-signature"]
-    assert ([FACADE, "__all__", "names", "__all__"] in findings) == (expected == ALL_UNKNOWN)
-
-
 def unfollowed(bound: str, target: str, clause: str) -> tuple[str, str, str, str, str]:
     return (bound, "signature", f"products.shop.backend.{target}", "unresolved", clause)
-
-
-def charge_by(clause: str) -> list[tuple[str, str, str, str, str]]:
-    return [
-        ("charge", "param:amount", "builtins.int", "external", clause),
-        ("charge", "return", "builtins.str", "external", clause),
-    ]
 
 
 PING_DEF = "\n\ndef ping() -> None:\n    pass\n"
@@ -414,7 +510,7 @@ UNFOLLOWED_CASES = {
                 'first_party = ["products"]',
                 'first_party = ["products"]\nexclude = ["products/shop/backend/hidden.py"]',
             ),
-            "products/shop/backend/hidden.py": "def charge(amount: int) -> str:\n    return ''\n",
+            "products/shop/backend/hidden.py": CHARGE,
             "products/shop/backend/facade/api.py": "from ..hidden import charge as charge\n" + PING_DEF,
         },
         [*PING, unfollowed("charge", "hidden.charge", "alias")],
@@ -463,60 +559,19 @@ UNFOLLOWED_CASES = {
     ),
     "a star import in a module with no function": (
         {
-            f"{LOGIC}.py": "def charge(amount: int) -> str:\n    return ''\n\n\ndef _helper(x: float) -> None:\n    pass\n",
+            f"{LOGIC}.py": CHARGE + "\n\ndef _helper(x: float) -> None:\n    pass\n",
             "products/shop/backend/facade/api.py": "from ..logic import *\n",
         },
         charge_by("no-functions"),
     ),
     "a star import of a source whose __all__ is unreadable": (
         {
-            f"{LOGIC}.py": "__all__ = sorted(NAMES)\n\n\ndef charge(amount: int) -> str:\n    return ''\n",
+            f"{LOGIC}.py": "__all__ = sorted(NAMES)\n\n\n" + CHARGE,
             "products/shop/backend/facade/api.py": "from ..logic import *\n",
         },
         [unfollowed("*", "logic.*", "no-functions")],
     ),
 }
-
-
-@pytest.mark.parametrize("case", UNFOLLOWED_CASES)
-def test_a_handed_out_name_the_engine_cannot_follow_is_an_unresolved_row(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
-) -> None:
-    files, expected = UNFOLLOWED_CASES[case]
-    out = both_engines(tmp_path, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(expected)
-
-
-def test_only_a_method_leaves_out_its_first_parameter_whatever_its_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    files = {
-        f"{LOGIC}.py": "def frozen(cls: type) -> type:\n    return cls\n",
-        "products/shop/backend/facade/api.py": (
-            "from ..logic import frozen as frozen\n\n\n"
-            "def build(cls: int, data: str) -> None:\n    pass\n\n\n"
-            "class Orders:\n"
-            "    def meta(mcs, key: str) -> None:\n        pass\n\n"
-            "    @classmethod\n    def load(klass, key: str) -> None:\n        pass\n\n"
-            "    @staticmethod\n    def make(self: int) -> None:\n        pass\n"
-        ),
-    }
-    out = both_engines(tmp_path, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(
-        [
-            ("frozen", "param:cls", "builtins.type", "external", "alias"),
-            ("frozen", "return", "builtins.type", "external", "alias"),
-            ("build", "param:cls", "builtins.int", "external", ""),
-            ("build", "param:data", "builtins.str", "external", ""),
-            ("build", "return", "builtins.None", "external", ""),
-            ("Orders.meta", "param:key", "builtins.str", "external", ""),
-            ("Orders.meta", "return", "builtins.None", "external", ""),
-            ("Orders.load", "param:key", "builtins.str", "external", ""),
-            ("Orders.load", "return", "builtins.None", "external", ""),
-            ("Orders.make", "param:self", "builtins.int", "external", ""),
-            ("Orders.make", "return", "builtins.None", "external", ""),
-        ]
-    )
 
 
 BASES = (
@@ -566,88 +621,14 @@ INHERITED_FIELD_CASES = {
         ],
     ),
 }
+# Every case above: the files beside BASE, and every `exposes` row at the facade.
+SLOT_CASES = {**ALIAS_FILE_CASES, **IMPORTED_ALIAS_CASES, **UNFOLLOWED_CASES, **INHERITED_FIELD_CASES}
 
 
-@pytest.mark.parametrize("case", INHERITED_FIELD_CASES)
-def test_a_dataclass_exposes_the_fields_it_inherits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
-    files, expected = INHERITED_FIELD_CASES[case]
-    out = both_engines(tmp_path, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(expected)
-
-
-def test_a_surface_hands_out_nothing_its_own_export_already_reports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    files = {
-        "products/shop/backend/facade/__init__.py": "from .api import charge\n",
-        "products/shop/backend/facade/api.py": "def charge(amount: int) -> str:\n    return ''\n",
-        "products/other/__init__.py": "",
-        "products/other/backend/__init__.py": "",
-        "products/other/backend/facade/__init__.py": "",
-        "products/other/backend/facade/contracts.py": "from products.shop.backend.facade.api import charge\n",
-    }
-    out = both_engines(tmp_path, files, monkeypatch)
-    assert slot_rows(out["native"], "products.shop.backend.facade") == []
-    assert slot_rows(out["native"], FACADE) == charge_by("")
-    assert slot_rows(out["native"], "products.other.backend.facade.contracts") == charge_by("no-functions")
-
-
-@pytest.mark.parametrize("depth", [4, 30])
-def test_an_alias_chain_that_doubles_at_every_step_gives_each_type_name_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
-) -> None:
-    chain = "".join(f"A{at} = tuple[A{at + 1}, A{at + 1}]\n" for at in range(depth)) + f"A{depth} = int\n"
-    files = {
-        "products/shop/backend/types.py": chain,
-        "products/shop/backend/facade/api.py": "from ..types import A0\n\n\ndef orders(x: list[A0]) -> None:\n    pass\n",
-    }
-    out = both_engines(tmp_path, files, monkeypatch)
-    names = [row[2] for row in slot_rows(out["native"], FACADE) if row[1] == "param:x"]
-    chained = [f"products.shop.backend.types.A{at}" for at in range(depth + 1)]
-    assert sorted(names) == sorted(["builtins.list", "builtins.tuple", "builtins.int", *chained])
-
-
-def test_a_module_with_no_function_hands_out_only_the_imports_it_does_not_use(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    files = {
-        f"{LOGIC}.py": (
-            "from .kit import frozen\n\n\n"
-            "def charge(amount: int) -> str:\n    return ''\n\n\n"
-            "def refund(x: float) -> None:\n    pass\n\n\n"
-            "def ping_target() -> None:\n    pass\n\n\n"
-            "def untouched(y: bytes) -> None:\n    pass\n\n\n"
-            "def rebound(z: int) -> None:\n    pass\n\n\n"
-            "@frozen\nclass Base:\n    id: int\n\n\n"
-            "@frozen\nclass Receipt:\n    total: int\n"
-        ),
-        "products/shop/backend/facade/api.py": (
-            "from ..kit import frozen\n"
-            "from ..logic import Base, Receipt, charge, rebound, refund, untouched\n"
-            "from ..logic import ping_target as ping_target\n\n"
-            '__all__ = ["refund"]\n\n'
-            "other = rebound\n\n\n"
-            "@frozen\nclass Order(Base):\n    note: 'Receipt'\n\n"
-            "    def total(self) -> None:\n        charge(1)\n        refund(2)\n        ping_target()\n"
-        ),
-    }
-    out = both_engines(tmp_path, files, monkeypatch)
-    handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
-    assert handed == sorted(
-        [
-            ("refund", "param:x", "builtins.float", "external", "all"),
-            ("refund", "return", "builtins.None", "external", "all"),
-            ("ping_target", "return", "builtins.None", "external", "alias"),
-            ("untouched", "param:y", "builtins.bytes", "external", "no-functions"),
-            ("untouched", "return", "builtins.None", "external", "no-functions"),
-        ]
-    )
-
-
-@pytest.mark.parametrize("case", ALIAS_FILE_CASES)
-def test_an_alias_is_read_from_the_file_the_module_table_reads(
+@pytest.mark.parametrize("case", SLOT_CASES)
+def test_a_facade_exposes_the_rows_each_case_expects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    files, expected = ALIAS_FILE_CASES[case]
+    files, expected = SLOT_CASES[case]
     out = both_engines(tmp_path, files, monkeypatch)
     assert slot_rows(out["native"], FACADE) == sorted(expected)
