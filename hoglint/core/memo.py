@@ -100,6 +100,7 @@ class Frame:
     reads: set[Read] = field(default_factory=set)
     files: set[int] = field(default_factory=set)
     step: str = ""  # the step a step's own frame runs
+    keep: bool = True  # a step's own frame keeps no read: no one reads them
 
     def add(self, other: Frame) -> None:
         self.reads |= other.reads
@@ -173,6 +174,10 @@ class Tracer:
         """The running step, which an edge query's key names."""
         return self.frames[0].step if self.frames else ""
 
+    def keeps(self) -> bool:
+        """Whether the running frame keeps its reads: an item's or a memo entry's, not a step's."""
+        return bool(self.frames) and self.frames[-1].keep
+
     def answer_with(self, kind: str, answer: Callable[[str], object]) -> None:
         """Answers reads of `kind` again by `answer(key)`, the same answer its note digests."""
         self.verifiers[kind] = lambda key: digest(answer(key))
@@ -228,20 +233,23 @@ class Tracer:
 
     def note(self, kind: str, key: str, value: object, form: Callable[[Any], object] | None = None) -> None:
         """A read whose answer is `form(value)`, or `value` with no form: the answer is built and
-        digested only the first time the run notes the read."""
+        digested only the first time the run notes the read. A step's frame keeps no read, but its
+        answer still serves a later check of a read no one can answer again (an edge query)."""
         if not self.frames or kind in self.dropped:
             return
         read = (kind, key)
-        self.frames[-1].reads.add(read)
+        frame = self.frames[-1]
+        if frame.keep:
+            frame.reads.add(read)
         if read not in self.answers:
             self.answers[read] = digest(value if form is None else form(value))
 
     def note_file(self, file: int) -> None:
-        if self.frames and FILE not in self.dropped:
+        if self.keeps() and FILE not in self.dropped:
             self.frames[-1].files.add(file)
 
     def merge(self, frame: Frame) -> None:
-        if self.frames:
+        if self.keeps():
             self.frames[-1].add(frame)
 
     @contextmanager
@@ -258,7 +266,7 @@ class Tracer:
     @contextmanager
     def step(self, name: str) -> Iterator[None]:
         """The frame of one step, around its items: it names the step for edge queries."""
-        self.frames.append(Frame(step=name))
+        self.frames.append(Frame(step=name, keep=False))
         try:
             yield
         finally:
@@ -878,18 +886,21 @@ class PackMemo:
 
         return RunStores.current().memo_mode()
 
-    def step(self, name: str, stored: bool = True) -> StepMemo:
-        """A step's memo; one that is not `stored` traces its items and keeps nothing."""
+    def step(self, name: str, stored: bool = True) -> StepMemo | None:
+        """A step's memo. A step that is not `stored` keeps nothing, so with no stats it gets none:
+        its items run in the step's frame, where shared memos still trace their entries."""
+        if not stored and not self.stats_path:
+            return None
         stats = None
         if self.stats_path:
             stats = StepStats(name)
             self.stats.append(stats)
         return StepMemo(name, digest([self.policy, name]), self.store if stored else None, stats, self.tracer)
 
-    def end_step(self, step: StepMemo) -> None:
+    def end_step(self, step: StepMemo | None) -> None:
         """Makes a step's new state once its items ran, so the parts it read are let go before
         the next step runs."""
-        if step.store is not None:
+        if step is not None and step.store is not None:
             try:
                 self.written.append(step.written())
             except Exception as error:  # noqa: BLE001 - the memo is a cache: it never fails a run

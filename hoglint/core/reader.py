@@ -73,14 +73,18 @@ class BuildReader:
             return [(scope.path, scope.module) for scope in self.scopes]
         return self.record_paths
 
+    # A listing read outside an item or memo entry is not noted: it has a verifier, so no check
+    # needs its answer noted first, and its digest is costly.
     @property
     def files(self) -> list[FileScope]:
-        self.listing.note("files")
+        if self.tracer.keeps():
+            self.listing.note("files")
         return self.scopes
 
     @property
     def paths(self) -> list[str]:
-        self.listing.note("paths")
+        if self.tracer.keeps():
+            self.listing.note("paths")
         return self.record_paths
 
     def record(self, path: str) -> Mapping[str, Any]:
@@ -147,7 +151,8 @@ class BuildReader:
     ) -> Iterator[tuple[FileScope, list[AttributeUse]]]:
         scopes = list(scopes)
         found = dict(self.queries.uses_to(scopes, targets))
-        if self.tracer.frames:
+        # No one answers `uses-to` again, and outside an item or memo entry no one keeps the read.
+        if self.tracer.keeps():
             wanted = targets_key(targets)
             for scope in scopes:
                 uses = found.get(scope, [])
