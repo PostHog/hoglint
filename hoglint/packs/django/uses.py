@@ -300,6 +300,6 @@ class GetModelItems(Items):
             return ItemOutput([])
 
         def file_edges(scope: FileScope) -> list[Edge]:
-            return [self.producer.edge(scope, row) for row in rows if self.on_registry(scope, row)]
+            return [self.producer.edge(scope, row) for row in rows if self.producer.on_registry(scope, row)]
 
         return ItemOutput(list(each_item([scope], file_edges, self.producer.failure)))
