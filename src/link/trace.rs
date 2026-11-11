@@ -56,10 +56,53 @@ pub enum Kind {
     Label,
 }
 
-pub const KIND_NAMES: [&str; 14] = [
-    "found", "missing", "stars", "lazy", "names", "module", "head", "class", "def", "alias",
-    "lines", "target", "spelled", "label",
-];
+impl Kind {
+    /// Every kind, in the order of its bit.
+    pub const ALL: [Kind; 14] = [
+        Kind::Found,
+        Kind::Missing,
+        Kind::Stars,
+        Kind::Lazy,
+        Kind::Names,
+        Kind::Module,
+        Kind::Head,
+        Kind::Class,
+        Kind::Def,
+        Kind::Alias,
+        Kind::Lines,
+        Kind::Target,
+        Kind::Spelled,
+        Kind::Label,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Found => "found",
+            Kind::Missing => "missing",
+            Kind::Stars => "stars",
+            Kind::Lazy => "lazy",
+            Kind::Names => "names",
+            Kind::Module => "module",
+            Kind::Head => "head",
+            Kind::Class => "class",
+            Kind::Def => "def",
+            Kind::Alias => "alias",
+            Kind::Lines => "lines",
+            Kind::Target => "target",
+            Kind::Spelled => "spelled",
+            Kind::Label => "label",
+        }
+    }
+}
+
+// The dump names kind k at position k, so `ALL` must follow the enum's own order.
+const _: () = {
+    let mut at = 0;
+    while at < Kind::ALL.len() {
+        assert!(Kind::ALL[at] as usize == at);
+        at += 1;
+    }
+};
 
 /// A cached answer whose reads `Recorder` keeps.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -605,7 +648,8 @@ impl Link {
         let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut out = BufWriter::new(file);
         let fail = |e: std::io::Error| format!("{}: {e}", path.display());
-        writeln!(out, "{}", json!(["kinds", KIND_NAMES])).map_err(fail)?;
+        let kinds = Kind::ALL.map(Kind::name);
+        writeln!(out, "{}", json!(["kinds", kinds])).map_err(fail)?;
         let it = &self.core.it;
         let rec = &self.core.rec;
         for (owner, scope) in self.scopes.iter().enumerate() {
