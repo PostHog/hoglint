@@ -119,10 +119,10 @@ class TraceConfig:
         return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]))
 
 
-def write_trace_dump(link: Any, config: Any, out: Path) -> tuple[int, int, int, int]:
+def write_trace_dump(link: Any, config: Any, out: Path) -> None:
     """The link's traces and interfaces, and the config's inputs, into `out`."""
     TraceConfig.of(config).write(out)
-    return link.write_traces(str(out / TRACES))
+    link.write_traces(str(out / TRACES))
 
 
 @dataclass(frozen=True)

@@ -540,15 +540,6 @@ pub fn interfaces(core: &Core) -> Vec<(u32, Vec<(String, u64)>)> {
         .collect()
 }
 
-/// What `Link::write_traces` wrote.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DumpCounts {
-    pub files: usize,
-    pub reads: usize,
-    pub interfaces: usize,
-    pub digests: usize,
-}
-
 /// The name of a read as the dump writes it: its first dotted part, because an interface holds
 /// a nested def under its top-level name.
 fn name_text(it: &Interner, name: Sid) -> &str {
@@ -606,14 +597,13 @@ impl Link {
     /// repo file, then `["handout", module, [handed], [kept], unread]` per export module: what its
     /// rule rows' `dst.exported` reads. A read of the file's own module is left out: a change to the module's files
     /// makes the file recompute anyway.
-    pub fn write_traces(&mut self, path: &Path) -> Result<DumpCounts, String> {
+    pub fn write_traces(&mut self, path: &Path) -> Result<(), String> {
         if self.core.it.len() as u64 > ID_MASK {
             return Err("too many strings to pack the reads of a trace".to_string());
         }
         let edge_reads = self.edge_reads();
         let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut out = BufWriter::new(file);
-        let mut counts = DumpCounts::default();
         let fail = |e: std::io::Error| format!("{}: {e}", path.display());
         writeln!(out, "{}", json!(["kinds", KIND_NAMES])).map_err(fail)?;
         let it = &self.core.it;
@@ -636,8 +626,6 @@ impl Link {
                 .map(|((m, n), mask)| (m, n, mask))
                 .collect();
             reads.sort_unstable();
-            counts.files += 1;
-            counts.reads += reads.len();
             let path = &*self.core.facts.files[scope.file as usize].path;
             let module = it.s(module);
             writeln!(out, "{}", json!(["trace", path, module, reads])).map_err(fail)?;
@@ -650,8 +638,6 @@ impl Link {
                 .iter()
                 .map(|(name, digest)| (name.as_str(), format!("{digest:016x}")))
                 .collect();
-            counts.interfaces += 1;
-            counts.digests += rows.len();
             writeln!(out, "{}", json!(["interface", path, module, rows])).map_err(fail)?;
         }
         let mut modules: Vec<Sid> = self.hand_outs.keys().copied().collect();
@@ -667,7 +653,6 @@ impl Link {
             ]);
             writeln!(out, "{row}").map_err(fail)?;
         }
-        out.flush().map_err(fail)?;
-        Ok(counts)
+        out.flush().map_err(fail)
     }
 }

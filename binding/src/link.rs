@@ -196,18 +196,10 @@ impl Link {
 
     /// Writes what each analyzed file's edges read from other files and every repo file's
     /// interface to `path` (`Link::write_traces`), when the link was built with `trace`.
-    /// Returns (files, reads, interfaces, digests).
-    fn write_traces(&mut self, path: &str) -> PyResult<(usize, usize, usize, usize)> {
-        let counts = self
-            .inner
+    fn write_traces(&mut self, path: &str) -> PyResult<()> {
+        self.inner
             .write_traces(std::path::Path::new(path))
-            .map_err(PyValueError::new_err)?;
-        Ok((
-            counts.files,
-            counts.reads,
-            counts.interfaces,
-            counts.digests,
-        ))
+            .map_err(PyValueError::new_err)
     }
 
     /// Every edge: core edges, then pack edges.
