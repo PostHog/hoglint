@@ -25,19 +25,23 @@ in its writes and runs it again: the child's tables must stay equal and no run m
 With `--mode traces` the replay is the certificate of stage S5: the cold checks record link
 traces (`hoglint.native.predict`), the prediction from the parent's traces must hold every file
 of the truth set, and each read kind is left out once to show which pairs need it (the planted
-gaps). Only the two cold checks run.
+gaps). Only the two cold checks run, so a prediction that holds prints HELD, not EQUAL: no
+table was compared.
 
 Usage:
   python -m hoglint.native.replay pairs --repo <git repo> --pairs <tsv> [--pairs <tsv>] --work <dir>
-      [--engine native] [--mode today|planted-miss|traces] [--only <name,...>] [--damage all|<name,...>]
+      [--engine native] [--mode today|planted-miss|traces|pack-memo-miss] [--only <name,...>]
+      [--damage all|<name,...>]
   python -m hoglint.native.replay determinism --repo <git repo> --tree <tree> [--tree ...] --work <dir>
       the cold dump of each tree under three hash seeds and one and four threads, each with an
       empty fact cache, compared with the first
   python -m hoglint.native.replay check ...
       one check in this process (the harness runs it)
 
-Exit 0 only when every compared table is equal, no check failed, each warm check shows that it
-reused stored work, and a certificate's prediction holds every item of the truth set.
+Exit 0 only when at least one pair ran, every compared table is equal, no check failed, each
+cold check shows that it reused nothing, each warm check shows that it reused stored work, every
+pair has each verdict its mode owes, and a certificate's prediction holds every item of the
+truth set.
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
-from hoglint.cli import Commands, Run, Snapshots
+from hoglint.cli import Commands, Run, RunMemo, Snapshots
 from hoglint.core.memo import (
     DROP_ENV as PACK_MEMO_DROP,
     MODE_ENV as PACK_MEMO_SWITCH,
@@ -106,13 +110,14 @@ GRAPH_OUTPUTS = (*LIST_OUTPUTS, "labels", "finding-files", "incomplete-files")
 CHECK_OUTPUTS = ("check-summary", "check-report", "check-exit")
 # The summary sections a stored summary stands in for a run with (`RunMemo.SECTIONS`).
 MEMO_SECTIONS = ("envelope", "incompletes", "findings", "levels")
+if set(MEMO_SECTIONS) != RunMemo.SECTIONS:
+    raise ImportError(f"MEMO_SECTIONS {MEMO_SECTIONS} differs from RunMemo.SECTIONS {sorted(RunMemo.SECTIONS)}")
 # Edge rows: where the site path and the producer sit.
 EDGE_PATH = FIELDS.index("path")
 EDGE_PRODUCER = FIELDS.index("producer")
 DIGEST_MOD = 2**128
 SEEDS = ("0", "1", "4242")
 THREADS = ("1", "4")
-SHOWN_ROWS = 5
 # The kinds of side a check runs on (`Side`).
 COLD, WARM, DAMAGED, FILL = "cold", "warm", "damaged", "fill"
 
