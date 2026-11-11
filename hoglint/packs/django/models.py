@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo, key_of
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo, key_of, parts_of
 from hoglint.core.reader import note_file_of
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
@@ -314,6 +314,11 @@ class TracedModels(dict[EntityId, ModelEntry]):
         if TRACER.frames:
             TRACER.note_lazy(self.MODEL, "*", lambda: list(dict.values(self)))
 
+    def answer_reads(self) -> None:
+        by_name = {str(ref): entry for ref, entry in dict.items(self)}
+        whole = list(dict.values(self))
+        TRACER.answer_with(self.MODEL, lambda key: whole if key == "*" else by_name.get(key))
+
     def __iter__(self) -> Iterator[EntityId]:
         self.note_all()
         return dict.__iter__(self)
@@ -341,6 +346,11 @@ class ModelItems(Items):
             if str(ref) != MODEL_BASE:
                 self.by_module.setdefault(ref.module, []).append(ref)
         self.files = {scope.path: scope for scope in files if scope.module in self.by_module}
+        TRACER.answer_with(self.FOUND, self.found_again)
+
+    def found_again(self, key: str) -> object:
+        scope = self.files.get(key)
+        return None if scope is None else [str(ref) for ref in self.by_module[scope.module]]
 
     def keys(self) -> list[str]:
         return list(self.files)
@@ -411,6 +421,16 @@ class ModelRegistry:
             concrete=self.index.concrete_model(ref),
             meta=meta,
         )
+
+    def answer_reads(self) -> None:
+        """Answers the registry's reads again in this run, once every model is in."""
+        self.models.answer_reads()
+        TRACER.answer_with(self.LABEL, self.label_again)
+
+    def label_again(self, key: str) -> object:
+        value, app_label, own = parts_of(key)
+        found = self.read_label(value, app_label, None if own is None else entity(*own))
+        return None if found is None else str(found)
 
     def add(self, entry: ModelEntry) -> None:
         self.models[entry.ref] = entry

@@ -384,6 +384,8 @@ class StaticGraph:
 class AliasProjection:
     """Database aliases per app label from the routing file; unrouted apps use the default alias."""
 
+    ROUTING = "django.routing"
+
     def __init__(self, repo_root: Path, routing: DatabaseRouting | None) -> None:
         self.routing = routing
         self.route: dict[str, str] = {}
@@ -392,7 +394,7 @@ class AliasProjection:
         path = routing.path if routing.path.is_absolute() else repo_root / routing.path
         routes = (yaml.safe_load(path.read_text()) or {}).get("routes", [])
         self.route = {r["app_label"]: r["database"] for r in routes}
-        TRACER.note("django.routing", str(routing.path), sorted(self.route.items()))
+        TRACER.note(self.ROUTING, str(routing.path), sorted(self.route.items()))
 
     def aliases(self, app: str) -> frozenset[str]:
         if self.routing is None:

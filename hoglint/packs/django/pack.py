@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
-from hoglint.core.memo import ItemOutput, ItemRun, Items
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.ledger.store import cache_root
@@ -61,6 +61,7 @@ class AppItems(Items):
 
     def take(self, key: str, data: Any) -> None:
         self.run.apps = AppRegistry.restore(data)
+        self.run.apps.answer_reads()
 
     def finish(self) -> Iterable[Output]:
         self.run.files = self.run.scan_files()
@@ -77,6 +78,7 @@ class ModelStepItems(ModelItems):
         self.run = run
 
     def finish(self) -> Iterable[Output]:
+        self.registry.answer_reads()
         if not self.registry.models:
             raise NoModels("no first-party model found")
         failures = self.registry.failures
@@ -92,6 +94,10 @@ class MigrationItems(Items):
 
     def __init__(self, run: DjangoRun) -> None:
         self.run = run
+        TRACER.answer_with(AliasProjection.ROUTING, self.routes)
+
+    def routes(self, key: str) -> object:
+        return sorted(AliasProjection(self.run.repo_root, self.run.config.routing).route.items())
 
     def folds(self) -> list[str]:
         return ["graph"]
@@ -198,7 +204,7 @@ class DjangoRun:
 
         return ProducerPlan(
             [
-                ProducerStep(APPS_PRODUCER, frozenset(), nothing, items=lambda: AppItems(self)),
+                ProducerStep(APPS_PRODUCER, frozenset(), nothing, items=lambda: AppItems(self), stored=False),
                 ProducerStep(
                     MODELS_PRODUCER,
                     MODEL_KINDS,
@@ -219,6 +225,7 @@ class DjangoRun:
                     nothing,
                     (MODELS_PRODUCER,),
                     items=self.relation_items,
+                    stored=False,
                 ),
                 ProducerStep(USES_PRODUCER, USES_KINDS, self.use_edges, (MODELS_PRODUCER,)),
                 ProducerStep(
@@ -227,6 +234,7 @@ class DjangoRun:
                     nothing,
                     (MODELS_PRODUCER,),
                     items=self.get_model_items,
+                    stored=False,
                 ),
                 ProducerStep(
                     SIGNALS_PRODUCER, frozenset({"signal"}), nothing, (MODELS_PRODUCER,), items=self.signal_items

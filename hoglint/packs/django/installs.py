@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, digest
 from hoglint.core.reader import note_file_of
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
@@ -177,7 +177,14 @@ class InstallsItems(Items):
         self.producer = producer
         self.files = {scope.path: scope for scope in files} if producer.hooks else {}
         self.aliases = producer.aliases(files) if producer.hooks else {}
+        digests = {path: digest(self.form(found)) for path, found in self.aliases.items()}
+        none = digest(self.form(Aliases()))
+        TRACER.verify_by_map(self.ALIASES, digests, none)
         self.calls: dict[str, list[list]] = {}
+
+    @staticmethod
+    def form(aliases: Aliases) -> object:
+        return (sorted(aliases.names), sorted(aliases.decorated))
 
     def keys(self) -> list[str]:
         return list(self.files)
@@ -191,7 +198,7 @@ class InstallsItems(Items):
         scope = self.files[key]
         note_file_of(scope)
         aliases = self.aliases.get(key, Aliases())
-        TRACER.note(self.ALIASES, key, (sorted(aliases.names), sorted(aliases.decorated)))
+        TRACER.note(self.ALIASES, key, self.form(aliases))
         rows = self.calls.get(key, [])
 
         def file_edges(one: FileScope) -> list[Edge]:

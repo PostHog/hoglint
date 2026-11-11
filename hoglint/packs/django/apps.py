@@ -154,6 +154,12 @@ class AppRegistry:
         settings = SettingsValues(dict(strings), {name: list(values) for name, values in lists.items()})
         return AppRegistry(list(settings_modules), settings, [InstalledApp(*app) for app in apps])
 
+    def answer_reads(self) -> None:
+        """Answers the registry's reads again in this run (`Tracer.answer_with`)."""
+        TRACER.answer_with(self.APPS, lambda key: self.installed if key == "apps" else self.read_settings_modules)
+        TRACER.answer_with(self.SETTING, self.settings.strings.get)
+        TRACER.answer_with(self.APP_LABEL, self.label_for_module)
+
     @property
     def apps(self) -> list[InstalledApp]:
         if TRACER.frames:

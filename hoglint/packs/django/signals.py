@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo, digest
 from hoglint.core.reader import note_file_of
 from hoglint.core.records import sequence_items, str_literal, value_text
 from hoglint.core.sites import FileScope
@@ -281,6 +281,9 @@ class SignalItems(Items):
         self.producer = producer
         self.files = {scope.path: scope for scope in files}
         self.decorated = producer.decorated(files)
+        digests = {path: digest(sorted(found)) for path, found in self.decorated.items()}
+        none = digest([])
+        TRACER.verify_by_map(self.DECORATED, digests, none)
         self.calls: dict[str, list[list]] = {}
         self.callees: dict[str, list[list]] = {}
 
