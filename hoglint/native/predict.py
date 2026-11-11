@@ -18,11 +18,19 @@ Rules folded over packages or the whole graph rerun when what they read moved: a
 file's edges outside their positions, any label, any symbol fact, or a declared side input.
 
 This module is generic: it knows trace kinds, not any repo's names.
+
+Usage:
+  python -m hoglint.native.predict summary <traces.jsonl>
+      counts and sizes of one tree's traces and interfaces
+  python -m hoglint.native.predict show <traces.jsonl> <path>
+      what one file read and why, and the interface of that file
 """
 
 from __future__ import annotations
 
+import sys
 import json
+import argparse
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -147,6 +155,15 @@ class TraceDump:
         return out
 
 
+def packages(dump: TraceDump) -> set[str]:
+    """Every module of a tree and every package above one: what exists in its module index."""
+    out: set[str] = set()
+    for module in dump.modules.values():
+        out.add(module)
+        out.update(module_ancestors(module))
+    return out
+
+
 @dataclass(frozen=False)
 class Changes:
     """What a commit moved at the link's grain: (module, name) keys, whole modules (a file added
@@ -156,11 +173,16 @@ class Changes:
     whole: set[str] = field(default_factory=set)
     paths: set[str] = field(default_factory=set)
     modules: set[str] = field(default_factory=set)
+    # The changed paths either tree analyzes or reads an interface of.
+    known: set[str] = field(default_factory=set)
 
     @staticmethod
     def of(parent: TraceDump, child: TraceDump, paths: set[str]) -> Changes:
-        """From the interfaces of the changed files in both trees."""
+        """From the interfaces of the changed files in both trees. A package above an added or
+        deleted file moves only when it exists in one tree and not the other."""
         out = Changes(paths=set(paths))
+        out.known = {path for path in paths if path in parent.modules or path in child.modules}
+        existence = packages(parent) ^ packages(child)
         for path in sorted(paths):
             before = parent.interfaces.get(path)
             after = child.interfaces.get(path)
@@ -170,7 +192,7 @@ class Changes:
                 module = after[0] if after is not None else before[0]  # type: ignore[index]
                 out.modules.add(module)
                 out.whole.add(module)
-                out.keys.update((ancestor, "") for ancestor in module_ancestors(module))
+                out.keys.update((ancestor, "") for ancestor in module_ancestors(module) if ancestor in existence)
                 out.keys.add((module, ""))
                 continue
             module = after[0]
@@ -222,7 +244,7 @@ class Predictor:
         """Step 1: the changed files, every file of a changed module, and every file whose
         trace reads a key that moved."""
         changes = self.changes
-        out = {path for path in changes.paths if path in self.parent.traces or path in self.parent.modules}
+        out = set(changes.known)
         for path, (module, reads) in self.parent.traces.items():
             if module in changes.modules or any(self.moved(read) for read in reads):
                 out.add(path)
@@ -437,3 +459,57 @@ class PairPrediction:
 def predict(parent_dump: Path, child_dump: Path, changed: set[str], ignored_kinds: Iterable[str] = ()) -> Prediction:
     """`PairPrediction.predict` for one question."""
     return PairPrediction(parent_dump, child_dump, changed).predict(ignored_kinds)
+
+
+# ── reading a dump as a person ──
+
+
+def summary(dump: Path) -> str:
+    """Counts of one dump: files, trace entries by kind, interfaces and digests, the bytes."""
+    traces = TraceDump(dump)
+    by_kind = dict.fromkeys(traces.kinds, 0)
+    entries = 0
+    for _, reads in traces.traces.values():
+        entries += len(reads)
+        for read in reads:
+            for at, kind in enumerate(traces.kinds):
+                by_kind[kind] += read.kinds >> at & 1
+    digests = sum(len(names) for _, names in traces.interfaces.values())
+    lines = [
+        f"{dump}: {dump.stat().st_size / 1e6:.1f} MB",
+        f"files with a trace: {len(traces.traces)}; trace entries (module, name): {entries}",
+        "entries per kind (an entry counts once per kind that read it):",
+        *(f"  {kind:8s} {count}" for kind, count in by_kind.items()),
+        f"interfaces: {len(traces.interfaces)}; digests: {digests}",
+    ]
+    return "\n".join(lines)
+
+
+def show(dump: Path, path: str) -> str:
+    """What one file read from other files, grouped by module, each with the kinds that read
+    it; then the interface other files read of it."""
+    traces = TraceDump(dump)
+    module, reads = traces.traces.get(path, ("", []))
+    lines = [f"{path} ({module}): {len(reads)} reads"]
+    for read in reads:
+        kinds = ", ".join(kind for at, kind in enumerate(traces.kinds) if read.kinds >> at & 1)
+        lines.append(f"  {read.module}  {read.name or '-'}  [{kinds}]")
+    found = traces.interfaces.get(path)
+    if found is not None:
+        lines.append(f"interface: {len(found[1])} entries")
+        lines.extend(f"  {name}  {digest}" for name, digest in sorted(found[1].items()))
+    return "\n".join(lines)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", choices=("summary", "show"))
+    parser.add_argument("dump", type=Path)
+    parser.add_argument("path", nargs="?", default="")
+    args = parser.parse_args()
+    text = summary(args.dump) if args.command == "summary" else show(args.dump, args.path)
+    sys.stdout.write(text + "\n")
+
+
+if __name__ == "__main__":
+    main()
