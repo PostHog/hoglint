@@ -24,8 +24,9 @@ pub struct SymbolFacts {
     bases: FxHashMap<String, Vec<String>>,
     decorators: FxHashMap<String, Vec<String>>,
     children: FxHashMap<String, Vec<String>>,
-    /// Classes a `decorate` edge marks frozen (`SymbolFacts.frozen`).
-    frozen: FxHashSet<String>,
+    /// The names of each class's decorators that a call passes `frozen=True`
+    /// (`SymbolFacts.frozen_by`).
+    frozen_by: FxHashMap<String, Vec<String>>,
 }
 
 /// (members of each kind in plan order, the kinds that hold each name, the names of unknown kind).
@@ -43,11 +44,13 @@ impl SymbolFacts {
                 bases.entry(owner).or_default().extend(names);
             }
         }
-        let mut frozen: FxHashSet<String> = FxHashSet::default();
+        let mut frozen_by: FxHashMap<String, Vec<String>> = FxHashMap::default();
         if let Some(decorate) = link.kind_sid("decorate") {
             for (owner, surface, names, is_frozen) in link.class_facts(decorate, "decorated") {
                 if is_frozen {
-                    frozen.insert(owner.clone());
+                    let found = frozen_by.entry(owner.clone()).or_default();
+                    found.push(surface.clone());
+                    found.extend(names.iter().cloned());
                 }
                 let found = decorators.entry(owner).or_default();
                 found.push(surface);
@@ -82,7 +85,7 @@ impl SymbolFacts {
             bases,
             decorators,
             children,
-            frozen,
+            frozen_by,
         }
     }
 
@@ -159,14 +162,29 @@ impl SymbolFacts {
 
     /// `SymbolFacts.is_dataclass`.
     pub fn is_dataclass(&self, link: &Link, name: &str) -> bool {
+        let make = &link.dataclass_kinds.make;
         self.decorators(link, name)
-            .contains(&"dataclasses.dataclass")
+            .iter()
+            .any(|found| make.contains(*found))
             || Self::fact(link, name, "dataclass") == "true"
     }
 
-    /// `SymbolFacts.is_frozen`.
+    /// `SymbolFacts.is_frozen`: a dataclass decorator call passes `frozen=True`, or a decorator
+    /// that always freezes makes the class.
     pub fn is_frozen(&self, link: &Link, name: &str) -> bool {
-        self.frozen.contains(name) || Self::fact(link, name, "frozen") == "true"
+        if Self::fact(link, name, "frozen") == "true" {
+            return true;
+        }
+        let kinds = &link.dataclass_kinds;
+        let frozen_call = self
+            .frozen_by
+            .get(name)
+            .is_some_and(|found| found.iter().any(|item| kinds.make.contains(item)));
+        frozen_call
+            || self
+                .decorators(link, name)
+                .iter()
+                .any(|found| kinds.freeze.contains(*found))
     }
 
     /// Every base class reachable from `name`, and whether the walk saw every base

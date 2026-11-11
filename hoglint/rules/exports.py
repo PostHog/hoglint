@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
+from hoglint.core.config import DataclassDecorators
 from hoglint.globs import compile_label_glob
 from hoglint.model import Context, Edge, Resolution, context_bits
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project
@@ -52,6 +53,7 @@ class ExportPrimitive(RuleType):
         self.spec = spec
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
+        self.dataclass_kinds = DataclassDecorators.from_discovery(ctx.config.discovery)
         self.index = ctx.labeler.index
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
@@ -184,9 +186,9 @@ class ExportPrimitive(RuleType):
             names.add("constant")
         if decl == "class":
             names.add("class")
-        if self.facts.is_dataclass(symbol):
+        if self.facts.is_dataclass(symbol, self.dataclass_kinds):
             names.add("dataclass")
-            if self.facts.is_frozen(symbol):
+            if self.facts.is_frozen(symbol, self.dataclass_kinds):
                 names.add("frozen-dataclass")
         if lineage & ABC_BASES or self.facts.get(symbol, "metaclass") in ABC_METAS:
             names.add("abc")

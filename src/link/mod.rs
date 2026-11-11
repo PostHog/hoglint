@@ -175,6 +175,9 @@ pub struct LinkConfig {
     pub dynamic_loaders: Vec<String>,
     #[serde(default)]
     pub dataclass_decorators: Vec<String>,
+    /// Those of `dataclass_decorators` that always make a frozen dataclass.
+    #[serde(default)]
+    pub frozen_dataclass_decorators: Vec<String>,
     #[serde(default)]
     pub patch_callees: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
@@ -250,7 +253,18 @@ pub struct Link {
     pub symbols: Symbols,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
+    /// `config.dataclass_decorators` and `config.frozen_dataclass_decorators`, for the rules'
+    /// symbol facts.
+    pub dataclass_kinds: DataclassKinds,
     pub timings: Timings,
+}
+
+/// The decorators that make a dataclass (`make`), and those of them that always freeze it
+/// (hoglint/core/config.py `DataclassDecorators`).
+#[derive(Default)]
+pub struct DataclassKinds {
+    pub make: FxHashSet<String>,
+    pub freeze: FxHashSet<String>,
 }
 
 /// (module, scope name) of the site of edge `id`, from the parts of a link, so a caller can
@@ -374,6 +388,10 @@ impl Link {
             index: EdgeIndex::default(),
             symbols,
             first_party,
+            dataclass_kinds: DataclassKinds {
+                make: config.dataclass_decorators.iter().cloned().collect(),
+                freeze: config.frozen_dataclass_decorators.iter().cloned().collect(),
+            },
             timings,
         })
     }

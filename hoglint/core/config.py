@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
+from typing import Any
 
 from hoglint.globs import ExportPaths
 
@@ -12,6 +14,21 @@ DEFAULT_TEST_PATHS = ("**/tests/**", "**/test/**", "**/test_*.py", "**/*_test.py
 DEFAULT_DYNAMIC_LOADERS = ("importlib.import_module", "builtins.__import__")
 DEFAULT_DATACLASS_DECORATORS = ("dataclasses.dataclass",)
 DEFAULT_PATCH_CALLEES = ("patch",)
+
+
+@dataclass(frozen=True, slots=True)
+class DataclassDecorators:
+    """The decorators that make a dataclass (`make`), and those of them that always make it frozen
+    (`freeze`); any other of them freezes it when its call passes `frozen=True`."""
+
+    make: frozenset[str]
+    freeze: frozenset[str]
+
+    @classmethod
+    def from_discovery(cls, discovery: Mapping[str, Any]) -> DataclassDecorators:
+        """The two lists of a config's `[discovery]`, with core's default for the first."""
+        make = discovery.get("dataclass_decorators", DEFAULT_DATACLASS_DECORATORS)
+        return cls(frozenset(make), frozenset(discovery.get("frozen_dataclass_decorators", ())))
 
 
 class PathGlobs:
@@ -100,6 +117,8 @@ class CoreConfig:
       ancestry resolve through third-party code (for example a web framework's base classes).
     - dynamic_loaders: callables that import a module named at runtime.
     - dataclass_decorators: decorators whose class fields form the generated `__init__`.
+    - frozen_dataclass_decorators: those of them that always make a frozen dataclass; any other
+      freezes it only when its call passes `frozen=True`.
     - patch_callees: last names of callees whose first argument is a dotted patch target.
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
@@ -114,6 +133,7 @@ class CoreConfig:
     external_packages: tuple[str, ...] = ()
     dynamic_loaders: tuple[str, ...] = DEFAULT_DYNAMIC_LOADERS
     dataclass_decorators: tuple[str, ...] = DEFAULT_DATACLASS_DECORATORS
+    frozen_dataclass_decorators: tuple[str, ...] = ()
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
     contract_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False

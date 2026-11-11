@@ -131,9 +131,7 @@ class NativeSymbolFacts(SymbolFacts):
         for owner, _, names, _ in graph.link.class_facts("inherit", "class"):
             self.add_base(owner, names)
         for owner, surface, names, frozen in graph.link.class_facts("decorate", "decorated"):
-            self.add_decorator(owner, surface, names)
-            if frozen:
-                self.frozen.add(owner)
+            self.add_decorator(owner, surface, names, frozen)
 
     def get(self, symbol: str, key: str) -> str:
         return self.columns.fact(symbol, key)

@@ -7,9 +7,11 @@ schema = 1
 edge_kinds = ["drives"]
 sections   = ["posthog"]  # the PostHog pack (hoglint.presets_py.posthog): drives
 
-# These decorators make a dataclass: its fields are slots of the class's `__init__`.
+# These decorators make a dataclass: its fields are slots of the class's `__init__`. The house
+# `frozen` always makes it frozen; the others do when they pass `frozen=True`.
 [discovery]
-dataclass_decorators = ["dataclasses.dataclass", "posthog.dataclasses.frozen", "pydantic.dataclasses.dataclass"]
+dataclass_decorators        = ["dataclasses.dataclass", "posthog.dataclasses.frozen", "pydantic.dataclasses.dataclass"]
+frozen_dataclass_decorators = ["posthog.dataclasses.frozen"]
 
 # ── Fields ─────────────────────────────────────────────────────
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.

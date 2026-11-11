@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Generic, TypeVar
 
+from hoglint.core.config import DataclassDecorators
 from hoglint.model import Edge, Graph, Resolution, set_handle
 from hoglint.selectors import split_list
 
@@ -18,7 +19,6 @@ V = TypeVar("V")
 
 MODULE_SCOPE = "<module>"
 DECL_NAMES = {"def": "function", "async": "function"}
-DATACLASS_DECORATORS = frozenset({"dataclasses.dataclass"})
 
 
 class Memo(Generic[K, V]):
@@ -101,13 +101,14 @@ class SymbolFacts:
     Bases come from `inherit` edges (attr `class`), decorators from `decorate` edges (attr
     `decorated`). An unresolved base is kept as `?<surface>`, so ancestry knows it is incomplete.
     Producers may add string facts to Graph.symbols: `abstract`, `frozen`, `metaclass`, `members`.
+    `frozen_by` holds the names of each class's decorators that a call passes `frozen=True`.
     """
 
     def __init__(self, graph: Graph, inherits: list[Edge], decorates: list[Edge]) -> None:
         self.symbols = graph.symbols
         self.base_map: dict[str, list[str]] = {}
         self.decorator_map: dict[str, list[str]] = {}
-        self.frozen: set[str] = set()
+        self.frozen_by: dict[str, list[str]] = {}
         self.add_edges(inherits, decorates)
         self.ancestors = Memo(self.walk_ancestors)
         self.any_decl = Memo(self.find_decl)
@@ -115,8 +116,10 @@ class SymbolFacts:
     def add_base(self, owner: str, names: list[str]) -> None:
         self.base_map.setdefault(owner, []).extend(names)
 
-    def add_decorator(self, owner: str, surface: str, names: list[str]) -> None:
+    def add_decorator(self, owner: str, surface: str, names: list[str], frozen: bool) -> None:
         self.decorator_map.setdefault(owner, []).extend([surface, *names])
+        if frozen:
+            self.frozen_by.setdefault(owner, []).extend([surface, *names])
 
     def add_edges(self, inherits: list[Edge], decorates: list[Edge]) -> None:
         for edge in inherits:
@@ -126,9 +129,7 @@ class SymbolFacts:
             if not edge.attr("decorated"):
                 continue
             owner = f"{edge.site.module}.{edge.attr('decorated')}"
-            self.add_decorator(owner, edge.surface, self.names(edge))
-            if edge.attr("frozen") == "1":
-                self.frozen.add(owner)
+            self.add_decorator(owner, edge.surface, self.names(edge), edge.attr("frozen") == "1")
 
     @staticmethod
     def names(edge: Edge) -> list[str]:
@@ -163,11 +164,17 @@ class SymbolFacts:
     def decorators(self, symbol: str) -> list[str]:
         return self.decorator_map.get(symbol, []) + split_list(self.get(symbol, "decorators"))
 
-    def is_dataclass(self, symbol: str) -> bool:
-        return bool(DATACLASS_DECORATORS & set(self.decorators(symbol))) or self.get(symbol, "dataclass") == "true"
+    def is_dataclass(self, symbol: str, kinds: DataclassDecorators) -> bool:
+        return bool(kinds.make & set(self.decorators(symbol))) or self.get(symbol, "dataclass") == "true"
 
-    def is_frozen(self, symbol: str) -> bool:
-        return symbol in self.frozen or self.get(symbol, "frozen") == "true"
+    def is_frozen(self, symbol: str, kinds: DataclassDecorators) -> bool:
+        """A dataclass decorator call passes `frozen=True`, or a decorator that always freezes
+        makes the class."""
+        if self.get(symbol, "frozen") == "true":
+            return True
+        if kinds.make & set(self.frozen_by.get(symbol, ())):
+            return True
+        return bool(kinds.freeze & set(self.decorators(symbol)))
 
     @cached_property
     def children(self) -> dict[str, list[str]]:

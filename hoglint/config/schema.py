@@ -34,6 +34,7 @@ from hoglint.config.model import (
     ZoneSpec,
     ZoneTable,
 )
+from hoglint.core.config import DataclassDecorators
 from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
@@ -144,6 +145,7 @@ DISCOVERY_KEYS = frozenset(
         "migrations",
         "plugins",
         "dataclass_decorators",
+        "frozen_dataclass_decorators",
     }
 )
 VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections", "views"})
@@ -967,7 +969,11 @@ class SchemaBuilder:
         return names
 
     def read_discovery(self) -> None:
-        self.check_keys("discovery", self.raw.get("discovery", {}), DISCOVERY_KEYS)
+        discovery = self.raw.get("discovery", {})
+        self.check_keys("discovery", discovery, DISCOVERY_KEYS)
+        kinds = DataclassDecorators.from_discovery(discovery)
+        for name in sorted(kinds.freeze - kinds.make):
+            self.fail("discovery.frozen_dataclass_decorators", f"{name!r} is not in dataclass_decorators")
 
 
 def without_sources(value: Any) -> Any:
