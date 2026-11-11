@@ -183,8 +183,11 @@ def slot_rows(out: Path, module: str) -> list[tuple[str, str, str, str, str]]:
     return sorted(rows)
 
 
-def both_engines(tmp_path: Path, files: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    out = dumps(tmp_path, {**BASE, **files}, monkeypatch)
+def both_engines(
+    tmp_path: Path, base: dict[str, str], files: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Path]:
+    """The dumps of both engines over `base` and `files`, which must agree and fail no file."""
+    out = dumps(tmp_path, {**base, **files}, monkeypatch)
     same_in_both_engines(out)
     assert read_lines(out["native"] / "failed.jsonl") == []
     return out
@@ -213,7 +216,7 @@ def test_a_handed_out_def_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files = {**TWIN_CASES[case], "products/shop/backend/facade/api.py": HANDS_OUT_CHARGE}
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
     assert handed == [
         ("charge", "param:amount", "builtins.int", "external", "alias"),
@@ -238,7 +241,7 @@ def test_an_alias_chain_deeper_than_the_limit_leaves_an_unresolved_row(
         "products/shop/backend/types.py": chain + "OrderMap = A0\n",
         "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP,
     }
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     rows = slot_rows(out["native"], FACADE)
     assert [row for row in rows if row[3] == "unresolved"] == [("orders", "return", "A32", "unresolved", "")]
     assert ("orders", "return", "products.shop.backend.types.A31", "resolved", "") in rows
@@ -294,7 +297,7 @@ def test_every_readable_dunder_all_hands_out_and_an_unreadable_one_is_unknown(
 ) -> None:
     dunder_all, expected = DUNDER_ALL_CASES[case]
     files = {**CHARGE_LOGIC, "products/shop/backend/facade/api.py": IMPORTS_CHARGE + dunder_all}
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert slot_rows(out["native"], FACADE) == sorted(PING + expected)
     findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "facade-signature"]
     assert ([FACADE, "__all__", "names", "__all__"] in findings) == (expected == ALL_UNKNOWN)
@@ -314,7 +317,7 @@ def test_only_a_method_leaves_out_its_first_parameter_whatever_its_name(
             "    @staticmethod\n    def make(self: int) -> None:\n        pass\n"
         ),
     }
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert slot_rows(out["native"], FACADE) == sorted(
         [
             ("frozen", "param:cls", "builtins.type", "external", "alias"),
@@ -343,7 +346,7 @@ def test_a_surface_hands_out_nothing_its_own_export_already_reports(
         "products/other/backend/facade/__init__.py": "",
         "products/other/backend/facade/contracts.py": "from products.shop.backend.facade.api import charge\n",
     }
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert slot_rows(out["native"], "products.shop.backend.facade") == []
     assert slot_rows(out["native"], FACADE) == charge_by("")
     assert slot_rows(out["native"], "products.other.backend.facade.contracts") == charge_by("no-functions")
@@ -358,7 +361,7 @@ def test_an_alias_chain_that_doubles_at_every_step_gives_each_type_name_once(
         "products/shop/backend/types.py": chain,
         "products/shop/backend/facade/api.py": "from ..types import A0\n\n\ndef orders(x: list[A0]) -> None:\n    pass\n",
     }
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     names = [row[2] for row in slot_rows(out["native"], FACADE) if row[1] == "param:x"]
     chained = [f"products.shop.backend.types.A{at}" for at in range(depth + 1)]
     assert sorted(names) == sorted(["builtins.list", "builtins.tuple", "builtins.int", *chained])
@@ -387,7 +390,7 @@ def test_a_module_with_no_function_hands_out_only_the_imports_it_does_not_use(
             "    def total(self) -> None:\n        charge(1)\n        refund(2)\n        ping_target()\n"
         ),
     }
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
     assert handed == sorted(
         [
@@ -630,5 +633,5 @@ def test_a_facade_exposes_the_rows_each_case_expects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = SLOT_CASES[case]
-    out = both_engines(tmp_path, files, monkeypatch)
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert slot_rows(out["native"], FACADE) == sorted(expected)
