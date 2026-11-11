@@ -18,6 +18,24 @@ from native.test_parity import OWNERS_REPO
 # The child moves core/b.py's import to another module: its edges and its finding change, and
 # nothing else does.
 CHILD_EDITS = {"core/b.py": "from products.billing.models import Invoice\n"}
+# A Django repo whose models module gains a second model in the child: the pack memo's item for
+# that module must run again, or the registry misses the new model.
+MODEL = "from django.db import models\n\n\nclass Invoice(models.Model):\n    pass\n"
+DJANGO_REPO = {
+    "hoglint.toml": (
+        'schema = 1\nextends = ["hoglint:django"]\n\n[discovery]\nsource_roots = ["."]\n'
+        'first_party = ["app", "proj", "django"]\n\n[django]\nsettings = "proj.settings"\n'
+    ),
+    "proj/__init__.py": "",
+    "proj/settings.py": 'INSTALLED_APPS = ["app"]\n',
+    "app/__init__.py": "",
+    "app/models.py": MODEL,
+    "django/__init__.py": "",
+    "django/db/__init__.py": "",
+    "django/db/models/__init__.py": "from django.db.models.base import Model\n",
+    "django/db/models/base.py": "class Model:\n    pass\n",
+}
+MODEL_EDITS = {"app/models.py": MODEL + "\n\nclass Refund(models.Model):\n    pass\n"}
 
 
 def write_tree(repo: Path, files: dict[str, str]) -> str:
@@ -30,14 +48,23 @@ def write_tree(repo: Path, files: dict[str, str]) -> str:
     ).stdout.strip()
 
 
-@pytest.fixture(scope="module")
-def pair(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
-    repo = tmp_path_factory.mktemp("replay") / "repo"
+def git_pair(root: Path, name: str, files: dict[str, str], edits: dict[str, str]) -> tuple[Path, Pair]:
+    repo = root / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    parent = write_tree(repo, OWNERS_REPO)
-    child = write_tree(repo, CHILD_EDITS)
-    return repo, Pair("move-import", parent, child)
+    parent = write_tree(repo, files)
+    child = write_tree(repo, edits)
+    return repo, Pair(name, parent, child)
+
+
+@pytest.fixture(scope="module")
+def pair(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    return git_pair(tmp_path_factory.mktemp("replay"), "move-import", OWNERS_REPO, CHILD_EDITS)
+
+
+@pytest.fixture(scope="module")
+def model_pair(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    return git_pair(tmp_path_factory.mktemp("replay-django"), "gain-model", DJANGO_REPO, MODEL_EDITS)
 
 
 def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str, damages: tuple[str, ...] = ()) -> PairResult:
@@ -67,6 +94,14 @@ def test_a_replay_reports_a_pair_equal_only_when_every_check_reports_the_same(
     if not equal:
         child = result.verdicts[0]
         assert [diff.name for diff in child.diffs if not diff.equal] == ["edges"]
+
+
+@pytest.mark.parametrize(("mode", "equal"), [("today", True), ("pack-memo-miss", False)])
+def test_a_pack_memo_that_forgets_its_reads_makes_the_replay_fail(
+    tmp_path: Path, model_pair: tuple[Path, Pair], mode: str, equal: bool
+) -> None:
+    result = replay(tmp_path, model_pair, mode)
+    assert result.equal is equal, result.line()
 
 
 def test_the_truth_set_holds_the_file_whose_rows_changed_and_the_commit_predicts_it(

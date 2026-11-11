@@ -64,6 +64,11 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.cli import Commands, Run, Snapshots
+from hoglint.core.memo import (
+    MODE_ENV as PACK_MEMO_SWITCH,
+    OFF as PACK_MEMO_OFF,
+)
+from hoglint.ledger.cache import OFF_SWITCH as ANSWER_CACHE_SWITCH
 from hoglint.ledger.scan import SUMMARY_SECTIONS, ScanSummary
 from hoglint.model import Finding, Graph
 from hoglint.native.config import TRACE_ENV
@@ -870,9 +875,12 @@ DAMAGES = (*(damage.name for damage in STATE_DAMAGES), *RUN_DAMAGES)
 
 # ── the harness ───────────────────────────────────────────────────
 
-# A cold check reuses no pack item: its own baseline would fill the pack memo first, so the child
-# would take the same stored items as the warm child, and a wrong item would compare equal.
-COLD = {"HOGLINT_PACK_MEMO": "off"}
+# A cold check runs with every store of reused answers switched off. Its own baseline fills the
+# cold state directory first, so a store left on would hand the cold child the same stored
+# answers as the warm child, and a wrong answer would compare equal. Every new store of reused
+# answers adds its off switch here. The per-blob fact cache stays on: its entries are what the
+# extractor makes of a file's bytes, keyed by those bytes.
+COLD_SWITCHES = {PACK_MEMO_SWITCH: PACK_MEMO_OFF, ANSWER_CACHE_SWITCH: "1"}
 
 
 @dataclass(frozen=True)
@@ -1018,8 +1026,10 @@ class Replay:
 
     def replay(self, pair: Pair, result: PairResult) -> None:
         check = self.checker.check
-        cold_parent = check(pair.parent, pair.parent, self.state("cold-parent"), "cold-parent", env=COLD)
-        result.cold = cold_child = check(pair.child, pair.parent, self.state("cold-child"), "cold-child", env=COLD)
+        cold_parent = check(pair.parent, pair.parent, self.state("cold-parent"), "cold-parent", env=COLD_SWITCHES)
+        result.cold = cold_child = check(
+            pair.child, pair.parent, self.state("cold-child"), "cold-child", env=COLD_SWITCHES
+        )
         truth = TruthSet(cold_parent.out, cold_child.out).compute()
         mode = self.checker.mode
         predicted = mode.predict(self.git, pair, (cold_parent.out, cold_child.out))
