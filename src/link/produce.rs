@@ -1369,6 +1369,24 @@ impl Producers<'_> {
         out
     }
 
+    /// Whether a decorator is one `dataclass_decorators` names, by spelling or target.
+    fn is_dataclass_decorator(&mut self, surface: Sid, resolved: Resolved) -> bool {
+        let target = resolved.target.map(|target| self.core.ent_sid(target));
+        let wanted = &self.settings.dataclass_decorators;
+        wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
+    }
+
+    /// Whether a class takes a decorator that makes it a dataclass.
+    fn is_dataclass_like(&mut self, owner: usize, node: &Def) -> bool {
+        for dec in &node.dec {
+            let (surface, resolved) = self.lookup_value(owner, dec, node.s, node.l);
+            if self.is_dataclass_decorator(surface, resolved) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The fields of the generated `__init__`, as the dataclass machinery collects them: from
     /// every dataclass-like class along the MRO, base first, a redefinition replacing the earlier
     /// field in its place.
@@ -1543,19 +1561,6 @@ impl Producers<'_> {
         !name.starts_with('_') || name == "__init__"
     }
 
-    /// Whether a class takes a decorator `dataclass_decorators` names, by spelling or target.
-    fn is_dataclass_like(&mut self, owner: usize, node: &Def) -> bool {
-        for dec in &node.dec {
-            let (surface, resolved) = self.lookup_value(owner, dec, node.s, node.l);
-            let target = resolved.target.map(|target| self.core.ent_sid(target));
-            let wanted = &self.settings.dataclass_decorators;
-            if wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name)) {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Where a handed-out name leads: the top-level function or class in an analyzed first-party
     /// file, every step of the way inside first-party code, or `Unfollowed`. None for a name
     /// that needs no row: a third-party name, a constant, a module.
@@ -1706,7 +1711,7 @@ impl Producers<'_> {
                     DECLARES, owner, enclosing, node.l, node.c, ctx, full, resolved, EMPTY, &attrs,
                 );
             }
-            let mut decorators: Vec<Sid> = Vec::new();
+            let mut dataclass = false;
             for dec in &node.dec {
                 let (surface, resolved) = self.lookup_value(owner, dec, enclosing, node.l);
                 let k = &self.settings.k;
@@ -1724,10 +1729,7 @@ impl Producers<'_> {
                     DECORATE, owner, enclosing, node.l, node.c, ctx, surface, resolved, use_,
                     &attrs,
                 );
-                decorators.push(surface);
-                if let Some(target) = resolved.target {
-                    decorators.push(self.core.ent_sid(target));
-                }
+                dataclass |= self.is_dataclass_decorator(surface, resolved);
             }
             let site = SlotSite {
                 owner,
@@ -1754,9 +1756,6 @@ impl Producers<'_> {
                         &attrs,
                     );
                 }
-                let dataclass = decorators
-                    .iter()
-                    .any(|name| self.settings.dataclass_decorators.contains(name));
                 if !nested && dataclass {
                     let init = self.core.it.join(qualname, self.settings.k.init);
                     if !in_contract {

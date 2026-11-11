@@ -770,6 +770,22 @@ class DeclarationProducer(Producer):
                 out.append(found)
         return out
 
+    @staticmethod
+    def is_dataclass_decorator(context: BuildContext, surface: str, resolved: Resolved) -> bool:
+        """Whether a decorator is one `dataclass_decorators` names, by spelling or target."""
+        wanted = context.config.dataclass_decorators
+        return surface in wanted or any(str(target) in wanted for target in resolved.targets)
+
+    def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
+        """Whether a class takes a decorator that makes it a dataclass."""
+        for dec in node.get("dec", ()):
+            found = context.value_lookup(scope, dec, node["s"], node["l"])
+            if found is None:
+                continue
+            if self.is_dataclass_decorator(context, found.surface, context.classifier.classify_lookup(found)):
+                return True
+        return False
+
     def mro_fields(
         self, context: BuildContext, lineage: list[tuple[FileScope, int]], lookup: SlotLookup
     ) -> list[Field]:
@@ -825,19 +841,6 @@ class DeclarationProducer(Producer):
         fields = self.mro_fields(context, lineage, lookup)
         self.expose_fields(context, graph, site, fields, callable_name, True, handed)
 
-    def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
-        """Whether a class takes a decorator `dataclass_decorators` names, by spelling or target."""
-        wanted = context.config.dataclass_decorators
-        for dec in node.get("dec", ()):
-            found = context.value_lookup(scope, dec, node["s"], node["l"])
-            if found is None:
-                continue
-            if found.surface in wanted or any(
-                str(t) in wanted for t in context.classifier.classify_lookup(found).targets
-            ):
-                return True
-        return False
-
     def declare(
         self,
         context: BuildContext,
@@ -870,7 +873,7 @@ class DeclarationProducer(Producer):
                     attrs=attrs,
                 )
             )
-        decorators: list[str] = []
+        dataclass = False
         for dec in node.get("dec", ()):
             found = context.value_lookup(scope, dec, enclosing, line)
             surface = found.surface if found else ""
@@ -893,8 +896,7 @@ class DeclarationProducer(Producer):
                     attrs=attrs,
                 )
             )
-            decorators.append(surface)
-            decorators.extend(str(target) for target in resolved.targets)
+            dataclass |= self.is_dataclass_decorator(context, surface, resolved)
         site = SlotSite(scope, enclosing, line, column, contexts)
         lookup = SlotLookup(scope, enclosing, line)
         in_contract = contract and self.in_contract(scope, idx)
@@ -909,7 +911,7 @@ class DeclarationProducer(Producer):
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs
                     )
                 )
-            if not nested and any(name in context.config.dataclass_decorators for name in decorators):
+            if not nested and dataclass:
                 init = f"{qualname}.__init__"
                 if not in_contract:
                     own = [Field(row, lookup, True) for row in fields.get(idx, [])]
