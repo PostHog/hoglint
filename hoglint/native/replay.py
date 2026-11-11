@@ -373,7 +373,8 @@ def reuse_problem(meta: dict[str, Any]) -> str:
 @dataclass(frozen=True)
 class Verdict:
     """One comparison of two dumps, as one short text and the rows of each differing table.
-    `word` names a failure that is not a table difference (MISSED, NO REUSE, NO GRAPH TABLES),
+    `word` names a failure that is not a table difference (MISSED, NO REUSE, NO GRAPH TABLES,
+    NOT COMPARED),
     with `note` saying more; `memo` says the right side's check was served by the run memo."""
 
     label: str
@@ -415,6 +416,10 @@ class Verdict:
         if engines[0] != engines[1]:
             return Verdict(label, (), (), f"REFUSED: the two checks ran different engines ({engines[0]}, {engines[1]})")
         diffs, skipped = compare_tables(left, right)
+        # Every check writes these tables; one missing on either side leaves nothing to stand on.
+        missing = [name for name in CHECK_OUTPUTS if name in skipped]
+        if missing:
+            return Verdict(label, tuple(diffs), tuple(skipped), f"missing {','.join(missing)}", "NOT COMPARED")
         memo = bool(metas[1].get("memo"))
         problem = reuse_problem(metas[1]) if warm else ""
         if problem:

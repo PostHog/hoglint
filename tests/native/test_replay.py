@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from hoglint.native.replay import (
+    CHECK_OUTPUTS,
     COLD_SWITCHES,
     MODES,
     Checker,
@@ -175,7 +176,8 @@ def test_a_check_takes_no_reuse_switch_from_the_callers_shell() -> None:
 def write_check(side: Path, meta: dict[str, object], graph: bool) -> Path:
     side.mkdir()
     (side / "check.json").write_text(json.dumps({"engine": "native-a", **meta}))
-    (side / "check-exit.jsonl").write_text("[0]\n")
+    for table in CHECK_OUTPUTS:
+        (side / f"{table}.jsonl").write_text("[0]\n")
     if graph:
         (side / "modules.jsonl").write_text('["a", "a.py"]\n')
     return side
@@ -208,10 +210,20 @@ def test_a_warm_check_must_show_that_it_reused_stored_work(
     assert Verdict.of("child", cold, warm).word == ""
 
 
+@pytest.mark.parametrize("warm", [False, True])
+def test_a_side_without_its_check_tables_is_not_compared(tmp_path: Path, warm: bool) -> None:
+    cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
+    other = write_check(tmp_path / "other", {"memo": False, "reuse": OPEN}, graph=True)
+    (other / "check-summary.jsonl").unlink()
+    verdict = Verdict.of("child", cold, other, warm=warm)
+    assert verdict.word == "NOT COMPARED"
+    assert not PairResult(Pair("p", "a", "b"), [verdict]).equal
+
+
 def test_a_warm_child_served_by_the_run_memo_is_not_printed_equal(tmp_path: Path) -> None:
     cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
     warm = write_check(tmp_path / "warm", {"memo": True}, graph=False)
     result = PairResult(Pair("p", "a", "b"), [Verdict.of("child", cold, warm, warm=True)])
     assert result.equal
     assert result.status() == "MEMO"
-    assert "served by the run memo (1 tables compared" in result.line()
+    assert "served by the run memo (3 tables compared" in result.line()
