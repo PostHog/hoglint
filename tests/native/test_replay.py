@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 import json
 import datetime
-import subprocess
 from pathlib import Path
 
 import pytest
 
+import hoglint
 from hoglint.native.parity import RowDiff
 from hoglint.native.replay import (
     CHECK_OUTPUTS,
@@ -17,6 +18,7 @@ from hoglint.native.replay import (
     COLD_SWITCHES,
     DAMAGED,
     MODES,
+    REUSE_SWITCHES,
     WARM,
     CheckDump,
     Checker,
@@ -35,6 +37,7 @@ from hoglint.native.replay import (
     labelled,
     pick_damages,
 )
+from rules.test_compare import git_in, write_files
 
 from native.require import native_module
 from native.test_parity import OWNERS_REPO
@@ -63,19 +66,15 @@ MODEL_EDITS = {"app/models.py": MODEL + "\n\nclass Refund(models.Model):\n    pa
 
 
 def write_tree(repo: Path, files: dict[str, str]) -> str:
-    for path, text in files.items():
-        (repo / path).parent.mkdir(parents=True, exist_ok=True)
-        (repo / path).write_text(text)
-    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
-    return subprocess.run(
-        ["git", "-C", str(repo), "write-tree"], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    write_files(repo, files)
+    git_in(repo, "add", ".")
+    return git_in(repo, "write-tree").strip()
 
 
 def git_pair(root: Path, name: str, files: dict[str, str], edits: dict[str, str]) -> tuple[Path, Pair]:
     repo = root / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git_in(repo, "init", "-q")
     parent = write_tree(repo, files)
     child = write_tree(repo, edits)
     return repo, Pair(name, parent, child)
@@ -186,8 +185,16 @@ def test_a_replay_that_compared_no_pair_fails() -> None:
     assert PairsReport().close() is False
 
 
+# Switches that pick a binary or a thread count: none turns a store or a recording on or off.
+NOT_REUSE_SWITCHES = {"HOGLINT_BASE_FACTS_BIN", "HOGLINT_FACTS_BIN", "HOGLINT_NATIVE_DIR", "HOGLINT_THREADS"}
+
+
 def test_a_check_takes_no_reuse_switch_from_the_callers_shell() -> None:
-    caller = {"PATH": "/bin", "HOGLINT_PACK_MEMO": "off", "HOGLINT_NO_ANSWER_CACHE": "1", "HOGLINT_LINK_TRACE": "1"}
+    package = Path(hoglint.__file__).parent
+    named = {match for path in package.rglob("*.py") for match in re.findall(r'"(HOGLINT_[A-Z_]+)"', path.read_text())}
+    unknown = named - set(REUSE_SWITCHES) - NOT_REUSE_SWITCHES
+    assert not unknown, "a new switch is a reuse switch (REUSE_SWITCHES) or not one (NOT_REUSE_SWITCHES)"
+    caller = {"PATH": "/bin", **dict.fromkeys(REUSE_SWITCHES, "1")}
     assert check_env(caller, {}) == {"PATH": "/bin"}
     assert check_env(caller, COLD_SWITCHES) == {"PATH": "/bin", **COLD_SWITCHES}
 
@@ -204,8 +211,8 @@ def write_check(side: Path, meta: dict[str, object], graph: bool) -> Path:
 
 OPEN = {"answers": True, "summaries": True, "pack_memo": ["open"]}
 # What a cold check records: every store it may not share off or unread.
-COLD_REUSE = {"answers": False, "summaries": True, "summary_reads": 0, "pack_memo": ["off"]}
-COLD_RECORD = {"memo": False, "reuse": COLD_REUSE}
+COLD_REUSE: dict[str, object] = {"answers": False, "summaries": True, "summary_reads": 0, "pack_memo": ["off"]}
+COLD_RECORD: dict[str, object] = {"memo": False, "reuse": COLD_REUSE}
 
 
 @pytest.mark.parametrize(
@@ -254,9 +261,9 @@ def test_a_warm_child_served_by_the_run_memo_is_not_printed_equal(tmp_path: Path
 def test_a_side_that_reuses_stored_work_needs_a_state_a_parent_check_filled(tmp_path: Path) -> None:
     state = States(tmp_path).fresh("warm")
     with pytest.raises(TypeError):
-        Side.warm(state)  # type: ignore[arg-type]
+        Side.warm(state)  # ty: ignore[invalid-argument-type]
     with pytest.raises(TypeError):
-        Side.damaged(state)  # type: ignore[arg-type]
+        Side.damaged(state)  # ty: ignore[invalid-argument-type]
     cold = Side.cold(States(tmp_path), "cold")
     assert cold.env == COLD_SWITCHES
     with pytest.raises(ValueError):
@@ -273,7 +280,7 @@ def test_a_side_that_reuses_stored_work_needs_a_state_a_parent_check_filled(tmp_
     ],
 )
 def test_a_cold_check_that_shared_a_store_is_not_compared(tmp_path: Path, reuse: dict[str, object], memo: bool) -> None:
-    record = {"memo": memo, "reuse": {**COLD_REUSE, **reuse}}
+    record: dict[str, object] = {"memo": memo, "reuse": {**COLD_REUSE, **reuse}}
     cold = write_check(tmp_path / "cold", record, graph=True)
     other = write_check(tmp_path / "other", COLD_RECORD, graph=True)
     verdict = compare("seed1-threads1", CheckDump.load(cold, COLD), CheckDump.load(other, COLD))
