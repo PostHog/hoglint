@@ -12,7 +12,7 @@ use super::Link;
 use super::facts::{Assign, Def, FileFacts, Import, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::produce::NO_FILE;
-use super::resolve::{Core, Ent};
+use super::resolve::{Core, Ent, unpacked_names};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
@@ -448,10 +448,10 @@ fn bindings<'a>(
         module_level.push(row);
         let mut names = Vec::new();
         for target in &row.targets {
-            bound_names(it, target, &mut names);
+            unpacked_names(it, target, &mut names);
         }
         for name in names {
-            entry(parts, it, name).assign(row);
+            entry(parts, it, it.s(name)).assign(row);
         }
         if matches!(row.value, Some(V::Str(..)) | Some(V::Dict(..))) {
             entry(parts, it, LAZY).assign(row);
@@ -492,26 +492,6 @@ fn import_name<'a>(it: &'a Interner, row: &Import) -> &'a str {
             let target = it.s(row.target.unwrap_or(EMPTY));
             target.split('.').next().unwrap_or(target)
         }
-    }
-}
-
-/// The names an assignment target binds at module level: a plain name, or the names of a
-/// tuple or list target. A dotted target binds none.
-fn bound_names<'a>(it: &'a Interner, target: &V, out: &mut Vec<&'a str>) {
-    match target {
-        V::Chain(name) => {
-            let text = it.s(*name);
-            if !text.contains('.') {
-                out.push(text);
-            }
-        }
-        V::Tuple(items) | V::List(items) => {
-            for item in items {
-                bound_names(it, item, out);
-            }
-        }
-        V::Star(inner) => bound_names(it, inner, out),
-        _ => {}
     }
 }
 
