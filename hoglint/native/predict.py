@@ -252,11 +252,15 @@ class Predictor:
 
     def readers(self, symbols: set[tuple[str, str]], labels: set[str]) -> set[str]:
         """Step 2: the files whose edges name a symbol whose facts moved, or whose rule rows read
-        the labels of a module whose labels moved."""
+        the labels of a module whose labels moved. Every rule row reads its own module's labels
+        (its owners, its package), which no trace holds: a file of such a module is predicted."""
         out = set()
         symbol_mask = self.symbol_mask & ~self.ignored
         label_bit = self.label_bit & ~self.ignored
-        for path, (_, reads) in self.parent.traces.items():
+        for path, (module, reads) in self.parent.traces.items():
+            if label_bit and module in labels:
+                out.add(path)
+                continue
             for read in reads:
                 if read.kinds & symbol_mask and (read.module, read.name) in symbols:
                     out.add(path)

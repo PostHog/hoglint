@@ -236,5 +236,6 @@ def test_an_ownership_file_relabels_the_modules_it_owns(tmp_path: Path, monkeypa
     child = traced_dump(tmp_path, "child", child_files, monkeypatch)
     prediction = predict(parent, child, {"CODEOWNERS"})
     assert prediction.labels is None, "a changed provider input relabels every module"
+    assert "app/lib.py" in prediction.files, "its own rule rows carry its owners"
     assert "app/use.py" in prediction.files, "its rule rows read the owners of app.lib"
     assert "app/use.py" not in predict(parent, child, {"CODEOWNERS"}, ignored_kinds=["label"]).files
