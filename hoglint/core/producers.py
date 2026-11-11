@@ -634,6 +634,22 @@ class DeclarationProducer(Producer):
         mentions = [Mention(value, position, lookup) for value, position in self.mentions(annotation, "whole")]
         self.expose_mentions(context, graph, rows, mentions, frozenset())
 
+    @staticmethod
+    def has_receiver(context: BuildContext, lookup: SlotLookup, node: dict) -> bool:
+        """Whether a def's first parameter is bound by the call, whatever its name: a method's
+        first positional parameter, unless the method is a `staticmethod`."""
+        parent = node["s"]
+        params = node.get("params", ())
+        if parent == -1 or lookup.scope.defs[parent]["k"] != "class":
+            return False
+        if not params or params[0][1] not in ("po", "a"):
+            return False
+        for dec in node.get("dec", ()):
+            found = context.value_lookup(lookup.scope, dec, parent, node["l"])
+            if found is not None and found.surface == "builtins.staticmethod":
+                return False
+        return True
+
     def expose_signature(
         self,
         context: BuildContext,
@@ -645,11 +661,12 @@ class DeclarationProducer(Producer):
         contract: bool,
         handed: str = "",
     ) -> None:
-        """The parameter and return slots of a function. In a contract `self`, `cls` and an
+        """The parameter and return slots of a function. In a contract a method's receiver and an
         unannotated return are no slots, and an unannotated parameter is one."""
-        for param in node.get("params", ()):
+        receiver = contract and self.has_receiver(context, lookup, node)
+        for position, param in enumerate(node.get("params", ())):
             annotation = param[2] if len(param) > 2 else None
-            in_slot = contract and param[0] not in ("self", "cls")
+            in_slot = contract and not (receiver and position == 0)
             if not in_slot and (annotation is None or handed):
                 continue
             slot = f"param:{param[0]}"

@@ -100,6 +100,7 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.api", "close", "param:flag", "builtins.bool", "", ""),
     ("products.shop.backend.facade.api", "close", "return", "builtins.None", "", ""),
     ("products.shop.backend.facade.api", "Orders.find", "param:key", "builtins.str", "", ""),
+    ("products.shop.backend.facade.api", "charge", "param:cls", "builtins.type", "", "alias"),
     ("products.shop.backend.facade.api", "charge", "param:amount", "products.shop.backend.logic.Totals", "", "alias"),
     ("products.shop.backend.facade.api", "charge", "param:amount", "builtins.dict", "", "alias"),
     ("products.shop.backend.facade.api", "charge", "param:amount", "builtins.str", "", "alias"),
@@ -112,6 +113,7 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:total", "builtins.int", "", "no-functions"),
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:_audit", "builtins.dict", "", "no-functions"),
     ("products.shop.backend.facade.contracts", "Base.__init__", "field:id", "builtins.int", "", "no-functions"),
+    ("products.shop.backend.facade.contracts", "frozen", "param:cls", "", "missing", "no-functions"),
     ("products.shop.backend.logic", "charge", "param:amount", "products.shop.backend.logic.Totals", "", ""),
     ("products.shop.backend.logic", "Receipt.__init__", "field:kind", "typing.ClassVar", "", ""),
 ]
@@ -466,6 +468,38 @@ def test_a_handed_out_name_the_engine_cannot_follow_is_an_unresolved_row(
     files, expected = UNFOLLOWED_CASES[case]
     out = both_engines(tmp_path, files, monkeypatch)
     assert slot_rows(out["native"], FACADE) == sorted(expected)
+
+
+def test_only_a_method_leaves_out_its_first_parameter_whatever_its_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        f"{LOGIC}.py": "def frozen(cls: type) -> type:\n    return cls\n",
+        "products/shop/backend/facade/api.py": (
+            "from ..logic import frozen as frozen\n\n\n"
+            "def build(cls: int, data: str) -> None:\n    pass\n\n\n"
+            "class Orders:\n"
+            "    def meta(mcs, key: str) -> None:\n        pass\n\n"
+            "    @classmethod\n    def load(klass, key: str) -> None:\n        pass\n\n"
+            "    @staticmethod\n    def make(self: int) -> None:\n        pass\n"
+        ),
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(
+        [
+            ("frozen", "param:cls", "builtins.type", "external", "alias"),
+            ("frozen", "return", "builtins.type", "external", "alias"),
+            ("build", "param:cls", "builtins.int", "external", ""),
+            ("build", "param:data", "builtins.str", "external", ""),
+            ("build", "return", "builtins.None", "external", ""),
+            ("Orders.meta", "param:key", "builtins.str", "external", ""),
+            ("Orders.meta", "return", "builtins.None", "external", ""),
+            ("Orders.load", "param:key", "builtins.str", "external", ""),
+            ("Orders.load", "return", "builtins.None", "external", ""),
+            ("Orders.make", "param:self", "builtins.int", "external", ""),
+            ("Orders.make", "return", "builtins.None", "external", ""),
+        ]
+    )
 
 
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)

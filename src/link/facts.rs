@@ -70,6 +70,8 @@ pub struct Param {
     pub name: Sid,
     /// The annotation; None when absent or null.
     pub annotation: Option<V>,
+    /// A positional parameter (`po` or `a`), not `*args`, keyword-only or `**kwargs`.
+    pub positional: bool,
 }
 
 pub struct Def {
@@ -573,6 +575,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                     let annotation = row(p, 2);
                     Param {
                         name: it.intern(text(row(p, 0))),
+                        positional: matches!(text(row(p, 1)), "po" | "a"),
                         annotation: if annotation.is_null() {
                             None
                         } else {

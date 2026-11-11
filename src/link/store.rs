@@ -173,6 +173,7 @@ impl Enc<'_> {
             for p in &d.params {
                 self.sid(p.name);
                 self.ov(p.annotation.as_ref());
+                self.u8(p.positional as u8);
             }
             self.ov(d.ret.as_ref());
             self.u8(d.stub as u8);
@@ -505,9 +506,11 @@ pub fn decode_body(
         let mut params = Vec::with_capacity(np);
         for _ in 0..np {
             let pname = d.sid()?;
+            let annotation = d.ov()?;
             params.push(Param {
                 name: pname,
-                annotation: d.ov()?,
+                annotation,
+                positional: d.u8()? != 0,
             });
         }
         let ret = d.ov()?;

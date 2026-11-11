@@ -342,6 +342,7 @@ struct Keys {
     dunder_all: Sid,
     names: Sid,
     signature: Sid,
+    staticmethod: Sid,
 }
 
 impl Producing {
@@ -406,6 +407,7 @@ impl Producing {
             dunder_all: it.intern("__all__"),
             names: it.intern("names"),
             signature: it.intern("signature"),
+            staticmethod: it.intern("builtins.staticmethod"),
         };
         Producing {
             names: LookupNames {
@@ -1100,7 +1102,27 @@ impl Producers<'_> {
         self.expose_mentions(rows, mentions, &mut Vec::new());
     }
 
-    /// The parameter and return slots of a function. In a contract `self`, `cls` and an
+    /// Whether a def's first parameter is bound by the call, whatever its name: a method's first
+    /// positional parameter, unless the method is a `staticmethod`.
+    fn has_receiver(&mut self, lookup: SlotLookup, node: &Def) -> bool {
+        let facts = self.core.facts.clone();
+        let defs = &facts.files[self.scopes[lookup.owner].file as usize].defs;
+        if node.s == -1 || !defs[node.s as usize].is_class() {
+            return false;
+        }
+        if !node.params.first().is_some_and(|param| param.positional) {
+            return false;
+        }
+        for dec in &node.dec {
+            let (surface, _) = self.lookup_value(lookup.owner, dec, node.s, node.l);
+            if surface == self.settings.k.staticmethod {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The parameter and return slots of a function. In a contract a method's receiver and an
     /// unannotated return are no slots, and an unannotated parameter is one.
     #[allow(clippy::too_many_arguments)]
     fn expose_signature(
@@ -1112,13 +1134,16 @@ impl Producers<'_> {
         contract: bool,
         handed: Sid,
     ) {
-        for param in &node.params {
-            let name = self.core.it.s(param.name);
-            let in_slot = contract && name != "self" && name != "cls";
+        let receiver = contract && self.has_receiver(lookup, node);
+        for (position, param) in node.params.iter().enumerate() {
+            let in_slot = contract && !(receiver && position == 0);
             if !in_slot && (param.annotation.is_none() || handed != EMPTY) {
                 continue;
             }
-            let slot = self.core.it.intern(&format!("param:{name}"));
+            let slot = self
+                .core
+                .it
+                .intern(&format!("param:{}", self.core.it.s(param.name)));
             self.expose(
                 site,
                 lookup,
