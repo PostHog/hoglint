@@ -41,7 +41,9 @@ class CoreBuild:
         paths = analyzed if analyzed is not None else sorted(p for p in store.records if p not in self.external)
         self.files = [self.file_scope(path) for path in paths if path in store.records and path not in self.external]
         self.scope_of = {scope.path: scope for scope in self.files}
-        self.context = BuildContext(config, store, self.index, self.resolver, self.files, self.first_party)
+        self.context = BuildContext(
+            config, store, self.index, self.resolver, self.files, self.first_party, self.scope_of, self.classes
+        )
         self.bodies_cache: dict[str, RecordBodies] = {}
 
     def file_scope(self, path: str) -> FileScope:

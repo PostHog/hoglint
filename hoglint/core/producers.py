@@ -158,14 +158,13 @@ class BuildContext:
     resolver: Resolver
     files: list[FileScope]
     first_party: FirstParty
-    scope_of_path: dict[str, FileScope] = field(init=False)
+    scope_of_path: dict[str, FileScope]
+    classes: ClassIndex
 
     def __post_init__(self) -> None:
         self.classifier = Classifier(self.index)
         self.names = NameLookup(self.resolver)
-        self.scope_of_path = {scope.path: scope for scope in self.files}
         self.assigned_by_module: dict[str, dict[str, tuple[FileScope | None, dict]]] = {}
-        self.classes = ClassIndex(self.resolver)
 
     def binding_scope(self, module: str, name: str) -> FileScope | None:
         """The analyzed file a module table reads a name's binding from (never a stub twin or a
@@ -860,7 +859,6 @@ class DeclarationProducer(Producer):
         scope: FileScope,
         idx: int,
         node: dict,
-        fields: dict[int, list[dict]],
         contract: bool,
     ) -> None:
         qualname = scope.qualnames[idx]
@@ -926,7 +924,7 @@ class DeclarationProducer(Producer):
             if not nested and dataclass:
                 rows = SlotRows(site, f"{qualname}.__init__")
                 if not in_contract:
-                    own = [Field(row, lookup, True) for row in fields.get(idx, [])]
+                    own = [Field(row, lookup, True) for row in self.fields_by_class(scope).get(idx, [])]
                     self.expose_fields(context, graph, rows, own, False)
                     return
                 self.expose_dataclass(context, graph, rows, lookup, idx)
@@ -986,10 +984,9 @@ class DeclarationProducer(Producer):
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
-            fields = self.fields_by_class(scope)
             contract = bool(self.contract_roots(context, scope))
             for idx, node in enumerate(scope.defs):
-                self.declare(context, graph, scope, idx, node, fields, contract)
+                self.declare(context, graph, scope, idx, node, contract)
             if contract:
                 self.hand_out(context, graph, scope)
 

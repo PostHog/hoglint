@@ -211,13 +211,6 @@ class SymbolFacts:
         return frozenset(seen), complete
 
 
-CORE_PRODUCER_PREFIX = "core-"
-
-
-def is_core(edge: Edge) -> bool:
-    return edge.producer.startswith(CORE_PRODUCER_PREFIX)
-
-
 def index_of(graph: Graph) -> GraphIndex:
     """The index of a graph. A graph that keeps its edges outside Python makes its own."""
     make = getattr(graph, "make_index", None)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from hoglint.globs import ExportPaths
 from hoglint.selectors import FieldType, Selector
 
 
@@ -118,6 +119,10 @@ class ExportSpec:
     audience: Selector | None = None  # None: everyone
     subclass_of: tuple[str, ...] = ()
     source: str = ""
+    files: ExportPaths = field(init=False, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "files", ExportPaths(self.within, self.paths))
 
 
 @dataclass(frozen=True, slots=True)

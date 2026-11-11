@@ -109,11 +109,16 @@ class GraphSource:
         """The snapshot a build reads: the git tree, or the working tree as git sees it (D40)."""
         return TreeListing.of(code_root, tree) if tree else WorktreeListing.of(code_root)
 
+    @staticmethod
+    def contract_surfaces(config: Config) -> tuple[ExportPaths, ...]:
+        """The files of exports whose shape makes their signatures part of their contract."""
+        return tuple(spec.files for spec in config.exports.values() if config.shapes[spec.shape].signatures)
+
     def key(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
         sections = {name: config.sections.get(name) for name in sorted(config.sections)}
         snapshot = f":tree={tree}" if tree else ":staged" if staged else ""
         # The contract surfaces come from [exports] and [shapes] and change what core produces.
-        surfaces = [(surface.within, surface.paths) for surface in self.core_config(config).contract_surfaces]
+        surfaces = [(surface.within, surface.paths) for surface in self.contract_surfaces(config)]
         return f"{code_root}{snapshot}", canonical({"sections": sections, "contract_surfaces": surfaces})
 
     def build(self, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
@@ -141,11 +146,7 @@ class GraphSource:
             fields["migration_paths"] = as_tuple(discovery["migrations"])
         if "dataclass_decorators" in discovery:
             fields["dataclass_decorators"] = as_tuple(discovery["dataclass_decorators"])
-        fields["contract_surfaces"] = tuple(
-            ExportPaths(spec.within, spec.paths)
-            for spec in config.exports.values()
-            if config.shapes[spec.shape].signatures
-        )
+        fields["contract_surfaces"] = GraphSource.contract_surfaces(config)
         return CoreConfig(**fields)
 
     @staticmethod
