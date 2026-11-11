@@ -94,6 +94,12 @@ Read them in this order.
 |---|---|
 | `second-opinion-ledger.md` | How a linter should carry existing violations: baselines, counts, scopes, rule states, the ledger's unit |
 
+## Test impact analysis (Nov 11)
+
+| File | One line |
+|---|---|
+| `test-impact-prior-art.md` | What published test selectors and one 2026 study say about deciding which tests a change affects, and what follows for a linter that holds the graph |
+
 ## A note on rule counts
 
 The PostHog preset had 31 rules by the engine round of Nov 9; the user guide, written the same day, describes an earlier set of 19.
