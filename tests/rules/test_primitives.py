@@ -423,10 +423,16 @@ def test_signature_denies_models_and_reads_any_as_unknown(tmp_path: Path) -> Non
     expose(builder, "builtins.int", "param:amount", Resolution.EXTERNAL)
     result = run(tmp_path, SIGNATURE, builder.graph)
     assert len(result.runs["facade-signature"].findings) == 2
-    found = {f.identity: f.unknown for f in result.runs["facade-signature"].findings}
+    found = {f.identity: (f.unknown, f.message) for f in result.runs["facade-signature"].findings}
     assert found == {
-        ("charge", "return", "products.billing.models.Invoice"): False,
-        ("charge", "param:payload", "typing.Any"): True,
+        ("charge", "return", "products.billing.models.Invoice"): (
+            False,
+            "products.billing.facade.api.charge exposes products.billing.models.Invoice in return",
+        ),
+        ("charge", "param:payload", "typing.Any"): (
+            True,
+            "products.billing.facade.api.charge: param:payload has no usable type (typing.Any)",
+        ),
     }
 
 

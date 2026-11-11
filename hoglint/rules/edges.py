@@ -165,6 +165,15 @@ class SignaturePrimitive(EdgeRule):
     def sees(self, edge: Edge) -> bool:
         return super().sees(edge) and not is_private(edge.attr("callable"))
 
+    @staticmethod
+    def subject(env: EdgeEnv) -> str:
+        """The callable a slot belongs to: the edge's `callable` in its module. A slot's edge sits
+        in the scope around the callable, so the site names no symbol of its own."""
+        callable_name = env.edge.attr("callable")
+        if callable_name:
+            return f"{env.src.module}.{callable_name}"
+        return env.src.symbol or env.src.module or ""
+
     def decide(self, env: EdgeEnv) -> Judgment:
         if self.selection(env) is Truth.FALSE:
             return Judgment.CLEAN
@@ -181,7 +190,7 @@ class SignaturePrimitive(EdgeRule):
         if judgment is not Judgment.UNKNOWN_TYPE:
             super().report(env, judgment, describe)
             return
-        message = f"{env.src.symbol}: {env.edge.attr('slot') or 'signature'} has no usable type ({env.edge.surface or 'missing'})"
+        message = f"{self.subject(env)}: {env.edge.attr('slot') or 'signature'} has no usable type ({env.edge.surface or 'missing'})"
         if self.spec.on_unknown == "incomplete":
             self.incomplete(env, message)
             return
@@ -200,7 +209,7 @@ class SignaturePrimitive(EdgeRule):
 
     def describe(self, env: EdgeEnv) -> str:
         slot = env.edge.attr("slot") or "signature"
-        return f"{env.src.symbol} exposes {env.dst.symbol} in {slot}"
+        return f"{self.subject(env)} exposes {env.dst.symbol} in {slot}"
 
     def plan(self) -> dict[str, Any]:
         return {**super().plan(), "signature": {"unknown_types": list(self.spec.unknown_types)}}
