@@ -10,6 +10,7 @@ from hoglint.config import load_config
 from hoglint.config.loader import PACKS_DIR
 from hoglint.model import Context, Graph, Resolution
 from hoglint.rules.engine import Engine, RunResult
+from hoglint.source import GraphSource
 
 from rules.support import GraphBuilder
 
@@ -190,3 +191,20 @@ def test_sentry_silo_from_decorators_and_owners_from_codeowners(tmp_path: Path) 
     assert result.labeler.field_value("sentry.users.models.user", None, "owners")[0].data == frozenset(
         {"@getsentry/accounts"}
     )
+
+
+def test_posthog_preset_gives_only_django_migration_files_the_migration_context(tmp_path: Path) -> None:
+    run_shape(tmp_path, "posthog", Graph())
+    config = load_config(tmp_path, tmp_path / "hoglint.toml", PACKS_DIR)
+    globs = GraphSource.core_config(config).migration_globs
+    migrations = {
+        "posthog/migrations/0889_add_schema_models.py": True,
+        "ee/migrations/0051_backfill.py": True,
+        "posthog/session/migrations/0001_initial.py": True,
+        "products/tasks/backend/migrations/0001_initial.py": True,
+        "posthog/clickhouse/migrations/0001_initial.py": False,
+        "posthog/async_migrations/migrations/0005_person.py": False,
+        "posthog/rbac/migrations/rbac_team_migration.py": False,
+        "posthog/models/team/team.py": False,
+    }
+    assert {path: globs.matches(path) for path in migrations} == migrations
