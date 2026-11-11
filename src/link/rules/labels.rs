@@ -4,7 +4,7 @@
 
 use super::conflicts::{Conflict, conflict_key};
 use super::env::Cx;
-use super::glob::{Captures, Glob, capture, fill};
+use super::glob::{Captures, ExportPaths, Glob, capture, fill};
 use super::plan::{AssignPlan, ExportPlan, Plan, RegistryPlan, SetValue, ValuePlan, ZonesPlan};
 use super::selector::Node;
 use super::value::{Value, Zone};
@@ -329,21 +329,15 @@ impl Registry {
 }
 
 pub struct Export {
-    within: Option<(String, Glob)>,
-    paths: Vec<Glob>,
+    paths: ExportPaths,
     pub subclass_of: Vec<String>,
     pub audience: Option<Node>,
 }
 
 impl Export {
     pub fn new(plan: &ExportPlan, audience: Option<Node>) -> Result<Export, String> {
-        let within = match plan.within.as_str() {
-            "" => None,
-            root => Some((root.to_string(), Glob::new(&format!("{root}/**"))?)),
-        };
         Ok(Export {
-            within,
-            paths: compile_globs(&plan.paths)?,
+            paths: ExportPaths::new(&plan.within, &plan.paths)?,
             subclass_of: plan.subclass_of.clone(),
             audience,
         })
@@ -351,14 +345,7 @@ impl Export {
 
     /// Whether the path lies inside the export's `within` and `paths` (`Labeler.export_covers`).
     fn covers(&self, path: &str) -> bool {
-        let relative = match &self.within {
-            None => path,
-            Some((root, glob)) => match glob.captures(path) {
-                Some(captures) => path.get(fill(root, &captures).len() + 1..).unwrap_or(""),
-                None => return false,
-            },
-        };
-        self.paths.iter().any(|glob| glob.is_match(relative))
+        self.paths.covers(path)
     }
 }
 

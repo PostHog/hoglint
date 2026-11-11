@@ -1,11 +1,13 @@
 //! The core producers (hoglint/core/producers.py): import, reference, declaration, dotted-path,
 //! dynamic-import and unparsed edges, in the order and with the fields Python makes them.
 
-use super::facts::{Argument, Assign, Op, V};
+use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
-use super::resolve::{Core, Ent, absolute_import};
-use super::scope::{LookupNames, Res, Resolved, Scope, UNRESOLVED};
-use rustc_hash::FxHashMap;
+use super::resolve::{Binding, CLASS, Core, Ent, HitKind, absolute_import};
+use super::rules::glob::ExportPaths;
+use super::scope::{LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
+use super::surface::handed_out;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const KIND_NAMES: [&str; 9] = [
     "import",
@@ -287,6 +289,8 @@ pub struct Producing {
     pub loader_last_names: Vec<String>,
     pub dataclass_decorators: Vec<Sid>,
     pub patch_callees: Vec<String>,
+    /// The files of exports whose signatures are part of their contract.
+    pub contract_surfaces: Vec<ExportPaths>,
     k: Keys,
 }
 
@@ -329,6 +333,10 @@ struct Keys {
     literal_name: Sid,
     annotated_name: Sid,
     init: Sid,
+    annotation: Sid,
+    missing: Sid,
+    handed: Sid,
+    ret: Sid,
 }
 
 impl Producing {
@@ -338,6 +346,7 @@ impl Producing {
         loaders: &[String],
         dataclass_decorators: &[String],
         patch_callees: &[String],
+        contract_surfaces: Vec<ExportPaths>,
     ) -> Producing {
         let mut last_names: Vec<String> = loaders
             .iter()
@@ -383,6 +392,10 @@ impl Producing {
             literal_name: it.intern("Literal"),
             annotated_name: it.intern("Annotated"),
             init: it.intern("__init__"),
+            annotation: it.intern("annotation"),
+            missing: it.intern("missing"),
+            handed: it.intern("handed"),
+            ret: it.intern("return"),
         };
         Producing {
             names: LookupNames {
@@ -397,6 +410,7 @@ impl Producing {
                 .map(|name| it.intern(name))
                 .collect(),
             patch_callees: patch_callees.to_vec(),
+            contract_surfaces,
             k,
         }
     }
@@ -536,11 +550,46 @@ fn patch_role(up: &str, patch_callees: &[String]) -> bool {
     }
 }
 
+/// Where an `exposes` edge is written (hoglint/core/producers.py `SlotSite`).
+#[derive(Clone, Copy)]
+struct SlotSite {
+    owner: usize,
+    scope: i32,
+    line: u32,
+    col: u32,
+    ctx: u8,
+}
+
+/// Where the names of a slot's annotation are looked up: the def's file, scope and line.
+#[derive(Clone, Copy)]
+struct SlotLookup {
+    owner: usize,
+    scope: i32,
+    line: u32,
+}
+
+/// Annotated single-name assignments by the def they sit in: the candidate dataclass fields.
+fn fields_by_class<'f>(it: &Interner, assigns: &'f [Assign]) -> FxHashMap<i32, Vec<&'f Assign>> {
+    let mut fields: FxHashMap<i32, Vec<&Assign>> = FxHashMap::default();
+    for row in assigns {
+        if row.op == Op::Annotated
+            && row.targets.len() == 1
+            && let V::Chain(name) = &row.targets[0]
+            && !it.s(*name).contains('.')
+        {
+            fields.entry(row.s).or_default().push(row);
+        }
+    }
+    fields
+}
+
 /// Builds the core edges of every analyzed file, producer by producer.
 pub struct Producers<'p> {
     pub core: &'p mut Core,
     pub scopes: &'p mut [Scope],
     pub settings: &'p Producing,
+    /// `config.first_party` or, when empty, every repo top-level module.
+    pub first_party: &'p FxHashSet<Sid>,
     pub edges: EdgeStore,
     pub symbols: Symbols,
 }
@@ -591,8 +640,14 @@ impl Producers<'_> {
         for owner in 0..self.scopes.len() {
             self.references(owner);
         }
+        let owner_of: FxHashMap<Sid, usize> = self
+            .scopes
+            .iter()
+            .enumerate()
+            .map(|(owner, scope)| (scope.module, owner))
+            .collect();
         for owner in 0..self.scopes.len() {
-            self.declarations(owner);
+            self.declarations(owner, &owner_of);
         }
         for owner in 0..self.scopes.len() {
             self.strings(owner);
@@ -767,24 +822,38 @@ impl Producers<'_> {
         }
     }
 
+    /// One `exposes` edge per type name in a slot. Builtin types count only in a contract, and
+    /// there an unannotated slot (annotation None) is an edge of its own. `handed` is the clause
+    /// a handed-out callable comes by, EMPTY for the module's own.
     #[allow(clippy::too_many_arguments)]
     fn expose(
         &mut self,
-        owner: usize,
-        idx: usize,
-        annotation: &V,
+        site: SlotSite,
+        lookup: SlotLookup,
+        annotation: Option<&V>,
         slot: Sid,
         callable: Sid,
-        line: u32,
+        contract: bool,
+        handed: Sid,
     ) {
-        let facts = self.core.facts.clone();
         let k = &self.settings.k;
-        let file = self.scopes[owner].file as usize;
-        let node = &facts.files[file].defs[idx];
-        let enclosing = node.s;
-        let ctx = self
-            .core
-            .contexts(&mut self.scopes[owner], node.f, enclosing);
+        let use_ = k.use_annotation;
+        let Some(annotation) = annotation else {
+            let mut attrs = vec![
+                (k.callable, callable),
+                (k.slot, slot),
+                (k.position, k.whole),
+                (k.annotation, k.missing),
+            ];
+            if handed != EMPTY {
+                attrs.push((k.handed, handed));
+            }
+            self.push(
+                EXPOSES, site.owner, site.scope, site.line, site.col, site.ctx, EMPTY, UNRESOLVED,
+                use_, &attrs,
+            );
+            return;
+        };
         let mut found_names = Vec::new();
         self.mentions(annotation, true, &mut found_names);
         for (value, whole) in found_names {
@@ -792,38 +861,140 @@ impl Producers<'_> {
             let head = core.it.head(value);
             let Some(found) = core.value_lookup(
                 &self.settings.names,
-                &mut self.scopes[owner],
+                &mut self.scopes[lookup.owner],
                 &V::Chain(value),
-                enclosing,
-                line,
+                lookup.scope,
+                lookup.line,
             ) else {
                 continue;
             };
-            if found.hit.is_none() {
+            if !contract && found.hit.is_none() {
                 let builtin = core.it.join(self.settings.names.builtins_module, head);
                 if found.surface == builtin {
                     continue;
                 }
             }
             let resolved = core.classify_lookup(found);
+            let k = &self.settings.k;
             let position = if whole { k.whole } else { k.nested };
-            let attrs = [
+            let mut attrs = vec![
                 (k.callable, callable),
                 (k.slot, slot),
                 (k.position, position),
             ];
-            let use_ = k.use_annotation;
+            if handed != EMPTY {
+                attrs.push((k.handed, handed));
+            }
             self.push(
                 EXPOSES,
-                owner,
-                enclosing,
-                line,
-                node.c,
-                ctx,
+                site.owner,
+                site.scope,
+                site.line,
+                site.col,
+                site.ctx,
                 found.surface,
                 resolved,
                 use_,
                 &attrs,
+            );
+        }
+    }
+
+    /// The parameter and return slots of a function. In a contract `self`, `cls` and an
+    /// unannotated return are no slots, and an unannotated parameter is one.
+    #[allow(clippy::too_many_arguments)]
+    fn expose_signature(
+        &mut self,
+        site: SlotSite,
+        lookup: SlotLookup,
+        node: &Def,
+        callable: Sid,
+        contract: bool,
+        handed: Sid,
+    ) {
+        for param in &node.params {
+            let name = self.core.it.s(param.name);
+            let in_slot = contract && name != "self" && name != "cls";
+            if param.annotation.is_none() && !in_slot {
+                continue;
+            }
+            let slot = self.core.it.intern(&format!("param:{name}"));
+            self.expose(
+                site,
+                lookup,
+                param.annotation.as_ref(),
+                slot,
+                callable,
+                in_slot,
+                handed,
+            );
+        }
+        if let Some(ret) = &node.ret {
+            let slot = self.settings.k.ret;
+            self.expose(site, lookup, Some(ret), slot, callable, contract, handed);
+        }
+    }
+
+    /// Whether an annotation is `ClassVar[...]`, by the last name of what it subscripts.
+    fn is_class_var(&mut self, annotation: &V) -> bool {
+        let V::Sub(inner, _) = annotation else {
+            return false;
+        };
+        let last = match &**inner {
+            V::Chain(chain) => self.core.it.last(*chain),
+            V::Attr(_, name) => *name,
+            _ => return false,
+        };
+        self.core.it.s(last) == "ClassVar"
+    }
+
+    /// The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
+    /// only fields directly in the class body count, and a `ClassVar` is no field.
+    #[allow(clippy::too_many_arguments)]
+    fn expose_fields(
+        &mut self,
+        site: SlotSite,
+        lookup: SlotLookup,
+        rows: &[&Assign],
+        callable: Sid,
+        contract: bool,
+        handed: Sid,
+    ) {
+        for row in rows {
+            let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
+                continue;
+            };
+            let in_slot = contract && row.f == CLASS && !self.is_class_var(annotation);
+            if handed != EMPTY && !in_slot {
+                continue;
+            }
+            let V::Chain(name) = &row.targets[0] else {
+                continue;
+            };
+            let slot = self
+                .core
+                .it
+                .intern(&format!("field:{}", self.core.it.s(*name)));
+            let line_site = if handed != EMPTY {
+                site
+            } else {
+                SlotSite {
+                    line: row.l,
+                    ..site
+                }
+            };
+            let line_lookup = SlotLookup {
+                line: row.l,
+                ..lookup
+            };
+            self.expose(
+                line_site,
+                line_lookup,
+                Some(annotation),
+                slot,
+                callable,
+                in_slot,
+                handed,
             );
         }
     }
@@ -842,20 +1013,129 @@ impl Producers<'_> {
         }
     }
 
-    fn declarations(&mut self, owner: usize) {
+    /// A test file hands nothing out, so it is no contract surface.
+    fn is_contract(&self, owner: usize) -> bool {
+        let scope = &self.scopes[owner];
+        if scope.base_ctx & ctx::TEST != 0 {
+            return false;
+        }
+        let path = &self.core.facts.files[scope.file as usize].path;
+        self.settings
+            .contract_surfaces
+            .iter()
+            .any(|surface| surface.covers(path))
+    }
+
+    /// Whether a def is a public callable of the module's contract: a top-level function or
+    /// class, or a method directly in a top-level class, with no leading `_` (`__init__` kept).
+    fn in_contract(&self, defs: &[Def], idx: usize) -> bool {
+        let node = &defs[idx];
+        let name = self.core.it.s(node.n);
+        if node.s == -1 {
+            return node.f == 0 && !name.starts_with('_');
+        }
+        let parent = node.s as usize;
+        let owner = &defs[parent];
+        if node.is_class() || !owner.is_class() || !self.in_contract(defs, parent) {
+            return false;
+        }
+        if owner.s != -1 || node.f != CLASS {
+            return false;
+        }
+        !name.starts_with('_') || name == "__init__"
+    }
+
+    /// Whether a class takes a decorator `dataclass_decorators` names, by spelling or target.
+    fn is_dataclass_like(&mut self, owner: usize, node: &Def) -> bool {
+        for dec in &node.dec {
+            let (surface, resolved) = self.lookup_value(owner, dec, node.s, node.l);
+            let target = resolved.target.map(|target| self.core.ent_sid(target));
+            let wanted = &self.settings.dataclass_decorators;
+            if wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The top-level function or class a handed-out name leads to, in an analyzed first-party
+    /// file: every step of the way stays inside first-party code.
+    fn handed_def(
+        &mut self,
+        target: Sid,
+        owner_of: &FxHashMap<Sid, usize>,
+    ) -> Option<(usize, u32)> {
+        let core = &mut *self.core;
+        let head = core.it.head(target);
+        if !self.first_party.contains(&head) {
+            return None;
+        }
+        let (hit, rest) = core.resolve_dotted(target);
+        let hit = hit?;
+        let kind = core.kind(hit);
+        if !rest.is_empty() || !matches!(kind, HitKind::Def | HitKind::Class) {
+            return None;
+        }
+        let chain = core.chain(hit).to_vec();
+        for step in chain {
+            let head = core.it.head(step.m);
+            if !self.first_party.contains(&head) {
+                return None;
+            }
+        }
+        let origin = core.origin(hit);
+        let owner = *owner_of.get(&origin.m)?;
+        match (kind, core.binding_of(origin.m, origin.s)?) {
+            (HitKind::Def, Binding::Def(idx, false))
+            | (HitKind::Class, Binding::Class(idx, false)) => Some((owner, idx)),
+            _ => None,
+        }
+    }
+
+    /// The slots of the functions and dataclass fields a contract surface hands out from other
+    /// modules, at the import that hands each one out.
+    fn hand_out(&mut self, owner: usize, owner_of: &FxHashMap<Sid, usize>) {
+        let facts = self.core.facts.clone();
+        let handed = handed_out(self.core, &self.scopes[owner]);
+        for item in handed {
+            let Some((origin, idx)) = self.handed_def(item.target, owner_of) else {
+                continue;
+            };
+            let record = &facts.files[self.scopes[origin].file as usize];
+            let node = &record.defs[idx as usize];
+            let clause = self.core.it.intern(item.clause);
+            let site = SlotSite {
+                owner,
+                scope: -1,
+                line: item.line,
+                col: item.col,
+                ctx: self.scopes[owner].base_ctx,
+            };
+            let lookup = SlotLookup {
+                owner: origin,
+                scope: node.s,
+                line: node.l,
+            };
+            if !node.is_class() {
+                self.expose_signature(site, lookup, node, item.bound, true, clause);
+                continue;
+            }
+            if !self.is_dataclass_like(origin, node) {
+                continue;
+            }
+            let fields = fields_by_class(&self.core.it, &record.assigns);
+            let rows = fields.get(&(idx as i32)).cloned().unwrap_or_default();
+            let init = self.core.it.join(item.bound, self.settings.k.init);
+            self.expose_fields(site, lookup, &rows, init, true, clause);
+        }
+    }
+
+    fn declarations(&mut self, owner: usize, owner_of: &FxHashMap<Sid, usize>) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];
-        let mut fields: rustc_hash::FxHashMap<i32, Vec<&Assign>> = rustc_hash::FxHashMap::default();
-        for row in &record.assigns {
-            if row.op == Op::Annotated
-                && row.targets.len() == 1
-                && let V::Chain(name) = &row.targets[0]
-                && !self.core.it.s(*name).contains('.')
-            {
-                fields.entry(row.s).or_default().push(row);
-            }
-        }
+        let fields = fields_by_class(&self.core.it, &record.assigns);
+        let contract = self.is_contract(owner);
         for (idx, node) in record.defs.iter().enumerate() {
             let k = &self.settings.k;
             let module = self.scopes[owner].module;
@@ -906,6 +1186,19 @@ impl Producers<'_> {
                     decorators.push(self.core.ent_sid(target));
                 }
             }
+            let site = SlotSite {
+                owner,
+                scope: enclosing,
+                line: node.l,
+                col: node.c,
+                ctx,
+            };
+            let lookup = SlotLookup {
+                owner,
+                scope: enclosing,
+                line: node.l,
+            };
+            let in_contract = contract && self.in_contract(&record.defs, idx);
             if node.is_class() {
                 for (position, base) in node.bases.iter().enumerate() {
                     let (surface, resolved) = self.lookup_value(owner, base, enclosing, node.l);
@@ -923,36 +1216,18 @@ impl Producers<'_> {
                     .any(|name| self.settings.dataclass_decorators.contains(name));
                 if !nested && dataclass {
                     let init = self.core.it.join(qualname, self.settings.k.init);
-                    for row in fields.get(&(idx as i32)).into_iter().flatten() {
-                        let V::Chain(name) = &row.targets[0] else {
-                            continue;
-                        };
-                        let slot = self
-                            .core
-                            .it
-                            .intern(&format!("field:{}", self.core.it.s(*name)));
-                        let annotation = row.ann.clone().unwrap_or(V::Null);
-                        self.expose(owner, idx, &annotation, slot, init, row.l);
-                    }
+                    let rows = fields.get(&(idx as i32)).cloned().unwrap_or_default();
+                    self.expose_fields(site, lookup, &rows, init, in_contract, EMPTY);
                 }
                 continue;
             }
             if nested {
                 continue;
             }
-            for param in &node.params {
-                if let Some(annotation) = &param.annotation {
-                    let slot = self
-                        .core
-                        .it
-                        .intern(&format!("param:{}", self.core.it.s(param.name)));
-                    self.expose(owner, idx, annotation, slot, qualname, node.l);
-                }
-            }
-            if let Some(ret) = &node.ret {
-                let slot = self.core.it.intern("return");
-                self.expose(owner, idx, ret, slot, qualname, node.l);
-            }
+            self.expose_signature(site, lookup, node, qualname, in_contract, EMPTY);
+        }
+        if contract {
+            self.hand_out(owner, owner_of);
         }
     }
 

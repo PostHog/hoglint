@@ -125,7 +125,7 @@ FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
 ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_paths", "symbols", "doc", "__source__"})
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
-SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "doc"})
+SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "signatures", "doc"})
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict"})
@@ -133,7 +133,18 @@ LEDGER_KEYS = frozenset({"file", "exceptions"})
 ROLE_KEYS = frozenset({"owner", "group"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
 DISCOVERY_KEYS = frozenset(
-    {"source_roots", "first_party", "exclude", "include", "scripts", "external", "tests", "migrations", "plugins"}
+    {
+        "source_roots",
+        "first_party",
+        "exclude",
+        "include",
+        "scripts",
+        "external",
+        "tests",
+        "migrations",
+        "plugins",
+        "dataclass_decorators",
+    }
 )
 VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections", "views"})
 CONTEXTS = tuple(c.value for c in Context)
@@ -215,6 +226,12 @@ class SchemaBuilder:
             return str(value)
         self.fail(key, f"{value!r} is not one of {', '.join(allowed)}{suggest(str(value), allowed)}")
         return allowed[0]
+
+    def check_bool(self, key: str, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        self.fail(key, f"{value!r} is not true or false")
+        return False
 
     def parse(self, key: str, text: Any, catalog: Catalog) -> Selector | None:
         if text is None:
@@ -492,6 +509,7 @@ class SchemaBuilder:
                 as_tuple(table.get("allow")),
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
+                self.check_bool(f"{key}.signatures", table.get("signatures", False)),
                 self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):

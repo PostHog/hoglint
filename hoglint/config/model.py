@@ -105,6 +105,7 @@ class ShapePolicy:
     allow: tuple[str, ...] = ()
     deny: tuple[str, ...] = ()
     unknown: str = "error"  # error | incomplete
+    signatures: bool = False  # the signatures of what the export hands out are part of the contract
     source: str = ""
 
 

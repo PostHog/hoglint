@@ -29,6 +29,7 @@ src/**/*.rs
 !src/link/resolve.rs
 !src/link/rules/**
 !src/link/scope.rs
+!src/link/surface.rs
 Cargo.toml
 Cargo.lock
 build.rs

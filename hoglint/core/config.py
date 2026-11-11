@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from functools import cached_property
 
+from hoglint.globs import ExportPaths
+
 DEFAULT_TEST_PATHS = ("**/tests/**", "**/test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py")
 DEFAULT_DYNAMIC_LOADERS = ("importlib.import_module", "builtins.__import__")
 DEFAULT_DATACLASS_DECORATORS = ("dataclasses.dataclass",)
@@ -99,6 +101,9 @@ class CoreConfig:
     - dynamic_loaders: callables that import a module named at runtime.
     - dataclass_decorators: decorators whose class fields form the generated `__init__`.
     - patch_callees: last names of callees whose first argument is a dotted patch target.
+    - contract_surfaces: the files of exports whose signatures are part of their contract. Their
+      callables expose every slot: unannotated ones and builtin types too, and the slots of what
+      they hand out from other modules.
     """
 
     source_roots: tuple[str, ...] = (".",)
@@ -110,6 +115,7 @@ class CoreConfig:
     dynamic_loaders: tuple[str, ...] = DEFAULT_DYNAMIC_LOADERS
     dataclass_decorators: tuple[str, ...] = DEFAULT_DATACLASS_DECORATORS
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
+    contract_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False
 
     @cached_property
@@ -123,6 +129,9 @@ class CoreConfig:
     @cached_property
     def migration_globs(self) -> PathGlobs:
         return PathGlobs(self.migration_paths)
+
+    def is_contract_surface(self, path: str) -> bool:
+        return any(surface.covers(path) for surface in self.contract_surfaces)
 
     def loader_callee_names(self) -> tuple[str, ...]:
         """Last dotted parts of the dynamic loaders; the extractor records calls to these."""

@@ -20,6 +20,9 @@ def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping
         "dynamic_loaders": list(config.dynamic_loaders),
         "dataclass_decorators": list(config.dataclass_decorators),
         "patch_callees": list(config.patch_callees),
+        "contract_surfaces": [
+            {"within": surface.within, "paths": list(surface.paths)} for surface in config.contract_surfaces
+        ],
         "builtins": sorted(dir(builtins)),
         "external": sorted(external.items()),
         "analyzed": list(analyzed),

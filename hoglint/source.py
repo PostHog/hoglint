@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from hoglint.config import Config
 from hoglint.config.schema import as_tuple, canonical
 from hoglint.facts import FACT_KINDS, FactNeeds
+from hoglint.globs import ExportPaths
 from hoglint.ledger.listing import Listing, TreeListing, WorktreeListing
 from hoglint.model import Graph
 from hoglint.plugins import REGISTRY, Pack, PackReader, PackSink, ProducerFailure
@@ -111,7 +112,9 @@ class GraphSource:
     def key(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> tuple[str, str]:
         sections = {name: config.sections.get(name) for name in sorted(config.sections)}
         snapshot = f":tree={tree}" if tree else ":staged" if staged else ""
-        return f"{code_root}{snapshot}", canonical(sections)
+        # The contract surfaces come from [exports] and [shapes] and change what core produces.
+        surfaces = [(surface.within, surface.paths) for surface in self.core_config(config).contract_surfaces]
+        return f"{code_root}{snapshot}", canonical({"sections": sections, "contract_surfaces": surfaces})
 
     def build(self, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
         key = self.key(code_root, config, staged, tree)
@@ -136,6 +139,13 @@ class GraphSource:
             fields["test_paths"] = as_tuple(discovery["tests"])
         if "migrations" in discovery:
             fields["migration_paths"] = as_tuple(discovery["migrations"])
+        if "dataclass_decorators" in discovery:
+            fields["dataclass_decorators"] = as_tuple(discovery["dataclass_decorators"])
+        fields["contract_surfaces"] = tuple(
+            ExportPaths(spec.within, spec.paths)
+            for spec in config.exports.values()
+            if config.shapes[spec.shape].signatures
+        )
         return CoreConfig(**fields)
 
     @staticmethod

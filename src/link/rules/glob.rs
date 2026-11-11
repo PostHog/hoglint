@@ -310,3 +310,37 @@ mod tests {
         assert_eq!(fill("open {product", &captures), "open {product");
     }
 }
+
+/// The files an export covers: its `paths`, read relative to the directory `within` names
+/// (hoglint/globs.py `ExportPaths`; `within` may capture `{name}` parts, empty is the repo root).
+#[derive(Clone, Debug)]
+pub struct ExportPaths {
+    within: Option<(String, Glob)>,
+    paths: Vec<Glob>,
+}
+
+impl ExportPaths {
+    pub fn new(within: &str, paths: &[String]) -> Result<ExportPaths, String> {
+        let within = match within {
+            "" => None,
+            root => Some((root.to_string(), Glob::new(&format!("{root}/**"))?)),
+        };
+        let paths = paths
+            .iter()
+            .map(|path| Glob::new(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ExportPaths { within, paths })
+    }
+
+    /// Whether the path lies inside `within` and one of `paths`.
+    pub fn covers(&self, path: &str) -> bool {
+        let relative = match &self.within {
+            None => path,
+            Some((root, glob)) => match glob.captures(path) {
+                Some(captures) => path.get(fill(root, &captures).len() + 1..).unwrap_or(""),
+                None => return false,
+            },
+        };
+        self.paths.iter().any(|glob| glob.is_match(relative))
+    }
+}

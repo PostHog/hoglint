@@ -164,3 +164,25 @@ def fill(template: Any, captures: dict[str, str]) -> Any:
     if not isinstance(template, str):
         return template
     return CAPTURE_RE.sub(lambda m: captures.get(m.group(1), m.group(0)), template)
+
+
+@dataclass(frozen=True, slots=True)
+class ExportPaths:
+    """The files an export covers: its `paths`, read relative to the directory `within` names
+    (`within` may capture `{name}` parts; empty means the repo root)."""
+
+    within: str
+    paths: tuple[str, ...]
+
+    def relative(self, path: str) -> str | None:
+        """The path below `within`, or None when it lies outside."""
+        if not self.within:
+            return path
+        root = glob_match(self.within + "/**", path)
+        if root is None:
+            return None
+        return path[len(fill(self.within, root)) + 1 :]
+
+    def covers(self, path: str) -> bool:
+        relative = self.relative(path)
+        return relative is not None and any(glob_match(pattern, relative) is not None for pattern in self.paths)

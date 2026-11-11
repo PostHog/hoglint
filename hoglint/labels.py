@@ -25,7 +25,7 @@ from hoglint.config.model import (
     RegistrySpec,
 )
 from hoglint.config.schema import canonical
-from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
+from hoglint.globs import CAPTURE_RE, ExportPaths, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
 from hoglint.model import Graph
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, Provided
@@ -618,22 +618,11 @@ class Labeler:
 
     # ── exports ──
 
-    def export_root(self, spec: ExportSpec, path: str) -> str | None:
-        if not spec.within:
-            return path
-        root = glob_match(spec.within + "/**", path)
-        if root is None:
-            return None
-        return path[len(fill(spec.within, root)) + 1 :]
-
     def find_path_exports(self, path: str) -> frozenset[str]:
         """The exports whose `within` and `paths` the path lies inside."""
-        out = set()
-        for spec in self.config.exports.values():
-            relative = self.export_root(spec, path)
-            if relative is not None and any(glob_match(pattern, relative) is not None for pattern in spec.paths):
-                out.add(spec.name)
-        return frozenset(out)
+        return frozenset(
+            spec.name for spec in self.config.exports.values() if ExportPaths(spec.within, spec.paths).covers(path)
+        )
 
     def export_reads_symbol(self, path: str) -> bool:
         """Whether an export that decides by class (`subclass_of`) covers the path. Elsewhere a

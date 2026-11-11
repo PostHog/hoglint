@@ -16,6 +16,7 @@ pub mod resolve;
 pub mod rules;
 pub mod scope;
 pub mod store;
+pub mod surface;
 
 /// Estimated heap bytes of a link's parts, for memory reports (`Link.heap()` in the binding).
 /// The estimate counts allocated capacity and hash table buckets; allocator overhead and
@@ -148,6 +149,7 @@ use intern::{Interner, Sid};
 use paths::{ModuleIndex, ModuleNamer, PathGlobs};
 use produce::{EdgeStore, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, Symbols};
 use resolve::Core;
+use rules::glob::ExportPaths;
 use rustc_hash::{FxHashMap, FxHashSet};
 use scope::{CONTEXT_NAMES, Scope, ctx};
 use serde::Deserialize;
@@ -172,6 +174,9 @@ pub struct LinkConfig {
     pub dataclass_decorators: Vec<String>,
     #[serde(default)]
     pub patch_callees: Vec<String>,
+    /// The files of exports whose signatures are part of their contract.
+    #[serde(default)]
+    pub contract_surfaces: Vec<SurfaceConfig>,
     /// Python's `dir(builtins)` of the interpreter that runs the packs.
     #[serde(default)]
     pub builtins: Vec<String>,
@@ -180,6 +185,13 @@ pub struct LinkConfig {
     pub external: Vec<(String, String)>,
     /// Files that produce edges, in order. Every other record only resolves.
     pub analyzed: Vec<String>,
+}
+
+/// One contract surface: an export's `within` and `paths` (hoglint/globs.py `ExportPaths`).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SurfaceConfig {
+    pub within: String,
+    pub paths: Vec<String>,
 }
 
 impl LinkConfig {
@@ -301,12 +313,19 @@ impl Link {
             })
             .collect();
         drop(file_of);
+        let contract_surfaces = config
+            .contract_surfaces
+            .iter()
+            .map(|surface| ExportPaths::new(&surface.within, &surface.paths))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("contract_surfaces: {e}"))?;
         let settings = Producing::new(
             &mut it,
             &config.builtins,
             &config.dynamic_loaders,
             &config.dataclass_decorators,
             &config.patch_callees,
+            contract_surfaces,
         );
         let mut core = Core::new(it, Arc::new(facts), namer, index);
         let mut scopes: Vec<Scope> = analyzed
@@ -323,6 +342,7 @@ impl Link {
             core: &mut core,
             scopes: &mut scopes,
             settings: &settings,
+            first_party: &first_party,
             edges: EdgeStore::default(),
             symbols: Symbols::default(),
         };

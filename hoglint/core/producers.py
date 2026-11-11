@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import re
 import builtins
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from hoglint.core.config import CoreConfig
-from hoglint.core.modules import ModuleIndex
+from hoglint.core.modules import FirstParty, ModuleIndex
+from hoglint.core.records import chain_last
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
-from hoglint.core.symbols import Hit, Resolver, absolute_import, entity
+from hoglint.core.surfaces import HandedOut
+from hoglint.core.symbols import CLASS, Hit, Resolver, absolute_import, entity
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
@@ -141,10 +143,13 @@ class BuildContext:
     index: ModuleIndex
     resolver: Resolver
     files: list[FileScope]
+    first_party: FirstParty
+    scope_of_module: dict[str, FileScope] = field(init=False)
 
     def __post_init__(self) -> None:
         self.classifier = Classifier(self.index)
         self.names = NameLookup(self.resolver)
+        self.scope_of_module = {scope.module: scope for scope in self.files}
 
     def is_builtin(self, name: str) -> bool:
         return name in BUILTIN_NAMES
@@ -182,6 +187,24 @@ class BuildContext:
             if key in value:
                 return self.value_lookup(scope, value[key], at_scope, line)
         return None
+
+    def handed_def(self, target: str) -> tuple[FileScope, int] | None:
+        """The top-level function or class a handed-out name leads to, in an analyzed
+        first-party file: every step of the way stays inside first-party code."""
+        if not self.first_party.contains(target):
+            return None
+        hit, rest = self.resolver.resolve_dotted(target)
+        if hit is None or rest or hit.kind not in ("def", "class"):
+            return None
+        if not all(self.first_party.contains(str(step)) for step in hit.chain):
+            return None
+        origin = hit.origin
+        table = self.resolver.tables.get(origin.module)
+        scope = self.scope_of_module.get(origin.module)
+        binding = table.names.get(origin.symbol) if table is not None else None
+        if scope is None or binding is None or binding[0] != hit.kind or binding[2]:
+            return None
+        return scope, binding[1]
 
     def resolve_dotted(self, dotted: str) -> tuple[Resolved, str] | None:
         """A dotted path in a string. None unless its head names repo code."""
@@ -314,8 +337,47 @@ class ReferenceProducer(Producer):
                 graph.edges.append(edge)
 
 
+@dataclass(frozen=True, slots=True)
+class SlotSite:
+    """Where an `exposes` edge is written."""
+
+    scope: FileScope
+    at_scope: int
+    line: int
+    column: int
+    contexts: frozenset[Context]
+
+    def edge(self, surface: str, resolved: Resolved, attrs: tuple[tuple[str, str], ...]) -> Edge:
+        return Producer.edge(
+            "exposes",
+            self.scope,
+            self.at_scope,
+            self.line,
+            self.column,
+            surface,
+            resolved,
+            self.contexts,
+            use="annotation",
+            attrs=attrs,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SlotLookup:
+    """Where the names of a slot's annotation are looked up: the def's file, scope and line."""
+
+    scope: FileScope
+    at_scope: int
+    line: int
+
+
 class DeclarationProducer(Producer):
-    """inherit, decorate, exposes and declares edges from def and class records."""
+    """inherit, decorate, exposes and declares edges from def and class records.
+
+    In a contract surface (`CoreConfig.contract_surfaces`) every public callable exposes its whole
+    signature: a slot with no annotation, builtin types, and the slots of the functions and
+    dataclass fields the module hands out from elsewhere (`surfaces.HandedOut`).
+    """
 
     kind = "declaration"
     kinds = ("inherit", "decorate", "exposes", "declares")
@@ -331,6 +393,30 @@ class DeclarationProducer(Producer):
             if row["op"] == ":" and len(row["t"]) == 1 and isinstance(row["t"][0], str) and "." not in row["t"][0]:
                 out.setdefault(row["s"], []).append(row)
         return out
+
+    @staticmethod
+    def is_contract(context: BuildContext, scope: FileScope) -> bool:
+        """A test file hands nothing out, so it is no contract surface."""
+        return Context.TEST not in scope.base_contexts and context.config.is_contract_surface(scope.path)
+
+    @staticmethod
+    def in_contract(scope: FileScope, idx: int) -> bool:
+        """Whether a def is a public callable of the module's contract: a top-level function or
+        class, or a method directly in a top-level class, with no leading `_` (`__init__` kept)."""
+        node = scope.defs[idx]
+        parent = node["s"]
+        if parent == -1:
+            return node.get("f", 0) == 0 and not node["n"].startswith("_")
+        owner = scope.defs[parent]
+        if node["k"] == "class" or owner["k"] != "class" or not DeclarationProducer.in_contract(scope, parent):
+            return False
+        if owner["s"] != -1 or node.get("f", 0) != CLASS:
+            return False
+        return not node["n"].startswith("_") or node["n"] == "__init__"
+
+    @staticmethod
+    def is_class_var(annotation: object) -> bool:
+        return isinstance(annotation, dict) and "sub" in annotation and chain_last(annotation["sub"]) == "ClassVar"
 
     def mentions(self, value: object, position: str) -> list[tuple[str, str]]:
         """Every dotted name in a type expression, with whether it is the whole annotation."""
@@ -361,37 +447,95 @@ class DeclarationProducer(Producer):
         self,
         context: BuildContext,
         graph: Graph,
-        scope: FileScope,
-        idx: int,
+        site: SlotSite,
+        lookup: SlotLookup,
         annotation: object,
         slot: str,
         callable_name: str,
-        line: int,
+        contract: bool,
+        handed: str = "",
     ) -> None:
-        node = scope.defs[idx]
-        enclosing = node["s"]
-        contexts = scope.contexts(node.get("f", 0), enclosing)
+        """One `exposes` edge per type name in a slot. Builtin types count only in a contract,
+        and there an unannotated slot (annotation None) is an edge of its own."""
+        tail = (("handed", handed),) if handed else ()
+        if annotation is None:
+            attrs = (
+                ("callable", callable_name),
+                ("slot", slot),
+                ("position", "whole"),
+                ("annotation", "missing"),
+                *tail,
+            )
+            graph.edges.append(site.edge("", UNRESOLVED, attrs))
+            return
         for value, position in self.mentions(annotation, "whole"):
             head = value.split(".")[0]
-            found = context.value_lookup(scope, value, enclosing, line)
-            if found is None or (found.hit is None and found.surface == f"builtins.{head}"):
+            found = context.value_lookup(lookup.scope, value, lookup.at_scope, lookup.line)
+            if found is None or (not contract and found.hit is None and found.surface == f"builtins.{head}"):
                 continue
             resolved = context.classifier.classify_lookup(found)
-            attrs = (("callable", callable_name), ("slot", slot), ("position", position))
-            graph.edges.append(
-                self.edge(
-                    "exposes",
-                    scope,
-                    enclosing,
-                    line,
-                    node["c"],
-                    found.surface,
-                    resolved,
-                    contexts,
-                    use="annotation",
-                    attrs=attrs,
-                )
-            )
+            attrs = (("callable", callable_name), ("slot", slot), ("position", position), *tail)
+            graph.edges.append(site.edge(found.surface, resolved, attrs))
+
+    def expose_signature(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        site: SlotSite,
+        lookup: SlotLookup,
+        node: dict,
+        callable_name: str,
+        contract: bool,
+        handed: str = "",
+    ) -> None:
+        """The parameter and return slots of a function. In a contract `self`, `cls` and an
+        unannotated return are no slots, and an unannotated parameter is one."""
+        for param in node.get("params", ()):
+            annotation = param[2] if len(param) > 2 else None
+            in_slot = contract and param[0] not in ("self", "cls")
+            if annotation is None and not in_slot:
+                continue
+            slot = f"param:{param[0]}"
+            self.expose(context, graph, site, lookup, annotation, slot, callable_name, in_slot, handed)
+        if node.get("ret") is not None:
+            self.expose(context, graph, site, lookup, node["ret"], "return", callable_name, contract, handed)
+
+    def expose_fields(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        site: SlotSite,
+        lookup: SlotLookup,
+        rows: list[dict],
+        callable_name: str,
+        contract: bool,
+        handed: str = "",
+    ) -> None:
+        """The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
+        only fields directly in the class body count, and a `ClassVar` is no field."""
+        for row in rows:
+            if row.get("ann") is None:
+                continue
+            in_slot = contract and row.get("f", 0) == CLASS and not self.is_class_var(row["ann"])
+            if handed and not in_slot:
+                continue
+            line_site = site if handed else replace(site, line=row["l"])
+            line_lookup = replace(lookup, line=row["l"])
+            slot = f"field:{row['t'][0]}"
+            self.expose(context, graph, line_site, line_lookup, row["ann"], slot, callable_name, in_slot, handed)
+
+    def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
+        """Whether a class takes a decorator `dataclass_decorators` names, by spelling or target."""
+        wanted = context.config.dataclass_decorators
+        for dec in node.get("dec", ()):
+            found = context.value_lookup(scope, dec, node["s"], node["l"])
+            if found is None:
+                continue
+            if found.surface in wanted or any(
+                str(t) in wanted for t in context.classifier.classify_lookup(found).targets
+            ):
+                return True
+        return False
 
     def declare(
         self,
@@ -401,6 +545,7 @@ class DeclarationProducer(Producer):
         idx: int,
         node: dict,
         fields: dict[int, list[dict]],
+        contract: bool,
     ) -> None:
         qualname = scope.qualnames[idx]
         enclosing = node["s"]
@@ -449,6 +594,9 @@ class DeclarationProducer(Producer):
             )
             decorators.append(surface)
             decorators.extend(str(target) for target in resolved.targets)
+        site = SlotSite(scope, enclosing, line, column, contexts)
+        lookup = SlotLookup(scope, enclosing, line)
+        in_contract = contract and self.in_contract(scope, idx)
         if node["k"] == "class":
             for position, base in enumerate(node.get("bases", ())):
                 found = context.value_lookup(scope, base, enclosing, line)
@@ -461,24 +609,40 @@ class DeclarationProducer(Producer):
                     )
                 )
             if not nested and any(name in context.config.dataclass_decorators for name in decorators):
-                for row in fields.get(idx, ()):
-                    self.expose(
-                        context, graph, scope, idx, row["ann"], f"field:{row['t'][0]}", f"{qualname}.__init__", row["l"]
-                    )
+                rows = fields.get(idx, [])
+                self.expose_fields(context, graph, site, lookup, rows, f"{qualname}.__init__", in_contract)
             return
         if nested:
             return
-        for param in node.get("params", ()):
-            if len(param) > 2 and param[2] is not None:
-                self.expose(context, graph, scope, idx, param[2], f"param:{param[0]}", qualname, line)
-        if node.get("ret") is not None:
-            self.expose(context, graph, scope, idx, node["ret"], "return", qualname, line)
+        self.expose_signature(context, graph, site, lookup, node, qualname, in_contract)
+
+    def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
+        """The slots of the functions and dataclass fields a contract surface hands out from other
+        modules, at the import that hands each one out."""
+        for item in HandedOut(scope, context.resolver.tables.get(scope.module)).names():
+            found = context.handed_def(item.target)
+            if found is None:
+                continue
+            origin, idx = found
+            node = origin.defs[idx]
+            site = SlotSite(scope, -1, item.line, item.column, scope.base_contexts)
+            lookup = SlotLookup(origin, node["s"], node["l"])
+            if node["k"] != "class":
+                self.expose_signature(context, graph, site, lookup, node, item.bound, True, item.clause)
+                continue
+            if not self.is_dataclass_like(context, origin, node):
+                continue
+            rows = self.fields_by_class(origin).get(idx, [])
+            self.expose_fields(context, graph, site, lookup, rows, f"{item.bound}.__init__", True, item.clause)
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
             fields = self.fields_by_class(scope)
+            contract = self.is_contract(context, scope)
             for idx, node in enumerate(scope.defs):
-                self.declare(context, graph, scope, idx, node, fields)
+                self.declare(context, graph, scope, idx, node, fields, contract)
+            if contract:
+                self.hand_out(context, graph, scope)
 
 
 class StringProducer(Producer):
