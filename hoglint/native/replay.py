@@ -870,6 +870,10 @@ DAMAGES = (*(damage.name for damage in STATE_DAMAGES), *RUN_DAMAGES)
 
 # ── the harness ───────────────────────────────────────────────────
 
+# A cold check reuses no pack item: its own baseline would fill the pack memo first, so the child
+# would take the same stored items as the warm child, and a wrong item would compare equal.
+COLD = {"HOGLINT_PACK_MEMO": "off"}
+
 
 @dataclass(frozen=True)
 class Pair:
@@ -1014,8 +1018,8 @@ class Replay:
 
     def replay(self, pair: Pair, result: PairResult) -> None:
         check = self.checker.check
-        cold_parent = check(pair.parent, pair.parent, self.state("cold-parent"), "cold-parent")
-        result.cold = cold_child = check(pair.child, pair.parent, self.state("cold-child"), "cold-child")
+        cold_parent = check(pair.parent, pair.parent, self.state("cold-parent"), "cold-parent", env=COLD)
+        result.cold = cold_child = check(pair.child, pair.parent, self.state("cold-child"), "cold-child", env=COLD)
         truth = TruthSet(cold_parent.out, cold_child.out).compute()
         mode = self.checker.mode
         predicted = mode.predict(self.git, pair, (cold_parent.out, cold_child.out))
