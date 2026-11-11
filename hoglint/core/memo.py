@@ -463,6 +463,26 @@ class TracedMap[K, V](dict[K, V]):
         return dict.items(self)
 
 
+class PerFileRead[V]:
+    """A read of one file's part of a value asked of the whole snapshot once (say, the defs a
+    `decorate` edge marks, by file): keyed by the file's path, answered by `form(value)`, by
+    `form(empty)` for a file with no part. The step answers it again from a digest per file."""
+
+    def __init__(self, tracer: Tracer, kind: str, values: dict[str, V], form: Callable[[V], object], empty: V) -> None:
+        self.tracer = tracer
+        self.kind = kind
+        self.values = values
+        self.form = form
+        self.empty = empty
+        tracer.verify_by_map(kind, values, form, empty)
+
+    def read(self, path: str) -> V:
+        """The part of one file, a read of the item that runs it."""
+        value = self.values.get(path, self.empty)
+        self.tracer.note(self.kind, path, value, self.form)
+        return value
+
+
 @dataclass(frozen=True, slots=True)
 class ItemOutput:
     """What one item makes: edges and refinements in order, and data the step keeps (`take`)."""
@@ -895,11 +915,16 @@ class PackMemo:
 
 
 class ItemRun:
-    """Runs one step's items in order, each in a frame of its own when there is a memo."""
+    """Runs one step's items, each in a frame of its own when there is a memo. The items of
+    `keys` run in key order, or in the order `order` gives them (tests: no item may depend on
+    another); their data is taken and their output kept in key order either way."""
 
-    def __init__(self, items: StepItems, memo: StepMemo | None) -> None:
+    def __init__(
+        self, items: StepItems, memo: StepMemo | None = None, order: Callable[[list[str]], list[str]] | None = None
+    ) -> None:
         self.items = items
         self.memo = memo
+        self.order = order
 
     def run(self, key: str) -> ItemOutput:
         if self.memo is None:
@@ -947,8 +972,10 @@ class ItemRun:
         keys = list(self.items.keys())
         found = self.reused_all(keys)
         self.items.prepare([key for key in keys if key not in found])
+        order = keys if self.order is None else self.order(keys)
+        made = {key: found.get(key) or self.run(key) for key in order}
         for key in keys:
-            result = found.get(key) or self.run(key)
+            result = made[key]
             self.items.take(key, result.data)
             out.extend(result.outputs)
         out.extend(self.items.finish())

@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from hoglint.core.memo import ItemOutput, Items, TracedMap, TracedMemo, TracedQuery
+from hoglint.core.harness import FileItems
+from hoglint.core.memo import NOTHING, ItemOutput, TracedMap, TracedMemo, TracedQuery
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import entity
@@ -293,7 +294,7 @@ class LabelRef:
         return LabelRef(module, owner, field, line, surface, None if target is None else entity(*target))
 
 
-class ModelItems(Items):
+class ModelItems(FileItems):
     """Model discovery as one item per module that defines a model. Which classes are models is
     asked of the whole snapshot once (`subclasses`); each item reads its own module's part,
     registers those models, and the registry takes them in file order."""
@@ -301,12 +302,13 @@ class ModelItems(Items):
     FOUND = "django.models-in"
 
     def __init__(self, registry: ModelRegistry, files: list[FileScope]) -> None:
-        self.registry = registry
-        self.by_module: dict[str, list[EntityId]] = {}
+        by_module: dict[str, list[EntityId]] = {}
         for ref in registry.reader.subclasses(MODEL_BASE):
             if str(ref) != MODEL_BASE:
-                self.by_module.setdefault(ref.module, []).append(ref)
-        self.files = {scope.path: scope for scope in files if scope.module in self.by_module}
+                by_module.setdefault(ref.module, []).append(ref)
+        super().__init__(registry.reader, [scope for scope in files if scope.module in by_module])
+        self.registry = registry
+        self.by_module = by_module
         self.found = TracedQuery(registry.reader.tracer, self.FOUND, self.refs_in, ref_names, plain=True)
         self.found.answer_reads()
 
@@ -314,22 +316,16 @@ class ModelItems(Items):
         scope = self.files.get(path)
         return None if scope is None else self.by_module[scope.module]
 
-    def keys(self) -> list[str]:
-        return list(self.files)
-
-    def run_item(self, key: str) -> ItemOutput:
-        scope = self.files[key]
-        reader = self.registry.reader
-        reader.note_file(scope)
-        refs = self.found(key)
+    def file_item(self, scope: FileScope) -> ItemOutput:
+        refs = self.found(scope.path)
         assert refs is not None
         if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
-            return ItemOutput([])
-        if reader.index.path_of.get(scope.module) != scope.path:
-            return ItemOutput([])
-        table = reader.tables.get(scope.module)
+            return NOTHING
+        if self.reader.index.path_of.get(scope.module) != scope.path:
+            return NOTHING
+        table = self.reader.tables.get(scope.module)
         if table is None:
-            return ItemOutput([])
+            return NOTHING
         classes = table.classes()
         data: list[list[Any]] = []
         for ref in refs:

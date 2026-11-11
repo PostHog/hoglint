@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.memo import ItemOutput, ItemRun, Items
+from hoglint.core.memo import ItemOutput, Items
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.models import LabelRef, ModelEntry, ModelRegistry, Relation, RelationBuilder
@@ -148,9 +148,6 @@ class RelationEdges:
     def failure(entry: ModelEntry, error: Exception) -> Edge:
         site = Site(entry.path, entry.ref.module, entry.ref.symbol, entry.line)
         return failure_edge("relation", RELATIONS_PRODUCER, site, PROD, error)
-
-    def produce(self) -> list[Output]:
-        return ItemRun(RelationItems(self), None).outputs()
 
 
 class RelationItems(Items):

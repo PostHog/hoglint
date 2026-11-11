@@ -1128,17 +1128,14 @@ class DrivesProducer:
             attrs=tuple(attrs),
         )
 
-    def produce(self) -> list[Edge]:
-        items = DriveItems(self)
-        if self.shuffle_seed is None:
-            return [edge for edge in ItemRun(items, None).outputs() if isinstance(edge, Edge)]
-        for key in items.folds():
-            items.take(key, items.run_item(key).data)
-        keys = list(items.keys())
+    def shuffled(self, keys: list[str]) -> list[str]:
         order = list(keys)
         random.Random(self.shuffle_seed).shuffle(order)
-        made = {key: items.run_item(key).outputs for key in order}
-        return [edge for key in keys for edge in made[key] if isinstance(edge, Edge)]
+        return order
+
+    def produce(self) -> list[Edge]:
+        order = self.shuffled if self.shuffle_seed is not None else None
+        return [edge for edge in ItemRun(DriveItems(self), order=order).outputs() if isinstance(edge, Edge)]
 
 
 class DriveItems(Items):

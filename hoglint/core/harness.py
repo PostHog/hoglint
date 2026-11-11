@@ -7,7 +7,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
-from hoglint.core.memo import NULL_TRACER, ItemRun, Output, PackMemo, StepItems, Tracer
+from hoglint.core.memo import NULL_TRACER, ItemOutput, ItemRun, Items, Output, PackMemo, StepItems, Tracer
+from hoglint.core.sites import FileScope
 from hoglint.model import Context, Edge, Graph, Resolution, Site, refined_edge
 from hoglint.plugins import PackReader, PackSink, ProducerFailure, RefinedFields, Refinements
 
@@ -50,6 +51,40 @@ def each_item(
     return out
 
 
+class FileItems(Items):
+    """A base for a step that runs as one item per file, keyed by path. An item notes the read of
+    its file, then `file_item` makes its output; `each_file` runs one file's edges, and a file that
+    raises makes its `failure` edge instead, so a step that uses it gives one."""
+
+    def __init__(
+        self,
+        reader: PackReader,
+        files: list[FileScope],
+        failure: Callable[[FileScope, Exception], Edge] | None = None,
+    ) -> None:
+        self.reader = reader
+        self.files = {scope.path: scope for scope in files}
+        self.failure = failure
+
+    def keys(self) -> list[str]:
+        return list(self.files)
+
+    def scopes(self, keys: Sequence[str]) -> list[FileScope]:
+        return [self.files[key] for key in keys]
+
+    def run_item(self, key: str) -> ItemOutput:
+        scope = self.files[key]
+        self.reader.note_file(scope)
+        return self.file_item(scope)
+
+    def file_item(self, scope: FileScope) -> ItemOutput:
+        raise NotImplementedError
+
+    def each_file(self, scope: FileScope, edges_for: Callable[[FileScope], Iterable[Output]]) -> ItemOutput:
+        assert self.failure is not None
+        return ItemOutput(each_item([scope], edges_for, self.failure))
+
+
 @dataclass(frozen=True, slots=True)
 class ProducerStep:
     """One producer: its id (also the `producer` of its edges), the edge kinds it makes or
@@ -59,15 +94,19 @@ class ProducerStep:
     of the edges it makes, and those of the edges it refines.
 
     A step may also run as items (`items`, see hoglint/core/memo.py): its output is then what
-    `run` makes, followed by its items' output. `stored` says whether the memo keeps its items:
+    `run` makes, if it has a `run`, followed by its items' output. `stored` says whether the memo keeps its items:
     a step whose items cost less to run than to check runs them, traced, every time."""
 
     name: str
     kinds: frozenset[str]
-    run: Callable[[], Iterable[Output]]
+    run: Callable[[], Iterable[Output]] | None = None
     after: tuple[str, ...] = ()
     items: Callable[[], StepItems] | None = None
     stored: bool = True
+
+    def __post_init__(self) -> None:
+        if self.run is None and self.items is None:
+            raise ValueError(f"producer step {self.name} has neither a run nor items")
 
 
 class ProducerPlan:
@@ -84,7 +123,7 @@ class ProducerPlan:
 
     @staticmethod
     def outputs(step: ProducerStep, memo: PackMemo | None) -> list[Output]:
-        output = list(step.run())
+        output = list(step.run()) if step.run is not None else []
         if step.items is None:
             return output
         if memo is None:

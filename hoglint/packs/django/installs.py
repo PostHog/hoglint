@@ -18,8 +18,8 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.memo import ItemOutput, ItemRun, Items
+from hoglint.core.harness import FileItems, failure_edge
+from hoglint.core.memo import ItemOutput, PerFileRead
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
 from hoglint.native.queries import Words, entities_named
@@ -162,44 +162,29 @@ class InstallsProducer:
             rows = scope.record.get("callees", [])
         return self.call_edges(scope, rows, aliases) + self.decorator_edges(scope, aliases)
 
-    def produce(self, files: list[FileScope]) -> list[Output]:
-        return ItemRun(InstallsItems(self, files), None).outputs()
 
-
-class InstallsItems(Items):
+class InstallsItems(FileItems):
     """`django.installs` as one item per file. The hooks bound or applied under another name are
     asked of the whole graph once, and each item reads its own file's part of them."""
 
     ALIASES = "django.installs.aliases"
 
     def __init__(self, producer: InstallsProducer, files: list[FileScope]) -> None:
+        super().__init__(producer.reader, files if producer.hooks else [], producer.failure)
         self.producer = producer
-        self.files = {scope.path: scope for scope in files} if producer.hooks else {}
-        self.aliases = producer.aliases(files) if producer.hooks else {}
+        aliases = producer.aliases(files) if producer.hooks else {}
+        self.aliases = PerFileRead(producer.reader.tracer, self.ALIASES, aliases, self.form, Aliases())
         self.calls: dict[str, list[list]] = {}
-        self.tracer = producer.reader.tracer
-        self.tracer.verify_by_map(self.ALIASES, self.aliases, self.form, Aliases())
 
     @staticmethod
     def form(aliases: Aliases) -> object:
         return (sorted(aliases.names), sorted(aliases.decorated))
 
-    def keys(self) -> list[str]:
-        return list(self.files)
-
     def prepare(self, keys: Sequence[str]) -> None:
-        scopes = [self.files[key] for key in keys]
-        found = self.producer.reader.calls_named(scopes, "callees", self.producer.hook_names)
+        found = self.reader.calls_named(self.scopes(keys), "callees", self.producer.hook_names)
         self.calls = {scope.path: rows for scope, rows in found}
 
-    def run_item(self, key: str) -> ItemOutput:
-        scope = self.files[key]
-        self.producer.reader.note_file(scope)
-        aliases = self.aliases.get(key, Aliases())
-        self.tracer.note(self.ALIASES, key, self.form(aliases))
-        rows = self.calls.get(key, [])
-
-        def file_edges(one: FileScope) -> list[Edge]:
-            return self.producer.file_edges(one, rows, aliases)
-
-        return ItemOutput(list(each_item([scope], file_edges, self.producer.failure)))
+    def file_item(self, scope: FileScope) -> ItemOutput:
+        aliases = self.aliases.read(scope.path)
+        rows = self.calls.get(scope.path, [])
+        return self.each_file(scope, lambda one: self.producer.file_edges(one, rows, aliases))

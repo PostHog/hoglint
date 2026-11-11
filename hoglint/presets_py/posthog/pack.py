@@ -12,7 +12,6 @@ from typing import Any
 
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.facts import FactNeeds
-from hoglint.model import Edge
 from hoglint.plugins import PackReader, PackSink
 from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DriveItems, DrivesProducer
 
@@ -40,13 +39,10 @@ class PosthogPack:
 
     @staticmethod
     def run(reader: PackReader, sink: PackSink) -> None:
-        def nothing() -> list[Edge]:
-            return []
-
         def items() -> DriveItems:
             return DriveItems(DrivesProducer(reader))
 
-        step = ProducerStep(DRIVES_PRODUCER, EDGE_KINDS, nothing, items=items)
+        step = ProducerStep(DRIVES_PRODUCER, EDGE_KINDS, items=items)
         ProducerPlan([step]).run(sink, reader)
 
 

@@ -203,12 +203,9 @@ class DjangoRun:
         return []
 
     def plan(self) -> ProducerPlan:
-        def nothing() -> list[Edge]:
-            return []
-
         return ProducerPlan(
             [
-                ProducerStep(APPS_PRODUCER, frozenset(), nothing, items=lambda: AppItems(self), stored=False),
+                ProducerStep(APPS_PRODUCER, frozenset(), items=lambda: AppItems(self), stored=False),
                 ProducerStep(
                     MODELS_PRODUCER,
                     MODEL_KINDS,
@@ -219,15 +216,13 @@ class DjangoRun:
                 ProducerStep(
                     MIGRATION_PRODUCER,
                     frozenset({"migration-parent"}),
-                    nothing,
-                    (APPS_PRODUCER,),
+                    after=(APPS_PRODUCER,),
                     items=lambda: MigrationItems(self),
                 ),
                 ProducerStep(
                     RELATIONS_PRODUCER,
                     frozenset({"relation", "reverse-accessor", "model-label"}),
-                    nothing,
-                    (MODELS_PRODUCER,),
+                    after=(MODELS_PRODUCER,),
                     items=self.relation_items,
                     stored=False,
                 ),
@@ -235,16 +230,15 @@ class DjangoRun:
                 ProducerStep(
                     GET_MODEL_PRODUCER,
                     frozenset({"model-label"}),
-                    nothing,
-                    (MODELS_PRODUCER,),
+                    after=(MODELS_PRODUCER,),
                     items=self.get_model_items,
                     stored=False,
                 ),
                 ProducerStep(
-                    SIGNALS_PRODUCER, frozenset({"signal"}), nothing, (MODELS_PRODUCER,), items=self.signal_items
+                    SIGNALS_PRODUCER, frozenset({"signal"}), after=(MODELS_PRODUCER,), items=self.signal_items
                 ),
                 ProducerStep(
-                    INSTALLS_PRODUCER, frozenset({"installs"}), nothing, (APPS_PRODUCER,), items=self.installs_items
+                    INSTALLS_PRODUCER, frozenset({"installs"}), after=(APPS_PRODUCER,), items=self.installs_items
                 ),
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
                 ProducerStep(SYMBOLS_PRODUCER, MODEL_KINDS, self.symbols, (MODELS_PRODUCER, MIGRATION_PRODUCER)),

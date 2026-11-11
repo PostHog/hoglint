@@ -13,8 +13,8 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import NamedTuple
 
-from hoglint.core.harness import Output, each_item, failure_edge
-from hoglint.core.memo import ItemOutput, ItemRun, Items
+from hoglint.core.harness import FileItems, Output, each_item, failure_edge
+from hoglint.core.memo import NOTHING, ItemOutput
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge, Resolution
@@ -216,9 +216,6 @@ class GetModelProducer:
         self.reader = reader
         self.registry = registry
 
-    def produce(self, files: list[FileScope]) -> list[Output]:
-        return ItemRun(GetModelItems(self, files), None).outputs()
-
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("model-label", GET_MODEL_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
@@ -273,32 +270,25 @@ class GetModelProducer:
         return Edge("model-label", site, label, (found,), resolution, contexts, GET_MODEL_PRODUCER, shape=GET_MODEL)
 
 
-class GetModelItems(Items):
+class GetModelItems(FileItems):
     """`django.get-model` as one item per file: its `get_model` calls, read for the files that
     run in one query."""
 
     def __init__(self, producer: GetModelProducer, files: list[FileScope]) -> None:
+        super().__init__(producer.reader, files, producer.failure)
         self.producer = producer
-        self.files = {scope.path: scope for scope in files}
         self.calls: dict[str, list[list]] = {}
 
-    def keys(self) -> list[str]:
-        return list(self.files)
-
     def prepare(self, keys: Sequence[str]) -> None:
-        scopes = [self.files[key] for key in keys]
-        self.calls = {
-            scope.path: rows for scope, rows in self.producer.reader.calls_named(scopes, "calls", (GET_MODEL,))
-        }
+        found = self.reader.calls_named(self.scopes(keys), "calls", (GET_MODEL,))
+        self.calls = {scope.path: rows for scope, rows in found}
 
-    def run_item(self, key: str) -> ItemOutput:
-        scope = self.files[key]
-        self.producer.reader.note_file(scope)
-        rows = self.calls.get(key)
+    def file_item(self, scope: FileScope) -> ItemOutput:
+        rows = self.calls.get(scope.path)
         if not rows:
-            return ItemOutput([])
+            return NOTHING
 
         def file_edges(scope: FileScope) -> list[Edge]:
             return [self.producer.edge(scope, row) for row in rows if self.producer.on_registry(scope, row)]
 
-        return ItemOutput(list(each_item([scope], file_edges, self.producer.failure)))
+        return self.each_file(scope, file_edges)
