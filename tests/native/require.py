@@ -22,4 +22,4 @@ def native_module() -> ModuleType:
     except ImportError as error:
         if native_required():
             pytest.fail(f"HOGLINT_REQUIRE_NATIVE=1, but hoglint_native is not built: {error}")
-        pytest.skip("hoglint_native is not built (tools/hoglint/bin/build)")
+        pytest.skip("hoglint_native is not built (bin/build)")

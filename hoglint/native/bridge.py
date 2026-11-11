@@ -1,6 +1,6 @@
 """Finds and imports the `hoglint_native` extension module.
 
-`tools/hoglint/bin/build` unpacks the module it builds into `<target>/python/`, next to the
+`bin/build` unpacks the module it builds into `<target>/python/`, next to the
 `hoglint-facts` binary; a module found there wins, as the binary does. Otherwise an installed
 wheel is imported, so a developer needs no Rust toolchain at run time. In a checkout, the module
 must report the `[native]` id of the checkout's own Rust sources, or the run stops: a stale
@@ -68,7 +68,7 @@ def check_sources(module: ModuleType) -> None:
     if module.NATIVE_ID != expected:
         raise EngineError(
             f"{MODULE} was built from other Rust sources (native id {module.NATIVE_ID}, the checkout "
-            f"has {expected}): rebuild it with tools/hoglint/bin/build"
+            f"has {expected}): rebuild it with bin/build"
         )
 
 

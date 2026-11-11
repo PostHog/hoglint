@@ -14,7 +14,7 @@ from pathlib import Path
 import orjson
 
 BINARY_NAME = "hoglint-facts"
-# Where tools/hoglint/bin/build puts the binary when CARGO_TARGET_DIR is not set.
+# Where bin/build puts the binary when CARGO_TARGET_DIR is not set.
 DEFAULT_TARGET_DIR = Path.home() / ".cache" / "hoglint-target"
 FACT_KINDS = frozenset(
     {
@@ -115,9 +115,7 @@ class Extractor:
         on_path = shutil.which(BINARY_NAME)
         if on_path:
             return Path(on_path)
-        raise FileNotFoundError(
-            f"{BINARY_NAME} not found; build it with tools/hoglint/bin/build or set HOGLINT_FACTS_BIN"
-        )
+        raise FileNotFoundError(f"{BINARY_NAME} not found; build it with bin/build or set HOGLINT_FACTS_BIN")
 
     def __init__(self, binary: Path | None = None) -> None:
         self.binary = binary or self.find_binary()

@@ -6,7 +6,7 @@
 # unpacked into $CARGO_TARGET_DIR/python, where hoglint.native.bridge finds it. Prints the
 # binary path on success.
 #
-# Usage: tools/hoglint/bin/build [extra cargo args]
+# Usage: bin/build [extra cargo args]
 # Env:   CARGO_TARGET_DIR (default: ~/.cache/hoglint-target)
 
 set -euo pipefail

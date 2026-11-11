@@ -1,4 +1,4 @@
-# The files that define hoglint, as glob patterns relative to tools/hoglint, in three sections.
+# The files that define hoglint, as glob patterns relative to the repo root, in three sections.
 # Each section makes one id, and each one adds files to the section above it:
 #   [facts]   the extractor and the link code that writes and reads a fact cache entry. Its id
 #             keys the per-blob fact cache, so other link or Python changes never re-extract.
