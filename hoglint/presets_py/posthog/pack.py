@@ -14,7 +14,7 @@ from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.facts import FactNeeds
 from hoglint.model import Edge
 from hoglint.plugins import PackReader, PackSink
-from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
+from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DriveItems, DrivesProducer
 
 SECTION = "posthog"
 EDGE_KINDS = frozenset({"drives"})
@@ -40,10 +40,14 @@ class PosthogPack:
 
     @staticmethod
     def run(reader: PackReader, sink: PackSink) -> None:
-        def drives() -> list[Edge]:
-            return DrivesProducer(reader).produce()
+        def nothing() -> list[Edge]:
+            return []
 
-        ProducerPlan([ProducerStep(DRIVES_PRODUCER, EDGE_KINDS, drives)]).run(sink)
+        def items() -> DriveItems:
+            return DriveItems(DrivesProducer(reader))
+
+        step = ProducerStep(DRIVES_PRODUCER, EDGE_KINDS, nothing, items=items)
+        ProducerPlan([step]).run(sink, getattr(reader, "memo", None))
 
 
 POSTHOG_PACK = PosthogPack()

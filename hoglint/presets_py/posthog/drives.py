@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMapping, TracedMemo, key_of
 from hoglint.core.producers import chain_tokens
 from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
 from hoglint.core.sites import FileScope
@@ -119,16 +120,29 @@ class TestFacts:
 
 
 class FileFacts:
-    """One module's facts, each read on first use: most modules give only their imports."""
+    """One module's facts, each read on first use: most modules give only their imports. Every
+    access is a read of the module's file, which is all these facts come from, but the lazy map,
+    which reads the module's table."""
 
     def __init__(self, reader: FactReader) -> None:
         self.reader = reader
         self.rel = reader.rel
         self.dotted = reader.scope.module
         self.is_test = reader.is_test
+        self.file: int | None = getattr(reader.scope.record, "file", None)
+        self.lazy: TracedMemo[str, dict[str, str]] = TracedMemo()
+
+    def touch(self) -> None:
+        if TRACER.frames and self.file is not None:
+            TRACER.note_file(self.file)
+
+    @property
+    def import_facts(self) -> tuple[list[ImportEdge], list[tuple[str, str]], set[str]]:
+        self.touch()
+        return self.kept_imports
 
     @cached_property
-    def import_facts(self) -> tuple[list[ImportEdge], list[tuple[str, str]], set[str]]:
+    def kept_imports(self) -> tuple[list[ImportEdge], list[tuple[str, str]], set[str]]:
         return self.reader.read_imports()
 
     @property
@@ -139,8 +153,13 @@ class FileFacts:
     def module_aliases(self) -> list[tuple[str, str]]:
         return self.import_facts[1]
 
-    @cached_property
+    @property
     def top(self) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]], dict[str, str]]:
+        self.touch()
+        return self.kept_top
+
+    @cached_property
+    def kept_top(self) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]], dict[str, str]]:
         return self.reader.read_top_names()
 
     @property
@@ -159,27 +178,47 @@ class FileFacts:
     def top_classes(self) -> dict[str, str]:
         return self.top[3]
 
-    @cached_property
+    @property
     def lazy_map(self) -> dict[str, str]:
-        return self.reader.lazy_map()
+        return self.lazy.get("lazy", self.reader.lazy_map)
+
+    @property
+    def test(self) -> TestFacts | None:
+        self.touch()
+        return self.kept_test
 
     @cached_property
-    def test(self) -> TestFacts | None:
+    def kept_test(self) -> TestFacts | None:
         if not self.is_test:
             return None
-        return self.reader.read_test(self.import_facts[2], self.reader.read_scopes(*self.reader.calls))
+        return self.reader.read_test(self.kept_imports[2], self.reader.read_scopes(*self.reader.calls))
 
-    @cached_property
+    @property
     def bodies(self) -> dict[str, Body]:
         """Function bodies by fid. The call view reaches few non-test files."""
+        self.touch()
+        return self.kept_bodies
+
+    @cached_property
+    def kept_bodies(self) -> dict[str, Body]:
         return self.reader.read_bodies()
 
-    @cached_property
+    @property
     def dispatch_branches(self) -> list[tuple[list[str], list[str], list[str]]]:
-        return self.reader.dispatch_branches() if self.rel == QUERY_DISPATCHER else []
+        self.touch()
+        return self.kept_branches
 
     @cached_property
+    def kept_branches(self) -> list[tuple[list[str], list[str], list[str]]]:
+        return self.reader.dispatch_branches() if self.rel == QUERY_DISPATCHER else []
+
+    @property
     def enum_members(self) -> dict[str, dict[str, str]]:
+        self.touch()
+        return self.kept_enum_members
+
+    @cached_property
+    def kept_enum_members(self) -> dict[str, dict[str, str]]:
         return self.reader.enum_members() if self.rel == NODE_KIND_ENUM else {}
 
 
@@ -602,6 +641,14 @@ class TestFilter:
         )
 
 
+def file_rel(ff: FileFacts) -> str:
+    return ff.rel
+
+
+def pair_key(pair: tuple[str, str]) -> str:
+    return key_of(*pair)
+
+
 # --- call view ----------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Reach:
@@ -628,19 +675,21 @@ class CallView:
     reaches it, so a query's answer (and its memo) depends only on the call graph and the limit,
     never on which queries ran before it."""
 
-    def __init__(self, facts: dict[str, FileFacts]) -> None:
+    def __init__(self, facts: TracedMapping[str, FileFacts]) -> None:
         self.facts = facts
-        self.memo: dict[tuple[str, str, frozenset[str]], Reach] = {}
-        self.found_targets: dict[Node, list[tuple[str, Body]]] = {}
-        self.imports_by_bound: dict[str, dict[str, list[ImportEdge]]] = {}
+        self.memo: TracedMemo[tuple[str, str, frozenset[str]], Reach] = TracedMemo()
+        self.found_targets: TracedMemo[Node, list[tuple[str, Body]]] = TracedMemo()
+        self.imports_by_bound: TracedMemo[str, dict[str, list[ImportEdge]]] = TracedMemo()
+
+    @staticmethod
+    def imports_by_name(ff: FileFacts) -> dict[str, list[ImportEdge]]:
+        table: dict[str, list[ImportEdge]] = defaultdict(list)
+        for edge in ff.imports:
+            table[edge.bound].append(edge)
+        return table
 
     def imports_named(self, ff: FileFacts, name: str) -> list[ImportEdge]:
-        table = self.imports_by_bound.get(ff.dotted)
-        if table is None:
-            table = defaultdict(list)
-            for edge in ff.imports:
-                table[edge.bound].append(edge)
-            self.imports_by_bound[ff.dotted] = table
+        table = self.imports_by_bound.get(ff.dotted, lambda: self.imports_by_name(ff))
         return table.get(name, [])
 
     @staticmethod
@@ -650,11 +699,11 @@ class CallView:
     def targets(self, node: Node) -> list[tuple[str, Body]]:
         """The bodies a call of `name` in `module` may run: the module's own top functions and
         methods of that name (for a call inside a helper), and top functions it imports by it."""
-        found = self.found_targets.get(node)
-        if found is not None:
-            return found
+        return self.found_targets.get(node, lambda: self.read_targets(node))
+
+    def read_targets(self, node: Node) -> list[tuple[str, Body]]:
         module, name, local = node
-        found = self.found_targets[node] = []
+        found: list[tuple[str, Body]] = []
         ff = self.facts.get(module)
         if ff is None:
             return found
@@ -674,11 +723,7 @@ class CallView:
             return PATCHED
         if module not in self.facts:
             return MISS
-        key = (module, name, patched)
-        found = self.memo.get(key)
-        if found is None:
-            found = self.memo[key] = self.walk((module, name, False), patched)
-        return found
+        return self.memo.get((module, name, patched), lambda: self.walk((module, name, False), patched))
 
     def walk(self, start: Node, patched: frozenset[str]) -> Reach:
         """The first body, in level order, that runs a dispatcher, with the hops that reach it."""
@@ -721,13 +766,23 @@ class DriveEdge:
 
 
 class Deriver:
+    """The drives of each test file. Its registry and origins are one fold over the snapshot
+    (`read_registry`, `grow_origins`); a test item reads them through the traced views `restore`
+    makes from the fold's data (`state`)."""
+
+    REGISTRY = "posthog.drives.registry"
+    MODULE = "posthog.drives.module"
+    ORIGIN = "posthog.drives.origin"
+    ORIGIN_MODULE = "posthog.drives.origin-module"
+    ORIGIN_PRODUCTS = "posthog.drives.origin-products"
+    IMPORTER_PRODUCTS = "posthog.drives.importer-products"
+
     def __init__(self, facts: dict[str, FileFacts], snapshot: PackReader) -> None:
-        self.facts = facts
+        self.facts: TracedMapping[str, FileFacts] = TracedMapping(self.MODULE, facts, form=file_rel)
         self.snapshot = snapshot
         self.by_rel = {f.rel: f for f in facts.values()}
-        self.view = CallView(facts)
+        self.view = CallView(self.facts)
         self.imports = ImportIndex(facts, snapshot)
-        self.importer_products: dict[str, set[str]] = defaultdict(set)
 
     def read_registry(self) -> None:
         enum_ff = self.by_rel[NODE_KIND_ENUM]
@@ -759,6 +814,45 @@ class Deriver:
         labelled = {kind: products & self.labels.keys() for kind, products in self.kinds.items()}
         self.test_filter = TestFilter(self.snapshot, labelled, self.members)
 
+    def state(self) -> dict[str, Any]:
+        """The fold's data: the registry and the origins, as JSON values."""
+        return {
+            "kinds": [[kind, sorted(products)] for kind, products in self.kinds.items()],
+            "members": [[member, kind] for member, kind in self.members.items()],
+            "enums": sorted(self.enums),
+            "query_products": self.query_products,
+            "origins": [[module, name, label] for (module, name), label in self.found_origins.items()],
+            "origin_products": [[module, sorted(found)] for module, found in self.found_origin_products.items()],
+            "importer_products": [[module, sorted(found)] for module, found in self.found_importer_products.items()],
+        }
+
+    def restore(self, state: dict[str, Any]) -> None:
+        """The registry and origins from the fold's data, each origin map behind a traced view."""
+        self.kinds = {kind: frozenset(products) for kind, products in state["kinds"]}
+        self.members = dict(state["members"])
+        self.enums = frozenset(state["enums"])
+        self.query_products = list(state["query_products"])
+        self.labels = {product: f"{product}:{QUERY_WIRING_LOCATION}" for product in self.query_products}
+        self.prefixes = [
+            (location_module(product, QUERY_WIRING_LOCATION) + ".", label, product)
+            for product, label in self.labels.items()
+        ]
+        labelled = {kind: products & self.labels.keys() for kind, products in self.kinds.items()}
+        self.test_filter = TestFilter(self.snapshot, labelled, self.members)
+        self.registry = [state["kinds"], state["members"], state["enums"], state["query_products"]]
+        origins = {(module, name): label for module, name, label in state["origins"]}
+        self.origins = TracedMapping(self.ORIGIN, origins, key=pair_key)
+        self.origin_modules = TracedMapping(self.ORIGIN_MODULE, dict.fromkeys((m for m, _ in origins), True))
+        products = {module: set(found) for module, found in state["origin_products"]}
+        self.origin_products = TracedMapping(self.ORIGIN_PRODUCTS, products, form=sorted)
+        importers = {module: set(found) for module, found in state["importer_products"]}
+        self.importer_products = TracedMapping(self.IMPORTER_PRODUCTS, importers, form=sorted)
+
+    def note_registry(self) -> None:
+        """A test item reads the registry: the query kinds, their products and the enum members."""
+        if TRACER.frames:
+            TRACER.note(self.REGISTRY, "*", self.registry)
+
     def module_exists(self, dotted: str) -> bool:
         return dotted in self.facts
 
@@ -785,36 +879,39 @@ class Deriver:
         """Every (module, name) that re-exports a seed, through imports. Also notes the products
         each module imports a seed of: only those can make a `name` drive."""
         seeds = self.seeds()
-        self.origins: dict[tuple[str, str], str] = dict(seeds)
+        origins: dict[tuple[str, str], str] = dict(seeds)
         work = list(seeds)
         while work:
             export = work.pop()
-            label = self.origins[export]
+            label = origins[export]
             for importer, bound in self.imports.importers(*export):
                 local = (importer.dotted, bound)
-                if self.origins.get(local) != label:
-                    self.origins[local] = label
+                if origins.get(local) != label:
+                    origins[local] = label
                     work.append(local)
-        self.origin_modules = {m for m, _ in self.origins}
-        self.origin_products: dict[str, set[str]] = defaultdict(set)
-        for origin, label in self.origins.items():
+        origin_products: dict[str, set[str]] = defaultdict(set)
+        importer_products: dict[str, set[str]] = defaultdict(set)
+        for origin, label in origins.items():
             product = label.split(":")[0]
-            self.origin_products[origin[0]].add(product)
+            origin_products[origin[0]].add(product)
             for importer, _ in self.imports.importers(*origin):
-                self.importer_products[importer.dotted].add(product)
+                importer_products[importer.dotted].add(product)
+        self.found_origins = origins
+        self.found_origin_products = origin_products
+        self.found_importer_products = importer_products
 
     def may_drive(self, ff: FileFacts) -> bool:
         """False only for a test file that can make no drive. Each test is a part of a drive's
         own condition: another product's wiring name imported, a module of another product's
         wiring or re-exports aliased, a `kind` entry that may count, or a kind named."""
         owner = product_of_path(ff.rel)
-        if self.importer_products.get(ff.dotted, set()) - {owner}:
+        if (self.importer_products.get(ff.dotted) or set()) - {owner}:
             return True
         if self.may_count_kind(ff) or self.test_filter.names_a_kind(ff, owner):
             return True
         prefixes = tuple(prefix for prefix, _, product in self.prefixes if product != owner)
         for module in self.snapshot.imported_modules(ff.reader.scope):
-            if module.startswith(prefixes) or self.origin_products.get(module, set()) - {owner}:
+            if module.startswith(prefixes) or (self.origin_products.get(module) or set()) - {owner}:
                 return True
         return False
 
@@ -1028,17 +1125,51 @@ class DrivesProducer:
         )
 
     def produce(self) -> list[Edge]:
-        facts = self.facts()
-        deriver = Deriver(facts, self.snapshot)
-        deriver.read_registry()
-        deriver.grow_origins()
-        tests = [ff for ff in facts.values() if ff.is_test and deriver.may_drive(ff)]
-        order = list(tests)
-        if self.shuffle_seed is not None:
-            random.Random(self.shuffle_seed).shuffle(order)
-        drives: dict[str, list[DriveEdge]] = {}
-        for ff in order:
-            test = ff.test
-            assert test is not None
-            drives[ff.dotted] = deriver.derive_file(ff, test)
-        return [self.edge(drive, ff.rel) for ff in tests for drive in drives[ff.dotted]]
+        items = DriveItems(self)
+        if self.shuffle_seed is None:
+            return [edge for edge in ItemRun(items, None).outputs() if isinstance(edge, Edge)]
+        for key in items.folds():
+            items.take(key, items.run_item(key).data)
+        keys = list(items.keys())
+        order = list(keys)
+        random.Random(self.shuffle_seed).shuffle(order)
+        made = {key: items.run_item(key).outputs for key in order}
+        return [edge for key in keys for edge in made[key] if isinstance(edge, Edge)]
+
+
+class DriveItems(Items):
+    """`posthog.drives` as items: the registry and origins as one fold, then one item per test
+    file, which makes that file's drives when it may drive another product's wiring."""
+
+    ORIGINS = "origins"
+
+    def __init__(self, producer: DrivesProducer) -> None:
+        self.producer = producer
+        self.deriver = Deriver(producer.facts(), producer.snapshot)
+        self.tests: dict[str, FileFacts] = {}
+
+    def folds(self) -> list[str]:
+        return [self.ORIGINS]
+
+    def keys(self) -> list[str]:
+        self.tests = {ff.rel: ff for ff in self.deriver.facts.entries.values() if ff.is_test}
+        return list(self.tests)
+
+    def run_item(self, key: str) -> ItemOutput:
+        deriver = self.deriver
+        if key == self.ORIGINS:
+            deriver.facts.note_all()
+            deriver.read_registry()
+            deriver.grow_origins()
+            return ItemOutput([], deriver.state())
+        ff = self.tests[key]
+        deriver.note_registry()
+        if not deriver.may_drive(ff):
+            return ItemOutput([])
+        test = ff.test
+        assert test is not None
+        return ItemOutput([self.producer.edge(drive, ff.rel) for drive in deriver.derive_file(ff, test)])
+
+    def take(self, key: str, data: Any) -> None:
+        if key == self.ORIGINS:
+            self.deriver.restore(data)
