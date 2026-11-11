@@ -12,21 +12,27 @@ import pytest
 
 from hoglint.native.replay import (
     CHECK_OUTPUTS,
+    COLD,
     COLD_SWITCHES,
+    DAMAGED,
     MODES,
-    Checker,
+    WARM,
     CheckDump,
+    Checker,
     Compared,
     Pair,
     PairResult,
     PairsReport,
     PredictionScore,
     Replay,
+    Side,
+    States,
     TruthItem,
     certify,
     check_env,
     compare,
     labelled,
+    pick_damages,
 )
 
 from native.require import native_module
@@ -89,7 +95,7 @@ def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str, damages: tuple[st
     os.environ.setdefault("PYTHONHASHSEED", "0")
     repo, found = pair
     checker = Checker(repo, "native", MODES[mode](), tmp_path / "work", datetime.date(2026, 1, 1))
-    return Replay(checker, damages).run(found)
+    return Replay(checker, pick_damages(",".join(damages))).run(found)
 
 
 @pytest.mark.parametrize(
@@ -97,7 +103,7 @@ def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str, damages: tuple[st
     [
         ("today", (), True),
         ("planted-miss", (), False),
-        ("today", ("garbage-summaries", "garbage-inputs", "two-children-at-once"), True),
+        ("today", ("garbage-summaries", "garbage-inputs", "garbage-answers", "two-children-at-once"), True),
     ],
 )
 def test_a_replay_reports_a_pair_equal_only_when_every_check_reports_the_same(
@@ -138,8 +144,8 @@ def test_two_checks_of_different_engines_are_never_compared(tmp_path: Path, what
         (tmp_path / side).mkdir()
         (tmp_path / side / "check.json").write_text(json.dumps({"engine": engine}))
         (tmp_path / side / "check-exit.jsonl").write_text("[0]\n")
-    left, right = CheckDump.load(tmp_path / "left"), CheckDump.load(tmp_path / "right")
-    verdict = Replay.verdict(labelled("garbage-inputs", what), left, right)
+    left, right = CheckDump.load(tmp_path / "left", COLD), CheckDump.load(tmp_path / "right", DAMAGED)
+    verdict = compare(labelled("garbage-inputs", what), left, right)
     assert not verdict.ok
     assert "different engines" in verdict.short()
     assert not PairResult(Pair("p", "a", "b"), [verdict]).ok
@@ -196,6 +202,9 @@ def write_check(side: Path, meta: dict[str, object], graph: bool) -> Path:
 
 
 OPEN = {"answers": True, "summaries": True, "pack_memo": ["open"]}
+# What a cold check records: every store it may not share off or unread.
+COLD_REUSE = {"answers": False, "summaries": True, "summary_reads": 0, "pack_memo": ["off"]}
+COLD_RECORD = {"memo": False, "reuse": COLD_REUSE}
 
 
 @pytest.mark.parametrize(
@@ -214,28 +223,60 @@ OPEN = {"answers": True, "summaries": True, "pack_memo": ["open"]}
 def test_a_warm_check_must_show_that_it_reused_stored_work(
     tmp_path: Path, meta: dict[str, object], graph: bool, word: str
 ) -> None:
-    cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
+    cold = write_check(tmp_path / "cold", COLD_RECORD, graph=True)
     warm = write_check(tmp_path / "warm", meta, graph)
-    verdict = compare("child", CheckDump.load(cold), CheckDump.load(warm), warm=True)
+    verdict = compare("child", CheckDump.load(cold, COLD), CheckDump.load(warm, WARM))
     assert verdict.word == word, verdict.short()
     assert verdict.ok is (word == "")
-    assert compare("child", CheckDump.load(cold), CheckDump.load(warm)).word == ""
+    assert compare("child", CheckDump.load(cold, COLD), CheckDump.load(warm, DAMAGED)).word == ""
 
 
-@pytest.mark.parametrize("warm", [False, True])
-def test_a_side_without_its_check_tables_is_not_compared(tmp_path: Path, warm: bool) -> None:
-    cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
+@pytest.mark.parametrize("side", [DAMAGED, WARM])
+def test_a_side_without_its_check_tables_is_not_compared(tmp_path: Path, side: str) -> None:
+    cold = write_check(tmp_path / "cold", COLD_RECORD, graph=True)
     other = write_check(tmp_path / "other", {"memo": False, "reuse": OPEN}, graph=True)
     (other / "check-summary.jsonl").unlink()
-    verdict = compare("child", CheckDump.load(cold), CheckDump.load(other), warm=warm)
+    verdict = compare("child", CheckDump.load(cold, COLD), CheckDump.load(other, side))
     assert verdict.word == "NOT COMPARED"
     assert not PairResult(Pair("p", "a", "b"), [verdict]).ok
 
 
 def test_a_warm_child_served_by_the_run_memo_is_not_printed_equal(tmp_path: Path) -> None:
-    cold = write_check(tmp_path / "cold", {"memo": False}, graph=True)
+    cold = write_check(tmp_path / "cold", COLD_RECORD, graph=True)
     warm = write_check(tmp_path / "warm", {"memo": True}, graph=False)
-    result = PairResult(Pair("p", "a", "b"), [compare("child", CheckDump.load(cold), CheckDump.load(warm), warm=True)])
+    result = PairResult(Pair("p", "a", "b"), [compare("child", CheckDump.load(cold, COLD), CheckDump.load(warm, WARM))])
     assert result.ok
     assert result.status() == "MEMO"
     assert "served by the run memo (3 tables compared" in result.line()
+
+
+def test_a_side_that_reuses_stored_work_needs_a_state_a_parent_check_filled(tmp_path: Path) -> None:
+    state = States(tmp_path).fresh("warm")
+    with pytest.raises(TypeError):
+        Side.warm(state)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Side.damaged(state)  # type: ignore[arg-type]
+    cold = Side.cold(States(tmp_path), "cold")
+    assert cold.env == COLD_SWITCHES
+    with pytest.raises(ValueError):
+        compare("child", CheckDump(tmp_path, {}, WARM), CheckDump(tmp_path, {}, COLD))
+
+
+@pytest.mark.parametrize(
+    ("reuse", "memo"),
+    [
+        ({"answers": True}, False),
+        ({"pack_memo": ["open"]}, False),
+        ({"summary_reads": 1}, False),
+        ({}, True),
+    ],
+)
+def test_a_cold_check_that_shared_a_store_is_not_compared(tmp_path: Path, reuse: dict[str, object], memo: bool) -> None:
+    record = {"memo": memo, "reuse": {**COLD_REUSE, **reuse}}
+    cold = write_check(tmp_path / "cold", record, graph=True)
+    other = write_check(tmp_path / "other", COLD_RECORD, graph=True)
+    verdict = compare("seed1-threads1", CheckDump.load(cold, COLD), CheckDump.load(other, COLD))
+    assert verdict.word == "NOT COLD", verdict.short()
+    result = PairResult(Pair("p", "a", "b"), [verdict])
+    assert not result.ok
+    assert result.status() == "NOT COLD"

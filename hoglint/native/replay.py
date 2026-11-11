@@ -74,11 +74,14 @@ from hoglint.core.memo import (
 )
 from hoglint.core.modules import longest_prefix
 from hoglint.ledger.cache import (
+    ANSWERS,
     OFF_SWITCH as ANSWER_CACHE_SWITCH,
     AnswerStore,
 )
+from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.listing import git, records
-from hoglint.ledger.scan import SUMMARY_SECTIONS, ScanSummary
+from hoglint.ledger.scan import ALL_SECTIONS, SUMMARY_SECTIONS, ScanSummary
+from hoglint.ledger.store import FACTS, MEMO, SummaryStore
 from hoglint.model import Finding, Graph
 from hoglint.native.config import TRACE_ENV
 from hoglint.native.graph import NativeGraph
@@ -110,6 +113,45 @@ DIGEST_MOD = 2**128
 SEEDS = ("0", "1", "4242")
 THREADS = ("1", "4")
 SHOWN_ROWS = 5
+# The kinds of side a check runs on (`Side`).
+COLD, WARM, DAMAGED, FILL = "cold", "warm", "damaged", "fill"
+
+
+# ── the stores of a run ───────────────────────────────────────────
+# Kept by hand, together: a new store of a run adds itself to each list in this block.
+
+# A cold check runs with every store of reused answers switched off. Its own baseline fills the
+# cold state directory first, so a store left on would hand the cold child the same stored
+# answers as the warm child, and a wrong answer would compare equal. Every new store of reused
+# answers adds its off switch here. The per-blob fact cache stays on: its entries are what the
+# extractor makes of a file's bytes, keyed by those bytes.
+COLD_SWITCHES = {PACK_MEMO_SWITCH: PACK_MEMO_OFF, ANSWER_CACHE_SWITCH: "1"}
+# Every switch that turns a store of reused answers or a recording on or off. A check never
+# takes them from the caller's shell: the replay sets what each side needs, so a warm side
+# reuses what it stored. Every new store adds its switch here too.
+REUSE_SWITCHES = (*COLD_SWITCHES, PACK_MEMO_DROP, PACK_MEMO_STATS, TRACE_ENV)
+# A cold check may share only the stores whose entries are keyed by the content they come from:
+# the per-blob fact cache (`facts/`) and the migration summaries under `packs/`. `cold_problem`
+# reads the check's own reuse record: every other store must have been off or unread there.
+# The files a check reads from the cache root, by store: (store, part, file pattern). A damage
+# case makes each kind garbage, empty and cut to half.
+CACHE_FILES = (
+    ("summaries", "summaries", "*"),
+    ("inputs", "inputs", "*"),
+    ("packs", "packs", "*"),
+    ("fact-database", FACTS, "*.sqlite"),
+    ("fact-marks", FACTS, "*.sqlite.*"),
+    ("pack-memo", MEMO, "*.sqlite"),
+    ("pack-memo-wal", MEMO, "*.sqlite-*"),
+    ("answers", ANSWERS, "*.json"),
+)
+DAMAGE_HOW = ("garbage", "empty", "truncate")
+
+
+def check_env(caller: dict[str, str], side: dict[str, str]) -> dict[str, str]:
+    """The caller's environment with no reuse switch, and then the side's own settings."""
+    out = {name: value for name, value in caller.items() if name not in REUSE_SWITCHES}
+    return {**out, **side}
 
 
 # ── one check, in its own process ─────────────────────────────────
@@ -153,6 +195,21 @@ class RecordingNativeSource(NativeGraphSource):
         return states
 
 
+class CountingSummaryStore(SummaryStore):
+    """A summary store that counts the stored summaries it handed out, so a cold check can show
+    that it read none."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads = 0
+
+    def get(self, key: Envelope, sections: frozenset[str] = ALL_SECTIONS) -> ScanSummary | None:
+        found = super().get(key, sections)
+        if found is not None:
+            self.reads += 1
+        return found
+
+
 class RecordingCommands(Commands):
     """`check --index` of a fixed tree that keeps what the run made: its graph when it ran live
     (`write_outputs` gets every live run), the summary it reported (`report` gets every check)
@@ -165,9 +222,11 @@ class RecordingCommands(Commands):
             self.recording = RecordingNativeSource(work_dir)
             self.source = self.runner.source = self.recording
         self.snapshots = FixedSnapshots(repo, work_dir, tree, head)
+        self.summaries = self.baselines.store = CountingSummaryStore()
         self.baselines.snapshots = self.snapshots
         if self.memo is not None:
             self.memo.snapshots = self.snapshots
+            self.memo.store = self.summaries
         self.live: Run | None = None
         self.reported: ScanSummary | None = None
         self.against = ""
@@ -190,9 +249,13 @@ class RecordingCommands(Commands):
         return super().report(summary, config, policy_root, files_root, touched, attributed)
 
     def reuse(self) -> dict[str, Any]:
-        """Which stores of reused work this check had: the answer stores, the summary store, and
-        per native build its pack memo (`memo_states`; absent on the Python engine)."""
-        out: dict[str, Any] = {"answers": not AnswerStore.off(), "summaries": not self.summaries.broken}
+        """Which stores of reused work this check had: the answer stores, the summary store and
+        how many stored summaries it read, and per native build its pack memo (`memo_states`;
+        absent on the Python engine)."""
+        summaries = self.summaries
+        out: dict[str, Any] = {"answers": not AnswerStore.off(), "summaries": not summaries.broken}
+        if isinstance(summaries, CountingSummaryStore):
+            out["summary_reads"] = summaries.reads
         if self.recording is not None:
             out["pack_memo"] = self.recording.memo_states()
         return out
@@ -316,14 +379,16 @@ class CheckFailed(Exception):
 
 @dataclass(frozen=True)
 class CheckDump:
-    """A finished check: the directory of its tables and the `check.json` it wrote there."""
+    """A finished check: the directory of its tables, the `check.json` it wrote there, and the
+    kind of side it ran on."""
 
     path: Path
     meta: dict[str, Any]
+    side: str
 
     @staticmethod
-    def load(path: Path) -> CheckDump:
-        return CheckDump(path, json.loads((path / "check.json").read_text()))
+    def load(path: Path, side: str) -> CheckDump:
+        return CheckDump(path, json.loads((path / "check.json").read_text()), side)
 
     @property
     def engine(self) -> str:
@@ -367,6 +432,23 @@ def reuse_problem(meta: dict[str, Any]) -> str:
         return "no build made a pack memo"
     bad = [state for state in memos if state not in ("open", "unused")]
     return f"the pack memo was {bad[0]}" if bad else ""
+
+
+def cold_problem(meta: dict[str, Any]) -> str:
+    """Why a cold check may have reused stored work, or "" when it shows it reused none: no
+    stored summary stood in for it or served as its baseline, and every answer store and pack
+    memo was off. See the stores a cold check may share, next to `COLD_SWITCHES`."""
+    if meta.get("memo"):
+        return "the run memo served it"
+    reuse = meta.get("reuse")
+    if not isinstance(reuse, dict):
+        return "the check did not say what it reused"
+    if reuse.get("answers"):
+        return "the answer stores were on"
+    if reuse.get("summary_reads", 1):
+        return "it read a stored summary"
+    on = [state for state in reuse.get("pack_memo", []) if state != "off"]
+    return f"the pack memo was {on[0]}" if on else ""
 
 
 class Outcome:
@@ -453,6 +535,18 @@ class Failed(Outcome):
 
 
 @dataclass(frozen=True)
+class NotCold(Outcome):
+    """A cold check that cannot show it reused nothing, so it is no baseline to compare with."""
+
+    word: ClassVar[str] = "NOT COLD"
+    label: str
+    problem: str
+
+    def short(self) -> str:
+        return f"{self.label}: {self.word} ({self.problem})"
+
+
+@dataclass(frozen=True)
 class NotCompared(TableOutcome):
     """A side lacks a table every check writes, so it did not finish its dump."""
 
@@ -533,17 +627,24 @@ def graph_tables(diffs: tuple[RowDiff, ...]) -> int:
     return sum(diff.name not in CHECK_OUTPUTS for diff in diffs)
 
 
-def compare(label: str, base: CheckDump, other: CheckDump, warm: bool = False) -> Outcome:
-    """The only maker of an outcome that compared tables. Every table both dumps hold is compared
-    in order and as a multiset; a `warm` other side must show that it reused stored work."""
+def compare(label: str, base: CheckDump, other: CheckDump) -> Outcome:
+    """The only maker of an outcome that compared tables. `base` is a cold check. Every table both
+    dumps hold is compared in order and as a multiset; a warm side must show that it reused
+    stored work."""
+    if base.side != COLD:
+        raise ValueError(f"a comparison stands on a cold check, not a {base.side} one")
     if base.engine != other.engine:
         return Refused(label, (base.engine, other.engine))
+    for dump in (base, other):
+        problem = cold_problem(dump.meta) if dump.side == COLD else ""
+        if problem:
+            return NotCold(label, problem)
     diffs = tuple(compare_dumps(base.path, other.path, (*CHECK_OUTPUTS, *GRAPH_OUTPUTS), skip_missing=True))
     # Every check writes these tables; one missing on either side leaves nothing to stand on.
     missing = tuple(name for name in CHECK_OUTPUTS if not (base.has(name) and other.has(name)))
     if missing:
         return NotCompared(label, diffs, missing)
-    if warm:
+    if other.side == WARM:
         problem = reuse_problem(other.meta)
         if problem:
             return NoReuse(label, diffs, problem)
@@ -751,6 +852,24 @@ class PredictionScore:
 # ── modes ─────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class Pair:
+    name: str
+    parent: str
+    child: str
+
+    @staticmethod
+    def read(path: Path) -> list[Pair]:
+        """Tab-separated: name, parent tree, child tree; further columns are ignored."""
+        out = []
+        for line in path.read_text().splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            name, parent, child = line.split("\t")[:3]
+            out.append(Pair(name, parent, child))
+        return out
+
+
 def changed_paths(repo: Path, pair: Pair) -> set[str]:
     """The paths the commit from the pair's parent tree to its child tree changed."""
     return set(records(git(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only", pair.parent, pair.child)))
@@ -854,7 +973,7 @@ class PackMemoMiss(Mode):
 MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces, PackMemoMiss)}
 
 
-# ── state directories ─────────────────────────────────────────────
+# ── state directories and sides ───────────────────────────────────
 
 
 def size_of(path: Path) -> int:
@@ -875,7 +994,7 @@ class State:
 
     @property
     def facts(self) -> Path:
-        return self.cache / "facts"
+        return self.cache / FACTS
 
     def create(self, shared_facts: Path, facts: str = "shared") -> State:
         if self.root.exists():
@@ -892,38 +1011,221 @@ class State:
     def files(self, part: str, pattern: str = "*") -> list[Path]:
         return sorted(path for path in (self.cache / part).rglob(pattern) if path.is_file())
 
-    def remove(self) -> None:
+
+class States:
+    """The state directories of a session, each made fresh by name, and the one fact cache they
+    share."""
+
+    def __init__(self, work: Path) -> None:
+        self.root = work / "states"
+        self.shared_facts = work / FACTS
+
+    def fresh(self, name: str, facts: str = "shared") -> State:
+        return State(self.root / name).create(self.shared_facts, facts)
+
+    def remove(self, name: str) -> None:
+        shutil.rmtree(self.root / name, ignore_errors=True)
+
+    def clear(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+@dataclass(frozen=True)
+class Filled:
+    """A state directory in which a parent's check ran, to its end or until it was killed."""
+
+    state: State
+
+
+class Side:
+    """Where one check runs, with which switches, and what its dump must show.
+
+    - cold: a fresh state with every store of reused answers off;
+    - warm: a state a parent's check filled, every store on; it must show that it reused stored work;
+    - damaged: a filled state that a damage case touched; a store may fail there, so it shows neither;
+    - fill: the parent's check that fills a state; its dump is never compared.
+    """
+
+    def __init__(self, kind: str, state: State, env: dict[str, str]) -> None:
+        self.kind = kind
+        self.state = state
+        self.env = env
+
+    @staticmethod
+    def cold(states: States, name: str, facts: str = "shared", env: dict[str, str] | None = None) -> Side:
+        return Side(COLD, states.fresh(name, facts), {**(env or {}), **COLD_SWITCHES})
+
+    @staticmethod
+    def warm(filled: Filled) -> Side:
+        return Side(WARM, Side.filled_state(filled), {})
+
+    @staticmethod
+    def damaged(filled: Filled) -> Side:
+        return Side(DAMAGED, Side.filled_state(filled), {})
+
+    @staticmethod
+    def filling(state: State) -> Side:
+        return Side(FILL, state, {})
+
+    @staticmethod
+    def filled_state(filled: Filled) -> State:
+        """A warm or damaged side stands only on a state a parent's check filled: a bare state
+        would make it a second cold check that reuses nothing."""
+        if not isinstance(filled, Filled):
+            raise TypeError(f"a side that reuses stored work needs a filled state, not {type(filled).__name__}")
+        return filled.state
+
+
+# ── the checks ────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Running:
+    """A started check, and the directory it writes its dump into."""
+
+    process: subprocess.Popen[str]
+    out: Path
+    side: Side
+
+
+class Checker:
+    """Starts checks, each in its own process, with its side's state directory as its cache root."""
+
+    def __init__(self, repo: Path, engine: str, mode: Mode, work: Path, today: datetime.date) -> None:
+        self.repo = repo
+        self.engine = engine
+        self.mode = mode
+        self.work = work
+        self.today = today
+        self.count = 0
+
+    def command(self, tree: str, head: str, out: Path, tables: bool) -> list[str]:
+        command = [sys.executable, "-m", "hoglint.native.replay", "check", "--repo", str(self.repo)]
+        command += ["--engine", self.engine, "--today", self.today.isoformat(), "--tree", tree, "--head", head]
+        return [*command, "--out", str(out), *(["--tables"] if tables else [])]
+
+    def start(self, side: Side, tree: str, head: str, label: str, tables: bool = True) -> Running:
+        self.count += 1
+        out = self.work / "dumps" / f"{self.count:04d}-{label}"
+        if out.exists():
+            shutil.rmtree(out)
+        env = check_env(dict(os.environ), {**self.mode.env(), **side.env, "XDG_CACHE_HOME": str(side.state.root)})
+        process = subprocess.Popen(
+            self.command(tree, head, out, tables),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        return Running(process, out, side)
+
+    def finish(self, running: Running) -> CheckDump:
+        process = running.process
+        _, stderr = process.communicate()
+        if process.returncode != 0 or not (running.out / "check.json").is_file():
+            raise CheckFailed(f"exit {process.returncode}: {stderr.strip()[-1500:]}")
+        return CheckDump.load(running.out, running.side.kind)
+
+    def check(self, side: Side, tree: str, head: str, label: str, tables: bool = True) -> CheckDump:
+        return self.finish(self.start(side, tree, head, label, tables))
+
+    def fill(self, state: State, pair: Pair, label: str) -> Filled:
+        """The parent's check in `state`, which a warm or damaged side then reuses."""
+        self.check(Side.filling(state), pair.parent, pair.parent, label, tables=False)
+        return Filled(state)
+
+    def killed(self, side: Side, tree: str, head: str, label: str, ready: Callable[[], bool]) -> str:
+        """Starts a check and kills its process group as soon as `ready` holds; says what happened."""
+        running = self.start(side, tree, head, label, tables=False)
+        process = running.process
+        what = "finished before the kill (not exercised)"
+        try:
+            while process.poll() is None:
+                if ready():
+                    what = "killed in its writes"
+                    break
+                time.sleep(0.002)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            shutil.rmtree(running.out, ignore_errors=True)
+        return what
 
 
 # ── damage ────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class DamageCase:
+    """What a damage case of one pair works with: the cold dumps its checks must equal."""
+
+    checker: Checker
+    states: States
+    pair: Pair
+    cold_parent: CheckDump
+    cold_child: CheckDump
+    rng: random.Random
+
+    def fill(self, name: str, facts: str = "shared") -> Filled:
+        return self.checker.fill(self.states.fresh(name, facts), self.pair, f"{name}-parent")
+
+    def child(self, side: Side, label: str) -> CheckDump:
+        return self.checker.check(side, self.pair.child, self.pair.parent, label)
+
+    @staticmethod
+    def against(label: str, cold: CheckDump, other: CheckDump) -> Outcome:
+        """The comparison, made once with its whole label, so no field is lost to a relabel."""
+        outcome = compare(label, cold, other)
+        shutil.rmtree(other.path, ignore_errors=True)
+        return outcome
+
+
 class Damage:
-    """Done to a state directory after the parent's check and before the child's. `facts` says
-    which fact cache the state needs: `copy` when the damage writes into it."""
+    """One damage case, run in a state directory of its own name: the checks after the damage
+    must report what the cold checks report, and none may fail (D28)."""
 
     name = ""
-    facts = "shared"
+
+    def run(self, case: DamageCase) -> list[Outcome]:
+        raise NotImplementedError
+
+
+class StoreDamage(Damage):
+    """Done to the stored files under `part` of the cache root, after the parent's check and
+    before the child's. A damage to the fact cache works on a private copy of it."""
+
+    part = ""
+
+    @property
+    def facts(self) -> str:
+        return "copy" if self.part == FACTS else "shared"
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         raise NotImplementedError
 
+    def run(self, case: DamageCase) -> list[Outcome]:
+        filled = case.fill(self.name, self.facts)
+        done = self.apply(filled.state, case.rng)
+        child = case.child(Side.damaged(filled), f"{self.name}-child")
+        what = f"{len(done)} damaged" if done else "nothing to damage"
+        return [case.against(labelled(self.name, what), case.cold_child, child)]
 
-class FileDamage(Damage):
+
+class FileDamage(StoreDamage):
     """Every stored file of one kind, under `part` of the cache root, made garbage, empty, cut to
     half, or (for a stored digest) text of the right length that is not a digest."""
 
     HOW = ("garbage", "empty", "truncate", "not-a-digest")
 
-    def __init__(self, store: str, part: str, pattern: str, how: str, facts: str = "shared") -> None:
+    def __init__(self, store: str, part: str, pattern: str, how: str) -> None:
         if how not in self.HOW:
             raise ValueError(f"no damage {how}")
         self.name = f"{how}-{store}"
         self.part = part
         self.pattern = pattern
         self.how = how
-        self.facts = facts
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         return [self.damage(path, rng) for path in state.files(self.part, self.pattern)]
@@ -942,40 +1244,43 @@ class FileDamage(Damage):
         return f"{path.name}: {self.how} ({size} bytes before)"
 
 
-class RemoveSummarySection(Damage):
+class RemoveSummarySection(StoreDamage):
     """Removes the section every baseline reads (incompletes) of each stored summary."""
 
     name = "remove-summary-section"
+    part = "summaries"
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
-        for manifest in state.files("summaries", "*.json"):
+        for manifest in state.files(self.part, "*.json"):
             digest = json.loads(manifest.read_bytes())["sections"]["incompletes"]
-            for section in state.files("summaries", f"{digest}.zst"):
+            for section in state.files(self.part, f"{digest}.zst"):
                 section.unlink()
                 done.append(f"removed {section.name}")
         return done
 
 
-class RemoveInputs(Damage):
+class RemoveInputs(StoreDamage):
     name = "remove-inputs"
+    part = "inputs"
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
-        for path in state.files("inputs"):
+        for path in state.files(self.part):
             path.unlink()
             done.append(f"removed {path.name}")
         return done
 
 
-class RemovePackEntry(Damage):
+class RemovePackEntry(StoreDamage):
     """Removes one stored migration summary of each pack cache file."""
 
     name = "remove-pack-entry"
+    part = "packs"
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
-        for path in state.files("packs", "*.json"):
+        for path in state.files(self.part, "*.json"):
             entries = json.loads(path.read_bytes())
             if not entries:
                 continue
@@ -986,14 +1291,13 @@ class RemovePackEntry(Damage):
         return done
 
 
-class FactRows(Damage):
-    """Damage to every tenth stored fact row, in a private copy of the fact cache."""
-
-    facts = "copy"
+class SqliteRows(StoreDamage):
+    """Damage to rows of every SQLite database under `part`: the fact cache or the pack memo's
+    stored parts and states (hoglint/native/memo_store.py)."""
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
-        for path in state.files("facts", "*.sqlite"):
+        for path in state.files(self.part, "*.sqlite"):
             with contextlib.closing(sqlite3.connect(path)) as conn:
                 changed = self.damage(conn)
                 conn.commit()
@@ -1004,74 +1308,107 @@ class FactRows(Damage):
         raise NotImplementedError
 
 
-class RemoveFactRows(FactRows):
+class RemoveFactRows(SqliteRows):
     """Removes stored fact bodies and records whose key rows stay: a key that leads nowhere."""
 
     name = "remove-fact-rows"
+    part = FACTS
 
     def damage(self, conn: sqlite3.Connection) -> int:
         removed = conn.execute("DELETE FROM facts WHERE id % 10 = 3").rowcount
         return removed + conn.execute("DELETE FROM records WHERE id % 10 = 7").rowcount
 
 
-class MemoRows(Damage):
-    """Damage to the pack memo's stored parts and states (hoglint/native/memo_store.py)."""
-
-    def apply(self, state: State, rng: random.Random) -> list[str]:
-        done = []
-        for path in state.files("memo", "*.sqlite"):
-            with contextlib.closing(sqlite3.connect(path)) as conn:
-                changed = self.damage(conn)
-                conn.commit()
-            done.append(f"{path.name}: {changed} rows")
-        return done
-
-    def damage(self, conn: sqlite3.Connection) -> int:
-        raise NotImplementedError
-
-
-class GarbageMemoParts(MemoRows):
-    name = "garbage-memo-parts"
-
-    def damage(self, conn: sqlite3.Connection) -> int:
-        changed = conn.execute("UPDATE parts SET body = randomblob(length(body)) WHERE digest < '8'").rowcount
-        return changed + conn.execute("UPDATE blobs SET body = randomblob(length(body)) WHERE id % 3 = 1").rowcount
-
-
-class RemoveMemoParts(MemoRows):
-    """Removes parts that states still name, and some states' manifests: names that lead nowhere."""
-
-    name = "remove-memo-parts"
-
-    def damage(self, conn: sqlite3.Connection) -> int:
-        removed = conn.execute("DELETE FROM parts WHERE digest < '8'").rowcount
-        return removed + conn.execute("DELETE FROM blobs WHERE id % 3 = 2").rowcount
-
-
-class GarbageFactRows(FactRows):
+class GarbageFactRows(SqliteRows):
     name = "garbage-fact-rows"
+    part = FACTS
 
     def damage(self, conn: sqlite3.Connection) -> int:
         changed = conn.execute("UPDATE facts SET body = randomblob(length(body)) WHERE id % 10 = 3").rowcount
         return changed + conn.execute("UPDATE records SET json = randomblob(length(json)) WHERE id % 10 = 7").rowcount
 
 
-# The files a check reads from the cache root, by store: (store, part, file pattern, fact cache).
-CACHE_FILES = (
-    ("summaries", "summaries", "*", "shared"),
-    ("inputs", "inputs", "*", "shared"),
-    ("packs", "packs", "*", "shared"),
-    ("fact-database", "facts", "*.sqlite", "copy"),
-    ("fact-marks", "facts", "*.sqlite.*", "copy"),
-    ("pack-memo", "memo", "*.sqlite", "shared"),
-    ("pack-memo-wal", "memo", "*.sqlite-*", "shared"),
-)
-STATE_DAMAGES: tuple[Damage, ...] = (
-    *(
-        FileDamage(store, part, pattern, how, facts)
-        for store, part, pattern, facts in CACHE_FILES
-        for how in ("garbage", "empty", "truncate")
-    ),
+class GarbageMemoParts(SqliteRows):
+    name = "garbage-memo-parts"
+    part = MEMO
+
+    def damage(self, conn: sqlite3.Connection) -> int:
+        changed = conn.execute("UPDATE parts SET body = randomblob(length(body)) WHERE digest < '8'").rowcount
+        return changed + conn.execute("UPDATE blobs SET body = randomblob(length(body)) WHERE id % 3 = 1").rowcount
+
+
+class RemoveMemoParts(SqliteRows):
+    """Removes parts that states still name, and some states' manifests: names that lead nowhere."""
+
+    name = "remove-memo-parts"
+    part = MEMO
+
+    def damage(self, conn: sqlite3.Connection) -> int:
+        removed = conn.execute("DELETE FROM parts WHERE digest < '8'").rowcount
+        return removed + conn.execute("DELETE FROM blobs WHERE id % 3 = 2").rowcount
+
+
+class TwoChildrenAtOnce(Damage):
+    """Two child checks at once in one filled state."""
+
+    name = "two-children-at-once"
+
+    def run(self, case: DamageCase) -> list[Outcome]:
+        filled = case.fill(self.name)
+        checker, pair = case.checker, case.pair
+        first = checker.start(Side.damaged(filled), pair.child, pair.parent, f"{self.name}-a")
+        second = checker.start(Side.damaged(filled), pair.child, pair.parent, f"{self.name}-b")
+        dumps = [checker.finish(first), checker.finish(second)]
+        return [case.against(f"{self.name}-{n}", case.cold_child, dump) for n, dump in zip("ab", dumps, strict=True)]
+
+
+class KilledInFactWrites(Damage):
+    """The parent's check, killed while it writes the fact cache, then run again, then the child."""
+
+    name = "killed-in-fact-writes"
+
+    def run(self, case: DamageCase) -> list[Outcome]:
+        state = case.states.fresh(self.name, facts="empty")
+        checker, pair = case.checker, case.pair
+        parent = f"{self.name}-parent"
+        what = checker.killed(Side.filling(state), pair.parent, pair.parent, parent, lambda: self.writing_facts(state))
+        filled = Filled(state)
+        again = checker.check(Side.damaged(filled), pair.parent, pair.parent, f"{parent}-again")
+        child = case.child(Side.damaged(filled), f"{self.name}-child")
+        return [
+            case.against(labelled(parent, what), case.cold_parent, again),
+            case.against(f"{self.name}-child", case.cold_child, child),
+        ]
+
+    @staticmethod
+    def writing_facts(state: State) -> bool:
+        """The fact database has taken a few megabytes of writes, so the check is in its writes."""
+        return any(size_of(path) > 4_000_000 for path in state.files(FACTS, "*.sqlite*"))
+
+
+class KilledInSummaryWrite(Damage):
+    """The child's check, killed while it writes a summary, then run again."""
+
+    name = "killed-in-summary-write"
+
+    def run(self, case: DamageCase) -> list[Outcome]:
+        filled = case.fill(self.name)
+        state = filled.state
+        known = set(state.files("summaries"))
+        checker, pair = case.checker, case.pair
+        child = f"{self.name}-child"
+        what = checker.killed(Side.damaged(filled), pair.child, pair.parent, child, lambda: self.new_file(state, known))
+        again = case.child(Side.damaged(filled), f"{child}-again")
+        return [case.against(labelled(self.name, what), case.cold_child, again)]
+
+    @staticmethod
+    def new_file(state: State, known: set[Path]) -> bool:
+        root = state.cache / "summaries"
+        return root.is_dir() and any(path not in known for path in root.rglob("*"))
+
+
+DAMAGES: tuple[Damage, ...] = (
+    *(FileDamage(store, part, pattern, how) for store, part, pattern in CACHE_FILES for how in DAMAGE_HOW),
     FileDamage("inputs", "inputs", "*", "not-a-digest"),
     RemoveSummarySection(),
     RemoveInputs(),
@@ -1080,118 +1417,13 @@ STATE_DAMAGES: tuple[Damage, ...] = (
     GarbageFactRows(),
     GarbageMemoParts(),
     RemoveMemoParts(),
+    TwoChildrenAtOnce(),
+    KilledInFactWrites(),
+    KilledInSummaryWrite(),
 )
-# Damages that are a way of running checks, not a change to stored files.
-RUN_DAMAGES = ("two-children-at-once", "killed-in-fact-writes", "killed-in-summary-write")
-DAMAGES = (*(damage.name for damage in STATE_DAMAGES), *RUN_DAMAGES)
 
 
 # ── the harness ───────────────────────────────────────────────────
-
-# A cold check runs with every store of reused answers switched off. Its own baseline fills the
-# cold state directory first, so a store left on would hand the cold child the same stored
-# answers as the warm child, and a wrong answer would compare equal. Every new store of reused
-# answers adds its off switch here. The per-blob fact cache stays on: its entries are what the
-# extractor makes of a file's bytes, keyed by those bytes.
-COLD_SWITCHES = {PACK_MEMO_SWITCH: PACK_MEMO_OFF, ANSWER_CACHE_SWITCH: "1"}
-# Every switch that turns a store of reused answers or a recording on or off. A check never
-# takes them from the caller's shell: the replay sets what each side needs, so a warm side
-# reuses what it stored. Every new store adds its switch here too.
-REUSE_SWITCHES = (*COLD_SWITCHES, PACK_MEMO_DROP, PACK_MEMO_STATS, TRACE_ENV)
-
-
-def check_env(caller: dict[str, str], side: dict[str, str]) -> dict[str, str]:
-    """The caller's environment with no reuse switch, and then the side's own settings."""
-    out = {name: value for name, value in caller.items() if name not in REUSE_SWITCHES}
-    return {**out, **side}
-
-
-@dataclass(frozen=True)
-class Pair:
-    name: str
-    parent: str
-    child: str
-
-    @staticmethod
-    def read(path: Path) -> list[Pair]:
-        """Tab-separated: name, parent tree, child tree; further columns are ignored."""
-        out = []
-        for line in path.read_text().splitlines():
-            if not line.strip() or line.startswith("#"):
-                continue
-            name, parent, child = line.split("\t")[:3]
-            out.append(Pair(name, parent, child))
-        return out
-
-
-class Checker:
-    """Starts checks, each in its own process, with a state directory as its cache root."""
-
-    def __init__(self, repo: Path, engine: str, mode: Mode, work: Path, today: datetime.date) -> None:
-        self.repo = repo
-        self.engine = engine
-        self.mode = mode
-        self.work = work
-        self.today = today
-        self.count = 0
-
-    def command(self, tree: str, head: str, out: Path, tables: bool) -> list[str]:
-        command = [sys.executable, "-m", "hoglint.native.replay", "check", "--repo", str(self.repo)]
-        command += ["--engine", self.engine, "--today", self.today.isoformat(), "--tree", tree, "--head", head]
-        return [*command, "--out", str(out), *(["--tables"] if tables else [])]
-
-    def start(
-        self, tree: str, head: str, state: State, label: str, tables: bool, env: dict[str, str]
-    ) -> subprocess.Popen[str]:
-        self.count += 1
-        out = self.work / "dumps" / f"{self.count:04d}-{label}"
-        if out.exists():
-            shutil.rmtree(out)
-        full_env = check_env(dict(os.environ), {**self.mode.env(), **env, "XDG_CACHE_HOME": str(state.root)})
-        return subprocess.Popen(
-            self.command(tree, head, out, tables),
-            env=full_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-
-    @staticmethod
-    def out_of(process: subprocess.Popen[str]) -> Path:
-        args = process.args
-        if not isinstance(args, list):
-            raise TypeError("a check is started with an argument list")
-        return Path(str(args[args.index("--out") + 1]))
-
-    def finish(self, process: subprocess.Popen[str]) -> CheckDump:
-        _, stderr = process.communicate()
-        out = self.out_of(process)
-        if process.returncode != 0 or not (out / "check.json").is_file():
-            raise CheckFailed(f"exit {process.returncode}: {stderr.strip()[-1500:]}")
-        return CheckDump.load(out)
-
-    def check(
-        self, tree: str, head: str, state: State, label: str, tables: bool = True, env: dict[str, str] | None = None
-    ) -> CheckDump:
-        return self.finish(self.start(tree, head, state, label, tables, env or {}))
-
-    def killed(self, tree: str, head: str, state: State, label: str, ready: Callable[[], bool]) -> str:
-        """Starts a check and kills its process group as soon as `ready` holds; says what happened."""
-        process = self.start(tree, head, state, label, False, {})
-        what = "finished before the kill (not exercised)"
-        try:
-            while process.poll() is None:
-                if ready():
-                    what = "killed in its writes"
-                    break
-                time.sleep(0.002)
-        finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
-            shutil.rmtree(self.out_of(process), ignore_errors=True)
-        return what
 
 
 @dataclass(frozen=False)
@@ -1242,15 +1474,12 @@ class PairResult:
 class Replay:
     """Replays pairs: cold parent, cold child, warm child, back again, and the damage cases."""
 
-    def __init__(self, checker: Checker, damages: tuple[str, ...]) -> None:
+    def __init__(self, checker: Checker, damages: tuple[Damage, ...]) -> None:
         self.checker = checker
         self.damages = damages
         self.work = checker.work
-        self.shared_facts = self.work / "facts"
+        self.states = States(self.work)
         self.rng = random.Random(0)
-
-    def state(self, name: str, facts: str = "shared") -> State:
-        return State(self.work / "states" / name).create(self.shared_facts, facts)
 
     def run(self, pair: Pair) -> PairResult:
         result = PairResult(pair)
@@ -1260,18 +1489,22 @@ class Replay:
             result.verdicts.append(Failed("check", str(error)))
         finally:
             shutil.rmtree(self.work / "dumps", ignore_errors=True)
-            shutil.rmtree(self.work / "states", ignore_errors=True)
+            self.states.clear()
         return result
 
     def replay(self, pair: Pair, result: PairResult) -> None:
-        check = self.checker.check
-        cold_parent = check(pair.parent, pair.parent, self.state("cold-parent"), "cold-parent", env=COLD_SWITCHES)
-        result.cold = cold_child = check(
-            pair.child, pair.parent, self.state("cold-child"), "cold-child", env=COLD_SWITCHES
-        )
+        checker = self.checker
+        cold_parent = checker.check(Side.cold(self.states, "cold-parent"), pair.parent, pair.parent, "cold-parent")
+        cold_child = checker.check(Side.cold(self.states, "cold-child"), pair.child, pair.parent, "cold-child")
+        result.cold = cold_child
+        for label, dump in (("cold-parent", cold_parent), ("cold-child", cold_child)):
+            problem = cold_problem(dump.meta)
+            if problem:
+                result.verdicts.append(NotCold(label, problem))
+                return
         truth = TruthSet(cold_parent.path, cold_child.path).compute()
-        mode = self.checker.mode
-        predicted = mode.predict(changed_paths(self.checker.repo, pair), (cold_parent.path, cold_child.path))
+        mode = checker.mode
+        predicted = mode.predict(changed_paths(checker.repo, pair), (cold_parent.path, cold_child.path))
         result.prediction = PredictionScore.of(truth, predicted)
         gaps = mode.gaps(truth)
         if gaps:
@@ -1279,82 +1512,28 @@ class Replay:
         if mode.cold_only:
             result.verdicts.append(certify(result.prediction))
             return
-        warm = self.state("warm")
-        check(pair.parent, pair.parent, warm, "warm-parent", tables=False)
-        result.warm = warm_child = check(pair.child, pair.parent, warm, "warm-child")
-        planted = self.checker.mode.tamper(warm_child.path, cold_parent.path, truth)
+        filled = checker.fill(self.states.fresh("warm"), pair, "warm-parent")
+        result.warm = warm_child = checker.check(Side.warm(filled), pair.child, pair.parent, "warm-child")
+        planted = mode.tamper(warm_child.path, cold_parent.path, truth)
         if planted:
             result.notes.append(planted)
-        result.verdicts.append(compare("child", cold_child, warm_child, warm=True))
-        back = check(pair.parent, pair.parent, warm, "back")
-        result.verdicts.append(compare("back", cold_parent, back, warm=True))
+        result.verdicts.append(compare("child", cold_child, warm_child))
+        back = checker.check(Side.warm(filled), pair.parent, pair.parent, "back")
+        result.verdicts.append(compare("back", cold_parent, back))
         shutil.rmtree(warm_child.path)
         shutil.rmtree(back.path)
-        for name in self.damages:
-            result.verdicts.extend(self.damaged(pair, name, cold_parent, cold_child))
+        case = DamageCase(checker, self.states, pair, cold_parent, cold_child, self.rng)
+        for damage in self.damages:
+            result.verdicts.extend(self.damaged(damage, case))
 
-    def damaged(self, pair: Pair, name: str, cold_parent: CheckDump, cold_child: CheckDump) -> list[Outcome]:
+    def damaged(self, damage: Damage, case: DamageCase) -> list[Outcome]:
         """One damage case; a check that fails is the finding, reported as a failed run."""
         try:
-            return self.damage_case(pair, name, cold_parent, cold_child)
+            return damage.run(case)
         except CheckFailed as error:
-            return [Failed(name, str(error))]
+            return [Failed(damage.name, str(error))]
         finally:
-            shutil.rmtree(self.work / "states" / name, ignore_errors=True)
-
-    def damage_case(self, pair: Pair, name: str, cold_parent: CheckDump, cold_child: CheckDump) -> list[Outcome]:
-        check = self.checker.check
-        if name == "two-children-at-once":
-            state = self.state(name)
-            check(pair.parent, pair.parent, state, f"{name}-parent", tables=False)
-            first = self.checker.start(pair.child, pair.parent, state, f"{name}-a", True, {})
-            second = self.checker.start(pair.child, pair.parent, state, f"{name}-b", True, {})
-            outcomes = [self.checker.finish(first), self.checker.finish(second)]
-            return [self.verdict(f"{name}-{n}", cold_child, o) for n, o in zip("ab", outcomes, strict=True)]
-        if name == "killed-in-fact-writes":
-            state = self.state(name, facts="empty")
-            what = self.checker.killed(
-                pair.parent, pair.parent, state, f"{name}-parent", lambda: self.writing_facts(state)
-            )
-            again = check(pair.parent, pair.parent, state, f"{name}-parent-again")
-            child = check(pair.child, pair.parent, state, f"{name}-child")
-            return [
-                self.verdict(labelled(f"{name}-parent", what), cold_parent, again),
-                self.verdict(f"{name}-child", cold_child, child),
-            ]
-        if name == "killed-in-summary-write":
-            state = self.state(name)
-            check(pair.parent, pair.parent, state, f"{name}-parent", tables=False)
-            known = set(state.files("summaries"))
-            what = self.checker.killed(
-                pair.child, pair.parent, state, f"{name}-child", lambda: self.new_summary_file(state, known)
-            )
-            child = check(pair.child, pair.parent, state, f"{name}-child-again")
-            return [self.verdict(labelled(name, what), cold_child, child)]
-        damage = next(d for d in STATE_DAMAGES if d.name == name)
-        state = self.state(name, damage.facts)
-        check(pair.parent, pair.parent, state, f"{name}-parent", tables=False)
-        done = damage.apply(state, self.rng)
-        child = check(pair.child, pair.parent, state, f"{name}-child")
-        what = f"{len(done)} damaged" if done else "nothing to damage"
-        return [self.verdict(labelled(name, what), cold_child, child)]
-
-    @staticmethod
-    def verdict(label: str, cold: CheckDump, other: CheckDump) -> Outcome:
-        """The comparison, made once with its whole label, so no field is lost to a relabel."""
-        outcome = compare(label, cold, other)
-        shutil.rmtree(other.path, ignore_errors=True)
-        return outcome
-
-    @staticmethod
-    def writing_facts(state: State) -> bool:
-        """The fact database has taken a few megabytes of writes, so the check is in its writes."""
-        return any(size_of(path) > 4_000_000 for path in state.files("facts", "*.sqlite*"))
-
-    @staticmethod
-    def new_summary_file(state: State, known: set[Path]) -> bool:
-        root = state.cache / "summaries"
-        return root.is_dir() and any(path not in known for path in root.rglob("*"))
+            self.states.remove(damage.name)
 
 
 class PairsReport:
@@ -1405,6 +1584,7 @@ class Determinism:
     def __init__(self, checker: Checker) -> None:
         self.checker = checker
         self.work = checker.work
+        self.states = States(self.work)
 
     def run(self, tree: str) -> bool:
         ok = True
@@ -1413,15 +1593,15 @@ class Determinism:
             for seed in SEEDS:
                 for threads in THREADS:
                     label = f"seed{seed}-threads{threads}"
-                    state = State(self.work / "states" / label).create(self.work / "facts", facts="empty")
+                    side = Side.cold(self.states, label, facts="empty", env=seed_env(seed, threads, threads))
                     try:
-                        dump = self.checker.check(tree, tree, state, label, env=seed_env(seed, threads, threads))
+                        dump = self.checker.check(side, tree, tree, label)
                     except CheckFailed as error:
                         sys.stdout.write(f"{tree[:11]} {label}: FAILED RUN: {error}\n")
                         ok = False
                         continue
                     finally:
-                        state.remove()
+                        self.states.remove(label)
                     if first is None:
                         first = dump
                         sys.stdout.write(f"{tree[:11]} {label}: first ({dump.wall:.1f}s)\n")
@@ -1435,20 +1615,21 @@ class Determinism:
                     sys.stdout.flush()
         finally:
             shutil.rmtree(self.work / "dumps", ignore_errors=True)
-            shutil.rmtree(self.work / "states", ignore_errors=True)
+            self.states.clear()
         return ok
 
 
-def pick_damages(text: str) -> tuple[str, ...]:
+def pick_damages(text: str) -> tuple[Damage, ...]:
     if not text:
         return ()
     if text == "all":
         return DAMAGES
+    by_name = {damage.name: damage for damage in DAMAGES}
     names = tuple(name.strip() for name in text.split(","))
-    unknown = [name for name in names if name not in DAMAGES]
+    unknown = [name for name in names if name not in by_name]
     if unknown:
-        raise SystemExit(f"unknown damage {unknown}; known: {', '.join(DAMAGES)}")
-    return names
+        raise SystemExit(f"unknown damage {unknown}; known: {', '.join(by_name)}")
+    return tuple(by_name[name] for name in names)
 
 
 def run_pairs(args: argparse.Namespace, checker: Checker) -> bool:
