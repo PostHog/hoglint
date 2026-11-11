@@ -2,7 +2,7 @@
 //! (hoglint/core/symbols.py). Caches and their cycle rule match the Python resolver, so
 //! the order of queries gives the same answers.
 
-use super::facts::{Def, FactSet, Import, Op, V};
+use super::facts::{Assign, Def, FactSet, FileFacts, Import, Op, V};
 use super::heap;
 use super::intern::{EMPTY, Interner, Sid};
 use super::paths::{ModuleIndex, ModuleNamer};
@@ -30,6 +30,34 @@ pub const MODULE_ATTRIBUTES: [&str; 9] = [
     "__dict__",
     "__all__",
 ];
+
+/// Whether an assigns row binds module-level names: `=`, `:` or `type` at module level.
+pub fn is_module_assign(row: &Assign) -> bool {
+    let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
+    row.s == -1 && row.f & !MODULE_LEVEL_FLAGS == 0 && assigned
+}
+
+/// name -> row index of the last module-level assignment with a value of each bare name, in one
+/// record: the value a module table reads for the name.
+pub fn module_assigns(it: &Interner, record: &FileFacts) -> FxHashMap<Sid, u32> {
+    let mut rows = FxHashMap::default();
+    if !record.ok() {
+        return rows;
+    }
+    for (at, row) in record.assigns.iter().enumerate() {
+        if !is_module_assign(row) || row.value.is_none() {
+            continue;
+        }
+        for target in &row.targets {
+            if let V::Chain(name) = target
+                && !it.s(*name).contains('.')
+            {
+                rows.insert(*name, at as u32);
+            }
+        }
+    }
+    rows
+}
 
 /// A language-qualified entity: a module (symbol EMPTY) or a symbol inside one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -410,8 +438,7 @@ impl Core {
             }
         }
         for row in &record.assigns {
-            let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
-            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || !assigned {
+            if !is_module_assign(row) {
                 continue;
             }
             for target in &row.targets {

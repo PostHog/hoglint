@@ -18,7 +18,7 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
 from hoglint.core.records import RecordBodies
 from hoglint.core.sites import MODULE_SCOPE, FileScope, Lookup
-from hoglint.core.symbols import MODULE_LEVEL_FLAGS, Hit, ModuleTable, Tables
+from hoglint.core.symbols import Hit, ModuleTable, Tables, module_assigns
 from hoglint.model import Context, EntityId, Site
 from hoglint.native.graph import CONTEXT_SETS, EdgeMaker
 
@@ -95,20 +95,6 @@ class NativeStore:
             dict.__setitem__(record, "status", status)
 
 
-def module_values(record: Mapping[str, Any]) -> dict[str, object]:
-    """name -> value of its last module-level assignment, as Tables.collect records them."""
-    values: dict[str, object] = {}
-    for row in record.get("assigns", ()):
-        if row["s"] != -1 or row.get("f", 0) & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
-            continue
-        if "v" not in row:
-            continue
-        for target in row["t"]:
-            if isinstance(target, str) and "." not in target:
-                values[target] = row["v"]
-    return values
-
-
 class ModuleValues(dict[str, object]):
     """A module table's `values`, decoded from the record's assigns when a pack first reads them:
     most tables packs ask for are read for their names only."""
@@ -120,8 +106,7 @@ class ModuleValues(dict[str, object]):
     def load(self) -> None:
         if self.record is not None:
             record, self.record = self.record, None
-            if record.get("status") == "ok":
-                self.update(module_values(record))
+            self.update((name, row["v"]) for name, row in module_assigns(record).items())
 
     def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
         self.load()

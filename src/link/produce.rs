@@ -4,7 +4,7 @@
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
-    Binding, CLASS, Core, Ent, HitKind, MODULE_LEVEL_FLAGS, OrderedMap, absolute_import, c3_merge,
+    Binding, CLASS, Core, Ent, HitKind, OrderedMap, absolute_import, c3_merge, module_assigns,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -906,37 +906,10 @@ impl Producers<'_> {
         }
     }
 
-    /// name -> assign row of the last module-level assignment of each name in one file.
-    fn assigned(
-        &self,
-        file: u32,
-        out: &mut FxHashMap<Sid, (u32, u32)>,
-        only: Option<&FxHashSet<Sid>>,
-    ) {
-        let record = &self.core.facts.files[file as usize];
-        if !record.ok() {
-            return;
-        }
-        for (at, row) in record.assigns.iter().enumerate() {
-            let assigned = matches!(row.op, Op::Assign | Op::Annotated | Op::TypeAlias);
-            if row.s != -1 || row.f & !MODULE_LEVEL_FLAGS != 0 || !assigned || row.value.is_none() {
-                continue;
-            }
-            for target in &row.targets {
-                if let V::Chain(name) = target
-                    && !self.core.it.s(*name).contains('.')
-                    && only.is_none_or(|names| names.contains(name))
-                {
-                    out.insert(*name, (file, at as u32));
-                }
-            }
-        }
-    }
-
-    /// The value of a module-level type alias a bare name binds (`X = dict[str, Any]`), read
-    /// from the file the module table reads the name from: the `.py`, or the stub for a name
-    /// only the stub binds. Each module's values are read once.
-    fn alias_value(&mut self, module: Sid, name: Sid) -> Option<V> {
+    /// A module-level type alias a bare name binds (`X = dict[str, Any]`): the file and assign
+    /// row of its value, read from the file the module table reads the name from: the `.py`, or
+    /// the stub for a name only the stub binds. Each module's assignments are read once.
+    fn alias(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
         if self.core.it.s(name).contains('.') {
             return None;
         }
@@ -947,16 +920,21 @@ impl Producers<'_> {
             return None;
         }
         if !self.aliases.contains_key(&module) {
-            let mut found = FxHashMap::default();
+            let facts = self.core.facts.clone();
             let table = self.core.table(module)?;
             let table = self.core.table_at(table);
-            let (record, stub) = (table.record, table.stub_record);
-            let stub_names = table.stub_names.clone();
-            if let Some(file) = record {
-                self.assigned(file, &mut found, None);
+            let mut found = FxHashMap::default();
+            if let Some(file) = table.record {
+                for (name, at) in module_assigns(&self.core.it, &facts.files[file as usize]) {
+                    found.insert(name, (file, at));
+                }
             }
-            if let Some(file) = stub.filter(|_| !stub_names.is_empty()) {
-                self.assigned(file, &mut found, Some(&stub_names));
+            if let Some(file) = table.stub_record.filter(|_| !table.stub_names.is_empty()) {
+                for (name, at) in module_assigns(&self.core.it, &facts.files[file as usize]) {
+                    if table.stub_names.contains(&name) {
+                        found.insert(name, (file, at));
+                    }
+                }
             }
             self.aliases.insert(module, found);
         }
@@ -965,7 +943,7 @@ impl Producers<'_> {
             .value
             .as_ref()?;
         match value {
-            V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..) => Some(value.clone()),
+            V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..) => Some((file, at)),
             _ => None,
         }
     }
@@ -976,7 +954,10 @@ impl Producers<'_> {
     /// shorten a signature, not to hide its types.
     fn alias_of(&mut self, mention: Mention, found: Lookup) -> Option<((Sid, Sid), V, SlotLookup)> {
         let module = self.scopes[mention.lookup.owner].module;
-        if let Some(value) = self.alias_value(module, mention.value) {
+        if let Some((file, at)) = self.alias(module, mention.value) {
+            let value = self.core.facts.files[file as usize].assigns[at as usize]
+                .value
+                .clone()?;
             return Some(((module, mention.value), value, mention.lookup));
         }
         let hit = found.hit?;
@@ -992,16 +973,15 @@ impl Producers<'_> {
             }
         }
         let origin = core.origin(hit);
-        let value = self.alias_value(origin.m, origin.s)?;
-        let (file, at) = self.aliases[&origin.m][&origin.s];
+        let (file, at) = self.alias(origin.m, origin.s)?;
         let owner = *self.owner_of.get(&file)?;
-        let line = self.core.facts.files[file as usize].assigns[at as usize].l;
+        let row = &self.core.facts.files[file as usize].assigns[at as usize];
         let lookup = SlotLookup {
             owner,
             scope: -1,
-            line,
+            line: row.l,
         };
-        Some(((origin.m, origin.s), value, lookup))
+        Some(((origin.m, origin.s), row.value.clone()?, lookup))
     }
 
     /// The attrs of one `exposes` row of a slot.

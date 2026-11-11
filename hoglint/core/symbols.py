@@ -6,7 +6,9 @@ origin, so edges can keep surface, via and origin apart.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from hoglint.core.modules import ModuleIndex
 from hoglint.facts import FactStore
@@ -29,6 +31,27 @@ CONDITIONAL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY
 MODULE_ATTRIBUTES = frozenset(
     {"__doc__", "__file__", "__name__", "__path__", "__spec__", "__loader__", "__package__", "__dict__", "__all__"}
 )
+
+
+def is_module_assign(row: dict) -> bool:
+    """Whether an assigns row binds module-level names: `=`, `:` or `type` at module level."""
+    return row["s"] == -1 and not row.get("f", 0) & ~MODULE_LEVEL_FLAGS and row["op"] in ("=", ":", "type")
+
+
+def module_assigns(record: Mapping[str, Any] | None) -> dict[str, dict]:
+    """name -> row of the last module-level assignment with a value of each bare name, in one
+    record: the value a module table reads for the name."""
+    rows: dict[str, dict] = {}
+    if record is None or record.get("status") != "ok":
+        return rows
+    for row in record.get("assigns", ()):
+        if not is_module_assign(row) or "v" not in row:
+            continue
+        for target in row["t"]:
+            if isinstance(target, str) and "." not in target:
+                rows[target] = row
+    return rows
+
 
 # Binding forms: ("class", def index, marker) | ("def", def index, marker) | ("variable",) | ("module", dotted)
 #   | ("from", source module, attribute) | ("alias", dotted chain)
@@ -158,19 +181,19 @@ class Tables:
             if bound is not None:
                 events.append((row[1], row[2], 1, row[3], bound[1], bound[0], None))
         for row in record.get("assigns", ()):
-            flags = row.get("f", 0)
-            if row["s"] != -1 or flags & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
+            if not is_module_assign(row):
                 continue
+            flags = row.get("f", 0)
             value = row.get("v")
             for target in row["t"]:
                 if isinstance(target, str) and "." not in target:
-                    if marker == "" and "v" in row:
-                        table.values[target] = value
                     assigned: Binding = ("alias", value) if isinstance(value, str) else ("variable",)
                     events.append((row["l"], row["c"], 2, flags, assigned, target, None))
                     continue
                 for name in unpacked_names(target):
                     events.append((row["l"], row["c"], 2, flags, ("variable",), name, None))
+        if marker == "":
+            table.values = {name: row["v"] for name, row in module_assigns(record).items()}
         events.sort(key=lambda e: (e[0], e[1], e[2]))
         for _, _, _, flags, binding, name, source in events:
             if binding is None:

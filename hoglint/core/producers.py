@@ -15,7 +15,7 @@ from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import chain_last
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
-from hoglint.core.symbols import CLASS, MODULE_LEVEL_FLAGS, ClassIndex, Hit, Resolver, Tables, absolute_import, entity
+from hoglint.core.symbols import CLASS, ClassIndex, Hit, Resolver, absolute_import, entity, module_assigns
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
@@ -148,44 +148,6 @@ class Followed:
 UNFOLLOWED = Followed(None, -1)
 
 
-class AliasValues:
-    """The value of each module-level name a module table binds by assignment, read once per
-    module from the file the table reads the name from: the `.py`, or the stub for a name only
-    the stub binds."""
-
-    def __init__(self, tables: Tables) -> None:
-        self.tables = tables
-        self.by_module: dict[str, dict[str, dict]] = {}
-
-    @staticmethod
-    def assigned(record: dict | None) -> dict[str, dict]:
-        """name -> row of its last module-level assignment with a value, in one record."""
-        values: dict[str, dict] = {}
-        if record is None or record.get("status") != "ok":
-            return values
-        for row in record.get("assigns", ()):
-            if row["s"] != -1 or row.get("f", 0) & ~MODULE_LEVEL_FLAGS or row["op"] not in ("=", ":", "type"):
-                continue
-            if "v" not in row:
-                continue
-            for target in row["t"]:
-                if isinstance(target, str) and "." not in target:
-                    values[target] = row
-        return values
-
-    def of(self, module: str) -> dict[str, dict]:
-        found = self.by_module.get(module)
-        if found is not None:
-            return found
-        found = self.assigned(self.tables.record(module))
-        table = self.tables.get(module)
-        if table is not None and table.stub_names:
-            stub = self.assigned(self.tables.stub_record(module))
-            found.update((name, value) for name, value in stub.items() if name in table.stub_names)
-        self.by_module[module] = found
-        return found
-
-
 @dataclass(frozen=False)
 class BuildContext:
     """What every producer reads. Built once per run."""
@@ -202,7 +164,7 @@ class BuildContext:
         self.classifier = Classifier(self.index)
         self.names = NameLookup(self.resolver)
         self.scope_of_path = {scope.path: scope for scope in self.files}
-        self.aliases = AliasValues(self.resolver.tables)
+        self.assigned_by_module: dict[str, dict[str, tuple[FileScope | None, dict]]] = {}
         self.classes = ClassIndex(self.resolver)
 
     def binding_scope(self, module: str, name: str) -> FileScope | None:
@@ -273,26 +235,36 @@ class BuildContext:
         found = self.def_of(hit.origin.module, hit.origin.symbol, hit.kind)
         return Followed(*found) if found is not None else UNFOLLOWED
 
-    def alias_value(self, module: str, name: str) -> object:
-        """The value of a module-level type alias the bare name binds (`X = dict[str, Any]`),
-        else None."""
+    def assigned(self, module: str) -> dict[str, tuple[FileScope | None, dict]]:
+        """name -> (file, row) of the last module-level assignment of each name, read once per
+        module from the file the module table reads the name from: the `.py`, or the stub for a
+        name only the stub binds. The file is None when it is not analyzed."""
+        found = self.assigned_by_module.get(module)
+        if found is not None:
+            return found
+        tables = self.resolver.tables
+        rows = module_assigns(tables.record(module))
+        table = tables.get(module)
+        if table is not None and table.stub_names:
+            stub = module_assigns(tables.stub_record(module))
+            rows.update((name, row) for name, row in stub.items() if name in table.stub_names)
+        found = {name: (self.binding_scope(module, name), row) for name, row in rows.items()}
+        self.assigned_by_module[module] = found
+        return found
+
+    def alias(self, module: str, name: str) -> tuple[FileScope | None, dict] | None:
+        """A module-level type alias the bare name binds (`X = dict[str, Any]`): the file and
+        row of the assignment, as `assigned` gives them; else None."""
         if "." in name:
             return None
-        table = self.resolver.tables.get(module)
-        binding = table.names.get(name) if table is not None else None
+        binding = self.resolver.tables.binding(module, name)
         if binding is None or binding[0] not in ("alias", "variable"):
             return None
-        row = self.aliases.of(module).get(name)
-        value = row["v"] if row is not None else None
+        found = self.assigned(module).get(name)
+        value = found[1]["v"] if found is not None else None
         if isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value)):
-            return value
+            return found
         return None
-
-    def alias_site(self, module: str, name: str) -> tuple[FileScope, int] | None:
-        """The file and line of the assignment `alias_value` reads."""
-        row = self.aliases.of(module).get(name)
-        scope = self.binding_scope(module, name) if row is not None else None
-        return (scope, row["l"]) if row is not None and scope is not None else None
 
     def resolve_dotted(self, dotted: str) -> tuple[Resolved, str] | None:
         """A dotted path in a string. None unless its head names repo code."""
@@ -597,20 +569,22 @@ class DeclarationProducer(Producer):
         first-party module that assigns it. A module holds `Handler = Callable[[Order], None]` to
         shorten a signature, not to hide its types."""
         module = mention.lookup.scope.module
-        local = context.alias_value(module, mention.value)
+        local = context.alias(module, mention.value)
         if local is not None:
-            return (module, mention.value), local, mention.lookup
+            return (module, mention.value), local[1]["v"], mention.lookup
         hit = found.hit
         if hit is None or hit.kind != "variable":
             return None
         if not all(context.first_party.contains(str(step)) for step in hit.chain):
             return None
         origin = hit.origin
-        value = context.alias_value(origin.module, origin.symbol)
-        site = context.alias_site(origin.module, origin.symbol)
-        if value is None or site is None:
+        imported = context.alias(origin.module, origin.symbol)
+        if imported is None:
             return None
-        return (origin.module, origin.symbol), value, SlotLookup(site[0], -1, site[1])
+        scope, row = imported
+        if scope is None:
+            return None
+        return (origin.module, origin.symbol), row["v"], SlotLookup(scope, -1, row["l"])
 
     def expand_into(
         self,
