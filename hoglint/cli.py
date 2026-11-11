@@ -496,7 +496,7 @@ class LocalEngine:
     def id(self) -> str:
         crate = EngineId.crate_of(PACKAGE_DIR)
         if crate is not None:
-            return EngineId.of(crate, self.name)
+            return EngineId.of_running(crate, self.name)
         return EngineId.installed(self.name, BinaryIds.of(self.binary, ENGINE))
 
     def framework(self, config: Config) -> str:

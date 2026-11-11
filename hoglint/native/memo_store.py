@@ -269,7 +269,7 @@ def engine_id() -> str:
     """The id of the code that makes a stored state: the `[engine]` id of the checkout's
     sources, else a digest of the installed package's Python files and its native module's id."""
     if EngineSources.read(CRATE) is not None:
-        return EngineId.of(CRATE, ENGINE_NATIVE)
+        return EngineId.of_running(CRATE, ENGINE_NATIVE)
     hasher = hashlib.sha256(bridge.load().NATIVE_ID.encode())
     for path in sorted(PACKAGE.rglob("*.py")):
         hasher.update(path.relative_to(PACKAGE).as_posix().encode())

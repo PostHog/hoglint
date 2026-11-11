@@ -30,6 +30,7 @@ import dataclasses
 import importlib.util
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -210,11 +211,27 @@ class EngineId:
         return crate if (crate / ENGINE_SOURCES).is_file() else None
 
     @staticmethod
-    def of(crate: Path, name: str = ENGINE_PYTHON) -> str:
+    def digest(crate: Path) -> str:
         sources = EngineSources.read(crate)
         if sources is None:
             raise EngineError(f"{crate} has no {ENGINE_SOURCES}: the engine predates run summary protocol {PROTOCOL}")
-        return f"{name}-{sources.digest(ENGINE)}"
+        return sources.digest(ENGINE)
+
+    @staticmethod
+    def of(crate: Path, name: str = ENGINE_PYTHON) -> str:
+        return f"{name}-{EngineId.digest(crate)}"
+
+    @staticmethod
+    @cache
+    def running_digest(crate: Path) -> str:
+        """`digest` of the running code's crate: it does not change while the process runs, so
+        its sources are read and hashed once per process."""
+        return EngineId.digest(crate)
+
+    @staticmethod
+    def of_running(crate: Path, name: str = ENGINE_PYTHON) -> str:
+        """`of` for the crate of the running code."""
+        return f"{name}-{EngineId.running_digest(crate)}"
 
     @staticmethod
     def installed(name: str, build_id: str) -> str:
