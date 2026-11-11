@@ -9,6 +9,7 @@ import pytest
 from hoglint.config import load_config
 from hoglint.config.model import Config
 from hoglint.facts import FACT_KINDS, FactNeeds
+from hoglint.native.config import link_config
 from hoglint.native.source import NativeGraphSource
 from hoglint.plugins import PackReader, PackSink, ProducerFailure
 from hoglint.source import GraphSource, run_packs
@@ -171,3 +172,13 @@ def test_the_graph_key_text_of_a_fixed_config_does_not_move(tmp_path: Path) -> N
     write_files(tmp_path, {"hoglint.toml": PINNED_CONFIG})
     assert GraphSource.key(Path("/repo"), load_config(tmp_path), True) == ("/repo:staged", PINNED_KEY)
 
+
+def test_a_bare_string_and_a_list_in_discovery_parse_to_one_value_on_every_side(tmp_path: Path) -> None:
+    parsed = []
+    for name, value in (("bare", '"pkg.frozen"'), ("listed", '["pkg.frozen"]')):
+        discovery = f"[discovery]\ndataclass_decorators = {value}\nfrozen_dataclass_decorators = {value}\n"
+        write_files(tmp_path / name, {"hoglint.toml": f"schema = 1\n\n{discovery}"})
+        core = GraphSource.core_config(load_config(tmp_path / name))
+        parsed.append((core, core.dataclass_kinds, link_config(core, (), {})))
+    assert parsed[0] == parsed[1]
+    assert parsed[0][1].make == parsed[0][1].freeze == frozenset({"pkg.frozen"})

@@ -30,13 +30,14 @@ import dataclasses
 import importlib.util
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, cached_property
 from pathlib import Path
 from typing import Any, ClassVar
 
 from hoglint.config.loader import PACK_PREFIX
 from hoglint.config.model import Config
 from hoglint.config.schema import as_tuple, canonical
+from hoglint.core.config import CoreConfig
 from hoglint.ledger.cache import answer_key
 from hoglint.ledger.errors import EngineError
 from hoglint.plugins import REGISTRY
@@ -380,6 +381,12 @@ class ConfigInputs:
                 "export_surfaces": [(surface.within, surface.paths) for surface in self.export_surfaces],
             }
         )
+
+    @cached_property
+    def core(self) -> CoreConfig:
+        """`[discovery]` and the surfaces as core reads them, parsed once: both engines and the
+        rules read this one value."""
+        return CoreConfig.from_discovery(self.config.discovery, self.contract_surfaces, self.export_surfaces)
 
     def rule_files(self) -> dict[str, str]:
         return {spec.id: spec.classify for spec in self.config.rules.values() if spec.classify}

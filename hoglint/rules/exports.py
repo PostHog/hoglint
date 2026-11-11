@@ -16,8 +16,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
-from hoglint.core.config import DataclassDecorators
 from hoglint.globs import compile_label_glob
+from hoglint.ledger.envelope import ConfigInputs
 from hoglint.model import Context, Edge, Resolution, context_bits
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project
 from hoglint.rules.plan import identity_paths
@@ -53,7 +53,7 @@ class ExportPrimitive(RuleType):
         self.spec = spec
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
-        self.dataclass_kinds = DataclassDecorators.from_discovery(ctx.config.discovery)
+        self.dataclass_kinds = ConfigInputs.of(ctx.config).core.dataclass_kinds
         self.index = ctx.labeler.index
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()

@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hoglint.config import Config
-from hoglint.config.schema import as_tuple
 from hoglint.facts import FACT_KINDS, FactNeeds
 from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import ConfigInputs
@@ -127,37 +126,15 @@ class GraphSource:
 
     @staticmethod
     def core_config(config: Config) -> CoreConfig:
-        from hoglint.core.config import (
-            CoreConfig,  # noqa: PLC0415 - the extractor stack loads only when a graph is built
-        )
-
-        discovery = config.discovery
-        fields: dict[str, Any] = {
-            "source_roots": as_tuple(discovery.get("source_roots", ["."])),
-            "first_party": as_tuple(discovery.get("first_party")),
-            "excludes": as_tuple(discovery.get("exclude")),
-            "external_packages": as_tuple(discovery.get("external")),
-        }
-        if "tests" in discovery:
-            fields["test_paths"] = as_tuple(discovery["tests"])
-        if "migrations" in discovery:
-            fields["migration_paths"] = as_tuple(discovery["migrations"])
-        if "dataclass_decorators" in discovery:
-            fields["dataclass_decorators"] = as_tuple(discovery["dataclass_decorators"])
-        if "path_callees" in discovery:
-            fields["path_callees"] = as_tuple(discovery["path_callees"])
-        if "frozen_dataclass_decorators" in discovery:
-            fields["frozen_dataclass_decorators"] = as_tuple(discovery["frozen_dataclass_decorators"])
-        inputs = ConfigInputs.of(config)
-        fields["contract_surfaces"] = inputs.contract_surfaces
-        fields["export_surfaces"] = inputs.export_surfaces
-        return CoreConfig(**fields)
+        return ConfigInputs.of(config).core
 
     @staticmethod
     def fact_needs(packs: list[tuple[Pack, Mapping[str, Any]]]) -> FactNeeds:
         """The union of what the active packs need extracted. A pack that does not say needs every
         fact kind and every watch list a registered pack declares."""
-        from hoglint.core.analysis import registered_needs  # noqa: PLC0415 - see core_config
+        from hoglint.core.analysis import (
+            registered_needs,  # noqa: PLC0415 - the extractor stack loads only when a graph is built
+        )
 
         needs = FactNeeds()
         for pack, section in packs:
@@ -167,8 +144,8 @@ class GraphSource:
         return needs
 
     def build_fresh(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> Graph:
-        from hoglint.core.analysis import AnalysisOptions, CoreAnalysis  # noqa: PLC0415 - see core_config
-        from hoglint.core.reader import python_pack_io  # noqa: PLC0415 - see core_config
+        from hoglint.core.analysis import AnalysisOptions, CoreAnalysis  # noqa: PLC0415 - see fact_needs
+        from hoglint.core.reader import python_pack_io  # noqa: PLC0415 - see fact_needs
 
         packs = active_packs(config)
         work = Path(tempfile.mkdtemp(dir=self.work_dir))

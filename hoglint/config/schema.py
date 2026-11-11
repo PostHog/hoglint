@@ -34,7 +34,7 @@ from hoglint.config.model import (
     ZoneSpec,
     ZoneTable,
 )
-from hoglint.core.config import DataclassDecorators, as_tuple
+from hoglint.core.config import CoreConfig, as_tuple
 from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
@@ -975,7 +975,7 @@ class SchemaBuilder:
     def read_discovery(self) -> None:
         discovery = self.raw.get("discovery", {})
         self.check_keys("discovery", discovery, DISCOVERY_KEYS)
-        kinds = DataclassDecorators.from_discovery(discovery)
+        kinds = CoreConfig.from_discovery(discovery).dataclass_kinds
         for name in sorted(kinds.freeze - kinds.make):
             self.fail("discovery.frozen_dataclass_decorators", f"{name!r} is not in dataclass_decorators")
 

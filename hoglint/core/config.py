@@ -33,14 +33,6 @@ class DataclassDecorators:
     make: frozenset[str]
     freeze: frozenset[str]
 
-    @classmethod
-    def from_discovery(cls, discovery: Mapping[str, Any]) -> DataclassDecorators:
-        """The two lists of a config's `[discovery]`, with core's default for the first."""
-        make = DEFAULT_DATACLASS_DECORATORS
-        if "dataclass_decorators" in discovery:
-            make = as_tuple(discovery["dataclass_decorators"])
-        return cls(frozenset(make), frozenset(as_tuple(discovery.get("frozen_dataclass_decorators"))))
-
 
 class PathGlobs:
     """Gitignore-style globs over repo-relative paths.
@@ -155,6 +147,36 @@ class CoreConfig:
     contract_surfaces: tuple[ExportPaths, ...] = ()
     export_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False
+
+    @classmethod
+    def from_discovery(
+        cls,
+        discovery: Mapping[str, Any],
+        contract_surfaces: tuple[ExportPaths, ...] = (),
+        export_surfaces: tuple[ExportPaths, ...] = (),
+    ) -> CoreConfig:
+        """A config's `[discovery]`, parsed: a bare string is a list of one name, and a key it
+        does not set keeps core's default."""
+        fields: dict[str, Any] = {
+            "source_roots": as_tuple(discovery.get("source_roots", ["."])),
+            "first_party": as_tuple(discovery.get("first_party")),
+            "excludes": as_tuple(discovery.get("exclude")),
+            "external_packages": as_tuple(discovery.get("external")),
+        }
+        for key, field_name in (
+            ("tests", "test_paths"),
+            ("migrations", "migration_paths"),
+            ("dataclass_decorators", "dataclass_decorators"),
+            ("path_callees", "path_callees"),
+            ("frozen_dataclass_decorators", "frozen_dataclass_decorators"),
+        ):
+            if key in discovery:
+                fields[field_name] = as_tuple(discovery[key])
+        return cls(**fields, contract_surfaces=contract_surfaces, export_surfaces=export_surfaces)
+
+    @cached_property
+    def dataclass_kinds(self) -> DataclassDecorators:
+        return DataclassDecorators(frozenset(self.dataclass_decorators), frozenset(self.frozen_dataclass_decorators))
 
     @cached_property
     def exclude_globs(self) -> PathGlobs:
