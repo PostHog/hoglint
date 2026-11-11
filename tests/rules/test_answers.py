@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
 import pytest
 
 from hoglint import facts
+from hoglint.adapters.turbo import TaskTable, TurboAdapter, TurboInputs
 from hoglint.facts import SitePackagesFiles, site_packages_files
 from hoglint.ledger.cache import OFF_SWITCH, AnswerStore
+from hoglint.ledger.inputs import InputPatterns, TreeFiles
+from hoglint.ledger.listing import TreeListing
+from hoglint.plugins import PLUGIN_ROOTS
+
+from rules.test_compare import git_in, write_files
 
 PACKAGES = ("alpha", "beta", "gamma")
 
@@ -106,3 +113,115 @@ def test_a_fresh_directory_or_the_off_switch_stores_nothing(
     assert SitePackagesFiles.of(PACKAGES) == site_packages_files(PACKAGES)
     assert entries(tmp_path / "cache", "site-packages") == []
 
+
+TURBO = {
+    "turbo.json": json.dumps({"tasks": {"check": {"inputs": ["backend/**"]}}}),
+    "products/a/package.json": json.dumps({"name": "a", "scripts": {"check": "true"}}),
+    "products/a/turbo.json": json.dumps({"extends": ["//"], "tasks": {"check": {"inputs": ["facade/**"]}}}),
+    "products/b/package.json": json.dumps({"name": "b", "scripts": {"check": "true"}}),
+    "products/c/package.json": json.dumps({"name": "c", "scripts": {"lint": "true"}}),
+    "products/a/facade/api.py": "",
+    "products/a/logic.py": "",
+    "products/b/backend/x.py": "",
+    "products/c/backend/y.py": "",
+}
+ASKED = ["products/a/facade/api.py", "products/a/logic.py", "products/b/backend/x.py", "products/c/backend/y.py"]
+OPTIONS = {"task": "check"}
+
+
+class TurboRepo:
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = tmp_path
+        self.repo = tmp_path / "repo"
+        write_files(self.repo, TURBO)
+        git_in(self.repo, "init", "-q")
+
+    def run_root(self) -> Path:
+        git_in(self.repo, "add", "-A")
+        tree = git_in(self.repo, "write-tree").strip()
+        work = self.tmp_path / "work"
+        work.mkdir(exist_ok=True)
+        declared = InputPatterns(TurboAdapter().inputs(OPTIONS))
+        return TreeFiles(TreeListing.of(self.repo, tree), work, InputPatterns(["**"]), declared).run_root()
+
+    @staticmethod
+    def answers(handle: TurboInputs) -> list[tuple[bool, str]]:
+        return [handle.covered(path) for path in ASKED]
+
+    def fresh(self, run_root: Path) -> TurboInputs:
+        return TurboInputs(PLUGIN_ROOTS.of(run_root, TurboAdapter(), OPTIONS), "check")
+
+
+@pytest.fixture
+def turbo_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TurboRepo:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv(OFF_SWITCH, raising=False)
+    return TurboRepo(tmp_path)
+
+
+def test_the_stored_turbo_table_answers_as_the_files_do(turbo_repo: TurboRepo, tmp_path: Path) -> None:
+    run_root = turbo_repo.run_root()
+    fresh = turbo_repo.fresh(run_root)
+    assert TurboAdapter().open_run(OPTIONS, run_root).table == fresh.table
+    [entry] = entries(tmp_path / "cache", "turbo")
+    stored = TurboAdapter().open_run(OPTIONS, run_root)
+    assert stored.table == fresh.table
+    assert turbo_repo.answers(stored) == turbo_repo.answers(fresh)
+    assert AnswerStore("turbo").get(entry.stem) is not None
+
+
+@pytest.mark.parametrize("how", ["truncated", "garbage", "missing", "body changed"])
+def test_a_damaged_turbo_entry_is_a_miss_and_is_replaced(turbo_repo: TurboRepo, tmp_path: Path, how: str) -> None:
+    run_root = turbo_repo.run_root()
+    TurboAdapter().open_run(OPTIONS, run_root)
+    [entry] = entries(tmp_path / "cache", "turbo")
+    if how == "body changed":
+        entry.write_bytes(entry.read_bytes().replace(b"products/a", b"products/z"))
+    else:
+        damage(entry, how)
+    assert TurboAdapter().open_run(OPTIONS, run_root).table == turbo_repo.fresh(run_root).table
+    assert AnswerStore("turbo").get(entry.stem) is not None
+
+
+def test_turbo_lookups_at_once_agree(turbo_repo: TurboRepo, tmp_path: Path) -> None:
+    run_root = turbo_repo.run_root()
+    found: list[TaskTable] = []
+    threads = [
+        threading.Thread(target=lambda: found.append(TurboAdapter().open_run(OPTIONS, run_root).table))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert found == [turbo_repo.fresh(run_root).table] * 8
+    [entry] = entries(tmp_path / "cache", "turbo")
+    assert AnswerStore("turbo").get(entry.stem) is not None
+
+
+@pytest.mark.parametrize(
+    "path, content",
+    [
+        ("products/c/package.json", json.dumps({"name": "c", "scripts": {"check": "true"}})),
+        ("products/a/turbo.json", json.dumps({"extends": ["//"], "tasks": {"check": {"inputs": ["**"]}}})),
+        ("turbo.json", json.dumps({"tasks": {"check": {"inputs": ["logic.py"]}}})),
+        ("products/d/package.json", json.dumps({"name": "d", "scripts": {"check": "true"}})),
+    ],
+)
+def test_a_turbo_input_change_is_seen(turbo_repo: TurboRepo, tmp_path: Path, path: str, content: str) -> None:
+    before = TurboAdapter().open_run(OPTIONS, turbo_repo.run_root())
+    assert entries(tmp_path / "cache", "turbo")
+    write_files(turbo_repo.repo, {path: content})
+    run_root = turbo_repo.run_root()
+    after = TurboAdapter().open_run(OPTIONS, run_root)
+    assert after.table == turbo_repo.fresh(run_root).table
+    assert after.table != before.table
+
+
+def test_the_off_switch_stores_no_turbo_table(
+    turbo_repo: TurboRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(OFF_SWITCH, "1")
+    run_root = turbo_repo.run_root()
+    assert TurboAdapter().open_run(OPTIONS, run_root).table == turbo_repo.fresh(run_root).table
+    assert entries(tmp_path / "cache", "turbo") == []

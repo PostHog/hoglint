@@ -168,6 +168,19 @@ class TreeFiles:
         PLUGIN_ROOTS.add(root, self)
         return root
 
+    def inputs_key(self, patterns: tuple[str, ...]) -> str:
+        """A digest of each file `patterns` match, by path, mode and blob id: what a plugin that
+        declares `patterns` reads. Empty when one of the files has no blob (its bytes are on
+        disk, or it is a link that leads nowhere), so no blob id names its content."""
+        wanted = InputPatterns(patterns)
+        hasher = hashlib.sha256()
+        for path in sorted(path for path in self.listing.modes if wanted.matches(path)):
+            blob = self.listing.blob(path)
+            if blob is None:
+                return ""
+            hasher.update(f"{path}\0{self.listing.modes[path]}\0{blob}\0".encode())
+        return hasher.hexdigest()
+
     def holds(self, path: str) -> bool:
         """Whether the snapshot holds `path`. A path no input pattern matches is not in the run's
         key, so the question is an engine error: its plugin or rule must declare the path."""

@@ -20,6 +20,7 @@ the path out.
 from __future__ import annotations
 
 import re
+import sys
 import json
 import posixpath
 import subprocess
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.globs import Braces, compile_glob
+from hoglint.ledger.cache import AnswerStore, answer_key
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 
 DEFAULT_MARKER = "$TURBO_DEFAULT$"
@@ -94,24 +96,50 @@ def read_json(path: Path) -> dict[str, Any]:
     return data
 
 
-class TurboInputs:
+@dataclass(frozen=True, slots=True)
+class TaskTable:
+    """What the turbo config says about one task: the workspace package directories, sorted, and
+    the packages that run the task. It depends only on the turbo.json and package.json files."""
+
+    directories: tuple[str, ...]
+    tasks: tuple[PackageTask, ...]
+
+    def to_json(self) -> dict[str, Any]:
+        rows = [[t.directory, t.decided_by, list(t.includes), list(t.excludes), t.default] for t in self.tasks]
+        return {"directories": list(self.directories), "tasks": rows}
+
+    @staticmethod
+    def from_json(data: Any) -> TaskTable | None:
+        """None for data of any other shape."""
+        try:
+            directories = tuple(data["directories"])
+            tasks = tuple(
+                PackageTask(directory, decided, tuple(includes), tuple(excludes), default)
+                for directory, decided, includes, excludes, default in data["tasks"]
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        texts = [*directories, *(text for task in tasks for text in (task.directory, task.decided_by))]
+        texts += [glob for task in tasks for glob in (*task.includes, *task.excludes)]
+        if not all(isinstance(text, str) for text in texts):
+            return None
+        if not all(isinstance(task.default, bool) for task in tasks):
+            return None
+        return TaskTable(directories, tasks)
+
+
+class TurboReader:
+    """Reads one task's `TaskTable` from the turbo.json and package.json files under a root."""
+
     def __init__(self, repo_root: Path, task: str) -> None:
         self.repo_root = repo_root
         self.task = task
         self.tree = PLUGIN_ROOTS.tree(repo_root)
         self.root_config = self.read_config(repo_root / "turbo.json")
-        self.directories = self.package_dirs()
-        self.directory_set = frozenset(self.directories)
-        self.tasks = self.package_tasks()
-        self.task_by_directory = {task.directory: task for task in self.tasks}
-        self.globs = {
-            task.directory: (
-                [compile_glob(glob, Braces.ALTERNATION) for glob in task.excludes],
-                [compile_glob(glob, Braces.ALTERNATION) for glob in task.includes],
-            )
-            for task in self.tasks
-        }
-        self.answers: dict[str, tuple[bool, str]] = {}
+
+    def read(self) -> TaskTable:
+        directories = self.package_dirs()
+        return TaskTable(tuple(directories), tuple(self.package_tasks(directories)))
 
     def read_config(self, path: Path) -> dict[str, Any]:
         return read_json(path) if path.is_file() else {}
@@ -185,9 +213,9 @@ class TurboInputs:
         excludes = [self.anchor("", item[1:]) for item in inputs if item.startswith("!")]
         return PackageTask("", "turbo.json", tuple(includes), tuple(excludes), DEFAULT_MARKER in inputs)
 
-    def package_tasks(self) -> list[PackageTask]:
+    def package_tasks(self, directories: list[str]) -> list[PackageTask]:
         out: list[PackageTask] = []
-        for directory in self.directories:
+        for directory in directories:
             task = self.package_task(directory, read_json(self.repo_root / directory / "package.json"))
             if task is not None:
                 out.append(task)
@@ -201,6 +229,28 @@ class TurboInputs:
         if glob.startswith(ROOT_MARKER):
             return glob.removeprefix(ROOT_MARKER)
         return posixpath.normpath(posixpath.join(directory, glob))
+
+
+class TurboInputs:
+    """Answers whether the task's inputs watch a path. `table` is the task's table when it is known
+    already; else it is read from the files under `repo_root`."""
+
+    def __init__(self, repo_root: Path, task: str, table: TaskTable | None = None) -> None:
+        self.repo_root = repo_root
+        self.task = task
+        self.table = TurboReader(repo_root, task).read() if table is None else table
+        self.directories = list(self.table.directories)
+        self.directory_set = frozenset(self.directories)
+        self.tasks = list(self.table.tasks)
+        self.task_by_directory = {task.directory: task for task in self.tasks}
+        self.globs = {
+            task.directory: (
+                [compile_glob(glob, Braces.ALTERNATION) for glob in task.excludes],
+                [compile_glob(glob, Braces.ALTERNATION) for glob in task.includes],
+            )
+            for task in self.tasks
+        }
+        self.answers: dict[str, tuple[bool, str]] = {}
 
     def tracked(self, path: str) -> bool:
         """Whether git tracks the path: whether the run's snapshot holds it. A working tree run
@@ -255,12 +305,29 @@ class TurboAdapter:
 
     name = "turbo"
     allowed_options = frozenset({"task"})
+    STORE = AnswerStore("turbo")
 
     def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]:
         return ("**/turbo.json", "**/package.json")
 
     def open(self, options: Mapping[str, Any], root: Path) -> TurboInputs:
         return turbo_inputs(root.resolve(), str(options.get("task", "")))
+
+    def open_run(self, options: Mapping[str, Any], run_root: Path) -> TurboInputs:
+        """`open` for a run whose root is `run_root`. The task table depends only on the files
+        this adapter declares and on this module, so it is stored under their blob ids and read
+        back with no file written or parsed."""
+        inputs = PLUGIN_ROOTS.key(run_root, self, options)
+        if not inputs:
+            return self.open(options, PLUGIN_ROOTS.of(run_root, self, options))
+        task = str(options.get("task", ""))
+        key = answer_key(Path(__file__).read_bytes(), sys.version, task, inputs)
+        table = TaskTable.from_json(self.STORE.get(key))
+        if table is not None:
+            return TurboInputs(run_root.resolve(), task, table)
+        handle = self.open(options, PLUGIN_ROOTS.of(run_root, self, options))
+        self.STORE.put(key, handle.table.to_json())
+        return handle
 
     def covered(self, handle: TurboInputs, path: str) -> tuple[bool, str]:
         return handle.covered(path)

@@ -502,7 +502,11 @@ class CoveragePrimitive(EntityRule):
             return self.run
         options = {key: value for key, value in self.spec.inputs if key != "adapter"}
         try:
-            handle = adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
+            open_run = getattr(adapter, "open_run", None)
+            if open_run is not None:
+                handle = open_run(options, repo)
+            else:
+                handle = adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
             self.incomplete("inputs", None, f"cannot read the {name} inputs: {error}")
             return self.run

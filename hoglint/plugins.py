@@ -300,7 +300,9 @@ class CoverageAdapter(Protocol):
     path. It declares `inputs` as a provider does; to ask whether the snapshot holds a file it
     does not read, it calls `PLUGIN_ROOTS.holds`. In a run it may ask that only about a path its
     `inputs`, a source pattern or another declared input covers, so the answer is in the run's
-    key; any other question fails the run."""
+    key; any other question fails the run. An adapter may also have `open_run(options, run_root)`,
+    which the rule calls in place of `open` with the run's root, so the adapter can answer from an
+    answer stored under `PLUGIN_ROOTS.key` before `PLUGIN_ROOTS.of` writes the files it reads."""
 
     name: str
     allowed_options: frozenset[str]
@@ -322,6 +324,8 @@ class TreeRoot(Protocol):
     """The files of one git tree, for a run of that tree (see `PluginRoots`)."""
 
     def plugin_root(self, patterns: tuple[str, ...]) -> Path: ...
+
+    def inputs_key(self, patterns: tuple[str, ...]) -> str: ...
 
     def holds(self, path: str) -> bool: ...
 
@@ -348,6 +352,13 @@ class PluginRoots:
         """The root `plugin` reads under `options`."""
         tree = self.tree(root)
         return root if tree is None else tree.plugin_root(declared_inputs(plugin, options))
+
+    def key(self, root: Path, plugin: object, options: Mapping[str, Any]) -> str:
+        """A digest of the blob ids of what `plugin` reads under `options`, so an answer that
+        depends only on those files can be stored under it; empty for a root that stands for no
+        snapshot, or when the bytes of one of the files are not in a blob."""
+        tree = self.tree(root)
+        return "" if tree is None else tree.inputs_key(declared_inputs(plugin, options))
 
     def holds(self, root: Path, path: str) -> bool:
         """Whether the snapshot behind `root` holds `path`, a file or a directory."""
