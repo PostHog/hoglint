@@ -293,3 +293,59 @@ def test_an_export_module_that_stops_handing_out_a_name_moves_its_importers_rows
     changed = {"app/api/__init__.py"}
     assert reader in predict(parent, child, changed).files
     assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files
+
+
+DRIVES_CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["posthog", "products", "common"]
+plugins = ["hoglint.presets_py.posthog"]
+
+[vocabulary]
+sections = ["posthog"]
+
+[posthog]
+"""
+DRIVES_REPO = {
+    "hoglint.toml": DRIVES_CONFIG,
+    "posthog/__init__.py": "",
+    "posthog/schema_enums.py": "",
+    "posthog/hogql_queries/__init__.py": "",
+    "posthog/hogql_queries/query_runner.py": (
+        "def get_query_runner(kind):\n"
+        '    if kind == "TrendsQuery":\n'
+        "        from products.charts.backend.hogql_queries.trends import TrendsRunner\n\n"
+        "        return TrendsRunner()\n"
+        "    return None\n"
+    ),
+    "products/__init__.py": "",
+    "products/charts/__init__.py": "",
+    "products/charts/backend/__init__.py": "",
+    "products/charts/backend/hogql_queries/__init__.py": "",
+    "products/charts/backend/hogql_queries/trends.py": "class TrendsRunner:\n    pass\n",
+    "common/__init__.py": "",
+    "common/helpers.py": "def run_it(kind):\n    return kind\n",
+    "posthog/test/__init__.py": "",
+    "posthog/test/test_trends.py": (
+        "from common.helpers import run_it\n\n\n"
+        'class TestTrends:\n    def test_trends(self):\n        run_it("TrendsQuery")\n'
+    ),
+}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="trace recording ends before the packs run: a pack edge that reads another file's function bodies is not traced",
+)
+def test_a_pack_edge_that_reads_a_helpers_body_predicts_the_unchanged_file_it_sits_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_module()
+    child_files = {**DRIVES_REPO, "common/helpers.py": "def run_it(kind):\n    return process_query(kind)\n"}
+    parent = traced_dump(tmp_path, "parent", DRIVES_REPO, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    reader = "posthog/test/test_trends.py"
+    assert rows_of(parent, reader) != rows_of(child, reader), "the helper's new call must move the test's drives"
+    assert reader in predict(parent, child, {"common/helpers.py"}).files

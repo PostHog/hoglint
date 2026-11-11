@@ -17,6 +17,15 @@ a commit changed, the prediction runs in two steps, as a check that reuses store
 Rules folded over packages or the whole graph rerun when what they read moved: any predicted
 file's edges outside their positions, any label, any symbol fact, or a declared side input.
 
+What it does not see: the reads of the packs. Trace recording ends when the link has made its
+edges, before the packs run, while the truth set holds pack edges by the file they sit in. A pack
+edge can depend on what it read of another file, such as a function body that an interface
+digest leaves out: a helper gains a call that reaches another product's wiring, and the drives
+pack makes a new edge in an unchanged test file that calls the helper, while no key of the
+helper's interface moves. That test file is not predicted. The pack memo
+(hoglint/core/memo.py) traces the reads of each pack item, but nothing joins those reads to this
+prediction yet.
+
 This module is generic: it knows trace kinds, not any repo's names.
 
 Usage:
