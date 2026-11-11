@@ -1492,6 +1492,36 @@ impl Producers<'_> {
             .collect()
     }
 
+    /// The import-bound names a module's own code refers to: every `refs` and `uses` row, in any
+    /// scope, and the type names of its annotations, which also reads string annotations.
+    fn used_names(&mut self, owner: usize) -> FxHashSet<Sid> {
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[owner].file as usize];
+        let mut names: FxHashSet<Sid> = record.refs.iter().map(|row| row.name).collect();
+        names.extend(record.uses.iter().map(|row| row.root));
+        let mut annotations: Vec<&V> = record
+            .assigns
+            .iter()
+            .filter_map(|row| row.ann.as_ref())
+            .collect();
+        for node in &record.defs {
+            annotations.extend(
+                node.params
+                    .iter()
+                    .filter_map(|param| param.annotation.as_ref()),
+            );
+            annotations.extend(node.ret.as_ref());
+        }
+        let mut mentioned = Vec::new();
+        for annotation in annotations {
+            self.mentions(annotation, true, &mut mentioned);
+        }
+        for (value, _) in mentioned {
+            names.insert(self.core.it.head(value));
+        }
+        names
+    }
+
     /// A test file hands nothing out, so it is no contract surface.
     fn is_contract(&self, owner: usize) -> bool {
         let scope = &self.scopes[owner];
@@ -1612,7 +1642,12 @@ impl Producers<'_> {
             self.push_slot(rows, k.dunder_all, UNRESOLVED, &attrs);
         }
         let roots = self.surface_roots(owner);
-        let handed = handed_out(self.core, &self.scopes[owner], listing.as_ref());
+        let used = if listing.is_none() {
+            self.used_names(owner)
+        } else {
+            FxHashSet::default()
+        };
+        let handed = handed_out(self.core, &self.scopes[owner], listing.as_ref(), &used);
         for item in handed {
             let Some(found) = self.handed_def(item.target) else {
                 continue;

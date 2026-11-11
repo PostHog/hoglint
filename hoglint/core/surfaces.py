@@ -5,7 +5,8 @@ A module hands out a name it binds by import when one of these clauses holds:
 - `__all__` lists it;
 - the import binds it under its own name (`from x import f as f`);
 - it is a lazy (PEP 562) name;
-- the module has no top-level function, so every import is there to be handed on.
+- the module has no top-level function, so every import is there to be handed on, unless the
+  module's own code refers to the name (a decorator, a base, an annotation, a call, ...).
 
 A star import hands out the names it binds (the source's `__all__`, else its public top-level
 names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
@@ -198,10 +199,12 @@ class HandedOut:
             found = [name for name in found if name in listed]
         return [(name, f"{source}.{name}", clause) for name in found]
 
-    def names(self, listing: DunderAll | None) -> list[Handed]:
+    def names(self, listing: DunderAll | None, used: frozenset[str]) -> list[Handed]:
+        """`used`: the names the module's own code refers to. In a module with no function such
+        a name is no import kept only to be handed on, so another clause has to hand it out."""
         scope = self.scope
         no_functions = listing is None
-        listed = listing.names if listing is not None else None
+        listed = listing.names if listing is not None else read_dunder_all(scope.record).names
         out: list[Handed] = []
         seen: set[tuple[str, str]] = set()
         for _, line, column, flags, target, level, name, asname in scope.record.get("imports", ()):
@@ -211,10 +214,11 @@ class HandedOut:
             if source is None:
                 continue
             if name == "*":
-                handed = self.star(source, no_functions, listed)
+                handed = self.star(source, no_functions, None if no_functions else listed)
             else:
                 bound = asname or name
-                handed = [(bound, f"{source}.{name}", self.clause(bound, name, asname, no_functions, listed))]
+                kept = no_functions and bound not in used
+                handed = [(bound, f"{source}.{name}", self.clause(bound, name, asname, kept, listed))]
             for bound, target_name, clause in handed:
                 if not clause or (bound, target_name) in seen:
                     continue

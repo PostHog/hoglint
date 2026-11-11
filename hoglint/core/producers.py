@@ -526,7 +526,9 @@ class DeclarationProducer(Producer):
 
     kind = "declaration"
     kinds = ("inherit", "decorate", "exposes", "declares")
-    reads = frozenset({"callees"})  # a call on `__all__` makes a contract's hand-out unknown
+    # `callees`: a call on `__all__` makes a contract's hand-out unknown. `refs` and `uses`: the
+    # names a contract module refers to itself.
+    reads = frozenset({"callees", "refs", "uses"})
 
     def __init__(self) -> None:
         self.expansions: dict[tuple[tuple[str, str], SlotLookup], list[Expanded]] = {}
@@ -940,6 +942,20 @@ class DeclarationProducer(Producer):
             return
         self.expose_signature(context, graph, site, lookup, node, qualname, in_contract)
 
+    def used_names(self, scope: FileScope) -> frozenset[str]:
+        """The import-bound names a module's own code refers to: every `refs` and `uses` row, in
+        any scope, and the type names of its annotations, which also reads string annotations."""
+        names = {row[5] for row in scope.record.get("refs", ())}
+        names.update(row[2] for row in scope.record.get("uses", ()))
+        annotations: list[object] = [row.get("ann") for row in scope.record.get("assigns", ())]
+        for node in scope.defs:
+            annotations.extend(param[2] for param in node.get("params", ()) if len(param) > 2)
+            annotations.append(node.get("ret"))
+        for annotation in annotations:
+            if annotation is not None:
+                names.update(value.split(".")[0] for value, _ in self.mentions(annotation, "whole"))
+        return frozenset(names)
+
     def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
         """The slots of the functions and dataclass fields a contract surface hands out from other
         modules, at the import that hands each one out. An `__all__` it cannot read is one
@@ -954,7 +970,8 @@ class DeclarationProducer(Producer):
             site = SlotSite(scope, -1, line, column, scope.base_contexts)
             rows = SlotRows(site, "__all__", "names", True, (("handed", ALL_CLAUSE),))
             graph.edges.append(site.edge("__all__", UNRESOLVED, rows.attrs("whole")))
-        for item in handed.names(listing):
+        used = self.used_names(scope) if listing is None else frozenset()
+        for item in handed.names(listing, used):
             found = context.handed_def(item.target)
             if found is None:
                 continue

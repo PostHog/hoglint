@@ -113,8 +113,6 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.contracts", "Order.__init__", "field:_audit", "builtins.dict", "", ""),
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:total", "builtins.int", "", "no-functions"),
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:_audit", "builtins.dict", "", "no-functions"),
-    ("products.shop.backend.facade.contracts", "Base.__init__", "field:id", "builtins.int", "", "no-functions"),
-    ("products.shop.backend.facade.contracts", "frozen", "param:cls", "", "missing", "no-functions"),
     ("products.shop.backend.logic", "charge", "param:amount", "products.shop.backend.logic.Totals", "", ""),
     ("products.shop.backend.logic", "Receipt.__init__", "field:kind", "typing.ClassVar", "", ""),
 ]
@@ -564,7 +562,6 @@ INHERITED_FIELD_CASES = {
         },
         [
             ("Child.__init__", "fields", "products.shop.backend.nowhere.Missing", "unresolved", ""),
-            unfollowed("Missing", "nowhere.Missing", "no-functions"),
             ("Child.__init__", "field:extra", "builtins.float", "external", ""),
         ],
     ),
@@ -608,6 +605,43 @@ def test_an_alias_chain_that_doubles_at_every_step_gives_each_type_name_once(
     names = [row[2] for row in slot_rows(out["native"], FACADE) if row[1] == "param:x"]
     chained = [f"products.shop.backend.types.A{at}" for at in range(depth + 1)]
     assert sorted(names) == sorted(["builtins.list", "builtins.tuple", "builtins.int", *chained])
+
+
+def test_a_module_with_no_function_hands_out_only_the_imports_it_does_not_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        f"{LOGIC}.py": (
+            "from .kit import frozen\n\n\n"
+            "def charge(amount: int) -> str:\n    return ''\n\n\n"
+            "def refund(x: float) -> None:\n    pass\n\n\n"
+            "def ping_target() -> None:\n    pass\n\n\n"
+            "def untouched(y: bytes) -> None:\n    pass\n\n\n"
+            "def rebound(z: int) -> None:\n    pass\n\n\n"
+            "@frozen\nclass Base:\n    id: int\n\n\n"
+            "@frozen\nclass Receipt:\n    total: int\n"
+        ),
+        "products/shop/backend/facade/api.py": (
+            "from ..kit import frozen\n"
+            "from ..logic import Base, Receipt, charge, rebound, refund, untouched\n"
+            "from ..logic import ping_target as ping_target\n\n"
+            '__all__ = ["refund"]\n\n'
+            "other = rebound\n\n\n"
+            "@frozen\nclass Order(Base):\n    note: 'Receipt'\n\n"
+            "    def total(self) -> None:\n        charge(1)\n        refund(2)\n        ping_target()\n"
+        ),
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
+    assert handed == sorted(
+        [
+            ("refund", "param:x", "builtins.float", "external", "all"),
+            ("refund", "return", "builtins.None", "external", "all"),
+            ("ping_target", "return", "builtins.None", "external", "alias"),
+            ("untouched", "param:y", "builtins.bytes", "external", "no-functions"),
+            ("untouched", "return", "builtins.None", "external", "no-functions"),
+        ]
+    )
 
 
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)

@@ -2,8 +2,9 @@
 //!
 //! A module hands out a name it binds by import when `__all__` lists it, when the import binds
 //! it under its own name (`from x import f as f`), when it is a lazy (PEP 562) name, or when the
-//! module has no top-level function. This is not the export primitive's notion of what a module
-//! exports (every module-level import): a surface also imports the code it calls.
+//! module has no top-level function and its own code does not refer to the name. This is not the
+//! export primitive's notion of what a module exports (every module-level import): a surface
+//! also imports the code it calls.
 //!
 //! A star import hands out the names it binds (the source's `__all__`, else its public top-level
 //! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
@@ -203,10 +204,24 @@ pub fn listing(core: &mut Core, scope: &Scope) -> Option<DunderAll> {
 }
 
 /// The names one module hands out, in import order and then lazy-name order.
-pub fn handed_out(core: &mut Core, scope: &Scope, listing: Option<&DunderAll>) -> Vec<Handed> {
+/// `used`: the names the module's own code refers to. In a module with no function such a name
+/// is no import kept only to be handed on, so another clause has to hand it out.
+pub fn handed_out(
+    core: &mut Core,
+    scope: &Scope,
+    listing: Option<&DunderAll>,
+    used: &FxHashSet<Sid>,
+) -> Vec<Handed> {
     let file = scope.file as usize;
     let no_functions = listing.is_none();
-    let listed = listing.and_then(|found| found.names.as_ref());
+    let own_listing = if no_functions {
+        Some(dunder_all(core, file))
+    } else {
+        None
+    };
+    let listed = listing
+        .or(own_listing.as_ref())
+        .and_then(|found| found.names.as_ref());
     let facts = core.facts.clone();
     let mut out = Vec::new();
     let mut seen: FxHashSet<(Sid, Sid)> = FxHashSet::default();
@@ -237,11 +252,12 @@ pub fn handed_out(core: &mut Core, scope: &Scope, listing: Option<&DunderAll>) -
             } else {
                 ALL_CLAUSE
             };
+            let star_listed = if no_functions { None } else { listed };
             match star_names(core, source) {
                 None => handed.push((star, core.it.join(source, star), clause)),
                 Some(found) => {
                     for name in found {
-                        if listed.is_none_or(|names| names.contains(&name)) {
+                        if star_listed.is_none_or(|names| names.contains(&name)) {
                             handed.push((name, core.it.join(source, name), clause));
                         }
                     }
@@ -249,7 +265,7 @@ pub fn handed_out(core: &mut Core, scope: &Scope, listing: Option<&DunderAll>) -
             }
         } else {
             let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
-            let clause = if no_functions {
+            let clause = if no_functions && !used.contains(&bound) {
                 NO_FUNCTIONS_CLAUSE
             } else if listed.is_some_and(|names| names.contains(&bound)) {
                 ALL_CLAUSE
