@@ -78,16 +78,19 @@ def test_reference_names_surface_and_origin_with_a_use_position() -> None:
 
 
 @pytest.mark.parametrize(
-    "surface, resolution, role",
+    "surface, expected",
     [
-        ("checkout.facade.api.charge", Resolution.RESOLVED, "patch-target"),
-        ("checkout.logic.gone", Resolution.UNRESOLVED, "literal"),
+        ("checkout.facade.api.charge", (Resolution.RESOLVED, "patch-target")),
+        # A literal that resolves to nothing, outside a path position, is a label, not a path.
+        ("checkout.logic.gone", None),
+        ("checkout.team", None),
     ],
 )
-def test_dotted_path_strings(surface: str, resolution: Resolution, role: str) -> None:
+def test_dotted_path_strings(surface: str, expected: tuple[Resolution, str] | None) -> None:
     edges = {edge.surface: edge for edge in edges_of(build(repo()), "dotted-path", VIEWS)}
-    assert (edges[surface].resolution, edges[surface].attr("role")) == (resolution, role)
-    assert "checkout.team" not in edges  # one dot and no match: a label, not a path
+    found = edges.get(surface)
+    read = (found.resolution, found.attr("role")) if found is not None else None
+    assert read == expected
 
 
 @pytest.mark.parametrize(
