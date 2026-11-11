@@ -21,7 +21,7 @@ from hoglint.core.symbols import FUNC
 from hoglint.ledger.store import CacheWarning
 from hoglint.model import Graph, Resolution
 from hoglint.native.queries import PackQueries
-from hoglint.packs.django.apps import AppRegistry
+from hoglint.packs.django.apps import AppReader
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
 from hoglint.packs.django.migrations import AliasProjection, MigrationReader, SummaryCache
 from hoglint.packs.django.pack import MODEL_KINDS
@@ -294,7 +294,7 @@ def migration_parents(settings_value: str, cache: SummaryCache) -> list[str]:
     build = FactRepo(migrations).build(CoreConfig(first_party=FIRST_PARTY))
     config = DjangoPackConfig(settings_modules=("proj.settings",))
     snapshot = BuildReader(build, DigestQueries(build, Graph()))
-    reader = MigrationReader(snapshot, AppRegistry(snapshot, config), config, cache)
+    reader = MigrationReader(snapshot, AppReader(snapshot).read(config), config, cache)
     graph = reader.read(AliasProjection(Path("."), None))
     edges = [f"{child[0]}.{child[1]} -> {parent[0]}.{parent[1]}" for child, parent in graph.graph.edges()]
     return edges + [f"unresolved {key[0]}.{key[1]}" for _, key in graph.graph.unresolved_keys]

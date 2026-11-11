@@ -2,33 +2,33 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
+from hoglint.core.memo import ItemOutput, ItemRun, Items
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
 from hoglint.ledger.store import cache_root
 from hoglint.model import Edge
 from hoglint.native.graph import NativeSink
-from hoglint.packs.django.apps import AppRegistry
+from hoglint.packs.django.apps import AppReader, AppRegistry
 from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
-from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsProducer
+from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsItems, InstallsProducer
 from hoglint.packs.django.loaders import LOADS_PRODUCER, AppLoads
 from hoglint.packs.django.migrations import (
     MIGRATION_PRODUCER,
     AliasProjection,
     MigrationEdges,
-    MigrationGraph,
     MigrationReader,
     SummaryCache,
 )
-from hoglint.packs.django.models import ModelRegistry, RelationBuilder
+from hoglint.packs.django.models import ModelItems, ModelRegistry, RelationBuilder
 from hoglint.packs.django.native_uses import NativeUses
-from hoglint.packs.django.relations import RELATIONS_PRODUCER, ModelFacts, RelationEdges
-from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalProducer
-from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelProducer, UseProducer
+from hoglint.packs.django.relations import RELATIONS_PRODUCER, ModelFacts, RelationEdges, RelationItems
+from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalItems, SignalProducer
+from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelItems, GetModelProducer, UseProducer
 from hoglint.plugins import PackReader, PackSink, ProducerFailure
 
 APPS_PRODUCER = "django.apps@1"
@@ -47,6 +47,68 @@ class NoModels(LookupError):
     """No first-party model found: the registry read nothing, which is never a clean answer."""
 
 
+class AppItems(Items):
+    """`django.apps`: the app registry as one fold. The files later steps scan come after it."""
+
+    def __init__(self, run: DjangoRun) -> None:
+        self.run = run
+
+    def folds(self) -> list[str]:
+        return ["apps"]
+
+    def run_item(self, key: str) -> ItemOutput:
+        return ItemOutput([], AppReader(self.run.reader).read(self.run.config).data())
+
+    def take(self, key: str, data: Any) -> None:
+        self.run.apps = AppRegistry.restore(data)
+
+    def finish(self) -> Iterable[Output]:
+        self.run.files = self.run.scan_files()
+        return ()
+
+
+class ModelStepItems(ModelItems):
+    """Model discovery of a run: no model at all fails the step, an unread class fails the
+    producer while the other models count."""
+
+    def __init__(self, run: DjangoRun) -> None:
+        assert run.registry is not None
+        super().__init__(run.registry, run.files)
+        self.run = run
+
+    def finish(self) -> Iterable[Output]:
+        if not self.registry.models:
+            raise NoModels("no first-party model found")
+        failures = self.registry.failures
+        if failures:
+            reason = f"{len(failures)} classes unread, first {failures[0]}"
+            self.run.sink.fail(MODELS_PRODUCER, ProducerFailure(reason, MODEL_KINDS))
+        return ()
+
+
+class MigrationItems(Items):
+    """`django.migrations`: the migration graph as one fold; its data is the database aliases
+    per app, which the symbols read."""
+
+    def __init__(self, run: DjangoRun) -> None:
+        self.run = run
+
+    def folds(self) -> list[str]:
+        return ["graph"]
+
+    def run_item(self, key: str) -> ItemOutput:
+        run = self.run
+        assert run.apps is not None
+        projection = AliasProjection(run.repo_root, run.config.routing)
+        cache = SummaryCache(cache_root() / "packs")
+        graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
+        aliases = {app: sorted(found) for app, found in graph.aliases.items()}
+        return ItemOutput(list(MigrationEdges(graph, run.reader.external).produce()), aliases)
+
+    def take(self, key: str, data: Any) -> None:
+        self.run.aliases = {app: frozenset(found) for app, found in data.items()}
+
+
 class DjangoRun:
     """One run of the pack's producers. Each step stores what later steps read."""
 
@@ -58,7 +120,7 @@ class DjangoRun:
         self.files: list[FileScope] = []
         self.apps: AppRegistry | None = None
         self.registry: ModelRegistry | None = None
-        self.migrations: MigrationGraph | None = None
+        self.aliases: dict[str, frozenset[str]] | None = None
 
     def scan_roots(self, apps: AppRegistry) -> tuple[str, ...]:
         """The configured roots, else the top-level packages of the first-party installed apps."""
@@ -67,41 +129,33 @@ class DjangoRun:
         first_party = self.reader.first_party
         return tuple(sorted({app.name.partition(".")[0] for app in apps.apps if first_party.contains(app.name)}))
 
-    def read_apps(self) -> list[Edge]:
-        self.apps = AppRegistry(self.reader, self.config)
+    def scan_files(self) -> list[FileScope]:
+        assert self.apps is not None
         roots = self.scan_roots(self.apps)
-        self.files = [
+        return [
             scope
             for scope in self.reader.files
             if scope.record.get("status") == "ok"
             and self.reader.first_party.contains(scope.module)
             and any(scope.module == root or scope.module.startswith(root + ".") for root in roots)
         ]
+
+    def read_apps(self) -> list[Edge]:
+        """The app registry and the files to scan, outside a plan (tests)."""
+        self.apps = AppReader(self.reader).read(self.config)
+        self.files = self.scan_files()
+        return []
+
+    def start_models(self) -> list[Edge]:
+        assert self.apps is not None
+        self.registry = ModelRegistry(self.reader, self.apps)
         return []
 
     def read_models(self) -> list[Edge]:
-        assert self.apps is not None
-        self.registry = ModelRegistry(self.reader, self.apps)
-        self.registry.discover(self.files)
-        if not self.registry.models:
-            raise NoModels("no first-party model found")
-        failures = self.registry.failures
-        if failures:
-            reason = f"{len(failures)} classes unread, first {failures[0]}"
-            self.sink.fail(MODELS_PRODUCER, ProducerFailure(reason, MODEL_KINDS))
+        """Model discovery outside a plan (tests)."""
+        self.start_models()
+        ItemRun(ModelStepItems(self), None).outputs()
         return []
-
-    def migration_edges(self) -> list[Edge]:
-        assert self.apps is not None
-        projection = AliasProjection(self.repo_root, self.config.routing)
-        cache = SummaryCache(cache_root() / "packs")
-        self.migrations = MigrationReader(self.reader, self.apps, self.config, cache).read(projection)
-        return MigrationEdges(self.migrations, self.reader.external).produce()
-
-    def relation_edges(self) -> list[Edge]:
-        assert self.registry is not None
-        builder = RelationBuilder(self.registry, self.config)
-        return RelationEdges(self.registry, builder, self.reader.index.path_of).produce()
 
     def use_edges(self) -> Sequence[Output]:
         """On the native engine the link judges the uses (D49); `UseProducer` is the meaning."""
@@ -111,16 +165,21 @@ class DjangoRun:
             return NativeUses(producer, self.sink).produce(self.files, USES_KINDS)
         return producer.produce(self.files)
 
-    def get_model_edges(self) -> list[Edge]:
+    def relation_items(self) -> RelationItems:
         assert self.registry is not None
-        return GetModelProducer(self.reader, self.registry).produce(self.files)
+        builder = RelationBuilder(self.registry, self.config)
+        return RelationItems(RelationEdges(self.registry, builder, self.reader.index.path_of))
 
-    def signal_edges(self) -> list[Edge]:
+    def get_model_items(self) -> GetModelItems:
         assert self.registry is not None
-        return SignalProducer(self.reader, self.registry, self.config).produce(self.files)
+        return GetModelItems(GetModelProducer(self.reader, self.registry), self.files)
 
-    def installs_edges(self) -> list[Edge]:
-        return InstallsProducer(self.reader, self.config.hooks).produce(self.files)
+    def signal_items(self) -> SignalItems:
+        assert self.registry is not None
+        return SignalItems(SignalProducer(self.reader, self.registry, self.config), self.files)
+
+    def installs_items(self) -> InstallsItems:
+        return InstallsItems(InstallsProducer(self.reader, self.config.hooks), self.files)
 
     def load_edges(self) -> list[Edge]:
         assert self.apps is not None
@@ -129,28 +188,52 @@ class DjangoRun:
     def symbols(self) -> list[Edge]:
         """Model and app symbols. Rules on model edges read them through `dst.kind`, so a failure
         here makes those edge kinds incomplete."""
-        assert self.registry is not None and self.apps is not None and self.migrations is not None
-        self.sink.add_symbols(ModelFacts(self.registry, self.apps).symbols(self.migrations.aliases))
+        assert self.registry is not None and self.apps is not None and self.aliases is not None
+        self.sink.add_symbols(ModelFacts(self.registry, self.apps).symbols(self.aliases))
         return []
 
     def plan(self) -> ProducerPlan:
+        def nothing() -> list[Edge]:
+            return []
+
         return ProducerPlan(
             [
-                ProducerStep(APPS_PRODUCER, frozenset(), self.read_apps),
-                ProducerStep(MODELS_PRODUCER, MODEL_KINDS, self.read_models, (APPS_PRODUCER,)),
+                ProducerStep(APPS_PRODUCER, frozenset(), nothing, items=lambda: AppItems(self)),
                 ProducerStep(
-                    MIGRATION_PRODUCER, frozenset({"migration-parent"}), self.migration_edges, (APPS_PRODUCER,)
+                    MODELS_PRODUCER,
+                    MODEL_KINDS,
+                    self.start_models,
+                    (APPS_PRODUCER,),
+                    items=lambda: ModelStepItems(self),
+                ),
+                ProducerStep(
+                    MIGRATION_PRODUCER,
+                    frozenset({"migration-parent"}),
+                    nothing,
+                    (APPS_PRODUCER,),
+                    items=lambda: MigrationItems(self),
                 ),
                 ProducerStep(
                     RELATIONS_PRODUCER,
                     frozenset({"relation", "reverse-accessor", "model-label"}),
-                    self.relation_edges,
+                    nothing,
                     (MODELS_PRODUCER,),
+                    items=self.relation_items,
                 ),
                 ProducerStep(USES_PRODUCER, USES_KINDS, self.use_edges, (MODELS_PRODUCER,)),
-                ProducerStep(GET_MODEL_PRODUCER, frozenset({"model-label"}), self.get_model_edges, (MODELS_PRODUCER,)),
-                ProducerStep(SIGNALS_PRODUCER, frozenset({"signal"}), self.signal_edges, (MODELS_PRODUCER,)),
-                ProducerStep(INSTALLS_PRODUCER, frozenset({"installs"}), self.installs_edges, (APPS_PRODUCER,)),
+                ProducerStep(
+                    GET_MODEL_PRODUCER,
+                    frozenset({"model-label"}),
+                    nothing,
+                    (MODELS_PRODUCER,),
+                    items=self.get_model_items,
+                ),
+                ProducerStep(
+                    SIGNALS_PRODUCER, frozenset({"signal"}), nothing, (MODELS_PRODUCER,), items=self.signal_items
+                ),
+                ProducerStep(
+                    INSTALLS_PRODUCER, frozenset({"installs"}), nothing, (APPS_PRODUCER,), items=self.installs_items
+                ),
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
                 ProducerStep(SYMBOLS_PRODUCER, MODEL_KINDS, self.symbols, (MODELS_PRODUCER, MIGRATION_PRODUCER)),
             ]
@@ -173,7 +256,7 @@ class DjangoPack:
 
     @staticmethod
     def run(reader: PackReader, config: DjangoPackConfig, sink: PackSink, root: Path) -> None:
-        DjangoRun(reader, config, root, sink).plan().run(sink)
+        DjangoRun(reader, config, root, sink).plan().run(sink, getattr(reader, "memo", None))
 
 
 DJANGO_PACK = DjangoPack()

@@ -6,12 +6,15 @@ Owners are never decided here: edges carry modules, and labels decide packages l
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo, key_of
+from hoglint.core.reader import note_file_of
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, value_text
 from hoglint.core.sites import FileScope
+from hoglint.core.symbols import entity
 from hoglint.model import Context, EntityId
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DjangoPackConfig
@@ -65,16 +68,13 @@ class ModelIndex:
         self.reader = reader
         self.resolver = reader.resolver
         self.classes = reader.classes
-        self.body_cache: dict[tuple[str, int], ClassBody] = {}
-        self.model_cache: dict[EntityId, bool] = {}
-        self.abstract_cache: dict[EntityId, bool] = {}
-        self.meta_cache: dict[EntityId, dict[str, object]] = {}
+        self.body_cache: TracedMemo[tuple[str, int], ClassBody] = TracedMemo()
+        self.model_cache: TracedMemo[EntityId, bool] = TracedMemo()
+        self.abstract_cache: TracedMemo[EntityId, bool] = TracedMemo()
+        self.meta_cache: TracedMemo[EntityId, dict[str, object]] = TracedMemo()
 
     def body_of(self, record: dict, idx: int) -> ClassBody:
-        key = (record["path"], idx)
-        if key not in self.body_cache:
-            self.body_cache[key] = ClassBody(self.reader.bodies(record), idx)
-        return self.body_cache[key]
+        return self.body_cache.get((record["path"], idx), lambda: ClassBody(self.reader.bodies(record), idx))
 
     def info(self, ref: EntityId) -> ClassBody:
         found = self.classes.located(ref)
@@ -115,9 +115,7 @@ class ModelIndex:
     def meta(self, ref: EntityId) -> dict[str, object]:
         """Own Meta, else the first inherited one. Django removes Meta from concrete models, so only
         abstract models and plain mixins pass theirs on."""
-        if ref not in self.meta_cache:
-            self.meta_cache[ref] = self.read_meta(ref)
-        return self.meta_cache[ref]
+        return self.meta_cache.get(ref, lambda: self.read_meta(ref))
 
     def read_meta(self, ref: EntityId) -> dict[str, object]:
         info = self.info(ref)
@@ -134,16 +132,14 @@ class ModelIndex:
         return {}
 
     def is_model(self, ref: EntityId) -> bool:
-        if ref not in self.model_cache:
-            self.model_cache[ref] = str(ref) != MODEL_BASE and self.classes.is_subclass(ref, MODEL_BASE)
-        return self.model_cache[ref]
+        return self.model_cache.get(ref, lambda: str(ref) != MODEL_BASE and self.classes.is_subclass(ref, MODEL_BASE))
 
     def is_abstract(self, ref: EntityId) -> bool:
-        if ref not in self.abstract_cache:
-            info = self.info(ref)
-            abstract = info.meta_idx is not None and bool(self.meta_attrs(ref, info.meta_idx).get("abstract", False))
-            self.abstract_cache[ref] = abstract
-        return self.abstract_cache[ref]
+        return self.abstract_cache.get(ref, lambda: self.read_abstract(ref))
+
+    def read_abstract(self, ref: EntityId) -> bool:
+        info = self.info(ref)
+        return info.meta_idx is not None and bool(self.meta_attrs(ref, info.meta_idx).get("abstract", False))
 
     def is_proxy(self, ref: EntityId) -> bool:
         return bool(self.meta(ref).get("proxy", False))
@@ -185,6 +181,25 @@ class ModelEntry:
     @property
     def label(self) -> str:
         return f"{self.app_label}.{self.ref.symbol}"
+
+    def data(self) -> list[Any]:
+        ref, concrete = self.ref, self.concrete
+        fields = [self.path, self.line, self.app_label, self.abstract, self.proxy]
+        return [ref.module, ref.symbol, *fields, concrete.module, concrete.symbol, self.meta]
+
+    @staticmethod
+    def restore(data: list[Any]) -> ModelEntry:
+        module, symbol, path, line, app_label, abstract, proxy, concrete_module, concrete_symbol, meta = data
+        return ModelEntry(
+            entity(module, symbol),
+            path,
+            line,
+            app_label,
+            abstract,
+            proxy,
+            entity(concrete_module, concrete_symbol),
+            meta,
+        )
 
 
 @dataclass(frozen=True)
@@ -258,51 +273,135 @@ class LabelRef:
     surface: str
     target: EntityId | None
 
+    @property
+    def key(self) -> tuple[str, str]:
+        return str(entity(self.module, self.owner)), self.field
+
+    def data(self) -> list[Any]:
+        target = None if self.target is None else [self.target.module, self.target.symbol]
+        return [self.module, self.owner, self.field, self.line, self.surface, target]
+
+    @staticmethod
+    def restore(data: list[Any]) -> LabelRef:
+        module, owner, field, line, surface, target = data
+        return LabelRef(module, owner, field, line, surface, None if target is None else entity(*target))
+
+
+class TracedModels(dict[EntityId, ModelEntry]):
+    """The registry's models by class: each lookup is a read of the registry, and a walk over
+    them reads them all."""
+
+    MODEL = "django.model"
+
+    def get(self, key: EntityId, default: Any = None) -> Any:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        found = dict.get(self, key)
+        if TRACER.frames:
+            TRACER.note(self.MODEL, str(key), found)
+        return default if found is None else found
+
+    def __getitem__(self, key: EntityId) -> ModelEntry:
+        if TRACER.frames:
+            TRACER.note(self.MODEL, str(key), dict.get(self, key))
+        return dict.__getitem__(self, key)
+
+    def __contains__(self, key: object) -> bool:
+        found = dict.get(self, key) if isinstance(key, EntityId) else None  # type: ignore[call-overload]
+        if TRACER.frames and isinstance(key, EntityId):
+            TRACER.note(self.MODEL, str(key), found)
+        return found is not None
+
+    def note_all(self) -> None:
+        if TRACER.frames:
+            TRACER.note_lazy(self.MODEL, "*", lambda: list(dict.values(self)))
+
+    def __iter__(self) -> Iterator[EntityId]:
+        self.note_all()
+        return dict.__iter__(self)
+
+    def values(self) -> Any:
+        self.note_all()
+        return dict.values(self)
+
+    def items(self) -> Any:
+        self.note_all()
+        return dict.items(self)
+
+
+class ModelItems(Items):
+    """Model discovery as one item per module that defines a model. Which classes are models is
+    asked of the whole snapshot once (`subclasses`); each item reads its own module's part,
+    registers those models, and the registry takes them in file order."""
+
+    FOUND = "django.models-in"
+
+    def __init__(self, registry: ModelRegistry, files: list[FileScope]) -> None:
+        self.registry = registry
+        self.by_module: dict[str, list[EntityId]] = {}
+        for ref in registry.reader.subclasses(MODEL_BASE):
+            if str(ref) != MODEL_BASE:
+                self.by_module.setdefault(ref.module, []).append(ref)
+        self.files = {scope.path: scope for scope in files if scope.module in self.by_module}
+
+    def keys(self) -> list[str]:
+        return list(self.files)
+
+    def run_item(self, key: str) -> ItemOutput:
+        scope = self.files[key]
+        note_file_of(scope)
+        refs = self.by_module[scope.module]
+        TRACER.note(self.FOUND, key, [str(ref) for ref in refs])
+        if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
+            return ItemOutput([])
+        reader = self.registry.reader
+        if reader.index.path_of.get(scope.module) != scope.path:
+            return ItemOutput([])
+        table = reader.tables.get(scope.module)
+        if table is None:
+            return ItemOutput([])
+        classes = table.classes()
+        data: list[list[Any]] = []
+        for ref in refs:
+            try:
+                entry = self.registry.entry_of(ref, scope.path, scope.defs[classes[ref.symbol]]["l"])
+            except Exception as error:  # noqa: BLE001 - one unreadable class is a gap, the other models still count
+                data.append(["failure", f"{ref}: {type(error).__name__}: {error}"])
+                continue
+            if entry is not None:
+                data.append(["model", entry.data()])
+        return ItemOutput([], data)
+
+    def take(self, key: str, data: Any) -> None:
+        for kind, value in data or ():
+            if kind == "model":
+                self.registry.add(ModelEntry.restore(value))
+            else:
+                self.registry.failures.append(value)
+
 
 class ModelRegistry:
     """Every first-party model with its app label, plus the label table."""
+
+    LABEL = "django.model-label"
 
     def __init__(self, reader: PackReader, apps: AppRegistry) -> None:
         self.reader = reader
         self.apps = apps
         self.index = ModelIndex(reader)
-        self.models: dict[EntityId, ModelEntry] = {}
+        self.models = TracedModels()
         self.by_label: dict[str, EntityId] = {}
         self.failures: list[str] = []
 
-    def discover(self, files: Iterable[FileScope]) -> None:
-        """Models in the given prod files: classes whose MRO reaches Django's Model. The reader
-        finds them all at once, so only a module with a model builds its table here."""
-        by_module: dict[str, list[EntityId]] = {}
-        for ref in self.reader.subclasses(MODEL_BASE):
-            if str(ref) != MODEL_BASE:
-                by_module.setdefault(ref.module, []).append(ref)
-        index = self.reader.index
-        for scope in files:
-            if scope.module not in by_module:
-                continue
-            if scope.base_contexts & {Context.TEST, Context.MIGRATION} or "node_modules" in scope.path.split("/"):
-                continue
-            if index.path_of.get(scope.module) != scope.path:
-                continue
-            table = self.reader.tables.get(scope.module)
-            if table is None:
-                continue
-            classes = table.classes()
-            for ref in by_module[scope.module]:
-                self.index.model_cache[ref] = True
-                try:
-                    self.register(ref, scope.path, scope.defs[classes[ref.symbol]]["l"])
-                except Exception as error:  # noqa: BLE001 - one unreadable class is a gap, the other models still count
-                    self.failures.append(f"{ref}: {type(error).__name__}: {error}")
+    def discover(self, files: list[FileScope]) -> None:
+        """Models in the given prod files: classes whose MRO reaches Django's Model."""
+        ItemRun(ModelItems(self, files), None).outputs()
 
-    def register(self, ref: EntityId, path: str, line: int) -> None:
+    def entry_of(self, ref: EntityId, path: str, line: int) -> ModelEntry | None:
         meta = self.index.meta(ref)
         abstract = self.index.is_abstract(ref)
         app_label = meta.get("app_label") or self.apps.label_for_module(ref.module)
         if app_label is None and not abstract:
-            return
-        entry = ModelEntry(
+            return None
+        return ModelEntry(
             ref=ref,
             path=path,
             line=line,
@@ -312,9 +411,11 @@ class ModelRegistry:
             concrete=self.index.concrete_model(ref),
             meta=meta,
         )
-        self.models[ref] = entry
-        if not abstract:
-            self.by_label.setdefault(entry.label.lower(), ref)
+
+    def add(self, entry: ModelEntry) -> None:
+        self.models[entry.ref] = entry
+        if not entry.abstract:
+            self.by_label.setdefault(entry.label.lower(), entry.ref)
 
     def external_label(self, ref: EntityId) -> str | None:
         meta = self.index.meta(ref)
@@ -326,6 +427,13 @@ class ModelRegistry:
 
     def resolve_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
         """`app.Model`, `Model` (same app) or `self` to a model class, as Django's registry would."""
+        found = self.read_label(value, app_label, self_ref)
+        if TRACER.frames:
+            own = None if self_ref is None else [self_ref.module, self_ref.symbol]
+            TRACER.note(self.LABEL, key_of(value, app_label, own), None if found is None else str(found))
+        return found
+
+    def read_label(self, value: str, app_label: str, self_ref: EntityId | None) -> EntityId | None:
         if value == RECURSIVE:
             return self_ref
         if "." not in value:
@@ -362,14 +470,12 @@ class RelationBuilder:
         self.reader = registry.reader
         self.apps = registry.apps
         self.config = config
-        self.field_class_kind: dict[EntityId, tuple[str, str | None] | None] = {}
+        self.field_class_kind: TracedMemo[EntityId, tuple[str, str | None] | None] = TracedMemo()
         self.label_refs: dict[tuple[str, str], LabelRef] = {}
-        self.local_cache: dict[EntityId, dict[str, FieldDecl]] = {}
+        self.local_cache: TracedMemo[EntityId, dict[str, FieldDecl]] = TracedMemo()
 
     def field_kind(self, ref: EntityId) -> tuple[str, str | None] | None:
-        if ref not in self.field_class_kind:
-            self.field_class_kind[ref] = self.read_field_kind(ref)
-        return self.field_class_kind[ref]
+        return self.field_class_kind.get(ref, lambda: self.read_field_kind(ref))
 
     def read_field_kind(self, ref: EntityId) -> tuple[str, str | None] | None:
         ids = [str(c) for c in self.index.mro(ref)]
@@ -458,9 +564,7 @@ class RelationBuilder:
         )
 
     def local_fields(self, ref: EntityId) -> dict[str, FieldDecl]:
-        if ref not in self.local_cache:
-            self.local_cache[ref] = self.read_local_fields(ref)
-        return self.local_cache[ref]
+        return self.local_cache.get(ref, lambda: self.read_local_fields(ref))
 
     def read_local_fields(self, ref: EntityId) -> dict[str, FieldDecl]:
         result = dict(self.body_fields(ref))

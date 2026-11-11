@@ -11,9 +11,12 @@ receiver name in the file, and `connect` calls by spelling. Each one then resolv
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from hoglint.core.harness import each_item, failure_edge
+from hoglint.core.harness import Output, each_item, failure_edge
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items, TracedMemo
+from hoglint.core.reader import note_file_of
 from hoglint.core.records import sequence_items, str_literal, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import Hit
@@ -53,7 +56,7 @@ class SignalProducer:
         self.registry = registry
         self.receivers = frozenset(config.receiver_decorators)
         self.signal_bases = config.signal_bases
-        self.signal_cache: dict[EntityId, bool] = {}
+        self.signal_cache: TracedMemo[EntityId, bool] = TracedMemo()
 
     def lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> Hit | None:
         found = self.reader.context.value_lookup(scope, chain, at_scope, line)
@@ -64,9 +67,7 @@ class SignalProducer:
         if hit is None or hit.kind != "variable":
             return False
         origin = hit.origin
-        if origin not in self.signal_cache:
-            self.signal_cache[origin] = self.built_by_signal_class(origin)
-        return self.signal_cache[origin]
+        return self.signal_cache.get(origin, lambda: self.built_by_signal_class(origin))
 
     def built_by_signal_class(self, origin: EntityId) -> bool:
         table = self.reader.tables.get(origin.module)
@@ -234,36 +235,72 @@ class SignalProducer:
             out.extend([edge] * count)
         return out
 
-    def candidates(self, files: list[FileScope]) -> dict[str, FileCandidates]:
-        """Defs whose decorator may resolve to a receiver: its `decorate` edge targets one, or the
-        file spells a receiver's name in a decorator or an import, where a target can be unknown.
-        And every `connect` call: its receiver decides."""
-        out: dict[str, FileCandidates] = {}
+    def decorated(self, files: list[FileScope]) -> dict[str, set[tuple[int, int]]]:
+        """The defs whose `decorate` edge targets a receiver, by file."""
+        out: dict[str, set[tuple[int, int]]] = {}
         paths = {scope.path for scope in files}
         targets = [entity for name in sorted(self.receivers) for entity in entities_named(name)]
         for edge in self.reader.edges_to("decorate", targets):
             if edge.site.path in paths:
-                out.setdefault(edge.site.path, FileCandidates()).defs.add((edge.site.line, edge.site.column))
-        spelled = Words.ending(name.rpartition(".")[2] for name in self.receivers)
-        for scope in files:
-            if self.reader.may_mention(scope, ("defs", "imports"), spelled):
-                decorated = {(d["l"], d["c"]) for d in scope.defs if d.get("dec")}
-                out.setdefault(scope.path, FileCandidates()).defs.update(decorated)
-        for scope, rows in self.reader.calls_named(files, "calls", (CONNECT,)):
-            out.setdefault(scope.path, FileCandidates()).calls = rows
-        for scope, rows in self.reader.calls_named(files, "callees", (CONNECT,)):
-            out.setdefault(scope.path, FileCandidates()).callees = rows
+                out.setdefault(edge.site.path, set()).add((edge.site.line, edge.site.column))
         return out
+
+    def candidates(
+        self, scope: FileScope, decorated: set[tuple[int, int]], calls: list[list], callees: list[list]
+    ) -> FileCandidates | None:
+        """Defs whose decorator may resolve to a receiver: its `decorate` edge targets one, or the
+        file spells a receiver's name in a decorator or an import, where a target can be unknown.
+        And every `connect` call: its receiver decides. None for a file with no candidate."""
+        found = FileCandidates(set(decorated), calls, callees)
+        spelled = Words.ending(name.rpartition(".")[2] for name in self.receivers)
+        mentions = self.reader.may_mention(scope, ("defs", "imports"), spelled)
+        if mentions:
+            found.defs.update((d["l"], d["c"]) for d in scope.defs if d.get("dec"))
+        if not (decorated or mentions or calls or callees):
+            return None
+        return found
 
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("signal", SIGNALS_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
-    def produce(self, files: list[FileScope]) -> list[Edge]:
-        candidates = self.candidates(files)
+    def file_edges(self, scope: FileScope, found: FileCandidates) -> list[Edge]:
+        return self.decorator_edges(scope, found.defs) + self.connect_edges(scope, found.calls, found.callees)
 
-        def file_edges(scope: FileScope) -> list[Edge]:
-            found = candidates[scope.path]
-            return self.decorator_edges(scope, found.defs) + self.connect_edges(scope, found.calls, found.callees)
+    def produce(self, files: list[FileScope]) -> list[Output]:
+        return ItemRun(SignalItems(self, files), None).outputs()
 
-        return each_item([scope for scope in files if scope.path in candidates], file_edges, self.failure)
+
+class SignalItems(Items):
+    """`django.signals` as one item per file. Which defs a `decorate` edge marks is asked of the
+    whole graph once, and each item reads its own file's part of it."""
+
+    DECORATED = "django.signals.decorated"
+
+    def __init__(self, producer: SignalProducer, files: list[FileScope]) -> None:
+        self.producer = producer
+        self.files = {scope.path: scope for scope in files}
+        self.decorated = producer.decorated(files)
+        self.calls: dict[str, list[list]] = {}
+        self.callees: dict[str, list[list]] = {}
+
+    def keys(self) -> list[str]:
+        return list(self.files)
+
+    def prepare(self, keys: Sequence[str]) -> None:
+        scopes = [self.files[key] for key in keys]
+        reader = self.producer.reader
+        self.calls = {scope.path: rows for scope, rows in reader.calls_named(scopes, "calls", (CONNECT,))}
+        self.callees = {scope.path: rows for scope, rows in reader.calls_named(scopes, "callees", (CONNECT,))}
+
+    def run_item(self, key: str) -> ItemOutput:
+        scope = self.files[key]
+        note_file_of(scope)
+        decorated = self.decorated.get(key, set())
+        TRACER.note(self.DECORATED, key, sorted(decorated))
+        found = self.producer.candidates(scope, decorated, self.calls.get(key, []), self.callees.get(key, []))
+        if found is None:
+            return ItemOutput([])
+        return ItemOutput(
+            list(each_item([scope], lambda one: self.producer.file_edges(one, found), self.producer.failure))
+        )

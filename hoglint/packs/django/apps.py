@@ -7,8 +7,10 @@ Django would derive from its entry and reads as not `known`.
 from __future__ import annotations
 
 import fnmatch
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field
+from typing import Any
 
+from hoglint.core.memo import TRACER
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.symbols import entity
 from hoglint.model import EntityId
@@ -123,17 +125,80 @@ class SettingsReader:
 
 
 class AppRegistry:
-    def __init__(self, reader: PackReader, config: DjangoPackConfig) -> None:
-        self.reader = reader
-        self.settings_modules = SettingsReader(reader).modules(config.settings_modules)
-        self.settings = SettingsReader(reader).read(self.settings_modules)
-        self.apps: list[InstalledApp] = [self.app_for_entry(e) for e in self.settings.lists.get(INSTALLED_APPS, [])]
-        self.by_label = {app.label: app for app in self.apps}
-        self.by_name_length = sorted(self.apps, key=lambda a: -len(a.name))
+    """The installed apps and the settings they were read from. Each answer is a read of the
+    registry, which the `django.apps` item builds: its data is `data()`, and `restore` makes the
+    registry again from it."""
+
+    APPS = "django.apps"
+    SETTING = "django.setting"
+    APP_LABEL = "django.app-label"
+
+    def __init__(self, settings_modules: list[str], settings: SettingsValues, apps: list[InstalledApp]) -> None:
+        self.read_settings_modules = settings_modules
+        self.settings = settings
+        self.installed = apps
+        self.by_name_length = sorted(apps, key=lambda a: -len(a.name))
         self.module_labels: dict[str, str | None] = {}
 
+    def data(self) -> list[Any]:
+        return [
+            self.read_settings_modules,
+            self.settings.strings,
+            self.settings.lists,
+            [list(astuple(app)) for app in self.installed],
+        ]
+
+    @staticmethod
+    def restore(data: list[Any]) -> AppRegistry:
+        settings_modules, strings, lists, apps = data
+        settings = SettingsValues(dict(strings), {name: list(values) for name, values in lists.items()})
+        return AppRegistry(list(settings_modules), settings, [InstalledApp(*app) for app in apps])
+
+    @property
+    def apps(self) -> list[InstalledApp]:
+        if TRACER.frames:
+            TRACER.note(self.APPS, "apps", self.installed)
+        return self.installed
+
+    @property
+    def settings_modules(self) -> list[str]:
+        if TRACER.frames:
+            TRACER.note(self.APPS, "settings_modules", self.read_settings_modules)
+        return self.read_settings_modules
+
     def setting(self, name: str) -> str | None:
-        return self.settings.strings.get(name)
+        found = self.settings.strings.get(name)
+        if TRACER.frames:
+            TRACER.note(self.SETTING, name, found)
+        return found
+
+    def app_for_module(self, module: str) -> InstalledApp | None:
+        for app in self.by_name_length:
+            if module == app.name or module.startswith(app.name + "."):
+                return app
+        return None
+
+    def label_for_module(self, module: str) -> str | None:
+        if module not in self.module_labels:
+            app = self.app_for_module(module)
+            self.module_labels[module] = app.label if app is not None else None
+        found = self.module_labels[module]
+        if TRACER.frames:
+            TRACER.note(self.APP_LABEL, module, found)
+        return found
+
+
+class AppReader:
+    """Reads the installed apps of the settings modules: each entry's AppConfig, name and label."""
+
+    def __init__(self, reader: PackReader) -> None:
+        self.reader = reader
+
+    def read(self, config: DjangoPackConfig) -> AppRegistry:
+        settings_modules = SettingsReader(self.reader).modules(config.settings_modules)
+        settings = SettingsReader(self.reader).read(settings_modules)
+        apps = [self.app_for_entry(e) for e in settings.lists.get(INSTALLED_APPS, [])]
+        return AppRegistry(settings_modules, settings, apps)
 
     def config_attrs(self, ref: EntityId) -> dict[str, object]:
         attrs: dict[str, object] = {}
@@ -175,15 +240,3 @@ class AppRegistry:
         name = str(attrs.get("name", entry))
         label = str(attrs.get("label") or name.rpartition(".")[2])
         return InstalledApp(entry, name, label, str(config), True)
-
-    def app_for_module(self, module: str) -> InstalledApp | None:
-        for app in self.by_name_length:
-            if module == app.name or module.startswith(app.name + "."):
-                return app
-        return None
-
-    def label_for_module(self, module: str) -> str | None:
-        if module not in self.module_labels:
-            app = self.app_for_module(module)
-            self.module_labels[module] = app.label if app is not None else None
-        return self.module_labels[module]

@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from bisect import bisect_left, insort
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from hoglint.core.harness import Output, each_item, failure_edge
+from hoglint.core.memo import ItemOutput, ItemRun, Items
+from hoglint.core.reader import note_file_of
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge, Resolution
@@ -214,13 +217,8 @@ class GetModelProducer:
         self.reader = reader
         self.registry = registry
 
-    def produce(self, files: list[FileScope]) -> list[Edge]:
-        calls = {scope.path: rows for scope, rows in self.reader.calls_named(files, "calls", (GET_MODEL,))}
-
-        def file_edges(scope: FileScope) -> list[Edge]:
-            return [self.edge(scope, row) for row in calls[scope.path] if self.on_registry(scope, row)]
-
-        return each_item([scope for scope in files if scope.path in calls], file_edges, self.failure)
+    def produce(self, files: list[FileScope]) -> list[Output]:
+        return ItemRun(GetModelItems(self, files), None).outputs()
 
     @staticmethod
     def failure(scope: FileScope, error: Exception) -> Edge:
@@ -274,3 +272,34 @@ class GetModelProducer:
             )
         resolution = self.reader.first_party.resolution(found.module)
         return Edge("model-label", site, label, (found,), resolution, contexts, GET_MODEL_PRODUCER, shape=GET_MODEL)
+
+
+class GetModelItems(Items):
+    """`django.get-model` as one item per file: its `get_model` calls, read for the files that
+    run in one query."""
+
+    def __init__(self, producer: GetModelProducer, files: list[FileScope]) -> None:
+        self.producer = producer
+        self.files = {scope.path: scope for scope in files}
+        self.calls: dict[str, list[list]] = {}
+
+    def keys(self) -> list[str]:
+        return list(self.files)
+
+    def prepare(self, keys: Sequence[str]) -> None:
+        scopes = [self.files[key] for key in keys]
+        self.calls = {
+            scope.path: rows for scope, rows in self.producer.reader.calls_named(scopes, "calls", (GET_MODEL,))
+        }
+
+    def run_item(self, key: str) -> ItemOutput:
+        scope = self.files[key]
+        note_file_of(scope)
+        rows = self.calls.get(key)
+        if not rows:
+            return ItemOutput([])
+
+        def file_edges(scope: FileScope) -> list[Edge]:
+            return [self.producer.edge(scope, row) for row in rows if self.on_registry(scope, row)]
+
+        return ItemOutput(list(each_item([scope], file_edges, self.producer.failure)))

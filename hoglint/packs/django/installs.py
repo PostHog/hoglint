@@ -15,9 +15,12 @@ found only by origin makes an edge only when it resolves to a hook.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from hoglint.core.harness import each_item, failure_edge
+from hoglint.core.harness import Output, each_item, failure_edge
+from hoglint.core.memo import TRACER, ItemOutput, ItemRun, Items
+from hoglint.core.reader import note_file_of
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
 from hoglint.native.queries import Words, entities_named
@@ -155,17 +158,43 @@ class InstallsProducer:
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("installs", INSTALLS_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
-    def produce(self, files: list[FileScope]) -> list[Edge]:
-        if not self.hooks:
-            return []
-        calls = {scope.path: rows for scope, rows in self.reader.calls_named(files, "callees", self.hook_names)}
-        aliases = self.aliases(files)
+    def file_edges(self, scope: FileScope, rows: list[list], aliases: Aliases) -> list[Edge]:
+        if aliases.names:
+            rows = scope.record.get("callees", [])
+        return self.call_edges(scope, rows, aliases) + self.decorator_edges(scope, aliases)
 
-        def file_edges(scope: FileScope) -> list[Edge]:
-            found = aliases.get(scope.path, Aliases())
-            rows = calls.get(scope.path, [])
-            if found.names:
-                rows = scope.record.get("callees", [])
-            return self.call_edges(scope, rows, found) + self.decorator_edges(scope, found)
+    def produce(self, files: list[FileScope]) -> list[Output]:
+        return ItemRun(InstallsItems(self, files), None).outputs()
 
-        return each_item(files, file_edges, self.failure)
+
+class InstallsItems(Items):
+    """`django.installs` as one item per file. The hooks bound or applied under another name are
+    asked of the whole graph once, and each item reads its own file's part of them."""
+
+    ALIASES = "django.installs.aliases"
+
+    def __init__(self, producer: InstallsProducer, files: list[FileScope]) -> None:
+        self.producer = producer
+        self.files = {scope.path: scope for scope in files} if producer.hooks else {}
+        self.aliases = producer.aliases(files) if producer.hooks else {}
+        self.calls: dict[str, list[list]] = {}
+
+    def keys(self) -> list[str]:
+        return list(self.files)
+
+    def prepare(self, keys: Sequence[str]) -> None:
+        scopes = [self.files[key] for key in keys]
+        found = self.producer.reader.calls_named(scopes, "callees", self.producer.hook_names)
+        self.calls = {scope.path: rows for scope, rows in found}
+
+    def run_item(self, key: str) -> ItemOutput:
+        scope = self.files[key]
+        note_file_of(scope)
+        aliases = self.aliases.get(key, Aliases())
+        TRACER.note(self.ALIASES, key, (sorted(aliases.names), sorted(aliases.decorated)))
+        rows = self.calls.get(key, [])
+
+        def file_edges(one: FileScope) -> list[Edge]:
+            return self.producer.file_edges(one, rows, aliases)
+
+        return ItemOutput(list(each_item([scope], file_edges, self.producer.failure)))

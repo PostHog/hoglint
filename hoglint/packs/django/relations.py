@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from hoglint.core.harness import each_item, failure_edge
+from collections.abc import Iterable
+from typing import Any
+
+from hoglint.core.harness import Output, each_item, failure_edge
+from hoglint.core.memo import ItemOutput, ItemRun, Items
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
 from hoglint.packs.django.apps import AppRegistry
-from hoglint.packs.django.models import ModelEntry, ModelRegistry, Relation, RelationBuilder
+from hoglint.packs.django.models import LabelRef, ModelEntry, ModelRegistry, Relation, RelationBuilder
 
 RELATIONS_PRODUCER = "django.relations@1"
 PROD = frozenset({Context.PROD})
@@ -145,6 +149,35 @@ class RelationEdges:
         site = Site(entry.path, entry.ref.module, entry.ref.symbol, entry.line)
         return failure_edge("relation", RELATIONS_PRODUCER, site, PROD, error)
 
-    def produce(self) -> list[Edge]:
-        out = each_item(self.builder.concrete_entries(), self.model_edges, self.failure)
-        return out + self.label_edges()
+    def produce(self) -> list[Output]:
+        return ItemRun(RelationItems(self), None).outputs()
+
+
+class RelationItems(Items):
+    """`django.relations` as one item per concrete model. The model-label edges come last, one
+    per declaration in the order the items first named it: each item keeps the labels it names
+    as its data."""
+
+    def __init__(self, edges: RelationEdges) -> None:
+        self.edges = edges
+        self.models = {str(entry.ref): entry.ref for entry in edges.builder.concrete_entries()}
+        self.refs: dict[tuple[str, str], LabelRef] = {}
+
+    def keys(self) -> list[str]:
+        return list(self.models)
+
+    def run_item(self, key: str) -> ItemOutput:
+        entry = self.edges.registry.models[self.models[key]]
+        builder = self.edges.builder
+        builder.label_refs = {}
+        outputs = each_item([entry], self.edges.model_edges, self.edges.failure)
+        return ItemOutput(list(outputs), [ref.data() for ref in builder.label_refs.values()])
+
+    def take(self, key: str, data: Any) -> None:
+        for value in data:
+            ref = LabelRef.restore(value)
+            self.refs.setdefault(ref.key, ref)
+
+    def finish(self) -> Iterable[Output]:
+        self.edges.builder.label_refs = self.refs
+        return self.edges.label_edges()
