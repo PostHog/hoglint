@@ -8,6 +8,7 @@ use super::resolve::{
     Binding, Core, Ent, FUNC, HitId, HitKind, IF, TC_ELSE, TRY, TYPE_ONLY, import_binding,
     unpacked_names,
 };
+use super::trace::{Kind, Memo};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Edge contexts as bits; names in `CONTEXT_NAMES` order.
@@ -285,6 +286,9 @@ impl Core {
             });
         }
         let binding = scope.binding_at(-1, name, line)?;
+        if scope.local_bindings[&(-1, name)].len() > 1 {
+            self.rec.read(Kind::Lines, scope.module, EMPTY);
+        }
         let surface = self.binding_surface(binding);
         let hit = self.resolve_binding(scope.module, binding);
         Some(Lookup {
@@ -303,10 +307,13 @@ impl Core {
             return self.module_level(scope, name, line);
         }
         if let Some(&found) = scope.module_lookups.get(&name) {
+            self.rec.replay(Memo::Lookup(scope.file, name));
             return found;
         }
+        let start = self.rec.mark();
         let found = self.module_level(scope, name, line);
         scope.module_lookups.insert(name, found);
+        self.rec.remember(Memo::Lookup(scope.file, name), start);
         found
     }
 
@@ -502,7 +509,7 @@ impl Core {
             let origin = self.origin(hit);
             let kind = self.kind(hit);
             let known =
-                !matches!(kind, HitKind::Missing | HitKind::Module) || self.index.exists(origin.m);
+                !matches!(kind, HitKind::Missing | HitKind::Module) || self.exists(origin.m);
             if known {
                 let res = if self.is_external(origin.m) {
                     Res::External

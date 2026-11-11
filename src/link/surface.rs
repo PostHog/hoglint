@@ -21,6 +21,7 @@ use super::facts::{Assign, COPY_CALLEES, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{Core, absolute_import};
 use super::scope::Scope;
+use super::trace::Kind;
 use rustc_hash::FxHashSet;
 
 pub const ALL_CLAUSE: &str = "all";
@@ -170,6 +171,7 @@ fn dunder_all(core: &mut Core, file: usize) -> DunderAll {
 /// The names `from source import *` binds: the source's `__all__`, else its public top-level
 /// names, sorted; None when the source cannot be read.
 fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
+    core.rec.read(Kind::Names, source, EMPTY);
     let table = core.table(source)?;
     let file = core.table_at(table).record?;
     if !core.facts.files[file as usize].ok() {

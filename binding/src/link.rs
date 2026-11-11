@@ -193,6 +193,22 @@ impl Link {
         self.inner.release_facts()
     }
 
+    /// Writes what each analyzed file's edges read from other files and every repo file's
+    /// interface to `path` (`Link::write_traces`), when the link was built with `trace`.
+    /// Returns (files, reads, interfaces, digests).
+    fn write_traces(&mut self, path: &str) -> PyResult<(usize, usize, usize, usize)> {
+        let counts = self
+            .inner
+            .write_traces(std::path::Path::new(path))
+            .map_err(PyValueError::new_err)?;
+        Ok((
+            counts.files,
+            counts.reads,
+            counts.interfaces,
+            counts.digests,
+        ))
+    }
+
     /// Every edge: core edges, then pack edges.
     fn edge_count(&self) -> usize {
         self.inner.edges.len()

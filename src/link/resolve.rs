@@ -6,6 +6,7 @@ use super::facts::{Assign, Def, FactSet, FileFacts, Import, Op, V};
 use super::heap;
 use super::intern::{EMPTY, Interner, Sid};
 use super::paths::{ModuleIndex, ModuleNamer};
+use super::trace::{Kind, Memo, Recorder};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
@@ -186,6 +187,8 @@ pub struct Core {
     mro_cache: FxHashMap<Ent, Vec<Ent>>,
     bases_cache: FxHashMap<Ent, Vec<Ent>>,
     ancestor_cache: FxHashMap<Ent, FxHashSet<Sid>>,
+    /// What each analyzed file's edges read, when the link records it (`LinkConfig::trace`).
+    pub rec: Recorder,
 }
 
 /// The absolute module named by `from <level dots><target> import ...` inside `module`.
@@ -390,6 +393,7 @@ impl Core {
             mro_cache: FxHashMap::default(),
             bases_cache: FxHashMap::default(),
             ancestor_cache: FxHashMap::default(),
+            rec: Recorder::default(),
         }
     }
 
@@ -397,12 +401,34 @@ impl Core {
         self.star_id
     }
 
-    pub fn exists(&self, module: Sid) -> bool {
+    pub fn exists(&mut self, module: Sid) -> bool {
+        self.rec.read(Kind::Module, module, EMPTY);
         self.index.exists(module)
     }
 
+    /// Third-party: loaded from site-packages, or named under a head no repo file has
+    /// (`ModuleIndex::is_external`).
     pub fn is_external(&mut self, module: Sid) -> bool {
-        self.index.is_external(&mut self.it, module)
+        self.rec.read(Kind::Module, module, EMPTY);
+        if let Some(&file) = self.index.path_of.get(&module) {
+            return self.index.site[file as usize];
+        }
+        let head = self.it.head(module);
+        self.rec.read(Kind::Head, head, EMPTY);
+        !self.index.repo_heads.contains(&head)
+    }
+
+    /// The longest dotted prefix (itself included) that is a module or namespace package
+    /// (`ModuleIndex::longest_module`).
+    pub fn longest_module(&mut self, dotted: Sid) -> Option<(Sid, usize)> {
+        let parts = self.it.segs(dotted);
+        for end in (1..=parts.len()).rev() {
+            let candidate = self.it.from_segs(&parts[..end]);
+            if self.exists(candidate) {
+                return Some((candidate, end));
+            }
+        }
+        None
     }
 
     // ── tables ──
@@ -523,7 +549,7 @@ impl Core {
                 for &ancestor in &ancestors {
                     candidates.push(self.it.join(ancestor, *value));
                 }
-                if let Some(found) = candidates.into_iter().find(|&c| self.index.exists(c)) {
+                if let Some(found) = candidates.into_iter().find(|&c| self.exists(c)) {
                     out.insert(*key, found);
                 }
             }
@@ -532,7 +558,7 @@ impl Core {
     }
 
     fn build_table(&mut self, module: Sid) -> Option<ModuleTable> {
-        if !self.index.exists(module) {
+        if !self.exists(module) {
             return None;
         }
         let mut table = ModuleTable {
@@ -581,13 +607,16 @@ impl Core {
 
     pub fn table(&mut self, module: Sid) -> Option<u32> {
         if let Some(&found) = self.table_of.get(&module) {
+            self.rec.replay(Memo::Table(module));
             return found;
         }
+        let start = self.rec.mark();
         let built = self.build_table(module).map(|table| {
             self.tables.push(table);
             (self.tables.len() - 1) as u32
         });
         self.table_of.insert(module, built);
+        self.rec.remember(Memo::Table(module), start);
         built
     }
 
@@ -597,7 +626,14 @@ impl Core {
 
     pub fn binding_of(&mut self, module: Sid, name: Sid) -> Option<Binding> {
         let table = self.table(module)?;
-        self.tables[table as usize].names.get(&name).copied()
+        let found = self.tables[table as usize].names.get(&name).copied();
+        let kind = if found.is_some() {
+            Kind::Found
+        } else {
+            Kind::Missing
+        };
+        self.rec.read(kind, module, name);
+        found
     }
 
     // ── hits ──
@@ -685,6 +721,7 @@ impl Core {
     pub fn resolve_name(&mut self, module: Sid, name: Sid) -> Option<HitId> {
         let key = (module, name);
         if let Some(&cached) = self.name_cache.get(&key) {
+            self.rec.replay(Memo::Name(module, name));
             return cached;
         }
         if self.in_progress.contains(&key) {
@@ -694,19 +731,21 @@ impl Core {
         let outer = self.met_cycle;
         self.met_cycle = false;
         self.in_progress.insert(key);
+        let start = self.rec.mark();
         let hit = self.lookup(module, name);
         self.in_progress.remove(&key);
         // A result that met a cycle is never cached, so each top-level answer is a pure function
         // of the tables.
         if !self.met_cycle {
             self.name_cache.insert(key, hit);
+            self.rec.remember(Memo::Name(module, name), start);
         }
         self.met_cycle = outer || self.met_cycle;
         hit
     }
 
     pub fn resolve_from(&mut self, source: Sid, attr: Sid) -> Option<HitId> {
-        if !self.index.exists(source) {
+        if !self.exists(source) {
             let missing = self.it.join(source, attr);
             return Some(self.make_hit(
                 &[Ent {
@@ -720,7 +759,7 @@ impl Core {
             return Some(hit);
         }
         let sub = self.it.join(source, attr);
-        if self.index.exists(sub) {
+        if self.exists(sub) {
             return Some(self.module_hit(sub));
         }
         None
@@ -737,7 +776,7 @@ impl Core {
                 break;
             }
             let module = self.origin(current).m;
-            if !self.index.exists(module) {
+            if !self.exists(module) {
                 let missing = self.it.join_all(module, &attrs[used..]);
                 let mut chain = self.chain(current).to_vec();
                 chain.push(Ent {
@@ -768,13 +807,16 @@ impl Core {
             Binding::From(source, attr) => {
                 let key = (source, attr);
                 if let Some(&cached) = self.from_cache.get(&key) {
+                    self.rec.replay(Memo::From(source, attr));
                     return cached;
                 }
                 let outer = self.met_cycle;
                 self.met_cycle = false;
+                let start = self.rec.mark();
                 let hit = self.resolve_from(source, attr);
                 if !self.met_cycle {
                     self.from_cache.insert(key, hit);
+                    self.rec.remember(Memo::From(source, attr), start);
                 }
                 self.met_cycle = outer || self.met_cycle;
                 hit
@@ -791,7 +833,14 @@ impl Core {
     fn lookup(&mut self, module: Sid, name: Sid) -> Option<HitId> {
         let table = self.table(module)? as usize;
         let step = Ent { m: module, s: name };
-        if let Some(binding) = self.tables[table].names.get(&name).copied() {
+        let bound = self.tables[table].names.get(&name).copied();
+        let kind = if bound.is_some() {
+            Kind::Found
+        } else {
+            Kind::Missing
+        };
+        self.rec.read(kind, module, name);
+        if let Some(binding) = bound {
             match binding {
                 Binding::Class(_, _) => return Some(self.make_hit(&[step], HitKind::Class)),
                 Binding::Def(_, _) => return Some(self.make_hit(&[step], HitKind::Def)),
@@ -805,6 +854,7 @@ impl Core {
                 }
             }
         }
+        self.rec.read(Kind::Stars, module, EMPTY);
         let stars = self.tables[table].star_imports.clone();
         for &source in &stars {
             if let Some(hit) = self.resolve_name(source, name) {
@@ -812,17 +862,19 @@ impl Core {
             }
         }
         let sub = self.it.join(module, name);
-        if self.index.exists(sub) {
+        if self.exists(sub) {
             return Some(self.module_hit(sub));
         }
         if self.module_attributes.contains(&name) {
             return Some(self.make_hit(&[step], HitKind::Variable));
         }
+        self.rec.read(Kind::Lazy, module, EMPTY);
         if let Some(&lazy) = self.tables[table].lazy.get(&name) {
             let found = self.resolve_binding(module, Binding::From(lazy, name));
             return found.map(|hit| self.behind(hit, step));
         }
-        if let Some(&unknown) = stars.iter().find(|&&source| !self.index.exists(source)) {
+        let unknown = stars.iter().copied().find(|&source| !self.exists(source));
+        if let Some(unknown) = unknown {
             let missing = self.it.join(unknown, name);
             return Some(self.make_hit(
                 &[
@@ -872,7 +924,7 @@ impl Core {
     /// Returns the hit and the parts left over.
     pub fn resolve_dotted(&mut self, dotted: Sid) -> (Option<HitId>, Vec<Sid>) {
         let parts = self.it.segs(dotted);
-        let Some((module, end)) = self.index.longest_module(&mut self.it, dotted) else {
+        let Some((module, end)) = self.longest_module(dotted) else {
             return (None, parts.to_vec());
         };
         let start = self.module_hit(module);
@@ -911,8 +963,11 @@ impl Core {
 
     pub fn bases(&mut self, class: Ent) -> Vec<Ent> {
         if let Some(found) = self.bases_cache.get(&class) {
+            self.rec.replay(Memo::Bases(class));
             return found.clone();
         }
+        let start = self.rec.mark();
+        self.rec.read(Kind::Class, class.m, class.s);
         let out = match self.located(class) {
             Some((file, idx)) => {
                 let facts = self.facts.clone();
@@ -921,6 +976,7 @@ impl Core {
             None => Vec::new(),
         };
         self.bases_cache.insert(class, out.clone());
+        self.rec.remember(Memo::Bases(class), start);
         out
     }
 
@@ -949,24 +1005,31 @@ impl Core {
     /// C3 over resolved bases. A class that inherits itself sees only itself.
     pub fn mro(&mut self, class: Ent) -> Vec<Ent> {
         if let Some(found) = self.mro_cache.get(&class) {
+            self.rec.replay(Memo::Mro(class));
             return found.clone();
         }
+        let start = self.rec.mark();
         self.mro_cache.insert(class, vec![class]);
         let bases = self.bases(class);
         let mut result = vec![class];
         result.extend(self.ancestors(&bases));
         self.mro_cache.insert(class, result.clone());
+        self.rec.remember(Memo::Mro(class), start);
         result
     }
 
     pub fn is_subclass(&mut self, class: Ent, qualified: Sid) -> bool {
-        if !self.ancestor_cache.contains_key(&class) {
+        if self.ancestor_cache.contains_key(&class) {
+            self.rec.replay(Memo::Ancestors(class));
+        } else {
+            let start = self.rec.mark();
             let ancestors = self
                 .mro(class)
                 .into_iter()
                 .map(|e| self.ent_sid(e))
                 .collect();
             self.ancestor_cache.insert(class, ancestors);
+            self.rec.remember(Memo::Ancestors(class), start);
         }
         self.ancestor_cache[&class].contains(&qualified)
     }

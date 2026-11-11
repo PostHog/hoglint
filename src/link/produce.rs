@@ -9,6 +9,7 @@ use super::resolve::{
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::{ALL_CLAUSE, HandOut, HandedOut};
+use super::trace::{Kind, Memo};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::rc::Rc;
 
@@ -778,13 +779,19 @@ impl Producers<'_> {
         });
     }
 
+    /// Runs one producer for every analyzed file, each file's reads going to its own trace.
+    fn each(&mut self, produce: fn(&mut Self, usize)) {
+        let owners = self.scopes.len();
+        for owner in 0..owners {
+            self.core.rec.enter(owner, owners);
+            produce(self, owner);
+            self.core.rec.leave();
+        }
+    }
+
     pub fn run(&mut self) {
-        for owner in 0..self.scopes.len() {
-            self.imports(owner);
-        }
-        for owner in 0..self.scopes.len() {
-            self.references(owner);
-        }
+        self.each(Self::imports);
+        self.each(Self::references);
         if !self.settings.contract_surfaces.is_empty() {
             self.owner_of = self
                 .scopes
@@ -793,18 +800,11 @@ impl Producers<'_> {
                 .map(|(owner, scope)| (scope.file, owner))
                 .collect();
         }
-        for owner in 0..self.scopes.len() {
-            self.declarations(owner);
-        }
-        for owner in 0..self.scopes.len() {
-            self.strings(owner);
-        }
-        for owner in 0..self.scopes.len() {
-            self.dynamic_imports(owner);
-        }
-        for owner in 0..self.scopes.len() {
-            self.unparsed(owner);
-        }
+        self.each(Self::declarations);
+        self.each(Self::strings);
+        self.each(Self::dynamic_imports);
+        self.each(Self::unparsed);
+        self.core.rec.finish();
     }
 
     fn imports(&mut self, owner: usize) {
@@ -984,9 +984,11 @@ impl Producers<'_> {
     fn first_party_chain(&mut self, hit: HitId) -> bool {
         let core = &mut *self.core;
         let chain = core.chain(hit).to_vec();
-        chain
-            .iter()
-            .all(|step| self.first_party.contains(&core.it.head(step.m)))
+        chain.iter().all(|step| {
+            let head = core.it.head(step.m);
+            core.rec.read(Kind::Head, head, EMPTY);
+            self.first_party.contains(&head)
+        })
     }
 
     /// A module-level type alias a bare name binds (`X = dict[str, Any]`): the file and assign
@@ -996,6 +998,7 @@ impl Producers<'_> {
         if self.core.it.s(name).contains('.') {
             return None;
         }
+        self.core.rec.read(Kind::Alias, module, name);
         if !matches!(
             self.core.binding_of(module, name)?,
             Binding::Alias(_) | Binding::Variable
@@ -1213,9 +1216,12 @@ impl Producers<'_> {
             row,
             lookup: at,
         } = alias;
+        let memo = Memo::Expansion(key.0, key.1, at.owner as u32, at.scope, at.line);
         if let Some(found) = self.expansions.get(&(key, at)) {
+            self.core.rec.replay(memo);
             return found.clone();
         }
+        let start = self.core.rec.mark();
         let facts = self.core.facts.clone();
         let Some(value) = facts.files[row.0 as usize].assigns[row.1 as usize]
             .value
@@ -1232,6 +1238,7 @@ impl Producers<'_> {
         self.expand_into(value, at, true, &mut expansion);
         let found: Rc<[Expanded]> = Rc::from(expansion.out);
         self.expansions.insert((key, at), found.clone());
+        self.core.rec.remember(memo, start);
         found
     }
 
@@ -1444,6 +1451,12 @@ impl Producers<'_> {
     /// The analyzed file's scope and def index of the def or class (`kind`) a module table binds
     /// a name to.
     fn def_of(&mut self, module: Sid, name: Sid, kind: HitKind) -> Option<(usize, u32)> {
+        let read = if kind == HitKind::Class {
+            Kind::Class
+        } else {
+            Kind::Def
+        };
+        self.core.rec.read(read, module, name);
         let (file, idx) = self.core.located_def(module, name, kind)?;
         Some((*self.owner_of.get(&file)?, idx))
     }
@@ -1643,6 +1656,7 @@ impl Producers<'_> {
     fn handed_def(&mut self, target: Sid) -> Option<Followed> {
         let core = &mut *self.core;
         let head = core.it.head(target);
+        core.rec.read(Kind::Head, head, EMPTY);
         if !self.first_party.contains(&head) {
             return None;
         }
@@ -1921,7 +1935,7 @@ impl Producers<'_> {
                 }
                 if resolved.target.is_some()
                     && resolved.res != Res::Unresolved
-                    && let Some((module, _)) = core.index.longest_module(&mut core.it, dotted)
+                    && let Some((module, _)) = core.longest_module(dotted)
                 {
                     attrs.push((k.module, module));
                 }

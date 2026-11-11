@@ -17,6 +17,7 @@ pub mod rules;
 pub mod scope;
 pub mod store;
 pub mod surface;
+pub mod trace;
 
 /// Estimated heap bytes of a link's parts, for memory reports (`Link.heap()` in the binding).
 /// The estimate counts allocated capacity and hash table buckets; allocator overhead and
@@ -197,6 +198,10 @@ pub struct LinkConfig {
     pub external: Vec<(String, String)>,
     /// Files that produce edges, in order. Every other record only resolves.
     pub analyzed: Vec<String>,
+    /// Record what each analyzed file's edges read from other files, and every repo file's
+    /// interface (`trace`). Off in a normal check.
+    #[serde(default)]
+    pub trace: bool,
 }
 
 /// One contract surface: an export's `within` and `paths` (hoglint/globs.py `ExportPaths`).
@@ -265,6 +270,8 @@ pub struct Link {
     /// symbol facts.
     pub dataclass_kinds: DataclassKinds,
     pub timings: Timings,
+    /// Every repo file's interface by file id, when the link records traces.
+    pub interfaces: Vec<(u32, Vec<(String, u64)>)>,
 }
 
 /// The decorators that make a dataclass (`make`), and those of them that always freeze it
@@ -361,6 +368,7 @@ impl Link {
             export_surfaces,
         );
         let mut core = Core::new(it, Arc::new(facts), namer, index);
+        core.rec.on = config.trace;
         let mut scopes: Vec<Scope> = analyzed
             .iter()
             .map(|&(file, base)| core.new_scope(file, base))
@@ -396,7 +404,12 @@ impl Link {
         edges.producers = (0..KIND_NAMES.len() as u8)
             .map(|kind| core.it.intern(&Self::producer_name(kind)))
             .collect();
-        timings.mark("producers", started);
+        let started = timings.mark("producers", started);
+        let mut interfaces = Vec::new();
+        if config.trace {
+            interfaces = trace::interfaces(&core);
+            timings.mark("interfaces", started);
+        }
         Ok(Link {
             core,
             scopes,
@@ -412,6 +425,7 @@ impl Link {
                 freeze: config.frozen_dataclass_decorators.iter().cloned().collect(),
             },
             timings,
+            interfaces,
         })
     }
 
