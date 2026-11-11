@@ -201,6 +201,36 @@ def stored_summary(result: RunResult, graph: Graph, roots: tuple[Path, ...], exc
     return summary_rows(summary.to_sections())
 
 
+class Tables:
+    """The normalized files of one check's graph and rule results, in `out`. `summary` is the
+    run's stored summary as rows (`stored_summary`), built before any file is written, so a
+    summary that fails leaves no table behind."""
+
+    def __init__(self, out: Path) -> None:
+        self.out = out
+
+    def write_lines(self, name: str, rows: Sequence[Any]) -> None:
+        with open(self.out / f"{name}.jsonl", "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False))
+                handle.write("\n")
+
+    def write(self, graph: Graph, result: RunResult, summary: list[Row]) -> None:
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.write_lines("findings", [finding_row(f) for f in result.findings()])
+        self.write_lines("incomplete", [incomplete_row(item) for item in result.incomplete()])
+        self.write_lines("scan-lines", [[list(key[1]), key[0], count] for key, count in result.scan.items()])
+        self.write_lines("symbols", [[name, sorted(facts.items())] for name, facts in graph.symbols.items()])
+        self.write_lines("modules", [[module, path] for module, path in graph.modules.items()])
+        failed = [[name, failure.reason, sorted(failure.kinds)] for name, failure in graph.failed_producers.items()]
+        self.write_lines("failed", failed)
+        levels = {name: [level.passing, sorted(level.failing.items())] for name, level in result.levels.items()}
+        (self.out / "levels.json").write_text(json.dumps(levels, ensure_ascii=False))
+        self.write_lines("stored-summary", summary)
+        self.write_lines("couplings", coupling_rows(graph))
+        self.write_lines("edges", [edge_row(edge) for edge in graph.edges])
+
+
 class Dump:
     """One engine's check over a repo, written as normalized files into `out`."""
 
@@ -234,30 +264,13 @@ class Dump:
         self.lap("rules", started)
         return graph, result, exceptions, files_root
 
-    def write_lines(self, name: str, rows: Sequence[Any]) -> None:
-        with open(self.out / f"{name}.jsonl", "w") as handle:
-            for row in rows:
-                handle.write(json.dumps(row, ensure_ascii=False))
-                handle.write("\n")
-
     def run(self) -> None:
         self.out.mkdir(parents=True, exist_ok=True)
         graph, result, exceptions, files_root = self.check()
         started = time.perf_counter()
         summary = stored_summary(result, graph, (self.repo, files_root), exceptions)
         started = self.lap("summary", started)
-        self.write_lines("findings", [finding_row(f) for f in result.findings()])
-        self.write_lines("incomplete", [incomplete_row(item) for item in result.incomplete()])
-        self.write_lines("scan-lines", [[list(key[1]), key[0], count] for key, count in result.scan.items()])
-        self.write_lines("symbols", [[name, sorted(facts.items())] for name, facts in graph.symbols.items()])
-        self.write_lines("modules", [[module, path] for module, path in graph.modules.items()])
-        failed = [[name, failure.reason, sorted(failure.kinds)] for name, failure in graph.failed_producers.items()]
-        self.write_lines("failed", failed)
-        levels = {name: [level.passing, sorted(level.failing.items())] for name, level in result.levels.items()}
-        (self.out / "levels.json").write_text(json.dumps(levels, ensure_ascii=False))
-        self.write_lines("stored-summary", summary)
-        self.write_lines("couplings", coupling_rows(graph))
-        self.write_lines("edges", [edge_row(edge) for edge in graph.edges])
+        Tables(self.out).write(graph, result, summary)
         self.lap("write", started)
         self.timings["maxrss_gb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9, 3)
         (self.out / "timings.json").write_text(json.dumps(self.timings))
