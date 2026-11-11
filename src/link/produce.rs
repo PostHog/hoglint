@@ -292,6 +292,7 @@ pub struct Producing {
     pub loader_last_names: Vec<String>,
     pub dataclass_decorators: Vec<Sid>,
     pub patch_callees: Vec<String>,
+    pub path_callees: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     pub contract_surfaces: Vec<ExportPaths>,
     /// The files of every export.
@@ -370,6 +371,7 @@ impl Producing {
         loaders: &[String],
         dataclass_decorators: &[String],
         patch_callees: &[String],
+        path_callees: &[String],
         contract_surfaces: Vec<ExportPaths>,
         export_surfaces: Vec<ExportPaths>,
     ) -> Producing {
@@ -445,6 +447,7 @@ impl Producing {
                 .map(|name| it.intern(name))
                 .collect(),
             patch_callees: patch_callees.to_vec(),
+            path_callees: path_callees.to_vec(),
             contract_surfaces,
             export_surfaces,
             k,
@@ -567,6 +570,19 @@ pub fn chain_tokens(chain: &str) -> Vec<&str> {
         rest = &rest[skip..];
     }
     out
+}
+
+/// `StringProducer.in_path_position`: a patch target, or the first argument of a callee
+/// `path_callees` names. Only there does a string that resolves to nothing stay an edge.
+fn in_path_position(up: &str, patch: bool, path_callees: &[String]) -> bool {
+    if patch {
+        return true;
+    }
+    let first = up.split(' ').next().unwrap_or("");
+    let (kind, rest) = first.split_once(':').unwrap_or((first, ""));
+    let (position, callee) = rest.split_once(':').unwrap_or((rest, ""));
+    let last = callee.rsplit('.').next().unwrap_or("");
+    kind == "arg" && position == "0" && path_callees.iter().any(|name| name == last)
 }
 
 fn patch_role(up: &str, patch_callees: &[String]) -> bool {
@@ -1880,6 +1896,7 @@ impl Producers<'_> {
                 }
             }
             let patch = patch_role(&row.up, &self.settings.patch_callees);
+            let path_position = in_path_position(&row.up, patch, &self.settings.path_callees);
             let role = if patch {
                 k.patch_target
             } else {
@@ -1891,7 +1908,7 @@ impl Producers<'_> {
                 let Some((resolved, rest)) = core.string_dotted(dotted) else {
                     continue;
                 };
-                if resolved.res == Res::Unresolved && !(patch || text.matches('.').count() >= 2) {
+                if resolved.res == Res::Unresolved && !path_position {
                     continue;
                 }
                 let k = &self.settings.k;

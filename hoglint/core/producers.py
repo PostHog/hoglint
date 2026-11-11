@@ -1041,7 +1041,8 @@ class DeclarationProducer(Producer):
 
 
 class StringProducer(Producer):
-    """dotted-path edges: string literals that name repo modules or symbols.
+    """dotted-path edges: string literals that name repo modules or symbols. A string that names
+    nothing is an edge only where the code holds a dotted path (`in_path_position`).
 
     A string made of several literal parts gives one edge per dotted part and one for the
     joined value, so consumers that check parts alone (as `tach` does) can select them.
@@ -1051,10 +1052,15 @@ class StringProducer(Producer):
     reads = frozenset({"strs"})
 
     @staticmethod
-    def path_like(text: str, role: str) -> bool:
-        """An unresolved string still counts when it reads as a path: a patch target, or two dots
-        or more. One-dot strings that resolve to nothing are labels or names, not paths."""
-        return role == "patch-target" or text.count(".") >= 2
+    def in_path_position(up: str, role: str, path_callees: tuple[str, ...]) -> bool:
+        """Whether a string sits where the code holds a dotted path: a patch target, or the first
+        argument of a callee `path_callees` names. Only there does a string that resolves to
+        nothing stay an edge; anywhere else it is a label, a name or a host, not a path."""
+        if role == "patch-target":
+            return True
+        kind, _, rest = up.split(" ")[0].partition(":")
+        position, _, callee = rest.partition(":")
+        return kind == "arg" and position == "0" and callee.rpartition(".")[2] in path_callees
 
     @staticmethod
     def role(up: str, patch_callees: tuple[str, ...]) -> str:
@@ -1072,6 +1078,7 @@ class StringProducer(Producer):
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         patch_callees = context.config.patch_callees
+        path_callees = context.config.path_callees
         for scope in context.files:
             for row in scope.record.get("strs", ()):
                 at_scope, _header, line, column, flags, value, _chain, up = row[:8]
@@ -1085,12 +1092,13 @@ class StringProducer(Producer):
                     if value is not None:
                         candidates.append((value, "joined"))
                 role = self.role(up, patch_callees)
+                path_position = self.in_path_position(up, role, path_callees)
                 for text, literal in candidates:
                     found = context.resolve_dotted(text)
                     if found is None:
                         continue
                     resolved, member = found
-                    if resolved.resolution == Resolution.UNRESOLVED and not self.path_like(text, role):
+                    if resolved.resolution == Resolution.UNRESOLVED and not path_position:
                         continue
                     attrs = [("literal", literal), ("role", role), ("up", up)]
                     if member:

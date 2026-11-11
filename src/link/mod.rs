@@ -180,6 +180,9 @@ pub struct LinkConfig {
     pub frozen_dataclass_decorators: Vec<String>,
     #[serde(default)]
     pub patch_callees: Vec<String>,
+    /// Last names of other callees whose first argument is a dotted path.
+    #[serde(default)]
+    pub path_callees: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     #[serde(default)]
     pub contract_surfaces: Vec<SurfaceConfig>,
@@ -353,6 +356,7 @@ impl Link {
             &config.dynamic_loaders,
             &config.dataclass_decorators,
             &config.patch_callees,
+            &config.path_callees,
             contract_surfaces,
             export_surfaces,
         );

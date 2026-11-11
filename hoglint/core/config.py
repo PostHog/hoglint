@@ -120,6 +120,9 @@ class CoreConfig:
     - frozen_dataclass_decorators: those of them that always make a frozen dataclass; any other
       freezes it only when its call passes `frozen=True`.
     - patch_callees: last names of callees whose first argument is a dotted patch target.
+    - path_callees: last names of other callees whose first argument is a dotted path (an import
+      by name, a URL include). There, and at a patch target, a string that resolves to nothing
+      stays an unresolved edge; anywhere else it is no edge.
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
       they hand out from other modules.
@@ -137,6 +140,7 @@ class CoreConfig:
     dataclass_decorators: tuple[str, ...] = DEFAULT_DATACLASS_DECORATORS
     frozen_dataclass_decorators: tuple[str, ...] = ()
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
+    path_callees: tuple[str, ...] = ()
     contract_surfaces: tuple[ExportPaths, ...] = ()
     export_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False

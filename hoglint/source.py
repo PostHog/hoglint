@@ -155,6 +155,8 @@ class GraphSource:
             fields["migration_paths"] = as_tuple(discovery["migrations"])
         if "dataclass_decorators" in discovery:
             fields["dataclass_decorators"] = as_tuple(discovery["dataclass_decorators"])
+        if "path_callees" in discovery:
+            fields["path_callees"] = as_tuple(discovery["path_callees"])
         if "frozen_dataclass_decorators" in discovery:
             fields["frozen_dataclass_decorators"] = as_tuple(discovery["frozen_dataclass_decorators"])
         fields["contract_surfaces"] = GraphSource.contract_surfaces(config)
