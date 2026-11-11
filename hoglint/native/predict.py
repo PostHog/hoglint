@@ -186,19 +186,19 @@ class Changes:
         for path in sorted(paths):
             before = parent.interfaces.get(path)
             after = child.interfaces.get(path)
-            if before is None and after is None:
+            if before is not None and after is not None:
+                out.modules.add(after[0])
+                names = set(before[1]) | set(after[1])
+                out.keys.update((after[0], name) for name in names if before[1].get(name) != after[1].get(name))
                 continue
-            if before is None or after is None:
-                module = after[0] if after is not None else before[0]  # type: ignore[index]
-                out.modules.add(module)
-                out.whole.add(module)
-                out.keys.update((ancestor, "") for ancestor in module_ancestors(module) if ancestor in existence)
-                out.keys.add((module, ""))
+            found = after if after is not None else before
+            if found is None:
                 continue
-            module = after[0]
+            module = found[0]
             out.modules.add(module)
-            names = set(before[1]) | set(after[1])
-            out.keys.update((module, name) for name in names if before[1].get(name) != after[1].get(name))
+            out.whole.add(module)
+            out.keys.update((ancestor, "") for ancestor in module_ancestors(module) if ancestor in existence)
+            out.keys.add((module, ""))
         return out
 
 

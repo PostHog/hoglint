@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from hoglint.native.config import TRACE_ENV
-from hoglint.native.normal import edge_row
 from hoglint.native.graph import NativeGraph
+from hoglint.native.normal import edge_row
 from hoglint.native.parity import Dump, finding_row
 from hoglint.native.predict import predict, write_trace_dump
 
