@@ -108,6 +108,53 @@ class RunInputs:
         return InputPatterns(self.declared())
 
 
+class InputDigests:
+    """The `inputs` part of a summary key: a digest of (path, mode, blob oid) over every file of a
+    git tree that the run's input patterns match, sorted by path. A link's blob is the one it
+    leads to, and an unreadable link has none (D41). A tree is immutable, so the digest of each
+    (tree, patterns) pair is kept under `<cache>/inputs`, and a tree seen before needs no listing.
+    That file is a cache: one that does not read is computed again."""
+
+    def __init__(self, cache: Path, stores: RunStores | None = None) -> None:
+        self.root = cache / INPUTS
+        self.stores = stores or RunStores.current()
+        self.known: dict[tuple[str, str], str] = {}
+
+    @staticmethod
+    def compute(listing: Listing, patterns: InputPatterns) -> str:
+        hasher = hashlib.sha256()
+        for path in sorted((path for path in listing.modes if patterns.matches(path)), key=str.encode):
+            hasher.update(f"{path}\0{listing.modes[path]}\0{listing.blob(path) or ''}\0".encode())
+        return hasher.hexdigest()[:INPUTS_DIGEST_CHARS]
+
+    def of(self, repo: Path, tree: str, patterns: InputPatterns) -> str:
+        """The digest for `tree`; empty when there is no tree."""
+        if not tree:
+            return ""
+        key = (tree, patterns.digest())
+        found = self.known.get(key)
+        if found is not None:
+            return found
+        path = self.root / f"{tree}-{key[1]}-{DIGEST_LAYOUT}"
+        self.stores.opened(INPUTS_STORE.name)
+        try:
+            found = path.read_text().strip()
+        except (OSError, UnicodeDecodeError):
+            found = ""
+        if not STORED_DIGEST.fullmatch(found):
+            found = self.compute(TreeListing.of(repo, tree), patterns)
+            self.keep(path, found)
+        self.known[key] = found
+        return found
+
+    @staticmethod
+    def keep(path: Path, digest: str) -> None:
+        try:
+            write_atomic(path, digest.encode())
+        except OSError:
+            return
+
+
 class TreeFiles:
     """Files of one snapshot, written into directories on request: a git tree, or the working
     tree as git sees it (D40), so a plugin of a working tree run never reads an ignored file or a
@@ -169,17 +216,13 @@ class TreeFiles:
         return root
 
     def inputs_key(self, patterns: tuple[str, ...]) -> str:
-        """A digest of each file `patterns` match, by path, mode and blob id: what a plugin that
-        declares `patterns` reads. Empty when one of the files has no blob (its bytes are on
+        """The inputs digest (`InputDigests.compute`) of the files `patterns` match: what a plugin
+        that declares `patterns` reads. Empty when one of the files has no blob (its bytes are on
         disk, or it is a link that leads nowhere), so no blob id names its content."""
         wanted = InputPatterns(patterns)
-        hasher = hashlib.sha256()
-        for path in sorted(path for path in self.listing.modes if wanted.matches(path)):
-            blob = self.listing.blob(path)
-            if blob is None:
-                return ""
-            hasher.update(f"{path}\0{self.listing.modes[path]}\0{blob}\0".encode())
-        return hasher.hexdigest()
+        if any(self.listing.blob(path) is None for path in self.listing.modes if wanted.matches(path)):
+            return ""
+        return InputDigests.compute(self.listing, wanted)
 
     def holds(self, path: str) -> bool:
         """Whether the snapshot holds `path`. A path no input pattern matches is not in the run's
@@ -187,50 +230,3 @@ class TreeFiles:
         if self.asked is not None and not self.asked.matches(path):
             raise EngineError(f"the run asked whether {path} exists, but no source or declared input pattern covers it")
         return self.listing.holds(path)
-
-
-class InputDigests:
-    """The `inputs` part of a summary key: a digest of (path, mode, blob oid) over every file of a
-    git tree that the run's input patterns match, sorted by path. A link's blob is the one it
-    leads to, and an unreadable link has none (D41). A tree is immutable, so the digest of each
-    (tree, patterns) pair is kept under `<cache>/inputs`, and a tree seen before needs no listing.
-    That file is a cache: one that does not read is computed again."""
-
-    def __init__(self, cache: Path, stores: RunStores | None = None) -> None:
-        self.root = cache / INPUTS
-        self.stores = stores or RunStores.current()
-        self.known: dict[tuple[str, str], str] = {}
-
-    @staticmethod
-    def compute(listing: TreeListing, patterns: InputPatterns) -> str:
-        hasher = hashlib.sha256()
-        for path in sorted((path for path in listing.modes if patterns.matches(path)), key=str.encode):
-            hasher.update(f"{path}\0{listing.modes[path]}\0{listing.blob(path) or ''}\0".encode())
-        return hasher.hexdigest()[:INPUTS_DIGEST_CHARS]
-
-    def of(self, repo: Path, tree: str, patterns: InputPatterns) -> str:
-        """The digest for `tree`; empty when there is no tree."""
-        if not tree:
-            return ""
-        key = (tree, patterns.digest())
-        found = self.known.get(key)
-        if found is not None:
-            return found
-        path = self.root / f"{tree}-{key[1]}-{DIGEST_LAYOUT}"
-        self.stores.opened(INPUTS_STORE.name)
-        try:
-            found = path.read_text().strip()
-        except (OSError, UnicodeDecodeError):
-            found = ""
-        if not STORED_DIGEST.fullmatch(found):
-            found = self.compute(TreeListing.of(repo, tree), patterns)
-            self.keep(path, found)
-        self.known[key] = found
-        return found
-
-    @staticmethod
-    def keep(path: Path, digest: str) -> None:
-        try:
-            write_atomic(path, digest.encode())
-        except OSError:
-            return
