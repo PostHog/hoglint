@@ -281,11 +281,16 @@ class SignalItems(Items):
         self.producer = producer
         self.files = {scope.path: scope for scope in files}
         self.decorated = producer.decorated(files)
-        digests = {path: digest(sorted(found)) for path, found in self.decorated.items()}
-        none = digest([])
-        TRACER.verify_by_map(self.DECORATED, digests, none)
         self.calls: dict[str, list[list]] = {}
         self.callees: dict[str, list[list]] = {}
+        # Only a step the memo runs opens a frame; a run with no memo digests nothing.
+        if TRACER.frames:
+            self.answer_reads()
+
+    def answer_reads(self) -> None:
+        """Answers this step's reads of decorated defs again from a digest per file."""
+        digests = {path: digest(sorted(found)) for path, found in self.decorated.items()}
+        TRACER.verify_by_map(self.DECORATED, digests, digest([]))
 
     def keys(self) -> list[str]:
         return list(self.files)

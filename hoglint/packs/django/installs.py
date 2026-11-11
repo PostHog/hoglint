@@ -177,10 +177,15 @@ class InstallsItems(Items):
         self.producer = producer
         self.files = {scope.path: scope for scope in files} if producer.hooks else {}
         self.aliases = producer.aliases(files) if producer.hooks else {}
-        digests = {path: digest(self.form(found)) for path, found in self.aliases.items()}
-        none = digest(self.form(Aliases()))
-        TRACER.verify_by_map(self.ALIASES, digests, none)
         self.calls: dict[str, list[list]] = {}
+        # Only a step the memo runs opens a frame; a run with no memo digests nothing.
+        if TRACER.frames:
+            self.answer_reads()
+
+    def answer_reads(self) -> None:
+        """Answers this step's alias reads again from a digest per file."""
+        digests = {path: digest(self.form(found)) for path, found in self.aliases.items()}
+        TRACER.verify_by_map(self.ALIASES, digests, digest(self.form(Aliases())))
 
     @staticmethod
     def form(aliases: Aliases) -> object:
