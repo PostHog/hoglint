@@ -10,6 +10,7 @@ use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::{ALL_CLAUSE, HandedOut};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::rc::Rc;
 
 pub const KIND_NAMES: [&str; 9] = [
     "import",
@@ -625,11 +626,22 @@ pub struct Expanded {
     too_deep: bool,
 }
 
+/// A type alias, as (module, name).
+type AliasKey = (Sid, Sid);
+
+/// A type alias a mention names: its key, the (file, assign row) of its value, and where its
+/// names are looked up.
+struct Alias {
+    key: AliasKey,
+    row: (u32, u32),
+    lookup: SlotLookup,
+}
+
 /// One alias's expansion while it is worked out: the aliases above the current one (`stack`),
 /// the (alias, top) pairs followed, and the names written, each once, in order.
 struct Expansion {
-    stack: Vec<(Sid, Sid)>,
-    followed: FxHashSet<((Sid, Sid), bool)>,
+    stack: Vec<AliasKey>,
+    followed: FxHashSet<(AliasKey, bool)>,
     seen: FxHashSet<Expanded>,
     out: Vec<Expanded>,
 }
@@ -692,7 +704,7 @@ pub struct Producers<'p> {
     /// The scope of each analyzed file, by file.
     pub owner_of: FxHashMap<u32, usize>,
     /// What each type alias expands to, by alias and the place its names are looked up.
-    pub expansions: FxHashMap<((Sid, Sid), SlotLookup), Vec<Expanded>>,
+    pub expansions: FxHashMap<(AliasKey, SlotLookup), Rc<[Expanded]>>,
     /// The candidate dataclass fields of each file, by file (`fields_by_class`).
     pub fields: FxHashMap<u32, FxHashMap<i32, Vec<u32>>>,
     /// The contract roots of each file, by its scope (`contract_roots`).
@@ -987,17 +999,18 @@ impl Producers<'_> {
         }
     }
 
-    /// The type alias a mention names, as (module, name), its value, and where its names are
-    /// looked up: assigned in the module that uses it, or followed through imports to the
-    /// first-party module that assigns it. A module holds `Handler = Callable[[Order], None]` to
+    /// The type alias a mention names, as (module, name), the (file, row) of its value, and where
+    /// its names are looked up: assigned in the module that uses it, or followed through imports
+    /// to the first-party module that assigns it. A module holds `Handler = Callable[[Order], None]` to
     /// shorten a signature, not to hide its types.
-    fn alias_of(&mut self, mention: Mention, found: Lookup) -> Option<((Sid, Sid), V, SlotLookup)> {
+    fn alias_of(&mut self, mention: Mention, found: Lookup) -> Option<Alias> {
         let module = self.scopes[mention.lookup.owner].module;
-        if let Some((file, at)) = self.alias(module, mention.value) {
-            let value = self.core.facts.files[file as usize].assigns[at as usize]
-                .value
-                .clone()?;
-            return Some(((module, mention.value), value, mention.lookup));
+        if let Some(row) = self.alias(module, mention.value) {
+            return Some(Alias {
+                key: (module, mention.value),
+                row,
+                lookup: mention.lookup,
+            });
         }
         let hit = found.hit?;
         if self.core.kind(hit) != HitKind::Variable {
@@ -1009,13 +1022,16 @@ impl Producers<'_> {
         let origin = self.core.origin(hit);
         let (file, at) = self.alias(origin.m, origin.s)?;
         let owner = *self.owner_of.get(&file)?;
-        let row = &self.core.facts.files[file as usize].assigns[at as usize];
         let lookup = SlotLookup {
             owner,
             scope: -1,
-            line: row.l,
+            line: self.core.facts.files[file as usize].assigns[at as usize].l,
         };
-        Some(((origin.m, origin.s), row.value.clone()?, lookup))
+        Some(Alias {
+            key: (origin.m, origin.s),
+            row: (file, at),
+            lookup,
+        })
     }
 
     /// One `exposes` row of a callable's slot.
@@ -1103,7 +1119,12 @@ impl Producers<'_> {
                 whole,
                 lookup: at,
             };
-            let Some((key, inner, inner_at)) = self.alias_of(mention, found) else {
+            let Some(Alias {
+                key,
+                row,
+                lookup: inner_at,
+            }) = self.alias_of(mention, found)
+            else {
                 continue;
             };
             if expansion.stack.contains(&key) || !expansion.followed.insert((key, item.top)) {
@@ -1116,18 +1137,37 @@ impl Producers<'_> {
                 });
                 continue;
             }
+            let facts = self.core.facts.clone();
+            let Some(inner) = facts.files[row.0 as usize].assigns[row.1 as usize]
+                .value
+                .as_ref()
+            else {
+                continue;
+            };
             expansion.stack.push(key);
-            self.expand_into(&inner, inner_at, item.top, expansion);
+            self.expand_into(inner, inner_at, item.top, expansion);
             expansion.stack.pop();
         }
     }
 
     /// The names a type alias expands to, worked out once per alias and place its names are
     /// looked up: the alias decides them, never the slot that names it.
-    fn expansion(&mut self, key: (Sid, Sid), value: &V, at: SlotLookup) -> Vec<Expanded> {
+    fn expansion(&mut self, alias: Alias) -> Rc<[Expanded]> {
+        let Alias {
+            key,
+            row,
+            lookup: at,
+        } = alias;
         if let Some(found) = self.expansions.get(&(key, at)) {
             return found.clone();
         }
+        let facts = self.core.facts.clone();
+        let Some(value) = facts.files[row.0 as usize].assigns[row.1 as usize]
+            .value
+            .as_ref()
+        else {
+            return Rc::from([]);
+        };
         let mut expansion = Expansion {
             stack: vec![key],
             followed: FxHashSet::default(),
@@ -1135,8 +1175,9 @@ impl Producers<'_> {
             out: Vec::new(),
         };
         self.expand_into(value, at, true, &mut expansion);
-        self.expansions.insert((key, at), expansion.out.clone());
-        expansion.out
+        let found: Rc<[Expanded]> = Rc::from(expansion.out);
+        self.expansions.insert((key, at), found.clone());
+        found
     }
 
     /// One row per mention, each followed (in a contract only) by a row per name of the type
@@ -1172,10 +1213,10 @@ impl Producers<'_> {
             if !contract {
                 continue;
             }
-            let Some((key, value, at)) = self.alias_of(mention, found) else {
+            let Some(alias) = self.alias_of(mention, found) else {
                 continue;
             };
-            for item in self.expansion(key, &value, at) {
+            for &item in self.expansion(alias).iter() {
                 let whole = mention.whole && item.top;
                 let inner = self.lookup_at(item.lookup, item.value);
                 let surface = if item.too_deep {
