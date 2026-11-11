@@ -104,7 +104,6 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.api", "charge", "return", "builtins.dict", "", "alias"),
     ("products.shop.backend.facade.contracts", "Order.__init__", "field:total", "builtins.int", "", ""),
     ("products.shop.backend.facade.contracts", "Line.__init__", "field:meta", "builtins.dict", "", ""),
-    ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:total", "builtins.int", "", "no-functions"),
     ("products.shop.backend.logic", "charge", "param:amount", "products.shop.backend.logic.Totals", "", ""),
     ("products.shop.backend.logic", "Receipt.__init__", "field:kind", "typing.ClassVar", "", ""),
 ]

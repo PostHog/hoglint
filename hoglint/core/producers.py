@@ -188,13 +188,13 @@ class BuildContext:
                 return self.value_lookup(scope, value[key], at_scope, line)
         return None
 
-    def handed_def(self, target: str) -> tuple[FileScope, int] | None:
-        """The top-level function or class a handed-out name leads to, in an analyzed
-        first-party file: every step of the way stays inside first-party code."""
+    def handed_function(self, target: str) -> tuple[FileScope, dict] | None:
+        """The top-level function a handed-out name leads to, in an analyzed first-party file:
+        every step of the way stays inside first-party code."""
         if not self.first_party.contains(target):
             return None
         hit, rest = self.resolver.resolve_dotted(target)
-        if hit is None or rest or hit.kind not in ("def", "class"):
+        if hit is None or rest or hit.kind != "def":
             return None
         if not all(self.first_party.contains(str(step)) for step in hit.chain):
             return None
@@ -202,9 +202,9 @@ class BuildContext:
         table = self.resolver.tables.get(origin.module)
         scope = self.scope_of_module.get(origin.module)
         binding = table.names.get(origin.symbol) if table is not None else None
-        if scope is None or binding is None or binding[0] != hit.kind or binding[2]:
+        if scope is None or binding is None or binding[0] != "def" or binding[2]:
             return None
-        return scope, binding[1]
+        return scope, scope.defs[binding[1]]
 
     def alias_value(self, module: str, name: str) -> object:
         """The value of a module-level type alias the bare name binds (`X = dict[str, Any]`),
@@ -389,8 +389,8 @@ class DeclarationProducer(Producer):
     """inherit, decorate, exposes and declares edges from def and class records.
 
     In a contract surface (`CoreConfig.contract_surfaces`) every public callable exposes its whole
-    signature: a slot with no annotation, builtin types, and the slots of the functions and
-    dataclass fields the module hands out from elsewhere (`surfaces.HandedOut`).
+    signature: a slot with no annotation, builtin types, and the slots of the functions the module
+    hands out from elsewhere (`surfaces.HandedOut`).
     """
 
     kind = "declaration"
@@ -541,7 +541,6 @@ class DeclarationProducer(Producer):
         rows: list[dict],
         callable_name: str,
         contract: bool,
-        handed: str = "",
     ) -> None:
         """The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
         only fields directly in the class body count, and a `ClassVar` is no field."""
@@ -549,25 +548,10 @@ class DeclarationProducer(Producer):
             if row.get("ann") is None:
                 continue
             in_slot = contract and row.get("f", 0) == CLASS and not self.is_class_var(row["ann"])
-            if handed and not in_slot:
-                continue
-            line_site = site if handed else replace(site, line=row["l"])
+            line_site = replace(site, line=row["l"])
             line_lookup = replace(lookup, line=row["l"])
             slot = f"field:{row['t'][0]}"
-            self.expose(context, graph, line_site, line_lookup, row["ann"], slot, callable_name, in_slot, handed)
-
-    def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
-        """Whether a class takes a decorator `dataclass_decorators` names, by spelling or target."""
-        wanted = context.config.dataclass_decorators
-        for dec in node.get("dec", ()):
-            found = context.value_lookup(scope, dec, node["s"], node["l"])
-            if found is None:
-                continue
-            if found.surface in wanted or any(
-                str(t) in wanted for t in context.classifier.classify_lookup(found).targets
-            ):
-                return True
-        return False
+            self.expose(context, graph, line_site, line_lookup, row["ann"], slot, callable_name, in_slot)
 
     def declare(
         self,
@@ -649,23 +633,16 @@ class DeclarationProducer(Producer):
         self.expose_signature(context, graph, site, lookup, node, qualname, in_contract)
 
     def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
-        """The slots of the functions and dataclass fields a contract surface hands out from other
-        modules, at the import that hands each one out."""
+        """The slots of the functions a contract surface hands out from other modules, at the
+        import that hands each one out."""
         for item in HandedOut(scope, context.resolver.tables.get(scope.module)).names():
-            found = context.handed_def(item.target)
+            found = context.handed_function(item.target)
             if found is None:
                 continue
-            origin, idx = found
-            node = origin.defs[idx]
+            origin, node = found
             site = SlotSite(scope, -1, item.line, item.column, scope.base_contexts)
             lookup = SlotLookup(origin, node["s"], node["l"])
-            if node["k"] != "class":
-                self.expose_signature(context, graph, site, lookup, node, item.bound, True, item.clause)
-                continue
-            if not self.is_dataclass_like(context, origin, node):
-                continue
-            rows = self.fields_by_class(origin).get(idx, [])
-            self.expose_fields(context, graph, site, lookup, rows, f"{item.bound}.__init__", True, item.clause)
+            self.expose_signature(context, graph, site, lookup, node, item.bound, True, item.clause)
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:

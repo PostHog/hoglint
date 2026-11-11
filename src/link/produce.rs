@@ -1024,16 +1024,12 @@ impl Producers<'_> {
         rows: &[&Assign],
         callable: Sid,
         contract: bool,
-        handed: Sid,
     ) {
         for row in rows {
             let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
                 continue;
             };
             let in_slot = contract && row.f == CLASS && !self.is_class_var(annotation);
-            if handed != EMPTY && !in_slot {
-                continue;
-            }
             let V::Chain(name) = &row.targets[0] else {
                 continue;
             };
@@ -1041,13 +1037,9 @@ impl Producers<'_> {
                 .core
                 .it
                 .intern(&format!("field:{}", self.core.it.s(*name)));
-            let line_site = if handed != EMPTY {
-                site
-            } else {
-                SlotSite {
-                    line: row.l,
-                    ..site
-                }
+            let line_site = SlotSite {
+                line: row.l,
+                ..site
             };
             let line_lookup = SlotLookup {
                 line: row.l,
@@ -1060,7 +1052,7 @@ impl Producers<'_> {
                 slot,
                 callable,
                 in_slot,
-                handed,
+                EMPTY,
             );
         }
     }
@@ -1111,22 +1103,9 @@ impl Producers<'_> {
         !name.starts_with('_') || name == "__init__"
     }
 
-    /// Whether a class takes a decorator `dataclass_decorators` names, by spelling or target.
-    fn is_dataclass_like(&mut self, owner: usize, node: &Def) -> bool {
-        for dec in &node.dec {
-            let (surface, resolved) = self.lookup_value(owner, dec, node.s, node.l);
-            let target = resolved.target.map(|target| self.core.ent_sid(target));
-            let wanted = &self.settings.dataclass_decorators;
-            if wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name)) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// The top-level function or class a handed-out name leads to, in an analyzed first-party
-    /// file: every step of the way stays inside first-party code.
-    fn handed_def(
+    /// The top-level function a handed-out name leads to, in an analyzed first-party file: every
+    /// step of the way stays inside first-party code.
+    fn handed_function(
         &mut self,
         target: Sid,
         owner_of: &FxHashMap<Sid, usize>,
@@ -1138,8 +1117,7 @@ impl Producers<'_> {
         }
         let (hit, rest) = core.resolve_dotted(target);
         let hit = hit?;
-        let kind = core.kind(hit);
-        if !rest.is_empty() || !matches!(kind, HitKind::Def | HitKind::Class) {
+        if !rest.is_empty() || core.kind(hit) != HitKind::Def {
             return None;
         }
         let chain = core.chain(hit).to_vec();
@@ -1151,20 +1129,19 @@ impl Producers<'_> {
         }
         let origin = core.origin(hit);
         let owner = *owner_of.get(&origin.m)?;
-        match (kind, core.binding_of(origin.m, origin.s)?) {
-            (HitKind::Def, Binding::Def(idx, false))
-            | (HitKind::Class, Binding::Class(idx, false)) => Some((owner, idx)),
+        match core.binding_of(origin.m, origin.s)? {
+            Binding::Def(idx, false) => Some((owner, idx)),
             _ => None,
         }
     }
 
-    /// The slots of the functions and dataclass fields a contract surface hands out from other
-    /// modules, at the import that hands each one out.
+    /// The slots of the functions a contract surface hands out from other modules, at the import
+    /// that hands each one out.
     fn hand_out(&mut self, owner: usize, owner_of: &FxHashMap<Sid, usize>) {
         let facts = self.core.facts.clone();
         let handed = handed_out(self.core, &self.scopes[owner]);
         for item in handed {
-            let Some((origin, idx)) = self.handed_def(item.target, owner_of) else {
+            let Some((origin, idx)) = self.handed_function(item.target, owner_of) else {
                 continue;
             };
             let record = &facts.files[self.scopes[origin].file as usize];
@@ -1182,17 +1159,7 @@ impl Producers<'_> {
                 scope: node.s,
                 line: node.l,
             };
-            if !node.is_class() {
-                self.expose_signature(site, lookup, node, item.bound, true, clause);
-                continue;
-            }
-            if !self.is_dataclass_like(origin, node) {
-                continue;
-            }
-            let fields = fields_by_class(&self.core.it, &record.assigns);
-            let rows = fields.get(&(idx as i32)).cloned().unwrap_or_default();
-            let init = self.core.it.join(item.bound, self.settings.k.init);
-            self.expose_fields(site, lookup, &rows, init, true, clause);
+            self.expose_signature(site, lookup, node, item.bound, true, clause);
         }
     }
 
@@ -1283,7 +1250,7 @@ impl Producers<'_> {
                 if !nested && dataclass {
                     let init = self.core.it.join(qualname, self.settings.k.init);
                     let rows = fields.get(&(idx as i32)).cloned().unwrap_or_default();
-                    self.expose_fields(site, lookup, &rows, init, in_contract, EMPTY);
+                    self.expose_fields(site, lookup, &rows, init, in_contract);
                 }
                 continue;
             }
