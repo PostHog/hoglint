@@ -3,7 +3,9 @@
 
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
-use super::resolve::{Binding, CLASS, Core, Ent, HitKind, MODULE_LEVEL_FLAGS, absolute_import};
+use super::resolve::{
+    Binding, CLASS, Core, Ent, HitKind, MODULE_LEVEL_FLAGS, OrderedMap, absolute_import, c3_merge,
+};
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::{ALL_CLAUSE, handed_out, listing};
@@ -343,6 +345,7 @@ struct Keys {
     names: Sid,
     signature: Sid,
     staticmethod: Sid,
+    fields: Sid,
 }
 
 impl Producing {
@@ -408,6 +411,7 @@ impl Producing {
             names: it.intern("names"),
             signature: it.intern("signature"),
             staticmethod: it.intern("builtins.staticmethod"),
+            fields: it.intern("fields"),
         };
         Producing {
             names: LookupNames {
@@ -610,19 +614,30 @@ struct SlotRows {
     handed: Sid,
 }
 
-/// Annotated single-name assignments by the def they sit in: the candidate dataclass fields.
-fn fields_by_class<'f>(it: &Interner, assigns: &'f [Assign]) -> FxHashMap<i32, Vec<&'f Assign>> {
-    let mut fields: FxHashMap<i32, Vec<&Assign>> = FxHashMap::default();
-    for row in assigns {
+/// Annotated single-name assignments by the def they sit in, as indexes into `assigns`: the
+/// candidate dataclass fields.
+fn fields_by_class(it: &Interner, assigns: &[Assign]) -> FxHashMap<i32, Vec<u32>> {
+    let mut fields: FxHashMap<i32, Vec<u32>> = FxHashMap::default();
+    for (at, row) in assigns.iter().enumerate() {
         if row.op == Op::Annotated
             && row.targets.len() == 1
             && let V::Chain(name) = &row.targets[0]
             && !it.s(*name).contains('.')
         {
-            fields.entry(row.s).or_default().push(row);
+            fields.entry(row.s).or_default().push(at as u32);
         }
     }
     fields
+}
+
+/// A field of a dataclass's generated `__init__`: its assign row (file and index), where its
+/// names are looked up, and whether the class itself declares it (else a base does).
+#[derive(Clone, Copy)]
+struct FieldRow {
+    file: u32,
+    at: u32,
+    lookup: SlotLookup,
+    own: bool,
 }
 
 /// Builds the core edges of every analyzed file, producer by producer.
@@ -1174,18 +1189,19 @@ impl Producers<'_> {
     }
 
     /// The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
-    /// only fields directly in the class body count, and a `ClassVar` is no field.
-    #[allow(clippy::too_many_arguments)]
+    /// only fields directly in a class body count, and a `ClassVar` is no field. A field the class
+    /// itself declares sits at its own line, unless the class is handed out.
     fn expose_fields(
         &mut self,
         site: SlotSite,
-        lookup: SlotLookup,
-        rows: &[&Assign],
+        fields: &[FieldRow],
         callable: Sid,
         contract: bool,
         handed: Sid,
     ) {
-        for row in rows {
+        let facts = self.core.facts.clone();
+        for field in fields {
+            let row = &facts.files[field.file as usize].assigns[field.at as usize];
             let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
                 continue;
             };
@@ -1200,17 +1216,17 @@ impl Producers<'_> {
                 .core
                 .it
                 .intern(&format!("field:{}", self.core.it.s(*name)));
-            let line_site = if handed != EMPTY {
-                site
-            } else {
+            let line_site = if field.own && handed == EMPTY {
                 SlotSite {
                     line: row.l,
                     ..site
                 }
+            } else {
+                site
             };
             let line_lookup = SlotLookup {
                 line: row.l,
-                ..lookup
+                ..field.lookup
             };
             self.expose(
                 line_site,
@@ -1221,6 +1237,121 @@ impl Producers<'_> {
                 in_slot,
                 handed,
             );
+        }
+    }
+
+    /// The analyzed file and def index of a class the link resolved to.
+    fn class_def(&mut self, class: Ent) -> Option<(usize, u32)> {
+        let Binding::Class(idx, stub) = self.core.binding_of(class.m, class.s)? else {
+            return None;
+        };
+        let table = self.core.table(class.m)?;
+        let table = self.core.table_at(table);
+        let file = if stub {
+            table.stub_record
+        } else {
+            table.record
+        }?;
+        Some((*self.owner_of.get(&file)?, idx))
+    }
+
+    /// A class and its ancestors in MRO order, through the link's own class resolution, each as
+    /// its file's scope and def index. An ancestor whose file is not analyzed is left out.
+    fn lineage(&mut self, owner: usize, idx: u32) -> Vec<(usize, u32)> {
+        let facts = self.core.facts.clone();
+        let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
+        let module = self.scopes[owner].module;
+        let mut bases = Vec::new();
+        for base in &node.bases {
+            if let Some(class) = self.core.resolve_class(module, base) {
+                bases.push(class);
+            }
+        }
+        let own = Ent {
+            m: module,
+            s: self.scopes[owner].qualnames[idx as usize],
+        };
+        let mut sequences: Vec<Vec<Ent>> = bases.iter().map(|&base| self.core.mro(base)).collect();
+        sequences.push(bases);
+        let mut out = vec![(owner, idx)];
+        for class in c3_merge(sequences) {
+            if class == own {
+                continue;
+            }
+            if let Some(found) = self.class_def(class) {
+                out.push(found);
+            }
+        }
+        out
+    }
+
+    /// The fields of the generated `__init__`, as the dataclass machinery collects them: from
+    /// every dataclass-like class along the MRO, base first, a redefinition replacing the earlier
+    /// field in its place.
+    fn mro_fields(&mut self, lineage: &[(usize, u32)], lookup: SlotLookup) -> Vec<FieldRow> {
+        let facts = self.core.facts.clone();
+        let mut fields: OrderedMap<FieldRow> = OrderedMap::default();
+        for position in (0..lineage.len()).rev() {
+            let (owner, idx) = lineage[position];
+            let file = self.scopes[owner].file;
+            let record = &facts.files[file as usize];
+            let node = &record.defs[idx as usize];
+            if position > 0 && !self.is_dataclass_like(owner, node) {
+                continue;
+            }
+            let at_lookup = if position == 0 {
+                lookup
+            } else {
+                SlotLookup {
+                    owner,
+                    scope: node.s,
+                    line: node.l,
+                }
+            };
+            let rows = fields_by_class(&self.core.it, &record.assigns);
+            for &at in rows.get(&(idx as i32)).map_or(&[][..], Vec::as_slice) {
+                let V::Chain(name) = &record.assigns[at as usize].targets[0] else {
+                    continue;
+                };
+                let field = FieldRow {
+                    file,
+                    at,
+                    lookup: at_lookup,
+                    own: position == 0,
+                };
+                fields.insert(*name, field);
+            }
+        }
+        fields.iter().map(|(_, field)| field).collect()
+    }
+
+    /// One unresolved row per base along the MRO that does not resolve: the fields it adds to
+    /// the generated `__init__` are unknown.
+    fn expose_unresolved_bases(
+        &mut self,
+        site: SlotSite,
+        lineage: &[(usize, u32)],
+        callable: Sid,
+        handed: Sid,
+    ) {
+        let facts = self.core.facts.clone();
+        let rows = SlotRows {
+            site,
+            callable,
+            slot: self.settings.k.fields,
+            contract: true,
+            handed,
+        };
+        for &(owner, idx) in lineage {
+            let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
+            for base in &node.bases {
+                let (surface, resolved) = self.lookup_value(owner, base, node.s, node.l);
+                if resolved.res != Res::Unresolved {
+                    continue;
+                }
+                let attrs = self.slot_attrs(rows, self.settings.k.whole, &[]);
+                self.push_slot(rows, surface, UNRESOLVED, &attrs);
+            }
         }
     }
 
@@ -1395,10 +1526,11 @@ impl Producers<'_> {
             if !self.is_dataclass_like(origin, node) {
                 continue;
             }
-            let fields = fields_by_class(&self.core.it, &record.assigns);
-            let rows = fields.get(&(idx as i32)).cloned().unwrap_or_default();
             let init = self.core.it.join(item.bound, self.settings.k.init);
-            self.expose_fields(site, lookup, &rows, init, true, clause);
+            let lineage = self.lineage(origin, idx);
+            self.expose_unresolved_bases(site, &lineage, init, clause);
+            let fields = self.mro_fields(&lineage, lookup);
+            self.expose_fields(site, &fields, init, true, clause);
         }
     }
 
@@ -1488,8 +1620,25 @@ impl Producers<'_> {
                     .any(|name| self.settings.dataclass_decorators.contains(name));
                 if !nested && dataclass {
                     let init = self.core.it.join(qualname, self.settings.k.init);
-                    let rows = fields.get(&(idx as i32)).cloned().unwrap_or_default();
-                    self.expose_fields(site, lookup, &rows, init, in_contract, EMPTY);
+                    if !in_contract {
+                        let own: Vec<FieldRow> = fields
+                            .get(&(idx as i32))
+                            .map_or(&[][..], Vec::as_slice)
+                            .iter()
+                            .map(|&at| FieldRow {
+                                file: file as u32,
+                                at,
+                                lookup,
+                                own: true,
+                            })
+                            .collect();
+                        self.expose_fields(site, &own, init, false, EMPTY);
+                        continue;
+                    }
+                    let lineage = self.lineage(owner, idx as u32);
+                    self.expose_unresolved_bases(site, &lineage, init, EMPTY);
+                    let fields = self.mro_fields(&lineage, lookup);
+                    self.expose_fields(site, &fields, init, true, EMPTY);
                 }
                 continue;
             }

@@ -236,6 +236,32 @@ pub fn unpacked_names(it: &Interner, target: &V, out: &mut Vec<Sid>) {
     }
 }
 
+/// The C3 merge of the bases' MROs and the bases themselves.
+pub fn c3_merge(mut sequences: Vec<Vec<Ent>>) -> Vec<Ent> {
+    let mut result = Vec::new();
+    loop {
+        sequences.retain(|s| !s.is_empty());
+        if sequences.is_empty() {
+            break;
+        }
+        let mut head = sequences[0][0];
+        for seq in &sequences {
+            let candidate = seq[0];
+            if !sequences.iter().any(|s| s[1..].contains(&candidate)) {
+                head = candidate;
+                break;
+            }
+        }
+        result.push(head);
+        for seq in sequences.iter_mut() {
+            if seq.first() == Some(&head) {
+                seq.remove(0);
+            }
+        }
+    }
+    result
+}
+
 fn def_binding(i: usize, d: &Def, stub: bool) -> Binding {
     if d.is_class() {
         Binding::Class(i as u32, stub)
@@ -883,26 +909,7 @@ impl Core {
         let mut sequences: Vec<Vec<Ent>> = bases.iter().map(|&base| self.mro(base)).collect();
         sequences.push(bases.clone());
         let mut result = vec![class];
-        loop {
-            sequences.retain(|s| !s.is_empty());
-            if sequences.is_empty() {
-                break;
-            }
-            let mut head = sequences[0][0];
-            for seq in &sequences {
-                let candidate = seq[0];
-                if !sequences.iter().any(|s| s[1..].contains(&candidate)) {
-                    head = candidate;
-                    break;
-                }
-            }
-            result.push(head);
-            for seq in sequences.iter_mut() {
-                if seq.first() == Some(&head) {
-                    seq.remove(0);
-                }
-            }
-        }
+        result.extend(c3_merge(sequences));
         self.mro_cache.insert(class, result.clone());
         result
     }

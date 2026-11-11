@@ -15,9 +15,9 @@ from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import chain_last
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
-from hoglint.core.symbols import CLASS, MODULE_LEVEL_FLAGS, Hit, Resolver, Tables, absolute_import, entity
+from hoglint.core.symbols import CLASS, MODULE_LEVEL_FLAGS, ClassIndex, Hit, Resolver, Tables, absolute_import, entity
 from hoglint.facts import FactStore
-from hoglint.model import Context, Edge, Graph, Resolution
+from hoglint.model import Context, Edge, EntityId, Graph, Resolution
 
 PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
@@ -203,6 +203,7 @@ class BuildContext:
         self.names = NameLookup(self.resolver)
         self.scope_of_path = {scope.path: scope for scope in self.files}
         self.aliases = AliasValues(self.resolver.tables)
+        self.classes = ClassIndex(self.resolver)
 
     def table_scope(self, module: str, stub: bool = False) -> FileScope | None:
         """The analyzed file a module table reads a binding from: the `.pyi` for a name only the
@@ -270,6 +271,15 @@ class BuildContext:
         if scope is None:
             return UNFOLLOWED
         return Followed(scope, binding[1])
+
+    def class_def(self, ref: EntityId) -> tuple[FileScope, int] | None:
+        """The analyzed file and def index of a class the link resolved to."""
+        table = self.resolver.tables.get(ref.module)
+        binding = table.names.get(ref.symbol) if table is not None else None
+        if binding is None or binding[0] != "class":
+            return None
+        scope = self.table_scope(ref.module, binding[2] == "stub")
+        return (scope, binding[1]) if scope is not None else None
 
     def alias_value(self, module: str, name: str) -> object:
         """The value of a module-level type alias the bare name binds (`X = dict[str, Any]`),
@@ -458,6 +468,16 @@ class SlotLookup:
     scope: FileScope
     at_scope: int
     line: int
+
+
+@dataclass(frozen=True, slots=True)
+class Field:
+    """A field of a dataclass's generated `__init__`: its row, where its names are looked up, and
+    whether the class itself declares it (else a base does)."""
+
+    row: dict
+    lookup: SlotLookup
+    own: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -679,24 +699,80 @@ class DeclarationProducer(Producer):
         context: BuildContext,
         graph: Graph,
         site: SlotSite,
-        lookup: SlotLookup,
-        rows: list[dict],
+        fields: list[Field],
         callable_name: str,
         contract: bool,
         handed: str = "",
     ) -> None:
         """The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
-        only fields directly in the class body count, and a `ClassVar` is no field."""
-        for row in rows:
+        only fields directly in a class body count, and a `ClassVar` is no field. A field the
+        class itself declares sits at its own line, unless the class is handed out."""
+        for member in fields:
+            row = member.row
             if row.get("ann") is None:
                 continue
             in_slot = contract and row.get("f", 0) == CLASS and not self.is_class_var(row["ann"])
             if handed and not in_slot:
                 continue
-            line_site = site if handed else replace(site, line=row["l"])
-            line_lookup = replace(lookup, line=row["l"])
+            line_site = replace(site, line=row["l"]) if member.own and not handed else site
+            line_lookup = replace(member.lookup, line=row["l"])
             slot = f"field:{row['t'][0]}"
             self.expose(context, graph, line_site, line_lookup, row["ann"], slot, callable_name, in_slot, handed)
+
+    def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
+        """A class and its ancestors in MRO order, through the link's own class resolution, each
+        as its file and def index. An ancestor whose file is not analyzed is left out."""
+        node = scope.defs[idx]
+        bases = []
+        for base in node.get("bases", ()):
+            hit = context.resolver.resolve_value(scope.module, base)
+            if hit is not None and hit.kind == "class":
+                bases.append(hit.origin)
+        own = entity(scope.module, scope.qualnames[idx])
+        order = ClassIndex.merge([list(context.classes.mro(base)) for base in bases] + [list(bases)])
+        out = [(scope, idx)]
+        for ref in order:
+            found = context.class_def(ref) if ref != own else None
+            if found is not None:
+                out.append(found)
+        return out
+
+    def mro_fields(
+        self, context: BuildContext, lineage: list[tuple[FileScope, int]], lookup: SlotLookup
+    ) -> list[Field]:
+        """The fields of the generated `__init__`, as the dataclass machinery collects them: from
+        every dataclass-like class along the MRO, base first, a redefinition replacing the
+        earlier field in its place."""
+        fields: dict[str, Field] = {}
+        for position in range(len(lineage) - 1, -1, -1):
+            scope, idx = lineage[position]
+            node = scope.defs[idx]
+            if position and not self.is_dataclass_like(context, scope, node):
+                continue
+            where = lookup if not position else SlotLookup(scope, node["s"], node["l"])
+            for row in self.fields_by_class(scope).get(idx, []):
+                fields[row["t"][0]] = Field(row, where, not position)
+        return list(fields.values())
+
+    def expose_unresolved_bases(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        site: SlotSite,
+        lineage: list[tuple[FileScope, int]],
+        callable_name: str,
+        handed: str = "",
+    ) -> None:
+        """One unresolved row per base along the MRO that does not resolve: the fields it adds
+        to the generated `__init__` are unknown."""
+        rows = SlotRows(site, callable_name, "fields", True, (("handed", handed),) if handed else ())
+        for scope, idx in lineage:
+            node = scope.defs[idx]
+            for base in node.get("bases", ()):
+                found = context.value_lookup(scope, base, node["s"], node["l"])
+                if found is not None and context.classifier.classify_lookup(found).resolution != Resolution.UNRESOLVED:
+                    continue
+                graph.edges.append(site.edge(found.surface if found else "", UNRESOLVED, rows.attrs("whole")))
 
     def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
         """Whether a class takes a decorator `dataclass_decorators` names, by spelling or target."""
@@ -783,8 +859,14 @@ class DeclarationProducer(Producer):
                     )
                 )
             if not nested and any(name in context.config.dataclass_decorators for name in decorators):
-                rows = fields.get(idx, [])
-                self.expose_fields(context, graph, site, lookup, rows, f"{qualname}.__init__", in_contract)
+                init = f"{qualname}.__init__"
+                if not in_contract:
+                    own = [Field(row, lookup, True) for row in fields.get(idx, [])]
+                    self.expose_fields(context, graph, site, own, init, False)
+                    return
+                lineage = self.lineage(context, scope, idx)
+                self.expose_unresolved_bases(context, graph, site, lineage, init)
+                self.expose_fields(context, graph, site, self.mro_fields(context, lineage, lookup), init, True)
             return
         if nested:
             return
@@ -819,8 +901,11 @@ class DeclarationProducer(Producer):
                 continue
             if not self.is_dataclass_like(context, origin, node):
                 continue
-            rows = self.fields_by_class(origin).get(idx, [])
-            self.expose_fields(context, graph, site, lookup, rows, f"{item.bound}.__init__", True, item.clause)
+            init = f"{item.bound}.__init__"
+            lineage = self.lineage(context, origin, idx)
+            self.expose_unresolved_bases(context, graph, site, lineage, init, item.clause)
+            fields = self.mro_fields(context, lineage, lookup)
+            self.expose_fields(context, graph, site, fields, init, True, item.clause)
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:

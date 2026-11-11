@@ -437,8 +437,14 @@ class ClassIndex:
             result = [ref, *(self.mro(bases[0]) if bases else ())]
             self.mro_cache[ref] = result
             return result
-        sequences = [list(self.mro(b)) for b in bases] + [list(bases)]
-        result = [ref]
+        result = [ref, *self.merge([list(self.mro(b)) for b in bases] + [list(bases)])]
+        self.mro_cache[ref] = result
+        return result
+
+    @staticmethod
+    def merge(sequences: list[list[EntityId]]) -> list[EntityId]:
+        """The C3 merge of the bases' MROs and the bases themselves."""
+        result: list[EntityId] = []
         while True:
             sequences = [s for s in sequences if s]
             if not sequences:
@@ -452,5 +458,4 @@ class ClassIndex:
             for s in sequences:
                 if s and s[0] == head:
                     s.pop(0)
-        self.mro_cache[ref] = result
         return result

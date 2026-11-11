@@ -107,6 +107,7 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.api", "charge", "param:amount", "builtins.int", "", "alias"),
     ("products.shop.backend.facade.api", "charge", "param:note", "", "missing", "alias"),
     ("products.shop.backend.facade.api", "charge", "return", "builtins.dict", "", "alias"),
+    ("products.shop.backend.facade.contracts", "Order.__init__", "field:id", "builtins.int", "", ""),
     ("products.shop.backend.facade.contracts", "Order.__init__", "field:total", "builtins.int", "", ""),
     ("products.shop.backend.facade.contracts", "Line.__init__", "field:meta", "builtins.dict", "", ""),
     ("products.shop.backend.facade.contracts", "Order.__init__", "field:_audit", "builtins.dict", "", ""),
@@ -500,6 +501,63 @@ def test_only_a_method_leaves_out_its_first_parameter_whatever_its_name(
             ("Orders.make", "return", "builtins.None", "external", ""),
         ]
     )
+
+
+BASES = (
+    "from dataclasses import dataclass\n\n\n"
+    "@dataclass\nclass Base:\n    id: int\n    name: str\n\n\n"
+    "class Mixin:\n    note: str\n"
+)
+CHILD = "@dataclass\nclass Child(Mixin, Base):\n    name: bytes\n    extra: float\n"
+
+
+def child_fields(callable_name: str, handed: str) -> list[tuple[str, str, str, str, str]]:
+    return [
+        (callable_name, "field:id", "builtins.int", "external", handed),
+        (callable_name, "field:name", "builtins.bytes", "external", handed),
+        (callable_name, "field:extra", "builtins.float", "external", handed),
+    ]
+
+
+# A dataclass's `__init__` takes the fields of every dataclass along its MRO, base first, a
+# redefinition replacing the earlier one; a base that does not resolve leaves its fields unknown.
+INHERITED_FIELD_CASES = {
+    "the surface's own class": (
+        {"products/shop/backend/facade/api.py": BASES + "\n\n" + CHILD},
+        [
+            ("Base.__init__", "field:id", "builtins.int", "external", ""),
+            ("Base.__init__", "field:name", "builtins.str", "external", ""),
+            *child_fields("Child.__init__", ""),
+        ],
+    ),
+    "a class the surface hands out": (
+        {
+            f"{LOGIC}.py": BASES + "\n\n" + CHILD,
+            "products/shop/backend/facade/api.py": "from ..logic import Child as Child\n",
+        },
+        child_fields("Child.__init__", "no-functions"),
+    ),
+    "a base that does not resolve": (
+        {
+            "products/shop/backend/facade/api.py": (
+                "from dataclasses import dataclass\n\nfrom ..nowhere import Missing\n\n\n"
+                "@dataclass\nclass Child(Missing):\n    extra: float\n"
+            ),
+        },
+        [
+            ("Child.__init__", "fields", "products.shop.backend.nowhere.Missing", "unresolved", ""),
+            unfollowed("Missing", "nowhere.Missing", "no-functions"),
+            ("Child.__init__", "field:extra", "builtins.float", "external", ""),
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", INHERITED_FIELD_CASES)
+def test_a_dataclass_exposes_the_fields_it_inherits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+    files, expected = INHERITED_FIELD_CASES[case]
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(expected)
 
 
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)
