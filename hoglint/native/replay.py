@@ -622,15 +622,15 @@ class Traces(Mode):
                 found.append(f"{kind}:{len({item.home for item in missed})}")
         return "gaps " + (" ".join(found) or "none")
 class PackMemoMiss(Mode):
-    """Test only: every pack item's trace leaves out the files it read (`HOGLINT_PACK_MEMO_DROP`),
-    as a pack memo that forgot a read would. A pair that edits a file whose own pack item output
-    changes (a models file whose classes move, say) then keeps the stale item, and the replay
-    must report the pair as different."""
+    """Test only: every pack item's trace leaves out its reads (`HOGLINT_PACK_MEMO_DROP`), as a
+    pack memo that stopped checking them would. A pair that changes a stored item's output then
+    keeps the stale item, and the replay must report the pair as different. One kind left out
+    is not enough on the sample: another read of the same trace carries the same change."""
 
     name = "pack-memo-miss"
 
     def env(self) -> dict[str, str]:
-        return {"HOGLINT_PACK_MEMO_DROP": "file"}
+        return {"HOGLINT_PACK_MEMO_DROP": "*"}
 
 
 MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces, PackMemoMiss)}

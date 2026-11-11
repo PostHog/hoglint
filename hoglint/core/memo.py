@@ -41,10 +41,11 @@ Read = tuple[str, str]
 
 # The read of a file's facts, noted by file id; its answer is the file's content key.
 FILE = "file"
-# Test only: reads of these kinds (comma-separated) are left out of every trace, so a replay
-# must find the miss.
+# Test only: reads of these kinds (comma-separated, or "*" for every kind) are left out of every
+# trace, so a replay must find the miss.
 DROP_ENV = "HOGLINT_PACK_MEMO_DROP"
 DIGEST_BYTES = 12
+ALL_KINDS = "*"
 # A step's stored state is split by item key into this many parts.
 PARTS = 64
 ZLIB_LEVEL = 1
@@ -125,6 +126,16 @@ class FileKeysMap:
         return self.keys.get(path)
 
 
+class AllKinds(frozenset[str]):
+    """Every read kind, for `HOGLINT_PACK_MEMO_DROP=*`."""
+
+    def __contains__(self, kind: object) -> bool:
+        return True
+
+
+ALL_DROPPED = AllKinds()
+
+
 class Tracer:
     """Notes what the running item reads. `answers` keeps the digest of each answer, once per run:
     an answer does not change while the packs run, except an edge query's, whose key names the
@@ -137,7 +148,8 @@ class Tracer:
     def __init__(self) -> None:
         self.frames: list[Frame] = []
         self.answers: dict[Read, str] = {}
-        self.dropped = frozenset(os.environ.get(DROP_ENV, "").split(","))
+        dropped = os.environ.get(DROP_ENV, "")
+        self.dropped = ALL_DROPPED if dropped == ALL_KINDS else frozenset(filter(None, dropped.split(",")))
         self.step = ""  # the running step, which an edge query's key names
         self.verifiers: dict[str, Callable[[str], str | None]] = {}
         self.maps: dict[str, tuple[dict[str, str], str]] = {}
