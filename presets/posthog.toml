@@ -5,7 +5,11 @@ schema = 1
 
 [vocabulary]
 edge_kinds = ["drives"]
-sections   = ["posthog"]  # the PostHog pack (hoglint.presets_py.posthog): drives and facade facts
+sections   = ["posthog"]  # the PostHog pack (hoglint.presets_py.posthog): drives
+
+# `@frozen` (posthog.dataclasses) makes a dataclass: its fields are slots of the class's `__init__`.
+[discovery]
+dataclass_decorators = ["dataclasses.dataclass", "posthog.dataclasses.frozen"]
 
 # ── Fields ─────────────────────────────────────────────────────
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
@@ -132,11 +136,14 @@ manager  = { subclass_of = ["django.db.models.manager.BaseManager", "django.db.m
 queryset = { subclass_of = ["django.db.models.query.QuerySet", "django.db.models.QuerySet"] }
 command  = { subclass_of = ["django.core.management.base.BaseCommand"] }
 
+# A contract's signatures are part of it: an unannotated slot is unknown, and the slots of what a
+# facade hands out from elsewhere count as the facade's.
 [shapes.contract]
-data     = ["frozen-dataclass", "enum"]
-behavior = { kind = "abc", where = "tier == 'core'" }
-deny     = ["model", "manager", "queryset", "command"]
-unknown  = "error"
+data       = ["frozen-dataclass", "enum"]
+behavior   = { kind = "abc", where = "tier == 'core'" }
+deny       = ["model", "manager", "queryset", "command"]
+unknown    = "error"
+signatures = true
 
 # Registration modules and presentation adapters hand out classes, never ORM types.
 [shapes.registration]

@@ -1,4 +1,8 @@
-"""The PostHog pack: the repo's own producers (drives, facade facts), for the `[posthog]` section."""
+"""The PostHog pack: the repo's own producer (drives), for the `[posthog]` section.
+
+The facade facts producer is no part of a check: core derives the signature slots of contract
+surfaces itself, and only the legacy ledger script runs the producer.
+"""
 
 from __future__ import annotations
 
@@ -11,13 +15,9 @@ from hoglint.facts import FactNeeds
 from hoglint.model import Edge
 from hoglint.plugins import PackReader, PackSink
 from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DrivesProducer
-from hoglint.presets_py.posthog.facade import FACADE_PRODUCER, FacadeFacts
 
 SECTION = "posthog"
-# Only the facade makes `export` edges, and its `exposes` add the slots of re-exported functions.
-# Its inherit, decorate and declares edges copy core's, so a facade failure leaves them complete.
-FACADE_KINDS = frozenset({"export", "exposes"})
-EDGE_KINDS = frozenset({"drives", *FACADE_KINDS})
+EDGE_KINDS = frozenset({"drives"})
 FACT_NEEDS = FactNeeds(
     kinds=frozenset(
         {"imports", "defs", "assigns", "refs", "uses", "calls", "callees", "names", "tags", "watched", "branches"}
@@ -43,15 +43,7 @@ class PosthogPack:
         def drives() -> list[Edge]:
             return DrivesProducer(reader).produce()
 
-        def facade() -> list[Edge]:
-            return FacadeFacts(reader).produce()
-
-        ProducerPlan(
-            [
-                ProducerStep(DRIVES_PRODUCER, frozenset({"drives"}), drives),
-                ProducerStep(FACADE_PRODUCER, FACADE_KINDS, facade),
-            ]
-        ).run(sink)
+        ProducerPlan([ProducerStep(DRIVES_PRODUCER, EDGE_KINDS, drives)]).run(sink)
 
 
 POSTHOG_PACK = PosthogPack()

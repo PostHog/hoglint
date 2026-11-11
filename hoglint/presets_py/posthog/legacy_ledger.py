@@ -18,6 +18,7 @@ from pathlib import Path
 from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
 from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
+from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.core.modules import FirstParty
 from hoglint.core.reader import python_pack_io
 from hoglint.core.records import sequence_items, str_literal
@@ -25,7 +26,7 @@ from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.packs.django.config import SECTION, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
 from hoglint.presets_py.posthog.drives import UNKNOWN_EXECUTION
-from hoglint.presets_py.posthog.facade import FACADE_PRODUCER
+from hoglint.presets_py.posthog.facade import FACADE_KINDS, FACADE_PRODUCER, FacadeFacts
 from hoglint.presets_py.posthog.layout import CORE, backend_product, backend_rel, product_of_module, product_of_path
 from hoglint.presets_py.posthog.pack import POSTHOG_PACK
 
@@ -441,11 +442,17 @@ class Parity:
         self.build = build
 
     def produce(self, graph: Graph) -> None:
-        """The repo's own `[django]` table drives the Django pack, so parity checks the real config."""
+        """The repo's own `[django]` table drives the Django pack, so parity checks the real config.
+        The facade facts producer runs here only: a check gets its slots from core."""
         section = tomllib.loads((self.repo_root / ROOT_CONFIG).read_text()).get(SECTION, {})
         reader, sink = python_pack_io(self.build, graph)
         DjangoPack.run(reader, DjangoPackConfig.from_section(section), sink, self.repo_root)
         POSTHOG_PACK.run(reader, sink)
+
+        def facade() -> list[Edge]:
+            return FacadeFacts(reader).produce()
+
+        ProducerPlan([ProducerStep(FACADE_PRODUCER, FACADE_KINDS, facade)]).run(sink)
 
     def lines(self, graph: Graph) -> list[str]:
         policy = CrossingsPolicy.from_facts(self.build)

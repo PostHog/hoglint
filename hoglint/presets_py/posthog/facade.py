@@ -28,6 +28,9 @@ from hoglint.plugins import PackReader
 from hoglint.presets_py.posthog.layout import backend_product, backend_rel
 
 FACADE_PRODUCER = "posthog.facade-facts@1"
+# Only the facade makes `export` edges, and its `exposes` add the slots of re-exported functions.
+# Its inherit, decorate and declares edges copy core's, so a facade failure leaves them complete.
+FACADE_KINDS = frozenset({"export", "exposes"})
 DATACLASS_DECORATORS = frozenset({"dataclass", "frozen"})
 SPECIAL_FORMS = frozenset({"Literal", "Annotated"})
 TYPING_MODULES = frozenset({"typing", "typing_extensions"})
