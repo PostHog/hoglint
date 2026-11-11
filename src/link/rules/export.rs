@@ -600,7 +600,11 @@ impl<'a> Walk<'a> {
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let annotation = link.core.it.get("annotation");
         let slot = link.core.it.get("slot");
+        let alias = link.core.it.get("alias");
         for id in self.member_edges(symbol, include_bases) {
+            if self.cx.attr(id, alias) == "expanded" {
+                continue;
+            }
             if self.cx.attr(id, annotation) == "missing" {
                 let why = ("no-annotation", self.cx.attr(id, slot));
                 self.unknown(symbol, module, shape, trail, Some(id), why);

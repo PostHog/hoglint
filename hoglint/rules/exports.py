@@ -296,6 +296,8 @@ class ExportPrimitive(RuleType):
 
     def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
         for edge in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
+            if edge.attr("alias") == "expanded":
+                continue
             if edge.attr("annotation") == "missing":
                 self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))
                 continue

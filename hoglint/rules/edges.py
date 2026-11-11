@@ -163,7 +163,9 @@ class SignaturePrimitive(EdgeRule):
     )
 
     def sees(self, edge: Edge) -> bool:
-        return super().sees(edge) and not is_private(edge.attr("callable"))
+        """A public callable's slot, but not the row of a type alias whose expansion core wrote:
+        the rows of what it expands to stand for it."""
+        return super().sees(edge) and not is_private(edge.attr("callable")) and edge.attr("alias") != "expanded"
 
     @staticmethod
     def subject(env: EdgeEnv) -> str:

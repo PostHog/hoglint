@@ -344,6 +344,7 @@ struct Keys {
     ret: Sid,
     alias: Sid,
     too_deep: Sid,
+    expanded: Sid,
     dunder_all: Sid,
     names: Sid,
     signature: Sid,
@@ -421,6 +422,7 @@ impl Producing {
             ret: it.intern("return"),
             alias: it.intern("alias"),
             too_deep: it.intern("too-deep"),
+            expanded: it.intern("expanded"),
             dunder_all: it.intern("__all__"),
             names: it.intern("names"),
             signature: it.intern("signature"),
@@ -1156,6 +1158,25 @@ impl Producers<'_> {
         }
     }
 
+    /// Whether a name of an expansion is a type alias whose own expansion was written there: it
+    /// was followed, not left as a too-deep marker, and it names at least one type.
+    fn expanded_in(&mut self, expansion: &[Expanded], item: Expanded, found: Lookup) -> bool {
+        let too_deep = Expanded {
+            too_deep: true,
+            ..item
+        };
+        if expansion.contains(&too_deep) {
+            return false;
+        }
+        let mention = Mention {
+            value: item.value,
+            whole: item.top,
+            lookup: item.lookup,
+        };
+        self.alias_of(mention, found)
+            .is_some_and(|alias| !self.expansion(alias).is_empty())
+    }
+
     /// The names a type alias expands to, worked out once per alias and place its names are
     /// looked up: the alias decides them, never the slot that names it.
     fn expansion(&mut self, alias: Alias) -> Rc<[Expanded]> {
@@ -1205,6 +1226,12 @@ impl Producers<'_> {
                 lookup,
             };
             let found = self.lookup_at(mention.lookup, mention.value);
+            let alias = if contract {
+                self.alias_of(mention, found)
+            } else {
+                None
+            };
+            let expansion = alias.map(|alias| self.expansion(alias));
             let core = &mut *self.core;
             let k = &self.settings.k;
             let position = if mention.whole { k.whole } else { k.nested };
@@ -1214,15 +1241,16 @@ impl Producers<'_> {
             };
             if !builtin {
                 let resolved = core.classify_lookup(found);
-                self.push_slot(rows, found.surface, resolved, slot, position, None);
+                let marker = expansion
+                    .as_ref()
+                    .filter(|items| !items.is_empty())
+                    .map(|_| (k.alias, k.expanded));
+                self.push_slot(rows, found.surface, resolved, slot, position, marker);
             }
-            if !contract {
-                continue;
-            }
-            let Some(alias) = self.alias_of(mention, found) else {
+            let Some(expansion) = expansion else {
                 continue;
             };
-            for &item in self.expansion(alias).iter() {
+            for &item in expansion.iter() {
                 let whole = mention.whole && item.top;
                 let inner = self.lookup_at(item.lookup, item.value);
                 let surface = if item.too_deep {
@@ -1240,8 +1268,11 @@ impl Producers<'_> {
                     self.push_slot(rows, surface, UNRESOLVED, slot, position, marker);
                     continue;
                 }
+                let marker = self
+                    .expanded_in(&expansion, item, inner)
+                    .then_some((self.settings.k.alias, self.settings.k.expanded));
                 let resolved = self.core.classify_lookup(inner);
-                self.push_slot(rows, surface, resolved, slot, position, None);
+                self.push_slot(rows, surface, resolved, slot, position, marker);
             }
         }
     }

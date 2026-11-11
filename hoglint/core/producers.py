@@ -78,6 +78,8 @@ UP_POSITIONS: tuple[tuple[str, str], ...] = (
     ("del", "delete"),
     ("lambda", "lambda"),
 )
+# The attr of a slot row whose type alias is explained by the rows of what it expands to.
+EXPANDED = ("alias", "expanded")
 # How many type aliases deep one slot's names are followed.
 MAX_ALIAS_DEPTH = 32
 TARGET_STEPS = ("assign-target", "annassign-target", "augassign-target", "for-target", "comp:target", "walrus-target")
@@ -664,6 +666,14 @@ class DeclarationProducer(Producer):
             self.expand_into(context, alias[1], alias[2], item.top, expansion)
             expansion.stack.pop()
 
+    def expanded_in(self, context: BuildContext, expansion: list[Expanded], item: Expanded, found: Lookup) -> bool:
+        """Whether a name of an expansion is a type alias whose own expansion was written there: it
+        was followed, not left as a too-deep marker, and it names at least one type."""
+        if replace(item, too_deep=True) in expansion:
+            return False
+        alias = self.alias_of(context, Mention(item.value, "whole" if item.top else "nested", item.lookup), found)
+        return alias is not None and bool(self.expansion(context, *alias))
+
     def expansion(
         self, context: BuildContext, key: tuple[str, str], value: object, where: SlotLookup
     ) -> list[Expanded]:
@@ -693,15 +703,15 @@ class DeclarationProducer(Producer):
         for value, mentioned in names:
             head = value.split(".")[0]
             found = self.lookup_at(context, lookup, value)
+            alias = self.alias_of(context, Mention(value, mentioned, lookup), found) if contract else None
+            expansion = self.expansion(context, *alias) if alias is not None else None
             if contract or found.hit is not None or found.surface != f"builtins.{head}":
                 resolved = context.classifier.classify_lookup(found)
-                graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned))
-            if not contract:
+                marker = (EXPANDED,) if expansion else ()
+                graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned, *marker))
+            if expansion is None:
                 continue
-            alias = self.alias_of(context, Mention(value, mentioned, lookup), found)
-            if alias is None:
-                continue
-            for item in self.expansion(context, *alias):
+            for item in expansion:
                 position = "whole" if mentioned == "whole" and item.top else "nested"
                 inner = self.lookup_at(context, item.lookup, item.value)
                 surface = item.value if item.too_deep else inner.surface
@@ -711,8 +721,9 @@ class DeclarationProducer(Producer):
                 if item.too_deep:
                     graph.edges.append(rows.edge(surface, UNRESOLVED, slot, position, ("alias", "too-deep")))
                     continue
+                marker = (EXPANDED,) if self.expanded_in(context, expansion, item, inner) else ()
                 resolved = context.classifier.classify_lookup(inner)
-                graph.edges.append(rows.edge(surface, resolved, slot, position))
+                graph.edges.append(rows.edge(surface, resolved, slot, position, *marker))
 
     def expose(
         self,

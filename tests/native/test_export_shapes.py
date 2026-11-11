@@ -139,6 +139,7 @@ SURFACE = {
     ),
 }
 SHOP = "products.shop.backend"
+API = f"{SHOP}.facade.api"
 
 
 def test_a_surface_module_exports_only_what_it_hands_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,3 +153,63 @@ def test_a_surface_module_exports_only_what_it_hands_out(tmp_path: Path, monkeyp
         ["public-surface", [f"{SHOP}.facade.api.Order", "products.other.use"]],
         ["public-surface", [f"{SHOP}.facade.contracts.Base", "products.other.use"]],
     ]
+
+
+ALIAS_CONFIG = (
+    CONFIG.replace('[shapes.contract]\ndata = ["frozen-dataclass"]\nunknown = "error"\n', "", 1)
+    + """
+[kinds]
+model = { subclass_of = ["products.shop.backend.models.Model"] }
+
+[shapes.contract]
+data = ["frozen-dataclass"]
+deny = ["model"]
+unknown = "error"
+signatures = true
+
+[rules.facade-signature]
+primitive = "signature"
+deny = "dst.kind == 'model'"
+on_unknown = "finding"
+identity = ["src.module", "edge.callable", "edge.slot", "dst.symbol"]
+ledger = false
+"""
+)
+MODELS = "class Model:\n    pass\n\n\nclass Order(Model):\n    pass\n"
+DEEP = "".join(f"A{at} = list[A{at + 1}]\n" for at in range(40)) + "A40 = int\n"
+
+
+# A type alias whose expansion core wrote is explained by it: the rules judge the names it expands
+# to, never the alias's own name. An alias too deep to follow stays unknown, by its name and by the
+# marker that stops the expansion.
+def slot_finding(name: str) -> list[object]:
+    return ["facade-signature", [API, "charge", "param:amount", name]]
+
+
+ORDER_IN_DICT = [slot_finding("builtins.dict"), slot_finding(f"{SHOP}.models.Order")]
+ALIAS_CASES = {
+    "a local alias": ("Totals = dict[str, Order]\n\n\ndef charge(amount: Totals) -> None:\n    pass\n", ORDER_IN_DICT),
+    "an alias of an alias": (
+        "Totals = dict[str, Order]\nRows = list[Totals]\n\n\ndef charge(amount: Rows) -> None:\n    pass\n",
+        ORDER_IN_DICT,
+    ),
+    "an alias too deep to follow": (
+        DEEP + "\n\ndef charge(amount: A0) -> None:\n    pass\n",
+        [slot_finding("A32"), slot_finding(f"{API}.A32")],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", ALIAS_CASES)
+def test_an_expanded_alias_is_judged_by_what_it_expands_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    body, expected = ALIAS_CASES[case]
+    files = {
+        "hoglint.toml": ALIAS_CONFIG,
+        "products/shop/backend/models.py": MODELS,
+        "products/shop/backend/facade/api.py": "from products.shop.backend.models import Order\n\n" + body,
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    findings = sorted([row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl"))
+    assert [row for row in findings if row[0] == "facade-signature"] == sorted(expected)

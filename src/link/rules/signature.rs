@@ -30,13 +30,18 @@ pub fn callable_of(link: &Link, id: u32, attr: Option<Sid>) -> Sid {
 
 impl Signature {
     /// `SignaturePrimitive.sees` past what every edge rule sees: the edges whose callable is
-    /// public. Keeps the order of `ids`.
+    /// public, but not the row of a type alias whose expansion core wrote. Keeps the order of
+    /// `ids`.
     pub fn seen(&self, link: &Link, ids: Vec<u32>) -> Vec<u32> {
-        let callable = link.core.it.get("callable");
+        let it = &link.core.it;
+        let callable = it.get("callable");
+        let alias = it.get("alias");
+        let expanded = it.get("expanded");
         ids.into_iter()
             .filter(|&id| {
-                let named = attr_sid(link, id, callable).map_or("", |value| link.core.it.s(value));
-                !is_private(named)
+                let named = attr_sid(link, id, callable).map_or("", |value| it.s(value));
+                let explained = expanded.is_some() && attr_sid(link, id, alias) == expanded;
+                !is_private(named) && !explained
             })
             .collect()
     }
