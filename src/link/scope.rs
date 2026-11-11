@@ -436,6 +436,46 @@ impl Core {
         (found, parts[1 + rest..].to_vec())
     }
 
+    /// A dotted name; attributes past what resolves make a member of the deepest hit.
+    pub fn dotted_lookup(
+        &mut self,
+        names: &LookupNames,
+        scope: &mut Scope,
+        dotted: Sid,
+        at: i32,
+        line: u32,
+    ) -> Lookup {
+        let (found, rest) = self.chain_lookup(names, scope, dotted, at, line);
+        if rest.is_empty() {
+            return found;
+        }
+        let surface = self.it.join_all(found.surface, &rest);
+        let Some(hit) = found.hit else {
+            return Lookup {
+                surface,
+                hit: None,
+                local: found.local,
+            };
+        };
+        let origin = self.origin(hit);
+        let symbol = if origin.s != EMPTY {
+            self.it.join_all(origin.s, &rest)
+        } else {
+            self.it.from_segs(&rest)
+        };
+        let mut chain = self.chain(hit).to_vec();
+        chain.push(Ent {
+            m: origin.m,
+            s: symbol,
+        });
+        let member = self.make_hit(&chain, HitKind::Member);
+        Lookup {
+            surface,
+            hit: Some(member),
+            local: false,
+        }
+    }
+
     /// A name-like value tree: a chain, a subscript's value, a call's callee, a string annotation.
     pub fn value_lookup(
         &mut self,
@@ -446,37 +486,7 @@ impl Core {
         line: u32,
     ) -> Option<Lookup> {
         match value {
-            V::Chain(chain) => {
-                let (found, rest) = self.chain_lookup(names, scope, *chain, at, line);
-                if rest.is_empty() {
-                    return Some(found);
-                }
-                let surface = self.it.join_all(found.surface, &rest);
-                let Some(hit) = found.hit else {
-                    return Some(Lookup {
-                        surface,
-                        hit: None,
-                        local: found.local,
-                    });
-                };
-                let origin = self.origin(hit);
-                let symbol = if origin.s != EMPTY {
-                    self.it.join_all(origin.s, &rest)
-                } else {
-                    self.it.from_segs(&rest)
-                };
-                let mut chain = self.chain(hit).to_vec();
-                chain.push(Ent {
-                    m: origin.m,
-                    s: symbol,
-                });
-                let member = self.make_hit(&chain, HitKind::Member);
-                Some(Lookup {
-                    surface,
-                    hit: Some(member),
-                    local: false,
-                })
-            }
+            V::Chain(chain) => Some(self.dotted_lookup(names, scope, *chain, at, line)),
             V::Sub(inner, _) | V::Call(inner, _, _) => {
                 self.value_lookup(names, scope, inner, at, line)
             }

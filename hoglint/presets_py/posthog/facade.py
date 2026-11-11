@@ -20,7 +20,7 @@ from collections import Counter
 from dataclasses import dataclass
 from functools import cached_property
 
-from hoglint.core.records import RecordBodies, chain_last, sequence_items, str_literal
+from hoglint.core.records import RecordBodies, chain_last, is_class_var, sequence_items, str_literal
 from hoglint.core.sites import binding_surface
 from hoglint.core.symbols import TYPE_ONLY, ModuleTable, absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
@@ -470,7 +470,7 @@ class FacadeFacts:
             ann = row.get("ann")
             if ann is None:
                 continue  # `x: None`: an annotated row always has an annotation
-            if isinstance(ann, dict) and "sub" in ann and chain_last(ann["sub"]) == "ClassVar":
+            if is_class_var(ann):
                 continue
             self.slot(ann, view, dotted, symbol, f"param:{target}", [("signature", f"field-{ordinal}")])
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex
-from hoglint.core.records import chain_last
+from hoglint.core.records import is_class_var
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
 from hoglint.core.symbols import CLASS, ClassIndex, Hit, Resolver, absolute_import, entity, module_assigns
@@ -200,24 +200,32 @@ class BuildContext:
         head, *attrs = chain.split(".")
         return self.names.descend(self.name_lookup(scope, head, at_scope, line), attrs)
 
+    def dotted_lookup(self, scope: FileScope, dotted: str, at_scope: int, line: int) -> Lookup:
+        """A dotted name; attributes past what resolves make a member of the deepest hit."""
+        found, rest = self.chain_lookup(scope, dotted, at_scope, line)
+        if not rest:
+            return found
+        surface = ".".join([found.surface, *rest])
+        if found.hit is None:
+            return Lookup(surface, None, found.local)
+        origin = found.hit.origin
+        member = entity(origin.module, ".".join([origin.symbol, *rest]) if origin.symbol else ".".join(rest))
+        return Lookup(surface, Hit((*found.hit.chain, member), "member"))
+
     def value_lookup(self, scope: FileScope, value: object, at_scope: int, line: int) -> Lookup | None:
         """A name-like value tree: a chain, a subscript's value, a call's callee, a string annotation."""
         if isinstance(value, str):
-            found, rest = self.chain_lookup(scope, value, at_scope, line)
-            if not rest:
-                return found
-            surface = ".".join([found.surface, *rest])
-            if found.hit is None:
-                return Lookup(surface, None, found.local)
-            origin = found.hit.origin
-            member = entity(origin.module, ".".join([origin.symbol, *rest]) if origin.symbol else ".".join(rest))
-            return Lookup(surface, Hit((*found.hit.chain, member), "member"))
+            return self.dotted_lookup(scope, value, at_scope, line)
         if not isinstance(value, dict):
             return None
         for key in ("sub", "sa", "call"):
             if key in value:
                 return self.value_lookup(scope, value[key], at_scope, line)
         return None
+
+    def first_party_chain(self, hit: Hit) -> bool:
+        """Whether every step from the name the code used to the origin is first-party code."""
+        return all(self.first_party.contains(str(step)) for step in hit.chain)
 
     def handed_def(self, target: str) -> Followed | None:
         """Where a handed-out name leads: the top-level function or class in an analyzed
@@ -230,7 +238,7 @@ class BuildContext:
             return UNFOLLOWED
         if hit.kind in ("variable", "module"):
             return None
-        if hit.kind not in ("def", "class") or not all(self.first_party.contains(str(step)) for step in hit.chain):
+        if hit.kind not in ("def", "class") or not self.first_party_chain(hit):
             return UNFOLLOWED
         found = self.def_of(hit.origin.module, hit.origin.symbol, hit.kind)
         return Followed(*found) if found is not None else UNFOLLOWED
@@ -407,6 +415,10 @@ class SlotSite:
     column: int
     contexts: frozenset[Context]
 
+    @staticmethod
+    def module_level(scope: FileScope, line: int, column: int) -> SlotSite:
+        return SlotSite(scope, -1, line, column, scope.base_contexts)
+
     def edge(self, surface: str, resolved: Resolved, attrs: tuple[tuple[str, str], ...]) -> Edge:
         return Producer.edge(
             "exposes",
@@ -478,6 +490,10 @@ class SlotRows:
             attrs = (*attrs, ("handed", self.handed))
         return self.site.edge(surface, resolved, attrs)
 
+    def unresolved(self, surface: str, slot: str, *extra: tuple[str, str]) -> Edge:
+        """A row for a whole slot whose types are unknown."""
+        return self.edge(surface, UNRESOLVED, slot, "whole", *extra)
+
 
 class DeclarationProducer(Producer):
     """inherit, decorate, exposes and declares edges from def and class records.
@@ -543,8 +559,9 @@ class DeclarationProducer(Producer):
         return not node["n"].startswith("_") or node["n"] == "__init__"
 
     @staticmethod
-    def is_class_var(annotation: object) -> bool:
-        return isinstance(annotation, dict) and "sub" in annotation and chain_last(annotation["sub"]) == "ClassVar"
+    def lookup_at(context: BuildContext, place: SlotLookup, name: str) -> Lookup:
+        """A dotted name, looked up where a slot's names are."""
+        return context.dotted_lookup(place.scope, name, place.at_scope, place.line)
 
     def mentions(self, value: object, position: str) -> list[tuple[str, str]]:
         """Every dotted name in a type expression, with whether it is the whole annotation."""
@@ -585,7 +602,7 @@ class DeclarationProducer(Producer):
         hit = found.hit
         if hit is None or hit.kind != "variable":
             return None
-        if not all(context.first_party.contains(str(step)) for step in hit.chain):
+        if not context.first_party_chain(hit):
             return None
         origin = hit.origin
         imported = context.alias(origin.module, origin.symbol)
@@ -615,8 +632,8 @@ class DeclarationProducer(Producer):
             if item not in seen:
                 seen.add(item)
                 out.append(item)
-            found = context.value_lookup(where.scope, name, where.at_scope, where.line)
-            alias = self.alias_of(context, Mention(name, position, where), found) if found is not None else None
+            found = self.lookup_at(context, where, name)
+            alias = self.alias_of(context, Mention(name, position, where), found)
             if alias is None or alias[0] in stack or (alias[0], item.top) in followed:
                 continue
             followed.add((alias[0], item.top))
@@ -649,11 +666,8 @@ class DeclarationProducer(Producer):
         position, however often its aliases repeat it."""
         written: set[tuple[str, str, bool]] = set()
         for mention in mentions:
-            lookup = mention.lookup
             head = mention.value.split(".")[0]
-            found = context.value_lookup(lookup.scope, mention.value, lookup.at_scope, lookup.line)
-            if found is None:
-                continue
+            found = self.lookup_at(context, mention.lookup, mention.value)
             if contract or found.hit is not None or found.surface != f"builtins.{head}":
                 resolved = context.classifier.classify_lookup(found)
                 graph.edges.append(rows.edge(found.surface, resolved, slot, mention.position))
@@ -664,9 +678,7 @@ class DeclarationProducer(Producer):
                 continue
             for item in self.expansion(context, *alias):
                 position = "whole" if mention.position == "whole" and item.top else "nested"
-                inner = context.value_lookup(item.lookup.scope, item.value, item.lookup.at_scope, item.lookup.line)
-                if inner is None:
-                    continue
+                inner = self.lookup_at(context, item.lookup, item.value)
                 surface = item.value if item.too_deep else inner.surface
                 if (surface, position, item.too_deep) in written:
                     continue
@@ -690,7 +702,7 @@ class DeclarationProducer(Producer):
         """One `exposes` edge per type name in a slot. Builtin types count only in a contract,
         and there an unannotated slot (annotation None) is an edge of its own."""
         if annotation is None:
-            graph.edges.append(rows.edge("", UNRESOLVED, slot, "whole", ("annotation", "missing")))
+            graph.edges.append(rows.unresolved("", slot, ("annotation", "missing")))
             return
         mentions = [Mention(value, position, lookup) for value, position in self.mentions(annotation, "whole")]
         self.expose_mentions(context, graph, rows, slot, contract, mentions)
@@ -747,7 +759,7 @@ class DeclarationProducer(Producer):
             row = member.row
             if row.get("ann") is None:
                 continue
-            in_slot = contract and row.get("f", 0) == CLASS and not self.is_class_var(row["ann"])
+            in_slot = contract and row.get("f", 0) == CLASS and not is_class_var(row["ann"])
             if rows.handed and not in_slot:
                 continue
             own = member.own and not rows.handed
@@ -815,7 +827,7 @@ class DeclarationProducer(Producer):
                 found = context.value_lookup(scope, base, node["s"], node["l"])
                 if found is not None and context.classifier.classify_lookup(found).resolution != Resolution.UNRESOLVED:
                     continue
-                graph.edges.append(rows.edge(found.surface if found else "", UNRESOLVED, "fields", "whole"))
+                graph.edges.append(rows.unresolved(found.surface if found else "", "fields"))
 
     def expose_dataclass(
         self,
@@ -939,17 +951,16 @@ class DeclarationProducer(Producer):
         unread = handed.dunder_all.unread
         if not handed.no_functions and unread is not None:
             line, column = unread
-            site = SlotSite(scope, -1, line, column, scope.base_contexts)
-            rows = SlotRows(site, "__all__", ALL_CLAUSE)
-            graph.edges.append(rows.edge("__all__", UNRESOLVED, "names", "whole"))
+            rows = SlotRows(SlotSite.module_level(scope, line, column), "__all__", ALL_CLAUSE)
+            graph.edges.append(rows.unresolved("__all__", "names"))
         used = self.used_names(scope) if handed.no_functions else frozenset()
         for item in handed.names(used):
             found = context.handed_def(item.target)
             if found is None:
                 continue
-            rows = SlotRows(SlotSite(scope, -1, item.line, item.column, scope.base_contexts), item.bound, item.clause)
+            rows = SlotRows(SlotSite.module_level(scope, item.line, item.column), item.bound, item.clause)
             if found.scope is None:
-                graph.edges.append(rows.edge(item.target, UNRESOLVED, "signature", "whole"))
+                graph.edges.append(rows.unresolved(item.target, "signature"))
                 continue
             origin, idx = found.scope, found.idx
             if roots & self.contract_roots(context, origin):

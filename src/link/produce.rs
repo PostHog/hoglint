@@ -4,7 +4,7 @@
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
-    Binding, CLASS, Core, Ent, HitKind, OrderedMap, absolute_import, module_assigns,
+    Binding, CLASS, Core, Ent, HitId, HitKind, OrderedMap, absolute_import, module_assigns,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -346,6 +346,7 @@ struct Keys {
     signature: Sid,
     staticmethod: Sid,
     fields: Sid,
+    class_var: Sid,
 }
 
 impl Producing {
@@ -421,6 +422,7 @@ impl Producing {
             signature: it.intern("signature"),
             staticmethod: it.intern("builtins.staticmethod"),
             fields: it.intern("fields"),
+            class_var: it.intern("ClassVar"),
         };
         Producing {
             names: LookupNames {
@@ -915,6 +917,22 @@ impl Producers<'_> {
         }
     }
 
+    /// A dotted name, looked up where a slot's names are.
+    fn lookup_at(&mut self, at: SlotLookup, name: Sid) -> Lookup {
+        let scope = &mut self.scopes[at.owner];
+        self.core
+            .dotted_lookup(&self.settings.names, scope, name, at.scope, at.line)
+    }
+
+    /// Whether every step from the name the code used to the origin is first-party code.
+    fn first_party_chain(&mut self, hit: HitId) -> bool {
+        let core = &mut *self.core;
+        let chain = core.chain(hit).to_vec();
+        chain
+            .iter()
+            .all(|step| self.first_party.contains(&core.it.head(step.m)))
+    }
+
     /// A module-level type alias a bare name binds (`X = dict[str, Any]`): the file and assign
     /// row of its value, read from the file the module table reads the name from: the `.py`, or
     /// the stub for a name only the stub binds. Each module's assignments are read once.
@@ -973,15 +991,10 @@ impl Producers<'_> {
         if self.core.kind(hit) != HitKind::Variable {
             return None;
         }
-        let core = &mut *self.core;
-        let chain = core.chain(hit).to_vec();
-        for step in chain {
-            let head = core.it.head(step.m);
-            if !self.first_party.contains(&head) {
-                return None;
-            }
+        if !self.first_party_chain(hit) {
+            return None;
         }
-        let origin = core.origin(hit);
+        let origin = self.core.origin(hit);
         let (file, at) = self.alias(origin.m, origin.s)?;
         let owner = *self.owner_of.get(&file)?;
         let row = &self.core.facts.files[file as usize].assigns[at as usize];
@@ -1021,6 +1034,23 @@ impl Producers<'_> {
         );
     }
 
+    /// A row for a whole slot whose types are unknown.
+    fn push_unresolved(&mut self, rows: SlotRows, surface: Sid, slot: Sid, extra: &[(Sid, Sid)]) {
+        let whole = self.settings.k.whole;
+        self.push_slot(rows, surface, UNRESOLVED, slot, whole, extra);
+    }
+
+    /// A site in a file's module body.
+    fn module_site(&self, owner: usize, line: u32, col: u32) -> SlotSite {
+        SlotSite {
+            owner,
+            scope: -1,
+            line,
+            col,
+            ctx: self.scopes[owner].base_ctx,
+        }
+    }
+
     /// Depth first, the names in an alias's value, each alias in it followed once per place (top
     /// or nested). A cycle stops at the alias that closes it; an alias deeper than
     /// MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown.
@@ -1045,21 +1075,13 @@ impl Producers<'_> {
             if state.seen.insert(item) {
                 out.push(item);
             }
-            let found = self.core.value_lookup(
-                &self.settings.names,
-                &mut self.scopes[at.owner],
-                &V::Chain(name),
-                at.scope,
-                at.line,
-            );
+            let found = self.lookup_at(at, name);
             let mention = Mention {
                 value: name,
                 whole,
                 lookup: at,
             };
-            let Some((key, inner, inner_at)) =
-                found.and_then(|found| self.alias_of(mention, found))
-            else {
+            let Some((key, inner, inner_at)) = self.alias_of(mention, found) else {
                 continue;
             };
             if stack.contains(&key) || !state.followed.insert((key, item.top)) {
@@ -1106,17 +1128,8 @@ impl Producers<'_> {
     ) {
         let mut written: FxHashSet<(Sid, bool, bool)> = FxHashSet::default();
         for mention in mentions {
-            let lookup = mention.lookup;
+            let found = self.lookup_at(mention.lookup, mention.value);
             let core = &mut *self.core;
-            let Some(found) = core.value_lookup(
-                &self.settings.names,
-                &mut self.scopes[lookup.owner],
-                &V::Chain(mention.value),
-                lookup.scope,
-                lookup.line,
-            ) else {
-                continue;
-            };
             let k = &self.settings.k;
             let position = if mention.whole { k.whole } else { k.nested };
             let builtin = !contract && found.hit.is_none() && {
@@ -1135,15 +1148,7 @@ impl Producers<'_> {
             };
             for item in self.expansion(key, &value, at) {
                 let whole = mention.whole && item.top;
-                let Some(inner) = self.core.value_lookup(
-                    &self.settings.names,
-                    &mut self.scopes[item.lookup.owner],
-                    &V::Chain(item.value),
-                    item.lookup.scope,
-                    item.lookup.line,
-                ) else {
-                    continue;
-                };
+                let inner = self.lookup_at(item.lookup, item.value);
                 let surface = if item.too_deep {
                     item.value
                 } else {
@@ -1178,8 +1183,8 @@ impl Producers<'_> {
     ) {
         let Some(annotation) = annotation else {
             let k = &self.settings.k;
-            let (whole, missing) = (k.whole, [(k.annotation, k.missing)]);
-            self.push_slot(rows, EMPTY, UNRESOLVED, slot, whole, &missing);
+            let missing = [(k.annotation, k.missing)];
+            self.push_unresolved(rows, EMPTY, slot, &missing);
             return;
         };
         let mut found = Vec::new();
@@ -1246,7 +1251,7 @@ impl Producers<'_> {
             V::Attr(_, name) => *name,
             _ => return false,
         };
-        self.core.it.s(last) == "ClassVar"
+        last == self.settings.k.class_var
     }
 
     /// The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
@@ -1400,8 +1405,7 @@ impl Producers<'_> {
                 if resolved.res != Res::Unresolved {
                     continue;
                 }
-                let (slot, whole) = (self.settings.k.fields, self.settings.k.whole);
-                self.push_slot(rows, surface, UNRESOLVED, slot, whole, &[]);
+                self.push_unresolved(rows, surface, self.settings.k.fields, &[]);
             }
         }
     }
@@ -1496,7 +1500,7 @@ impl Producers<'_> {
         if owner.s != -1 || node.f != CLASS {
             return false;
         }
-        !name.starts_with('_') || name == "__init__"
+        !name.starts_with('_') || node.n == self.settings.k.init
     }
 
     /// Where a handed-out name leads: the top-level function or class in an analyzed first-party
@@ -1519,14 +1523,10 @@ impl Producers<'_> {
         if !matches!(kind, HitKind::Def | HitKind::Class) {
             return Some(Followed::Unfollowed);
         }
-        let chain = core.chain(hit).to_vec();
-        for step in chain {
-            let head = core.it.head(step.m);
-            if !self.first_party.contains(&head) {
-                return Some(Followed::Unfollowed);
-            }
+        if !self.first_party_chain(hit) {
+            return Some(Followed::Unfollowed);
         }
-        let origin = core.origin(hit);
+        let origin = self.core.origin(hit);
         match self.def_of(origin.m, origin.s, kind) {
             Some((owner, idx)) => Some(Followed::Def(owner, idx)),
             None => Some(Followed::Unfollowed),
@@ -1542,20 +1542,13 @@ impl Producers<'_> {
         let facts = self.core.facts.clone();
         let handed = HandedOut::new(self.core, &self.scopes[owner]);
         if let Some((line, col)) = handed.dunder_all.unread.filter(|_| !handed.no_functions) {
-            let k = &self.settings.k;
             let rows = SlotRows {
-                site: SlotSite {
-                    owner,
-                    scope: -1,
-                    line,
-                    col,
-                    ctx: self.scopes[owner].base_ctx,
-                },
-                callable: k.dunder_all,
+                site: self.module_site(owner, line, col),
+                callable: self.settings.k.dunder_all,
                 handed: self.core.it.intern(ALL_CLAUSE),
             };
-            let (names, whole) = (k.names, k.whole);
-            self.push_slot(rows, k.dunder_all, UNRESOLVED, names, whole, &[]);
+            let k = &self.settings.k;
+            self.push_unresolved(rows, k.dunder_all, k.names, &[]);
         }
         let roots = self.contract_roots(owner).to_vec();
         let used = if handed.no_functions {
@@ -1569,19 +1562,12 @@ impl Producers<'_> {
             };
             let clause = self.core.it.intern(item.clause);
             let rows = SlotRows {
-                site: SlotSite {
-                    owner,
-                    scope: -1,
-                    line: item.line,
-                    col: item.col,
-                    ctx: self.scopes[owner].base_ctx,
-                },
+                site: self.module_site(owner, item.line, item.col),
                 callable: item.bound,
                 handed: clause,
             };
             let Followed::Def(origin, idx) = found else {
-                let (signature, whole) = (self.settings.k.signature, self.settings.k.whole);
-                self.push_slot(rows, item.target, UNRESOLVED, signature, whole, &[]);
+                self.push_unresolved(rows, item.target, self.settings.k.signature, &[]);
                 continue;
             };
             if self

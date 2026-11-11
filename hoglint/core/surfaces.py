@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from hoglint.core.records import str_literal
+from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import ModuleTable, Tables, absolute_import
 
@@ -79,8 +79,8 @@ class ListedNames:
         if "dict" in value:
             items = [key for key, _ in value["dict"]]
         else:
-            items = value.get("list", value.get("tuple", value.get("set")))
-        if not isinstance(items, list):
+            items = sequence_items(value)
+        if items is None:
             return None
         names = [str_literal(item) for item in items]
         if any(found is None for found in names):
@@ -101,8 +101,8 @@ class ListedNames:
             if not isinstance(callee, str) or callee not in self.COPIES or len(args) != 1:
                 return None
             return self.of(args[0])
-        items = value.get("list", value.get("tuple", value.get("set")))
-        if not isinstance(items, list):
+        items = sequence_items(value)
+        if items is None:
             return None
         out: set[str] = set()
         for item in items:

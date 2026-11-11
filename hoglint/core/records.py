@@ -45,6 +45,11 @@ def sequence_items(value: object) -> list[object] | None:
     return None
 
 
+def is_class_var(annotation: object) -> bool:
+    """Whether an annotation is `ClassVar[...]`, by the last name of what it subscripts."""
+    return isinstance(annotation, dict) and "sub" in annotation and chain_last(annotation["sub"]) == "ClassVar"
+
+
 def value_text(value: object) -> str:
     """Display text for a V value: a chain as written, a string quoted, an opaque node as <Kind>."""
     if isinstance(value, str):
