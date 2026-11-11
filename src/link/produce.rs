@@ -3,10 +3,10 @@
 
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
+use super::queries::named;
 use super::resolve::{
     Binding, CLASS, Core, Ent, HitId, HitKind, OrderedMap, absolute_import, module_assigns,
 };
-use super::queries::named;
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::{ALL_CLAUSE, HandOut, HandedOut};
