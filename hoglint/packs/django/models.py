@@ -354,7 +354,9 @@ class ModelItems(Items):
             if str(ref) != MODEL_BASE:
                 self.by_module.setdefault(ref.module, []).append(ref)
         self.files = {scope.path: scope for scope in files if scope.module in self.by_module}
-        TRACER.answer_with(self.FOUND, self.found_again)
+        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
+        if TRACER.frames:
+            TRACER.answer_with(self.FOUND, self.found_again)
 
     def found_again(self, key: str) -> object:
         scope = self.files.get(key)

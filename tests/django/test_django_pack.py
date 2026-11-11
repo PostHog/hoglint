@@ -136,6 +136,7 @@ def test_a_run_with_no_pack_memo_registers_no_answers_on_the_tracer() -> None:
     assert graph.by_kind("installs") and graph.by_kind("signal")
     assert InstallsItems.ALIASES not in TRACER.maps
     assert SignalItems.DECORATED not in TRACER.maps
+    assert TRACER.verifiers == {}, "no step of the pack registers an answer with no memo"
 
 
 @pytest.mark.parametrize("scan_roots, installs", [((), 0), (("proj",), 3)])

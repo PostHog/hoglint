@@ -61,7 +61,9 @@ class AppItems(Items):
 
     def take(self, key: str, data: Any) -> None:
         self.run.apps = AppRegistry.restore(data)
-        self.run.apps.answer_reads()
+        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
+        if TRACER.frames:
+            self.run.apps.answer_reads()
 
     def finish(self) -> Iterable[Output]:
         self.run.files = self.run.scan_files()
@@ -78,7 +80,8 @@ class ModelStepItems(ModelItems):
         self.run = run
 
     def finish(self) -> Iterable[Output]:
-        self.registry.answer_reads()
+        if TRACER.frames:
+            self.registry.answer_reads()
         if not self.registry.models:
             raise NoModels("no first-party model found")
         failures = self.registry.failures
@@ -94,7 +97,9 @@ class MigrationItems(Items):
 
     def __init__(self, run: DjangoRun) -> None:
         self.run = run
-        TRACER.answer_with(AliasProjection.ROUTING, self.routes)
+        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
+        if TRACER.frames:
+            TRACER.answer_with(AliasProjection.ROUTING, self.routes)
 
     def routes(self, key: str) -> object:
         return sorted(AliasProjection(self.run.repo_root, self.run.config.routing).route.items())

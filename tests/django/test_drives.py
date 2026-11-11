@@ -4,6 +4,7 @@ import pytest
 
 from core.support import Repo, class_def, func_def, import_row
 from hoglint.core.config import CoreConfig
+from hoglint.core.memo import TRACER
 from hoglint.core.reader import python_pack_io
 from hoglint.model import Graph, Resolution
 from hoglint.presets_py.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
@@ -56,8 +57,10 @@ def repo() -> Repo:
 @pytest.mark.parametrize("shuffle_seed", [0, 1])
 def test_a_walk_the_depth_limit_stops_is_unknown_whichever_test_walks_first(shuffle_seed: int) -> None:
     build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
+    TRACER.reset()
 
     edges = DrivesProducer(python_pack_io(build, Graph())[0], shuffle_seed).produce()
+    assert TRACER.verifiers == {}, "the drives pack registers no answer with no memo"
 
     assert [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges] == [
         ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, HELPERS - MIDDLE),

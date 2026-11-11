@@ -779,7 +779,9 @@ class Deriver:
 
     def __init__(self, facts: dict[str, FileFacts], snapshot: PackReader) -> None:
         self.facts: TracedMapping[str, FileFacts] = TracedMapping(self.MODULE, facts, form=file_rel)
-        self.facts.answer_reads()
+        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
+        if TRACER.frames:
+            self.facts.answer_reads()
         self.snapshot = snapshot
         self.by_rel = {f.rel: f for f in facts.values()}
         self.view = CallView(self.facts)
@@ -848,6 +850,9 @@ class Deriver:
         self.origin_products = TracedMapping(self.ORIGIN_PRODUCTS, products, form=sorted)
         importers = {module: set(found) for module, found in state["importer_products"]}
         self.importer_products = TracedMapping(self.IMPORTER_PRODUCTS, importers, form=sorted)
+        # Only a step the memo runs opens a frame; a run with no memo registers nothing.
+        if not TRACER.frames:
+            return
         for mapping in (self.origins, self.origin_modules, self.origin_products, self.importer_products):
             mapping.answer_reads()
         TRACER.answer_with(self.REGISTRY, lambda key: self.registry)
