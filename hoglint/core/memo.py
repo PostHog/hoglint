@@ -11,6 +11,10 @@ same output.
 A file's facts are read so often that a frame notes the file alone (`Frame.files`); the answer is
 the file's content key, which the store looks up when it writes the item.
 
+With a store (hoglint/native/memo_store.py), each item is kept with its reads and output, and a
+later run takes the stored output when every read has the same answer again (`Tracer.current`):
+the reader answers its own reads again, a fold answers the reads of its state.
+
 The tracer is one per process (`TRACER`). With no frame open, a read costs one check.
 """
 
@@ -141,10 +145,6 @@ class Tracer:
     def answer_with(self, kind: str, answer: Callable[[str], object]) -> None:
         """Answers reads of `kind` again by `answer(key)`, the same answer its note digests."""
         self.verifiers[kind] = lambda key: digest(answer(key))
-
-    def verify_with(self, kind: str, found: Callable[[str], str | None]) -> None:
-        """Answers reads of `kind` again with a digest `found(key)` gives directly."""
-        self.verifiers[kind] = found
 
     def verify_by_map(self, kind: str, digests: dict[str, str], default: str) -> None:
         """Answers reads of `kind` again from a map of digests by key, `default` for a key it
