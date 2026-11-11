@@ -133,6 +133,12 @@ class CoreConfig:
     def is_contract_surface(self, path: str) -> bool:
         return any(surface.covers(path) for surface in self.contract_surfaces)
 
+    def surface_roots(self, path: str) -> frozenset[tuple[int, str]]:
+        """(export, root) of every contract surface that covers a path: two files with one in
+        common belong to the same export of the same captured root."""
+        found = ((at, surface.covered_root(path)) for at, surface in enumerate(self.contract_surfaces))
+        return frozenset((at, root) for at, root in found if root is not None)
+
     def loader_callee_names(self) -> tuple[str, ...]:
         """Last dotted parts of the dynamic loaders; the extractor records calls to these."""
         return tuple(sorted({loader.rpartition(".")[2] for loader in self.dynamic_loaders}))

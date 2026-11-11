@@ -876,7 +876,9 @@ class DeclarationProducer(Producer):
         """The slots of the functions and dataclass fields a contract surface hands out from other
         modules, at the import that hands each one out. An `__all__` it cannot read is one
         unresolved row: what the module hands out is unknown. So is a handed-out name the engine
-        cannot follow to a def."""
+        cannot follow to a def. A def in a file of the same export and root (the same product's
+        facade) gets no rows here: that file reports it."""
+        roots = context.config.surface_roots(scope.path)
         handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
         listing = handed.listing()
         if listing is not None and listing.unread is not None:
@@ -894,6 +896,8 @@ class DeclarationProducer(Producer):
                 graph.edges.append(site.edge(item.target, UNRESOLVED, rows.attrs("whole")))
                 continue
             origin, idx = found.scope, found.idx
+            if self.is_contract(context, origin) and roots & context.config.surface_roots(origin.path):
+                continue
             node = origin.defs[idx]
             lookup = SlotLookup(origin, node["s"], node["l"])
             if node["k"] != "class":

@@ -560,6 +560,23 @@ def test_a_dataclass_exposes_the_fields_it_inherits(tmp_path: Path, monkeypatch:
     assert slot_rows(out["native"], FACADE) == sorted(expected)
 
 
+def test_a_surface_hands_out_nothing_its_own_export_already_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        "products/shop/backend/facade/__init__.py": "from .api import charge\n",
+        "products/shop/backend/facade/api.py": "def charge(amount: int) -> str:\n    return ''\n",
+        "products/other/__init__.py": "",
+        "products/other/backend/__init__.py": "",
+        "products/other/backend/facade/__init__.py": "",
+        "products/other/backend/facade/contracts.py": "from products.shop.backend.facade.api import charge\n",
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], "products.shop.backend.facade") == []
+    assert slot_rows(out["native"], FACADE) == charge_by("")
+    assert slot_rows(out["native"], "products.other.backend.facade.contracts") == charge_by("no-functions")
+
+
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)
 def test_an_alias_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str

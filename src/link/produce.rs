@@ -1369,6 +1369,18 @@ impl Producers<'_> {
         }
     }
 
+    /// (export, root) of every contract surface that covers a file: two files with one in
+    /// common belong to the same export of the same captured root.
+    fn surface_roots(&self, owner: usize) -> Vec<(usize, String)> {
+        let path = &self.core.facts.files[self.scopes[owner].file as usize].path;
+        self.settings
+            .contract_surfaces
+            .iter()
+            .enumerate()
+            .filter_map(|(at, surface)| surface.covered_root(path).map(|root| (at, root)))
+            .collect()
+    }
+
     /// A test file hands nothing out, so it is no contract surface.
     fn is_contract(&self, owner: usize) -> bool {
         let scope = &self.scopes[owner];
@@ -1465,7 +1477,8 @@ impl Producers<'_> {
     /// The slots of the functions and dataclass fields a contract surface hands out from other
     /// modules, at the import that hands each one out. An `__all__` it cannot read is one
     /// unresolved row: what the module hands out is unknown. So is a handed-out name the engine
-    /// cannot follow to a def.
+    /// cannot follow to a def. A def in a file of the same export and root (the same product's
+    /// facade) gets no rows here: that file reports it.
     fn hand_out(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let listing = listing(self.core, &self.scopes[owner]);
@@ -1487,6 +1500,7 @@ impl Producers<'_> {
             let attrs = self.slot_attrs(rows, k.whole, &[]);
             self.push_slot(rows, k.dunder_all, UNRESOLVED, &attrs);
         }
+        let roots = self.surface_roots(owner);
         let handed = handed_out(self.core, &self.scopes[owner], listing.as_ref());
         for item in handed {
             let Some(found) = self.handed_def(item.target) else {
@@ -1512,6 +1526,14 @@ impl Producers<'_> {
                 self.push_slot(rows, item.target, UNRESOLVED, &attrs);
                 continue;
             };
+            if self.is_contract(origin)
+                && self
+                    .surface_roots(origin)
+                    .iter()
+                    .any(|root| roots.contains(root))
+            {
+                continue;
+            }
             let record = &facts.files[self.scopes[origin].file as usize];
             let node = &record.defs[idx as usize];
             let lookup = SlotLookup {

@@ -332,15 +332,25 @@ impl ExportPaths {
         Ok(ExportPaths { within, paths })
     }
 
+    /// The directory `within` names for a path the export covers, its captures filled in
+    /// (`products/billing`); None for a path it does not cover.
+    pub fn covered_root(&self, path: &str) -> Option<String> {
+        let (root, relative) = match &self.within {
+            None => (String::new(), path),
+            Some((within, glob)) => {
+                let root = fill(within, &glob.captures(path)?);
+                let relative = path.get(root.len() + 1..).unwrap_or("");
+                (root, relative)
+            }
+        };
+        self.paths
+            .iter()
+            .any(|glob| glob.is_match(relative))
+            .then_some(root)
+    }
+
     /// Whether the path lies inside `within` and one of `paths`.
     pub fn covers(&self, path: &str) -> bool {
-        let relative = match &self.within {
-            None => path,
-            Some((root, glob)) => match glob.captures(path) {
-                Some(captures) => path.get(fill(root, &captures).len() + 1..).unwrap_or(""),
-                None => return false,
-            },
-        };
-        self.paths.iter().any(|glob| glob.is_match(relative))
+        self.covered_root(path).is_some()
     }
 }

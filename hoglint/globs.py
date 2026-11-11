@@ -174,15 +174,19 @@ class ExportPaths:
     within: str
     paths: tuple[str, ...]
 
-    def relative(self, path: str) -> str | None:
-        """The path below `within`, or None when it lies outside."""
-        if not self.within:
-            return path
-        root = glob_match(self.within + "/**", path)
-        if root is None:
+    def covered_root(self, path: str) -> str | None:
+        """The directory `within` names for a path the export covers, its captures filled in
+        (`products/billing`); None for a path it does not cover."""
+        root, relative = "", path
+        if self.within:
+            captures = glob_match(self.within + "/**", path)
+            if captures is None:
+                return None
+            root = fill(self.within, captures)
+            relative = path[len(root) + 1 :]
+        if not any(glob_match(pattern, relative) is not None for pattern in self.paths):
             return None
-        return path[len(fill(self.within, root)) + 1 :]
+        return root
 
     def covers(self, path: str) -> bool:
-        relative = self.relative(path)
-        return relative is not None and any(glob_match(pattern, relative) is not None for pattern in self.paths)
+        return self.covered_root(path) is not None
