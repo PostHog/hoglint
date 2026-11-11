@@ -145,32 +145,28 @@ def read_dunder_all(record: dict) -> DunderAll:
 
 
 class HandedOut:
-    """The names one module hands out, in import order and then lazy-name order."""
+    """The names one module hands out, in import order and then lazy-name order.
+
+    `no_functions`: the module body defines no function outside any block, so it hands out every
+    import it does not use itself, whatever `__all__` says."""
 
     def __init__(self, scope: FileScope, table: ModuleTable | None, tables: Tables) -> None:
         self.scope = scope
         self.table = table
         self.tables = tables
+        self.no_functions = not any(d["s"] == -1 and d.get("f", 0) == 0 and d["k"] != "class" for d in scope.defs)
+        self.dunder_all = read_dunder_all(scope.record)
 
-    def has_functions(self) -> bool:
-        """Whether the module body defines a function outside any block."""
-        return any(d["s"] == -1 and d.get("f", 0) == 0 and d["k"] != "class" for d in self.scope.defs)
-
-    def clause(
-        self, bound: str, name: str, asname: str | None, no_functions: bool, listed: frozenset[str] | None
-    ) -> str:
-        if no_functions:
+    def clause(self, bound: str, name: str, asname: str | None, kept: bool) -> str:
+        """`kept`: the import is one a module with no function keeps only to hand it on."""
+        if kept:
             return NO_FUNCTIONS_CLAUSE
+        listed = self.dunder_all.names
         if listed is not None and bound in listed:
             return ALL_CLAUSE
         if asname == name:
             return ALIAS_CLAUSE
         return ""
-
-    def listing(self) -> DunderAll | None:
-        """The module's `__all__`; None for a module with no top-level function, which hands out
-        every import whatever `__all__` says."""
-        return read_dunder_all(self.scope.record) if self.has_functions() else None
 
     def star_names(self, source: str) -> list[str] | None:
         """The names `from source import *` binds: the source's `__all__`, else its public
@@ -186,12 +182,13 @@ class HandedOut:
             return sorted(listing.names)
         return sorted(name for name in table.names if not name.startswith("_"))
 
-    def star(self, source: str, no_functions: bool, listed: frozenset[str] | None) -> list[tuple[str, str, str]]:
+    def star(self, source: str) -> list[tuple[str, str, str]]:
         """(bound, target, clause) of each name a star import hands out. A source that cannot be
         read hands out `*`, a name nothing can follow."""
-        if not no_functions and listed is None:
+        listed = None if self.no_functions else self.dunder_all.names
+        if not self.no_functions and listed is None:
             return []
-        clause = NO_FUNCTIONS_CLAUSE if no_functions else ALL_CLAUSE
+        clause = NO_FUNCTIONS_CLAUSE if self.no_functions else ALL_CLAUSE
         found = self.star_names(source)
         if found is None:
             return [("*", f"{source}.*", clause)]
@@ -199,12 +196,10 @@ class HandedOut:
             found = [name for name in found if name in listed]
         return [(name, f"{source}.{name}", clause) for name in found]
 
-    def names(self, listing: DunderAll | None, used: frozenset[str]) -> list[Handed]:
+    def names(self, used: frozenset[str]) -> list[Handed]:
         """`used`: the names the module's own code refers to. In a module with no function such
         a name is no import kept only to be handed on, so another clause has to hand it out."""
         scope = self.scope
-        no_functions = listing is None
-        listed = listing.names if listing is not None else read_dunder_all(scope.record).names
         out: list[Handed] = []
         seen: set[tuple[str, str]] = set()
         for _, line, column, flags, target, level, name, asname in scope.record.get("imports", ()):
@@ -214,11 +209,11 @@ class HandedOut:
             if source is None:
                 continue
             if name == "*":
-                handed = self.star(source, no_functions, None if no_functions else listed)
+                handed = self.star(source)
             else:
                 bound = asname or name
-                kept = no_functions and bound not in used
-                handed = [(bound, f"{source}.{name}", self.clause(bound, name, asname, kept, listed))]
+                kept = self.no_functions and bound not in used
+                handed = [(bound, f"{source}.{name}", self.clause(bound, name, asname, kept))]
             for bound, target_name, clause in handed:
                 if not clause or (bound, target_name) in seen:
                     continue

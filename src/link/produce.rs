@@ -8,7 +8,7 @@ use super::resolve::{
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
-use super::surface::{ALL_CLAUSE, handed_out, listing};
+use super::surface::{ALL_CLAUSE, HandedOut};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const KIND_NAMES: [&str; 9] = [
@@ -1601,8 +1601,8 @@ impl Producers<'_> {
     /// facade) gets no rows here: that file reports it.
     fn hand_out(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
-        let listing = listing(self.core, &self.scopes[owner]);
-        if let Some((line, col)) = listing.as_ref().and_then(|found| found.unread) {
+        let handed = HandedOut::new(self.core, &self.scopes[owner]);
+        if let Some((line, col)) = handed.dunder_all.unread.filter(|_| !handed.no_functions) {
             let k = &self.settings.k;
             let rows = SlotRows {
                 site: SlotSite {
@@ -1621,13 +1621,12 @@ impl Producers<'_> {
             self.push_slot(rows, k.dunder_all, UNRESOLVED, &attrs);
         }
         let roots = self.contract_roots(owner).to_vec();
-        let used = if listing.is_none() {
+        let used = if handed.no_functions {
             self.used_names(owner)
         } else {
             FxHashSet::default()
         };
-        let handed = handed_out(self.core, &self.scopes[owner], listing.as_ref(), &used);
-        for item in handed {
+        for item in handed.names(self.core, &self.scopes[owner], &used) {
             let Some(found) = self.handed_def(item.target) else {
                 continue;
             };

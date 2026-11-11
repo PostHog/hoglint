@@ -947,14 +947,14 @@ class DeclarationProducer(Producer):
         facade) gets no rows here: that file reports it."""
         roots = self.contract_roots(context, scope)
         handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
-        listing = handed.listing()
-        if listing is not None and listing.unread is not None:
-            line, column = listing.unread
+        unread = handed.dunder_all.unread
+        if not handed.no_functions and unread is not None:
+            line, column = unread
             site = SlotSite(scope, -1, line, column, scope.base_contexts)
             rows = SlotRows(site, "__all__", "names", True, (("handed", ALL_CLAUSE),))
             graph.edges.append(site.edge("__all__", UNRESOLVED, rows.attrs("whole")))
-        used = self.used_names(scope) if listing is None else frozenset()
-        for item in handed.names(listing, used):
+        used = self.used_names(scope) if handed.no_functions else frozenset()
+        for item in handed.names(used):
             found = context.handed_def(item.target)
             if found is None:
                 continue

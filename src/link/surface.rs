@@ -35,14 +35,6 @@ pub struct Handed {
     pub col: u32,
 }
 
-/// Whether the module body defines a function outside any block.
-fn has_functions(core: &Core, file: usize) -> bool {
-    core.facts.files[file]
-        .defs
-        .iter()
-        .any(|d| d.s == -1 && d.f == 0 && !d.is_class())
-}
-
 /// The names a module's `__all__` lists, or where it first cannot be read (`unread`).
 pub struct DunderAll {
     pub names: Option<FxHashSet<Sid>>,
@@ -192,92 +184,108 @@ fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
     Some(names)
 }
 
-/// The module's `__all__`; None for a module with no top-level function, which hands out every
-/// import whatever `__all__` says.
-pub fn listing(core: &mut Core, scope: &Scope) -> Option<DunderAll> {
-    let file = scope.file as usize;
-    if has_functions(core, file) {
-        Some(dunder_all(core, file))
-    } else {
-        None
-    }
+/// The names one module hands out, in import order and then lazy-name order.
+///
+/// `no_functions`: the module body defines no function outside any block, so it hands out every
+/// import it does not use itself, whatever `__all__` says.
+pub struct HandedOut {
+    pub no_functions: bool,
+    pub dunder_all: DunderAll,
 }
 
-/// The names one module hands out, in import order and then lazy-name order.
-/// `used`: the names the module's own code refers to. In a module with no function such a name
-/// is no import kept only to be handed on, so another clause has to hand it out.
-pub fn handed_out(
-    core: &mut Core,
-    scope: &Scope,
-    listing: Option<&DunderAll>,
-    used: &FxHashSet<Sid>,
-) -> Vec<Handed> {
-    let file = scope.file as usize;
-    let no_functions = listing.is_none();
-    let own_listing = if no_functions {
-        Some(dunder_all(core, file))
-    } else {
-        None
-    };
-    let listed = listing
-        .or(own_listing.as_ref())
-        .and_then(|found| found.names.as_ref());
-    let facts = core.facts.clone();
-    let mut out = Vec::new();
-    let mut seen: FxHashSet<(Sid, Sid)> = FxHashSet::default();
-    let star = core.star();
-    for row in &facts.files[file].imports {
-        let Some(name) = row.name else {
-            continue;
-        };
-        if row.flags != 0 {
-            continue;
+impl HandedOut {
+    pub fn new(core: &mut Core, scope: &Scope) -> HandedOut {
+        let file = scope.file as usize;
+        let no_functions = !core.facts.files[file]
+            .defs
+            .iter()
+            .any(|d| d.s == -1 && d.f == 0 && !d.is_class());
+        HandedOut {
+            no_functions,
+            dunder_all: dunder_all(core, file),
         }
-        let Some(source) = absolute_import(
-            &mut core.it,
-            scope.module,
-            scope.is_package,
-            row.target,
-            row.level,
-        ) else {
-            continue;
-        };
-        let mut handed: Vec<(Sid, Sid, &'static str)> = Vec::new();
-        if name == star {
-            if !no_functions && listed.is_none() {
-                continue;
-            }
-            let clause = if no_functions {
-                NO_FUNCTIONS_CLAUSE
-            } else {
-                ALL_CLAUSE
-            };
-            let star_listed = if no_functions { None } else { listed };
-            match star_names(core, source) {
-                None => handed.push((star, core.it.join(source, star), clause)),
-                Some(found) => {
-                    for name in found {
-                        if star_listed.is_none_or(|names| names.contains(&name)) {
-                            handed.push((name, core.it.join(source, name), clause));
-                        }
-                    }
-                }
-            }
+    }
+
+    /// `kept`: the import is one a module with no function keeps only to hand it on.
+    fn clause(&self, bound: Sid, name: Sid, asname: Option<Sid>, kept: bool) -> &'static str {
+        if kept {
+            return NO_FUNCTIONS_CLAUSE;
+        }
+        let listed = self.dunder_all.names.as_ref();
+        if listed.is_some_and(|names| names.contains(&bound)) {
+            return ALL_CLAUSE;
+        }
+        if asname == Some(name) {
+            return ALIAS_CLAUSE;
+        }
+        ""
+    }
+
+    /// (bound, target, clause) of each name a star import hands out. A source that cannot be
+    /// read hands out `*`, a name nothing can follow.
+    fn star(&self, core: &mut Core, source: Sid) -> Vec<(Sid, Sid, &'static str)> {
+        let listed = if self.no_functions {
+            None
         } else {
-            let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
-            let clause = if no_functions && !used.contains(&bound) {
-                NO_FUNCTIONS_CLAUSE
-            } else if listed.is_some_and(|names| names.contains(&bound)) {
-                ALL_CLAUSE
-            } else if row.asname == Some(name) {
-                ALIAS_CLAUSE
-            } else {
+            self.dunder_all.names.as_ref()
+        };
+        if !self.no_functions && listed.is_none() {
+            return Vec::new();
+        }
+        let clause = if self.no_functions {
+            NO_FUNCTIONS_CLAUSE
+        } else {
+            ALL_CLAUSE
+        };
+        let star = core.star();
+        let Some(found) = star_names(core, source) else {
+            return vec![(star, core.it.join(source, star), clause)];
+        };
+        found
+            .into_iter()
+            .filter(|name| listed.is_none_or(|names| names.contains(name)))
+            .map(|name| (name, core.it.join(source, name), clause))
+            .collect()
+    }
+
+    /// `used`: the names the module's own code refers to. In a module with no function such a
+    /// name is no import kept only to be handed on, so another clause has to hand it out.
+    pub fn names(&self, core: &mut Core, scope: &Scope, used: &FxHashSet<Sid>) -> Vec<Handed> {
+        let facts = core.facts.clone();
+        let mut out = Vec::new();
+        let mut seen: FxHashSet<(Sid, Sid)> = FxHashSet::default();
+        let star = core.star();
+        for row in &facts.files[scope.file as usize].imports {
+            let Some(name) = row.name else {
                 continue;
             };
-            handed.push((bound, core.it.join(source, name), clause));
-        }
-        for (bound, target, clause) in handed {
-            if seen.insert((bound, target)) {
+            if row.flags != 0 {
+                continue;
+            }
+            let Some(source) = absolute_import(
+                &mut core.it,
+                scope.module,
+                scope.is_package,
+                row.target,
+                row.level,
+            ) else {
+                continue;
+            };
+            let handed = if name == star {
+                self.star(core, source)
+            } else {
+                let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
+                let kept = self.no_functions && !used.contains(&bound);
+                let clause = self.clause(bound, name, row.asname, kept);
+                if clause.is_empty() {
+                    continue;
+                }
+                vec![(bound, core.it.join(source, name), clause)]
+            };
+            for (bound, target, clause) in handed {
+                if clause.is_empty() || !seen.insert((bound, target)) {
+                    continue;
+                }
                 out.push(Handed {
                     bound,
                     target,
@@ -287,22 +295,22 @@ pub fn handed_out(
                 });
             }
         }
-    }
-    let lazy: Vec<(Sid, Sid)> = match core.table(scope.module) {
-        Some(table) => core.table_at(table).lazy.iter().collect(),
-        None => Vec::new(),
-    };
-    for (name, module) in lazy {
-        let target = core.it.join(module, name);
-        if seen.insert((name, target)) {
-            out.push(Handed {
-                bound: name,
-                target,
-                clause: LAZY_CLAUSE,
-                line: 0,
-                col: 0,
-            });
+        let lazy: Vec<(Sid, Sid)> = match core.table(scope.module) {
+            Some(table) => core.table_at(table).lazy.iter().collect(),
+            None => Vec::new(),
+        };
+        for (name, module) in lazy {
+            let target = core.it.join(module, name);
+            if seen.insert((name, target)) {
+                out.push(Handed {
+                    bound: name,
+                    target,
+                    clause: LAZY_CLAUSE,
+                    line: 0,
+                    col: 0,
+                });
+            }
         }
+        out
     }
-    out
 }
