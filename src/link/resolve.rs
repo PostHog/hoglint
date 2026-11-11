@@ -6,6 +6,7 @@ use super::facts::{Assign, Def, FactSet, FileFacts, Import, Op, V};
 use super::heap;
 use super::intern::{EMPTY, Interner, Sid};
 use super::paths::{ModuleIndex, ModuleNamer};
+use super::queries::named;
 use super::trace::{Kind, Memo, Recorder};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
@@ -250,7 +251,7 @@ pub fn import_binding(
         Some(name) if name == star => None,
         Some(name) => {
             let source = absolute_import(it, module, is_package, row.target, row.level)?;
-            let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
+            let bound = named(row.asname, name);
             Some((bound, Binding::From(source, name)))
         }
     }

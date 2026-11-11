@@ -21,6 +21,7 @@
 
 use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
+use super::queries::named;
 use super::resolve::{Core, RUN_TIME_MODULE_FLAGS, absolute_import, module_level};
 use super::scope::Scope;
 use super::trace::Kind;
@@ -294,7 +295,7 @@ impl HandedOut {
             let handed = if name == star {
                 self.star(core, source)
             } else {
-                let bound = row.asname.filter(|&a| a != EMPTY).unwrap_or(name);
+                let bound = named(row.asname, name);
                 let kept = self.no_functions && !used.contains(&bound);
                 let clause = self.clause(bound, name, row.asname, kept);
                 if clause.is_empty() {
@@ -349,7 +350,7 @@ impl HandedOut {
             .filter(|row| binds_at_run_time(row))
             .filter_map(|row| {
                 let name = row.name.filter(|&name| name != star)?;
-                Some(row.asname.filter(|&a| a != EMPTY).unwrap_or(name))
+                Some(named(row.asname, name))
             })
             .filter(|bound| !handed.contains(bound))
             .collect();

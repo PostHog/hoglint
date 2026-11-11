@@ -19,7 +19,7 @@ pub struct UseHit {
 }
 
 /// `a or b` for optional names: an empty name counts as absent, as in Python.
-fn named(first: Option<Sid>, fallback: Sid) -> Sid {
+pub(crate) fn named(first: Option<Sid>, fallback: Sid) -> Sid {
     first.filter(|&s| s != EMPTY).unwrap_or(fallback)
 }
 
