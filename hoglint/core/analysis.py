@@ -16,9 +16,9 @@ from hoglint.facts import (
     ExtractRequest,
     FactNeeds,
     FactStore,
+    SitePackagesFiles,
     default_cache_dir,
     site_packages,
-    site_packages_files,
 )
 from hoglint.ledger.listing import TreeListing, WorktreeListing
 from hoglint.model import Graph
@@ -105,7 +105,7 @@ class CoreAnalysis:
     def run(self) -> AnalysisResult:
         timings: dict[str, float] = {}
         snapshot = self.snapshot()
-        external = site_packages_files(self.options.config.external_packages)
+        external = SitePackagesFiles.of(self.options.config.external_packages)
         try:
             started = time.perf_counter()
             inventory = Discovery(self.options.config).run(snapshot)

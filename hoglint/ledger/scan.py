@@ -26,8 +26,6 @@ built on Linux CI serves a Mac.
 
 from __future__ import annotations
 
-import os
-import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import repeat
@@ -39,6 +37,7 @@ from compression import zstd
 
 from hoglint.config.schema import canonical
 from hoglint.index import Memo
+from hoglint.ledger.cache import write_atomic
 from hoglint.ledger.couplings import Coupling, CouplingScan
 from hoglint.ledger.envelope import PROTOCOL, Envelope, short_digest
 from hoglint.ledger.equality import EqualityResult
@@ -75,15 +74,6 @@ Obligation = tuple[str, str, str]  # (rule, key, reason)
 
 class ProtocolError(Exception):
     """A summary file this engine cannot read."""
-
-
-def write_atomic(path: Path, content: bytes) -> None:
-    """Writes through a temporary file in the same directory, so a reader never sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".write-")
-    with os.fdopen(handle, "wb") as out:
-        out.write(content)
-    Path(temporary).replace(path)
 
 
 def is_shown(

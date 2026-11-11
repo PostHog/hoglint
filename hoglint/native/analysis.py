@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from hoglint.core.analysis import CoreAnalysis
 from hoglint.core.discovery import Discovery, Inventory
 from hoglint.core.producers import PRODUCERS
-from hoglint.facts import site_packages, site_packages_files
+from hoglint.facts import SitePackagesFiles, site_packages
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
 from hoglint.native.config import link_config
@@ -94,7 +94,7 @@ class NativeAnalysis(CoreAnalysis):
         config = self.options.config
         started = time.perf_counter()
         snapshot = self.blob_snapshot()
-        external = site_packages_files(config.external_packages)
+        external = SitePackagesFiles.of(config.external_packages)
         inventory = Discovery(config).run(snapshot)  # type: ignore[arg-type]
         timings["snapshot"] = time.perf_counter() - started
         started = time.perf_counter()

@@ -2,8 +2,8 @@
 
 Root: `$XDG_CACHE_HOME/hoglint`, else `~/.cache/hoglint`, one per machine and shared by every
 worktree. It holds the fact cache (`facts/`, namespaced by the `[facts]` id), run summaries
-(`summaries/`), the inputs digests of known trees (`inputs/`, see inputs.py) and extractor
-binaries (`extractors/`).
+(`summaries/`), the inputs digests of known trees (`inputs/`, see inputs.py), answers stored by
+the content they depend on (`answers/`, see cache.py) and extractor binaries (`extractors/`).
 
 Summaries: one manifest per exact key, `summaries/<engine id>/<inputs>/<policy>-<framework>.json`,
 and its sections, `summaries/<engine id>/sections/<sha>.zst`. The key is the envelope (inputs
@@ -33,7 +33,6 @@ a miss, not an error.
 from __future__ import annotations
 
 import os
-import sys
 import time
 import shutil
 import hashlib
@@ -47,8 +46,9 @@ import orjson
 from compression import zstd
 
 from hoglint.facts import BINARY_NAME
+from hoglint.ledger.cache import CacheWarning, cache_root, write_atomic
 from hoglint.ledger.envelope import NATIVE, PROTOCOL, BinaryIds, EngineError, Envelope
-from hoglint.ledger.scan import ALL_SECTIONS, ZSTD_LEVEL, ProtocolError, ScanSummary, write_atomic
+from hoglint.ledger.scan import ALL_SECTIONS, ZSTD_LEVEL, ProtocolError, ScanSummary
 
 ENVELOPE_SECTION = "envelope"
 SECTION_DIGEST_CHARS = 32
@@ -56,23 +56,6 @@ MAX_BYTES = 1024**3
 MAX_AGE = datetime.timedelta(days=30)
 PRUNED_MARK = ".pruned-"  # then the day, one mark per day
 FACTS = "facts"  # the fact cache, pruned by its own pruner
-
-
-def cache_root() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "hoglint"
-
-
-class CacheWarning:
-    """One stderr line per process for a cache that cannot be used."""
-
-    warned = False
-
-    @staticmethod
-    def warn(what: str, error: OSError) -> None:
-        if CacheWarning.warned:
-            return
-        CacheWarning.warned = True
-        sys.stderr.write(f"hoglint: cannot use the cache ({what}: {error}), so this run goes on without it\n")
 
 
 @dataclass(frozen=True)

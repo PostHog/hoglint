@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import os
 import sys
+import stat
+import time
 import shutil
 import sysconfig
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import orjson
+
+from hoglint.ledger.cache import AnswerStore, answer_key
 
 BINARY_NAME = "hoglint-facts"
 # Where bin/build puts the binary when CARGO_TARGET_DIR is not set.
@@ -82,6 +87,84 @@ def site_packages_files(packages: tuple[str, ...]) -> dict[str, str]:
                 inside = path.relative_to(site).as_posix()
                 out[f"{SITE_PACKAGES}/{inside}"] = inside
     return out
+
+
+# A directory that changed this recently can change again within its clock's tick, with no new
+# time, so a walk that met one is not stored.
+SETTLED_NS = 2_000_000_000
+# The state of a package root that is not a directory: no inode is 0.
+NO_DIRECTORY = (0, 0, 0)
+
+
+class SitePackagesFiles:
+    """`site_packages_files`, stored with the state (inode and times) of every directory under
+    the packages. A file comes, goes or is renamed only through its directory, which gives the
+    directory new times, and the walk lists names only. So while each stored directory has its
+    stored state, and each package root that was no directory is still none, the walk would list
+    the same files, and the stored list is the answer."""
+
+    STORE = AnswerStore("site-packages")
+
+    @staticmethod
+    def of(packages: tuple[str, ...]) -> dict[str, str]:
+        site = site_packages()
+        key = answer_key(Path(__file__).read_bytes(), sys.version, str(site), *packages)
+        stored = SitePackagesFiles.STORE.get(key)
+        if stored is not None:
+            files = SitePackagesFiles.unchanged(site, stored)
+            if files is not None:
+                return files
+        directories = SitePackagesFiles.directories(site, packages)
+        files = site_packages_files(packages)
+        if directories is not None:
+            SitePackagesFiles.STORE.put(key, {"directories": directories, "files": list(files.items())})
+        return files
+
+    @staticmethod
+    def state(path: Path) -> tuple[int, int, int]:
+        try:
+            found = os.stat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            return NO_DIRECTORY
+        if not stat.S_ISDIR(found.st_mode):
+            return NO_DIRECTORY
+        return found.st_ino, found.st_mtime_ns, found.st_ctime_ns
+
+    @staticmethod
+    def directories(site: Path, packages: tuple[str, ...]) -> list[list[str | int]] | None:
+        """Each package root and every directory under it, with its state, taken before the walk
+        so a change during the walk shows at the next lookup; None when one changed too recently
+        or could not be listed."""
+        settled = time.time_ns() - SETTLED_NS
+        rows: list[list[str | int]] = []
+        for package in packages:
+            root = site / package
+            if not root.is_dir():
+                rows.append([package, *NO_DIRECTORY])
+                continue
+            errors: list[OSError] = []
+            for parent, _, _ in os.walk(root, onerror=errors.append):
+                state = SitePackagesFiles.state(Path(parent))
+                if max(state[1], state[2]) > settled:
+                    return None
+                rows.append([Path(parent).relative_to(site).as_posix(), *state])
+            if errors:
+                return None
+        return rows
+
+    @staticmethod
+    def unchanged(site: Path, stored: Any) -> dict[str, str] | None:
+        """The stored files while every stored directory keeps its state; else None."""
+        try:
+            for path, *state in stored["directories"]:
+                if SitePackagesFiles.state(site / path) != tuple(state):
+                    return None
+            files = dict(stored["files"])
+        except (OSError, KeyError, TypeError, ValueError):
+            return None
+        if not all(isinstance(item, str) for pair in files.items() for item in pair):
+            return None
+        return files
 
 
 @dataclass(frozen=True)
