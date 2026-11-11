@@ -1052,28 +1052,30 @@ class StringProducer(Producer):
     reads = frozenset({"strs"})
 
     @staticmethod
+    def first_step(up: str) -> tuple[str, str, str]:
+        """The first step of `up` (`arg:0:callee`, `kw:target:callee`): its kind, its position or
+        keyword, and the last name of its callee."""
+        kind, _, rest = up.split(" ")[0].partition(":")
+        slot, _, callee = rest.partition(":")
+        return kind, slot, callee.rpartition(".")[2]
+
+    @staticmethod
     def in_path_position(up: str, role: str, path_callees: tuple[str, ...]) -> bool:
         """Whether a string sits where the code holds a dotted path: a patch target, or the first
         argument of a callee `path_callees` names. Only there does a string that resolves to
         nothing stay an edge; anywhere else it is a label, a name or a host, not a path."""
         if role == "patch-target":
             return True
-        kind, _, rest = up.split(" ")[0].partition(":")
-        position, _, callee = rest.partition(":")
-        return kind == "arg" and position == "0" and callee.rpartition(".")[2] in path_callees
+        kind, slot, callee = StringProducer.first_step(up)
+        return kind == "arg" and slot == "0" and callee in path_callees
 
     @staticmethod
     def role(up: str, patch_callees: tuple[str, ...]) -> str:
-        first = up.split(" ")[0]
-        kind, _, rest = first.partition(":")
-        if kind == "arg":
-            position, _, callee = rest.partition(":")
-            if position == "0" and callee.rpartition(".")[2] in patch_callees:
-                return "patch-target"
-        if kind == "kw":
-            keyword, _, callee = rest.partition(":")
-            if keyword == "target" and callee.rpartition(".")[2] in patch_callees:
-                return "patch-target"
+        kind, slot, callee = StringProducer.first_step(up)
+        if kind == "arg" and slot == "0" and callee in patch_callees:
+            return "patch-target"
+        if kind == "kw" and slot == "target" and callee in patch_callees:
+            return "patch-target"
         return "literal"
 
     def run(self, context: BuildContext, graph: Graph) -> None:
