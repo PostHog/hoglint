@@ -238,16 +238,14 @@ class TurboInputs:
         self.repo_root = repo_root
         self.task = task
         self.table = TurboReader(repo_root, task).read() if table is None else table
-        self.directories = list(self.table.directories)
-        self.directory_set = frozenset(self.directories)
-        self.tasks = list(self.table.tasks)
-        self.task_by_directory = {task.directory: task for task in self.tasks}
+        self.directory_set = frozenset(self.table.directories)
+        self.task_by_directory = {task.directory: task for task in self.table.tasks}
         self.globs = {
             task.directory: (
                 [compile_glob(glob, Braces.ALTERNATION) for glob in task.excludes],
                 [compile_glob(glob, Braces.ALTERNATION) for glob in task.includes],
             )
-            for task in self.tasks
+            for task in self.table.tasks
         }
         self.answers: dict[str, tuple[bool, str]] = {}
 
@@ -283,7 +281,7 @@ class TurboInputs:
         return found
 
     def find_covered(self, path: str) -> tuple[bool, str]:
-        for task in self.tasks:
+        for task in self.table.tasks:
             if self.watches(task, path):
                 return True, task.decided_by
         holder = self.holder(path)

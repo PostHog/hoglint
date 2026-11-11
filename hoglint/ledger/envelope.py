@@ -35,6 +35,7 @@ from typing import Any
 
 from hoglint.config.model import Config
 from hoglint.config.schema import as_tuple, canonical
+from hoglint.ledger.cache import answer_key
 from hoglint.ledger.errors import EngineError
 from hoglint.plugins import REGISTRY
 
@@ -54,11 +55,7 @@ MISSING = "missing"
 
 
 def short_digest(parts: Iterable[str | bytes]) -> str:
-    hasher = hashlib.sha256()
-    for part in parts:
-        hasher.update(part.encode() if isinstance(part, str) else part)
-        hasher.update(b"\0")
-    return hasher.hexdigest()[:DIGEST_CHARS]
+    return answer_key(*parts, chars=DIGEST_CHARS)
 
 
 def file_digest(path: Path) -> str:

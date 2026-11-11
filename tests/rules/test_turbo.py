@@ -87,5 +87,5 @@ def turbo(tmp_path_factory: pytest.TempPathFactory) -> TurboInputs:
     ],
 )
 def test_turbo_inputs_follow_turbo_semantics(turbo: TurboInputs, path: str, watched: bool, covered: bool) -> None:
-    assert any(turbo.watches(task, path) for task in turbo.tasks) is watched
+    assert any(turbo.watches(task, path) for task in turbo.table.tasks) is watched
     assert turbo.covered(path)[0] is covered
