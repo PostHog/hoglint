@@ -105,7 +105,7 @@ def package_scan(lines: dict[tuple[str, str, str], int]) -> ScanSummary:
 @pytest.mark.parametrize(
     "base, head_base, renames, code, admitted",
     [
-        # a coupling removed in one product no longer pays for a new one in another
+        # a coupling removed in one product never pays for a new one in another
         ({(INVOICE, "alerts.a", "write"): 1}, {(INVOICE, "crm.b", "write"): 1}, {}, 1, 0),
         # the same swap inside one product passes
         ({(INVOICE, "alerts.a", "write"): 1}, {(INVOICE, "alerts.b", "write"): 1}, {}, 0, 0),
