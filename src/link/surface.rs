@@ -50,6 +50,13 @@ pub struct HandOut {
     pub unread: bool,
 }
 
+/// The names of a hand-out set as text, sorted: the order every reader of `HandOut` prints.
+pub fn sorted_names<'a>(it: &'a Interner, names: &FxHashSet<Sid>) -> Vec<&'a str> {
+    let mut out: Vec<&str> = names.iter().map(|&name| it.s(name)).collect();
+    out.sort_unstable();
+    out
+}
+
 /// The names a module's `__all__` lists, or where it first cannot be read (`unread`).
 pub struct DunderAll {
     pub names: Option<FxHashSet<Sid>>,

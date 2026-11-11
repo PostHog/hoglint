@@ -13,8 +13,9 @@ use super::facts::{Assign, Def, FileFacts, Import, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::produce::NO_FILE;
 use super::resolve::{Core, Ent, unpacked_names};
+use super::surface::sorted_names;
 use rayon::prelude::*;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use serde_json::json;
 use std::fs::File;
 use std::hash::Hasher;
@@ -657,16 +658,11 @@ impl Link {
         modules.sort_by(|a, b| it.s(*a).cmp(it.s(*b)));
         for module in modules {
             let found = &self.hand_outs[&module];
-            let names = |set: &FxHashSet<Sid>| -> Vec<&str> {
-                let mut out: Vec<&str> = set.iter().map(|&name| it.s(name)).collect();
-                out.sort_unstable();
-                out
-            };
             let row = json!([
                 "handout",
                 it.s(module),
-                names(&found.handed),
-                names(&found.kept),
+                sorted_names(it, &found.handed),
+                sorted_names(it, &found.kept),
                 found.unread
             ]);
             writeln!(out, "{row}").map_err(fail)?;

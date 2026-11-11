@@ -10,6 +10,7 @@ use hoglint_facts::link::packs::refined::{Field, RefinedFields};
 use hoglint_facts::link::produce::NO_FILE;
 use hoglint_facts::link::resolve::{Binding, Ent, HitId};
 use hoglint_facts::link::scope::{Lookup, Res};
+use hoglint_facts::link::surface::sorted_names;
 use hoglint_facts::link::{ClassFact, Link as CoreLink, LinkConfig, NewPackRow};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
@@ -416,23 +417,17 @@ impl Link {
     /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
     /// kept names, whether its `__all__` cannot be read), in module name order.
     #[allow(clippy::type_complexity)]
-    fn hand_outs(&self) -> Vec<(String, Vec<String>, Vec<String>, bool)> {
+    fn hand_outs(&self) -> Vec<(&str, Vec<&str>, Vec<&str>, bool)> {
         let it = &self.inner.core.it;
-        let sorted = |set: &rustc_hash::FxHashSet<Sid>| {
-            let mut out: Vec<String> = set.iter().map(|&name| it.s(name).to_string()).collect();
-            out.sort();
-            out
-        };
-        let mut out: Vec<(String, Vec<String>, Vec<String>, bool)> = self
+        let mut out: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = self
             .inner
             .hand_outs
             .iter()
             .map(|(&module, found)| {
-                let handed = sorted(&found.handed);
                 (
-                    it.s(module).to_string(),
-                    handed,
-                    sorted(&found.kept),
+                    it.s(module),
+                    sorted_names(it, &found.handed),
+                    sorted_names(it, &found.kept),
                     found.unread,
                 )
             })
