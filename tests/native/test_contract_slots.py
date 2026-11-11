@@ -262,6 +262,84 @@ ALIAS_FILE_CASES = {
 }
 
 
+MODELS = {"products/shop/backend/models.py": "class OrderModel:\n    pass\n"}
+ORDERS_USES_ORDER_MAP = "from ..types import OrderMap\n\n\ndef orders() -> OrderMap:\n    return {}\n"
+ORDER_MAP = ("orders", "return", "products.shop.backend.types.OrderMap", "resolved", "")
+ORDER_MODEL = ("orders", "return", "products.shop.backend.models.OrderModel", "resolved", "")
+DICT, STR, INT, LIST = (
+    ("orders", "return", f"builtins.{name}", "external", "") for name in ("dict", "str", "int", "list")
+)
+# An alias assigned in another first-party module is followed there, through the link's own
+# resolution, and the names in it are looked up where it is assigned.
+IMPORTED_ALIAS_CASES = {
+    "imported": (
+        {
+            "products/shop/backend/types.py": (
+                "from products.shop.backend.models import OrderModel\n\nOrderMap = dict[str, OrderModel]\n"
+            ),
+        },
+        [ORDER_MAP, DICT, STR, ORDER_MODEL],
+    ),
+    "re-exported, then imported again in the alias's module": (
+        {
+            "products/shop/backend/types.py": "from products.shop.backend.more import OrderMap as OrderMap\n",
+            "products/shop/backend/more.py": (
+                "from products.shop.backend.models import OrderModel\nfrom .ids import Id\n\n"
+                "OrderMap = dict[Id, OrderModel]\n"
+            ),
+            "products/shop/backend/ids.py": "Id = tuple[int, str]\n",
+        },
+        [
+            ("orders", "return", "products.shop.backend.types.OrderMap", "resolved", ""),
+            DICT,
+            ("orders", "return", "products.shop.backend.ids.Id", "resolved", ""),
+            ("orders", "return", "builtins.tuple", "external", ""),
+            INT,
+            STR,
+            ORDER_MODEL,
+        ],
+    ),
+    "a cycle": (
+        {
+            "products/shop/backend/types.py": "from .other import Other\n\nOrderMap = list[Other]\n",
+            "products/shop/backend/other.py": "from .types import OrderMap\n\nOther = list[OrderMap]\n",
+        },
+        [
+            ORDER_MAP,
+            ORDER_MAP,
+            LIST,
+            LIST,
+            ("orders", "return", "products.shop.backend.other.Other", "resolved", ""),
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", IMPORTED_ALIAS_CASES)
+def test_an_imported_alias_is_expanded_where_it_is_assigned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = IMPORTED_ALIAS_CASES[case]
+    files = {**MODELS, **files, "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP}
+    out = both_engines(tmp_path, files, monkeypatch)
+    assert slot_rows(out["native"], FACADE) == sorted(expected)
+
+
+def test_an_alias_chain_deeper_than_the_limit_leaves_an_unresolved_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = "".join(f"A{at} = list[A{at + 1}]\n" for at in range(40)) + "A40 = int\n"
+    files = {
+        "products/shop/backend/types.py": chain + "OrderMap = A0\n",
+        "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP,
+    }
+    out = both_engines(tmp_path, files, monkeypatch)
+    rows = slot_rows(out["native"], FACADE)
+    assert [row for row in rows if row[3] == "unresolved"] == [("orders", "return", "A32", "unresolved", "")]
+    assert ("orders", "return", "products.shop.backend.types.A31", "resolved", "") in rows
+    assert ("orders", "return", "products.shop.backend.types.A33", "resolved", "") not in rows
+
+
 @pytest.mark.parametrize("case", ALIAS_FILE_CASES)
 def test_an_alias_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str

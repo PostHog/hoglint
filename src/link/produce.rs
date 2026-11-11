@@ -5,7 +5,7 @@ use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{Binding, CLASS, Core, Ent, HitKind, MODULE_LEVEL_FLAGS, absolute_import};
 use super::rules::glob::ExportPaths;
-use super::scope::{LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
+use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::handed_out;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -337,6 +337,8 @@ struct Keys {
     missing: Sid,
     handed: Sid,
     ret: Sid,
+    alias: Sid,
+    too_deep: Sid,
 }
 
 impl Producing {
@@ -396,6 +398,8 @@ impl Producing {
             missing: it.intern("missing"),
             handed: it.intern("handed"),
             ret: it.intern("return"),
+            alias: it.intern("alias"),
+            too_deep: it.intern("too-deep"),
         };
         Producing {
             names: LookupNames {
@@ -568,6 +572,29 @@ struct SlotLookup {
     line: u32,
 }
 
+/// How many type aliases deep one slot's names are followed.
+const MAX_ALIAS_DEPTH: usize = 32;
+
+/// A dotted name in a type expression: whether it is the whole annotation, and where it is looked
+/// up (an alias's names are looked up where the alias is assigned).
+#[derive(Clone, Copy)]
+struct Mention {
+    value: Sid,
+    whole: bool,
+    lookup: SlotLookup,
+}
+
+/// What every `exposes` row of one slot shares. `handed` is the clause a handed-out callable
+/// comes by, EMPTY for the module's own.
+#[derive(Clone, Copy)]
+struct SlotRows {
+    site: SlotSite,
+    callable: Sid,
+    slot: Sid,
+    contract: bool,
+    handed: Sid,
+}
+
 /// Annotated single-name assignments by the def they sit in: the candidate dataclass fields.
 fn fields_by_class<'f>(it: &Interner, assigns: &'f [Assign]) -> FxHashMap<i32, Vec<&'f Assign>> {
     let mut fields: FxHashMap<i32, Vec<&Assign>> = FxHashMap::default();
@@ -595,6 +622,8 @@ pub struct Producers<'p> {
     /// Per module: name -> (file, assign row) of the value each module-level name is assigned,
     /// read from the file the module table reads the name from.
     pub aliases: FxHashMap<Sid, FxHashMap<Sid, (u32, u32)>>,
+    /// The scope of each analyzed file, by file.
+    pub owner_of: FxHashMap<u32, usize>,
 }
 
 impl Producers<'_> {
@@ -643,14 +672,14 @@ impl Producers<'_> {
         for owner in 0..self.scopes.len() {
             self.references(owner);
         }
-        let owner_of: FxHashMap<u32, usize> = self
+        self.owner_of = self
             .scopes
             .iter()
             .enumerate()
             .map(|(owner, scope)| (scope.file, owner))
             .collect();
         for owner in 0..self.scopes.len() {
-            self.declarations(owner, &owner_of);
+            self.declarations(owner);
         }
         for owner in 0..self.scopes.len() {
             self.strings(owner);
@@ -889,31 +918,132 @@ impl Producers<'_> {
         }
     }
 
-    /// Each mention, followed by the names of the type alias it is, when it is one: a module
-    /// holds `Handler = Callable[[Order], None]` to shorten a signature, not to hide its types.
-    fn expand_aliases(
-        &mut self,
-        owner: usize,
-        mentions: Vec<(Sid, bool)>,
-        expanding: &mut Vec<Sid>,
-    ) -> Vec<(Sid, bool)> {
-        let mut out = Vec::new();
-        for (value, whole) in mentions {
-            out.push((value, whole));
-            if expanding.contains(&value) {
-                continue;
+    /// The type alias a mention names, as (module, name), its value, and where its names are
+    /// looked up: assigned in the module that uses it, or followed through imports to the
+    /// first-party module that assigns it. A module holds `Handler = Callable[[Order], None]` to
+    /// shorten a signature, not to hide its types.
+    fn alias_of(&mut self, mention: Mention, found: Lookup) -> Option<((Sid, Sid), V, SlotLookup)> {
+        let module = self.scopes[mention.lookup.owner].module;
+        if let Some(value) = self.alias_value(module, mention.value) {
+            return Some(((module, mention.value), value, mention.lookup));
+        }
+        let hit = found.hit?;
+        if self.core.kind(hit) != HitKind::Variable {
+            return None;
+        }
+        let core = &mut *self.core;
+        let chain = core.chain(hit).to_vec();
+        for step in chain {
+            let head = core.it.head(step.m);
+            if !self.first_party.contains(&head) {
+                return None;
             }
-            let module = self.scopes[owner].module;
-            let Some(alias) = self.alias_value(module, value) else {
+        }
+        let origin = core.origin(hit);
+        let value = self.alias_value(origin.m, origin.s)?;
+        let (file, at) = self.aliases[&origin.m][&origin.s];
+        let owner = *self.owner_of.get(&file)?;
+        let line = self.core.facts.files[file as usize].assigns[at as usize].l;
+        let lookup = SlotLookup {
+            owner,
+            scope: -1,
+            line,
+        };
+        Some(((origin.m, origin.s), value, lookup))
+    }
+
+    /// The attrs of one `exposes` row of a slot.
+    fn slot_attrs(&self, rows: SlotRows, position: Sid, extra: &[(Sid, Sid)]) -> Vec<(Sid, Sid)> {
+        let k = &self.settings.k;
+        let mut attrs = vec![
+            (k.callable, rows.callable),
+            (k.slot, rows.slot),
+            (k.position, position),
+        ];
+        attrs.extend_from_slice(extra);
+        if rows.handed != EMPTY {
+            attrs.push((k.handed, rows.handed));
+        }
+        attrs
+    }
+
+    fn push_slot(
+        &mut self,
+        rows: SlotRows,
+        surface: Sid,
+        resolved: Resolved,
+        attrs: &[(Sid, Sid)],
+    ) {
+        let site = rows.site;
+        let use_ = self.settings.k.use_annotation;
+        self.push(
+            EXPOSES, site.owner, site.scope, site.line, site.col, site.ctx, surface, resolved,
+            use_, attrs,
+        );
+    }
+
+    /// One row per mention, each followed by the rows of the type alias it is, when it is one
+    /// (in a contract only). A cycle stops at the alias it closes; an expansion deeper than
+    /// MAX_ALIAS_DEPTH stops with an unresolved row, because a type left unread is unknown.
+    fn expose_mentions(
+        &mut self,
+        rows: SlotRows,
+        mentions: Vec<Mention>,
+        expanding: &mut Vec<(Sid, Sid)>,
+    ) {
+        for mention in mentions {
+            let lookup = mention.lookup;
+            let core = &mut *self.core;
+            let Some(found) = core.value_lookup(
+                &self.settings.names,
+                &mut self.scopes[lookup.owner],
+                &V::Chain(mention.value),
+                lookup.scope,
+                lookup.line,
+            ) else {
                 continue;
             };
+            let k = &self.settings.k;
+            let position = if mention.whole { k.whole } else { k.nested };
+            let builtin = !rows.contract && found.hit.is_none() && {
+                let head = core.it.head(mention.value);
+                found.surface == core.it.join(self.settings.names.builtins_module, head)
+            };
+            if !builtin {
+                let resolved = core.classify_lookup(found);
+                let attrs = self.slot_attrs(rows, position, &[]);
+                self.push_slot(rows, found.surface, resolved, &attrs);
+            }
+            if !rows.contract {
+                continue;
+            }
+            let Some((key, value, at)) = self.alias_of(mention, found) else {
+                continue;
+            };
+            if expanding.contains(&key) {
+                continue;
+            }
+            if expanding.len() >= MAX_ALIAS_DEPTH {
+                let k = &self.settings.k;
+                let marker = [(k.alias, k.too_deep)];
+                let attrs = self.slot_attrs(rows, position, &marker);
+                self.push_slot(rows, mention.value, UNRESOLVED, &attrs);
+                continue;
+            }
             let mut inner = Vec::new();
-            self.mentions(&alias, whole, &mut inner);
-            expanding.push(value);
-            out.extend(self.expand_aliases(owner, inner, expanding));
+            self.mentions(&value, mention.whole, &mut inner);
+            let inner = inner
+                .into_iter()
+                .map(|(value, whole)| Mention {
+                    value,
+                    whole,
+                    lookup: at,
+                })
+                .collect();
+            expanding.push(key);
+            self.expose_mentions(rows, inner, expanding);
             expanding.pop();
         }
-        out
     }
 
     /// One `exposes` edge per type name in a slot. Builtin types count only in a contract, and
@@ -930,71 +1060,31 @@ impl Producers<'_> {
         contract: bool,
         handed: Sid,
     ) {
-        let k = &self.settings.k;
-        let use_ = k.use_annotation;
+        let rows = SlotRows {
+            site,
+            callable,
+            slot,
+            contract,
+            handed,
+        };
         let Some(annotation) = annotation else {
-            let mut attrs = vec![
-                (k.callable, callable),
-                (k.slot, slot),
-                (k.position, k.whole),
-                (k.annotation, k.missing),
-            ];
-            if handed != EMPTY {
-                attrs.push((k.handed, handed));
-            }
-            self.push(
-                EXPOSES, site.owner, site.scope, site.line, site.col, site.ctx, EMPTY, UNRESOLVED,
-                use_, &attrs,
-            );
+            let k = &self.settings.k;
+            let missing = [(k.annotation, k.missing)];
+            let attrs = self.slot_attrs(rows, k.whole, &missing);
+            self.push_slot(rows, EMPTY, UNRESOLVED, &attrs);
             return;
         };
-        let mut found_names = Vec::new();
-        self.mentions(annotation, true, &mut found_names);
-        if contract {
-            found_names = self.expand_aliases(lookup.owner, found_names, &mut Vec::new());
-        }
-        for (value, whole) in found_names {
-            let core = &mut *self.core;
-            let head = core.it.head(value);
-            let Some(found) = core.value_lookup(
-                &self.settings.names,
-                &mut self.scopes[lookup.owner],
-                &V::Chain(value),
-                lookup.scope,
-                lookup.line,
-            ) else {
-                continue;
-            };
-            if !contract && found.hit.is_none() {
-                let builtin = core.it.join(self.settings.names.builtins_module, head);
-                if found.surface == builtin {
-                    continue;
-                }
-            }
-            let resolved = core.classify_lookup(found);
-            let k = &self.settings.k;
-            let position = if whole { k.whole } else { k.nested };
-            let mut attrs = vec![
-                (k.callable, callable),
-                (k.slot, slot),
-                (k.position, position),
-            ];
-            if handed != EMPTY {
-                attrs.push((k.handed, handed));
-            }
-            self.push(
-                EXPOSES,
-                site.owner,
-                site.scope,
-                site.line,
-                site.col,
-                site.ctx,
-                found.surface,
-                resolved,
-                use_,
-                &attrs,
-            );
-        }
+        let mut found = Vec::new();
+        self.mentions(annotation, true, &mut found);
+        let mentions = found
+            .into_iter()
+            .map(|(value, whole)| Mention {
+                value,
+                whole,
+                lookup,
+            })
+            .collect();
+        self.expose_mentions(rows, mentions, &mut Vec::new());
     }
 
     /// The parameter and return slots of a function. In a contract `self`, `cls` and an
@@ -1157,11 +1247,7 @@ impl Producers<'_> {
 
     /// The top-level function or class a handed-out name leads to, in an analyzed first-party
     /// file: every step of the way stays inside first-party code.
-    fn handed_def(
-        &mut self,
-        target: Sid,
-        owner_of: &FxHashMap<u32, usize>,
-    ) -> Option<(usize, u32)> {
+    fn handed_def(&mut self, target: Sid) -> Option<(usize, u32)> {
         let core = &mut *self.core;
         let head = core.it.head(target);
         if !self.first_party.contains(&head) {
@@ -1190,16 +1276,16 @@ impl Producers<'_> {
         // of the same name.
         let table = core.table(origin.m)?;
         let file = core.table_at(table).record?;
-        Some((*owner_of.get(&file)?, idx))
+        Some((*self.owner_of.get(&file)?, idx))
     }
 
     /// The slots of the functions and dataclass fields a contract surface hands out from other
     /// modules, at the import that hands each one out.
-    fn hand_out(&mut self, owner: usize, owner_of: &FxHashMap<u32, usize>) {
+    fn hand_out(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let handed = handed_out(self.core, &self.scopes[owner]);
         for item in handed {
-            let Some((origin, idx)) = self.handed_def(item.target, owner_of) else {
+            let Some((origin, idx)) = self.handed_def(item.target) else {
                 continue;
             };
             let record = &facts.files[self.scopes[origin].file as usize];
@@ -1231,7 +1317,7 @@ impl Producers<'_> {
         }
     }
 
-    fn declarations(&mut self, owner: usize, owner_of: &FxHashMap<u32, usize>) {
+    fn declarations(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];
@@ -1328,7 +1414,7 @@ impl Producers<'_> {
             self.expose_signature(site, lookup, node, qualname, in_contract, EMPTY);
         }
         if contract {
-            self.hand_out(owner, owner_of);
+            self.hand_out(owner);
         }
     }
 

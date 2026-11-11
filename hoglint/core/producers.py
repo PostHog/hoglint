@@ -78,6 +78,8 @@ UP_POSITIONS: tuple[tuple[str, str], ...] = (
     ("del", "delete"),
     ("lambda", "lambda"),
 )
+# How many type aliases deep one slot's names are followed.
+MAX_ALIAS_DEPTH = 32
 TARGET_STEPS = ("assign-target", "annassign-target", "augassign-target", "for-target", "comp:target", "walrus-target")
 
 
@@ -141,12 +143,12 @@ class AliasValues:
 
     def __init__(self, tables: Tables) -> None:
         self.tables = tables
-        self.by_module: dict[str, dict[str, object]] = {}
+        self.by_module: dict[str, dict[str, dict]] = {}
 
     @staticmethod
-    def assigned(record: dict | None) -> dict[str, object]:
-        """name -> value of its last module-level assignment in one record."""
-        values: dict[str, object] = {}
+    def assigned(record: dict | None) -> dict[str, dict]:
+        """name -> row of its last module-level assignment with a value, in one record."""
+        values: dict[str, dict] = {}
         if record is None or record.get("status") != "ok":
             return values
         for row in record.get("assigns", ()):
@@ -156,10 +158,10 @@ class AliasValues:
                 continue
             for target in row["t"]:
                 if isinstance(target, str) and "." not in target:
-                    values[target] = row["v"]
+                    values[target] = row
         return values
 
-    def of(self, module: str) -> dict[str, object]:
+    def of(self, module: str) -> dict[str, dict]:
         found = self.by_module.get(module)
         if found is not None:
             return found
@@ -190,10 +192,11 @@ class BuildContext:
         self.scope_of_path = {scope.path: scope for scope in self.files}
         self.aliases = AliasValues(self.resolver.tables)
 
-    def table_scope(self, module: str) -> FileScope | None:
-        """The analyzed file a module table reads its own bindings from: the one file the index
-        names for the module, never a stub twin or a package of the same name."""
-        path = self.index.path_of.get(module)
+    def table_scope(self, module: str, stub: bool = False) -> FileScope | None:
+        """The analyzed file a module table reads a binding from: the `.pyi` for a name only the
+        stub binds, else the one file the index names for the module (never a stub twin or a
+        package of the same name)."""
+        path = (self.index.stub_of if stub else self.index.path_of).get(module)
         return self.scope_of_path.get(path) if path is not None else None
 
     def is_builtin(self, name: str) -> bool:
@@ -262,10 +265,20 @@ class BuildContext:
         binding = table.names.get(name) if table is not None else None
         if binding is None or binding[0] not in ("alias", "variable"):
             return None
-        value = self.aliases.of(module).get(name)
+        row = self.aliases.of(module).get(name)
+        value = row["v"] if row is not None else None
         if isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value)):
             return value
         return None
+
+    def alias_site(self, module: str, name: str) -> tuple[FileScope, int] | None:
+        """The file and line of the assignment `alias_value` reads."""
+        row = self.aliases.of(module).get(name)
+        table = self.resolver.tables.get(module)
+        if row is None or table is None:
+            return None
+        scope = self.table_scope(module, name in table.stub_names)
+        return (scope, row["l"]) if scope is not None else None
 
     def resolve_dotted(self, dotted: str) -> tuple[Resolved, str] | None:
         """A dotted path in a string. None unless its head names repo code."""
@@ -432,6 +445,30 @@ class SlotLookup:
     line: int
 
 
+@dataclass(frozen=True, slots=True)
+class Mention:
+    """A dotted name in a type expression: whether it is the whole annotation, and where it is
+    looked up (an alias's names are looked up where the alias is assigned)."""
+
+    value: str
+    position: str
+    lookup: SlotLookup
+
+
+@dataclass(frozen=True, slots=True)
+class SlotRows:
+    """What every `exposes` row of one slot shares."""
+
+    site: SlotSite
+    callable_name: str
+    slot: str
+    contract: bool
+    tail: tuple[tuple[str, str], ...]
+
+    def attrs(self, position: str, *extra: tuple[str, str]) -> tuple[tuple[str, str], ...]:
+        return (("callable", self.callable_name), ("slot", self.slot), ("position", position), *extra, *self.tail)
+
+
 class DeclarationProducer(Producer):
     """inherit, decorate, exposes and declares edges from def and class records.
 
@@ -504,20 +541,61 @@ class DeclarationProducer(Producer):
                 return [m for item in value[key] for m in self.mentions(item, "nested")]
         return []
 
-    def expand_aliases(
-        self, context: BuildContext, module: str, mentions: list[tuple[str, str]], expanding: frozenset[str]
-    ) -> list[tuple[str, str]]:
-        """Each mention, followed by the names of the type alias it is, when it is one: a module
-        holds `Handler = Callable[[Order], None]` to shorten a signature, not to hide its types."""
-        out: list[tuple[str, str]] = []
-        for value, position in mentions:
-            out.append((value, position))
-            alias = context.alias_value(module, value)
-            if alias is None or value in expanding:
+    def alias_of(
+        self, context: BuildContext, mention: Mention, found: Lookup
+    ) -> tuple[tuple[str, str], object, SlotLookup] | None:
+        """The type alias a mention names, as (module, name), its value, and where its names are
+        looked up: assigned in the module that uses it, or followed through imports to the
+        first-party module that assigns it. A module holds `Handler = Callable[[Order], None]` to
+        shorten a signature, not to hide its types."""
+        module = mention.lookup.scope.module
+        local = context.alias_value(module, mention.value)
+        if local is not None:
+            return (module, mention.value), local, mention.lookup
+        hit = found.hit
+        if hit is None or hit.kind != "variable":
+            return None
+        if not all(context.first_party.contains(str(step)) for step in hit.chain):
+            return None
+        origin = hit.origin
+        value = context.alias_value(origin.module, origin.symbol)
+        site = context.alias_site(origin.module, origin.symbol)
+        if value is None or site is None:
+            return None
+        return (origin.module, origin.symbol), value, SlotLookup(site[0], -1, site[1])
+
+    def expose_mentions(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        rows: SlotRows,
+        mentions: list[Mention],
+        expanding: frozenset[tuple[str, str]],
+    ) -> None:
+        """One row per mention, each followed by the rows of the type alias it is, when it is one
+        (in a contract only). A cycle stops at the alias it closes; an expansion deeper than
+        MAX_ALIAS_DEPTH stops with an unresolved row, because a type left unread is unknown."""
+        for mention in mentions:
+            lookup = mention.lookup
+            head = mention.value.split(".")[0]
+            found = context.value_lookup(lookup.scope, mention.value, lookup.at_scope, lookup.line)
+            if found is None:
                 continue
-            inner = self.mentions(alias, position)
-            out.extend(self.expand_aliases(context, module, inner, expanding | {value}))
-        return out
+            if rows.contract or found.hit is not None or found.surface != f"builtins.{head}":
+                resolved = context.classifier.classify_lookup(found)
+                graph.edges.append(rows.site.edge(found.surface, resolved, rows.attrs(mention.position)))
+            if not rows.contract:
+                continue
+            alias = self.alias_of(context, mention, found)
+            if alias is None or alias[0] in expanding:
+                continue
+            key, value, where = alias
+            if len(expanding) >= MAX_ALIAS_DEPTH:
+                attrs = rows.attrs(mention.position, ("alias", "too-deep"))
+                graph.edges.append(rows.site.edge(mention.value, UNRESOLVED, attrs))
+                continue
+            inner = [Mention(name, position, where) for name, position in self.mentions(value, mention.position)]
+            self.expose_mentions(context, graph, rows, inner, expanding | {key})
 
     def expose(
         self,
@@ -533,28 +611,12 @@ class DeclarationProducer(Producer):
     ) -> None:
         """One `exposes` edge per type name in a slot. Builtin types count only in a contract,
         and there an unannotated slot (annotation None) is an edge of its own."""
-        tail = (("handed", handed),) if handed else ()
+        rows = SlotRows(site, callable_name, slot, contract, (("handed", handed),) if handed else ())
         if annotation is None:
-            attrs = (
-                ("callable", callable_name),
-                ("slot", slot),
-                ("position", "whole"),
-                ("annotation", "missing"),
-                *tail,
-            )
-            graph.edges.append(site.edge("", UNRESOLVED, attrs))
+            graph.edges.append(site.edge("", UNRESOLVED, rows.attrs("whole", ("annotation", "missing"))))
             return
-        mentions = self.mentions(annotation, "whole")
-        if contract:
-            mentions = self.expand_aliases(context, lookup.scope.module, mentions, frozenset())
-        for value, position in mentions:
-            head = value.split(".")[0]
-            found = context.value_lookup(lookup.scope, value, lookup.at_scope, lookup.line)
-            if found is None or (not contract and found.hit is None and found.surface == f"builtins.{head}"):
-                continue
-            resolved = context.classifier.classify_lookup(found)
-            attrs = (("callable", callable_name), ("slot", slot), ("position", position), *tail)
-            graph.edges.append(site.edge(found.surface, resolved, attrs))
+        mentions = [Mention(value, position, lookup) for value, position in self.mentions(annotation, "whole")]
+        self.expose_mentions(context, graph, rows, mentions, frozenset())
 
     def expose_signature(
         self,
