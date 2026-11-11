@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.native.replay import MODES, Checker, Pair, PairResult, Replay, Verdict
+from hoglint.native.replay import MODES, Checker, Pair, PairResult, PairsReport, Prediction, Replay, TruthItem, Verdict
 
 from native.require import native_module
 from native.test_parity import OWNERS_REPO
@@ -134,3 +134,19 @@ def test_the_certificate_predicts_from_the_parents_traces_and_reports_each_gap(
     assert "core/b.py" in prediction.predicted
     assert not prediction.missed
     assert [note for note in result.notes if note.startswith("gaps ")] == ["gaps none"]
+
+
+def missed_prediction() -> Prediction:
+    item = TruthItem("edges", "imports", "core/t.py", frozenset({"core/t.py"}))
+    return Prediction(frozenset({"core/t.py"}), frozenset(), (item,), (item,))
+
+
+def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pytest.CaptureFixture[str]) -> None:
+    result = PairResult(Pair("p", "a", "b"), [Verdict.predicted(missed_prediction())], missed_prediction())
+    assert not result.equal
+    assert result.status() == "MISSED"
+    report = PairsReport()
+    report.add(result)
+    assert report.close() is False
+    assert "p  MISSED  prediction: MISSED (1 files" in capsys.readouterr().out
+    assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "EQUAL"

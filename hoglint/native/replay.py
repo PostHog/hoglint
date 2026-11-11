@@ -36,7 +36,8 @@ Usage:
   python -m hoglint.native.replay check ...
       one check in this process (the harness runs it)
 
-Exit 0 only when every compared table is equal and no check failed.
+Exit 0 only when every compared table is equal, no check failed, and a certificate's prediction
+holds every item of the truth set.
 """
 
 from __future__ import annotations
@@ -301,18 +302,22 @@ def compare_tables(left: Path, right: Path) -> tuple[list[RowDiff], list[str]]:
 
 @dataclass(frozen=True)
 class Verdict:
-    """One comparison of two dumps, as one short text and the rows of each differing table."""
+    """One comparison of two dumps, as one short text and the rows of each differing table.
+    `word` names a failure that is not a table difference (MISSED), with `note` saying more."""
 
     label: str
     diffs: tuple[RowDiff, ...]
     skipped: tuple[str, ...]
     note: str = ""
+    word: str = ""
 
     @property
     def equal(self) -> bool:
-        return not self.note and all(diff.equal for diff in self.diffs)
+        return not self.note and not self.word and all(diff.equal for diff in self.diffs)
 
     def short(self) -> str:
+        if self.word:
+            return f"{self.label}: {self.word} ({self.note})"
         if self.note:
             return f"{self.label}: {self.note}"
         if self.equal:
@@ -336,6 +341,14 @@ class Verdict:
     @staticmethod
     def failed(label: str, error: str) -> Verdict:
         return Verdict(label, (), (), f"FAILED RUN: {error}")
+
+    @staticmethod
+    def predicted(prediction: Prediction | None) -> Verdict:
+        """A certificate's verdict: its prediction must hold every item of the truth set."""
+        if prediction is None or not prediction.missed:
+            return Verdict("prediction", (), ())
+        files = sorted({item.home for item in prediction.missed})
+        return Verdict("prediction", (), (), f"{len(files)} files of the truth set not predicted", "MISSED")
 
 
 # ── the truth set ─────────────────────────────────────────────────
@@ -987,13 +1000,19 @@ class PairResult:
     def equal(self) -> bool:
         return bool(self.verdicts) and all(verdict.equal for verdict in self.verdicts)
 
+    def status(self) -> str:
+        words = [verdict.word for verdict in self.verdicts if verdict.word]
+        if words:
+            return " ".join(dict.fromkeys(words))
+        return "EQUAL" if self.equal else "NOT EQUAL"
+
     def timing(self) -> str:
         if self.cold is None or self.warm is None:
             return ""
         return f"cold {self.cold.wall:.1f}s/{self.cold.cpu:.1f}cpu warm {self.warm.wall:.1f}s/{self.warm.cpu:.1f}cpu"
 
     def line(self) -> str:
-        parts = [self.pair.name, "EQUAL" if self.equal else "NOT EQUAL", *(v.short() for v in self.verdicts)]
+        parts = [self.pair.name, self.status(), *(v.short() for v in self.verdicts)]
         parts.append(self.timing())
         if self.prediction is not None:
             parts.append(self.prediction.short())
@@ -1041,7 +1060,7 @@ class Replay:
         if gaps:
             result.notes.append(gaps)
         if mode.cold_only:
-            result.verdicts.append(Verdict("cold", (), ()))
+            result.verdicts.append(Verdict.predicted(result.prediction))
             return
         warm = self.state("warm")
         check(pair.parent, pair.parent, warm, "warm-parent", tables=False)
