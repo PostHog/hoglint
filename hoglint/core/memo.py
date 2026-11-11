@@ -340,6 +340,7 @@ class StepStats:
     run_cpu: float = 0.0
     check_wall: float = 0.0
     check_cpu: float = 0.0
+    changed: dict[str, int] = field(default_factory=dict)  # read kind -> stored reads whose answer changed
 
     def row(self) -> dict[str, Any]:
         counts = [r + f for r, f in zip(self.reads, self.files, strict=True)]
@@ -353,6 +354,7 @@ class StepStats:
             "files": sorted(self.files),
             "run": [round(self.run_wall, 4), round(self.run_cpu, 4)],
             "check": [round(self.check_wall, 4), round(self.check_cpu, 4)],
+            "changed": self.changed,
         }
 
 
@@ -544,6 +546,10 @@ class StepMemo:
                 failing = part.failed_reads()
             except Exception:  # noqa: BLE001 - a damaged read table is a miss for the whole part
                 continue
+            if self.stats is not None:
+                for at in failing:
+                    kind = part.reads[at][0]
+                    self.stats.changed[kind] = self.stats.changed.get(kind, 0) + 1
             for key, entry in part.items.items():
                 if key not in wanted:
                     continue
