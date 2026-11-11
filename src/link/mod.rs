@@ -54,7 +54,10 @@ pub mod heap {
         match v {
             V::Null | V::Chain(_) | V::Opaque(_) | V::Other => 0,
             V::Str(_, parsed) => parsed.as_ref().map_or(0, |p| size_of::<V>() + value(p)),
-            V::Call(inner, _) | V::Attr(inner, _) | V::Star(inner) => size_of::<V>() + value(inner),
+            V::Call(inner, _, sole) => {
+                size_of::<V>() + value(inner) + sole.as_deref().map_or(0, value)
+            }
+            V::Attr(inner, _) | V::Star(inner) => size_of::<V>() + value(inner),
             V::Sub(a, b) | V::Bin(_, a, b) => 2 * size_of::<V>() + value(a) + value(b),
             V::Tuple(items) | V::List(items) | V::Set(items) => values(items),
             V::Dict(pairs) => {

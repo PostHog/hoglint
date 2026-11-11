@@ -87,10 +87,11 @@ impl Enc<'_> {
                 self.sid(*s);
                 self.ov(parsed.as_deref());
             }
-            V::Call(inner, frozen) => {
+            V::Call(inner, frozen, sole) => {
                 self.u8(3);
                 self.v(inner);
                 self.u8(u8::from(*frozen));
+                self.ov(sole.as_deref());
             }
             V::Attr(inner, a) => {
                 self.u8(4);
@@ -399,7 +400,8 @@ impl<'b> Dec<'b, '_> {
             }
             3 => {
                 let inner = self.v()?;
-                V::Call(Box::new(inner), self.u8()? == 1)
+                let frozen = self.u8()? == 1;
+                V::Call(Box::new(inner), frozen, self.ov()?.map(Box::new))
             }
             4 => {
                 let inner = self.v()?;

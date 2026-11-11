@@ -362,6 +362,24 @@ DUNDER_ALL_CASES = {
     "extended with a name": ('__all__ = ["ping"]\n__all__ += NAMES\n', ALL_UNKNOWN),
     "an item that is no string": ('__all__ = ["ping", charge.__name__]\n', ALL_UNKNOWN),
     "changed by a method": ('__all__ = ["ping"]\n__all__.extend(["charge"])\n', ALL_UNKNOWN),
+    "sorted keys of a module-level dict": ('_LAZY = {"charge": "logic"}\n__all__ = sorted(_LAZY)\n', CHARGE_BY_ALL),
+    "list of a module-level tuple": ('_NAMES = ("charge", "ping")\n__all__ = list(_NAMES)\n', CHARGE_BY_ALL),
+    "a starred module-level set": ('_NAMES = {"charge"}\n__all__ = [*_NAMES]\n', CHARGE_BY_ALL),
+    "a starred sorted name beside literals": (
+        '_LAZY = {"charge": "logic"}\n__all__ = [*sorted(_LAZY), "ping"]\n',
+        CHARGE_BY_ALL,
+    ),
+    "sorted over a starred name in a tuple": (
+        '_LAZY = {"charge": "logic"}\n__all__ = sorted((*_LAZY, "ping"))\n',
+        CHARGE_BY_ALL,
+    ),
+    "a name assigned twice": ('_LAZY = {"charge": "logic"}\n_LAZY = {}\n__all__ = sorted(_LAZY)\n', ALL_UNKNOWN),
+    "a name assigned under a condition": (
+        'if ping:\n    _LAZY = {"charge": "logic"}\n__all__ = sorted(_LAZY)\n',
+        ALL_UNKNOWN,
+    ),
+    "a name holding no strings": ("_LAZY = {1: 2}\n__all__ = sorted(_LAZY)\n", ALL_UNKNOWN),
+    "a call of anything else": ('_LAZY = {"charge": "logic"}\n__all__ = names(_LAZY)\n', ALL_UNKNOWN),
 }
 
 

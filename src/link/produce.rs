@@ -1709,7 +1709,7 @@ impl Producers<'_> {
                     k.zero
                 };
                 let mut attrs = vec![(k.decorated, qualname), (k.called, called)];
-                if matches!(dec, V::Call(_, true)) {
+                if matches!(dec, V::Call(_, true, _)) {
                     attrs.push((k.frozen, k.one));
                 }
                 let use_ = k.use_decorator;

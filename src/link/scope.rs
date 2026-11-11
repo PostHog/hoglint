@@ -477,7 +477,7 @@ impl Core {
                     local: false,
                 })
             }
-            V::Sub(inner, _) | V::Call(inner, _) => {
+            V::Sub(inner, _) | V::Call(inner, _, _) => {
                 self.value_lookup(names, scope, inner, at, line)
             }
             V::Str(_, Some(parsed)) => self.value_lookup(names, scope, parsed, at, line),

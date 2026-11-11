@@ -9,12 +9,13 @@
 //! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
 //! follows.
 //!
-//! `__all__` is read in every form whose names a reader can list: `__all__ = [...]`, annotated
-//! or not, `+=` with a literal, and a sum of literals. One built by code, changed by a method or
-//! set under a condition cannot be read: what the module hands out is then unknown.
+//! `__all__` is read in every form whose names a reader can list (`ListedNames`): `__all__ = [...]`,
+//! annotated or not, `+=` with a literal, a sum of literals, and copies of a module-level literal
+//! such as `sorted(_LAZY)`. One built by other code, changed by a method or set under a condition
+//! cannot be read: what the module hands out is then unknown.
 
-use super::facts::{Op, V};
-use super::intern::{EMPTY, Sid};
+use super::facts::{Assign, Op, V};
+use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{Core, absolute_import};
 use super::scope::Scope;
 use rustc_hash::FxHashSet;
@@ -47,23 +48,72 @@ pub struct DunderAll {
     pub unread: Option<(u32, u32)>,
 }
 
-/// The strings a list or tuple literal holds, or a sum of such literals; None for any other
-/// value, and for a literal with an item that is no string.
-fn listed_names(value: Option<&V>) -> Option<FxHashSet<Sid>> {
-    match value? {
-        V::Bin(false, left, right) => {
-            let mut names = listed_names(Some(left))?;
-            names.extend(listed_names(Some(right))?);
-            Some(names)
+/// The names a value lists, read from one module's assigns: a list, tuple or set of string
+/// literals, items starred from a readable value, a sum of such values, `sorted`, `list`, `tuple`
+/// or `set` of one readable value, and a module-level name assigned once, unconditionally, to a
+/// literal of strings (a dict gives its keys). None for anything else.
+struct ListedNames<'a> {
+    it: &'a Interner,
+    assigns: &'a [Assign],
+}
+
+impl ListedNames<'_> {
+    const COPIES: [&'static str; 4] = ["sorted", "list", "tuple", "set"];
+
+    /// The strings a module-level name holds, when one unconditional assignment binds it to a
+    /// literal list, tuple, set or dict of string literals.
+    fn literal(&self, name: Sid) -> Option<FxHashSet<Sid>> {
+        let mut rows = self.assigns.iter().filter(|row| {
+            row.s == -1
+                && row
+                    .targets
+                    .iter()
+                    .any(|target| matches!(target, V::Chain(bound) if *bound == name))
+        });
+        let row = rows.next()?;
+        if rows.next().is_some() || row.f != 0 || !matches!(row.op, Op::Assign | Op::Annotated) {
+            return None;
         }
-        V::List(items) | V::Tuple(items) => items
-            .iter()
-            .map(|item| match item {
-                V::Str(text, None) => Some(*text),
+        let text = |item: Option<&V>| match item {
+            Some(V::Str(text, None)) => Some(*text),
+            _ => None,
+        };
+        match row.value.as_ref()? {
+            V::Dict(items) => items.iter().map(|(key, _)| text(key.as_ref())).collect(),
+            V::List(items) | V::Tuple(items) | V::Set(items) => {
+                items.iter().map(|item| text(Some(item))).collect()
+            }
+            _ => None,
+        }
+    }
+
+    fn of(&self, value: &V) -> Option<FxHashSet<Sid>> {
+        match value {
+            V::Chain(name) if !self.it.s(*name).contains('.') => self.literal(*name),
+            V::Bin(false, left, right) => {
+                let mut names = self.of(left)?;
+                names.extend(self.of(right)?);
+                Some(names)
+            }
+            V::Call(callee, _, Some(sole)) => match &**callee {
+                V::Chain(name) if Self::COPIES.contains(&self.it.s(*name)) => self.of(sole),
                 _ => None,
-            })
-            .collect(),
-        _ => None,
+            },
+            V::List(items) | V::Tuple(items) | V::Set(items) => {
+                let mut names = FxHashSet::default();
+                for item in items {
+                    match item {
+                        V::Star(inner) => names.extend(self.of(inner)?),
+                        V::Str(text, None) => {
+                            names.insert(*text);
+                        }
+                        _ => return None,
+                    }
+                }
+                Some(names)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -80,6 +130,10 @@ fn dunder_all(core: &mut Core, file: usize) -> DunderAll {
     let all = core.it.intern("__all__");
     let mut names: Option<FxHashSet<Sid>> = None;
     let mut unread: Vec<(u32, u32)> = Vec::new();
+    let reader = ListedNames {
+        it: &core.it,
+        assigns: &facts.files[file].assigns,
+    };
     for row in &facts.files[file].assigns {
         let listed = row
             .targets
@@ -91,7 +145,7 @@ fn dunder_all(core: &mut Core, file: usize) -> DunderAll {
         if row.op == Op::Annotated && row.value.is_none() {
             continue;
         }
-        let found = listed_names(row.value.as_ref());
+        let found = row.value.as_ref().and_then(|value| reader.of(value));
         match (found, row.op) {
             (Some(found), Op::Assign | Op::Annotated) if row.f == 0 => names = Some(found),
             (Some(found), Op::AddAssign) if row.f == 0 && names.is_some() => {

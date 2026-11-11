@@ -62,7 +62,11 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
             Some(keywords) => frozen_keyword(&keywords)?,
             None => false,
         };
-        return Ok(V::Call(Box::new(py_value(it, &callee)?), frozen));
+        let sole = match get("args")? {
+            Some(args) if args.len()? == 1 => Some(Box::new(py_value(it, &args.get_item(0)?)?)),
+            _ => None,
+        };
+        return Ok(V::Call(Box::new(py_value(it, &callee)?), frozen, sole));
     }
     if let (Some(a), Some(v)) = (get("a")?, get("v")?) {
         let attr: String = a.extract().unwrap_or_default();

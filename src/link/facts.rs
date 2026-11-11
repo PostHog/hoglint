@@ -17,8 +17,9 @@ pub enum V {
     /// `{"s": text}`, with `sa` (the parsed text of a string annotation) when the key is there.
     Str(Sid, Option<Box<V>>),
     /// `{"call": callee, ...}`, also the over-budget form `{"call": callee, "o": "big"}`; true
-    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example).
-    Call(Box<V>, bool),
+    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example); the one
+    /// positional argument, when the call has exactly one (`sorted(_LAZY)`).
+    Call(Box<V>, bool, Option<Box<V>>),
     Attr(Box<V>, Sid),
     Sub(Box<V>, Box<V>),
     Tuple(Vec<V>),
@@ -401,7 +402,15 @@ pub fn value(it: &mut Interner, json: &J) -> V {
                 return V::Str(it.intern(text(s)), parsed);
             }
             if let Some(callee) = map.get("call") {
-                return V::Call(Box::new(value(it, callee)), frozen_keyword(map.get("kw")));
+                let sole = match map.get("args") {
+                    Some(J::Array(args)) if args.len() == 1 => Some(Box::new(value(it, &args[0]))),
+                    _ => None,
+                };
+                return V::Call(
+                    Box::new(value(it, callee)),
+                    frozen_keyword(map.get("kw")),
+                    sole,
+                );
             }
             if let (Some(a), Some(v)) = (map.get("a"), map.get("v")) {
                 let attr = it.intern(text(a));

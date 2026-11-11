@@ -13,9 +13,10 @@ names) under the same clauses; a source that cannot be read hands out `*`, which
 This is not the export primitive's notion of what a module exports (every module-level import).
 A surface also imports the code it calls, and that code is not part of its contract.
 
-`__all__` is read in every form whose names a reader can list: `__all__ = [...]`, annotated or
-not, `+=` with a literal, and a sum of literals. One built by code, changed by a method or set
-under a condition cannot be read: what the module hands out is then unknown.
+`__all__` is read in every form whose names a reader can list (`ListedNames`): `__all__ = [...]`,
+annotated or not, `+=` with a literal, a sum of literals, and copies of a module-level literal
+such as `sorted(_LAZY)`. One built by other code, changed by a method or set under a condition
+cannot be read: what the module hands out is then unknown.
 """
 
 from __future__ import annotations
@@ -54,33 +55,80 @@ class DunderAll:
     unread: tuple[int, int] | None
 
 
-def listed_names(value: object) -> frozenset[str] | None:
-    """The strings a list or tuple literal holds, or a sum of such literals; None for any other
-    value, and for a literal with an item that is no string."""
-    if not isinstance(value, dict):
-        return None
-    if "bin" in value and value["bin"] != "|":
-        left, right = listed_names(value["l"]), listed_names(value["r"])
-        return left | right if left is not None and right is not None else None
-    items = value.get("list", value.get("tuple"))
-    if not isinstance(items, list):
-        return None
-    names = [str_literal(item) for item in items]
-    if any(name is None for name in names):
-        return None
-    return frozenset(name for name in names if name is not None)
+class ListedNames:
+    """The names a value lists, read from one module's record: a list, tuple or set of string
+    literals, items starred from a readable value, a sum of such values, `sorted`, `list`,
+    `tuple` or `set` of one readable value, and a module-level name assigned once,
+    unconditionally, to a literal of strings (a dict gives its keys). None for anything else."""
+
+    COPIES = frozenset({"sorted", "list", "tuple", "set"})
+
+    def __init__(self, record: dict) -> None:
+        self.record = record
+
+    def literal(self, name: str) -> frozenset[str] | None:
+        """The strings a module-level name holds, when one unconditional assignment binds it to a
+        literal list, tuple, set or dict of string literals."""
+        rows = [row for row in self.record.get("assigns", ()) if row["s"] == -1 and name in row["t"]]
+        if len(rows) != 1 or rows[0].get("f", 0) != 0 or rows[0]["op"] not in ("=", ":"):
+            return None
+        value = rows[0].get("v")
+        if not isinstance(value, dict):
+            return None
+        if "dict" in value:
+            items = [key for key, _ in value["dict"]]
+        else:
+            items = value.get("list", value.get("tuple", value.get("set")))
+        if not isinstance(items, list):
+            return None
+        names = [str_literal(item) for item in items]
+        if any(found is None for found in names):
+            return None
+        return frozenset(found for found in names if found is not None)
+
+    def of(self, value: object) -> frozenset[str] | None:
+        if isinstance(value, str):
+            return self.literal(value) if "." not in value else None
+        if not isinstance(value, dict):
+            return None
+        if "bin" in value and value["bin"] != "|":
+            left, right = self.of(value["l"]), self.of(value["r"])
+            return left | right if left is not None and right is not None else None
+        if "call" in value:
+            args = value.get("args", [])
+            callee = value["call"]
+            if not isinstance(callee, str) or callee not in self.COPIES or len(args) != 1:
+                return None
+            return self.of(args[0])
+        items = value.get("list", value.get("tuple", value.get("set")))
+        if not isinstance(items, list):
+            return None
+        out: set[str] = set()
+        for item in items:
+            if isinstance(item, dict) and "star" in item:
+                found = self.of(item["star"])
+                if found is None:
+                    return None
+                out |= found
+                continue
+            text = str_literal(item)
+            if text is None:
+                return None
+            out.add(text)
+        return frozenset(out)
 
 
 def read_dunder_all(record: dict) -> DunderAll:
     """A module body's `__all__`, statement by statement in source order."""
     names: frozenset[str] | None = None
     unread: list[tuple[int, int]] = []
+    reader = ListedNames(record)
     for row in record.get("assigns", ()):
         if row["s"] != -1 or "__all__" not in row["t"]:
             continue
         if row["op"] == ":" and "v" not in row:
             continue
-        listed = listed_names(row.get("v"))
+        listed = reader.of(row.get("v"))
         if row.get("f", 0) != 0 or listed is None:
             unread.append((row["l"], row["c"]))
         elif row["op"] in ("=", ":"):
