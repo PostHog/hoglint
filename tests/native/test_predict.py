@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import gc
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,11 +13,12 @@ import pytest
 
 from hoglint.native.config import TRACE_ENV
 from hoglint.native.graph import NativeGraph
-from hoglint.native.normal import edge_row
+from hoglint.native.normal import FIELDS, edge_row
 from hoglint.native.parity import Dump, finding_row
 from hoglint.native.predict import predict, write_trace_dump
 
 from native.require import native_module
+from rules.test_compare import git_in, write_files
 
 CONFIG = """
 schema = 1
@@ -164,12 +164,14 @@ CASES = [
 ]
 
 
+# Where an edge row holds its site's path; a witness is an edge row too.
+PATH = FIELDS.index("path")
+
+
 def write_repo(root: Path, files: dict[str, str]) -> None:
-    for path, text in files.items():
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text(text)
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    write_files(root, files)
+    git_in(root, "init", "-q")
+    git_in(root, "add", ".")
 
 
 def jsonl(path: Path, rows: list) -> None:
@@ -202,11 +204,11 @@ def traced_dump(tmp_path: Path, name: str, files: dict[str, str], monkeypatch: p
 
 def rows_of(out: Path, path: str) -> list[str]:
     """The edges sited in a file and the findings whose witnesses sit there."""
-    edges = [line for line in (out / "edges.jsonl").read_text().splitlines() if json.loads(line)[1] == path]
+    edges = [line for line in (out / "edges.jsonl").read_text().splitlines() if json.loads(line)[PATH] == path]
     findings = [
         line
         for line in (out / "findings.jsonl").read_text().splitlines()
-        if any(witness[1] == path for witness in json.loads(line)[4])
+        if any(witness[PATH] == path for witness in json.loads(line)[4])
     ]
     return sorted(edges + findings)
 

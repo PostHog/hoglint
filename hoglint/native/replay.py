@@ -65,6 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.cli import Commands, Run, Snapshots
+from hoglint.core.modules import longest_prefix
 from hoglint.core.memo import (
     DROP_ENV as PACK_MEMO_DROP,
     MODE_ENV as PACK_MEMO_SWITCH,
@@ -76,6 +77,7 @@ from hoglint.ledger.cache import (
     OFF_SWITCH as ANSWER_CACHE_SWITCH,
     AnswerStore,
 )
+from hoglint.ledger.listing import git, records
 from hoglint.ledger.scan import SUMMARY_SECTIONS, ScanSummary
 from hoglint.model import Finding, Graph
 from hoglint.native.config import TRACE_ENV
@@ -93,12 +95,7 @@ from hoglint.native.parity import (
     row_texts,
     stored_summary,
 )
-from hoglint.native.predict import (
-    KIND_NAMES,
-    PairPrediction,
-    Prediction as Predicted,
-    write_trace_dump,
-)
+from hoglint.native.predict import PairPrediction, Prediction, write_trace_dump
 from hoglint.native.source import ENGINES, NativeGraphSource, batch_mode
 from hoglint.rules.base import IncompleteItem
 
@@ -434,7 +431,7 @@ class Verdict:
         return Verdict(label, (), (), f"FAILED RUN: {error}")
 
     @staticmethod
-    def predicted(prediction: Prediction | None) -> Verdict:
+    def predicted(prediction: PredictionScore | None) -> Verdict:
         """A certificate's verdict: its prediction must hold every item of the truth set. A mode
         that made no prediction certified nothing."""
         if prediction is None:
@@ -504,10 +501,7 @@ class DumpIndex:
 
     def file_of(self, name: str, modules: dict[str, str]) -> str:
         """The file of a dotted name: its longest module prefix's."""
-        module = name
-        while module and module not in modules:
-            module = module.rpartition(".")[0]
-        return modules.get(module, "")
+        return modules.get(longest_prefix(name, modules.__contains__) or "", "")
 
     def symbols(self, modules: dict[str, str]) -> FileDigests:
         out = FileDigests()
@@ -593,7 +587,7 @@ class TruthSet:
 
 
 @dataclass(frozen=True)
-class Prediction:
+class PredictionScore:
     """A predicted set of files against the truth: an item is missed when no file it names is
     predicted; `site_misses` counts the files of the truth set the prediction left out."""
 
@@ -618,11 +612,9 @@ class Prediction:
         return text + (f" missed {missed}" if missed else "")
 
     @staticmethod
-    def covers(item: TruthItem, predicted: set[str] | Predicted) -> bool:
+    def covers(item: TruthItem, predicted: Prediction) -> bool:
         """A file the item names is predicted; a label row's module is relabelled; a finding or
         an incomplete item belongs to a folded rule that reruns."""
-        if isinstance(predicted, set):
-            return bool(item.files & predicted)
         if item.files & predicted.files:
             return True
         if item.table == "labels":
@@ -630,26 +622,18 @@ class Prediction:
         return bool(item.rule) and item.rule in predicted.rerun
 
     @staticmethod
-    def of(truth: TruthSet, predicted: set[str] | Predicted) -> Prediction:
-        missed = tuple(item for item in truth.items if not Prediction.covers(item, predicted))
-        by_key = tuple(item for item in truth.key_items if not Prediction.covers(item, predicted))
-        files = predicted if isinstance(predicted, set) else set(predicted.files)
-        return Prediction(frozenset(truth.files), frozenset(files), missed, by_key)
+    def of(truth: TruthSet, predicted: Prediction) -> PredictionScore:
+        missed = tuple(item for item in truth.items if not PredictionScore.covers(item, predicted))
+        by_key = tuple(item for item in truth.key_items if not PredictionScore.covers(item, predicted))
+        return PredictionScore(frozenset(truth.files), predicted.files, missed, by_key)
 
 
 # ── modes ─────────────────────────────────────────────────────────
 
 
-class Git:
-    def __init__(self, repo: Path) -> None:
-        self.repo = repo
-
-    def run(self, *args: str) -> str:
-        return subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, text=True).stdout
-
-    def changed(self, parent: str, child: str) -> set[str]:
-        out = self.run("diff-tree", "-r", "-z", "--no-renames", "--name-only", parent, child)
-        return {path for path in out.split("\0") if path}
+def changed_paths(repo: Path, pair: Pair) -> set[str]:
+    """The paths the commit from the pair's parent tree to its child tree changed."""
+    return set(records(git(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only", pair.parent, pair.child)))
 
 
 class Mode:
@@ -664,9 +648,9 @@ class Mode:
     def env(self) -> dict[str, str]:
         return {}
 
-    def predict(self, git: Git, pair: Pair, dumps: tuple[Path, Path]) -> set[str] | Predicted | None:
-        """The files the commit changed."""
-        return git.changed(pair.parent, pair.child)
+    def predict(self, changed: set[str], dumps: tuple[Path, Path]) -> Prediction:
+        """The files the commit changed, with no label module relabelled and no folded rule rerun."""
+        return Prediction(frozenset(changed), frozenset(), frozenset())
 
     def gaps(self, truth: TruthSet) -> str:
         """What the prediction misses with parts of it left out; nothing in today's mode."""
@@ -719,8 +703,8 @@ class Traces(Mode):
     def env(self) -> dict[str, str]:
         return {TRACE_ENV: "1"}
 
-    def predict(self, git: Git, pair: Pair, dumps: tuple[Path, Path]) -> Predicted:
-        self.pair = PairPrediction(dumps[0], dumps[1], git.changed(pair.parent, pair.child))
+    def predict(self, changed: set[str], dumps: tuple[Path, Path]) -> Prediction:
+        self.pair = PairPrediction(dumps[0], dumps[1], changed)
         return self.pair.predict()
 
     def gaps(self, truth: TruthSet) -> str:
@@ -728,8 +712,8 @@ class Traces(Mode):
         if self.pair is None:
             return ""
         found = []
-        for kind in KIND_NAMES:
-            missed = Prediction.of(truth, self.pair.predict([kind])).missed
+        for kind in self.pair.parent.kinds:
+            missed = PredictionScore.of(truth, self.pair.predict([kind])).missed
             if missed:
                 found.append(f"{kind}:{len({item.home for item in missed})}")
         return "gaps " + (" ".join(found) or "none")
@@ -744,7 +728,7 @@ class PackMemoMiss(Mode):
     name = "pack-memo-miss"
 
     def env(self) -> dict[str, str]:
-        return {"HOGLINT_PACK_MEMO_DROP": "*"}
+        return {PACK_MEMO_DROP: "*"}
 
 
 MODES: dict[str, type[Mode]] = {mode.name: mode for mode in (Mode, PlantedMiss, Traces, PackMemoMiss)}
@@ -1095,7 +1079,7 @@ class Checker:
 class PairResult:
     pair: Pair
     verdicts: list[Verdict] = field(default_factory=list)
-    prediction: Prediction | None = None
+    prediction: PredictionScore | None = None
     cold: CheckOutcome | None = None
     warm: CheckOutcome | None = None
     notes: list[str] = field(default_factory=list)
@@ -1139,7 +1123,6 @@ class Replay:
         self.damages = damages
         self.work = checker.work
         self.shared_facts = self.work / "facts"
-        self.git = Git(checker.repo)
         self.rng = random.Random(0)
 
     def state(self, name: str, facts: str = "shared") -> State:
@@ -1164,9 +1147,8 @@ class Replay:
         )
         truth = TruthSet(cold_parent.out, cold_child.out).compute()
         mode = self.checker.mode
-        predicted = mode.predict(self.git, pair, (cold_parent.out, cold_child.out))
-        if predicted is not None:
-            result.prediction = Prediction.of(truth, predicted)
+        predicted = mode.predict(changed_paths(self.checker.repo, pair), (cold_parent.out, cold_child.out))
+        result.prediction = PredictionScore.of(truth, predicted)
         gaps = mode.gaps(truth)
         if gaps:
             result.notes.append(gaps)

@@ -309,6 +309,7 @@ class EdgeInventory(EdgeRule):
     MODE = "inventory-classify"
     MODE_KEY = "classify"
     NATIVE_MODE = "judge"
+    FOLDS = False
     CONFIRM = "whole"
     READS = frozenset({"kinds", "contexts", "from", "select", "classify", "remedy", "on_unresolved"})
 

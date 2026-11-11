@@ -47,28 +47,14 @@ from pathlib import Path
 from typing import Any
 
 from hoglint.config.loader import PACK_PREFIX
+from hoglint.core.modules import longest_prefix
 from hoglint.ledger.envelope import PolicyFiles
 from hoglint.ledger.inputs import InputPatterns, RunInputs
+from hoglint.native.normal import FIELDS
+from hoglint.native.parity import read_rows
 from hoglint.rules.engine import primitive_of
 
 TRACES = "traces.jsonl"
-# The read kinds in the order of their bits (`trace::KIND_NAMES` in Rust).
-KIND_NAMES = (
-    "found",
-    "missing",
-    "stars",
-    "lazy",
-    "names",
-    "module",
-    "head",
-    "class",
-    "def",
-    "alias",
-    "lines",
-    "target",
-    "spelled",
-    "label",
-)
 TRACE_CONFIG = "trace-config.json"
 # Interface entries that are no Python name (`trace::STARS` and the others in Rust).
 STARS, LAZY, NAMES, LINES = "<stars>", "<lazy>", "<names>", "<lines>"
@@ -76,9 +62,14 @@ STARS, LAZY, NAMES, LINES = "<stars>", "<lazy>", "<names>", "<lines>"
 NAME_KINDS = frozenset({"found", "missing", "class", "def", "alias", "target", "spelled"})
 # Read kinds that name a symbol a rule row or a pack reads the facts of.
 SYMBOL_KINDS = frozenset({"target", "spelled"})
-# The native modes of rules that judge one edge at a time; any other mode folds many edges.
-ROW_MODE = "judge"
+# Views whose rows group many edges, so a rule over one folds them whatever its primitive.
 FOLDING_VIEWS = frozenset({"packages"})
+# Where an edge row holds each field (`normal.FIELDS`).
+KIND, PATH, MODULE, SURFACE, TARGETS, RESOLUTION, ATTRS = (
+    FIELDS.index(name) for name in ("kind", "path", "module", "surface", "targets", "resolution", "attrs")
+)
+# The fields of an edge's place, which move with every edit above it.
+PLACE_FIELDS = frozenset({"path", "line", "column"})
 
 
 def module_ancestors(module: str) -> list[str]:
@@ -102,8 +93,7 @@ class TraceConfig:
     def of(config: Any) -> TraceConfig:
         folded = []
         for spec in config.rules.values():
-            mode = primitive_of(spec).NATIVE_MODE
-            if mode != ROW_MODE or spec.view in FOLDING_VIEWS:
+            if primitive_of(spec).FOLDS or spec.view in FOLDING_VIEWS:
                 folded.append(spec.id)
         configs = [label for label in config.files if not label.startswith(PACK_PREFIX)]
         policy = tuple(sorted({*configs, *PolicyFiles(config).paths()}))
@@ -291,17 +281,13 @@ class Predictor:
 # ── step 2 from two dumps of tables ──
 
 
-def jsonl(path: Path) -> Iterator[Any]:
-    with path.open() as handle:
-        for line in handle:
-            yield json.loads(line)
-
-
 def longest_module(name: str, modules: dict[str, str]) -> str:
-    module = name
-    while module and module not in modules:
-        module = module.rpartition(".")[0]
-    return module
+    return longest_prefix(name, modules.__contains__) or ""
+
+
+def without_place(row: list[Any]) -> list[Any]:
+    """An edge row without the fields of its place."""
+    return [value for field, value in zip(FIELDS, row, strict=True) if field not in PLACE_FIELDS]
 
 
 def symbol_key(name: str, modules: dict[str, str]) -> tuple[str, str]:
@@ -325,23 +311,24 @@ class TreeTables:
 
     @staticmethod
     def read(dump: Path, files: set[str], label_modules: set[str] | None) -> TreeTables:
-        modules = dict(jsonl(dump / "modules.jsonl"))
+        modules = dict(read_rows(dump / "modules.jsonl"))
         out = TreeTables(modules)
-        for name, facts in jsonl(dump / "symbols.jsonl"):
+        for name, facts in read_rows(dump / "symbols.jsonl"):
             module = longest_module(name, modules)
             if modules.get(module) in files:
                 out.symbols[name] = facts
-        for row in jsonl(dump / "edges.jsonl"):
-            path = row[1]
+        for row in read_rows(dump / "edges.jsonl"):
+            path = row[PATH]
             if path not in files:
                 continue
-            kind, attrs = row[0], dict(map(tuple, row[15]))
+            kind, attrs = row[KIND], dict(map(tuple, row[ATTRS]))
             # An edge's place moves with every edit above it; what folded rules read does not.
-            out.edges[path].append(json.dumps([row[0], *row[2:4], *row[6:]]))
+            out.edges[path].append(json.dumps(without_place(row)))
             owner = attrs.get("class") if kind == "inherit" else attrs.get("decorated") if kind == "decorate" else None
             if owner:
-                out.classes.setdefault(f"{row[2]}.{owner}", []).append([kind, row[6], row[7], row[8]])
-        for module, _, rows in jsonl(dump / "labels.jsonl"):
+                found = [kind, row[SURFACE], row[TARGETS], row[RESOLUTION]]
+                out.classes.setdefault(f"{row[MODULE]}.{owner}", []).append(found)
+        for module, _, rows in read_rows(dump / "labels.jsonl"):
             if label_modules is None or module in label_modules:
                 out.labels[module] = rows
         return out
@@ -350,14 +337,14 @@ class TreeTables:
 def inherit_children(dump: Path) -> dict[str, set[str]]:
     """Base -> the classes that name it in an inherit edge, over a whole tree."""
     children: dict[str, set[str]] = defaultdict(set)
-    for row in jsonl(dump / "edges.jsonl"):
-        if row[0] != "inherit":
+    for row in read_rows(dump / "edges.jsonl"):
+        if row[KIND] != "inherit":
             continue
-        owner = dict(map(tuple, row[15])).get("class")
+        owner = dict(map(tuple, row[ATTRS])).get("class")
         if not owner:
             continue
-        for base in row[7] or [f"?{row[6]}"]:
-            children[base].add(f"{row[2]}.{owner}")
+        for base in row[TARGETS] or [f"?{row[SURFACE]}"]:
+            children[base].add(f"{row[MODULE]}.{owner}")
     return children
 
 
@@ -385,11 +372,9 @@ class Moved:
 @dataclass(frozen=True)
 class Prediction:
     """A commit's prediction: the files to recompute, the label modules recomputed (None for
-    every module), the folded rules that rerun, and each step's share."""
+    every module), and the folded rules that rerun."""
 
     files: frozenset[str]
-    link: frozenset[str]
-    readers: frozenset[str]
     labels: frozenset[str] | None
     rerun: frozenset[str]
 
@@ -469,17 +454,17 @@ class PairPrediction:
 
     def predict(self, ignored_kinds: Iterable[str] = ()) -> Prediction:
         config = self.config
-        predictor = Predictor(self.parent, self.changes, self.parent.mask(ignored_kinds))
-        link = predictor.link_files()
         if any(path in set(config.policy) for path in self.changed):
             every = frozenset(self.parent.traces) | frozenset(self.child.modules)
-            return Prediction(every, every, frozenset(), None, frozenset(config.folded))
+            return Prediction(every, None, frozenset(config.folded))
+        predictor = Predictor(self.parent, self.changes, self.parent.mask(ignored_kinds))
+        link = predictor.link_files()
         moved = self.moved(link)
         readers = predictor.readers(moved.symbols, moved.labels)
         folded_moved = moved.edges or bool(moved.labels) or bool(moved.symbols) or self.side_changed
         rerun = frozenset(config.folded) if folded_moved else frozenset()
         labels = frozenset(self.label_modules) if self.label_modules is not None else None
-        return Prediction(frozenset(link | readers), frozenset(link), frozenset(readers - link), labels, rerun)
+        return Prediction(frozenset(link | readers), labels, rerun)
 
 
 def predict(parent_dump: Path, child_dump: Path, changed: set[str], ignored_kinds: Iterable[str] = ()) -> Prediction:

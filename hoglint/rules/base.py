@@ -85,6 +85,9 @@ class RuleType:
     # How the native evaluator runs the rule: "judge" (per edge), "entities", "reach", "cycle",
     # "export" or "coverage".
     NATIVE_MODE: ClassVar[str]
+    # Whether one row of the rule reads many edges (a fold), so it runs again when any of them
+    # moves. A type that does not say is taken to fold, which can only cost a rerun.
+    FOLDS: ClassVar[bool] = True
     # Whether its selectors and identity read entities (a module, a symbol or a path) rather than
     # an edge's two ends.
     ENTITIES: ClassVar[bool] = False

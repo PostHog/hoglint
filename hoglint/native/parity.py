@@ -283,8 +283,14 @@ def row_texts(path: Path) -> Iterator[str]:
             yield line.removesuffix("\n")
 
 
+def read_rows(path: Path) -> Iterator[Row]:
+    """The rows of a dump file, one at a time."""
+    for text in row_texts(path):
+        yield json.loads(text)
+
+
 def read_lines(path: Path) -> list[Row]:
-    return [json.loads(text) for text in row_texts(path)]
+    return list(read_rows(path))
 
 
 def compare_dumps(left: Path, right: Path) -> list[RowDiff]:

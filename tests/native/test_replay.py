@@ -18,7 +18,7 @@ from hoglint.native.replay import (
     Pair,
     PairResult,
     PairsReport,
-    Prediction,
+    PredictionScore,
     Replay,
     TruthItem,
     Verdict,
@@ -151,9 +151,9 @@ def test_the_certificate_predicts_from_the_parents_traces_and_reports_each_gap(
     assert [note for note in result.notes if note.startswith("gaps ")] == ["gaps none"]
 
 
-def missed_prediction() -> Prediction:
+def missed_prediction() -> PredictionScore:
     item = TruthItem("edges", "imports", "core/t.py", frozenset({"core/t.py"}))
-    return Prediction(frozenset({"core/t.py"}), frozenset(), (item,), (item,))
+    return PredictionScore(frozenset({"core/t.py"}), frozenset(), (item,), (item,))
 
 
 def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pytest.CaptureFixture[str]) -> None:
@@ -164,7 +164,7 @@ def test_a_certificate_whose_prediction_missed_a_file_fails_the_pair(capsys: pyt
     report.add(result)
     assert report.close() is False
     assert "p  MISSED  prediction: MISSED (1 files" in capsys.readouterr().out
-    held = Prediction(frozenset({"core/t.py"}), frozenset({"core/t.py"}), (), ())
+    held = PredictionScore(frozenset({"core/t.py"}), frozenset({"core/t.py"}), (), ())
     assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(held)]).status() == "EQUAL"
     assert PairResult(Pair("p", "a", "b"), [Verdict.predicted(None)]).status() == "NO PREDICTION"
 
