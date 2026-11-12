@@ -636,6 +636,17 @@ class DeclarationProducer(Producer):
             return ()
         return ((ARGUMENT_OF, self.lookup_at(context, lookup, argument_of).surface),)
 
+    def markers(
+        self, context: BuildContext, expanded: bool, subscripted: bool, lookup: SlotLookup, argument_of: str
+    ) -> tuple[tuple[str, str], ...]:
+        """The attrs that tell a slot's rows of one name apart: an expanded alias, a generic
+        given arguments, and the generic it is an argument of."""
+        return (
+            *((EXPANDED,) if expanded else ()),
+            *((SUBSCRIPTED,) if subscripted else ()),
+            *self.argument_marker(context, lookup, argument_of),
+        )
+
     def alias_of(
         self, context: BuildContext, mention: Mention, found: Lookup
     ) -> tuple[tuple[str, str], object, SlotLookup] | None:
@@ -729,11 +740,7 @@ class DeclarationProducer(Producer):
             expansion = self.expansion(context, *alias) if alias is not None else None
             if contract or found.hit is not None or found.surface != f"builtins.{head}":
                 resolved = context.classifier.classify_lookup(found)
-                marker = (
-                    *((EXPANDED,) if expansion else ()),
-                    *((SUBSCRIPTED,) if subscripted else ()),
-                    *self.argument_marker(context, lookup, argument_of),
-                )
+                marker = self.markers(context, bool(expansion), subscripted, lookup, argument_of)
                 graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned, *marker))
             if expansion is None:
                 continue
@@ -745,11 +752,8 @@ class DeclarationProducer(Producer):
                         written.add((item.value, position, TOO_DEEP))
                         graph.edges.append(rows.edge(item.value, UNRESOLVED, slot, position, *TOO_DEEP))
                     continue
-                marker = (
-                    *((EXPANDED,) if self.expanded_in(context, expansion, item, inner) else ()),
-                    *((SUBSCRIPTED,) if item.subscripted else ()),
-                    *self.argument_marker(context, item.lookup, item.argument_of),
-                )
+                expanded = self.expanded_in(context, expansion, item, inner)
+                marker = self.markers(context, expanded, item.subscripted, item.lookup, item.argument_of)
                 if (inner.surface, position, marker) in written:
                     continue
                 written.add((inner.surface, position, marker))

@@ -590,10 +590,10 @@ class SchemaBuilder:
                 as_tuple(table.get("allow")),
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
-                self.check_bool(f"{key}.signatures", table.get("signatures", False)),
-                self.parse(f"{key}.allow_where", table.get("allow_where"), self.entity_catalog()),
-                self.parse(f"{key}.walk_where", table.get("walk_where"), self.entity_catalog()),
-                self.source(key),
+                signatures=self.check_bool(f"{key}.signatures", table.get("signatures", False)),
+                allow_where=self.parse(f"{key}.allow_where", table.get("allow_where"), self.entity_catalog()),
+                walk_where=self.parse(f"{key}.walk_where", table.get("walk_where"), self.entity_catalog()),
+                source=self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):
                 if shape not in known:
@@ -715,9 +715,9 @@ class SchemaBuilder:
             if isinstance(raw_symbols, dict):
                 self.check_keys(f"{key}.symbols", raw_symbols, frozenset({"decorated_by", "subclass_of", "names"}))
                 symbols = SymbolMatch(
-                    as_tuple(raw_symbols.get("decorated_by")),
-                    as_tuple(raw_symbols.get("subclass_of")),
-                    as_tuple(raw_symbols.get("names")),
+                    decorated_by=as_tuple(raw_symbols.get("decorated_by")),
+                    subclass_of=as_tuple(raw_symbols.get("subclass_of")),
+                    names=as_tuple(raw_symbols.get("names")),
                 )
             if not match and symbols is None:
                 self.fail(key, "an assignment needs `match` or `symbols`")

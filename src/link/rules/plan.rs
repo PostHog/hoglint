@@ -64,7 +64,7 @@ pub enum SetValue {
     Other(String, String),
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct SymbolMatchPlan {
     pub decorated_by: Vec<String>,
     pub subclass_of: Vec<String>,

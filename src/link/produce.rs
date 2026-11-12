@@ -661,9 +661,16 @@ pub struct Expanded {
     argument_of: Sid,
 }
 
-/// A name in a type expression: whether it is the whole annotation, whether it is given
-/// arguments, and the generic it is an argument of, as written (EMPTY for none).
-type Named = (Sid, bool, bool, Sid);
+/// A name in a type expression.
+struct Named {
+    name: Sid,
+    /// Whether it is the whole annotation.
+    whole: bool,
+    /// Whether it is given arguments (`dict[str, str]`, not `dict`).
+    subscripted: bool,
+    /// The generic it is an argument of, as written (EMPTY for none).
+    argument_of: Sid,
+}
 
 /// A type alias, as (module, name).
 type AliasKey = (Sid, Sid);
@@ -954,13 +961,18 @@ impl Producers<'_> {
     fn mentions(&mut self, value: &V, whole: bool, argument_of: Sid, out: &mut Vec<Named>) {
         let k = &self.settings.k;
         match value {
-            V::Chain(chain) => out.push((*chain, whole, false, argument_of)),
+            V::Chain(chain) => out.push(Named {
+                name: *chain,
+                whole,
+                subscripted: false,
+                argument_of,
+            }),
             V::Str(_, Some(parsed)) => self.mentions(parsed, whole, argument_of, out),
             V::Sub(inner, index) => {
                 let start = out.len();
                 self.mentions(inner, whole, argument_of, out);
                 for found in &mut out[start..] {
-                    found.2 = true;
+                    found.subscripted = true;
                 }
                 let container = match &**inner {
                     V::Chain(chain) => *chain,
@@ -1003,6 +1015,27 @@ impl Producers<'_> {
         }
         let surface = self.lookup_at(at, argument_of).surface;
         extra.push((self.settings.k.argument_of, surface));
+    }
+
+    /// The attrs that tell a slot's rows of one name apart (`DeclarationProducer.markers`): an
+    /// expanded alias, a generic given arguments, and the generic it is an argument of.
+    fn markers(
+        &mut self,
+        expanded: bool,
+        subscripted: bool,
+        at: SlotLookup,
+        argument_of: Sid,
+    ) -> Vec<(Sid, Sid)> {
+        let k = &self.settings.k;
+        let mut out = Vec::new();
+        if expanded {
+            out.push((k.alias, k.expanded));
+        }
+        if subscripted {
+            out.push((k.subscripted, k.one));
+        }
+        self.argument_marker(at, argument_of, &mut out);
+        out
     }
 
     /// A dotted name, looked up where a slot's names are.
@@ -1175,20 +1208,20 @@ impl Producers<'_> {
     fn expand_into(&mut self, value: &V, at: SlotLookup, top: bool, expansion: &mut Expansion) {
         let mut names = Vec::new();
         self.mentions(value, true, EMPTY, &mut names);
-        for (name, whole, subscripted, argument_of) in names {
+        for named in names {
             let item = Expanded {
-                value: name,
-                top: top && whole,
+                value: named.name,
+                top: top && named.whole,
                 lookup: at,
                 too_deep: false,
-                subscripted,
-                argument_of,
+                subscripted: named.subscripted,
+                argument_of: named.argument_of,
             };
             expansion.write(item);
-            let found = self.lookup_at(at, name);
+            let found = self.lookup_at(at, named.name);
             let mention = Mention {
-                value: name,
-                whole,
+                value: named.name,
+                whole: named.whole,
                 lookup: at,
             };
             let Some(Alias {
@@ -1288,10 +1321,10 @@ impl Producers<'_> {
         names: Vec<Named>,
     ) {
         let mut written: FxHashSet<AliasRow> = FxHashSet::default();
-        for (value, whole, subscripted, argument_of) in names {
+        for named in names {
             let mention = Mention {
-                value,
-                whole,
+                value: named.name,
+                whole: named.whole,
                 lookup,
             };
             let found = self.lookup_at(mention.lookup, mention.value);
@@ -1310,14 +1343,8 @@ impl Producers<'_> {
             };
             if !builtin {
                 let resolved = core.classify_lookup(found);
-                let mut extra = Vec::new();
-                if expansion.as_ref().is_some_and(|items| !items.is_empty()) {
-                    extra.push((k.alias, k.expanded));
-                }
-                if subscripted {
-                    extra.push((k.subscripted, k.one));
-                }
-                self.argument_marker(lookup, argument_of, &mut extra);
+                let expanded = expansion.as_ref().is_some_and(|items| !items.is_empty());
+                let extra = self.markers(expanded, named.subscripted, lookup, named.argument_of);
                 self.push_slot(rows, found.surface, resolved, slot, position, &extra);
             }
             let Some(expansion) = expansion else {
@@ -1335,14 +1362,8 @@ impl Producers<'_> {
                     }
                     continue;
                 }
-                let mut extra = Vec::new();
-                if self.expanded_in(&expansion, item, inner) {
-                    extra.push((self.settings.k.alias, self.settings.k.expanded));
-                }
-                if item.subscripted {
-                    extra.push((self.settings.k.subscripted, self.settings.k.one));
-                }
-                self.argument_marker(item.lookup, item.argument_of, &mut extra);
+                let expanded = self.expanded_in(&expansion, item, inner);
+                let extra = self.markers(expanded, item.subscripted, item.lookup, item.argument_of);
                 if !written.insert((inner.surface, whole, extra.clone())) {
                     continue;
                 }
@@ -1701,8 +1722,8 @@ impl Producers<'_> {
         for annotation in annotations {
             self.mentions(annotation, true, EMPTY, &mut mentioned);
         }
-        for (value, _, _, _) in mentioned {
-            names.insert(self.core.it.head(value));
+        for found in mentioned {
+            names.insert(self.core.it.head(found.name));
         }
         names
     }

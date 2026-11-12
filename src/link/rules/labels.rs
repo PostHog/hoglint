@@ -5,7 +5,9 @@
 use super::conflicts::{Conflict, conflict_key};
 use super::env::Cx;
 use super::glob::{Captures, ExportPaths, Glob, capture, fill};
-use super::plan::{AssignPlan, ExportPlan, Plan, RegistryPlan, SetValue, ValuePlan, ZonesPlan};
+use super::plan::{
+    AssignPlan, ExportPlan, Plan, RegistryPlan, SetValue, SymbolMatchPlan, ValuePlan, ZonesPlan,
+};
 use super::selector::Node;
 use super::value::{Value, Zone};
 use super::{NO_PLACE, Rules, place_of};
@@ -91,8 +93,8 @@ pub struct Assign {
     /// (field index, value) for each declared field it sets.
     sets: Vec<(usize, SetValue)>,
     pub overrides: bool,
-    /// For a symbol assignment: (decorated_by, subclass_of, names).
-    pub symbols: Option<(Vec<String>, Vec<String>, Vec<String>)>,
+    /// For a symbol assignment: the symbols it matches.
+    pub symbols: Option<SymbolMatchPlan>,
 }
 
 impl Assign {
@@ -114,13 +116,7 @@ impl Assign {
             only_values: plan.only_values.clone(),
             sets,
             overrides: plan.overrides,
-            symbols: plan.symbols.as_ref().map(|found| {
-                (
-                    found.decorated_by.clone(),
-                    found.subclass_of.clone(),
-                    found.names.clone(),
-                )
-            }),
+            symbols: plan.symbols.clone(),
         })
     }
 
@@ -859,7 +855,12 @@ impl Rules {
         symbol: &str,
         path: Option<&str>,
     ) -> bool {
-        let Some((decorated_by, subclass_of, names)) = &assign.symbols else {
+        let Some(SymbolMatchPlan {
+            decorated_by,
+            subclass_of,
+            names,
+        }) = &assign.symbols
+        else {
             return false;
         };
         if !assign.allows(path) {
