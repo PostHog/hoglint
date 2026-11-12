@@ -162,6 +162,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `WW07` | `hoglint.toml` (planted line) | A request seed whose path matches no file | config:stale-name incomplete | A path the config writes out in full and the tree lacks is incomplete (Nov 12) |
 | `WW08` | `posthog/middleware.py`, `posthog/request_log.py` | An import on the request path that does not resolve | no-product-lists-in-core and prod-imports-test unknown; wiring-watched incomplete (`rule request-path cannot tell`) | Unknown is never clean (Nov 12) |
 | `WW09` | `posthog/settings/web.py` | The preset expects request keys this tree's settings carry on no edge: unset keys, and `DEFAULT_THROTTLE_CLASSES`, whose only entry cannot be named (`WW06`) | config:stale-name incomplete for each key | A seed key that no settings edge carries is reported, never read clean (Nov 12) |
+| `WW10` | `products/gatekeeper/backend/middleware.py`, `products/gatekeeper/backend/facade/lazy_gate.py`, `products/gatekeeper/backend/logic/lazy_rules.py` | A facade on the request path hands out its logic lazily (`_LAZY`, `__getattr__`); the logic is unwatched | request-path row for the facade only; wiring-watched clean | A written limit of D103: a lazy edge (`function_local`) does not run on import, so the reach does not follow it |
 | `SN01` | the preset | The preset writes out monorepo paths and symbols this miniature does not hold; the tree runs the real preset and holds only the files its cases need, so these rows stay | config:stale-name incomplete for each | A path or symbol the config writes out in full and the tree lacks is incomplete, never silent (Nov 12) |
 | `UK01` | `scripts/new_tool.py` | A file in a top folder no assignment names imports product internals (the source end unknown) | incomplete in every rule that crosses packages; product-code-at-home incomplete | D105: a new top folder reads unknown |
 | `UK02` | `products/legacy/backend/logic/widgets.py`, `scripts/helpers.py` | A product imports from such a folder (the destination end unknown) | public-surface and cycle incomplete | D105 |
@@ -205,7 +206,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `walk_where` | A handed-out class whose tier is unknown | `WK03` | walked: finding |
 | `walk_where` | A handed-out class from a top folder outside `first_party` | `WK04` | not walked; only incomplete rows on its edges (defect, wanted) |
 | `handed_zones` | A handed name that is a namespace directory | `HZ03` | finding |
-| `handed_zones` | A lazy hand-out; `import a.b as name`; a relative import above the top package | `HZ04`, `HZ05`, `HZ06` | clean for facade-logic (defects, wanted) |
+| `handed_zones` | A lazy hand-out; `import a.b as name`; a relative import above the top package | `HZ04`, `HZ05`, `HZ06` | finding, finding, incomplete |
 | `dst.zone` | A directory two source roots place apart | none | The tree has one source root; a second would change every other case's module names |
 | `crosses` | A slot typed with a name that does not resolve | `CR03` | unknown |
 | `installs` as a list | A hook call that does not resolve | `UI01`, `UI02` | incomplete; the product is not Isolated |
@@ -327,6 +328,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | wiring-watched | A product module the request path reaches, unwatched | `WW01` |
 | request-path | Core's request code reaches product modules by module-level imports, past the first one | `WW01`, `WW03` |
 | request-path | The same through an import inside a function | `WW02` (not followed) |
+| request-path | The same through a lazy hand-out of a facade | `WW10` (not followed) |
 | request-path | A list splatted into `MIDDLEWARE`, an `insert` from a second settings module | `WW04`, `WW05` |
 | request-path | A request key the settings reader cannot name | `WW06` (incomplete) |
 | request-path | An unresolved import on the request path | `WW08` (incomplete) |

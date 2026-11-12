@@ -5,60 +5,6 @@
 # config:stale-name
 
 [[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["AUTHENTICATION_BACKENDS"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.EXCEPTION_HANDLER"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["SESSION_ENGINE"]
-
-[[row]]
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
@@ -256,6 +202,60 @@ rule = "config:stale-name"
 verdict = "incomplete"
 identity = ["posthog/api/view_base.py"]
 
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["AUTHENTICATION_BACKENDS"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.EXCEPTION_HANDLER"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["SESSION_ENGINE"]
+
 # contracts-no-django
 
 [[row]]
@@ -295,12 +295,6 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "HZ10"
-rule = "export-shape"
-verdict = "unknown"
-identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
-
-[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -336,13 +330,13 @@ rule = "export-shape"
 verdict = "unknown"
 identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
 
-# facade-logic
-
 [[row]]
 case = "HZ10"
-rule = "facade-logic"
-verdict = "incomplete"
-identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
+
+# facade-logic
 
 [[row]]
 case = "FL03"
@@ -380,13 +374,13 @@ rule = "facade-logic"
 verdict = "incomplete"
 identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
 
-# facade-no-drf
-
 [[row]]
 case = "HZ10"
-rule = "facade-no-drf"
-verdict = "unknown"
-identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
+rule = "facade-logic"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
+
+# facade-no-drf
 
 [[row]]
 case = "CR03"
@@ -430,13 +424,13 @@ rule = "facade-no-drf"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.aboveworkers", "?"]
 
-# facade-signature
-
 [[row]]
 case = "HZ10"
-rule = "facade-signature"
+rule = "facade-no-drf"
 verdict = "unknown"
-identity = ["products.legacy.backend.facade.lazygoneworkers", "run_gone", "signature", "products.legacy.backend.temporal.gone.run_gone"]
+identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
+
+# facade-signature
 
 [[row]]
 case = "CM01"
@@ -563,6 +557,12 @@ case = "FS10"
 rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
+
+[[row]]
+case = "HZ10"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "run_gone", "signature", "products.legacy.backend.temporal.gone.run_gone"]
 
 [[row]]
 case = "TM01"
@@ -1156,12 +1156,6 @@ identity = ["products.legacy.backend.presentation.views", "products.inventory.ba
 # prod-imports-test
 
 [[row]]
-case = "HZ10"
-rule = "prod-imports-test"
-verdict = "unknown"
-identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
-
-[[row]]
 case = "CR03"
 rule = "prod-imports-test"
 verdict = "unknown"
@@ -1172,6 +1166,12 @@ case = "HZ06"
 rule = "prod-imports-test"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.aboveworkers", "?"]
+
+[[row]]
+case = "HZ10"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 [[row]]
 case = "PT01"
@@ -1506,6 +1506,12 @@ verdict = "incomplete"
 identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
 
 # request-path
+
+[[row]]
+case = "WW10"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.facade.lazy_gate"]
 
 [[row]]
 case = "WW01"

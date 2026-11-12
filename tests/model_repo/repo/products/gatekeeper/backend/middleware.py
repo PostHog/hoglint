@@ -1,3 +1,4 @@
+from products.gatekeeper.backend.facade import lazy_gate
 from products.gatekeeper.backend.logic.session import touch_session
 
 
