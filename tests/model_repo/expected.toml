@@ -35,6 +35,12 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "HZ06"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
+
+[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -61,10 +67,10 @@ identity = ["products.catalog.backend.api.serializers.EntrySerializer", "product
 # facade-logic
 
 [[row]]
-case = "HZ05"
+case = "HZ06"
 rule = "facade-logic"
-verdict = "finding"
-identity = ["products.legacy.backend.facade.aliasworkers.start_alias", "products.legacy.backend.facade.aliasworkers"]
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
 
 [[row]]
 case = "FL03"
@@ -89,6 +95,12 @@ case = "HZ04"
 rule = "facade-logic"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.lazyworkers.start_lazy", "products.legacy.backend.facade.lazyworkers"]
+
+[[row]]
+case = "HZ05"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.aliasworkers.start_alias", "products.legacy.backend.facade.aliasworkers"]
 
 # facade-no-drf
 
@@ -1337,13 +1349,6 @@ decision = "unknown is never clean: a class from a top folder outside first_part
 rule = "*"
 verdict = "*"
 match = ["ExternalView", "StockItem"]
-
-[[wanted]]
-case = "HZ06"
-decision = "unknown is never clean: a relative import above the top package makes handed_zones unknown (Nov 12 handed_zones fix, not fixed)"
-rule = "facade-logic"
-verdict = "*"
-match = ["products.legacy.backend.facade.aboveworkers"]
 
 [[wanted]]
 case = "ES06"

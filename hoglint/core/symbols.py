@@ -80,6 +80,11 @@ def absolute_import(module: str, is_package: bool, target: str | None, level: in
     return f"{base}.{target}" if target else base
 
 
+def unresolved_surface(target: str | None, level: int, name: str) -> str:
+    """How a relative import that climbs above the top package is written: `...pkg.name`."""
+    return "." * level + (f"{target}." if target else "") + name
+
+
 def lazy_sites(record: Mapping[str, Any]) -> dict[str, tuple[int, int]]:
     """(line, column) of the module-level dict assignment each lazy name is read from: the last
     one that maps the name to a string, as a later map wins in `Tables.lazy_map`."""

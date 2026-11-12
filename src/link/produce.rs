@@ -7,7 +7,7 @@ use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
     Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, absolute_import, lazy_sites,
-    module_assigns,
+    module_assigns, unresolved_surface,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -954,24 +954,12 @@ impl Producers<'_> {
                     let Some(source) =
                         absolute_import(&mut core.it, module, is_package, row.target, row.level)
                     else {
-                        let mut text = ".".repeat(row.level as usize);
-                        if let Some(target) = row.target.filter(|&t| t != EMPTY) {
-                            text.push_str(core.it.s(target));
-                            text.push('.');
-                        }
-                        text.push_str(core.it.s(name));
-                        let surface = core.it.intern(&text);
+                        let surface = unresolved_surface(&mut core.it, row.target, row.level, name);
+                        // The name stays bound, so a reader of what the module hands out sees it unresolved.
+                        let attrs = [(self.settings.k.binds, named(row.asname, name))];
                         self.push(
-                            IMPORT,
-                            owner,
-                            row.scope,
-                            row.line,
-                            row.col,
-                            ctx,
-                            surface,
-                            UNRESOLVED,
-                            EMPTY,
-                            &[],
+                            IMPORT, owner, row.scope, row.line, row.col, ctx, surface, UNRESOLVED,
+                            EMPTY, &attrs,
                         );
                         continue;
                     };

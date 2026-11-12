@@ -10,7 +10,9 @@
 //! A star import hands out the names it binds (the source's `__all__`, else its public top-level
 //! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
 //! follows. `import a.b as name` binds the module `a.b` under `name` and is handed out by the same
-//! clauses; a plain `import a.b` binds `a`, no surface of its own, and hands out nothing.
+//! clauses; a plain `import a.b` binds `a`, no surface of its own, and hands out nothing. A relative
+//! import that climbs above the top package resolves to nothing and still binds its name: handed
+//! out, it leaves what the module hands out unresolved.
 //!
 //! Every rule reads this notion of what a module exports: core records it for every export
 //! module (`Link::hand_outs`).
@@ -23,7 +25,9 @@
 use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
-use super::resolve::{Core, RUN_TIME_MODULE_FLAGS, absolute_import, module_level};
+use super::resolve::{
+    Core, RUN_TIME_MODULE_FLAGS, absolute_import, module_level, unresolved_surface,
+};
 use super::scope::Scope;
 use super::trace::Kind;
 use rustc_hash::FxHashSet;
@@ -292,7 +296,8 @@ impl HandedOut {
 
     /// (bound, target, clause) of each name one import of the module body binds. `import a.b`
     /// binds `a`, no surface of its own, so it hands out nothing; `import a.b as name` binds the
-    /// module.
+    /// module. A relative import that climbs above the top package resolves to nothing and still
+    /// binds its name.
     fn import_names(
         &self,
         core: &mut Core,
@@ -315,13 +320,16 @@ impl HandedOut {
             row.target,
             row.level,
         );
-        let Some(source) = source else {
-            return Vec::new();
-        };
         if name == core.star() {
-            return self.star(core, source);
+            return match source {
+                Some(source) => self.star(core, source),
+                None => Vec::new(),
+            };
         }
-        let target = core.it.join(source, name);
+        let target = match source {
+            Some(source) => core.it.join(source, name),
+            None => unresolved_surface(&mut core.it, row.target, row.level, name),
+        };
         vec![self.single(named(row.asname, name), target, name, row.asname, used)]
     }
 

@@ -25,6 +25,7 @@ from hoglint.core.symbols import (
     entity,
     lazy_sites,
     module_assigns,
+    unresolved_surface,
 )
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
@@ -404,9 +405,13 @@ class ImportProducer(Producer):
                 else:
                     source = absolute_import(scope.module, scope.is_package, target, level)
                     if source is None:
-                        surface = "." * level + (f"{target}." if target else "") + name
+                        surface = unresolved_surface(target, level, name)
+                        # The name stays bound, so a reader of what the module hands out sees it unresolved.
+                        attrs = (("binds", asname or name),)
                         graph.edges.append(
-                            self.edge(self.kind, scope, at_scope, line, column, surface, UNRESOLVED, contexts)
+                            self.edge(
+                                self.kind, scope, at_scope, line, column, surface, UNRESOLVED, contexts, attrs=attrs
+                            )
                         )
                         continue
                     if name == "*":

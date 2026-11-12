@@ -84,6 +84,11 @@ def test_a_lazy_name_gets_an_import_edge_that_does_not_run_on_import() -> None:
     assert edge.attrs == (("binds", "refund"), ("module", "checkout.logic"), ("lazy", "1"))
 
 
+def test_a_relative_import_above_the_top_package_keeps_the_name_it_binds() -> None:
+    edges = {edge.surface: edge for edge in edges_of(build(repo()), "import", VIEWS)}
+    assert edges["...too_far.x"].attrs == (("binds", "x"),)
+
+
 def test_reference_names_surface_and_origin_with_a_use_position() -> None:
     [edge] = edges_of(build(repo()), "reference", VIEWS)
     assert (edge.surface, str(edge.target), edge.use) == ("checkout.facade.charge", "checkout.logic.charge", "call")

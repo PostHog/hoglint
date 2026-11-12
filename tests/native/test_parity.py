@@ -458,6 +458,14 @@ HANDED_CASES = {
         [],
         [],
     ),
+    "a relative import above the top package": ("from ...... import gone", "gone", {}, [], BUILD_INCOMPLETE),
+    "a relative import that resolves": (
+        "from ..temporal.jobs import run",
+        "run",
+        {"products/shop/backend/temporal/jobs.py": RUN},
+        BUILD_FOUND,
+        [],
+    ),
 }
 
 
@@ -492,6 +500,7 @@ HANDING_IMPORTS = {
         ["jobs"],
         ["hidden"],
     ),
+    "a relative import above the top package": ("from ...... import gone\n\n__all__ = ['gone', 'build']", ["gone"], []),
 }
 
 

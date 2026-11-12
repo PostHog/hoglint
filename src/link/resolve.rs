@@ -231,6 +231,17 @@ pub fn absolute_import(
     })
 }
 
+/// How a relative import that climbs above the top package is written: `...pkg.name`.
+pub fn unresolved_surface(it: &mut Interner, target: Option<Sid>, level: u32, name: Sid) -> Sid {
+    let mut text = ".".repeat(level as usize);
+    if let Some(target) = target.filter(|&t| t != EMPTY) {
+        text.push_str(it.s(target));
+        text.push('.');
+    }
+    text.push_str(it.s(name));
+    it.intern(&text)
+}
+
 /// (line, column) of the module-level dict assignment each lazy name is read from: the last one
 /// that maps the name to a string, as a later map wins in `Core::lazy_map`.
 pub fn lazy_sites(assigns: &[Assign]) -> FxHashMap<Sid, (u32, u32)> {

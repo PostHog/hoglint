@@ -14,7 +14,9 @@ binds the name at run time; one under `if TYPE_CHECKING:` does not.
 A star import hands out the names it binds (the source's `__all__`, else its public top-level
 names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
 `import a.b as name` binds the module `a.b` under `name` and is handed out by the same clauses; a
-plain `import a.b` binds `a`, no surface of its own, and hands out nothing.
+plain `import a.b` binds `a`, no surface of its own, and hands out nothing. A relative import that
+climbs above the top package resolves to nothing and still binds its name: handed out, it leaves
+what the module hands out unresolved.
 
 Every rule reads this notion of what a module exports: a surface also imports the code it calls,
 and that code is not part of its contract. Core records it for every export module
@@ -33,7 +35,14 @@ from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import RUN_TIME_MODULE_FLAGS, ModuleTable, Tables, absolute_import, module_level
+from hoglint.core.symbols import (
+    RUN_TIME_MODULE_FLAGS,
+    ModuleTable,
+    Tables,
+    absolute_import,
+    module_level,
+    unresolved_surface,
+)
 from hoglint.model import HandOut
 
 ALL_CLAUSE = "all"
@@ -220,16 +229,17 @@ class HandedOut:
     def import_names(self, row: list, used: frozenset[str]) -> list[tuple[str, str, str]]:
         """(bound, target, clause) of each name one import of the module body binds. `import a.b`
         binds `a`, no surface of its own, so it hands out nothing; `import a.b as name` binds the
-        module."""
+        module. A relative import that climbs above the top package resolves to nothing and still
+        binds its name."""
         scope = self.scope
         _, _, _, _, target, level, name, asname = row
         if name is None:
             return [self.single(asname, target, target, asname, used)] if asname else []
         source = absolute_import(scope.module, scope.is_package, target, level)
-        if source is None:
-            return []
         if name == "*":
-            return self.star(source)
+            return self.star(source) if source is not None else []
+        if source is None:
+            return [self.single(asname or name, unresolved_surface(target, level, name), name, asname, used)]
         return [self.single(asname or name, f"{source}.{name}", name, asname, used)]
 
     def names(self, used: frozenset[str]) -> list[Handed]:
