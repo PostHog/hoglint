@@ -161,7 +161,7 @@ match = [
   "products/error_tracking/backend/embedding.py", "products/error_tracking/backend/embedding/**",
   "products/error_tracking/backend/indexed_embedding.py", "products/error_tracking/backend/indexed_embedding/**",
   "products/batch_exports/backend/sql.py", "products/batch_exports/backend/sql/**",
-  "products/warehouse_sources/backend/models.py", "products/warehouse_sources/backend/models/**",
+  "products/warehouse_sources/backend/models/**",
   "products/warehouse_sources/backend/temporal/data_imports/sources/common/**",
   "products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py",
   "products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**",
