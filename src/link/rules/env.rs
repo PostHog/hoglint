@@ -3,7 +3,7 @@
 //! (`Labeler.label_resolver`).
 
 use super::conflicts::Conflict;
-use super::labels::{Cell, FieldKind, NAMESPACE_PROBE, Namespace};
+use super::labels::{Cell, FieldKind, Namespace};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
 use super::{Handed, Rules, longest_module, name_owner};
@@ -160,14 +160,7 @@ impl<'a> Cx<'a> {
             return None;
         }
         let found = self.namespace(endpoint.module, endpoint.at)?;
-        if !found.inside.is_empty() {
-            return Some(found.inside.clone());
-        }
-        let directory = found
-            .path
-            .strip_suffix(NAMESPACE_PROBE)
-            .unwrap_or(&found.path);
-        Some(vec![directory.to_string()])
+        Some(found.files(|at| self.rules.module_path(self.link, at)))
     }
 
     /// Whether an endpoint names a dotted name two directories without `__init__.py` hold

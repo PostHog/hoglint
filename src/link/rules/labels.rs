@@ -352,19 +352,39 @@ impl Export {
 
 /// A file name no glob spells (`labels.NAMESPACE_PROBE`): a namespace directory is labelled by
 /// the path of a module file directly inside it.
-pub const NAMESPACE_PROBE: &str = "\0.py";
+const NAMESPACE_PROBE: &str = "\0.py";
 
 /// A directory without `__init__.py` that holds graph modules (`labels.NamespaceDirectories`):
 /// an edge can name one, and the path of a file directly inside it labels it.
 pub struct Namespace {
+    pub directory: String,
+    /// The path that labels the directory: the probe file directly inside it.
     pub path: String,
-    /// The paths of the module files directly inside the directory, sorted
+    /// The places of the graph modules whose file lies directly inside the directory
     /// (`NamespaceDirectories.inside`).
-    pub inside: Vec<String>,
+    pub inside: Vec<u32>,
     /// Per field, the label that path's assignments and zones give; None where none does and for
     /// symbol and provider fields; unknown where two sources disagree or a module file directly
     /// inside the directory reads the field otherwise.
     pub labels: Vec<Option<Cell>>,
+}
+
+impl Namespace {
+    /// What stands for the directory (`NamespaceDirectories.files`): each module file directly
+    /// inside it, sorted, as `__init__.py` stands for a package; else the directory itself with a
+    /// trailing slash. `path_of` gives a graph module's path by its place.
+    pub fn files<'p>(&self, path_of: impl Fn(u32) -> &'p str) -> Vec<String> {
+        let mut files: Vec<String> = self
+            .inside
+            .iter()
+            .map(|&at| path_of(at).to_string())
+            .collect();
+        if files.is_empty() {
+            return vec![format!("{}/", self.directory)];
+        }
+        files.sort();
+        files
+    }
 }
 
 /// The directories of a module's path, and where the module's first part sits among them, when
@@ -518,16 +538,12 @@ impl Labels {
             let path = format!("{directory}/{NAMESPACE_PROBE}");
             let found = &inside[directory.as_str()];
             let labels = out.label_namespace(&path, found);
-            let mut files: Vec<String> = found
-                .iter()
-                .map(|&at| paths[at as usize].to_string())
-                .collect();
-            files.sort();
             out.namespaces.insert(
                 name.as_str().into(),
                 Namespace {
+                    directory: directory.clone(),
                     path,
-                    inside: files,
+                    inside: found.clone(),
                     labels,
                 },
             );

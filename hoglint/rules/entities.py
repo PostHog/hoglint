@@ -8,7 +8,6 @@ from typing import Any
 from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.globs import fill, glob_match
-from hoglint.labels import NAMESPACE_PROBE
 from hoglint.model import Edge
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 from hoglint.rules.base import (
@@ -475,12 +474,9 @@ class CoveragePrimitive(EntityRule):
         """What stands for a directory without `__init__.py`: each module file directly inside it,
         as `__init__.py` stands for a package; the directory itself (`expand`) when it holds none.
         None for an endpoint that is no such directory."""
-        namespaces = self.ctx.labeler.namespaces
-        module = endpoint.module
-        if endpoint.external is not None or module is None or module not in namespaces.paths:
+        if endpoint.external is not None or endpoint.module is None:
             return None
-        inside = sorted(self.ctx.graph.modules[name] for name in namespaces.inside.get(module, ()))
-        return inside or [namespaces.paths[module].removesuffix(NAMESPACE_PROBE)]
+        return self.ctx.labeler.namespaces.files(endpoint.module)
 
     def namespace_clash(self, endpoint: Endpoint) -> bool:
         """A name two directories without `__init__.py` hold: no file can stand for it."""

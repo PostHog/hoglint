@@ -175,6 +175,7 @@ class NamespaceDirectories:
     `inside` holds, per name, the graph modules whose file lies directly in the directory."""
 
     def __init__(self, modules: dict[str, str]) -> None:
+        self.modules = modules
         found: dict[str, str] = {}
         clashes: set[str] = set()
         for module, path in modules.items():
@@ -193,6 +194,7 @@ class NamespaceDirectories:
                 if found.setdefault(name, directory) != directory:
                     clashes.add(name)
                     del found[name]
+        self.directory_of = found
         self.paths = {name: f"{directory}/{NAMESPACE_PROBE}" for name, directory in found.items()}
         self.clashes = frozenset(clashes)
         named = {directory: name for name, directory in found.items()}
@@ -201,6 +203,16 @@ class NamespaceDirectories:
             name = named.get(path.rpartition("/")[0])
             if name is not None:
                 self.inside.setdefault(name, []).append(module)
+
+    def files(self, name: str) -> list[str] | None:
+        """What stands for the directory: each module file directly inside it, sorted, as
+        `__init__.py` stands for a package; else the directory itself with a trailing slash. None
+        for a name that is no such directory."""
+        directory = self.directory_of.get(name)
+        if directory is None:
+            return None
+        inside = sorted(self.modules[module] for module in self.inside.get(name, ()))
+        return inside or [f"{directory}/"]
 
     @staticmethod
     def directories(module: str, path: str) -> tuple[str, ...] | None:
