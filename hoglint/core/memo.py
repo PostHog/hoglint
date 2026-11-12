@@ -44,7 +44,7 @@ Read = tuple[str, str]
 # The read of a file's facts, noted by file id; its answer is the file's content key.
 FILE = "file"
 # Test only: reads of these kinds (comma-separated, or "*" for every kind) are left out of every
-# trace, so a replay must find the miss.
+# stored item, so a replay must find the miss.
 DROP_ENV = "HOGLINT_PACK_MEMO_DROP"
 DIGEST_BYTES = 12
 ALL_KINDS = "*"
@@ -140,16 +140,6 @@ class FileKeysMap:
         return self.keys.get(path)
 
 
-class AllKinds(frozenset[str]):
-    """Every read kind, for `HOGLINT_PACK_MEMO_DROP=*`."""
-
-    def __contains__(self, kind: object) -> bool:
-        return True
-
-
-ALL_DROPPED = AllKinds()
-
-
 class DigestMap:
     """A verifier that answers reads again from a digest per key, `default` for a key it lacks:
     a part checks these with no call per read."""
@@ -174,8 +164,6 @@ class Tracer:
     def __init__(self) -> None:
         self.frames: list[Frame] = []
         self.answers: dict[Read, str] = {}
-        dropped = os.environ.get(DROP_ENV, "")
-        self.dropped = ALL_DROPPED if dropped == ALL_KINDS else frozenset(filter(None, dropped.split(",")))
         self.verifiers: dict[str, Callable[[str], str | None]] = {}
         self.files: FileKeys | None = None
 
@@ -245,7 +233,7 @@ class Tracer:
         """A read whose answer is `form(value)`, or `value` with no form: the answer is built and
         digested only the first time the run notes the read. A step's frame keeps no read, but its
         answer still serves a later check of a read no one can answer again (an edge query)."""
-        if not self.frames or kind in self.dropped:
+        if not self.frames:
             return
         read = (kind, key)
         frame = self.frames[-1]
@@ -255,7 +243,7 @@ class Tracer:
             self.answers[read] = digest(value if form is None else form(value))
 
     def note_file(self, file: int) -> None:
-        if self.keeps() and FILE not in self.dropped:
+        if self.keeps():
             self.frames[-1].files.add(file)
 
     def merge(self, frame: Frame) -> None:
@@ -747,9 +735,18 @@ class StepMemo:
     item that ran, with its reads, to store. Its state is split in parts by item key, so a run
     that changes a few items writes only their parts. It reads the newest state only."""
 
-    def __init__(self, name: str, key: str, store: MemoStore | None, stats: StepStats | None, tracer: Tracer) -> None:
+    def __init__(
+        self,
+        name: str,
+        key: str,
+        store: MemoStore | None,
+        stats: StepStats | None,
+        tracer: Tracer,
+        dropped: frozenset[str] = frozenset(),
+    ) -> None:
         self.name = name
         self.tracer = tracer
+        self.dropped = dropped
         self.key = key
         self.store = store
         self.stats = stats
@@ -805,6 +802,8 @@ class StepMemo:
     def keep(self, key: str, reads: Frame, result: ItemOutput) -> ItemOutput:
         """Records an item that ran. Its data comes back as the store gives it, so a later take
         sees the same values whether the item ran or was reused."""
+        if self.dropped:
+            reads = self.without_dropped(reads)
         if self.stats is not None:
             self.stats.reads.append(len(reads.reads))
             self.stats.files.append(len(reads.files))
@@ -822,6 +821,13 @@ class StepMemo:
         if stored is not None and outputs is not None:
             self.fresh.setdefault(part, {})[key] = [stored, outputs, data]
         return ItemOutput(result.outputs, data)
+
+    def without_dropped(self, reads: Frame) -> Frame:
+        """An item's reads less those `HOGLINT_PACK_MEMO_DROP` leaves out."""
+        if ALL_KINDS in self.dropped:
+            return Frame()
+        kept = {read for read in reads.reads if read[0] not in self.dropped}
+        return Frame(kept, set() if FILE in self.dropped else reads.files)
 
     def written(self) -> Written:
         """The step's new state, made once its items ran: a part that holds an item that ran,
@@ -889,6 +895,7 @@ class PackMemo:
 
     def __init__(self, store: MemoStore | None, policy: str, stats: str = "") -> None:
         self.tracer = Tracer()
+        self.dropped = frozenset(filter(None, os.environ.get(DROP_ENV, "").split(",")))
         self.store = store
         self.policy = policy
         self.stats_path = stats
@@ -910,7 +917,9 @@ class PackMemo:
         if self.stats_path:
             stats = StepStats(name)
             self.stats.append(stats)
-        return StepMemo(name, digest([self.policy, name]), self.store if stored else None, stats, self.tracer)
+        return StepMemo(
+            name, digest([self.policy, name]), self.store if stored else None, stats, self.tracer, self.dropped
+        )
 
     def end_step(self, step: StepMemo | None) -> None:
         """Makes a step's new state once its items ran, so the parts it read are let go before
