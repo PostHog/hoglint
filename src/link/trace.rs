@@ -117,6 +117,8 @@ pub enum Memo {
     Lookup(u32, Sid),
     /// An alias expansion: (alias module, alias name, owner, scope, line).
     Expansion(Sid, Sid, u32, i32, u32),
+    /// Whether a class has a dataclass base: (owner, def index).
+    DataclassBase(u32, u32),
 }
 
 /// A range of packed reads in `Recorder::arena`.

@@ -549,6 +549,7 @@ class DeclarationProducer(Producer):
     def __init__(self) -> None:
         self.expansions: dict[tuple[tuple[str, str], SlotLookup], list[Expanded]] = {}
         self.fields: dict[str, dict[int, list[dict]]] = {}
+        self.dataclass_bases: dict[tuple[str, int], bool] = {}
         self.roots: dict[str, frozenset[tuple[int, str]]] = {}
 
     @property
@@ -854,12 +855,26 @@ class DeclarationProducer(Producer):
         wanted = context.config.dataclass_decorators
         return surface in wanted or any(str(target) in wanted for target in resolved.targets)
 
+    def fields_matter(self, scope: FileScope, idx: int, contract: bool) -> bool:
+        """Whether a class's fields can be slots: it declares a field, or it is in a contract,
+        which also exposes the fields it inherits. Only then is its dataclass base asked for, so a
+        plain class reads nothing of its ancestors for it."""
+        return bool(self.fields_by_class(scope).get(idx)) or (contract and self.in_contract(scope, idx))
+
     def has_dataclass_base(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
         """Whether a class or one of its ancestors names a base of `dataclass_bases`, by spelling
-        or target: a model library's base makes annotated class attributes `__init__` fields."""
-        wanted = context.config.dataclass_bases
-        if not wanted:
+        or target: a model library's base makes annotated class attributes `__init__` fields.
+        Worked out once per class."""
+        if not context.config.dataclass_bases:
             return False
+        key = (scope.path, idx)
+        found = self.dataclass_bases.get(key)
+        if found is None:
+            found = self.dataclass_bases[key] = self.find_dataclass_base(context, scope, idx)
+        return found
+
+    def find_dataclass_base(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
+        wanted = context.config.dataclass_bases
         for owner, at in self.lineage(context, scope, idx):
             node = owner.defs[at]
             for base in node.get("bases", ()):
@@ -999,7 +1014,7 @@ class DeclarationProducer(Producer):
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs
                     )
                 )
-        if is_class and not dataclass and not nested:
+        if is_class and not dataclass and not nested and self.fields_matter(scope, idx, contract):
             dataclass = self.has_dataclass_base(context, scope, idx)
         if nested or (is_class and not dataclass):
             return

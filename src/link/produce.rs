@@ -750,6 +750,8 @@ pub struct Producers<'p> {
     pub roots: FxHashMap<usize, Vec<(usize, String)>>,
     /// What each export module hands out by import (`record_hand_out`).
     pub hand_outs: FxHashMap<Sid, HandOut>,
+    /// Whether each class has a dataclass base, by (owner, def index) (`has_dataclass_base`).
+    pub dataclass_bases: FxHashMap<(usize, u32), bool>,
 }
 
 impl Producers<'_> {
@@ -1519,12 +1521,32 @@ impl Producers<'_> {
         wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
     }
 
+    /// `DeclarationProducer.fields_matter`: whether a class's fields can be slots. It declares a
+    /// field, or it is in a contract, which also exposes the fields it inherits.
+    fn fields_matter(&mut self, file: u32, defs: &[Def], idx: usize, contract: bool) -> bool {
+        !self.class_fields(file, idx as u32).is_empty() || (contract && self.in_contract(defs, idx))
+    }
+
     /// `DeclarationProducer.has_dataclass_base`: whether a class or one of its ancestors names a
-    /// base of `dataclass_bases`, by spelling or target.
+    /// base of `dataclass_bases`, by spelling or target. Worked out once per class; a file that
+    /// asks again reads what the answer read.
     fn has_dataclass_base(&mut self, owner: usize, idx: u32) -> bool {
         if self.settings.dataclass_bases.is_empty() {
             return false;
         }
+        let memo = Memo::DataclassBase(owner as u32, idx);
+        if let Some(&found) = self.dataclass_bases.get(&(owner, idx)) {
+            self.core.rec.replay(memo);
+            return found;
+        }
+        let start = self.core.rec.mark();
+        let found = self.find_dataclass_base(owner, idx);
+        self.dataclass_bases.insert((owner, idx), found);
+        self.core.rec.remember(memo, start);
+        found
+    }
+
+    fn find_dataclass_base(&mut self, owner: usize, idx: u32) -> bool {
         let facts = self.core.facts.clone();
         for (at_owner, at) in self.lineage(owner, idx) {
             let node = &facts.files[self.scopes[at_owner].file as usize].defs[at as usize];
@@ -1863,7 +1885,11 @@ impl Producers<'_> {
                     );
                 }
             }
-            if node.is_class() && !dataclass && !nested {
+            if node.is_class()
+                && !dataclass
+                && !nested
+                && self.fields_matter(file as u32, &record.defs, idx, contract)
+            {
                 dataclass = self.has_dataclass_base(owner, idx as u32);
             }
             if nested || (node.is_class() && !dataclass) {

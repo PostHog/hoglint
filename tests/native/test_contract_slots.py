@@ -3,10 +3,14 @@ read from them, in both engines."""
 
 from __future__ import annotations
 
+import sys
+from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from hoglint.core.producers import DeclarationProducer
 from hoglint.native.parity import read_lines
 
 from native.test_parity import dumps, same_in_both_engines
@@ -635,3 +639,43 @@ def test_a_facade_exposes_the_rows_each_case_expects(
     files, expected = SLOT_CASES[case]
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert slot_rows(out["native"], FACADE) == sorted(expected)
+
+
+# Each class's dataclass base is worked out once: a plain base class that many classes, plain and
+# dataclass-like, inherit is not walked again for each of them. A class with no field of its own,
+# outside a contract, has no slot the answer could add, so its lineage is not walked for it.
+BASE_CLASSES = (
+    "class Model:\n    pass\n\n\n"
+    "class Plain:\n    note: str\n\n\n"
+    "class Payload(Plain, Model):\n    total: int\n\n\n"
+    "class Other(Plain):\n    pass\n"
+)
+
+
+def test_each_class_walks_its_lineage_for_a_dataclass_base_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    walked: list[tuple[int, str, int]] = []
+    lineage = DeclarationProducer.lineage
+
+    def counted(self: DeclarationProducer, context: Any, scope: Any, idx: int) -> Any:
+        if sys._getframe(1).f_code.co_name in ("has_dataclass_base", "find_dataclass_base"):
+            walked.append((id(self), scope.path, idx))
+        return lineage(self, context, scope, idx)
+
+    monkeypatch.setattr(DeclarationProducer, "lineage", counted)
+    config = CONFIG.replace(
+        "dataclass_decorators =", 'dataclass_bases = ["products.shop.backend.logic.Model"]\ndataclass_decorators ='
+    )
+    files = {
+        "hoglint.toml": config,
+        "products/shop/backend/logic.py": BASE_CLASSES,
+        "products/shop/backend/facade/api.py": "from ..logic import Payload\n",
+    }
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert ("Payload.__init__", "field:total", "builtins.int", "external", "no-functions") in slot_rows(
+        out["native"], FACADE
+    )
+    assert walked and max(Counter(walked).values()) == 1
+    other = BASE_CLASSES.split("\n\n\n").index("class Other(Plain):\n    pass\n")
+    assert ("products/shop/backend/logic.py", other) not in {(path, idx) for _, path, idx in walked}
