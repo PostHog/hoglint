@@ -1,0 +1,1501 @@
+# The reviewed result of the model repository on the real preset: every finding and incomplete
+# row, each tied to a case of CASES.md. Refresh it with `bin/model-repo --refresh`, then review
+# the diff: a row with case "?" is new and must get a case (or the tree has a bug), a row that
+# went is a verdict that changed. See docs/design/12-how-work-is-done.md, "The model repository".
+# contracts-no-django
+
+[[row]]
+case = "CN01"
+rule = "contracts-no-django"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.contracts", "django.conf"]
+
+[[row]]
+case = "CN02"
+rule = "contracts-no-django"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.enums", "django.conf"]
+
+# drives
+
+[[row]]
+case = "DR01"
+rule = "drives"
+verdict = "finding"
+identity = ["catalog:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(EntryQuery)"]
+
+[[row]]
+case = "DR02"
+rule = "drives"
+verdict = "finding"
+identity = ["reports:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(WidgetQuery)"]
+
+# dynamic-imports
+
+[[row]]
+case = "DI01"
+rule = "dynamic-imports"
+verdict = "incomplete"
+identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
+
+# export-shape
+
+[[row]]
+case = "ES01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.models", "export-denied(model)"]
+
+[[row]]
+case = "ES02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["django.db.models.query.QuerySet", "products.catalog.backend.facade.api", "export-denied(queryset)"]
+
+[[row]]
+case = "ES02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.EntryManager", "products.catalog.backend.facade.api", "export-denied(manager)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.organization.Organization", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.organization.Organization", "products.catalog.backend.facade.shapes", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.organization.OrganizationMembership", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.organization.OrganizationMembership", "products.catalog.backend.facade.shapes", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.project.Project", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.project.Project", "products.catalog.backend.facade.shapes", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.team.Team", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.team.Team", "products.catalog.backend.facade.shapes", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.user.User", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.user.User", "products.catalog.backend.facade.shapes", "export-denied(model)"]
+
+[[row]]
+case = "ES04"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.integration.Integration", "products.catalog.backend.facade.api", "export-denied(model)"]
+
+[[row]]
+case = "ES04"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.integration.Integration", "products.catalog.backend.facade.shapes", "export-denied(model)"]
+
+[[row]]
+case = "ES05"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["builtins.dict", "products.catalog.backend.facade.api", "export-unknown"]
+
+[[row]]
+case = "ES05"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["builtins.object", "products.catalog.backend.facade.api", "export-unknown"]
+
+[[row]]
+case = "ES05"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api.take_unannotated", "products.catalog.backend.facade.api", "export-unknown"]
+
+[[row]]
+case = "ES05"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["typing.Any", "products.catalog.backend.facade.api", "export-unknown"]
+
+[[row]]
+case = "ES06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.EntryMissing", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.EntryOutOfStock", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.contracts.StockMissing", "products.inventory.backend.facade.contracts", "export-shape(class)"]
+
+[[row]]
+case = "ES07"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.EntryStockView", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES07"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.EntryView", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES08"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.EntryListener", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES08"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.StockListener", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES09"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes.EntryDraft", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+
+[[row]]
+case = "ES11"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.backfill_command.Command", "products.legacy.backend.facade.backfill_command", "export-denied(command)"]
+
+[[row]]
+case = "ES12"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.testing", "export-denied(model)"]
+
+# facade-logic
+
+[[row]]
+case = "FL01"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["access_control", "products.access_control.backend.facade.api"]
+
+[[row]]
+case = "FL01"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["gatekeeper", "products.gatekeeper.backend.facade.api"]
+
+[[row]]
+case = "FL01"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["inventory", "products.inventory.backend.facade.api"]
+count = 4
+
+[[row]]
+case = "FL01"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["legacy", "products.legacy.backend.facade.api"]
+count = 2
+
+[[row]]
+case = "FL01"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["notifications", "products.notifications.backend.facade.api"]
+
+[[row]]
+case = "FL01"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["reports", "products.reports.backend.facade.api"]
+
+[[row]]
+case = "FL02"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["catalog", "products.catalog.backend.facade.api"]
+count = 26
+
+[[row]]
+case = "FL03"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["legacy", "products.legacy.backend.facade.queries"]
+
+[[row]]
+case = "FL05"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["inventory", "products.inventory.backend.facade.hooks"]
+
+[[row]]
+case = "FL06"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["catalog", "products.catalog.backend.facade.testing"]
+
+[[row]]
+case = "FL07"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["legacy", "products.legacy.backend.facade.backfill_command"]
+
+# facade-no-drf
+
+[[row]]
+case = "FD01"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.api", "django.http"]
+
+[[row]]
+case = "FD02"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.api", "rest_framework.exceptions"]
+
+[[row]]
+case = "FD03"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.api", "products.legacy.backend.presentation.views"]
+
+# facade-signature
+
+[[row]]
+case = "FS01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "get_entry", "return", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "FS02"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "entries_for", "return", "django.db.models.query.QuerySet"]
+
+[[row]]
+case = "FS02"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "entries_for", "return", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "FS03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "entry_manager", "return", "products.catalog.backend.models.EntryManager"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "for_membership", "param:membership", "posthog.models.organization.OrganizationMembership"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "for_organization", "param:organization", "posthog.models.organization.Organization"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "for_project", "param:project", "posthog.models.project.Project"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "for_team", "param:team", "posthog.models.team.Team"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "for_user", "param:user", "posthog.models.user.User"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "membership_of", "return", "posthog.models.organization.OrganizationMembership"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "organization_of", "return", "posthog.models.organization.Organization"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "project_of", "return", "posthog.models.project.Project"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "team_of", "return", "posthog.models.team.Team"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "user_of", "return", "posthog.models.user.User"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOwners.__init__", "field:membership", "posthog.models.organization.OrganizationMembership"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOwners.__init__", "field:organization", "posthog.models.organization.Organization"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOwners.__init__", "field:project", "posthog.models.project.Project"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOwners.__init__", "field:team", "posthog.models.team.Team"]
+
+[[row]]
+case = "FS04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOwners.__init__", "field:user", "posthog.models.user.User"]
+
+[[row]]
+case = "FS05"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "for_integration", "param:integration", "posthog.models.integration.Integration"]
+
+[[row]]
+case = "FS05"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "integration_of", "return", "posthog.models.integration.Integration"]
+
+[[row]]
+case = "FS05"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryIntegration.__init__", "field:integration", "posthog.models.integration.Integration"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "give_payload", "return", "builtins.dict"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "give_payload", "return", "typing.Any"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_any", "param:value", "typing.Any"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_bare_dict", "param:value", "builtins.dict"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_object", "param:value", "builtins.object"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_payload", "param:value", "builtins.dict"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_payload", "param:value", "typing.Any"]
+
+[[row]]
+case = "FS06"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_str_map", "param:value", "builtins.dict"]
+
+[[row]]
+case = "FS07"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "take_unannotated", "param:value", "?"]
+
+[[row]]
+case = "FS08"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "StockListener.__call__", "param:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "FS10"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:args", "?"]
+
+[[row]]
+case = "FS10"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
+
+[[row]]
+case = "FS11"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.testing", "make_entry", "return", "products.catalog.backend.models.CatalogEntry"]
+
+# featureflag-relations
+
+[[row]]
+case = "FF01"
+rule = "featureflag-relations"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "flag"]
+
+[[row]]
+case = "FF02"
+rule = "featureflag-relations"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "flag"]
+
+# foundation-direction
+
+[[row]]
+case = "FO01"
+rule = "foundation-direction"
+verdict = "finding"
+identity = ["access_control", "gatekeeper"]
+
+# generated-producer
+
+[[row]]
+case = "GP01"
+rule = "generated-producer"
+verdict = "incomplete"
+identity = ["posthog.schema"]
+
+[[row]]
+case = "GP01"
+rule = "generated-producer"
+verdict = "incomplete"
+identity = ["posthog.schema_enums"]
+
+# get-model
+
+[[row]]
+case = "GM01"
+rule = "get-model"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "get_model"]
+
+[[row]]
+case = "GM03"
+rule = "get-model"
+verdict = "unknown"
+identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolved-model-label"]
+
+# health-checks-no-dags
+
+[[row]]
+case = "HD01"
+rule = "health-checks-no-dags"
+verdict = "finding"
+identity = []
+
+# infrastructure-direction
+
+[[row]]
+case = "IF01"
+rule = "infrastructure-direction"
+verdict = "finding"
+identity = ["egress", "gatekeeper"]
+
+[[row]]
+case = "IF02"
+rule = "infrastructure-direction"
+verdict = "finding"
+identity = ["kafka_client", "billing"]
+
+# installs
+
+[[row]]
+case = "IN01"
+rule = "installs"
+verdict = "finding"
+identity = ["posthog.api.file_system.deletion.register_post_delete_hook", "products.legacy.backend.apps", "call"]
+
+[[row]]
+case = "IN02"
+rule = "installs"
+verdict = "finding"
+identity = ["posthog.models.resource_transfer.registered_models.register_model", "products.legacy.backend.apps", "call"]
+
+[[row]]
+case = "IN03"
+rule = "installs"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.hooks.register_restock_hook", "products.reports.backend.apps", "call"]
+
+# leaves-stay-leaves
+
+[[row]]
+case = "LV01"
+rule = "leaves-stay-leaves"
+verdict = "finding"
+identity = ["packages.owners_yaml.django_glue", "django.conf"]
+
+[[row]]
+case = "LV01"
+rule = "leaves-stay-leaves"
+verdict = "finding"
+identity = ["packages.owners_yaml.django_glue", "posthog.redis"]
+
+# migration-database
+
+[[row]]
+case = "MD01"
+rule = "migration-database"
+verdict = "finding"
+identity = ["legacy.0001_initial", "posthog.0001_initial"]
+
+# model-crossings
+
+[[row]]
+case = "MC01"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
+
+[[row]]
+case = "PS08"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
+
+[[row]]
+case = "PS25"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "instance-many(filter)"]
+
+[[row]]
+case = "RD01"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.receivers", "other(keyword)"]
+
+[[row]]
+case = "RD02"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.stock_listeners", "other(keyword)"]
+
+# no-new-package-cycles
+
+[[row]]
+case = "CY01"
+rule = "no-new-package-cycles"
+verdict = "finding"
+identity = ["catalog", "reports"]
+
+[[row]]
+case = "CY01"
+rule = "no-new-package-cycles"
+verdict = "finding"
+identity = ["reports", "catalog"]
+
+[[row]]
+case = "CY03"
+rule = "no-new-package-cycles"
+verdict = "unknown"
+identity = ["legacy", "?"]
+
+# no-product-lists-in-core
+
+[[row]]
+case = "IF01"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.egress.client", "products.gatekeeper.backend.facade.api"]
+
+[[row]]
+case = "PS01"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
+count = 2
+
+[[row]]
+case = "PS05"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["ee.hogai.tools", "products.inventory.backend.facade.api"]
+
+[[row]]
+case = "PS05"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.api.sharing", "products.inventory.backend.facade.api"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.access_control.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.catalog.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.inventory.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.legacy.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.notifications.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.reports.backend.apps"]
+
+[[row]]
+case = "PS11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.reports.backend.logic.build"]
+
+[[row]]
+case = "PS12"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.migrations.0002_entry_table", "products.catalog.backend.sql"]
+
+[[row]]
+case = "PS13"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.hogql_queries.query_runner", "products.catalog.backend.hogql_queries.entries"]
+
+[[row]]
+case = "PS13"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.hogql_queries.query_runner", "products.reports.backend.hogql_queries.widget"]
+
+[[row]]
+case = "PS13"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.management.commands.start_worker", "products.reports.backend.temporal.workflows"]
+
+[[row]]
+case = "PS14"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.clickhouse.schema", "products.catalog.backend.sql"]
+
+[[row]]
+case = "PS15"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.api", "products.legacy.backend.api.widgets"]
+
+[[row]]
+case = "PS15"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.urls", "products.legacy.backend.api.widgets"]
+
+[[row]]
+case = "PS24"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.tasks.scheduled", "products.catalog.backend.tasks.reindex"]
+
+[[row]]
+case = "PS24"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.tasks.scheduled", "products.inventory.backend.tasks.restock"]
+
+[[row]]
+case = "PS24"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.tasks.scheduled", "products.reports.backend.tasks.nightly"]
+
+[[row]]
+case = "PS25"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["ee.api.widgets", "products.legacy.backend.models"]
+
+[[row]]
+case = "WW01"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.auth", "products.gatekeeper.backend.facade.api"]
+
+[[row]]
+case = "WW02"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.permissions", "products.access_control.backend.facade.api"]
+
+# orm-independent
+
+[[row]]
+case = "OI01"
+rule = "orm-independent"
+verdict = "finding"
+identity = ["posthog.egress.client", "send_for_team", "param:team", "posthog.models.team.Team"]
+
+[[row]]
+case = "OI02"
+rule = "orm-independent"
+verdict = "unknown"
+identity = ["posthog.egress.client", "forward", "param:kwargs", "typing.Any"]
+
+# own-database
+
+[[row]]
+case = "OD01"
+rule = "own-database"
+verdict = "incomplete"
+identity = ["products.access_control.backend.models.AccessRule"]
+
+[[row]]
+case = "OD01"
+rule = "own-database"
+verdict = "incomplete"
+identity = ["products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "OD01"
+rule = "own-database"
+verdict = "incomplete"
+identity = ["products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "OD01"
+rule = "own-database"
+verdict = "incomplete"
+identity = ["products.legacy.backend.models.Widget"]
+
+[[row]]
+case = "OD01"
+rule = "own-database"
+verdict = "incomplete"
+identity = ["products.reports.backend.models.ReportRun"]
+
+# presentation-uses-facade
+
+[[row]]
+case = "PF02"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.presentation.views", "products.legacy.backend.models"]
+
+[[row]]
+case = "PF03"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.routes", "products.legacy.backend.api.widgets"]
+
+# prod-imports-test
+
+[[row]]
+case = "PT01"
+rule = "prod-imports-test"
+verdict = "finding"
+identity = ["products.legacy.backend.tasks.cleanup", "products.legacy.backend.tests.factories"]
+
+[[row]]
+case = "PT02"
+rule = "prod-imports-test"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.testing", "products.catalog.backend.tests.factories"]
+
+# product-code-at-home
+
+[[row]]
+case = "PH01"
+rule = "product-code-at-home"
+verdict = "finding"
+identity = ["ai_observability", "posthog.temporal.ai_observability"]
+
+[[row]]
+case = "PH01"
+rule = "product-code-at-home"
+verdict = "finding"
+identity = ["ai_observability", "posthog.temporal.ai_observability.summarize"]
+
+# public-surface
+
+[[row]]
+case = "PS01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.logic.widgets", "posthog.api.widget_report", "import"]
+
+[[row]]
+case = "PS01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.logic.widgets.widget_total", "posthog.api.widget_report", "import"]
+
+[[row]]
+case = "PS02"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "import"]
+
+[[row]]
+case = "PS02"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "reference"]
+count = 3
+
+[[row]]
+case = "PS03"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.logic.widgets.WIDGET_LIMIT", "posthog.api.widget_report", "reference"]
+
+[[row]]
+case = "PS07"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.pricing.price_for", "products.reports.backend.logic.build", "import"]
+
+[[row]]
+case = "PS09"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.access_control.backend.models.AccessRule", "posthog.test.test_auth", "import"]
+
+[[row]]
+case = "PS09"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.access_control.backend.models.AccessRule", "posthog.test.test_auth", "reference"]
+
+[[row]]
+case = "PS09"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_widgets", "import"]
+
+[[row]]
+case = "PS09"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_widgets", "reference"]
+
+[[row]]
+case = "PS10"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock.log_restock", "products.legacy.backend.tests.test_widgets", "dotted-path"]
+
+[[row]]
+case = "PS10"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.logic.build.run_count", "posthog.test.test_auth", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.access_control.backend.apps.AccessControlConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.apps.CatalogConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.gatekeeper.backend.apps.GatekeeperConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.gatekeeper.backend.middleware.GateSessionMiddleware", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.apps.InventoryConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.apps.LegacyConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.notifications.backend.apps.NotificationsConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.apps.ReportsConfig", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS11"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.logic.build", "posthog.settings.web", "dotted-path"]
+
+[[row]]
+case = "PS12"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "posthog.migrations.0002_entry_table", "import"]
+
+[[row]]
+case = "PS12"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "posthog.migrations.0002_entry_table", "reference"]
+
+[[row]]
+case = "PS13"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.hogql_queries.entries.EntryQueryRunner", "posthog.hogql_queries.query_runner", "import"]
+
+[[row]]
+case = "PS13"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.hogql_queries.entries.EntryQueryRunner", "posthog.hogql_queries.query_runner", "reference"]
+
+[[row]]
+case = "PS13"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.hogql_queries.widget.WidgetQueryRunner", "posthog.hogql_queries.query_runner", "import"]
+
+[[row]]
+case = "PS13"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.hogql_queries.widget.WidgetQueryRunner", "posthog.hogql_queries.query_runner", "reference"]
+
+[[row]]
+case = "PS13"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.temporal.workflows.BuildReportWorkflow", "posthog.management.commands.start_worker", "import"]
+
+[[row]]
+case = "PS13"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.temporal.workflows.BuildReportWorkflow", "posthog.management.commands.start_worker", "reference"]
+
+[[row]]
+case = "PS14"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "posthog.clickhouse.schema", "import"]
+
+[[row]]
+case = "PS14"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "posthog.clickhouse.schema", "reference"]
+
+[[row]]
+case = "PS14"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "products.reports.backend.logic.build", "import"]
+
+[[row]]
+case = "PS14"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "products.reports.backend.logic.build", "reference"]
+
+[[row]]
+case = "PS15"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.api.widgets.WidgetViewSet", "posthog.api", "import"]
+
+[[row]]
+case = "PS15"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.api.widgets.WidgetViewSet", "posthog.api", "reference"]
+
+[[row]]
+case = "PS15"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.api.widgets.WidgetViewSet", "posthog.urls", "import"]
+
+[[row]]
+case = "PS15"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.api.widgets.WidgetViewSet", "posthog.urls", "reference"]
+
+[[row]]
+case = "PS16"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.access_control.backend.presentation.access_control.AccessControlViewSetMixin", "products.legacy.backend.api.widgets", "import"]
+
+[[row]]
+case = "PS16"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.access_control.backend.presentation.access_control.AccessControlViewSetMixin", "products.legacy.backend.api.widgets", "reference"]
+
+[[row]]
+case = "PS17"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.presentation.views.EntryExportView", "products.legacy.backend.presentation.views", "import"]
+
+[[row]]
+case = "PS17"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.presentation.views.EntryExportView", "products.legacy.backend.presentation.views", "reference"]
+
+[[row]]
+case = "PS18"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.presentation.serializers.StockSerializer", "products.legacy.backend.presentation.views", "import"]
+
+[[row]]
+case = "PS18"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.presentation.serializers.StockSerializer", "products.legacy.backend.presentation.views", "reference"]
+
+[[row]]
+case = "PS19"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.events.ENTRY_CREATED", "products.legacy.backend.facade.contracts", "import"]
+
+[[row]]
+case = "PS19"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.events.ENTRY_CREATED", "products.legacy.backend.facade.contracts", "reference"]
+
+[[row]]
+case = "PS20"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.shapes", "import"]
+
+[[row]]
+case = "PS20"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.shapes", "reference"]
+count = 3
+
+[[row]]
+case = "PS21"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.pricing.price_for", "bin.build_types", "import"]
+
+[[row]]
+case = "PS21"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.logic.widgets.widget_total", "livestream.bot", "import"]
+
+[[row]]
+case = "PS21"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.logic.build.run_count", "tools.codegen.generate", "import"]
+
+[[row]]
+case = "PS24"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.catalog.backend.tasks.reindex.reindex_catalog", "posthog.tasks.scheduled", "import"]
+
+[[row]]
+case = "PS24"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.tasks.restock.restock", "posthog.tasks.scheduled", "import"]
+
+[[row]]
+case = "PS24"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.reports.backend.tasks.nightly.nightly_reports", "posthog.tasks.scheduled", "import"]
+
+[[row]]
+case = "PS25"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "import"]
+
+[[row]]
+case = "PS25"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "reference"]
+
+[[row]]
+case = "RD01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.receivers", "import"]
+
+[[row]]
+case = "RD01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.receivers", "reference"]
+
+[[row]]
+case = "RD02"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.stock_listeners", "import"]
+
+[[row]]
+case = "RD02"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.stock_listeners", "reference"]
+
+# receiver-direction
+
+[[row]]
+case = "RD01"
+rule = "receiver-direction"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.receivers"]
+
+[[row]]
+case = "RD02"
+rule = "receiver-direction"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
+
+# registry-slots
+
+[[row]]
+case = "RS01"
+rule = "registry-slots"
+verdict = "incomplete"
+identity = ["products.catalog.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
+
+[[row]]
+case = "RS01"
+rule = "registry-slots"
+verdict = "incomplete"
+identity = ["products.inventory.backend.health_checks.HEALTH_CHECKS"]
+
+[[row]]
+case = "RS01"
+rule = "registry-slots"
+verdict = "incomplete"
+identity = ["products.reports.backend.health_checks.HEALTH_CHECKS"]
+
+[[row]]
+case = "RS02"
+rule = "registry-slots"
+verdict = "incomplete"
+identity = ["products.legacy.backend.health_checks.HEALTH_CHECKS"]
+
+[[row]]
+case = "RS03"
+rule = "registry-slots"
+verdict = "incomplete"
+identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
+
+# reverse-accessor
+
+[[row]]
+case = "RA01"
+rule = "reverse-accessor"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.models.Widget", "stock", "widget_set"]
+
+[[row]]
+case = "RA02"
+rule = "reverse-accessor"
+verdict = "finding"
+identity = ["posthog.models.team.Team", "products.legacy.backend.models.Widget", "team", "widget_set"]
+
+[[row]]
+case = "RA03"
+rule = "reverse-accessor"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "posthog.models.sharing.SharingConfiguration", "widget", "sharingconfiguration_set"]
+
+# thin-commands
+
+[[row]]
+case = "TC01"
+rule = "thin-commands"
+verdict = "finding"
+identity = ["products.legacy.backend.management.commands.seed_widgets", "products.legacy.backend.models"]
+
+[[row]]
+case = "TC02"
+rule = "thin-commands"
+verdict = "finding"
+identity = ["products.legacy.backend.management.commands.backfill_widget_names", "products.legacy.backend.logic.widgets"]
+
+[[row]]
+case = "TC03"
+rule = "thin-commands"
+verdict = "finding"
+identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
+
+# wiring-watched
+
+[[row]]
+case = "DR01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/hogql_queries/__init__.py"]
+
+[[row]]
+case = "IN01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/apps.py"]
+
+[[row]]
+case = "IN03"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/apps.py"]
+
+[[row]]
+case = "PS10"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/logic/build.py"]
+
+[[row]]
+case = "RD02"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/stock_listeners.py"]
+
+
+# Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
+# is an expected failure of test_model_repo.py until the rule gives it. A wanted row matches a
+# row of `rule` ("*" for any rule) with `verdict` whose identity holds every string of `match`.
+
+[[wanted]]
+case = "FQ01"
+decision = "D95, D96: a facade function runs no ORM query itself"
+rule = "*"
+verdict = "finding"
+match = ["products.catalog.backend.facade.api", "count_entries"]
+
+[[wanted]]
+case = "IN02"
+decision = "D100: a model class registered into another package is a crossing"
+rule = "*"
+verdict = "finding"
+match = ["products.legacy.backend.models.Widget", "registered_models"]
+
+[[wanted]]
+case = "WW01"
+decision = "D103: the request path is a watched channel"
+rule = "wiring-watched"
+verdict = "finding"
+match = ["products/gatekeeper/backend/logic/decisions.py"]
+
+[[wanted]]
+case = "DO01"
+decision = "core package with a declared door (direction agreed Nov 12)"
+rule = "*"
+verdict = "finding"
+match = ["posthog.ingress.dispatch", "products.legacy.backend.logic.widgets"]
+
+[[wanted]]
+case = "AT01"
+decision = "B10: views open no transactions (rule built, no reference edge for a call)"
+rule = "atomic-outside-views"
+verdict = "finding"
+match = ["products.legacy.backend.presentation.views"]
+
+[[wanted]]
+case = "FF03"
+decision = "featureflag-relations: a stale classification fails (rule built, file not read)"
+rule = "featureflag-relations"
+verdict = "finding"
+match = ["CatalogEntry", "flag"]
+
+[[wanted]]
+case = "FD04"
+decision = "facade-no-drf reads the names a facade hands out (Nov 12 cross-check)"
+rule = "facade-no-drf"
+verdict = "finding"
+match = ["products.catalog.backend.facade.api", "serializers"]
+
+[[wanted]]
+case = "RS02"
+decision = "registry-slots: a slot file defines the attribute (rule built, producer missing)"
+rule = "registry-slots"
+verdict = "finding"
+match = ["products.legacy.backend.health_checks"]
+
+[[wanted]]
+case = "RS03"
+decision = "registry-slots: members subclass the base (rule built, producer missing)"
+rule = "registry-slots"
+verdict = "finding"
+match = ["products.legacy.backend.webhook_consumers"]
+
+[[wanted]]
+case = "ES06"
+decision = "D63 and the Nov 12 cross-check: an allowed shape is still walked"
+rule = "export-shape"
+verdict = "finding"
+match = ["EntryOutOfStock", "StockItem"]
+
+[[wanted]]
+case = "ES07"
+decision = "D63 and the Nov 12 cross-check: an allowed shape is still walked"
+rule = "export-shape"
+verdict = "finding"
+match = ["EntryStockView", "StockItem"]
+
+# Levels: the products that pass and fail each level.
+
+[levels.isolated]
+passing = ["ai_observability"]
+failing = ["access_control", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]
