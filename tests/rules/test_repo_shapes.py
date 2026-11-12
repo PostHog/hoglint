@@ -311,6 +311,18 @@ PUBLIC_SURFACE_CASES = [
             ("products.error_tracking.backend.sql.TABLE", "products.billing.backend.logic", "import"),
         ],
     ),
+    (
+        "a test's patch target is left to wiring-watched; a test's import stays",
+        [
+            ("dotted-path", "posthog.api.test.test_thing", "products.billing.backend.logic.charge", (Context.TEST,)),
+            ("import", "posthog.api.test.test_thing", "products.billing.backend.logic.charge", (Context.TEST,)),
+            ("dotted-path", "posthog.api.thing", "products.billing.backend.logic.charge", (Context.PROD,)),
+        ],
+        [
+            ("products.billing.backend.logic.charge", "posthog.api.test.test_thing", "import"),
+            ("products.billing.backend.logic.charge", "posthog.api.thing", "dotted-path"),
+        ],
+    ),
 ]
 
 
