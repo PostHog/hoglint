@@ -161,9 +161,9 @@ MEMO_STORE = Store(
     off_values=(OFF, TRACE),
 )
 SUMMARY_STORE = Store("summaries", SUMMARIES, shared=False, warning=CACHE_WARNING)
-INPUTS_STORE = Store("inputs", INPUTS, shared=False, warning=CACHE_WARNING)
+INPUTS_STORE = Store("inputs", INPUTS, shared=True, warning=CACHE_WARNING)
 PACKS_STORE = Store("packs", PACKS, shared=True, warning=CACHE_WARNING)
-EXTRACTOR_STORE = Store("extractors", EXTRACTORS, shared=False, warning=CACHE_WARNING)
+EXTRACTOR_STORE = Store("extractors", EXTRACTORS, shared=True, warning=CACHE_WARNING)
 SITE_PACKAGES_ANSWERS = Store(
     "site-packages", f"{ANSWERS}/site-packages", shared=False, warning=CACHE_WARNING, switch=OFF_SWITCH, off="1"
 )

@@ -48,6 +48,7 @@ def test_a_store_added_to_the_list_reaches_every_view_with_no_other_edit(tmp_pat
 
 
 def test_the_replay_switches_are_the_views_of_the_store_list() -> None:
+    assert {store.name for store in STORES.stores if store.shared} == {"facts", "packs", "inputs", "extractors"}
     assert STORES.cold_environment() == COLD_SWITCHES
     assert set(STORES.switches()) == set(REUSE_SWITCHES)
 
