@@ -948,7 +948,7 @@ class Tables:
         rng = self.rng
         if mode in ENTITY_MODES and key != "from":
             return selector(rng, ENTITY_REFS)
-        if key == "from" and mode == "reach":
+        if key == "from" and mode in ("reach", "export"):
             module_refs = [
                 ref for ref in self.refs if ref.startswith("src.") and ref not in ("src.context", "src.exported")
             ]
@@ -1017,6 +1017,7 @@ class Tables:
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
+            "slots": lambda: rng.choice(["all", "shape"]),
             "exports": lambda: rng.sample(["facade", "adapter"], rng.randint(1, 2)),
             "on": lambda: rng.choice(["module", "symbol"]),
             "within": lambda: "products/{product}",
