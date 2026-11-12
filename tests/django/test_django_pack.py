@@ -123,6 +123,7 @@ SETTINGS = {
             assign("_TWICE", {"list": [{"s": "shop.models"}]}, 5),
             assign("A", {"list": [{"star": "_TWICE"}]}, 6),
             assign("B", {"bin": "+", "l": "_TWICE", "r": {"list": []}}, 7),
+            {"s": -1, "l": 9, "c": 0, "op": "=", "t": [{"i": {"s": "default"}, "sub": "CACHES"}], "v": {"dict": []}},
         ],
         "strs": [
             setting_string(2, "shop.models.Order", "elt:list ifexp:body assign:_EXTRA"),
@@ -132,6 +133,8 @@ SETTINGS = {
             setting_string(8, "shop.apps", "elt:list dict:val:DEFAULT_AUTHENTICATION_CLASSES assign:REST_FRAMEWORK"),
             setting_string(9, "shop.models.Order", "dict:val:h assign:[]"),
             setting_string(10, "billing.models", "arg:0:?.append expr"),
+            setting_string(11, "shop.apps.ShopConfig", "dict:val dict:val:filters assign:LOGGING"),
+            setting_string(12, "billing.models.Invoice", "cmp:left if-test"),
         ],
     }
 }
@@ -141,7 +144,7 @@ def test_a_settings_string_carries_its_setting_or_says_it_cannot_tell() -> None:
     graph = FactRepo(SETTINGS).graph()
 
     found = {
-        e.site.line: e.attr("setting") or f"unknown:{e.attr('unknown')}"
+        e.site.line: e.attr("setting") or (f"unknown:{e.attr('unknown')}" if e.attr("unknown") else "none")
         for e in graph.by_kind("dotted-path")
         if e.site.module == "proj.settings"
     }
@@ -152,8 +155,10 @@ def test_a_settings_string_carries_its_setting_or_says_it_cannot_tell() -> None:
         4: "MIDDLEWARE",
         5: "unknown:setting",
         8: "REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES",
-        9: "unknown:setting",
+        9: "CACHES.default.h",
         10: "unknown:setting",
+        11: "LOGGING.filters",
+        12: "none",
     }
 
 

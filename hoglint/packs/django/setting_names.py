@@ -3,7 +3,11 @@ edges core makes there: a rule selects a setting's entries by its name (`MIDDLEW
 `REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES`), not by the syntax around them.
 
 A string in a list that another setting takes in (`[*EXTRA]`, `A + B`, `B = A`, `{**A}`) belongs to
-that setting. A string whose setting cannot be told gets `unknown = "setting"`, never no attr.
+that setting; one under a subscript target or a computed key belongs to the name and literal keys
+above it. A string in a condition is no value of a setting and gets no attr. A string whose
+setting cannot be told gets `unknown = "setting"`: one passed to a call that is no method of a
+plain name (`X["k"].append(...)`: the facts hold no text of the receiver), and one in a list that
+flows into two settings.
 """
 
 from __future__ import annotations
@@ -22,44 +26,97 @@ DOTTED_PATH = "dotted-path"
 CONTAINER_STEPS = ("elt:", "star", "ifexp:body", "ifexp:else")
 # The statement kinds that name the setting a value goes into.
 ASSIGN_STEPS = ("assign:", "annassign:")
+# The name an assignment step gives a subscript target.
+SUBSCRIPT = "[]"
+# Statements whose strings are no value of a setting: a condition.
+CONDITION_STEPS = frozenset({"if-test", "assert"})
+# The place of a string that is no value of a setting.
+NO_SETTING = ""
 
 
 class SettingPlaces:
     """Reads a string's setting from its syntax chain (`up`, innermost step first): the name the
-    statement assigns or mutates, and the literal dict keys on the way down to the string."""
+    statement assigns or mutates, and the literal keys on the way down to the string, up to the
+    first key that is computed. A string in a condition is no value of a setting."""
 
-    @staticmethod
-    def target(steps: list[str]) -> tuple[str, list[str]] | None:
-        """The statement's name, and the steps inside it; None when the statement names no plain
-        setting (a subscript target, a condition, a call that is no method of a name)."""
+    def target(self, steps: list[str], subscript: Subscript | None) -> tuple[str, list[str], list[str]] | None:
+        """The statement's name, the literal keys of a subscript target, and the steps inside the
+        statement; None when no name can be read (a call that is no method of a plain name)."""
         last = steps[-1]
-        if last.startswith(ASSIGN_STEPS):
-            return last.partition(":")[2], steps[:-1]
-        if last.startswith("augassign:"):
-            return last.split(":", 2)[2], steps[:-1]
+        if last.startswith(ASSIGN_STEPS) or last.startswith("augassign:"):
+            name = last.rsplit(":", 1)[1]
+            if name == SUBSCRIPT and subscript is not None:
+                return subscript.name, subscript.keys, steps[:-1]
+            return name, [], steps[:-1]
         if last == "expr" and len(steps) >= 2 and steps[-2].startswith("arg:"):
             receiver = steps[-2].split(":", 2)[2].rpartition(".")[0]
-            return receiver, steps[:-2]
+            return receiver, [], steps[:-2]
         return None
 
-    def place(self, up: str) -> str | None:
-        """`NAME` or `NAME.KEY.KEY`; None when it cannot be told."""
-        found = self.target(up.split(" "))
+    def place(self, up: str, subscript: Subscript | None) -> str | None:
+        """`NAME` or `NAME.KEY.KEY`; NO_SETTING for a string in a condition; None when the name
+        cannot be read."""
+        steps = up.split(" ")
+        if steps[-1] in CONDITION_STEPS:
+            return NO_SETTING
+        found = self.target(steps, subscript)
         if found is None:
             return None
-        name, inner = found
+        name, keys, inner = found
         if not name.isidentifier():
             return None
-        keys: list[str] = []
+        keys = list(keys)
         for step in reversed(inner):
             if step.startswith("dict:val:"):
                 keys.append(step.removeprefix("dict:val:"))
                 continue
-            if step == "dict:val":
-                return None
             if not step.startswith(CONTAINER_STEPS):
                 break
         return ".".join([name, *keys])
+
+
+class Subscript:
+    """A subscript assignment target (`CACHES["default"]["OPTIONS"] = ...`): the name it starts
+    from and its literal keys, up to the first computed one."""
+
+    def __init__(self, name: str, keys: list[str]) -> None:
+        self.name = name
+        self.keys = keys
+
+    @staticmethod
+    def of(target: object) -> Subscript | None:
+        indices: list[object] = []
+        while isinstance(target, dict) and "sub" in target:
+            indices.append(target.get("i"))
+            target = target["sub"]
+        if not isinstance(target, str) or not indices:
+            return None
+        keys: list[str] = []
+        for index in reversed(indices):
+            if not (isinstance(index, dict) and isinstance(index.get("s"), str)):
+                break
+            keys.append(index["s"])
+        return Subscript(target, keys)
+
+
+class Statements:
+    """The module-level assignments of one settings module in source order, to find the subscript
+    target of the statement a string sits in."""
+
+    def __init__(self, record: Mapping[str, Any]) -> None:
+        rows = [row for row in record.get("assigns", ()) if row["s"] == -1]
+        self.starts = sorted(((row["l"], row["c"]), row["t"]) for row in rows)
+
+    def subscript_at(self, line: int, column: int) -> Subscript | None:
+        """The subscript target of the last statement that starts before the string."""
+        found = None
+        for start, targets in self.starts:
+            if start > (line, column):
+                break
+            found = targets
+        if not found:
+            return None
+        return Subscript.of(found[0])
 
 
 class SettingFlows:
@@ -132,6 +189,7 @@ class SettingNames:
         wanted: dict[tuple[str, int, int], str | None] = {}
         names: set[str] = set()
         for module, record in records:
+            statements = Statements(record)
             for row in record.get("strs", ()):
                 at_scope, _header, line, column, _flags, value, _chain, up = row[:8]
                 # A string inside a function is no value of a setting.
@@ -140,7 +198,9 @@ class SettingNames:
                 parts = row[8] if len(row) > 8 else None
                 texts = [value] if parts is None else [*parts, value]
                 names.update(text.rpartition(".")[2] for text in texts if text)
-                place = places.place(up)
+                place = places.place(up, statements.subscript_at(line, column))
+                if place == NO_SETTING:
+                    continue
                 wanted[(module, line, column)] = flows.setting(place) if place is not None else None
         out: list[Refinement] = []
         if not wanted:
