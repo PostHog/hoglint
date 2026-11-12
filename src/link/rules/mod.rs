@@ -665,7 +665,8 @@ impl Rules {
     /// when it decides by class, else always.
     pub fn export_member(&self, link: &Link, export: &Export, symbol: Option<&str>) -> Truth {
         if !export.symbols.is_empty() {
-            let listed = symbol.is_some_and(|symbol| export.symbols.iter().any(|name| name == symbol));
+            let listed =
+                symbol.is_some_and(|symbol| export.symbols.iter().any(|name| name == symbol));
             return if listed { Truth::True } else { Truth::False };
         }
         if export.subclass_of.is_empty() {

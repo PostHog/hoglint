@@ -648,9 +648,7 @@ impl<'a> Env<'a> {
             if bits & (1 << index) == 0 {
                 continue;
             }
-            let mut truth = cx
-                .rules
-                .export_member(cx.link, export, symbol.as_deref());
+            let mut truth = cx.rules.export_member(cx.link, export, symbol.as_deref());
             if truth == Truth::False {
                 continue;
             }
