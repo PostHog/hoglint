@@ -434,3 +434,17 @@ def test_posthog_preset_presentation_uses_facade(
         builder.module(src, origin.rpartition(".")[0], surface.rpartition(".")[0]).symbol(origin, "def")
         builder.edge("import", src, origin, surface)
     assert found(run_shape(tmp_path, "posthog", builder.graph), "presentation-uses-facade") == sorted(expected)
+
+
+def test_posthog_preset_leaves_relations_onto_feature_flags_to_the_repo_test(tmp_path: Path) -> None:
+    flag = "products.feature_flags.backend.models.FeatureFlag"
+    graph = (
+        GraphBuilder()
+        .module("products.feature_flags.backend.models", "products.surveys.backend.models")
+        .symbol(flag, "model", abstract="false")
+        .edge("relation", "products.surveys.backend.models", flag, attrs=(("model", "Survey"), ("field", "flag")))
+        .graph
+    )
+    result = run_shape(tmp_path, "posthog", graph)
+    assert [rule for rule, spec in result.config.rules.items() if spec.classify] == []
+    assert [f.rule for f in result.findings() if f.identity[0] == flag] == []

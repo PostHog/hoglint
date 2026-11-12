@@ -335,7 +335,6 @@ receiver-sender          = ["dst.symbol", "src.package", "src.module"]
 location-module-trigger  = ["edge.location", "src.module", "edge.label"]
 package-module           = ["src.package", "src.module"]
 package-file             = ["package", "subject"]
-field-of-model           = ["edge.model", "edge.field"]
 
 # ── The public surface ─────────────────────────────────────────
 
@@ -599,15 +598,6 @@ require       = "edge.child_databases subset_of edge.parent_databases"
 on_unresolved = "block"
 identity      = "migration-pair"
 growth_key    = ["edge.child", "edge.parent"]
-
-[rules.featureflag-relations]
-primitive  = "inventory"
-doc        = "Every relation onto FeatureFlag is classified. Missing and stale entries both fail."
-kinds      = ["relation"]
-select     = "dst.kind == 'model' and dst.name == 'FeatureFlag'"
-classify   = "tools/hoglint/policy/featureflag-relations.toml"
-identity   = "field-of-model"
-growth_key = ["edge.model", "edge.field"]
 
 [rules.own-database]
 primitive  = "layout"
