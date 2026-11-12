@@ -285,6 +285,12 @@ identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.b
 # facade-logic
 
 [[row]]
+case = "HZ12"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
+
+[[row]]
 case = "FL03"
 rule = "facade-logic"
 verdict = "finding"
@@ -781,30 +787,6 @@ identity = ["scripts.shapes|reference|products.inventory.backend.models.StockIte
 # no-product-lists-in-core
 
 [[row]]
-case = "WW14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
-
-[[row]]
-case = "WW11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
-
-[[row]]
-case = "WW12"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
-
-[[row]]
-case = "WW13"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
-
-[[row]]
 case = "DR04"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1044,6 +1026,30 @@ case = "WW08"
 rule = "no-product-lists-in-core"
 verdict = "unknown"
 identity = ["posthog.request_log", "?"]
+
+[[row]]
+case = "WW11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
+
+[[row]]
+case = "WW12"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
+
+[[row]]
+case = "WW13"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
+
+[[row]]
+case = "WW14"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
 
 # orm-independent
 
@@ -1478,24 +1484,6 @@ identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
 # request-path
 
 [[row]]
-case = "WW11"
-rule = "request-path"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
-
-[[row]]
-case = "WW12"
-rule = "request-path"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
-
-[[row]]
-case = "WW13"
-rule = "request-path"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
-
-[[row]]
 case = "WW01"
 rule = "request-path"
 verdict = "finding"
@@ -1536,6 +1524,24 @@ case = "WW10"
 rule = "request-path"
 verdict = "finding"
 identity = ["posthog.settings.web", "products.gatekeeper.backend.facade.lazy_gate"]
+
+[[row]]
+case = "WW11"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
+
+[[row]]
+case = "WW12"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
+
+[[row]]
+case = "WW13"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
 
 # reverse-accessor
 
@@ -1578,24 +1584,6 @@ verdict = "finding"
 identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
 
 # wiring-watched
-
-[[row]]
-case = "WW11"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/gatekeeper/backend/session_gate.py"]
-
-[[row]]
-case = "WW12"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/gatekeeper/backend/token_check.py"]
-
-[[row]]
-case = "WW13"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/gatekeeper/backend/validator.py"]
 
 [[row]]
 case = "DR01"
@@ -1674,6 +1662,24 @@ case = "WW08"
 rule = "wiring-watched"
 verdict = "incomplete"
 identity = ["rules.request-path|posthog.settings.web|import|products.gatekeeper.backend.facade.trail"]
+
+[[row]]
+case = "WW11"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/session_gate.py"]
+
+[[row]]
+case = "WW12"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/token_check.py"]
+
+[[row]]
+case = "WW13"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/validator.py"]
 
 
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
@@ -1784,3 +1790,17 @@ match = ["StockHolder", "StockItem"]
 [levels.isolated]
 passing = ["ai_observability", "visual_review"]
 failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]
+
+[[wanted]]
+case = "HZ13"
+decision = "Unknown is never clean: a lazy map of bare names where no entry resolves (a written limit, Nov 12)"
+rule = "*"
+verdict = "*"
+match = ["products.legacy.backend.facade.barelazy"]
+
+[[wanted]]
+case = "HZ14"
+decision = "Unknown is never clean: a lazy value that names the attribute, 'pkg.mod:Name' (a written limit, Nov 12)"
+rule = "*"
+verdict = "*"
+match = ["products.legacy.backend.facade.colonlazy"]

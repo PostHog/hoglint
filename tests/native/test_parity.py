@@ -382,6 +382,10 @@ BUILD_INCOMPLETE = ["products.shop.backend.facade.hooks|declares|products.shop.b
 GETATTR_FOUND = "products.shop.backend.facade.hooks.__getattr__"
 GETATTR_INCOMPLETE = "products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.__getattr__"
 LAZY_RUN = '_LAZY = {{"run": "{module}"}}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
+LAZY_TWO = (
+    '_LAZY = {{"run": "{module}", "other": "products.shop.backend.logic"}}\n\n\n'
+    "def __getattr__(name):\n    raise AttributeError(name)\n"
+)
 # (the import a facade module hands a name out by, the name, the files it reads, its findings, its
 # incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
 # directory without `__init__.py` has the zone a file directly inside it reads; a first-party name
@@ -482,6 +486,27 @@ HANDED_CASES = {
         [],
         [],
     ),
+    "a relative lazy member in a known zone": (
+        LAZY_RUN.format(module="..temporal.jobs"),
+        "run",
+        {"products/shop/backend/temporal/jobs.py": RUN},
+        [GETATTR_FOUND, *BUILD_FOUND],
+        [],
+    ),
+    "a relative lazy member whose module does not exist": (
+        LAZY_TWO.format(module="..temporal.gone"),
+        "run",
+        {"products/shop/backend/logic.py": RUN},
+        [],
+        [GETATTR_INCOMPLETE, *BUILD_INCOMPLETE],
+    ),
+    "a relative value in a dict of text in a module with a lazy hook": (
+        LAZY_RUN.format(module=".txt"),
+        "build",
+        {},
+        [],
+        [],
+    ),
     "a relative import that resolves": (
         "from ..temporal.jobs import run",
         "run",
@@ -527,6 +552,13 @@ HANDING_IMPORTS = {
     "a lazy name whose module does not exist": (
         LAZY_RUN.format(module="products.shop.backend.gone") + "\n__all__ = ['run', 'build']",
         ["run"],
+        [],
+    ),
+    "a relative lazy name": (LAZY_RUN.format(module="..temporal.jobs") + "\n__all__ = ['run', 'build']", ["run"], []),
+    "a relative lazy name whose module does not exist": (
+        LAZY_TWO.format(module="..temporal.gone").replace("backend.logic", "backend.temporal.jobs")
+        + "\n__all__ = ['run', 'build']",
+        ["other", "run"],
         [],
     ),
 }

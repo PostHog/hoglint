@@ -96,6 +96,9 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `HZ09` | `products/legacy/backend/facade/relativelabels.py` | A facade module with a body that hands out a name from logic by a relative import that resolves | clean | Neighbor of `HZ06` |
 | `HZ10` | `products/legacy/backend/facade/lazygoneworkers.py` | A facade module with a body whose lazy map names a module that does not exist | facade-logic incomplete; export-shape, facade-signature, facade-no-drf and prod-imports-test unknown; one more cycle unknown (`CY03`) | The entry is an import edge that does not resolve and keeps its name: unknown is never clean (Nov 12) |
 | `HZ11` | `products/legacy/backend/facade/lazytext.py` | A facade module with `__getattr__` and a module-level dict of text | clean | Neighbor of `HZ10`: a value that is no dotted path is no lazy entry |
+| `HZ12` | `products/legacy/backend/facade/relativeworkers.py` | A facade module with a body whose lazy map names wiring by a relative value (`'..temporal.jobs'`) | facade-logic finding | A relative value is anchored at the module's package, as a relative import is (Nov 12) |
+| `HZ13` | `products/legacy/backend/facade/barelazy.py` | A lazy map of one bare name where no entry resolves | clean | A written limit: a dict of plain words looks the same (wanted, not clean) |
+| `HZ14` | `products/legacy/backend/facade/colonlazy.py` | A lazy value that names the attribute (`'pkg.mod:Name'`) | clean | A written limit (wanted, not clean) |
 | `FQ01` | `products/catalog/backend/facade/api.py` | A facade function runs an ORM query itself (`count_entries`) | clean | D95, D96 (wanted) |
 | `FQ02` | `products/inventory/backend/facade/api.py` | A facade function maps a list that its logic returned | clean | D96 |
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |
@@ -210,6 +213,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `walk_where` | A handed-out class from a top folder outside `first_party` | `WK04` | not walked; only incomplete rows on its edges (defect, wanted) |
 | `handed_zones` | A handed name that is a namespace directory | `HZ03` | finding |
 | `handed_zones` | A lazy hand-out; `import a.b as name`; a relative import above the top package | `HZ04`, `HZ05`, `HZ06` | finding, finding, incomplete |
+| `handed_zones` | A lazy map of bare names where none resolves; a `'pkg.mod:Name'` value | `HZ13`, `HZ14` | clean (written limits, wanted) |
 | `dst.zone` | A directory two source roots place apart | none | The tree has one source root; a second would change every other case's module names |
 | `crosses` | A slot typed with a name that does not resolve | `CR03` | unknown |
 | `installs` as a list | A hook call that does not resolve | `UI01`, `UI02` | incomplete; the product is not Isolated |

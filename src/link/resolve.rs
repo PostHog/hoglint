@@ -556,13 +556,34 @@ impl Core {
         }
     }
 
+    /// The module a relative value (`.foo`, `..foo`) names, anchored at the module's package as
+    /// `import_module(text, __package__)` reads it; None above the top package or for a value that
+    /// is no dotted path.
+    fn relative_module(&mut self, package: Sid, text: &str) -> Option<Sid> {
+        let rest = text.trim_start_matches('.');
+        let level = text.len() - rest.len();
+        if self.it.s(package).is_empty() {
+            return None;
+        }
+        let parts = self.it.segs(package);
+        if level > parts.len() || !is_dotted_path(rest) {
+            return None;
+        }
+        let keep = parts.len() + 1 - level;
+        let base = self.it.from_segs(&parts[..keep]);
+        let anchored = format!("{}.{rest}", self.it.s(base));
+        Some(self.it.intern(&anchored))
+    }
+
     /// PEP 562 lazy exports: module-level dicts of name -> module string in a module with
     /// `__getattr__`. A value is the tail of a module-level string prefix, an absolute module,
-    /// or a module under the package or one of its ancestors (nearest first).
+    /// or a module under the package or one of its ancestors (nearest first). A relative value
+    /// (`.foo`) is anchored at the package, as a relative import is.
     ///
-    /// Second, the entries no module answers for, by name, with the module path as written. Only
-    /// an entry that reads as a name and a dotted path counts, and a path of one name only in a
-    /// dict where another entry resolves: another dict of text or names is no lazy map.
+    /// Second, the entries no module answers for, by name, with the module path as written (a
+    /// relative one anchored). Only an entry that reads as a name and a dotted path counts, and a
+    /// path of one name or a relative path only in a dict where another entry resolves: another
+    /// dict of text or names is no lazy map.
     fn lazy_map(
         &mut self,
         module: Sid,
@@ -598,31 +619,46 @@ impl Core {
         let mut out = OrderedMap::default();
         let mut missing = OrderedMap::default();
         for items in maps {
-            let mut unresolved: Vec<(Sid, Sid)> = Vec::new();
+            let mut unresolved: Vec<(Sid, Sid, bool)> = Vec::new();
             let mut resolves = false;
             for (key, value) in items {
                 let (Some(V::Str(key, _)), V::Str(value, _)) = (key, value) else {
                     continue;
                 };
                 let tail = self.it.s(*value).to_string();
-                let mut candidates: Vec<Sid> = prefixes
-                    .iter()
-                    .map(|p| self.it.intern(&format!("{p}{tail}")))
-                    .collect();
-                candidates.push(*value);
-                for &ancestor in &ancestors {
-                    candidates.push(self.it.join(ancestor, *value));
+                let relative = tail.starts_with('.');
+                let anchored = if relative {
+                    self.relative_module(package, &tail)
+                } else {
+                    None
+                };
+                let mut candidates: Vec<Sid> = Vec::new();
+                if relative {
+                    candidates.extend(anchored);
+                } else {
+                    for p in &prefixes {
+                        candidates.push(self.it.intern(&format!("{p}{tail}")));
+                    }
+                    candidates.push(*value);
+                    for &ancestor in &ancestors {
+                        candidates.push(self.it.join(ancestor, *value));
+                    }
                 }
                 if let Some(found) = candidates.into_iter().find(|&c| self.exists(c)) {
                     out.insert(*key, found);
                     resolves = true;
-                } else if is_identifier(self.it.s(*key)) && is_dotted_path(&tail) {
-                    unresolved.push((*key, *value));
+                } else if !is_identifier(self.it.s(*key)) {
+                    continue;
+                } else if let Some(path) = anchored {
+                    unresolved.push((*key, path, true));
+                } else if is_dotted_path(&tail) {
+                    unresolved.push((*key, *value, false));
                 }
             }
-            for (name, path) in unresolved {
-                // A bare name may be any word; it reads as a module only in a dict that is a lazy map.
-                if resolves || self.it.s(path).contains('.') {
+            for (name, path, relative) in unresolved {
+                // A bare name or a relative path may be any text; it reads as a module only in a
+                // dict that is a lazy map.
+                if resolves || (self.it.s(path).contains('.') && !relative) {
                     missing.insert(name, path);
                 }
             }
