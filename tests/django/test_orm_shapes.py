@@ -30,6 +30,11 @@ from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition
         ("", "typealias:Target", Shape("annotation")),
         ("", "bin:| arg:1:isinstance", Shape("other", "BinOp")),
         ("", "bin:+ assign:total", Shape("other", "BinOp")),
+        ("", "bin:| elt:tuple slice assign:Cache", Shape("annotation")),
+        ("", "elt:tuple slice assign:Cache", Shape("in-collection")),
+        (".objects.filter().order_by()[].values()", "assign:rows", Shape("scalar-chain", "values")),
+        (".objects.filter()[].values", "assign:rows", Shape("instance-many", "filter")),
+        (".objects.select_for_update()[].values()", "expr", Shape("lock")),
     ],
 )
 def test_classify(chain: str, up: str, expected: Shape) -> None:

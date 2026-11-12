@@ -491,6 +491,7 @@ impl Link {
             annotation_terminals: names("annotation_terminals")?,
             local_assign_steps: names("local_assign_steps")?,
             union_steps: names("union_steps")?,
+            alias_pass_steps: names("alias_pass_steps")?,
             alias_assign_steps: names("alias_assign_steps")?,
         };
         let models: Vec<Ent> = models.iter().map(|(m, s)| self.ent(m, s)).collect();

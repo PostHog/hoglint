@@ -72,6 +72,8 @@ SHAPES = [
     ("Order", "", "bin:| bin:| assign:Target"),
     ("Order", "", "bin:| typealias:Target"),
     ("Order", "", "bin:| arg:1:isinstance"),
+    ("Order", "", "bin:| elt:tuple slice assign:Cache"),
+    ("Order", ".objects.filter().order_by()[].values()", "assign:rows"),
     ("Invoice", ".objects.filter()", "await assign:qs"),
     ("Invoice", ".objects.all()", "assign:later"),
 ]

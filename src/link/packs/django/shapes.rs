@@ -28,8 +28,10 @@ pub struct Vocabulary {
     /// Prefixes of an escape step that ends an annotation, and of one that assigns a local.
     pub annotation_terminals: Vec<String>,
     pub local_assign_steps: Vec<String>,
-    /// The steps of a union of classes, and the prefixes of a step that assigns it to a name.
+    /// The steps of a union of classes, the steps a type alias may pass on the way up (a subscript,
+    /// a tuple), and the prefixes of a step that assigns it to a name.
     pub union_steps: Vec<String>,
+    pub alias_pass_steps: Vec<String>,
     pub alias_assign_steps: Vec<String>,
 }
 
@@ -200,6 +202,15 @@ impl UsePosition {
         }
         (methods, &[])
     }
+
+    /// The methods called after the first subscript: `values` in `qs[:5].values()`.
+    fn called_after_subscript(&self) -> Vec<&str> {
+        let (_, rest) = self.methods();
+        rest.windows(2)
+            .filter(|pair| pair[1] == "()")
+            .filter_map(|pair| pair[0].strip_prefix('.'))
+            .collect()
+    }
 }
 
 /// The first call above the top of the attribute and call chain whose callee is a name or an
@@ -267,17 +278,23 @@ impl Vocabulary {
         false
     }
 
-    /// An operand of a union of classes that is assigned to a name: `Target = A | B`.
+    /// An operand of a union of classes that is assigned to a name, also inside a subscript or a
+    /// tuple: `Target = A | B`, `Cache = dict[str, A | None]`.
     fn in_type_alias(&self, position: &UsePosition) -> bool {
-        let unions = position
-            .up
-            .iter()
-            .take_while(|step| holds(&self.union_steps, step))
-            .count();
+        let mut unions = 0;
+        let mut at = 0;
+        while let Some(step) = position.up.get(at) {
+            if holds(&self.union_steps, step) {
+                unions += 1;
+            } else if !holds(&self.alias_pass_steps, step) {
+                break;
+            }
+            at += 1;
+        }
         unions > 0
             && position
                 .up
-                .get(unions)
+                .get(at)
                 .is_some_and(|step| starts_with_any(step, &self.alias_assign_steps))
     }
 
@@ -360,7 +377,17 @@ impl Vocabulary {
         }
         let (methods, rest) = position.methods();
         if !methods.is_empty() {
-            return Ok(self.attribute_chain(&methods, enclosing_call(position, rest)?));
+            let shape = self.attribute_chain(&methods, enclosing_call(position, rest)?);
+            let values = position
+                .called_after_subscript()
+                .into_iter()
+                .find(|method| holds(&self.value_methods, method));
+            if let Some(values) = values
+                && matches!(shape.kind, "instance-single" | "instance-many")
+            {
+                return Ok(Shape::with("scalar-chain", values));
+            }
+            return Ok(shape);
         }
         if let Some(first) = position.trailers.first() {
             // The parent is the call that calls the node, or the subscript that indexes it.
@@ -443,6 +470,7 @@ mod tests {
             annotation_terminals: names(&["param-ann:", "returns", "annotation", "typealias:"]),
             local_assign_steps: names(&["assign:", "annassign:", "walrus:"]),
             union_steps: names(&["bin:|"]),
+            alias_pass_steps: names(&["slice", "elt:tuple"]),
             alias_assign_steps: names(&["assign:", "annassign:"]),
         }
     }
@@ -488,6 +516,17 @@ mod tests {
             ("", "bin:| bin:| assign:Target", "annotation"),
             ("", "bin:| typealias:Target", "annotation"),
             ("", "bin:| arg:1:isinstance", "other(BinOp)"),
+            ("", "bin:| elt:tuple slice assign:Cache", "annotation"),
+            (
+                ".objects.filter().order_by()[].values()",
+                "assign:rows",
+                "scalar-chain(values)",
+            ),
+            (
+                ".objects.filter()[].first()",
+                "assign:row",
+                "instance-many(filter)",
+            ),
         ];
         for (chain, up, expected) in cases {
             assert_eq!(

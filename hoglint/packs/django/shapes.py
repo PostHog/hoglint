@@ -105,9 +105,11 @@ STEP_PARENT = {
     "typeparam": "TypeVar",
 }
 ANNOTATION_TERMINALS = ("param-ann:", "returns", "annotation", "typealias:")
-# A union of classes assigned to a name (`Target = A | B`) is a type alias.
+# A union of classes assigned to a name (`Target = A | B`, `Cache = dict[str, A | None]`) is a type alias.
 UNION_STEPS = ("bin:|",)
+ALIAS_PASS_STEPS = ("slice", "elt:tuple")
 ALIAS_ASSIGN_STEPS = ("assign:", "annassign:")
+INSTANCE_SHAPES = frozenset({"instance-single", "instance-many"})
 LOCAL_ASSIGN_STEPS = ("assign:", "annassign:", "walrus:")
 
 # The names the link's shape code reads (src/link/packs/django/shapes.rs `Vocabulary`), handed
@@ -125,6 +127,7 @@ VOCABULARY: dict[str, list[str]] = {
     "annotation_terminals": list(ANNOTATION_TERMINALS),
     "local_assign_steps": list(LOCAL_ASSIGN_STEPS),
     "union_steps": list(UNION_STEPS),
+    "alias_pass_steps": list(ALIAS_PASS_STEPS),
     "alias_assign_steps": list(ALIAS_ASSIGN_STEPS),
 }
 
@@ -169,6 +172,11 @@ class UsePosition:
             if t != "()":
                 methods.append(t[1:])
         return methods, ()
+
+    def called_after_subscript(self) -> list[str]:
+        """The methods called after the first subscript: `values` in `qs[:5].values()`."""
+        _, rest = self.methods()
+        return [t[1:] for t, after in zip(rest, rest[1:]) if t.startswith(".") and after == "()"]
 
     def local_target(self) -> str | None:
         """The plain local name a use is assigned to (`qs = M.objects.filter()`), else None."""
@@ -218,12 +226,14 @@ class OrmShapes:
 
     @staticmethod
     def in_type_alias(position: UsePosition) -> bool:
-        """An operand of a union of classes that is assigned to a name: `Target = A | B`."""
+        """An operand of a union of classes that is assigned to a name, also inside a subscript or a
+        tuple: `Target = A | B`, `Cache = dict[str, A | None]`."""
         steps = list(position.up)
         unions = 0
-        while steps and steps[0] in UNION_STEPS:
-            steps.pop(0)
-            unions += 1
+        while steps and steps[0] in (*UNION_STEPS, *ALIAS_PASS_STEPS):
+            step = steps.pop(0)
+            if step in UNION_STEPS:
+                unions += 1
         return unions > 0 and bool(steps) and steps[0].startswith(ALIAS_ASSIGN_STEPS)
 
     def manager_chain(self, methods: list[str], enclosing: str | None) -> Shape:
@@ -273,7 +283,11 @@ class OrmShapes:
             return Shape("annotation")
         methods, rest = position.methods()
         if methods:
-            return self.attribute_chain(methods, self.enclosing_call(position, rest))
+            shape = self.attribute_chain(methods, self.enclosing_call(position, rest))
+            values = [m for m in position.called_after_subscript() if m in VALUE_METHODS]
+            if shape.kind in INSTANCE_SHAPES and values:
+                return Shape("scalar-chain", values[0])
+            return shape
         if position.trailers:
             # The parent is the Call that calls the node, or the Subscript that indexes it.
             return Shape("construct") if position.trailers[0] == "()" else Shape("in-collection")
