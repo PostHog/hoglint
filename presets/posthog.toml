@@ -444,11 +444,14 @@ growth_key = ["dst.module", "src.package"]
 
 [rules.model-crossings]
 primitive    = "use-shape"
-doc          = "Outside its package, a model appears only in harmless shapes. Judged at the origin, so a re-export hides nothing."
+doc          = "Outside its package, a model appears only in allowed shapes: a type, a cast, value rows, a signal sender, the team-extension registry. Judged at the origin, so a re-export hides nothing."
 kinds        = ["reference"]
 select       = "dst.kind == 'model' and dst.tier == 'product' and src.package != dst.package and edge.shape != none"
 endpoint     = "origin"
-allow_shapes = ["annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch"]
+allow_shapes = [
+  "annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch", "sender",
+  "passed-as-class(cast)", "passed-as-class(get_or_create_team_extension)",
+]
 contexts     = { exclude = ["test", "migration"] }
 flow         = "def-use"
 requires     = ["django.uses"]

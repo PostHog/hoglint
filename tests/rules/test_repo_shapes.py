@@ -448,3 +448,25 @@ def test_posthog_preset_leaves_relations_onto_feature_flags_to_the_repo_test(tmp
     result = run_shape(tmp_path, "posthog", graph)
     assert [rule for rule, spec in result.config.rules.items() if spec.classify] == []
     assert [f.rule for f in result.findings() if f.identity[0] == flag] == []
+
+
+def test_posthog_preset_lets_a_model_cross_only_in_shapes_that_hold_no_instance(tmp_path: Path) -> None:
+    invoice = "products.billing.backend.models.Invoice"
+    shapes = [
+        ("sender", ""),
+        ("scalar-chain", "values_list"),
+        ("annotation", ""),
+        ("passed-as-class", "cast"),
+        ("passed-as-class", "get_or_create_team_extension"),
+        ("passed-as-class", "build"),
+        ("instance-many", "filter"),
+    ]
+    builder = GraphBuilder().module("products.billing.backend.models", "posthog.api.thing")
+    builder.symbol(invoice, "model", abstract="false")
+    for line, (shape, detail) in enumerate(shapes, start=1):
+        builder.edge("reference", "posthog.api.thing", invoice, shape=shape, detail=detail, line=line)
+    result = run_shape(tmp_path, "posthog", builder.graph)
+    assert [f.identity[2] for f in result.runs["model-crossings"].findings] == [
+        "passed-as-class(build)",
+        "instance-many(filter)",
+    ]
