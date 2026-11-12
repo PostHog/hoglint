@@ -645,7 +645,10 @@ impl<'a> Walk<'a> {
                 );
                 return;
             }
-            if shapes.contains("dataclass") || shapes.contains("frozen-dataclass") {
+            // A data shape is part of the contract, so its fields are; any other allowed shape is
+            // handed out as it stands.
+            let data = policy.data.iter().any(|name| shapes.contains(name));
+            if data && (shapes.contains("dataclass") || shapes.contains("frozen-dataclass")) {
                 self.check_members(symbol, module, shape, trail);
             }
             return;
