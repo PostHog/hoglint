@@ -63,7 +63,9 @@ class ReachPrimitive(EdgeRule):
     PRIMITIVE = MODE = "reach"
     NATIVE_MODE = "reach"
     CONFIRM = "whole"
-    READS = frozenset({"kinds", "contexts", "view", "from", "select", "deny", "unless", "remedy", "on_unresolved"})
+    READS = frozenset(
+        {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied", "remedy", "on_unresolved"}
+    )
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
@@ -195,11 +197,14 @@ class ReachPrimitive(EdgeRule):
                     self.incomplete(env, f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
                     continue
                 verdict, excused = self.kept_verdict(module, at, hop, origin)
+                denied = verdict is not Truth.FALSE and not excused
                 target = dst.symbol or dst.module or ""
-                if verdict is not Truth.FALSE and not excused and target not in reported:
+                if denied and target not in reported:
                     reported.add(target)
                     path = [*self.path_to(parents, module), hop]
                     self.report(self.hop_env(hop, origin), [step.edge for step in path], verdict)
+                # A denied module is entered only with `through_denied`, never because a second hop names it.
+                if denied and not self.spec.through_denied:
                     continue
                 if dst.external is not None or dst.module is None or dst.module in parents:
                     continue
@@ -226,6 +231,7 @@ class ReachPrimitive(EdgeRule):
             "start": selector_tree(spec.from_),
             "deny": selector_tree(spec.deny),
             "unless": selector_tree(spec.unless),
+            "through_denied": spec.through_denied,
         }
 
     def report(self, env: EdgeEnv, path: list[Edge], verdict: Truth) -> None:

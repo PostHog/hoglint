@@ -211,6 +211,7 @@ class RuleSpec:
     exports: tuple[str, ...] = ()
     unknown_types: tuple[str, ...] = ()
     uses_at_import: bool = False  # entrypoint: a later use of an imported name is judged at its import
+    through_denied: bool = False  # reach: the search goes on through a denied target and reports what lies past it
 
     slots: str = "all"  # export: "shape" leaves a slot's kinds and unknown types to a signature rule
     producer_options: tuple[tuple[str, Any], ...] = ()

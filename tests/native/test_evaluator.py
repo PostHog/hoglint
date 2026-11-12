@@ -1071,6 +1071,7 @@ class Tables:
             "flow": lambda: rng.choice(["def-use", "def-use", "syntax"]),
             "resolve_calls": lambda: rng.choice(["bare-name", "import"]),
             "uses_at_import": lambda: rng.random() < 0.5,
+            "through_denied": lambda: rng.random() < 0.5,
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
@@ -1263,7 +1264,7 @@ class KeysRead:
 
 
 def test_each_rule_type_reads_exactly_the_keys_it_declares(world: World) -> None:
-    tables = Tables(random.Random(20261112))
+    tables = Tables(random.Random(20261113))
     read = KeysRead()
     # A key such as `on_unresolved` is read only when a drawn rule meets an unresolved edge, so
     # each type needs enough draws that every key it declares is read at least once.

@@ -195,7 +195,8 @@ impl Rules {
                         .module
                         .map_or(String::new(), |module| cx.text(module).to_string()),
                 };
-                if verdict != Truth::False && !excused && !reported.contains(&target) {
+                let denied = verdict != Truth::False && !excused;
+                if denied && !reported.contains(&target) {
                     reported.insert(target);
                     let mut path = vec![step];
                     let mut back = parents.get(&module).copied().flatten();
@@ -209,6 +210,10 @@ impl Rules {
                         path,
                         verdict,
                     });
+                }
+                // A denied module is entered only with `through_denied`, never because a second
+                // hop names it.
+                if denied && !rule.through_denied {
                     continue;
                 }
                 let Some(next) = hop.dst.module.filter(|_| hop.dst.external.is_none()) else {

@@ -316,6 +316,8 @@ pub struct ReachPlan {
     pub start: Option<NodePlan>,
     pub deny: Option<NodePlan>,
     pub unless: Option<NodePlan>,
+    /// The search goes on through a denied target (`through_denied`).
+    pub through_denied: bool,
 }
 
 #[derive(Deserialize)]

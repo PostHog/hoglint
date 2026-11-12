@@ -210,6 +210,8 @@ pub struct Reach {
     start: Option<Node>,
     deny: Option<Node>,
     unless: Option<Node>,
+    /// The search goes on through a denied target.
+    through_denied: bool,
 }
 
 /// A cycle rule (`CyclePrimitive`): its group field on each end.
@@ -752,6 +754,7 @@ impl Rules {
                 start: edge.optional(&found.start)?,
                 deny: edge.optional(&found.deny)?,
                 unless: edge.optional(&found.unless)?,
+                through_denied: found.through_denied,
             }),
             ModePlan::Cycle(found) => {
                 let path = |root: &str| [root.to_string(), found.group.clone()];

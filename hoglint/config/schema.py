@@ -136,7 +136,7 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
     "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots", "on_unknown", "unknown_types"},
-    "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless"},
+    "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
     "coverage": COMMON_RULE_KEYS | {"covers", "inputs"},
@@ -984,6 +984,7 @@ class SchemaBuilder:
             exports=as_tuple(table.get("exports")),
             unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
             uses_at_import=self.check_bool(f"{key}.uses_at_import", table.get("uses_at_import", False)),
+            through_denied=self.check_bool(f"{key}.through_denied", table.get("through_denied", False)),
             slots=self.check_enum(f"{key}.slots", table.get("slots", "all"), EXPORT_SLOTS),
             producer_options=tuple(producer_options),
             source=self.source(key),
