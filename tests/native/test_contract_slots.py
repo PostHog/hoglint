@@ -682,3 +682,17 @@ def test_each_class_walks_its_lineage_for_a_dataclass_base_once(
     assert walked and max(Counter(walked).values()) == 1
     other = BASE_CLASSES.split("\n\n\n").index("class Other(Plain):\n    pass\n")
     assert ("products/shop/backend/logic.py", other) not in {(path, idx) for _, path, idx in walked}
+
+
+def test_the_slot_rows_of_a_lazy_name_sit_at_the_line_of_its_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lazy = '"""Lazy names."""\n\n_LAZY = {"charge": "products.shop.backend.logic"}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
+    files = {f"{LOGIC}.py": CHARGE, "products/shop/backend/facade/api.py": lazy}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    places = {
+        (row[4], row[5])
+        for row in read_lines(out["native"] / "edges.jsonl")
+        if row[0] == "exposes" and row[2] == FACADE and dict(row[-1]).get("handed") == "lazy"
+    }
+    assert places == {(3, 0)}

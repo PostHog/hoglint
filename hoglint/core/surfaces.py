@@ -40,6 +40,7 @@ from hoglint.core.symbols import (
     ModuleTable,
     Tables,
     absolute_import,
+    lazy_sites,
     module_level,
     unresolved_surface,
 )
@@ -262,10 +263,12 @@ class HandedOut:
         missing = self.table.lazy_missing if self.table is not None else {}
         lazy_targets = [(name, f"{module}.{name}") for name, module in lazy.items()]
         lazy_targets += [(name, f"{written}.{name}") for name, written in missing.items()]
+        sites = lazy_sites(self.scope.record) if lazy_targets else {}
         for key in lazy_targets:
             if key not in seen:
                 seen.add(key)
-                out.append(Handed(key[0], key[1], LAZY_CLAUSE, 0, 0))
+                line, column = sites.get(key[0], (0, 0))
+                out.append(Handed(key[0], key[1], LAZY_CLAUSE, line, column))
         return out
 
     def hand_out(self, used: frozenset[str]) -> HandOut:

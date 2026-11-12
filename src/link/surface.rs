@@ -26,11 +26,11 @@ use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
-    Core, RUN_TIME_MODULE_FLAGS, absolute_import, module_level, unresolved_surface,
+    Core, RUN_TIME_MODULE_FLAGS, absolute_import, lazy_sites, module_level, unresolved_surface,
 };
 use super::scope::Scope;
 use super::trace::Kind;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const ALL_CLAUSE: &str = "all";
 pub const ALIAS_CLAUSE: &str = "alias";
@@ -377,15 +377,21 @@ impl HandedOut {
             }
             None => (Vec::new(), Vec::new()),
         };
+        let sites = if lazy.is_empty() && missing.is_empty() {
+            FxHashMap::default()
+        } else {
+            lazy_sites(&facts.files[scope.file as usize].assigns)
+        };
         for (name, module) in lazy.into_iter().chain(missing) {
             let target = core.it.join(module, name);
             if seen.insert((name, target)) {
+                let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
                 out.push(Handed {
                     bound: name,
                     target,
                     clause: LAZY_CLAUSE,
-                    line: 0,
-                    col: 0,
+                    line,
+                    col,
                 });
             }
         }
