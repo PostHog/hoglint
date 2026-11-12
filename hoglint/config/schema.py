@@ -6,6 +6,7 @@ in selectors, rules without identity or growth key, exports without a shape poli
 
 from __future__ import annotations
 
+import re
 import json
 import hashlib
 import dataclasses
@@ -38,7 +39,18 @@ from hoglint.core.config import CoreConfig, as_tuple
 from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
-from hoglint.selectors import Catalog, FieldInfo, FieldType, Selector, SelectorError, suggest
+from hoglint.selectors import (
+    KEYWORDS,
+    Catalog,
+    Condition,
+    FieldInfo,
+    FieldType,
+    Parser,
+    Selector,
+    SelectorError,
+    refs,
+    suggest,
+)
 
 if TYPE_CHECKING:
     from hoglint.rules.base import RuleType
@@ -187,7 +199,10 @@ ENDPOINT_FIELDS: dict[str, FieldInfo] = {
     "context": FieldInfo(FieldType.ENUM, CONTEXTS),
 }
 BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
-CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles")
+CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles", "conditions")
+# A condition's name is one word: with no dot it never reads as `src.x`, `dst.x` or `edge.x`.
+CONDITION_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]*")
+SELECTOR_ROOTS = frozenset({"src", "dst", "edge"})
 
 
 def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
@@ -220,6 +235,8 @@ class SchemaBuilder:
         self.use_shapes: tuple[str, ...] = ()
         self.views: dict[str, tuple[str, ...]] = dict(CORE_VIEWS)
         self.identities: dict[str, tuple[str, ...]] = dict(NAMED_IDENTITIES)
+        self.conditions: dict[str, Condition] = {}
+        self.used_conditions: set[str] = set()
 
     # ── helpers ──
 
@@ -254,10 +271,12 @@ class SchemaBuilder:
             self.fail(key, "a selector must be a string")
             return None
         try:
-            return Selector.parse(text, catalog)
+            selector = Selector.parse(text, catalog, self.conditions)
         except SelectorError as error:
             self.fail(key, str(error))
             return None
+        self.used_conditions.update(selector.conditions)
+        return selector
 
     # ── catalogs ──
 
@@ -312,6 +331,7 @@ class SchemaBuilder:
     def build(self) -> Config:
         self.check_top_level()
         self.read_vocabulary()
+        self.read_conditions()
         zones_raw = self.raw.get("zones", {})
         self.zone_names = self.read_zone_names(zones_raw)
         self.kind_names = tuple(self.raw.get("kinds", {}))
@@ -331,6 +351,7 @@ class SchemaBuilder:
         outputs = self.read_outputs()
         self.read_discovery()
         pack_sections = self.read_pack_sections()
+        self.check_unused_conditions()
         if self.problems:
             raise ConfigError(self.problems)
         sections = {name: value for name, value in self.raw.items() if name not in (*NAMED_SECTIONS, *CORE_SECTIONS)}
@@ -382,6 +403,50 @@ class SchemaBuilder:
                     self.fail(f"vocabulary.views.{name}", f"unknown edge kind {kind!r}{suggest(kind, self.edge_kinds)}")
             current = self.views.get(name, ())
             self.views[name] = (*current, *(kind for kind in kinds if kind not in current))
+
+    def read_conditions(self) -> None:
+        """`[conditions]`: name to selector text. A rule names a condition where an expression may
+        stand; the config expands it when it loads, so no evaluator sees a name."""
+        table = self.raw.get("conditions", {})
+        if not isinstance(table, dict):
+            self.fail("conditions", "must be a table of condition name -> selector")
+            return
+        taken = {*self.raw.get("fields", {}), *BUILTIN_NAMES, *KEYWORDS, *SELECTOR_ROOTS}
+        for name, text in table.items():
+            key = f"conditions.{name}"
+            if CONDITION_NAME_RE.fullmatch(name) is None:
+                self.fail(key, "a condition's name is one word of letters, digits, `_` and `-`")
+                continue
+            if name in taken:
+                self.fail(
+                    key, f"{name!r} is already a field, an attribute or a keyword; give the condition another name"
+                )
+                continue
+            if not isinstance(text, str):
+                self.fail(key, "a condition must be a selector string")
+                continue
+            try:
+                node = Parser(text).parse()
+            except SelectorError as error:
+                self.fail(key, str(error))
+                continue
+            self.conditions[name] = Condition(name, text.strip(), node)
+        for condition in self.conditions.values():
+            nested = [ref.path[0] for ref in refs(condition.node) if len(ref.path) == 1 and ref.path[0] in table]
+            if nested:
+                self.fail(
+                    f"conditions.{condition.name}",
+                    f"uses the condition {nested[0]!r}; a condition may not use another condition",
+                )
+
+    def check_unused_conditions(self) -> None:
+        """A condition no selector names is an error, as a key no code reads is (D52). Checked only
+        when all else loads: a selector that fails to load names none."""
+        if self.problems:
+            return
+        for name in self.conditions:
+            if name not in self.used_conditions:
+                self.fail(f"conditions.{name}", "no selector uses this condition; remove it")
 
     def read_zone_names(self, zones_raw: dict[str, Any]) -> tuple[str, ...]:
         names = [name for name in zones_raw if name not in ("within", "default")]

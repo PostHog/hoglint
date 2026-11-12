@@ -47,6 +47,13 @@ A comparison reads them so:
   A rule that must not match third-party code says so (`dst.external == none`).
 - Both engines read one table of these cases (`tests/rules/missing_side.txt`).
 
+**Named conditions** (owner, Nov 12).
+`[conditions]` maps a name to selector text; a selector names it wherever an expression may stand, and the name reads as its text in parentheses.
+- The config expands each name when it loads, so neither evaluator sees one.
+- A name is one word with no dot, and never a field, a built-in attribute, a keyword or `src`, `dst`, `edge`.
+- Conditions are flat: one that names another is a config error, so a rule still reads by itself with one lookup.
+- A condition no selector uses is a config error, as a key no code reads is (D52).
+
 **How a rule is scoped.**
 A rule selects on labels, never on a folder alone:
 - **zones**: for example `facade`, `presentation`, registries, `internal`.

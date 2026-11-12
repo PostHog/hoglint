@@ -6,8 +6,11 @@ import pytest
 
 from hoglint.config import ConfigError
 from hoglint.config.explain import ConfigExplainer
+from hoglint.rules.plan import tree
 
 from rules.support import config_from
+
+OTHER_RULE = "[rules.other]\nprimitive = 'edge'\nledger = false\n"
 
 BASE = """
 schema = 1
@@ -181,6 +184,30 @@ ledger = false
             "`classify` is the path of a classification file, not False",
         ),
         ("[discovery]\nsource_root = ['.']\n", "unknown key 'source_root'"),
+        # a condition's name stands where an expression stands, so it may not read as anything else
+        ("[conditions]\npackage = \"src.package == 'a'\"\n", "'package' is already a field"),
+        ("[conditions]\nmodule = \"src.package == 'a'\"\n", "'module' is already a field, an attribute"),
+        ("[conditions]\nnone = \"src.package == 'a'\"\n", "'none' is already a field, an attribute or a keyword"),
+        ("[conditions]\nsrc = \"src.package == 'a'\"\n", "'src' is already a field"),
+        ('[conditions]\n"a.b" = "src.package == \'a\'"\n', "a condition's name is one word"),
+        ('[conditions]\nbroken = "src.package =="\n', "conditions.broken: unexpected end"),
+        # conditions are flat: one never uses another
+        (
+            "[conditions]\nmine = \"src.package == 'a'\"\nboth = \"mine and dst.package == 'a'\"\n"
+            + OTHER_RULE
+            + "deny = 'both'\n",
+            "conditions.both: uses the condition 'mine'; a condition may not use another condition",
+        ),
+        ("[conditions]\nlonely = \"src.package == 'a'\"\n", "conditions.lonely: no selector uses this condition"),
+        # the error names the rule and the condition
+        (
+            '[conditions]\ncrossing = "src.packag != dst.package"\n' + OTHER_RULE + "deny = 'crossing'\n",
+            "rules.other.deny: in condition 'crossing': unknown field 'src.packag'",
+        ),
+        (
+            '[conditions]\ncrossing = "src.package != dst.package"\n' + OTHER_RULE + "deny = 'crossing == true'\n",
+            "condition 'crossing' is an expression and cannot be compared",
+        ),
         ("[unknown_section]\nx = 1\n", "unknown section"),
     ],
 )
@@ -188,6 +215,35 @@ def test_config_errors_before_any_run(tmp_path: Path, root: str, problem: str) -
     with pytest.raises(ConfigError) as error:
         config_from(tmp_path, BASE + root, {"preset.toml": PRESET})
     assert problem in str(error.value)
+
+
+CROSSING = "src.package != dst.package and dst.tier == none"
+
+
+def named_condition(tmp_path: Path, crossing: str, deny: str) -> tuple[str, dict[str, object] | None]:
+    root = BASE + f'[conditions]\ncrossing = "{crossing}"\n' + OTHER_RULE + f'deny = "{deny}"\n'
+    config = config_from(tmp_path, root, {"preset.toml": PRESET})
+    deny_selector = config.rules["other"].deny
+    assert deny_selector is not None
+    return config.policy_hash, tree(deny_selector.node)
+
+
+def test_a_condition_reads_as_its_text_in_parentheses_and_its_text_keys_the_policy(tmp_path: Path) -> None:
+    used, named = named_condition(tmp_path / "named", CROSSING, "not crossing or dst.tier == 'core'")
+    inline = config_from(
+        tmp_path / "inline",
+        BASE + OTHER_RULE + f"deny = \"not ({CROSSING}) or dst.tier == 'core'\"\n",
+        {"preset.toml": PRESET},
+    )
+    inline_deny = inline.rules["other"].deny
+    assert inline_deny is not None
+    # the evaluators receive this tree: the same tree means neither engine sees a name
+    assert named == tree(inline_deny.node)
+    changed, changed_tree = named_condition(
+        tmp_path / "changed", "src.package != dst.package", "not crossing or dst.tier == 'core'"
+    )
+    assert changed != used
+    assert changed_tree != named
 
 
 def test_pack_is_found_and_unknown_pack_fails(tmp_path: Path) -> None:

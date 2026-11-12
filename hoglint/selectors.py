@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import difflib
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -122,6 +122,17 @@ class Or:
 
 Node = Compare | Bare | Not | And | Or
 
+
+@dataclass(frozen=True, slots=True)
+class Condition:
+    """A named selector from `[conditions]`: a rule names it where an expression may stand, and the
+    name reads as its text in parentheses."""
+
+    name: str
+    source: str
+    node: Node
+
+
 KEYWORDS = frozenset({"and", "or", "not", "in", "startswith", "subset_of", "true", "false", "none"})
 # The deepest a selector nests, in its text (parentheses, `not`) and in its tree: a limit of the
 # config, so both engines judge every selector that loads.
@@ -162,13 +173,16 @@ def tokenize(source: str) -> list[Token]:
 
 
 class Parser:
-    """Recursive descent: or > and > not > comparison."""
+    """Recursive descent: or > and > not > comparison. A bare name in `conditions` becomes that
+    condition's tree."""
 
-    def __init__(self, source: str) -> None:
+    def __init__(self, source: str, conditions: Mapping[str, Condition] | None = None) -> None:
         self.source = source
         self.tokens = tokenize(source)
         self.index = 0
         self.depth = 0
+        self.conditions: Mapping[str, Condition] = conditions or {}
+        self.used: list[str] = []
 
     def fail(self, message: str) -> SelectorError:
         return SelectorError(f"{message} in selector {self.source.strip()!r}")
@@ -245,8 +259,24 @@ class Parser:
         left = self.parse_operand()
         op = self.parse_operator()
         if op is None:
-            return Bare(left)
-        return Compare(op, left, self.parse_operand())
+            condition = self.condition_of(left)
+            return condition.node if condition is not None else Bare(left)
+        right = self.parse_operand()
+        for operand in (left, right):
+            condition = self.condition_of(operand)
+            if condition is not None:
+                raise self.fail(f"condition {condition.name!r} is an expression and cannot be compared")
+        return Compare(op, left, right)
+
+    def condition_of(self, operand: Operand) -> Condition | None:
+        """The condition a lone name stands for; a field always has a root or a dot in edge
+        selectors, and a condition's name may not be a field's."""
+        if not isinstance(operand, Ref) or len(operand.path) != 1:
+            return None
+        condition = self.conditions.get(operand.path[0])
+        if condition is not None and condition.name not in self.used:
+            self.used.append(condition.name)
+        return condition
 
     def parse_operator(self) -> str | None:
         token = self.peek()
@@ -648,17 +678,28 @@ class ClassSelection:
 
 @dataclass(frozen=True, slots=True)
 class Selector:
-    """A parsed and validated selector, kept with its source text for explain output."""
+    """A parsed and validated selector, kept with its source text for explain output. `node` holds
+    the conditions it names expanded; `conditions` names them."""
 
     source: str
     node: Node
+    conditions: tuple[str, ...] = ()
 
     @staticmethod
-    def parse(source: str, catalog: Catalog | None = None) -> Selector:
-        node = Parser(source).parse()
+    def parse(
+        source: str, catalog: Catalog | None = None, conditions: Mapping[str, Condition] | None = None
+    ) -> Selector:
+        parser = Parser(source, conditions)
+        node = parser.parse()
         if catalog is not None:
+            for name in parser.used:
+                condition = parser.conditions[name]
+                try:
+                    Validator(catalog, condition.source).check(condition.node)
+                except SelectorError as error:
+                    raise SelectorError(f"in condition {name!r}: {error}") from None
             Validator(catalog, source).check(node)
-        return Selector(source.strip(), node)
+        return Selector(source.strip(), node, tuple(parser.used))
 
     def evaluate(self, resolve: Resolver) -> Truth:
         return evaluate(self.node, resolve)
