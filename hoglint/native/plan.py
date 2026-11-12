@@ -17,6 +17,7 @@ from hoglint.config.model import Config, FieldSpec
 from hoglint.labels import Labeler
 from hoglint.native.graph import NativeGraph
 from hoglint.rules.base import RuleType
+from hoglint.rules.exports import core_shape_bases
 from hoglint.rules.plan import selector_tree
 from hoglint.selectors import FieldType, State, Value
 
@@ -170,6 +171,7 @@ class RulePlan:
                 }
                 for policy in config.shapes.values()
             ],
+            "core_bases": core_shape_bases(),
             "kinds": [
                 {
                     "name": spec.name,

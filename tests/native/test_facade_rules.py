@@ -10,6 +10,7 @@ from hoglint import facts
 from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
+from hoglint.rules import exports
 
 from native.test_contract_slots import both_engines
 
@@ -414,3 +415,21 @@ def test_an_allowed_class_whose_walk_cannot_be_told_is_walked(
     assert findings(out["native"], "export-shape") == [
         ["products.billing.backend.models.Invoice", API, "export-denied(model)"]
     ]
+
+
+# The core shapes' base classes have one list, in Python: the native engine reads it from the plan.
+# A class that inherits a base the list leaves out is a plain class in both engines.
+@pytest.mark.parametrize("bases", ["EXCEPTION_BASES", "PROTOCOL_BASES"])
+def test_both_engines_read_one_list_of_core_shape_bases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bases: str
+) -> None:
+    monkeypatch.setattr(exports, bases, frozenset())
+    contracts = (
+        "from typing import Protocol\n\n\n"
+        "class ShopError(Exception):\n    pass\n\n\n"
+        "class Chooser(Protocol):\n    def __call__(self, name: str) -> str: ...\n"
+    )
+    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
+    left_out = "ShopError" if bases == "EXCEPTION_BASES" else "Chooser"
+    module = f"{SHOP}.facade.contracts"
+    assert findings(out["native"], "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]

@@ -123,6 +123,18 @@ BUILTIN_EXCEPTIONS = (
 EXCEPTION_BASES = frozenset(f"builtins.{name}" for name in BUILTIN_EXCEPTIONS)
 
 
+def core_shape_bases() -> dict[str, list[str]]:
+    """The base classes and metaclasses that make each core shape, for the native evaluator's
+    plan: these lists are the only copy, so both engines recognize the same classes."""
+    return {
+        "abc": sorted(ABC_BASES),
+        "abc_metas": sorted(ABC_METAS),
+        "enum": sorted(ENUM_BASES),
+        "protocol": sorted(PROTOCOL_BASES),
+        "exception": sorted(EXCEPTION_BASES),
+    }
+
+
 DEFAULT_EXCLUDED = (Context.TYPE_ONLY, Context.TEST)  # a type-only or test import hands nothing out
 
 # Why an export rule cannot tell about a symbol, by code; `{detail}` is the export's name or the

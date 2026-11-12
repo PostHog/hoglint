@@ -31,7 +31,8 @@ use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
 use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
-    EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan, check_columns,
+    CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan,
+    check_columns,
 };
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
 use self::signature::Signature;
@@ -250,6 +251,8 @@ pub struct Rules {
     pub export_names: Vec<String>,
     pub export_shapes: Vec<usize>,
     pub shapes: Vec<Shape>,
+    /// The base classes and metaclasses that make each core shape.
+    pub core_bases: CoreBasesPlan,
     pub kind_names: Vec<String>,
     pub kind_sets: KindSets,
     facts: SymbolFacts,
@@ -514,6 +517,7 @@ impl Rules {
                 .collect(),
             export_shapes: plan.exports.iter().map(|export| export.shape).collect(),
             shapes,
+            core_bases: plan.core_bases.clone(),
             kind_names: plan.kinds.iter().map(|kind| kind.name.clone()).collect(),
             kind_sets,
             facts,

@@ -14,91 +14,6 @@ use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-const ABC_BASES: [&str; 1] = ["abc.ABC"];
-const ABC_METAS: [&str; 1] = ["abc.ABCMeta"];
-const ENUM_BASES: [&str; 5] = [
-    "enum.Enum",
-    "enum.StrEnum",
-    "enum.IntEnum",
-    "enum.Flag",
-    "enum.IntFlag",
-];
-const PROTOCOL_BASES: [&str; 2] = ["typing.Protocol", "typing_extensions.Protocol"];
-/// Python's own exception classes (`exports.BUILTIN_EXCEPTIONS`): a class that inherits one is an
-/// exception.
-const EXCEPTION_BASES: [&str; 70] = [
-    "builtins.ArithmeticError",
-    "builtins.AssertionError",
-    "builtins.AttributeError",
-    "builtins.BaseException",
-    "builtins.BaseExceptionGroup",
-    "builtins.BlockingIOError",
-    "builtins.BrokenPipeError",
-    "builtins.BufferError",
-    "builtins.BytesWarning",
-    "builtins.ChildProcessError",
-    "builtins.ConnectionAbortedError",
-    "builtins.ConnectionError",
-    "builtins.ConnectionRefusedError",
-    "builtins.ConnectionResetError",
-    "builtins.DeprecationWarning",
-    "builtins.EOFError",
-    "builtins.EncodingWarning",
-    "builtins.EnvironmentError",
-    "builtins.Exception",
-    "builtins.ExceptionGroup",
-    "builtins.FileExistsError",
-    "builtins.FileNotFoundError",
-    "builtins.FloatingPointError",
-    "builtins.FutureWarning",
-    "builtins.GeneratorExit",
-    "builtins.IOError",
-    "builtins.ImportError",
-    "builtins.ImportWarning",
-    "builtins.IndentationError",
-    "builtins.IndexError",
-    "builtins.InterruptedError",
-    "builtins.IsADirectoryError",
-    "builtins.KeyError",
-    "builtins.KeyboardInterrupt",
-    "builtins.LookupError",
-    "builtins.MemoryError",
-    "builtins.ModuleNotFoundError",
-    "builtins.NameError",
-    "builtins.NotADirectoryError",
-    "builtins.NotImplementedError",
-    "builtins.OSError",
-    "builtins.OverflowError",
-    "builtins.PendingDeprecationWarning",
-    "builtins.PermissionError",
-    "builtins.ProcessLookupError",
-    "builtins.PythonFinalizationError",
-    "builtins.RecursionError",
-    "builtins.ReferenceError",
-    "builtins.ResourceWarning",
-    "builtins.RuntimeError",
-    "builtins.RuntimeWarning",
-    "builtins.StopAsyncIteration",
-    "builtins.StopIteration",
-    "builtins.SyntaxError",
-    "builtins.SyntaxWarning",
-    "builtins.SystemError",
-    "builtins.SystemExit",
-    "builtins.TabError",
-    "builtins.TimeoutError",
-    "builtins.TypeError",
-    "builtins.UnboundLocalError",
-    "builtins.UnicodeDecodeError",
-    "builtins.UnicodeEncodeError",
-    "builtins.UnicodeError",
-    "builtins.UnicodeTranslateError",
-    "builtins.UnicodeWarning",
-    "builtins.UserWarning",
-    "builtins.ValueError",
-    "builtins.Warning",
-    "builtins.ZeroDivisionError",
-];
-
 /// A `[shapes]` policy (`ShapePolicy`).
 pub struct Shape {
     data: Vec<String>,
@@ -540,11 +455,12 @@ impl<'a> Walk<'a> {
             return (names, !kind_unknown);
         }
         let (ancestors, complete) = rules.facts.ancestors(link, symbol);
-        let in_lineage = |bases: &[&str]| {
+        let in_lineage = |bases: &[String]| {
             bases
                 .iter()
-                .any(|base| *base == symbol || ancestors.contains(base))
+                .any(|base| base == symbol || ancestors.contains(base.as_str()))
         };
+        let core = &rules.core_bases;
         match rules.symbol_decl(link, symbol) {
             "function" => {
                 names.insert("function".into());
@@ -564,16 +480,16 @@ impl<'a> Walk<'a> {
             }
         }
         let metaclass = rules.symbol_fact(link, symbol, "metaclass");
-        if in_lineage(&ABC_BASES) || ABC_METAS.contains(&metaclass) {
+        if in_lineage(&core.abc) || core.abc_metas.iter().any(|meta| meta == metaclass) {
             names.insert("abc".into());
         }
-        if in_lineage(&ENUM_BASES) {
+        if in_lineage(&core.enum_) {
             names.insert("enum".into());
         }
-        if in_lineage(&PROTOCOL_BASES) {
+        if in_lineage(&core.protocol) {
             names.insert("protocol".into());
         }
-        if in_lineage(&EXCEPTION_BASES) {
+        if in_lineage(&core.exception) {
             names.insert("exception".into());
         }
         (names, complete && !kind_unknown)

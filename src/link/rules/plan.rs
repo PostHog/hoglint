@@ -18,6 +18,7 @@ pub struct Plan {
     pub registries: Vec<RegistryPlan>,
     pub exports: Vec<ExportPlan>,
     pub shapes: Vec<ShapePlan>,
+    pub core_bases: CoreBasesPlan,
     pub kinds: Vec<KindPlan>,
     /// Per provider-set field a rule or a domain reads: its label on each module.
     pub provided: Vec<ProvidedPlan>,
@@ -149,6 +150,18 @@ pub struct ShapePlan {
     /// An entity selector: an allowed class that is no data shape is walked only where it holds.
     #[serde(default)]
     pub walk_where: Option<NodePlan>,
+}
+
+/// The base classes and metaclasses that make each core shape (`exports.core_shape_bases`): the
+/// Python lists are the only copy.
+#[derive(Clone, Deserialize)]
+pub struct CoreBasesPlan {
+    pub abc: Vec<String>,
+    pub abc_metas: Vec<String>,
+    #[serde(rename = "enum")]
+    pub enum_: Vec<String>,
+    pub protocol: Vec<String>,
+    pub exception: Vec<String>,
 }
 
 /// What an export rule checks (`ExportPrimitive`).
