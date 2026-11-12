@@ -214,6 +214,14 @@ Labels = dict[str, Label]
 
 
 @dataclass(frozen=True, slots=True)
+class NamespaceLabels:
+    """A namespace directory's labels, and the fields it reads as unknown."""
+
+    labels: Labels
+    unknown: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
 class KindSets:
     """[kinds] as sets. `members` holds every name each kind holds true, `kinds_of` the kinds
     that hold each name, in config order. `unknown` holds the symbols with facts that no kind
@@ -269,7 +277,7 @@ class Labeler:
         }
         self.provider_fields = frozenset(name for spec in self.providers.specs for name in spec.sets)
         self.module_labels = Memo(self.label_module)
-        self.namespace_unknown: dict[str, frozenset[str]] = {}
+        self.namespace_labels = Memo(self.label_namespace)
         self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
         self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
@@ -350,7 +358,8 @@ class Labeler:
         cached = self.path_candidate_table[path] = PathCandidates(collected, conflicts)
         return cached
 
-    def resolve_candidates(self, entity: str, name: str, candidates: list[Candidate]) -> Label | None:
+    def settle(self, name: str, candidates: list[Candidate]) -> tuple[Label | None, str]:
+        """A field's label from its candidates, or none and the conflict, without the entity."""
         spec = self.config.fields.get(name)
         if spec is not None and spec.type is FieldType.SET:
             values: set[str] = set()
@@ -360,15 +369,20 @@ class Labeler:
                     if isinstance(candidate.value, (frozenset, set, list, tuple))
                     else {str(candidate.value)}
                 )
-            return Label(frozenset(values), "; ".join(c.source for c in candidates))
+            return Label(frozenset(values), "; ".join(c.source for c in candidates)), ""
         overriding = [c for c in candidates if c.override]
         pool = overriding or candidates
         distinct = {repr(c.value) for c in pool}
         if len(distinct) > 1:
             sources = "; ".join(f"{c.value!r} from {c.source}" for c in pool)
-            self.conflicts.append(f"{entity}: field {name!r} set differently by {sources}")
-            return None
-        return Label(pool[0].value, pool[0].source)
+            return None, f"field {name!r} set differently by {sources}"
+        return Label(pool[0].value, pool[0].source), ""
+
+    def resolve_candidates(self, entity: str, name: str, candidates: list[Candidate]) -> Label | None:
+        label, conflict = self.settle(name, candidates)
+        if conflict:
+            self.conflicts.append(f"{entity}: {conflict}")
+        return label
 
     def resolve_all(self, entity: str, collected: dict[str, list[Candidate]]) -> Labels:
         labels: Labels = {}
@@ -378,39 +392,42 @@ class Labeler:
                 labels[name] = label
         return labels
 
+    def own_candidates(self, cached: PathCandidates) -> dict[str, list[Candidate]]:
+        """A path's candidates for the fields no provider sets."""
+        return {
+            name: list(candidates) for name, candidates in cached.fields.items() if name not in self.provider_fields
+        }
+
     def label_module(self, module: str) -> Labels:
         """Labels from the config's paths, zones and registries. Fields a provider sets are left to
         `label_provided`, so the conflict check never reads providers' files."""
         path = self.path_of(module)
         if path is None:
-            return self.label_namespace(module)
+            return self.namespace_labels(module).labels
         cached = self.path_candidates(path)
         self.conflicts.extend(cached.conflicts)
-        collected = {
-            name: list(candidates) for name, candidates in cached.fields.items() if name not in self.provider_fields
-        }
-        labels = self.resolve_all(module, collected)
+        labels = self.resolve_all(module, self.own_candidates(cached))
         registry = self.registry_of(path, module)
         if registry is not None:
             labels[REGISTRY_FIELD] = Label(registry.name, "registries")
         return labels
 
-    def label_namespace(self, module: str) -> Labels:
+    def label_namespace(self, module: str) -> NamespaceLabels:
         """A namespace directory's labels: those a file directly inside it reads from the path's
         assignments and zones. A field two sources set apart, or that a module file inside the
-        directory reads otherwise, is unknown (`namespace_unknown`); the modules inside report
-        their own conflicts, so none is recorded here."""
+        directory reads otherwise, is unknown; the modules inside report their own conflicts, so
+        none is recorded here."""
         path = self.namespaces.paths.get(module)
         if path is None:
-            return {}
+            return NamespaceLabels({}, frozenset())
         inside = [self.module_labels(other) for other in self.namespaces.inside.get(module, ())]
         cached = self.path_candidates(path)
-        collected = {
-            name: list(candidates) for name, candidates in cached.fields.items() if name not in self.provider_fields
-        }
-        before = len(self.conflicts)
-        labels = self.resolve_all(module, collected)
-        del self.conflicts[before:]
+        collected = self.own_candidates(cached)
+        labels: Labels = {}
+        for name, candidates in collected.items():
+            label, _ = self.settle(name, candidates)
+            if label is not None:
+                labels[name] = label
         unknown = {name for name in collected if name not in labels}
         if cached.conflicts:
             unknown.update(self.zone_fields)
@@ -422,8 +439,7 @@ class Labeler:
                     unknown.add(name)
         for name in unknown:
             labels.pop(name, None)
-        self.namespace_unknown[module] = frozenset(unknown)
-        return labels
+        return NamespaceLabels(labels, frozenset(unknown))
 
     @staticmethod
     def label_value(label: Label | None) -> object:
@@ -631,6 +647,12 @@ class Labeler:
             found = self.sparse_values[key] = self.compute_value(module, symbol, name)
         return found
 
+    def read_apart(self, module: str | None, name: str) -> bool:
+        """Whether a namespace directory reads a field as unknown: the files directly inside it
+        read it apart. Only a directory whose labels were read can say so."""
+        found = self.namespace_labels.values.get(module) if module is not None else None
+        return found is not None and name in found.unknown
+
     def compute_value(self, module: str | None, symbol: str | None, name: str) -> tuple[Value, str]:
         spec = self.config.fields[name]
         if spec.on == "symbol" and symbol is None:
@@ -638,7 +660,7 @@ class Labeler:
         label = self.label_of(module, symbol, name)
         if label is not None:
             return self.to_value(spec, label), label.source
-        if spec.on == "module" and module is not None and name in self.namespace_unknown.get(module, ()):
+        if spec.on == "module" and self.read_apart(module, name):
             return UNKNOWN, "the files directly inside the directory read it apart"
         if spec.on == "symbol" and symbol is not None and self.facts.get(symbol, name):
             return Value.known(self.facts.get(symbol, name)), "producer fact"
@@ -655,8 +677,8 @@ class Labeler:
         label = self.label_of(module, symbol, name)
         if label is not None:
             return self.to_value(self.config.fields[name], label)
-        if self.config.fields[name].on == "module" and module is not None:
-            return UNKNOWN if name in self.namespace_unknown.get(module, ()) else NONE
+        if self.config.fields[name].on == "module" and self.read_apart(module, name):
+            return UNKNOWN
         return NONE
 
     def builtin(self, module: str | None, symbol: str | None, name: str, sourced: bool = False) -> Value:
