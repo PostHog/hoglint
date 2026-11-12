@@ -245,3 +245,15 @@ def test_export_shape_leaves_a_slot_to_the_signature_rule(tmp_path: Path, monkey
         ["place", "param:extra"],
         ["place", "param:order"],
     ]
+
+
+def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    testing = (
+        "from typing import Any\n\nfrom rest_framework import serializers\n\n"
+        "from products.shop.backend.models import Order\n\n\n"
+        "def make_order(**fields: Any) -> Order:\n    return Order(**fields)\n\n\n"
+        "class OrderFactory:\n    def build(self) -> Order:\n        return Order()\n"
+    )
+    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/testing.py": testing}, monkeypatch)
+    for rule in ("export-shape", "facade-signature", "facade-logic", "facade-no-drf"):
+        assert findings(out["native"], rule) == [], rule

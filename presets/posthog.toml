@@ -339,6 +339,7 @@ growth_key    = ["dst.symbol", "edge.kind", "src.package"]
 
 [rules.export-shape]
 primitive  = "export"
+from       = "src.zone != 'fixtures'"
 slots      = "shape"
 doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a base or a re-export. A model or an unknown type in a slot of what it hands out is facade-signature's to report."
 identity   = "module-symbol"
@@ -347,7 +348,7 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 [rules.facade-signature]
 primitive  = "signature"
 doc        = "A public facade function neither accepts nor returns a model, manager or queryset. Any and a bare dict are unknown; a mapping with type arguments is typed, and Any as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
-select     = "src.zone == 'facade' and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
+select     = "src.zone == 'facade' and src.zone != 'fixtures' and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
 unknown_types = ["typing.Any", "builtins.dict", "typing.Dict"]
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
@@ -381,7 +382,7 @@ growth_key = ["dst.module", "src.package"]
 primitive  = "edge"
 doc        = "A facade stays framework-free: no DRF, no django.http, no presentation."
 view       = "zones"
-from       = "src.zone == 'facade'"
+from       = "src.zone == 'facade' and src.zone != 'fixtures'"
 deny       = "dst.external == 'rest_framework' or dst.module startswith 'django.http' or dst.zone == 'presentation'"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]

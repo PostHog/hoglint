@@ -75,6 +75,9 @@ The rule that reads the list is the signature rule: a listed model in a slot of 
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
 - One slot, one rule: with `slots = "shape"` the export rule judges only a class's shape in a slot of what it hands out. A model, an unknown type, a missing annotation or an unresolved name there is the signature rule's finding, under its own identity. The fields of a data class found in a slot are still judged in full by the export rule.
 
+**The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).
+Other packages import it, so it stays in the export and its audience holds; but the contract rules (`export-shape` by its `from`, `facade-signature`, `facade-logic`, `facade-no-drf`) do not judge it: its helpers take and return models on purpose.
+
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
   The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from).
