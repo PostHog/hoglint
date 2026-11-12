@@ -113,3 +113,29 @@ def test_facade_logic_names_each_body_of_a_capability_submodule(
         files[f"products/shop/backend/facade/{name.split('/')[0]}/__init__.py"] = ""
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert findings(out["native"], "facade-logic") == sorted(expected)
+
+
+CORE_MODELS = {
+    "posthog/models/__init__.py": "",
+    "posthog/models/team/__init__.py": "",
+    "posthog/models/team/team.py": MODEL.format(name="Team"),
+    "posthog/models/activity.py": MODEL.format(name="ActivityLog"),
+}
+API = f"{SHOP}.facade.api"
+
+
+def test_facade_signature_lets_the_named_core_models_cross(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    api = (
+        "from posthog.models.activity import ActivityLog\n"
+        "from posthog.models.team.team import Team\n"
+        "from products.shop.backend.models import Order\n\n\n"
+        "def for_team(team: Team) -> int:\n    return 1\n\n\n"
+        "def logged(entry: ActivityLog) -> int:\n    return 1\n\n\n"
+        "def place(order: Order) -> int:\n    return 1\n"
+    )
+    files = {**CORE_MODELS, "products/shop/backend/facade/api.py": api}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings(out["native"], "facade-signature") == [
+        [API, "logged", "param:entry", "posthog.models.activity.ActivityLog"],
+        [API, "place", "param:order", f"{SHOP}.models.Order"],
+    ]

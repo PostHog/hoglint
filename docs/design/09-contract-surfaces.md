@@ -60,6 +60,7 @@ The reasoning matches D63: where something is defined must not change the verdic
 The owner decided that a preset holds a named list of future-proof core models that may cross.
 Any model that core owns is not enough, because a core model may later move into a product.
 Which models a company lists is its own policy and is not published.
+The rule that reads the list is the signature rule: a listed model in a slot of a facade is no finding (`unless`), every other model is.
 
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
