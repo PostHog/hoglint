@@ -279,4 +279,4 @@ class HandedOut:
             elif asname:
                 bound.add(asname)
         unread = not self.no_functions and self.dunder_all.unread is not None
-        return HandOut(handed, bound - handed, unread)
+        return HandOut(handed, frozenset(bound - handed), unread)
