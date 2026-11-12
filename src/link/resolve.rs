@@ -8,6 +8,7 @@ use super::intern::{EMPTY, Interner, Sid};
 use super::paths::{ModuleIndex, ModuleNamer};
 use super::queries::named;
 use super::trace::{Kind, Memo, Recorder};
+use crate::strings::is_identifier;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
@@ -256,18 +257,8 @@ pub fn unresolved_surface(it: &mut Interner, target: Option<Sid>, level: u32, na
     it.intern(&text)
 }
 
-/// An ASCII identifier, as a lazy map's name is written.
-fn is_identifier(text: &str) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 /// Dotted ASCII identifiers, as a lazy map writes a module path.
-fn is_dotted_path(text: &str) -> bool {
+fn is_module_path(text: &str) -> bool {
     text.split('.').all(is_identifier)
 }
 
@@ -630,7 +621,7 @@ impl Core {
                 let tail = self.it.s(*value).to_string();
                 let relative = tail.starts_with('.');
                 let rest = tail.trim_start_matches('.');
-                let anchored = if relative && is_dotted_path(rest) {
+                let anchored = if relative && is_module_path(rest) {
                     let level = (tail.len() - rest.len()) as u32;
                     let rest = self.it.intern(rest);
                     absolute_import(&mut self.it, module, is_package, Some(rest), level)
@@ -656,7 +647,7 @@ impl Core {
                     continue;
                 } else if let Some(path) = anchored {
                     unresolved.push((*key, path, true));
-                } else if is_dotted_path(&tail) {
+                } else if is_module_path(&tail) {
                     unresolved.push((*key, *value, false));
                 }
             }

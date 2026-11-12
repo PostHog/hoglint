@@ -31,9 +31,8 @@ RUN_TIME_MODULE_FLAGS = TC_ELSE | IF | TRY | BLOCK
 # Statements that may not run, or run instead of another branch.
 CONDITIONAL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY
 
-# A name and a module path as a lazy map writes them: ASCII identifiers, the path dotted.
+# A name as a lazy map writes it: an ASCII identifier.
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-DOTTED_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 MODULE_ATTRIBUTES = frozenset(
     {"__doc__", "__file__", "__name__", "__path__", "__spec__", "__loader__", "__package__", "__dict__", "__all__"}
 )
@@ -67,6 +66,11 @@ def module_assigns(record: Mapping[str, Any] | None) -> dict[str, dict]:
 # Binding forms: ("class", def index, marker) | ("def", def index, marker) | ("variable",) | ("module", dotted)
 #   | ("from", source module, attribute) | ("alias", dotted chain)
 Binding = tuple
+
+
+def is_module_path(text: str) -> bool:
+    """Dotted ASCII identifiers, as a lazy map writes a module path."""
+    return all(IDENTIFIER.fullmatch(part) for part in text.split("."))
 
 
 def absolute_import(module: str, is_package: bool, target: str | None, level: int) -> str | None:
@@ -288,7 +292,7 @@ class Tables:
                 if text.startswith("."):
                     rest = text.lstrip(".")
                     level = len(text) - len(rest)
-                    anchored = absolute_import(module, is_package, rest, level) if DOTTED_PATH.fullmatch(rest) else None
+                    anchored = absolute_import(module, is_package, rest, level) if is_module_path(rest) else None
                     candidates: tuple[str, ...] = (anchored,) if anchored is not None else ()
                 else:
                     anchored = None
@@ -302,7 +306,7 @@ class Tables:
                     continue
                 elif anchored is not None:
                     unresolved.append((key["s"], anchored, True))
-                elif DOTTED_PATH.fullmatch(text):
+                elif is_module_path(text):
                     unresolved.append((key["s"], text, False))
             for name, path, was_relative in unresolved:
                 # A bare name or a relative path may be any text; it reads as a module only in a
