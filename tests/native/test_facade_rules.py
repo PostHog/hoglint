@@ -145,7 +145,7 @@ def test_facade_signature_lets_the_named_core_models_cross(tmp_path: Path, monke
 
 
 # A mapping given type arguments is typed; `Any` stays unknown, except as the value type of a
-# mapping in a parameter or a field (an opaque payload). `object` asks the caller to narrow.
+# mapping in a parameter or a field (an opaque payload). `object` stays unknown: it would hide a model.
 UNKNOWN_CASES = {
     "a bare dict": ("amount: dict", "None", ["builtins.dict"]),
     "a dict with arguments": ("amount: dict[str, str]", "None", []),
@@ -157,7 +157,7 @@ UNKNOWN_CASES = {
     "Any in a list": ("amount: list[Any]", "None", ["typing.Any"]),
     "a callback that returns Any": ("amount: Callable[..., Any]", "None", ["typing.Any"]),
     "a list of bare dicts": ("amount: list[dict]", "None", ["builtins.dict"]),
-    "object": ("amount: object", "None", []),
+    "object": ("amount: object", "None", ["builtins.object"]),
 }
 
 

@@ -63,8 +63,9 @@ Which models a company lists is its own policy and is not published.
 The rule that reads the list is the signature rule: a listed model in a slot of a facade is no finding (`unless`), every other model is.
 
 **What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
-- A slot type is unknown when it is `Any`, a bare `dict` or no annotation.
-  A mapping given type arguments (`dict[str, str]`) is typed, and so is `object`, which makes the caller narrow.
+- A slot type is unknown when it is `Any`, `object`, a bare `dict` or no annotation.
+  `object` stays unknown because a slot typed `object` would let any model cross unseen.
+  A mapping given type arguments (`dict[str, str]`) is typed.
 - `Any` as an argument of a mapping (`dict[str, Any]`) is an opaque payload: allowed in a parameter and a field, a finding in a return value.
   `Any` in any other generic (`list[Any]`, `Optional[Any]`) stays unknown.
   The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
