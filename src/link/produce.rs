@@ -1,6 +1,7 @@
 //! The core producers (hoglint/core/producers.py): import, reference, declaration, dotted-path,
 //! dynamic-import and unparsed edges, in the order and with the fields Python makes them.
 
+use super::LinkConfig;
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
@@ -369,19 +370,14 @@ impl Producing {
             .collect()
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         it: &mut Interner,
-        builtins: &[String],
-        loaders: &[String],
-        dataclass_decorators: &[String],
-        dataclass_bases: &[String],
-        patch_callees: &[String],
-        path_callees: &[String],
+        config: &LinkConfig,
         contract_surfaces: Vec<ExportPaths>,
         export_surfaces: Vec<ExportPaths>,
     ) -> Producing {
-        let mut last_names: Vec<String> = loaders
+        let mut last_names: Vec<String> = config
+            .dynamic_loaders
             .iter()
             .map(|loader| loader.rsplit('.').next().unwrap_or("").to_string())
             .collect();
@@ -443,19 +439,28 @@ impl Producing {
         };
         Producing {
             names: LookupNames {
-                builtins: builtins.iter().map(|name| it.intern(name)).collect(),
+                builtins: config.builtins.iter().map(|name| it.intern(name)).collect(),
                 builtins_module: it.intern("builtins"),
             },
             module_scope: it.intern("<module>"),
-            loaders: loaders.iter().map(|loader| it.intern(loader)).collect(),
+            loaders: config
+                .dynamic_loaders
+                .iter()
+                .map(|loader| it.intern(loader))
+                .collect(),
             loader_last_names: last_names,
-            dataclass_decorators: dataclass_decorators
+            dataclass_decorators: config
+                .dataclass_decorators
                 .iter()
                 .map(|name| it.intern(name))
                 .collect(),
-            dataclass_bases: dataclass_bases.iter().map(|name| it.intern(name)).collect(),
-            patch_callees: patch_callees.to_vec(),
-            path_callees: path_callees.to_vec(),
+            dataclass_bases: config
+                .dataclass_bases
+                .iter()
+                .map(|name| it.intern(name))
+                .collect(),
+            patch_callees: config.patch_callees.clone(),
+            path_callees: config.path_callees.clone(),
             contract_surfaces,
             export_surfaces,
             k,

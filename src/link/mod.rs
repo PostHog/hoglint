@@ -359,17 +359,7 @@ impl Link {
         drop(file_of);
         let contract_surfaces = surface_paths("contract_surfaces", &config.contract_surfaces)?;
         let export_surfaces = surface_paths("export_surfaces", &config.export_surfaces)?;
-        let settings = Producing::new(
-            &mut it,
-            &config.builtins,
-            &config.dynamic_loaders,
-            &config.dataclass_decorators,
-            &config.dataclass_bases,
-            &config.patch_callees,
-            &config.path_callees,
-            contract_surfaces,
-            export_surfaces,
-        );
+        let settings = Producing::new(&mut it, config, contract_surfaces, export_surfaces);
         let mut core = Core::new(it, Arc::new(facts), namer, index);
         core.rec.on = config.trace;
         let mut scopes: Vec<Scope> = analyzed
