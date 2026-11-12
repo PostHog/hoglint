@@ -77,6 +77,8 @@ CORE_VIEWS: dict[str, tuple[str, ...]] = {
     "zones": ("import",),
     "packages": ("import", "reference", "dotted-path"),
 }
+# The core views whose rows group many edges, so a rule over one folds them whatever its primitive.
+FOLDING_VIEWS = frozenset({"packages"})
 ENDPOINTS = ("surface", "origin", "via")
 ON_UNRESOLVED = ("finding", "block", "incomplete")
 LIFECYCLES = ("setup", "first-request", "worker-start", "on-demand")

@@ -46,9 +46,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hoglint.config.loader import PACK_PREFIX
+from hoglint.config.schema import FOLDING_VIEWS
 from hoglint.core.modules import longest_prefix
-from hoglint.ledger.envelope import PolicyFiles
+from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.inputs import InputPatterns, RunInputs
 from hoglint.native.normal import FIELDS
 from hoglint.native.parity import read_rows
@@ -62,8 +62,6 @@ STARS, LAZY, NAMES, LINES = "<stars>", "<lazy>", "<names>", "<lines>"
 NAME_KINDS = frozenset({"found", "missing", "class", "def", "alias", "target", "spelled"})
 # Read kinds that name a symbol a rule row or a pack reads the facts of.
 SYMBOL_KINDS = frozenset({"target", "spelled"})
-# Views whose rows group many edges, so a rule over one folds them whatever its primitive.
-FOLDING_VIEWS = frozenset({"packages"})
 # Where an edge row holds each field (`normal.FIELDS`).
 KIND, PATH, MODULE, SURFACE, TARGETS, RESOLUTION, ATTRS = (
     FIELDS.index(name) for name in ("kind", "path", "module", "surface", "targets", "resolution", "attrs")
@@ -95,8 +93,7 @@ class TraceConfig:
         for spec in config.rules.values():
             if primitive_of(spec).FOLDS or spec.view in FOLDING_VIEWS:
                 folded.append(spec.id)
-        configs = [label for label in config.files if not label.startswith(PACK_PREFIX)]
-        policy = tuple(sorted({*configs, *PolicyFiles(config).paths()}))
+        policy = ConfigInputs.of(config).predicted_policy()
         return TraceConfig(RunInputs.of(config).side(), policy, tuple(sorted(folded)))
 
     def write(self, out: Path) -> None:
