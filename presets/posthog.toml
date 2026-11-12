@@ -389,11 +389,11 @@ growth_key = ["dst.module", "src.package"]
 
 [rules.contracts-no-django]
 primitive     = "reach"
-doc           = "Contracts never pull in Django, not even through a chain."
+doc           = "Importing a contract module runs no Django: no module-level import, direct or through a chain, reaches it. An import inside a function body does not run on import."
 view          = "file-imports"
 from          = "src.zone == 'contracts'"
 deny          = "dst.external == 'django'"
-contexts      = { exclude = ["type_only", "test"] }
+contexts      = { exclude = ["type_only", "test", "function_local"] }
 on_unresolved = "incomplete"
 identity      = "module-pair"
 growth_key    = ["src.module"]

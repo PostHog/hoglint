@@ -78,6 +78,11 @@ The rule that reads the list is the signature rule: a listed model in a slot of 
 **The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).
 Other packages import it, so it stays in the export and its audience holds; but the contract rules (`export-shape` by its `from`, `facade-signature`, `facade-logic`, `facade-no-drf`) do not judge it: its helpers take and return models on purpose.
 
+**Importing a contract module runs no Django** (D93, as decided on Nov 12).
+- The rule follows what runs when the contract module is imported: its module-level imports and theirs, through other modules.
+  An import inside a function body runs later, so it is left out, and so is a type-only import.
+- Known gap: an import of `a.b.c` also runs the `__init__` of `a` and `a.b`; the reach does not follow that, so a package `__init__` that loads Django is not seen.
+
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
   The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from).

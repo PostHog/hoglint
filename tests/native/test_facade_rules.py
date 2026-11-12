@@ -257,3 +257,31 @@ def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkey
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/testing.py": testing}, monkeypatch)
     for rule in ("export-shape", "facade-signature", "facade-logic", "facade-no-drf"):
         assert findings(out["native"], rule) == [], rule
+
+
+# Importing a contract module must run no Django: a module-level import, direct or through other
+# modules, reaches it; an import inside a function body and one under `if TYPE_CHECKING:` do not.
+LOGIC_IMPORTING_DJANGO = "def build() -> None:\n    from django.db import models\n"
+CONTRACT_IMPORT_CASES = {
+    "a module-level import": ("from django.db import models\n", ["django.db.models"]),
+    "an import in a function": ("def build() -> None:\n    from django.db import models\n", []),
+    "a type-only import": (
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from django.db import models\n",
+        [],
+    ),
+    "a chain through module-level imports": ("import products.shop.backend.models\n", ["django.db.models"]),
+    "a chain through a function-local import": ("import products.shop.backend.helpers\n", []),
+}
+
+
+@pytest.mark.parametrize("case", CONTRACT_IMPORT_CASES)
+def test_contracts_no_django_reads_what_runs_on_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    body, reached = CONTRACT_IMPORT_CASES[case]
+    files = {
+        "products/shop/backend/helpers.py": LOGIC_IMPORTING_DJANGO,
+        "products/shop/backend/facade/contracts.py": body,
+    }
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings(out["native"], "contracts-no-django") == [[f"{SHOP}.facade.contracts", dst] for dst in reached]
