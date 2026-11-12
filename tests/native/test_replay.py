@@ -129,7 +129,7 @@ def test_a_replay_reports_a_pair_equal_only_when_every_check_reports_the_same(
 
 @pytest.mark.parametrize(
     ("mode", "damages", "equal"),
-    [("today", (), True), ("pack-memo-miss", (), False), ("today", ("remove-memo-parts",), True)],
+    [("today", (), True), ("pack-memo-miss", (), False), ("today", ("remove-memo-parts", "stray-memo-key"), True)],
 )
 def test_a_pack_memo_that_forgets_its_reads_or_stays_broken_makes_the_replay_fail(
     tmp_path: Path, model_pair: tuple[Path, Pair], mode: str, damages: tuple[str, ...], equal: bool

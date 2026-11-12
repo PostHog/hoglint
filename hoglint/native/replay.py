@@ -1372,7 +1372,8 @@ class GarbageMemoParts(SqliteRows):
 
 class RemoveMemoParts(SqliteRows):
     """Removes parts that states still name, and some states' manifests: names that lead nowhere.
-    The newest manifest always goes, so the next state's new row takes an id a key still holds."""
+    The newest manifest always goes too: the next state's manifest must take a new id, never
+    the one a key still holds."""
 
     name = "remove-memo-parts"
     part = MEMO
@@ -1381,6 +1382,21 @@ class RemoveMemoParts(SqliteRows):
         removed = conn.execute("DELETE FROM parts WHERE digest < '8'").rowcount
         newest = "SELECT max(id) FROM blobs"
         return removed + conn.execute(f"DELETE FROM blobs WHERE id % 3 = 2 OR id = ({newest})").rowcount
+
+
+class StrayMemoKey(SqliteRows):
+    """Adds a key at the id the next state's manifest takes, so the store's next write breaks a
+    unique id: a store that only warns would fail the same way on every later run."""
+
+    name = "stray-memo-key"
+    part = MEMO
+
+    def damage(self, conn: sqlite3.Connection) -> int:
+        taken = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'blobs'").fetchone()
+        if taken is None:
+            return 0
+        conn.execute("INSERT INTO keys VALUES (?, 'stray', 'stray', 0, 0, 0)", (taken[0] + 1,))
+        return 1
 
 
 class TwoChildrenAtOnce(Damage):
@@ -1451,6 +1467,7 @@ LAYOUT_DAMAGES: tuple[Damage, ...] = (
     GarbageFactRows(),
     GarbageMemoParts(),
     RemoveMemoParts(),
+    StrayMemoKey(),
     TwoChildrenAtOnce(),
     KilledInFactWrites(),
     KilledInSummaryWrite(),
