@@ -4,10 +4,8 @@
 use super::LinkConfig;
 use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
-use super::queries::named;
 use super::resolve::{
-    Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, absolute_import, module_assigns,
-    unresolved_surface,
+    Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, import_surface, module_assigns,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -943,43 +941,24 @@ impl Producers<'_> {
             let scope = &mut self.scopes[owner];
             let ctx = core.contexts(scope, row.flags, row.scope);
             let (module, is_package) = (scope.module, scope.is_package);
-            let (surface, hit, loaded, binds);
-            match row.name {
-                None => {
-                    let target = row.target.unwrap_or(EMPTY);
-                    surface = target;
-                    hit = Some(core.module_hit(target));
-                    loaded = target;
-                    binds = row
-                        .asname
-                        .filter(|&a| a != EMPTY)
-                        .unwrap_or_else(|| core.it.head(target));
+            let (bound, surface, source) = import_surface(&mut core.it, module, is_package, row);
+            let Some(source) = source else {
+                // The name stays bound, so a reader of what the module hands out sees it unresolved.
+                let attrs = [(self.settings.k.binds, bound)];
+                self.push(
+                    IMPORT, owner, row.scope, row.line, row.col, ctx, surface, UNRESOLVED, EMPTY,
+                    &attrs,
+                );
+                continue;
+            };
+            let (hit, loaded) = match row.name {
+                Some(name) if name != self.settings.k.star => {
+                    let (_, hit, loaded) = Self::from_target(core, source, name);
+                    (hit, loaded)
                 }
-                Some(name) => {
-                    let Some(source) =
-                        absolute_import(&mut core.it, module, is_package, row.target, row.level)
-                    else {
-                        let surface = unresolved_surface(&mut core.it, row.target, row.level, name);
-                        // The name stays bound, so a reader of what the module hands out sees it unresolved.
-                        let attrs = [(self.settings.k.binds, named(row.asname, name))];
-                        self.push(
-                            IMPORT, owner, row.scope, row.line, row.col, ctx, surface, UNRESOLVED,
-                            EMPTY, &attrs,
-                        );
-                        continue;
-                    };
-                    if name == self.settings.k.star {
-                        surface = core.it.join(source, name);
-                        hit = Some(core.module_hit(source));
-                        loaded = source;
-                        binds = name;
-                    } else {
-                        (surface, hit, loaded) = Self::from_target(core, source, name);
-                        binds = named(row.asname, name);
-                    }
-                }
-            }
-            let attrs = self.bound_attrs(binds, loaded);
+                _ => (Some(core.module_hit(source)), source),
+            };
+            let attrs = self.bound_attrs(bound, loaded);
             let resolved = self.core.classify(surface, hit);
             self.push(
                 IMPORT, owner, row.scope, row.line, row.col, ctx, surface, resolved, EMPTY, &attrs,

@@ -105,6 +105,18 @@ def import_binding(module: str, is_package: bool, row: list) -> tuple[str, Bindi
     return asname or name, ("from", source, name)
 
 
+def import_surface(module: str, is_package: bool, row: list) -> tuple[str, str, str | None]:
+    """(bound name, surface, source) of one `imports` row. `import a.b` binds `a` (or its alias)
+    and has `a.b` as surface and source. A from import's surface is `source.name`, a star's
+    `source.*`; above the top package the source is None and the surface is the text as written."""
+    _, _, _, _, target, level, name, asname = row
+    if name is None:
+        return asname or target.split(".")[0], target, target
+    source = absolute_import(module, is_package, target, level)
+    surface = f"{source}.{name}" if source is not None else unresolved_surface(target, level, name)
+    return asname or name, surface, source
+
+
 def unpacked_names(target: object) -> list[str]:
     """Plain names bound by a tuple or list assignment target, nested ones included."""
     if isinstance(target, str):

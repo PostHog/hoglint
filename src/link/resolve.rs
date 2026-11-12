@@ -297,6 +297,32 @@ pub fn import_binding(
     }
 }
 
+/// (bound name, surface, source) of one import row (`symbols.import_surface`). `import a.b` binds
+/// `a` (or its alias) and has `a.b` as surface and source. A from import's surface is
+/// `source.name`, a star's `source.*`; above the top package the source is None and the surface
+/// is the text as written.
+pub fn import_surface(
+    it: &mut Interner,
+    module: Sid,
+    is_package: bool,
+    row: &Import,
+) -> (Sid, Sid, Option<Sid>) {
+    let Some(name) = row.name else {
+        let target = row.target.unwrap_or(EMPTY);
+        let bound = row
+            .asname
+            .filter(|&a| a != EMPTY)
+            .unwrap_or_else(|| it.head(target));
+        return (bound, target, Some(target));
+    };
+    let source = absolute_import(it, module, is_package, row.target, row.level);
+    let surface = match source {
+        Some(source) => it.join(source, name),
+        None => unresolved_surface(it, row.target, row.level, name),
+    };
+    (named(row.asname, name), surface, source)
+}
+
 /// Plain names a tuple or list assignment target binds, nested ones included.
 pub fn unpacked_names(it: &Interner, target: &V, out: &mut Vec<Sid>) {
     match target {

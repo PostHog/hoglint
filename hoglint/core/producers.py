@@ -15,17 +15,7 @@ from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import is_class_var
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
-from hoglint.core.symbols import (
-    CLASS,
-    FUNC,
-    ClassIndex,
-    Hit,
-    Resolver,
-    absolute_import,
-    entity,
-    module_assigns,
-    unresolved_surface,
-)
+from hoglint.core.symbols import CLASS, FUNC, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
@@ -404,30 +394,21 @@ class ImportProducer(Producer):
         resolver = context.resolver
         for scope in context.files:
             for row in scope.record.get("imports", ()):
-                at_scope, line, column, flags, target, level, name, asname = row
+                at_scope, line, column, flags, _, _, name, _ = row
                 contexts = scope.contexts(flags, at_scope)
-                if name is None:
-                    surface, hit = target, resolver.module_hit(target)
-                    loaded = target
-                    binds = asname or target.split(".")[0]
+                bound, surface, source = import_surface(scope.module, scope.is_package, row)
+                if source is None:
+                    # The name stays bound, so a reader of what the module hands out sees it unresolved.
+                    attrs = (("binds", bound),)
+                    graph.edges.append(
+                        self.edge(self.kind, scope, at_scope, line, column, surface, UNRESOLVED, contexts, attrs=attrs)
+                    )
+                    continue
+                if name is None or name == "*":
+                    hit, loaded = resolver.module_hit(source), source
                 else:
-                    source = absolute_import(scope.module, scope.is_package, target, level)
-                    if source is None:
-                        surface = unresolved_surface(target, level, name)
-                        # The name stays bound, so a reader of what the module hands out sees it unresolved.
-                        attrs = (("binds", asname or name),)
-                        graph.edges.append(
-                            self.edge(
-                                self.kind, scope, at_scope, line, column, surface, UNRESOLVED, contexts, attrs=attrs
-                            )
-                        )
-                        continue
-                    if name == "*":
-                        surface, hit, loaded, binds = f"{source}.*", resolver.module_hit(source), source, "*"
-                    else:
-                        surface, hit, loaded = self.from_target(context, source, name)
-                        binds = asname or name
-                attrs = self.bound_attrs(context, binds, loaded)
+                    _, hit, loaded = self.from_target(context, source, name)
+                attrs = self.bound_attrs(context, bound, loaded)
                 resolved = context.classifier.classify(surface, hit)
                 graph.edges.append(
                     self.edge(self.kind, scope, at_scope, line, column, surface, resolved, contexts, attrs=tuple(attrs))

@@ -35,14 +35,7 @@ from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import (
-    RUN_TIME_MODULE_FLAGS,
-    ModuleTable,
-    Tables,
-    absolute_import,
-    module_level,
-    unresolved_surface,
-)
+from hoglint.core.symbols import RUN_TIME_MODULE_FLAGS, ModuleTable, Tables, import_surface, module_level
 from hoglint.model import HandOut
 
 ALL_CLAUSE = "all"
@@ -220,10 +213,9 @@ class HandedOut:
             found = [name for name in found if name in listed]
         return [(name, f"{source}.{name}", clause) for name in found]
 
-    def single(
-        self, bound: str, target: str, name: str, asname: str | None, used: frozenset[str]
-    ) -> tuple[str, str, str]:
+    def single(self, target: str, name: str, asname: str | None, used: frozenset[str]) -> tuple[str, str, str]:
         """(bound, target, clause) of an import that binds one name; `used` as in `names`."""
+        bound = asname or name
         kept = self.no_functions and bound not in used
         return bound, target, self.clause(bound, name, asname, kept)
 
@@ -232,17 +224,13 @@ class HandedOut:
         binds `a`, no surface of its own, so it hands out nothing; `import a.b as name` binds the
         module. A relative import that climbs above the top package resolves to nothing and still
         binds its name."""
-        scope = self.scope
-        _, _, _, _, target, level, name, asname = row
-        if name is None:
-            return [self.single(asname, target, target, asname, used)] if asname else []
-        source = absolute_import(scope.module, scope.is_package, target, level)
+        name, asname = row[6], row[7]
+        if name is None and not asname:
+            return []
+        _, surface, source = import_surface(self.scope.module, self.scope.is_package, row)
         if name == "*":
-            surface = f"{source}.*" if source is not None else unresolved_surface(target, level, name)
             return self.star(source, surface)
-        if source is None:
-            return [self.single(asname or name, unresolved_surface(target, level, name), name, asname, used)]
-        return [self.single(asname or name, f"{source}.{name}", name, asname, used)]
+        return [self.single(surface, surface if name is None else name, asname, used)]
 
     def names(self, used: frozenset[str]) -> list[Handed]:
         """`used`: the names the module's own code refers to. In a module with no function such
@@ -270,13 +258,10 @@ class HandedOut:
         """The names the module hands out and the ones it binds by import and keeps to itself.
         `used` as in `names`."""
         handed = frozenset(item.bound for item in self.names(used))
-        bound: set[str] = set()
-        for scope_id, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ()):
-            if not binds_at_run_time(scope_id, flags) or name == "*":
-                continue
-            if name is not None:
-                bound.add(asname or name)
-            elif asname:
-                bound.add(asname)
+        bound = {
+            asname or name
+            for scope_id, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ())
+            if binds_at_run_time(scope_id, flags) and name != "*" and (asname or name)
+        }
         unread = not self.no_functions and self.dunder_all.unread is not None
         return HandOut(handed, frozenset(bound - handed), unread)
