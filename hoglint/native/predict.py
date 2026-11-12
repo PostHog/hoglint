@@ -6,8 +6,8 @@ what other files can read of it (`Link.write_traces`). Given the parent tree's d
 a commit changed, the prediction runs in two steps, as a check that reuses stored answers would:
 
 1. The link. The changed files' interfaces of parent and child give the (module, name) keys that
-   moved; an added or deleted file moves its whole module and the existence of every module above
-   it. A file whose trace reads a moved key is predicted, with every changed file and every file
+   moved; an added or deleted file moves its whole module, the existence of every module above
+   it and the labels of a directory without `__init__.py` that holds it. A file whose trace reads a moved key is predicted, with every changed file and every file
    of a changed module.
 2. What rule rows read. The predicted files are recomputed (here: their rows are taken from the
    child's dump), which tells whose symbol facts, class ancestry and labels really moved. A file
@@ -183,10 +183,13 @@ class Changes:
     @staticmethod
     def of(parent: TraceDump, child: TraceDump, paths: set[str]) -> Changes:
         """From the interfaces of the changed files in both trees. A package above an added or
-        deleted file moves only when it exists in one tree and not the other."""
+        deleted file moves only when it exists in one tree and not the other. A directory without
+        `__init__.py` that holds an added or deleted file moves whole: its labels are those its
+        files read."""
         out = Changes(paths=set(paths))
         out.known = {path for path in paths if path in parent.modules or path in child.modules}
         existence = packages(parent) ^ packages(child)
+        with_file = set(parent.modules.values()) | set(child.modules.values())
         for path in sorted(paths):
             before = parent.interfaces.get(path)
             after = child.interfaces.get(path)
@@ -203,6 +206,10 @@ class Changes:
             out.whole.add(module)
             out.keys.update((ancestor, "") for ancestor in module_ancestors(module) if ancestor in existence)
             out.keys.add((module, ""))
+            directory = module.rpartition(".")[0]
+            if directory and directory not in with_file:
+                out.whole.add(directory)
+                out.keys.add((directory, ""))
         return out
 
 

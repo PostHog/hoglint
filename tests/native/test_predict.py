@@ -427,3 +427,33 @@ def test_a_moved_hand_out_source_rejudges_a_row_that_reads_handed_zones_at_the_d
     changed = {"app/shim.py"}
     assert reader in predict(parent, child, changed).files
     assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files
+
+
+NAMESPACE_HANDED = {
+    "hoglint.toml": HANDED_CONFIG.replace(
+        'wiring = { paths = ["jobs/**"] }',
+        'wiring = { paths = ["jobs/**"] }\ntests = { paths = ["**/test_*.py"], override = true }',
+    ),
+    "app/__init__.py": "",
+    "app/jobs/run.py": "def run():\n    pass\n",
+    "app/api/__init__.py": "from app import jobs\n\n__all__ = ['jobs', 'ping']\n\n\ndef ping():\n    pass\n",
+    "app/views.py": "from app.api import ping\n",
+}
+TEST_FILE = "app/jobs/test_run.py"
+
+
+# A directory without `__init__.py` has the zone its files read, so a file added to it or deleted
+# from it moves what a facade that hands the directory out hands out.
+@pytest.mark.parametrize("added", [True, False], ids=["a file is added", "a file is deleted"])
+def test_a_file_added_to_a_handed_namespace_directory_rejudges_a_row_that_reads_handed_zones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, added: bool
+) -> None:
+    native_module()
+    without = dict(NAMESPACE_HANDED)
+    with_test = {**NAMESPACE_HANDED, TEST_FILE: "def test_run():\n    pass\n"}
+    parent_files, child_files = (without, with_test) if added else (with_test, without)
+    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    reader = "app/views.py"
+    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
+    assert reader in predict(parent, child, {TEST_FILE}).files
