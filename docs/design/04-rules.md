@@ -1,7 +1,7 @@
 # 4. Rules: primitives, scoping, states
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 12, 2026.
 
 ## Decided
 
@@ -24,6 +24,28 @@
 - Typos are config errors.
 - A rule defined twice is an error; replacing a rule and adding or removing list items are explicit (review blockers 1 and 2).
 - Product files outside the zone table fall into a default private zone.
+
+**A side with no value** (owner, Nov 12).
+A field outside its domain reads a known `none`.
+A field inside its domain that nothing sets reads `unknown`.
+A comparison reads them so:
+
+| Comparison | One side `none` | Both sides `none` | One side `unknown` |
+|---|---|---|---|
+| `a == b` | false | true | unknown |
+| `a != b` | true | false | unknown |
+| `a in b`, `a startswith b` | false | false | unknown |
+| `a not in b` | true | true | unknown |
+| `a subset_of b` | `none` is the empty set | true | unknown |
+| a bare `a` | false | | unknown |
+| `not (...)` | the opposite | the opposite | unknown |
+
+- The keyword `none` is a side with no value: `a == none` is true when `a` has none.
+- Why: a rule that denies must not pass an edge because a label is missing.
+  So a missing side differs from every value, and only `unknown` stays open.
+- The cost: two ends that both have no value count as equal.
+  A rule that must not match third-party code says so (`dst.external == none`).
+- Both engines read one table of these cases (`tests/rules/missing_side.txt`).
 
 **How a rule is scoped.**
 A rule selects on labels, never on a folder alone:
