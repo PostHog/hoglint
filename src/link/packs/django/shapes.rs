@@ -10,6 +10,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 const ESCAPE_WRAPPERS: &[&str] = &["await", "ifexp:body", "ifexp:else", "star"];
+/// The shapes of a use that reads model instances.
+const INSTANCE_SHAPES: &[&str] = &["instance-single", "instance-many"];
 
 /// The Django names the shape code reads: the tables of hoglint/packs/django/shapes.py, which
 /// Python hands over with each run of the producer, so the two engines read one list.
@@ -202,15 +204,15 @@ impl UsePosition {
         }
         (methods, &[])
     }
+}
 
-    /// The methods called after the first subscript: `values` in `qs[:5].values()`.
-    fn called_after_subscript(&self) -> Vec<&str> {
-        let (_, rest) = self.methods();
-        rest.windows(2)
-            .filter(|pair| pair[1] == "()")
-            .filter_map(|pair| pair[0].strip_prefix('.'))
-            .collect()
-    }
+/// The methods called in the trailers from the first subscript on (`UsePosition.methods`):
+/// `values` in `qs[:5].values()`.
+fn called_after_subscript(rest: &[String]) -> Vec<&str> {
+    rest.windows(2)
+        .filter(|pair| pair[1] == "()")
+        .filter_map(|pair| pair[0].strip_prefix('.'))
+        .collect()
 }
 
 /// The first call above the top of the attribute and call chain whose callee is a name or an
@@ -298,6 +300,14 @@ impl Vocabulary {
                 .is_some_and(|step| starts_with_any(step, &self.alias_assign_steps))
     }
 
+    /// The first of `names` that reads values (`values`, `values_list`).
+    fn first_value_method<'n>(&self, names: &[&'n str]) -> Option<&'n str> {
+        names
+            .iter()
+            .copied()
+            .find(|name| holds(&self.value_methods, name))
+    }
+
     fn manager_chain(&self, methods: &[&str], enclosing: Option<&str>) -> Shape {
         let terminal = methods.last().copied().unwrap_or("manager");
         if methods.contains(&"select_for_update") {
@@ -320,11 +330,8 @@ impl Vocabulary {
         if holds(&self.scalar_terminals, terminal) {
             return Shape::with("scalar-chain", terminal);
         }
-        if let Some(values) = methods
-            .iter()
-            .find(|method| holds(&self.value_methods, method))
-        {
-            return Shape::with("scalar-chain", *values);
+        if let Some(value) = self.first_value_method(methods) {
+            return Shape::with("scalar-chain", value);
         }
         if enclosing.is_some_and(|call| call.ends_with("Field")) {
             return Shape::of("drf-field-queryset");
@@ -378,16 +385,15 @@ impl Vocabulary {
         let (methods, rest) = position.methods();
         if !methods.is_empty() {
             let shape = self.attribute_chain(&methods, enclosing_call(position, rest)?);
-            let values = position
-                .called_after_subscript()
-                .into_iter()
-                .find(|method| holds(&self.value_methods, method));
-            if let Some(values) = values
-                && matches!(shape.kind, "instance-single" | "instance-many")
-            {
-                return Ok(Shape::with("scalar-chain", values));
+            if !INSTANCE_SHAPES.contains(&shape.kind) {
+                return Ok(shape);
             }
-            return Ok(shape);
+            return Ok(
+                match self.first_value_method(&called_after_subscript(rest)) {
+                    Some(value) => Shape::with("scalar-chain", value),
+                    None => shape,
+                },
+            );
         }
         if let Some(first) = position.trailers.first() {
             // The parent is the call that calls the node, or the subscript that indexes it.

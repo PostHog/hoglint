@@ -173,9 +173,10 @@ class UsePosition:
                 methods.append(t[1:])
         return methods, ()
 
-    def called_after_subscript(self) -> list[str]:
-        """The methods called after the first subscript: `values` in `qs[:5].values()`."""
-        _, rest = self.methods()
+    @staticmethod
+    def called_after_subscript(rest: tuple[str, ...]) -> list[str]:
+        """The methods called in the trailers from the first subscript on (`methods`): `values` in
+        `qs[:5].values()`."""
         return [t[1:] for t, after in zip(rest, rest[1:]) if t.startswith(".") and after == "()"]
 
     def local_target(self) -> str | None:
@@ -228,13 +229,21 @@ class OrmShapes:
     def in_type_alias(position: UsePosition) -> bool:
         """An operand of a union of classes that is assigned to a name, also inside a subscript or a
         tuple: `Target = A | B`, `Cache = dict[str, A | None]`."""
-        steps = list(position.up)
+        up = position.up
         unions = 0
-        while steps and steps[0] in (*UNION_STEPS, *ALIAS_PASS_STEPS):
-            step = steps.pop(0)
-            if step in UNION_STEPS:
+        at = 0
+        while at < len(up):
+            if up[at] in UNION_STEPS:
                 unions += 1
-        return unions > 0 and bool(steps) and steps[0].startswith(ALIAS_ASSIGN_STEPS)
+            elif up[at] not in ALIAS_PASS_STEPS:
+                break
+            at += 1
+        return unions > 0 and at < len(up) and up[at].startswith(ALIAS_ASSIGN_STEPS)
+
+    @staticmethod
+    def first_value_method(names: list[str]) -> str | None:
+        """The first of `names` that reads values (`values`, `values_list`)."""
+        return next((name for name in names if name in VALUE_METHODS), None)
 
     def manager_chain(self, methods: list[str], enclosing: str | None) -> Shape:
         terminal = methods[-1] if methods else "manager"
@@ -249,9 +258,9 @@ class OrmShapes:
             return Shape("subquery", enclosing or "")
         if terminal in SCALAR_TERMINALS:
             return Shape("scalar-chain", terminal)
-        values = [m for m in methods if m in VALUE_METHODS]
-        if values:
-            return Shape("scalar-chain", values[0])
+        value = self.first_value_method(methods)
+        if value is not None:
+            return Shape("scalar-chain", value)
         if enclosing is not None and enclosing.endswith("Field"):
             return Shape("drf-field-queryset")
         if terminal in SINGLE_TERMINALS:
@@ -284,10 +293,10 @@ class OrmShapes:
         methods, rest = position.methods()
         if methods:
             shape = self.attribute_chain(methods, self.enclosing_call(position, rest))
-            values = [m for m in position.called_after_subscript() if m in VALUE_METHODS]
-            if shape.kind in INSTANCE_SHAPES and values:
-                return Shape("scalar-chain", values[0])
-            return shape
+            if shape.kind not in INSTANCE_SHAPES:
+                return shape
+            value = self.first_value_method(UsePosition.called_after_subscript(rest))
+            return shape if value is None else Shape("scalar-chain", value)
         if position.trailers:
             # The parent is the Call that calls the node, or the Subscript that indexes it.
             return Shape("construct") if position.trailers[0] == "()" else Shape("in-collection")
