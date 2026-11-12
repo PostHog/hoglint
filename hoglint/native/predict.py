@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import sys
 import json
+import fnmatch
 import argparse
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
@@ -52,6 +53,7 @@ from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.inputs import InputPatterns, RunInputs
 from hoglint.native.normal import FIELDS
 from hoglint.native.parity import read_rows
+from hoglint.plugins import REGISTRY
 from hoglint.rules.engine import primitive_of
 
 TRACES = "traces.jsonl"
@@ -80,12 +82,13 @@ def module_ancestors(module: str) -> list[str]:
 class TraceConfig:
     """What a run's config says about its inputs, written next to its trace dump: the patterns of
     the files label providers and coverage adapters read, the policy files (every config file of
-    the repo, each rule's `classify` file and each pack's policy files), and the rules whose rows
-    fold many edges."""
+    the repo, each rule's `classify` file and each pack's policy files), the rules whose rows
+    fold many edges, and the modules a pack reads as one unit (`whole_modules`)."""
 
     side: tuple[str, ...]
     policy: tuple[str, ...]
     folded: tuple[str, ...]
+    whole: tuple[str, ...] = ()
 
     @staticmethod
     def of(config: Any) -> TraceConfig:
@@ -94,16 +97,34 @@ class TraceConfig:
             if primitive_of(spec).FOLDS or spec.view in FOLDING_VIEWS:
                 folded.append(spec.id)
         policy = ConfigInputs.of(config).predicted_policy()
-        return TraceConfig(RunInputs.of(config).side(), policy, tuple(sorted(folded)))
+        whole = TraceConfig.whole_modules(config)
+        return TraceConfig(RunInputs.of(config).side(), policy, tuple(sorted(folded)), whole)
+
+    @staticmethod
+    def whole_modules(config: Any) -> tuple[str, ...]:
+        """The module names and fnmatch globs each active pack reads as one unit: a pack row in
+        one of them can move when another of them changes, which no trace records."""
+        out: list[str] = []
+        for name in config.pack_sections:
+            section = config.sections.get(name)
+            reads = getattr(REGISTRY.packs.get(name), "whole_modules", None)
+            if reads is not None and isinstance(section, dict):
+                out.extend(reads(section))
+        return tuple(sorted(set(out)))
 
     def write(self, out: Path) -> None:
         data = {"side": list(self.side), "policy": list(self.policy), "folded": list(self.folded)}
+        data["whole"] = list(self.whole)
         (out / TRACE_CONFIG).write_text(json.dumps(data))
 
     @staticmethod
     def read(out: Path) -> TraceConfig:
         data = json.loads((out / TRACE_CONFIG).read_text())
-        return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]))
+        whole = tuple(data.get("whole", ()))
+        return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]), whole)
+
+    def in_whole(self, module: str) -> bool:
+        return any(module == pattern or fnmatch.fnmatchcase(module, pattern) for pattern in self.whole)
 
 
 def write_trace_dump(link: Any, config: Any, out: Path) -> None:
@@ -458,13 +479,22 @@ class PairPrediction:
                 break
         return out
 
+    def whole_files(self) -> set[str]:
+        """Every file of a unit a pack reads whole (`TraceConfig.whole`), when a changed file is
+        one of them."""
+        config = self.config
+        modules = {**self.parent.modules, **self.child.modules}
+        if not any(config.in_whole(modules[path]) for path in self.changed if path in modules):
+            return set()
+        return {path for path, module in modules.items() if config.in_whole(module)}
+
     def predict(self, ignored_kinds: Iterable[str] = ()) -> Prediction:
         config = self.config
         if any(path in set(config.policy) for path in self.changed):
             every = frozenset(self.parent.traces) | frozenset(self.child.modules)
             return Prediction(every, None, frozenset(config.folded))
         predictor = Predictor(self.parent, self.changes, self.parent.mask(ignored_kinds))
-        link = predictor.link_files()
+        link = predictor.link_files() | self.whole_files()
         moved = self.moved(link)
         readers = predictor.readers(moved.symbols, moved.labels)
         folded_moved = moved.edges or bool(moved.labels) or bool(moved.symbols) or self.side_changed

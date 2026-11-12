@@ -264,6 +264,12 @@ class DjangoPack:
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
         return FACT_NEEDS
 
+    @staticmethod
+    def whole_modules(section: Mapping[str, Any]) -> tuple[str, ...]:
+        """The settings modules: a list one of them hands another moves the setting name the
+        pack writes on the other's edges."""
+        return DjangoPackConfig.from_section(section).settings_modules
+
     def produce(self, section: Mapping[str, Any], reader: PackReader, sink: PackSink, root: Path) -> None:
         self.run(reader, DjangoPackConfig.from_section(section), sink, root)
 

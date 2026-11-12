@@ -521,3 +521,152 @@ def test_a_moved_hand_out_edge_rejudges_a_row_that_reads_handed_zones_at_the_des
     changed = {path for path in child_files if child_files[path] != parent_files.get(path)}
     assert reader in predict(parent, child, changed).files
     assert reader not in predict(parent, child, changed, ignored_kinds=kinds).files
+
+
+WATCHED_CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core", "products"]
+
+[fields]
+package = { type = "id" }
+tier = { type = "enum", values = ["core", "product"] }
+seed = { type = "bool" }
+
+[[assign]]
+match = "products/{package}/**"
+set = { package = "{package}", tier = "product" }
+
+[[assign]]
+match = "core/**"
+set = { package = "core", tier = "core" }
+
+[[assign]]
+match = "core/routing.py"
+set = { seed = true }
+
+[rules.request-path]
+primitive = "reach"
+kinds = ["import"]
+from = "src.seed == true"
+deny = "dst.tier == 'product'"
+through_denied = true
+contexts = { exclude = ["function_local"] }
+identity = ["src.module", "dst.module"]
+report = "advisory"
+ledger = false
+
+[rules.wiring-watched]
+primitive = "coverage"
+covers = ["rules.request-path.dst.path", "edge.kind == 'import' and src.module == 'core.registry': dst"]
+inputs = { adapter = "turbo", task = "contract-check" }
+identity = ["subject"]
+ledger = false
+"""
+WATCHED_REPO = {
+    "hoglint.toml": WATCHED_CONFIG,
+    "package.json": '{"name": "root", "private": true}',
+    "turbo.json": '{"tasks": {"contract-check": {}}}',
+    "core/__init__.py": "",
+    "core/routing.py": "from products.shop.facade import api\n",
+    "core/registry.py": "from products.shop import queries\n",
+    "products/__init__.py": "",
+    "products/shop/__init__.py": "",
+    "products/shop/package.json": '{"name": "shop", "scripts": {"contract-check": "true"}}',
+    "products/shop/turbo.json": json.dumps(
+        {"extends": ["//"], "tasks": {"contract-check": {"inputs": ["facade/**", "queries/run.py"]}}}
+    ),
+    "products/shop/facade/__init__.py": "",
+    "products/shop/facade/api.py": "def ask():\n    pass\n",
+    "products/shop/logic.py": "def decide():\n    pass\n",
+    "products/shop/queries/run.py": "def run():\n    pass\n",
+}
+# What a commit changes, and the rule whose rows it moves: both rules fold the whole graph, so the
+# prediction covers their rows by naming them for rerun.
+WATCHED_CHANGES = {
+    "an import is added on a chain": (
+        {"products/shop/facade/api.py": "from products.shop.logic import decide\n\n\ndef ask():\n    decide()\n"},
+        "wiring-watched",
+    ),
+    "the seed moves": (
+        {"core/routing.py": None, "core/routes.py": "from products.shop.facade import api\n"},
+        "request-path",
+    ),
+    "a file is added to a directory without __init__.py": (
+        {"products/shop/queries/extra.py": "def extra():\n    pass\n"},
+        "wiring-watched",
+    ),
+    "a contract-check input changes": (
+        {
+            "products/shop/turbo.json": json.dumps(
+                {"extends": ["//"], "tasks": {"contract-check": {"inputs": ["facade/**"]}}}
+            )
+        },
+        "wiring-watched",
+    ),
+}
+
+
+def rule_rows(out: Path, rule: str) -> list[str]:
+    """A rule's findings and incomplete items in a dump."""
+    findings = [line for line in (out / "findings.jsonl").read_text().splitlines() if json.loads(line)[0] == rule]
+    return sorted(findings)
+
+
+@pytest.mark.parametrize("change", sorted(WATCHED_CHANGES))
+def test_a_change_to_the_request_path_or_a_watched_directory_reruns_the_rules_whose_rows_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    native_module()
+    edits, rule = WATCHED_CHANGES[change]
+    child_files = {path: text for path, text in {**WATCHED_REPO, **edits}.items() if text is not None}
+    parent = traced_dump(tmp_path, "parent", WATCHED_REPO, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    assert rule_rows(parent, rule) != rule_rows(child, rule), "the change must move the rule's rows"
+    assert {"request-path", "wiring-watched"} <= predict(parent, child, set(edits)).rerun
+
+
+SETTINGS_CONFIG = """
+schema = 1
+extends = ["hoglint:django"]
+
+[discovery]
+source_roots = ["."]
+first_party = ["proj", "shop"]
+
+[django]
+settings = ["proj.settings", "proj.extra"]
+
+[rules.middleware]
+primitive = "edge"
+kinds = ["dotted-path"]
+select = "edge.setting == 'MIDDLEWARE'"
+deny = "true"
+identity = ["dst.module"]
+ledger = false
+"""
+SETTINGS_REPO = {
+    "hoglint.toml": SETTINGS_CONFIG,
+    "proj/__init__.py": "",
+    "proj/extra.py": 'EXTRA = ["shop.middleware.M"]\n',
+    "proj/settings.py": 'from proj.extra import EXTRA\n\nINSTALLED_APPS = ["shop"]\nMIDDLEWARE = ["proj.extra", *EXTRA]\n',
+    "shop/__init__.py": "",
+    "shop/middleware.py": "class M:\n    pass\n",
+}
+
+
+# The Django pack names a settings string by the setting that takes it in, which another settings
+# module can decide: the pack reads its settings modules as one unit.
+def test_a_settings_module_that_stops_taking_in_a_list_moves_the_rows_of_the_module_that_holds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_module()
+    child_files = {**SETTINGS_REPO, "proj/settings.py": 'INSTALLED_APPS = ["shop"]\nMIDDLEWARE = ["proj.extra"]\n'}
+    parent = traced_dump(tmp_path, "parent", SETTINGS_REPO, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    reader = "proj/extra.py"
+    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
+    assert reader in predict(parent, child, {"proj/settings.py"}).files
+    assert reader not in predict(parent, child, {"shop/middleware.py"}).files
