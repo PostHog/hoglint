@@ -494,9 +494,10 @@ growth_key    = ["dst.symbol"]
 
 [rules.receiver-direction]
 primitive  = "edge"
-doc        = "A product never listens to another product's sender (B6). The ledger keeps the sender."
+doc        = "A product never listens to another product's sender (B6). The ledger keeps the sender. A receiver in a test is no wiring."
 kinds      = ["signal"]
 select     = "src.package != dst.package and dst.tier == 'product'"
+contexts   = { exclude = ["test"] }
 identity   = "receiver-sender"
 counted    = true
 growth_key = ["dst.symbol", "src.package"]
