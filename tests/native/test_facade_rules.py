@@ -9,11 +9,10 @@ import pytest
 from hoglint import facts
 from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
-from hoglint.native.parity import read_lines
 from hoglint.rules import exports
 from rules.support import PRESET
 
-from native.test_contract_slots import both_engines
+from native.test_contract_slots import both_engines, findings_of
 
 ROOT_CONFIG = """
 schema = 1
@@ -66,10 +65,6 @@ def site_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(module, "site_packages", lambda: site)
 
 
-def findings(out: Path, rule: str) -> list[list[str]]:
-    return sorted(row[1] for row in read_lines(out / "findings.jsonl") if row[0] == rule)
-
-
 BODIES = (
     "def build() -> int:\n    return 1\n\n\n"
     "def _helper() -> int:\n    return 2\n\n\n"
@@ -113,7 +108,7 @@ def test_facade_logic_names_each_body_of_a_capability_submodule(
     if "/" in name:
         files[f"products/shop/backend/facade/{name.split('/')[0]}/__init__.py"] = ""
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "facade-logic") == sorted(expected)
+    assert findings_of(out["native"], "facade-logic") == sorted(expected)
 
 
 CORE_MODELS = {
@@ -123,6 +118,13 @@ CORE_MODELS = {
     "posthog/models/activity.py": MODEL.format(name="ActivityLog"),
     "posthog/models/organization.py": MODEL.format(name="OrganizationMembership"),
 }
+# A product whose model another product's facade names.
+BILLING = {
+    "products/billing/__init__.py": "",
+    "products/billing/backend/__init__.py": "",
+    "products/billing/backend/models.py": MODEL.format(name="Invoice"),
+}
+INVOICE = "products.billing.backend.models.Invoice"
 API = f"{SHOP}.facade.api"
 
 
@@ -139,7 +141,7 @@ def test_facade_signature_lets_the_named_core_models_cross(tmp_path: Path, monke
     )
     files = {**CORE_MODELS, "products/shop/backend/facade/api.py": api}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "facade-signature") == [
+    assert findings_of(out["native"], "facade-signature") == [
         [API, "logged", "param:entry", "posthog.models.activity.ActivityLog"],
         [API, "place", "param:order", f"{SHOP}.models.Order"],
     ]
@@ -167,17 +169,19 @@ UNKNOWN_CASES = {
 ALIASES = "Payload = dict[str, Any] | list[Any]\nBag = dict[str, str] | dict\n\n\n"
 
 
-@pytest.mark.parametrize("case", UNKNOWN_CASES)
-def test_facade_signature_reads_typed_mappings_and_payloads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
-) -> None:
-    param, returns, expected = UNKNOWN_CASES[case]
-    api = (
-        "from collections.abc import Callable, Mapping\nfrom typing import Any, Optional\n\n"
-        f"{ALIASES}def charge({param}) -> {returns}:\n    pass\n"
+# One function per case in one run: a slot's rows depend on that slot alone.
+def test_facade_signature_reads_typed_mappings_and_payloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    callables = {f"charge_{at}": case for at, case in enumerate(UNKNOWN_CASES)}
+    functions = "".join(
+        f"def {name}({UNKNOWN_CASES[case][0]}) -> {UNKNOWN_CASES[case][1]}:\n    pass\n\n\n"
+        for name, case in callables.items()
     )
+    api = f"from collections.abc import Callable, Mapping\nfrom typing import Any, Optional\n\n{ALIASES}{functions}"
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/api.py": api}, monkeypatch)
-    assert [row[3] for row in findings(out["native"], "facade-signature")] == expected
+    found: dict[str, list[str]] = {case: [] for case in UNKNOWN_CASES}
+    for row in findings_of(out["native"], "facade-signature"):
+        found[callables[row[1]]].append(row[3])
+    assert found == {case: expected for case, (_, _, expected) in UNKNOWN_CASES.items()}
 
 
 def test_a_payload_field_of_a_contract_is_typed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,7 +190,7 @@ def test_a_payload_field_of_a_contract_is_typed(tmp_path: Path, monkeypatch: pyt
         "@dataclasses.dataclass(frozen=True)\nclass Event:\n    properties: dict[str, Any]\n    extra: Any\n"
     )
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
-    assert findings(out["native"], "facade-signature") == [
+    assert findings_of(out["native"], "facade-signature") == [
         [f"{SHOP}.facade.contracts", "Event.__init__", "field:extra", "typing.Any"],
     ]
 
@@ -210,7 +214,7 @@ def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, mo
     )
     files = {**HOGQL, "products/shop/backend/facade/contracts.py": contracts}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "export-shape") == []
+    assert findings_of(out["native"], "export-shape") == []
 
 
 def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -222,7 +226,7 @@ def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monke
         "class Loose:\n    pass\n"
     )
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
-    assert findings(out["native"], "export-shape") == [
+    assert findings_of(out["native"], "export-shape") == [
         [f"{SHOP}.facade.contracts.Loose", f"{SHOP}.facade.contracts", "export-shape(class)"],
     ]
 
@@ -243,11 +247,11 @@ def test_export_shape_leaves_a_slot_to_the_signature_rule(tmp_path: Path, monkey
     )
     files = {"products/shop/backend/logic.py": logic, "products/shop/backend/facade/api.py": api}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "export-shape") == [
+    assert findings_of(out["native"], "export-shape") == [
         [f"{SHOP}.logic.Spec", API, "export-shape(class)"],
         [f"{SHOP}.models.Order", API, "export-denied(model)"],
     ]
-    assert [row[1:3] for row in findings(out["native"], "facade-signature")] == [
+    assert [row[1:3] for row in findings_of(out["native"], "facade-signature")] == [
         ["place", "param:extra"],
         ["place", "param:order"],
     ]
@@ -292,7 +296,7 @@ def test_export_shape_judges_a_slot_no_signature_rule_sees(
 ) -> None:
     name, text, expected = SLOT_OWNER_CASES[case]
     out = both_engines(tmp_path, BASE, {f"products/shop/backend/{name}": text}, monkeypatch)
-    assert findings(out["native"], "export-shape") == expected
+    assert findings_of(out["native"], "export-shape") == expected
 
 
 def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,7 +308,7 @@ def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkey
     )
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/testing.py": testing}, monkeypatch)
     for rule in ("export-shape", "facade-signature", "facade-logic", "facade-no-drf"):
-        assert findings(out["native"], rule) == [], rule
+        assert findings_of(out["native"], rule) == [], rule
 
 
 # Importing a contract module must run no Django: a module-level import, direct or through other
@@ -332,7 +336,7 @@ def test_contracts_no_django_reads_what_runs_on_import(
         "products/shop/backend/facade/contracts.py": body,
     }
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "contracts-no-django") == [[f"{SHOP}.facade.contracts", dst] for dst in reached]
+    assert findings_of(out["native"], "contracts-no-django") == [[f"{SHOP}.facade.contracts", dst] for dst in reached]
 
 
 # The core models on the list may cross a contract at any depth: in a slot of a facade function
@@ -351,8 +355,8 @@ def test_the_core_model_list_holds_at_any_depth(tmp_path: Path, monkeypatch: pyt
     )
     files = {**CORE_MODELS, "products/shop/backend/logic.py": logic, "products/shop/backend/facade/api.py": api}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "export-shape") == [[f"{SHOP}.models.Order", API, "export-denied(model)"]]
-    assert findings(out["native"], "facade-signature") == []
+    assert findings_of(out["native"], "export-shape") == [[f"{SHOP}.models.Order", API, "export-denied(model)"]]
+    assert findings_of(out["native"], "facade-signature") == []
 
 
 # An allowed contract type is allowed as a class; what its fields and methods name is still judged.
@@ -366,21 +370,15 @@ ALLOWED_WITH_A_MODEL = (
 
 
 def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    files = {
-        "products/billing/__init__.py": "",
-        "products/billing/backend/__init__.py": "",
-        "products/billing/backend/models.py": MODEL.format(name="Invoice"),
-        "products/shop/backend/facade/contracts.py": ALLOWED_WITH_A_MODEL,
-    }
+    files = {**BILLING, "products/shop/backend/facade/contracts.py": ALLOWED_WITH_A_MODEL}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    invoice = "products.billing.backend.models.Invoice"
     contracts = f"{SHOP}.facade.contracts"
-    assert findings(out["native"], "facade-signature") == [
-        [contracts, "BillingError.__init__", "param:invoice", invoice],
-        [contracts, "Chooser.__call__", "param:invoice", invoice],
-        [contracts, "Payload.__init__", "field:invoice", invoice],
+    assert findings_of(out["native"], "facade-signature") == [
+        [contracts, "BillingError.__init__", "param:invoice", INVOICE],
+        [contracts, "Chooser.__call__", "param:invoice", INVOICE],
+        [contracts, "Payload.__init__", "field:invoice", INVOICE],
     ]
-    assert findings(out["native"], "export-shape") == []
+    assert findings_of(out["native"], "export-shape") == []
 
 
 # An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_where`
@@ -405,16 +403,12 @@ def test_an_allowed_class_whose_walk_cannot_be_told_is_walked(
             'first_party = ["posthog", "products"]', 'first_party = ["posthog", "products", "scripts"]'
         ),
         "scripts/__init__.py": "",
-        "products/billing/__init__.py": "",
-        "products/billing/backend/__init__.py": "",
-        "products/billing/backend/models.py": MODEL.format(name="Invoice"),
+        **BILLING,
         path: kit,
         "products/shop/backend/facade/api.py": f"from {module} import Payload\n\n\ndef get() -> Payload:\n    return Payload()\n",
     }
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "export-shape") == [
-        ["products.billing.backend.models.Invoice", API, "export-denied(model)"]
-    ]
+    assert findings_of(out["native"], "export-shape") == [[INVOICE, API, "export-denied(model)"]]
 
 
 # The core shapes' base classes have one list, in Python: the native engine reads it from the plan.
@@ -432,4 +426,4 @@ def test_both_engines_read_one_list_of_core_shape_bases(
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
     left_out = "ShopError" if shape == "exception" else "Chooser"
     module = f"{SHOP}.facade.contracts"
-    assert findings(out["native"], "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]
+    assert findings_of(out["native"], "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]

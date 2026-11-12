@@ -14,6 +14,7 @@ from hoglint.model import Context, Edge
 from hoglint.native.parity import read_lines
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 
+from native.test_contract_slots import findings_of
 from native.test_parity import dumps, same_in_both_engines
 
 SECTION = "refiner"
@@ -112,10 +113,6 @@ ledger = false
 """
 
 
-def findings(out: dict[str, Path], rule: str) -> list[list[str]]:
-    return sorted(row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == rule)
-
-
 def failed(out: dict[str, Path]) -> dict[str, str]:
     return {row[0]: row[1] for row in read_lines(out["native"] / "failed.jsonl")}
 
@@ -125,7 +122,10 @@ def test_a_refined_field_read_only_by_an_identity_is_the_refined_value(
 ) -> None:
     out = dumps(tmp_path, repo('steps = [{ name = "a", shape = "write" }]', SHAPE_IDENTITY), monkeypatch)
     same_in_both_engines(out)
-    assert findings(out, "uses") == [["core.a", "write", "core-reference@1"], ["core.b", "write", "core-reference@1"]]
+    assert findings_of(out["native"], "uses") == [
+        ["core.a", "write", "core-reference@1"],
+        ["core.b", "write", "core-reference@1"],
+    ]
 
 
 def test_an_edge_at_the_site_of_a_refined_edge_stays_its_own_edge(
@@ -134,7 +134,7 @@ def test_an_edge_at_the_site_of_a_refined_edge_stays_its_own_edge(
     steps = 'steps = [{ name = "a", shape = "write" }, { name = "twin", twin = true }]'
     out = dumps(tmp_path, repo(steps, SHAPE_IDENTITY), monkeypatch)
     same_in_both_engines(out)
-    assert findings(out, "uses") == [
+    assert findings_of(out["native"], "uses") == [
         ["core.a", "-", "refiner.twin@1"],
         ["core.a", "write", "core-reference@1"],
         ["core.b", "-", "refiner.twin@1"],
@@ -186,7 +186,7 @@ def test_grouped_members_that_differ_outside_their_group_key_judge_alike(
     sources["core/b.py"] = "from products.billing import models\n\n\ndef g():\n    models.Invoice.objects.update()\n"
     out = dumps(tmp_path, sources, monkeypatch)
     same_in_both_engines(out)
-    assert findings(out, "surfaces") == [
+    assert findings_of(out["native"], "surfaces") == [
         ["core.a", "products.billing.models.Invoice", "write"],
         ["core.b", "products.billing.models.Invoice", "write"],
     ]
@@ -214,7 +214,7 @@ def test_a_decision_on_the_label_keeps_two_labels_of_one_kind_apart(
     sources["products/billing/models.py"] = "class Invoice:\n    pass\n\n\nclass Other:\n    pass\n"
     out = dumps(tmp_path, sources, monkeypatch)
     same_in_both_engines(out)
-    assert findings(out, "labels") == [
+    assert findings_of(out["native"], "labels") == [
         ["core.a", "products.billing.models.Invoice"],
         ["core.b", "products.billing.models.Invoice"],
     ]

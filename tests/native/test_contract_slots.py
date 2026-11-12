@@ -3,7 +3,6 @@ read from them, in both engines."""
 
 from __future__ import annotations
 
-import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -195,6 +194,11 @@ def both_engines(
     same_in_both_engines(out)
     assert read_lines(out["native"] / "failed.jsonl") == []
     return out
+
+
+def findings_of(out: Path, rule: str) -> list[list[str]]:
+    """The identities of a rule's findings in a dump, sorted."""
+    return sorted(row[1] for row in read_lines(out / "findings.jsonl") if row[0] == rule)
 
 
 # A handed-out def is read from the file whose binding the module table holds, never from a stub
@@ -656,14 +660,13 @@ def test_each_class_walks_its_lineage_for_a_dataclass_base_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     walked: list[tuple[int, str, int]] = []
-    lineage = DeclarationProducer.lineage
+    find = DeclarationProducer.find_dataclass_base
 
-    def counted(self: DeclarationProducer, context: Any, scope: Any, idx: int) -> Any:
-        if sys._getframe(1).f_code.co_name in ("has_dataclass_base", "find_dataclass_base"):
-            walked.append((id(self), scope.path, idx))
-        return lineage(self, context, scope, idx)
+    def counted(self: DeclarationProducer, context: Any, scope: Any, idx: int) -> bool:
+        walked.append((id(self), scope.path, idx))
+        return find(self, context, scope, idx)
 
-    monkeypatch.setattr(DeclarationProducer, "lineage", counted)
+    monkeypatch.setattr(DeclarationProducer, "find_dataclass_base", counted)
     config = CONFIG.replace(
         "dataclass_decorators =", 'dataclass_bases = ["products.shop.backend.logic.Model"]\ndataclass_decorators ='
     )

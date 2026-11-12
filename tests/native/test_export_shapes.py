@@ -9,7 +9,7 @@ import pytest
 
 from hoglint.native.parity import read_lines
 
-from native.test_contract_slots import both_engines
+from native.test_contract_slots import both_engines, findings_of
 
 CONFIG = """
 schema = 1
@@ -59,10 +59,6 @@ BASE = {
 CONTRACTS = "products.shop.backend.facade.contracts"
 
 
-def export_shape_findings(out: Path) -> list[list[str]]:
-    return sorted(row[1] for row in read_lines(out / "findings.jsonl") if row[0] == "export-shape")
-
-
 IMPORTS = (
     "import dataclasses\n\n"
     "from products.shop.backend.kit import frozen, model, other\n\n\n"
@@ -89,7 +85,7 @@ def test_a_frozen_dataclass_is_read_from_the_dataclass_decorators(
     body, flagged = FROZEN_CASES[case]
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": IMPORTS + body}, monkeypatch)
     expected = [[f"{CONTRACTS}.Order", CONTRACTS, "export-shape(class)"]] if flagged else []
-    assert export_shape_findings(out["native"]) == expected
+    assert findings_of(out["native"], "export-shape") == expected
 
 
 SURFACE_CONFIG = (
@@ -272,7 +268,7 @@ def test_a_module_level_import_in_a_block_is_handed_out(
     files = {"products/shop/backend/logic.py": LOGIC, "products/shop/backend/facade/api.py": api}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     expected = [[f"{SHOP}.logic.Order", API, "export-shape(class)"]] if flagged else []
-    assert export_shape_findings(out["native"]) == expected
+    assert findings_of(out["native"], "export-shape") == expected
 
 
 def test_a_bare_string_names_one_dataclass_decorator_in_both_engines(
@@ -288,4 +284,4 @@ def test_a_bare_string_names_one_dataclass_decorator_in_both_engines(
     contracts = IMPORTS + "@frozen\nclass Order:\n    id: int\n"
     files = {"hoglint.toml": config, "products/shop/backend/facade/contracts.py": contracts}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert export_shape_findings(out["native"]) == []
+    assert findings_of(out["native"], "export-shape") == []
