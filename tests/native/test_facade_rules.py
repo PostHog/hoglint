@@ -11,10 +11,10 @@ from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
 from hoglint.rules import exports
+from rules.support import PRESET
 
 from native.test_contract_slots import both_engines
 
-PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
 ROOT_CONFIG = """
 schema = 1
 extends = ["hoglint:django", "tools/hoglint/presets/posthog.toml"]

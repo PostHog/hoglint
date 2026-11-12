@@ -2,33 +2,20 @@
 
 from __future__ import annotations
 
-import shutil
 import datetime
 from pathlib import Path
 
 import pytest
 
-from hoglint.config import load_config
-from hoglint.config.loader import PACKS_DIR
 from hoglint.model import Context, Graph, Resolution
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.source import GraphSource
 
-from rules.support import GraphBuilder
-
-SHAPES = Path(__file__).parent / "shapes"
-PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
+from rules.support import GraphBuilder, shape_config
 
 
 def run_shape(tmp_path: Path, name: str, graph: Graph, files: dict[str, str] | None = None) -> RunResult:
-    shutil.copy(SHAPES / f"{name}.toml", tmp_path / "hoglint.toml")
-    preset = tmp_path / "tools" / "hoglint" / "presets" / "posthog.toml"
-    preset.parent.mkdir(parents=True)
-    shutil.copy(PRESET, preset)
-    for path, content in (files or {}).items():
-        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / path).write_text(content)
-    config = load_config(tmp_path, tmp_path / "hoglint.toml", PACKS_DIR)
+    config = shape_config(tmp_path, name, files)
     return Engine(config, graph, tmp_path, today=datetime.date(2026, 11, 9)).evaluate()
 
 
@@ -218,8 +205,7 @@ def test_posthog_preset_seals_relations_between_packages_but_not_onto_a_third_pa
 
 
 def test_posthog_preset_gives_only_django_migration_files_the_migration_context(tmp_path: Path) -> None:
-    run_shape(tmp_path, "posthog", Graph())
-    config = load_config(tmp_path, tmp_path / "hoglint.toml", PACKS_DIR)
+    config = shape_config(tmp_path, "posthog")
     globs = GraphSource.core_config(config).migration_globs
     migrations = {
         "posthog/migrations/0889_add_schema_models.py": True,

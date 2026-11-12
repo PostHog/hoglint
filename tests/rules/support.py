@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
 import textwrap
 from pathlib import Path
 
 from hoglint.config import Config, load_config
+from hoglint.config.loader import PACKS_DIR
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
 
 DJANGO_PACK_STUB = """
@@ -117,3 +119,20 @@ def packs_dir(root: Path) -> Path:
 def config_from(root: Path, text: str, extra: dict[str, str] | None = None) -> Config:
     path = write_config(root, text, extra)
     return load_config(root, path, packs_dir(root))
+
+
+SHAPES = Path(__file__).parent / "shapes"
+PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
+
+
+def shape_config(root: Path, name: str, files: dict[str, str] | None = None) -> Config:
+    """The config of repo shape `name` (`shapes/<name>.toml`) in a tree that holds the PostHog
+    preset where a PostHog checkout keeps it, and `files`."""
+    shutil.copy(SHAPES / f"{name}.toml", root / "hoglint.toml")
+    preset = root / "tools" / "hoglint" / "presets" / "posthog.toml"
+    preset.parent.mkdir(parents=True)
+    shutil.copy(PRESET, preset)
+    for path, content in (files or {}).items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(content)
+    return load_config(root, root / "hoglint.toml", PACKS_DIR)

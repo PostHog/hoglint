@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
 
 from hoglint.adapters.codeowners import CodeownersFile
-from hoglint.config import ConfigError, load_config
-from hoglint.config.loader import PACKS_DIR
+from hoglint.config import ConfigError
 from hoglint.labels import CandidateCache, Labeler, render
 from hoglint.model import Resolution
 from hoglint.rules.base import RuleContext, read_endpoint
 from hoglint.rules.engine import Engine
 
-from rules.support import GraphBuilder, config_from
+from rules.support import GraphBuilder, config_from, shape_config
 
 CONFIG = """
 schema = 1
@@ -262,10 +260,6 @@ def test_labelers_sharing_a_cache_keep_the_sources_of_their_own_config(tmp_path:
     assert ["base.toml" in source for source in sources] == [False, True]
 
 
-SHAPES = Path(__file__).parent / "shapes"
-PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
-
-
 @pytest.mark.parametrize(
     "module, package",
     [
@@ -279,11 +273,7 @@ PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
 def test_the_posthog_preset_gives_every_first_party_file_a_package_or_unknown(
     tmp_path: Path, module: str, package: str
 ) -> None:
-    shutil.copy(SHAPES / "posthog.toml", tmp_path / "hoglint.toml")
-    preset = tmp_path / "tools" / "hoglint" / "presets" / "posthog.toml"
-    preset.parent.mkdir(parents=True)
-    shutil.copy(PRESET, preset)
-    config = load_config(tmp_path, tmp_path / "hoglint.toml", PACKS_DIR)
+    config = shape_config(tmp_path, "posthog")
     charge = "products.billing.backend.logic.charge"
     graph = (
         GraphBuilder()
