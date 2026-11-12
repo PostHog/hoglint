@@ -31,8 +31,9 @@ from hoglint.rules.levels import LevelEvaluator, LevelResult
 UNREADABLE = "source:unreadable"
 READ_ERROR = ("status", "read_error")
 
-# Every literal path of an assignment that no file has, and every symbol an assignment or an export
-# names that no symbol has, is an incomplete item of this rule: the labels it sets are missing.
+# Every literal path of an assignment that no file has, every symbol an assignment or an export
+# names that no symbol has, and every value a rule expects that no edge carries, is an incomplete
+# item of this rule: the labels it sets or the seeds it starts from are missing.
 STALE_NAMES = "config:stale-name"
 GLOB_CHARACTERS = frozenset("*?[{")
 
@@ -43,6 +44,7 @@ class StaleNames:
 
     def __init__(self, config: Config, graph: Graph, labeler: Labeler) -> None:
         self.config = config
+        self.graph = graph
         self.paths = set(graph.modules.values())
         self.modules = graph.modules
         self.facts = labeler.facts
@@ -57,11 +59,28 @@ class StaleNames:
                 for name in assignment.symbols.names:
                     if not self.known(name):
                         out.append(self.item(name, f"{name} is named by {assignment.label()} but no symbol has it"))
+        for spec in self.config.rules.values():
+            out.extend(self.expected(spec))
         for export in self.config.exports.values():
             for name in export.symbols:
                 if not self.known(name):
                     reason = f"{name} is named by [exports.{export.name}]  ({export.source}) but no symbol has it"
                     out.append(self.item(name, reason))
+        return out
+
+    def expected(self, spec: RuleSpec) -> list[IncompleteItem]:
+        """The values a rule expects (`expect`) that no edge of its kinds carries: a seed that went
+        away, which would leave the rule reading clean."""
+        out: list[IncompleteItem] = []
+        if not spec.expect:
+            return out
+        edges = [edge for kind in spec.kinds for edge in self.graph.by_kind(kind)] if spec.kinds else self.graph.edges
+        for attr, values in spec.expect:
+            carried = {edge.attr(attr) for edge in edges}
+            for value in values:
+                if value not in carried:
+                    reason = f"{value} is expected by rules.{spec.id} on edge.{attr} but no edge carries it"
+                    out.append(self.item(value, reason))
         return out
 
     def known(self, name: str) -> bool:

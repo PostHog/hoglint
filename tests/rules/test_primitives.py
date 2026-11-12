@@ -872,6 +872,26 @@ def test_an_assignment_that_names_no_file_or_symbol_is_incomplete_not_silent(tmp
     ]
 
 
+EXPECTED_VALUES = """
+[rules.middleware]
+primitive = "edge"
+kinds = ["dotted-path"]
+select = "edge.setting in ['MIDDLEWARE', 'SESSION_ENGINE']"
+deny = "true"
+expect = { setting = ["MIDDLEWARE", "SESSION_ENGINE"] }
+identity = ["dst.module"]
+ledger = false
+"""
+
+
+def test_a_value_a_rule_expects_that_no_edge_carries_is_a_stale_name(tmp_path: Path) -> None:
+    graph = base_graph().edge("dotted-path", "core.api", "products.billing.logic", attrs=(("setting", "MIDDLEWARE"),))
+    result = run(tmp_path, EXPECTED_VALUES, graph.graph)
+    assert [(item.key, item.reason) for item in result.runs["config:stale-name"].incomplete] == [
+        ("SESSION_ENGINE", "SESSION_ENGINE is expected by rules.middleware on edge.setting but no edge carries it")
+    ]
+
+
 @pytest.mark.parametrize(
     "entry, problem",
     [

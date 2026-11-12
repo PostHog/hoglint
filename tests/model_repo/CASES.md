@@ -161,6 +161,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `WW06` | `posthog/settings/web.py`, `products/gatekeeper/backend/throttles.py` | A request key extended through a subscript (`REST_FRAMEWORK[...].append`): the setting cannot be told | no-product-lists-in-core finding; wiring-watched incomplete (`rule request-path cannot tell`); `throttles.py` is not followed | Unknown is never clean: the setting reads unknown, never absent (Nov 12) |
 | `WW07` | `hoglint.toml` (planted line) | A request seed whose path matches no file | config:stale-name incomplete | A path the config writes out in full and the tree lacks is incomplete (Nov 12) |
 | `WW08` | `posthog/middleware.py`, `posthog/request_log.py` | An import on the request path that does not resolve | no-product-lists-in-core and prod-imports-test unknown; wiring-watched incomplete (`rule request-path cannot tell`) | Unknown is never clean (Nov 12) |
+| `WW09` | `posthog/settings/web.py` | The preset expects request keys this tree's settings carry on no edge: unset keys, and `DEFAULT_THROTTLE_CLASSES`, whose only entry cannot be named (`WW06`) | config:stale-name incomplete for each key | A seed key that no settings edge carries is reported, never read clean (Nov 12) |
 | `SN01` | the preset | The preset writes out monorepo paths and symbols this miniature does not hold; the tree runs the real preset and holds only the files its cases need, so these rows stay | config:stale-name incomplete for each | A path or symbol the config writes out in full and the tree lacks is incomplete, never silent (Nov 12) |
 | `UK01` | `scripts/new_tool.py` | A file in a top folder no assignment names imports product internals (the source end unknown) | incomplete in every rule that crosses packages; product-code-at-home incomplete | D105: a new top folder reads unknown |
 | `UK02` | `products/legacy/backend/logic/widgets.py`, `scripts/helpers.py` | A product imports from such a folder (the destination end unknown) | public-surface and cycle incomplete | D105 |
@@ -212,6 +213,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `through_denied` (reach) | An import on the request path that does not resolve | `WW08` | request-path incomplete, carried into wiring-watched |
 | `setting` on settings edges | An entry added through a subscript (`X[...].append`) | `WW06` | the setting reads unknown: wiring-watched incomplete |
 | Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks | `WW07`, `SN01` | config:stale-name incomplete |
+| `expect` of a rule | A request key no settings edge carries | `WW09` | config:stale-name incomplete |
 | Rule covers of a coverage rule | What the covered rule cannot tell (an advisory rule's own items never reach a check's output) | `WW06`, `WW08` | wiring-watched incomplete |
 | `uses_at_import` | A use whose import the rule does not report | `PS03` | the use is a finding of its own; with this preset no import is reported clean while its use is not, so no stronger case can be built (`tests/native/test_evaluator.py` holds it) |
 | `slots = "shape"` | A module the signature rule cannot tell about | none | A file's zone is never unknown in this preset (the zone field has no domain); `tests/native/test_facade_rules.py` holds it |
@@ -329,6 +331,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | request-path | A request key the settings reader cannot name | `WW06` (incomplete) |
 | request-path | An unresolved import on the request path | `WW08` (incomplete) |
 | config:stale-name | A seed path that matches no file | `WW07` |
+| config:stale-name | A request key no settings edge carries | `WW09` |
 | wiring-watched | A location without `__init__.py`, one file unwatched, one watched; all watched | `DR02`; `DR04` (clean) |
 | foundation-direction | A foundation model points at a feature product | None: `FO01` shows the import form |
 | infrastructure-direction | Infrastructure imports a product | `IF01` |

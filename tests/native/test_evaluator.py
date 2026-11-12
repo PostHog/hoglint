@@ -1056,6 +1056,7 @@ class Tables:
             "counted": lambda: rng.random() < 0.5,
             "remedy": lambda: "go through the facade",
             "requires": lambda: ["flows.flow"],
+            "expect": lambda: {"flow_shape": ["write(save)", "write(gone)"]},
             "on_unresolved": lambda: rng.choice(on_any),
             "on_unknown": lambda: rng.choice(on_any),
             "kinds": lambda: self.kinds(mode),

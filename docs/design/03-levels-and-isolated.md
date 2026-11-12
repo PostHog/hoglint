@@ -46,7 +46,7 @@ There is no list and no special level; a product keeps the skip for the code the
   `wiring-watched` requires the file of every module on each row's chain.
 - What the rule cannot tell, `wiring-watched` cannot tell either: an import on the path that does not resolve, or a settings entry whose setting cannot be named, is an incomplete item of `wiring-watched`.
   An advisory rule's own incomplete items do not reach a check's output, so they must be carried.
-- A seed written as a path that matches no file is reported (`config:stale-name`), never dropped.
+- A seed written as a path that matches no file, and a request key that no settings edge carries, are reported (`config:stale-name`), never dropped.
 
 Its limits, in plain words:
 1. An import inside a function is not followed.

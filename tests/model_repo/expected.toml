@@ -5,6 +5,60 @@
 # config:stale-name
 
 [[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["AUTHENTICATION_BACKENDS"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["REST_FRAMEWORK.EXCEPTION_HANDLER"]
+
+[[row]]
+case = "WW09"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["SESSION_ENGINE"]
+
+[[row]]
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"

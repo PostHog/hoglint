@@ -123,10 +123,24 @@ NAMED_IDENTITIES: dict[str, tuple[str, ...]] = {
 }
 
 COMMON_RULE_KEYS = frozenset(
-    {"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "remedy", "requires", "on_unresolved"}
+    {
+        "primitive",
+        "doc",
+        "report",
+        "ledger",
+        "identity",
+        "counted",
+        "growth_key",
+        "remedy",
+        "requires",
+        "on_unresolved",
+        "expect",
+    }
 )
 # The keys the engine and the ledger read for every rule, whatever its type.
-EVERY_RULE_READS = frozenset({"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "requires"})
+EVERY_RULE_READS = frozenset(
+    {"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "requires", "expect"}
+)
 EDGE_SELECT_KEYS = frozenset({"kinds", "contexts", "view", "from", "select", "endpoint", "unless"})
 PRODUCER_OPTION_KEYS = {"flow": ("syntax", "def-use"), "resolve_calls": ("bare-name", "import")}
 RULE_KEYS: dict[str, frozenset[str]] = {
@@ -972,6 +986,7 @@ class SchemaBuilder:
             allow_shapes=as_tuple(table.get("allow_shapes")),
             deny_shapes=as_tuple(table.get("deny_shapes")),
             requires=as_tuple(table.get("requires")),
+            expect=self.read_expect(f"{key}.expect", table.get("expect", {})),
             classify=classify,
             exactly_one=str(table.get("exactly_one", "")),
             covers=self.read_covers(f"{key}.covers", table.get("covers"), rule_ids),
@@ -989,6 +1004,21 @@ class SchemaBuilder:
             producer_options=tuple(producer_options),
             source=self.source(key),
         )
+
+    def read_expect(self, key: str, value: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """`expect = { <edge attr> = [values] }`: the values the rule starts from, each of which
+        some edge of its kinds must carry."""
+        if not isinstance(value, dict):
+            self.fail(key, "expect must be a table of edge attributes to lists of values")
+            return ()
+        out = []
+        for attr, values in value.items():
+            listed = as_tuple(values)
+            if not all(isinstance(item, str) for item in listed):
+                self.fail(f"{key}.{attr}", "expected values must be strings")
+                continue
+            out.append((attr, listed))
+        return tuple(sorted(out))
 
     def read_levels(self, rules: dict[str, RuleSpec]) -> dict[str, LevelSpec]:
         out: dict[str, LevelSpec] = {}

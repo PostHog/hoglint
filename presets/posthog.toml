@@ -578,17 +578,19 @@ identity      = "location-module-trigger"
 counted       = true
 growth_key    = ["edge.location", "edge.label", "src.package"]
 
-# The request-pipeline keys: the settings Django and DRF read to build every request's middleware,
-# authentication, session, permission, throttle, rendering, parsing, paging and error handling.
+# The request-pipeline keys the settings set: what Django and DRF read to build every request's
+# middleware, authentication, session, permission, throttle, rendering, paging, schema and errors.
 [rules.request-path]
 primitive     = "reach"
 doc           = "A product module that core's request pipeline reaches by module-level imports is a watched file (D103): wiring-watched checks it. The search starts at the modules settings name under the request-pipeline keys and at the view base class, and goes on through product code. A list, not debt."
 kinds         = ["import", "dotted-path"]
 from          = "src.settings == true or src.request_seed == true"
-select        = "(src.settings == true and edge.kind == 'dotted-path' and edge.setting in ['MIDDLEWARE', 'AUTHENTICATION_BACKENDS', 'SESSION_ENGINE', 'REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES', 'REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES', 'REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES', 'REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES', 'REST_FRAMEWORK.DEFAULT_PARSER_CLASSES', 'REST_FRAMEWORK.DEFAULT_CONTENT_NEGOTIATION_CLASS', 'REST_FRAMEWORK.DEFAULT_METADATA_CLASS', 'REST_FRAMEWORK.DEFAULT_VERSIONING_CLASS', 'REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS', 'REST_FRAMEWORK.DEFAULT_FILTER_BACKENDS', 'REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS', 'REST_FRAMEWORK.EXCEPTION_HANDLER']) or (src.settings != true and edge.kind == 'import')"
+select        = "(src.settings == true and edge.kind == 'dotted-path' and edge.setting in ['MIDDLEWARE', 'AUTHENTICATION_BACKENDS', 'SESSION_ENGINE', 'REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES', 'REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES', 'REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES', 'REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES', 'REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS', 'REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS', 'REST_FRAMEWORK.EXCEPTION_HANDLER']) or (src.settings != true and edge.kind == 'import')"
 deny          = "dst.tier == 'product'"
 through_denied = true
 contexts      = { exclude = ["type_only", "test", "function_local"] }
+# Each key must be carried by a settings edge, so a key renamed or built by a call is reported.
+expect        = { setting = ["MIDDLEWARE", "AUTHENTICATION_BACKENDS", "SESSION_ENGINE", "REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES", "REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES", "REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES", "REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES", "REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS", "REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS", "REST_FRAMEWORK.EXCEPTION_HANDLER"] }
 on_unresolved = "incomplete"
 identity      = "module-pair"
 growth_key    = ["dst.module"]

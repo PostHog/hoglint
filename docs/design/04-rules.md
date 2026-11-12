@@ -88,6 +88,7 @@ The Django pack uses it for `setting`, the name of the setting a string of a set
 **A name the config writes out in full must exist** (Nov 12).
 A literal path of an assignment that no file has, and a symbol an assignment or an export names that no symbol has, are incomplete items of `config:stale-name`.
 The config loads before the tree is read, so only a run can tell.
+A rule may declare the edge attribute values it starts from (`expect = { setting = [...] }`); a value that no edge of its kinds carries is such an item too, so a seed that went away (a key renamed, a list built by a call) is reported, not read clean.
 
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
