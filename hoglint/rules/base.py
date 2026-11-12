@@ -952,7 +952,8 @@ class EdgeRule(RuleType):
         }
 
     def plan(self) -> dict[str, Any]:
-        """A rule judged per edge. A signature rule adds its part."""
+        """A rule judged per edge. A signature rule adds its part, an entrypoint rule its
+        `uses_at_import`."""
         spec = self.spec
         return {
             "id": spec.id,
@@ -962,4 +963,5 @@ class EdgeRule(RuleType):
             "unless": selector_tree(spec.unless),
             "signature": None,
             "verdict": self.verdict_plan(),
+            "uses_at_import": False,
         }

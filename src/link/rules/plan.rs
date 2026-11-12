@@ -69,7 +69,6 @@ pub struct SymbolMatchPlan {
     pub decorated_by: Vec<String>,
     pub subclass_of: Vec<String>,
     /// The symbols' full dotted names.
-    #[serde(default)]
     pub names: Vec<String>,
 }
 
@@ -119,7 +118,6 @@ pub struct ExportPlan {
     pub paths: Vec<String>,
     pub subclass_of: Vec<String>,
     /// Only these symbols are members, not their subclasses (`ExportSpec.symbols`).
-    #[serde(default)]
     pub symbols: Vec<String>,
     pub audience: Option<NodePlan>,
 }
@@ -142,13 +140,10 @@ pub struct ShapePlan {
     /// `unknown = "incomplete"`.
     pub incomplete: bool,
     /// `signatures = true`: the signatures of what the export hands out are part of it.
-    #[serde(default)]
     pub signatures: bool,
     /// An entity selector: a symbol it holds for is allowed as it stands.
-    #[serde(default)]
     pub allow_where: Option<NodePlan>,
     /// An entity selector: an allowed class that is no data shape is walked only where it holds.
-    #[serde(default)]
     pub walk_where: Option<NodePlan>,
 }
 
@@ -284,7 +279,6 @@ pub struct JudgePlan {
     pub verdict: VerdictPlan,
     /// An entrypoint rule that judges a later use of an imported name at its import
     /// (`EntrypointPrimitive.sees`).
-    #[serde(default)]
     pub uses_at_import: bool,
 }
 
