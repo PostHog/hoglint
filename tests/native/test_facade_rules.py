@@ -419,17 +419,17 @@ def test_an_allowed_class_whose_walk_cannot_be_told_is_walked(
 
 # The core shapes' base classes have one list, in Python: the native engine reads it from the plan.
 # A class that inherits a base the list leaves out is a plain class in both engines.
-@pytest.mark.parametrize("bases", ["EXCEPTION_BASES", "PROTOCOL_BASES"])
+@pytest.mark.parametrize("shape", ["exception", "protocol"])
 def test_both_engines_read_one_list_of_core_shape_bases(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bases: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
 ) -> None:
-    monkeypatch.setattr(exports, bases, frozenset())
+    monkeypatch.setitem(exports.SHAPE_BASES, shape, frozenset())
     contracts = (
         "from typing import Protocol\n\n\n"
         "class ShopError(Exception):\n    pass\n\n\n"
         "class Chooser(Protocol):\n    def __call__(self, name: str) -> str: ...\n"
     )
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
-    left_out = "ShopError" if bases == "EXCEPTION_BASES" else "Chooser"
+    left_out = "ShopError" if shape == "exception" else "Chooser"
     module = f"{SHOP}.facade.contracts"
     assert findings(out["native"], "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]

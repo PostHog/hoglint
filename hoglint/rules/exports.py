@@ -119,18 +119,19 @@ BUILTIN_EXCEPTIONS = (
     "ZeroDivisionError",
 )
 EXCEPTION_BASES = frozenset(f"builtins.{name}" for name in BUILTIN_EXCEPTIONS)
+# The core shapes a class has when its lineage holds one of their bases.
+SHAPE_BASES = {"abc": ABC_BASES, "enum": ENUM_BASES, "protocol": PROTOCOL_BASES, "exception": EXCEPTION_BASES}
 
 
 def core_shape_bases() -> dict[str, list[str]]:
     """The base classes and metaclasses that make each core shape, for the native evaluator's
     plan: these lists are the only copy, so both engines recognize the same classes."""
-    return {
-        "abc": sorted(ABC_BASES),
-        "abc_metas": sorted(ABC_METAS),
-        "enum": sorted(ENUM_BASES),
-        "protocol": sorted(PROTOCOL_BASES),
-        "exception": sorted(EXCEPTION_BASES),
-    }
+    out: dict[str, list[str]] = {}
+    for name, bases in SHAPE_BASES.items():
+        out[name] = sorted(bases)
+        if name == "abc":
+            out["abc_metas"] = sorted(ABC_METAS)
+    return out
 
 
 # Why an export rule cannot tell about a symbol, by code; `{detail}` is the export's name or the
@@ -325,14 +326,9 @@ class ExportPrimitive(RuleType):
             names.add("dataclass")
             if self.facts.is_frozen(symbol, self.dataclass_kinds):
                 names.add("frozen-dataclass")
-        if lineage & ABC_BASES or self.facts.get(symbol, "metaclass") in ABC_METAS:
+        names.update(name for name, bases in SHAPE_BASES.items() if lineage & bases)
+        if self.facts.get(symbol, "metaclass") in ABC_METAS:
             names.add("abc")
-        if lineage & ENUM_BASES:
-            names.add("enum")
-        if lineage & PROTOCOL_BASES:
-            names.add("protocol")
-        if lineage & EXCEPTION_BASES:
-            names.add("exception")
         return frozenset(names), complete and kind.state is not State.UNKNOWN
 
     def symbol_truth(self, selector: Selector, symbol: str) -> Truth:

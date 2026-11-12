@@ -4,6 +4,7 @@
 use super::labels::Labels;
 use super::selector::Ref;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 pub struct Plan {
@@ -151,12 +152,11 @@ pub struct ShapePlan {
 /// Python lists are the only copy.
 #[derive(Clone, Deserialize)]
 pub struct CoreBasesPlan {
-    pub abc: Vec<String>,
     pub abc_metas: Vec<String>,
-    #[serde(rename = "enum")]
-    pub enum_: Vec<String>,
-    pub protocol: Vec<String>,
-    pub exception: Vec<String>,
+    /// Each shape a class has when its lineage holds one of the shape's bases
+    /// (`exports.SHAPE_BASES`).
+    #[serde(flatten)]
+    pub bases: BTreeMap<String, Vec<String>>,
 }
 
 /// What an export rule checks (`ExportPrimitive`).

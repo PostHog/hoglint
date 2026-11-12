@@ -463,18 +463,14 @@ impl<'a> Walk<'a> {
                 names.insert("frozen-dataclass".into());
             }
         }
+        for (name, bases) in &core.bases {
+            if in_lineage(bases) {
+                names.insert(name.clone());
+            }
+        }
         let metaclass = rules.symbol_fact(link, symbol, "metaclass");
-        if in_lineage(&core.abc) || core.abc_metas.iter().any(|meta| meta == metaclass) {
+        if core.abc_metas.iter().any(|meta| meta == metaclass) {
             names.insert("abc".into());
-        }
-        if in_lineage(&core.enum_) {
-            names.insert("enum".into());
-        }
-        if in_lineage(&core.protocol) {
-            names.insert("protocol".into());
-        }
-        if in_lineage(&core.exception) {
-            names.insert("exception".into());
         }
         (names, complete && !kind_unknown)
     }
