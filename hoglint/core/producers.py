@@ -854,16 +854,14 @@ class DeclarationProducer(Producer):
         return out
 
     @staticmethod
-    def is_dataclass_decorator(context: BuildContext, surface: str, resolved: Resolved) -> bool:
-        """Whether a decorator is one `dataclass_decorators` names, by spelling or target."""
-        wanted = context.config.dataclass_decorators
+    def named_in(wanted: tuple[str, ...], surface: str, resolved: Resolved) -> bool:
+        """Whether a name is one `wanted` holds, by its spelling or by its target."""
         return surface in wanted or any(str(target) in wanted for target in resolved.targets)
 
-    def fields_matter(self, scope: FileScope, idx: int, contract: bool) -> bool:
-        """Whether a class's fields can be slots: it declares a field, or it is in a contract,
-        which also exposes the fields it inherits. Only then is its dataclass base asked for, so a
-        plain class reads nothing of its ancestors for it."""
-        return bool(self.fields_by_class(scope).get(idx)) or (contract and self.in_contract(scope, idx))
+    @classmethod
+    def is_dataclass_decorator(cls, context: BuildContext, surface: str, resolved: Resolved) -> bool:
+        """Whether a decorator is one `dataclass_decorators` names, by spelling or target."""
+        return cls.named_in(context.config.dataclass_decorators, surface, resolved)
 
     def has_dataclass_base(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
         """Whether a class or one of its ancestors names a base of `dataclass_bases`, by spelling
@@ -885,9 +883,7 @@ class DeclarationProducer(Producer):
                 found = context.value_lookup(owner, base, node["s"], node["l"])
                 if found is None:
                     continue
-                if found.surface in wanted:
-                    return True
-                if any(str(target) in wanted for target in context.classifier.classify_lookup(found).targets):
+                if self.named_in(wanted, found.surface, context.classifier.classify_lookup(found)):
                     return True
         return False
 
@@ -1018,13 +1014,21 @@ class DeclarationProducer(Producer):
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs
                     )
                 )
-        if is_class and not dataclass and not nested and self.fields_matter(scope, idx, contract):
+        in_contract = contract and self.in_contract(scope, idx)
+        # Only a class whose fields can be slots asks for its dataclass base: one that declares a
+        # field, or one in a contract, which also exposes the fields it inherits.
+        if (
+            is_class
+            and not dataclass
+            and not nested
+            and context.config.dataclass_bases
+            and (bool(self.fields_by_class(scope).get(idx)) or in_contract)
+        ):
             dataclass = self.has_dataclass_base(context, scope, idx)
         if nested or (is_class and not dataclass):
             return
         site = SlotSite(scope, enclosing, line, column, contexts)
         lookup = SlotLookup(scope, enclosing, line)
-        in_contract = contract and self.in_contract(scope, idx)
         if not is_class:
             self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
             return

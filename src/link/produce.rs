@@ -666,6 +666,11 @@ pub struct Expanded {
     argument_of: Sid,
 }
 
+/// Whether a name is one `wanted` holds, by its spelling or by its target.
+fn named_in(wanted: &[Sid], surface: Sid, target: Option<Sid>) -> bool {
+    wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
+}
+
 /// A name in a type expression.
 struct Named {
     name: Sid,
@@ -1494,17 +1499,27 @@ impl Producers<'_> {
         }
     }
 
-    /// The candidate dataclass fields of one class, as assign indexes; each file is read once.
+    /// The candidate dataclass fields of a file, by class; each file is read once.
+    fn file_fields(&mut self, file: u32) -> &FxHashMap<i32, Vec<u32>> {
+        let core = &self.core;
+        self.fields
+            .entry(file)
+            .or_insert_with(|| fields_by_class(&core.it, &core.facts.files[file as usize].assigns))
+    }
+
+    /// The candidate dataclass fields of one class, as assign indexes.
     fn class_fields(&mut self, file: u32, idx: u32) -> Vec<u32> {
-        if !self.fields.contains_key(&file) {
-            let record = &self.core.facts.files[file as usize];
-            let found = fields_by_class(&self.core.it, &record.assigns);
-            self.fields.insert(file, found);
-        }
-        self.fields[&file]
+        self.file_fields(file)
             .get(&(idx as i32))
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Whether a class declares a candidate dataclass field.
+    fn declares_fields(&mut self, file: u32, idx: u32) -> bool {
+        self.file_fields(file)
+            .get(&(idx as i32))
+            .is_some_and(|found| !found.is_empty())
     }
 
     /// The analyzed file's scope and def index of the def or class (`kind`) a module table binds
@@ -1546,14 +1561,7 @@ impl Producers<'_> {
     /// Whether a decorator is one `dataclass_decorators` names, by spelling or target.
     fn is_dataclass_decorator(&mut self, surface: Sid, resolved: Resolved) -> bool {
         let target = resolved.target.map(|target| self.core.ent_sid(target));
-        let wanted = &self.settings.dataclass_decorators;
-        wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
-    }
-
-    /// `DeclarationProducer.fields_matter`: whether a class's fields can be slots. It declares a
-    /// field, or it is in a contract, which also exposes the fields it inherits.
-    fn fields_matter(&mut self, file: u32, defs: &[Def], idx: usize, contract: bool) -> bool {
-        !self.class_fields(file, idx as u32).is_empty() || (contract && self.in_contract(defs, idx))
+        named_in(&self.settings.dataclass_decorators, surface, target)
     }
 
     /// `DeclarationProducer.has_dataclass_base`: whether a class or one of its ancestors names a
@@ -1582,8 +1590,7 @@ impl Producers<'_> {
             for base in &node.bases {
                 let (surface, resolved) = self.lookup_value(at_owner, base, node.s, node.l);
                 let target = resolved.target.map(|target| self.core.ent_sid(target));
-                let wanted = &self.settings.dataclass_bases;
-                if wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name)) {
+                if named_in(&self.settings.dataclass_bases, surface, target) {
                     return true;
                 }
             }
@@ -1914,10 +1921,14 @@ impl Producers<'_> {
                     );
                 }
             }
+            let in_contract = contract && self.in_contract(&record.defs, idx);
+            // Only a class whose fields can be slots asks for its dataclass base: one that declares
+            // a field, or one in a contract, which also exposes the fields it inherits.
             if node.is_class()
                 && !dataclass
                 && !nested
-                && self.fields_matter(file as u32, &record.defs, idx, contract)
+                && !self.settings.dataclass_bases.is_empty()
+                && (self.declares_fields(file as u32, idx as u32) || in_contract)
             {
                 dataclass = self.has_dataclass_base(owner, idx as u32);
             }
@@ -1936,7 +1947,6 @@ impl Producers<'_> {
                 scope: enclosing,
                 line: node.l,
             };
-            let in_contract = contract && self.in_contract(&record.defs, idx);
             if !node.is_class() {
                 let rows = SlotRows {
                     site,
