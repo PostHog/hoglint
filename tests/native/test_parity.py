@@ -267,3 +267,79 @@ def test_grouped_findings_keep_the_flags_their_judgment_sets(tmp_path: Path, mon
         ("core.a", "products.billing.gone.Lost"): (False, True),
         ("core.b", "products.billing.gone.Lost"): (False, True),
     }
+
+
+NAMESPACE_CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core", "products", "tools"]
+
+[fields]
+package = { type = "id", required_on = ["**"] }
+zone = { type = "zone" }
+
+[[assign]]
+match = "products/{product}/**"
+set = { package = "{product}" }
+
+[[assign]]
+match = "core/**"
+set = { package = "core" }
+
+[[assign]]
+match = "tools/{name}/**"
+set = { package = "tools-{name}" }
+
+[[assign]]
+match = "tools/*"
+set = { package = "tools" }
+
+[zones]
+within = "products/{product}"
+default = "internal"
+backend = { paths = ["backend/**"] }
+facade = { parent = "backend", paths = ["backend/facade/**"] }
+data-api = { parent = "facade", paths = ["backend/facade/api*.py"] }
+presentation = { parent = "backend", paths = ["backend/presentation/**"] }
+
+[rules.into]
+primitive = "edge"
+kinds = ["import"]
+select = "src.module == 'core.user'"
+deny = "dst.zone == 'presentation' or dst.zone in ['facade', 'data-api'] or dst.package == 'tools-hogli'"
+identity = ["dst.module", "dst.zone", "dst.package"]
+ledger = false
+"""
+NAMESPACE_REPO = {
+    "hoglint.toml": NAMESPACE_CONFIG,
+    "core/__init__.py": "",
+    "core/user.py": (
+        "from products.shop.backend import presentation\n"
+        "from products.shop.backend import facade\n"
+        "from tools import hogli\n"
+    ),
+    "products/__init__.py": "",
+    "products/shop/__init__.py": "",
+    "products/shop/backend/__init__.py": "",
+    "products/shop/backend/presentation/views.py": "",
+    "products/shop/backend/facade/api.py": "",
+    "products/shop/backend/facade/logic.py": "",
+    "tools/hogli/main.py": "",
+}
+
+
+# A directory without `__init__.py` reads the labels a file directly inside it reads from path
+# rules, so a glob written for files (`X/**`) holds for the directory `X`. Where the files inside
+# disagree, the directory's field is unknown.
+def test_a_namespace_directory_reads_the_labels_of_a_file_inside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = dumps(tmp_path, NAMESPACE_REPO, monkeypatch)
+    same_in_both_engines(out)
+    assert sorted(row[1] for row in read_lines(out["native"] / "findings.jsonl")) == [
+        ["products.shop.backend.facade", "?", "shop"],
+        ["products.shop.backend.presentation", "presentation", "shop"],
+        ["tools.hogli", "-", "tools-hogli"],
+    ]

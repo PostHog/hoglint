@@ -165,10 +165,16 @@ class ProviderRunner:
 # ── Directories without `__init__.py` ───────────────────────────
 
 
+# A file name no glob spells: the path a namespace directory is labelled by is that of a module
+# file directly inside it, so a glob written for files (`X/**`) holds for the directory `X`.
+NAMESPACE_PROBE = "\x00.py"
+
+
 class NamespaceDirectories:
     """The directories without `__init__.py` that hold graph modules, by dotted name: an edge can
-    name one (a namespace package), and its labels come from its path as a module's do. A name
-    two graph modules place in two directories gets no path."""
+    name one (a namespace package), and its labels come from the path of a file directly inside
+    it. A name two graph modules place in two directories gets no path. `inside` holds, per name,
+    the graph modules whose file lies directly in the directory."""
 
     def __init__(self, modules: dict[str, str]) -> None:
         found: dict[str, str] = {}
@@ -180,7 +186,13 @@ class NamespaceDirectories:
                 if found.setdefault(name, directory) != directory:
                     clashes.add(name)
                     del found[name]
-        self.paths = found
+        self.paths = {name: f"{directory}/{NAMESPACE_PROBE}" for name, directory in found.items()}
+        named = {directory: name for name, directory in found.items()}
+        self.inside: dict[str, list[str]] = {}
+        for module, path in modules.items():
+            name = named.get(path.rpartition("/")[0])
+            if name is not None:
+                self.inside.setdefault(name, []).append(module)
 
     @staticmethod
     def parents(module: str, path: str) -> list[tuple[str, str]]:
@@ -257,6 +269,7 @@ class Labeler:
         }
         self.provider_fields = frozenset(name for spec in self.providers.specs for name in spec.sets)
         self.module_labels = Memo(self.label_module)
+        self.namespace_unknown: dict[str, frozenset[str]] = {}
         self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
         self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
@@ -383,11 +396,14 @@ class Labeler:
         return labels
 
     def label_namespace(self, module: str) -> Labels:
-        """A namespace directory's labels from its path's assignments and zones. Two sources that
-        disagree leave the field unset here; the modules inside the directory report them."""
+        """A namespace directory's labels: those a file directly inside it reads from the path's
+        assignments and zones. A field two sources set apart, or that a module file inside the
+        directory reads otherwise, is unknown (`namespace_unknown`); the modules inside report
+        their own conflicts, so none is recorded here."""
         path = self.namespaces.paths.get(module)
         if path is None:
             return {}
+        inside = [self.module_labels(other) for other in self.namespaces.inside.get(module, ())]
         cached = self.path_candidates(path)
         collected = {
             name: list(candidates) for name, candidates in cached.fields.items() if name not in self.provider_fields
@@ -395,7 +411,23 @@ class Labeler:
         before = len(self.conflicts)
         labels = self.resolve_all(module, collected)
         del self.conflicts[before:]
+        unknown = {name for name in collected if name not in labels}
+        if cached.conflicts:
+            unknown.update(self.zone_fields)
+        for other in inside:
+            for name in self.config.fields:
+                if name in self.provider_fields or self.config.fields[name].on == "symbol":
+                    continue
+                if self.label_value(other.get(name)) != self.label_value(labels.get(name)):
+                    unknown.add(name)
+        for name in unknown:
+            labels.pop(name, None)
+        self.namespace_unknown[module] = frozenset(unknown)
         return labels
+
+    @staticmethod
+    def label_value(label: Label | None) -> object:
+        return None if label is None else label.value
 
     def label_provided(self, module: str) -> Labels:
         """The fields providers set (owners, for example), from the config's paths and the
@@ -606,6 +638,8 @@ class Labeler:
         label = self.label_of(module, symbol, name)
         if label is not None:
             return self.to_value(spec, label), label.source
+        if spec.on == "module" and module is not None and name in self.namespace_unknown.get(module, ()):
+            return UNKNOWN, "the files directly inside the directory read it apart"
         if spec.on == "symbol" and symbol is not None and self.facts.get(symbol, name):
             return Value.known(self.facts.get(symbol, name)), "producer fact"
         if name in self.providers.failed_fields:
@@ -619,7 +653,11 @@ class Labeler:
     def label_only(self, module: str | None, symbol: str | None, name: str) -> Value:
         """A field as its labels say, without the domain: what a domain selector itself reads."""
         label = self.label_of(module, symbol, name)
-        return self.to_value(self.config.fields[name], label) if label is not None else NONE
+        if label is not None:
+            return self.to_value(self.config.fields[name], label)
+        if self.config.fields[name].on == "module" and module is not None:
+            return UNKNOWN if name in self.namespace_unknown.get(module, ()) else NONE
+        return NONE
 
     def builtin(self, module: str | None, symbol: str | None, name: str, sourced: bool = False) -> Value:
         """An entity attribute the labeler answers itself (see BUILTIN_ENTITY_NAMES); `sourced`

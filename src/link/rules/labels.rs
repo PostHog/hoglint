@@ -354,12 +354,17 @@ impl Export {
     }
 }
 
+/// A file name no glob spells (`labels.NAMESPACE_PROBE`): a namespace directory is labelled by
+/// the path of a module file directly inside it.
+const NAMESPACE_PROBE: &str = "\0.py";
+
 /// A directory without `__init__.py` that holds graph modules (`labels.NamespaceDirectories`):
-/// an edge can name one, and its path labels it as a module's path does.
+/// an edge can name one, and the path of a file directly inside it labels it.
 pub struct Namespace {
     pub path: String,
-    /// Per field, the label the path's assignments and zones give; None where none does, where
-    /// two disagree (the modules inside report that), and for symbol and provider fields.
+    /// Per field, the label that path's assignments and zones give; None where none does and for
+    /// symbol and provider fields; unknown where two sources disagree or a module file directly
+    /// inside the directory reads the field otherwise.
     pub labels: Vec<Option<Cell>>,
 }
 
@@ -489,10 +494,22 @@ impl Labels {
         for (at, (path, module)) in paths.iter().zip(modules).enumerate() {
             out.label_module(at as u32, path, module, exports);
         }
-        for (name, path) in namespace_paths(paths, modules) {
-            let labels = out.label_namespace(&path);
+        let directories = namespace_paths(paths, modules);
+        let mut inside: FxHashMap<&str, Vec<u32>> = FxHashMap::default();
+        for (_, directory) in &directories {
+            inside.insert(directory.as_str(), Vec::new());
+        }
+        for (at, path) in paths.iter().enumerate() {
+            let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+            if let Some(found) = inside.get_mut(parent) {
+                found.push(at as u32);
+            }
+        }
+        for (name, directory) in &directories {
+            let path = format!("{directory}/{NAMESPACE_PROBE}");
+            let labels = out.label_namespace(&path, &inside[directory.as_str()]);
             out.namespaces
-                .insert(name.into(), Namespace { path, labels });
+                .insert(name.as_str().into(), Namespace { path, labels });
         }
         out.fill_provided(plan)?;
         Ok(out)
@@ -535,10 +552,11 @@ impl Labels {
         (collected, zone_conflict)
     }
 
-    /// A namespace directory's labels from its path (`Labeler.label_namespace`): two sources that
-    /// disagree leave the field unset, and nothing is recorded as a conflict.
-    fn label_namespace(&mut self, path: &str) -> Vec<Option<Cell>> {
-        let (collected, _) = self.path_candidates(path);
+    /// A namespace directory's labels (`Labeler.label_namespace`): those of `path`, a file
+    /// directly inside it. A field two sources set apart, or that one of the module files
+    /// directly inside (`inside`) reads otherwise, is unknown; nothing is recorded as a conflict.
+    fn label_namespace(&mut self, path: &str, inside: &[u32]) -> Vec<Option<Cell>> {
+        let (collected, zone_conflict) = self.path_candidates(path);
         let mut out = Vec::with_capacity(collected.len());
         for (at, candidates) in collected.iter().enumerate() {
             let field = &self.fields[at];
@@ -546,7 +564,16 @@ impl Labels {
                 out.push(None);
                 continue;
             }
-            out.push(self.resolve(at, candidates).ok().flatten());
+            let zone = field.kind == FieldKind::Zone;
+            let label = match self.resolve(at, candidates) {
+                Ok(_) if zone && zone_conflict => Some(Cell::Unknown),
+                Ok(label) => label,
+                Err(()) => Some(Cell::Unknown),
+            };
+            let apart = inside
+                .iter()
+                .any(|&module| self.labels[at][module as usize] != label);
+            out.push(if apart { Some(Cell::Unknown) } else { label });
         }
         out
     }
