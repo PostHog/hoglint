@@ -57,7 +57,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `ES01` | `products/catalog/backend/facade/models.py` | A facade module that only re-exports a model | export-shape finding | |
 | `ES02` | `products/catalog/backend/facade/api.py` | A model, queryset and manager in facade signatures | clean for export-shape (see `FS01`-`FS03`) | One rule per slot (`slots = "shape"`) |
 | `ES03` | `products/catalog/backend/facade/api.py`, `products/catalog/backend/facade/shapes.py` | The five core models in signatures and fields | clean | `crosses` (D98) |
-| `ES06` | `products/inventory/backend/facade/contracts.py`, `products/catalog/backend/facade/shapes.py` | An exception handed out; one with a class attribute typed as another product's model | clean for both | Exceptions are allowed (Nov 12); a class attribute of an exception is no slot: open |
+| `ES06` | `products/inventory/backend/facade/contracts.py`, `products/catalog/backend/facade/shapes.py` | An exception handed out; one with a class attribute typed as another product's model; a Protocol with such an attribute | clean for all | Exceptions and Protocols are allowed (Nov 12); an annotated attribute is handed out like a field and judged (Nov 12; wanted, with `ME01`) |
 | `ES07` | `products/catalog/backend/facade/shapes.py` | A pydantic model; one with a field typed as another product's model | clean; facade-signature finding for the field | pydantic fields are slots (`dataclass_bases`); allowed shapes are walked (D63) |
 | `ES08` | `products/catalog/backend/facade/shapes.py` | A `Protocol`; one whose call takes another product's model | clean; facade-signature finding for the call (`FS08`) | D93 |
 | `ES09` | `products/catalog/backend/facade/shapes.py` | A mutable dataclass | export-shape finding | |
@@ -87,7 +87,10 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `FL05` | `products/inventory/backend/facade/hooks.py`, `products/catalog/backend/facade/testing.py`, `products/legacy/backend/facade/backfill_command.py` | Bodies in other facade modules (a hook registration, a fixture, a class) | clean | |
 | `HZ01` | `products/legacy/backend/facade/workers.py`, `products/legacy/backend/temporal/jobs.py` | A facade module that hands out a name from a wiring location and has a body | facade-logic finding | A capability by what it hands out (`handed_zones`) |
 | `HZ02` | `products/legacy/backend/facade/labels.py` | A facade module that hands out a name from logic and has a body | clean | |
-| `HZ03` | `products/legacy/backend/facade/nsworkers.py` | A facade module that hands out a namespace directory under a wiring location and has a body | clean | Defect: a handed name with no graph module counts as no zone, not unknown (wanted) |
+| `HZ03` | `products/legacy/backend/facade/nsworkers.py` | A facade module that hands out a namespace directory under a wiring location and has a body | facade-logic finding | The directory's zone is read (Nov 12 handed_zones fix) |
+| `HZ04` | `products/legacy/backend/facade/lazyworkers.py` | A facade module with a body that hands out wiring lazily (`_LAZY`, `__getattr__`) | clean | Defect, not fixed: a lazy name has no zone (wanted) |
+| `HZ05` | `products/legacy/backend/facade/aliasworkers.py` | A facade module with a body that hands out `import a.b as name` from wiring, listed in `__all__` | clean | Defect, not fixed: such an import is never handed out (wanted) |
+| `HZ06` | `products/legacy/backend/facade/aboveworkers.py` | A facade module with a body and a relative import above the top package in `__all__` | facade-logic clean; unknown rows in public-surface, facade-no-drf, prod-imports-test and the cycle rule | Defect, not fixed: the import binds no handed name, so `handed_zones` stays known (wanted as unknown) |
 | `FQ01` | `products/catalog/backend/facade/api.py` | A facade function runs an ORM query itself (`count_entries`) | clean | D95, D96 (wanted) |
 | `FQ02` | `products/inventory/backend/facade/api.py` | A facade function maps a list that its logic returned | clean | D96 |
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |
@@ -151,7 +154,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `DI02` | `posthog/products.py` | The registry loader's computed import | clean | |
 | `CY01` | `products/catalog/backend/facade/api.py`, `products/reports/backend/logic/build.py` | Two products that depend on each other | no-new-package-cycles finding, one per direction | |
 | `CY02` | `products/reports/backend/logic/build.py`, `products/catalog/backend/facade/shapes.py` | One-way dependencies | clean | |
-| `CY03` | `products/legacy/backend/logic/widgets.py` | An unresolved model label | no-new-package-cycles unknown onto `?` | Open (see `GM03`) |
+| `CY03` | `products/legacy/backend/logic/widgets.py`, `products/legacy/backend/facade/aboveworkers.py` | An unresolved model label; an unresolved relative import | no-new-package-cycles unknown onto `?` (one identity, two rows) | Open (see `GM03`) |
 | `FO01` | `products/access_control/backend/logic/rules.py` | A foundation product imports a feature product's facade | foundation-direction finding | |
 | `FO02` | `products/access_control/backend/logic/rules.py` | A foundation product imports another foundation product | clean | |
 | `IF01` | `posthog/egress/client.py` | Infrastructure imports a product's facade | infrastructure-direction and no-product-lists-in-core findings | |
@@ -186,7 +189,9 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `crosses-package` and the tier `tool` | A file in an unassigned top folder at the source end, at the destination end | `UK01`, `UK02` | incomplete |
 | `walk_where` | A handed-out class whose tier is unknown | `WK03` | walked: finding |
 | `walk_where` | A handed-out class from a top folder outside `first_party` | `WK04` | not walked; only incomplete rows on its edges (defect, wanted) |
-| `handed_zones` | A handed name that is a namespace directory | `HZ03` | clean (defect, wanted) |
+| `handed_zones` | A handed name that is a namespace directory | `HZ03` | finding |
+| `handed_zones` | A lazy hand-out; `import a.b as name`; a relative import above the top package | `HZ04`, `HZ05`, `HZ06` | clean for facade-logic (defects, wanted) |
+| `dst.zone` | A directory two source roots place apart | none | The tree has one source root; a second would change every other case's module names |
 | `crosses` | A slot typed with a name that does not resolve | `CR03` | unknown |
 | `installs` as a list | A hook call that does not resolve | `UI01`, `UI02` | incomplete; the product is not Isolated |
 | Namespace-directory labels | A drives location without `__init__.py` | `DR02` | clean for wiring-watched (defect, wanted) |

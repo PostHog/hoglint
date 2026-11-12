@@ -66,3 +66,7 @@ class EntryTeams:
 @frozen
 class EntryJob:
     command: ImportCommand
+
+
+class StockHolder(Protocol):
+    item: StockItem

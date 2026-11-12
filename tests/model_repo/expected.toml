@@ -66,6 +66,12 @@ rule = "facade-logic"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.workers.start", "products.legacy.backend.facade.workers"]
 
+[[row]]
+case = "HZ03"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.nsworkers.job_names", "products.legacy.backend.facade.nsworkers"]
+
 # facade-no-drf
 
 [[row]]
@@ -91,6 +97,12 @@ case = "FD03"
 rule = "facade-no-drf"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.api", "products.legacy.backend.presentation.views"]
+
+[[row]]
+case = "HZ06"
+rule = "facade-no-drf"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.aboveworkers", "?"]
 
 # facade-signature
 
@@ -311,16 +323,16 @@ identity = ["kafka_client", "billing"]
 # installs
 
 [[row]]
-case = "UI02"
-rule = "installs"
-verdict = "incomplete"
-identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
-
-[[row]]
 case = "UI01"
 rule = "installs"
 verdict = "incomplete"
 identity = ["products.gatekeeper.backend.wiring|installs|registry.register_post_delete_hook"]
+
+[[row]]
+case = "UI02"
+rule = "installs"
+verdict = "incomplete"
+identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
 
 # leaves-stay-leaves
 
@@ -438,6 +450,7 @@ case = "CY03"
 rule = "no-new-package-cycles"
 verdict = "unknown"
 identity = ["legacy", "?"]
+count = 2
 
 [[row]]
 case = "UK01"
@@ -787,6 +800,12 @@ verdict = "unknown"
 identity = ["products.catalog.backend.facade.api", "?"]
 
 [[row]]
+case = "HZ06"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.aboveworkers", "?"]
+
+[[row]]
 case = "PT01"
 rule = "prod-imports-test"
 verdict = "finding"
@@ -831,6 +850,12 @@ verdict = "incomplete"
 identity = ["scripts.shapes"]
 
 # public-surface
+
+[[row]]
+case = "HZ06"
+rule = "public-surface"
+verdict = "unknown"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
 
 [[row]]
 case = "ME01"
@@ -1143,12 +1168,6 @@ identity = ["products.legacy.backend.management.commands.sync_widgets", "product
 # wiring-watched
 
 [[row]]
-case = "UI02"
-rule = "wiring-watched"
-verdict = "incomplete"
-identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
-
-[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"
@@ -1183,6 +1202,12 @@ case = "UI01"
 rule = "wiring-watched"
 verdict = "incomplete"
 identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
+
+[[row]]
+case = "UI02"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
 
 
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
@@ -1282,13 +1307,6 @@ verdict = "unknown"
 match = ["take_bare_list"]
 
 [[wanted]]
-case = "HZ03"
-decision = "unknown is never clean: handed_zones of a namespace directory (Nov 12 review)"
-rule = "*"
-verdict = "*"
-match = ["products.legacy.backend.facade.nsworkers"]
-
-[[wanted]]
 case = "DR02"
 decision = "unknown is never clean: a drives location without __init__.py must be watched"
 rule = "wiring-watched"
@@ -1301,6 +1319,41 @@ decision = "unknown is never clean: a class from a top folder outside first_part
 rule = "*"
 verdict = "*"
 match = ["ExternalView", "StockItem"]
+
+[[wanted]]
+case = "HZ04"
+decision = "unknown is never clean: a lazy hand-out of wiring has a zone (Nov 12 handed_zones fix, not fixed)"
+rule = "facade-logic"
+verdict = "*"
+match = ["products.legacy.backend.facade.lazyworkers"]
+
+[[wanted]]
+case = "HZ05"
+decision = "unknown is never clean: `import a.b as name` in __all__ is handed out (Nov 12 handed_zones fix, not fixed)"
+rule = "facade-logic"
+verdict = "*"
+match = ["products.legacy.backend.facade.aliasworkers"]
+
+[[wanted]]
+case = "HZ06"
+decision = "unknown is never clean: a relative import above the top package makes handed_zones unknown (Nov 12 handed_zones fix, not fixed)"
+rule = "facade-logic"
+verdict = "*"
+match = ["products.legacy.backend.facade.aboveworkers"]
+
+[[wanted]]
+case = "ES06"
+decision = "Nov 12: an annotated attribute of a handed-out exception is handed out like a field (members of an allowed class, with ME01)"
+rule = "*"
+verdict = "*"
+match = ["EntryOutOfStock", "StockItem"]
+
+[[wanted]]
+case = "ES06"
+decision = "Nov 12: an annotated attribute of a handed-out Protocol is handed out like a field (members of an allowed class, with ME01)"
+rule = "*"
+verdict = "*"
+match = ["StockHolder", "StockItem"]
 
 # Levels: the products that pass and fail each level.
 
