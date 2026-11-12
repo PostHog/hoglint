@@ -255,8 +255,14 @@ impl HandedOut {
     }
 
     /// (bound, target, clause) of each name a star import hands out. A source that cannot be
-    /// read hands out `*`, a name nothing can follow.
-    fn star(&self, core: &mut Core, source: Sid) -> Vec<(Sid, Sid, &'static str)> {
+    /// read, or a relative one above the top package (`source` None), hands out `*` at the
+    /// import's `surface`: a name nothing can follow.
+    fn star(
+        &self,
+        core: &mut Core,
+        source: Option<Sid>,
+        surface: Sid,
+    ) -> Vec<(Sid, Sid, &'static str)> {
         let listed = if self.no_functions {
             None
         } else {
@@ -271,8 +277,12 @@ impl HandedOut {
             ALL_CLAUSE
         };
         let star = core.star();
-        let Some(found) = star_names(core, source) else {
-            return vec![(star, core.it.join(source, star), clause)];
+        let found = match source {
+            Some(source) => star_names(core, source).map(|found| (source, found)),
+            None => None,
+        };
+        let Some((source, found)) = found else {
+            return vec![(star, surface, clause)];
         };
         found
             .into_iter()
@@ -321,10 +331,11 @@ impl HandedOut {
             row.level,
         );
         if name == core.star() {
-            return match source {
-                Some(source) => self.star(core, source),
-                None => Vec::new(),
+            let surface = match source {
+                Some(source) => core.it.join(source, name),
+                None => unresolved_surface(&mut core.it, row.target, row.level, name),
             };
+            return self.star(core, source, surface);
         }
         let target = match source {
             Some(source) => core.it.join(source, name),

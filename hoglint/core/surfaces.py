@@ -205,16 +205,17 @@ class HandedOut:
             return sorted(listing.names)
         return sorted(name for name in table.names if not name.startswith("_"))
 
-    def star(self, source: str) -> list[tuple[str, str, str]]:
+    def star(self, source: str | None, surface: str) -> list[tuple[str, str, str]]:
         """(bound, target, clause) of each name a star import hands out. A source that cannot be
-        read hands out `*`, a name nothing can follow."""
+        read, or a relative one above the top package (`source` None), hands out `*` at the
+        import's `surface`: a name nothing can follow."""
         listed = None if self.no_functions else self.dunder_all.names
         if not self.no_functions and listed is None:
             return []
         clause = NO_FUNCTIONS_CLAUSE if self.no_functions else ALL_CLAUSE
-        found = self.star_names(source)
+        found = self.star_names(source) if source is not None else None
         if found is None:
-            return [("*", f"{source}.*", clause)]
+            return [("*", surface, clause)]
         if listed is not None:
             found = [name for name in found if name in listed]
         return [(name, f"{source}.{name}", clause) for name in found]
@@ -237,7 +238,8 @@ class HandedOut:
             return [self.single(asname, target, target, asname, used)] if asname else []
         source = absolute_import(scope.module, scope.is_package, target, level)
         if name == "*":
-            return self.star(source) if source is not None else []
+            surface = f"{source}.*" if source is not None else unresolved_surface(target, level, name)
+            return self.star(source, surface)
         if source is None:
             return [self.single(asname or name, unresolved_surface(target, level, name), name, asname, used)]
         return [self.single(asname or name, f"{source}.{name}", name, asname, used)]

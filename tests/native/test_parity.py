@@ -459,6 +459,7 @@ HANDED_CASES = {
         [],
     ),
     "a relative import above the top package": ("from ...... import gone", "gone", {}, [], BUILD_INCOMPLETE),
+    "a star import above the top package": ("from ...... import *", "gone", {}, [], BUILD_INCOMPLETE),
     "a relative import that resolves": (
         "from ..temporal.jobs import run",
         "run",
