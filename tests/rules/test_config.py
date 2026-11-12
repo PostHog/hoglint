@@ -246,6 +246,38 @@ def test_a_condition_reads_as_its_text_in_parentheses_and_its_text_keys_the_poli
     assert changed_tree != named
 
 
+EITHER = "src.package == 'a' or src.package == 'b'"
+# (condition, deny naming it, the same deny inline without and with parentheses). A condition's
+# parts join the enclosing `and` (or `or`), so a rule's staging sees each part on its own.
+FLAT_CASES = {
+    "and in and": (
+        CROSSING,
+        "crossing and dst.tier == 'core'",
+        f"{CROSSING} and dst.tier == 'core'",
+        f"({CROSSING}) and dst.tier == 'core'",
+    ),
+    "or in or": (
+        EITHER,
+        "crossing or dst.tier == 'core'",
+        f"{EITHER} or dst.tier == 'core'",
+        f"({EITHER}) or dst.tier == 'core'",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", FLAT_CASES)
+def test_a_condition_joins_the_enclosing_and_or_or(tmp_path: Path, case: str) -> None:
+    crossing, deny, inline, parenthesized = FLAT_CASES[case]
+    _, named = named_condition(tmp_path / "named", crossing, deny)
+    trees = []
+    for name, text in (("inline", inline), ("parenthesized", parenthesized)):
+        config = config_from(tmp_path / name, BASE + OTHER_RULE + f'deny = "{text}"\n', {"preset.toml": PRESET})
+        selector = config.rules["other"].deny
+        assert selector is not None
+        trees.append(tree(selector.node))
+    assert named == trees[0] == trees[1]
+
+
 def test_pack_is_found_and_unknown_pack_fails(tmp_path: Path) -> None:
     config = config_from(tmp_path, 'schema = 1\nextends = ["hoglint:django"]\n[django]\nsettings = "x"\n')
     assert "model-label" in config.edge_kinds

@@ -50,6 +50,7 @@ A comparison reads them so:
 **Named conditions** (owner, Nov 12).
 `[conditions]` maps a name to selector text; a selector names it wherever an expression may stand, and the name reads as its text in parentheses.
 - The config expands each name when it loads, so neither evaluator sees one.
+- An `and` inside an `and` joins it, and so does an `or` inside an `or`, whether parentheses or a name made it: a rule stages each part of its selection on its own.
 - A name is one word with no dot, and never a field, a built-in attribute, a keyword or `src`, `dst`, `edge`.
 - Conditions are flat: one that names another is a config error, so a rule still reads by itself with one lookup.
 - A condition no selector uses is a config error, as a key no code reads is (D52).

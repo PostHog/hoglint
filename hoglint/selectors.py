@@ -224,18 +224,26 @@ class Parser:
         if self.depth > MAX_DEPTH:
             raise self.fail(f"nested more than {MAX_DEPTH} deep")
 
+    # An `and` inside an `and` (from parentheses or a named condition) joins it, and so does an
+    # `or` inside an `or`: rules stage the top-level parts of a selection one by one.
     def parse_or(self) -> Node:
-        parts = [self.parse_and()]
-        while self.peek_word() == "or":
+        parts: list[Node] = []
+        while True:
+            part = self.parse_and()
+            parts.extend(part.parts if isinstance(part, Or) else (part,))
+            if self.peek_word() != "or":
+                break
             self.take()
-            parts.append(self.parse_and())
         return parts[0] if len(parts) == 1 else Or(tuple(parts))
 
     def parse_and(self) -> Node:
-        parts = [self.parse_not()]
-        while self.peek_word() == "and":
+        parts: list[Node] = []
+        while True:
+            part = self.parse_not()
+            parts.extend(part.parts if isinstance(part, And) else (part,))
+            if self.peek_word() != "and":
+                break
             self.take()
-            parts.append(self.parse_not())
         return parts[0] if len(parts) == 1 else And(tuple(parts))
 
     def parse_not(self) -> Node:
