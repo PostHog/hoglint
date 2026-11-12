@@ -161,14 +161,13 @@ impl<V: Copy> OrderedMap<V> {
 
 /// One name of a PEP 562 lazy map, at the module-level dict assignment it is read from
 /// (`symbols.LazyEntry`). `module` is the module path as written (a relative one anchored) when no
-/// module answers for it (`found` false).
+/// module of the tree answers for it.
 #[derive(Clone, Copy)]
 pub struct LazyEntry {
     pub name: Sid,
     pub module: Sid,
     pub line: u32,
     pub col: u32,
-    pub found: bool,
 }
 
 pub struct ModuleTable {
@@ -661,27 +660,19 @@ impl Core {
                 }
             }
         }
-        let entry = |name: Sid, module: Sid, found: bool| {
-            let (line, col) = if found {
-                found_at[&name]
-            } else {
-                missing_at[&name]
-            };
-            LazyEntry {
-                name,
-                module,
-                line,
-                col,
-                found,
-            }
+        let entry = |name: Sid, module: Sid, (line, col): (u32, u32)| LazyEntry {
+            name,
+            module,
+            line,
+            col,
         };
         let mut entries: Vec<LazyEntry> = out
             .iter()
-            .map(|(name, found)| entry(name, found, true))
+            .map(|(name, found)| entry(name, found, found_at[&name]))
             .collect();
         for (name, written) in missing.iter() {
             if out.get(&name).is_none() {
-                entries.push(entry(name, written, false));
+                entries.push(entry(name, written, missing_at[&name]));
             }
         }
         (out, entries)

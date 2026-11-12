@@ -374,15 +374,8 @@ class ImportProducer(Producer):
             return
         contexts = scope.contexts(FUNC, -1)
         for entry in table.lazy_entries:
-            if not entry.found:
-                # No module answers for it, so the name stays bound to an edge that does not resolve.
-                attrs = (("binds", entry.name), LAZY_ATTR)
-                surface = f"{entry.module}.{entry.name}"
-                edge = self.edge(
-                    self.kind, scope, -1, entry.line, entry.column, surface, UNRESOLVED, contexts, attrs=attrs
-                )
-                graph.edges.append(edge)
-                continue
+            # Read as `from <module> import <name>`: a third-party module makes an external edge, a
+            # first-party one no module answers for an edge that does not resolve.
             surface, hit, loaded = self.from_target(context, entry.module, entry.name)
             attrs = (*self.bound_attrs(context, entry.name, loaded), LAZY_ATTR)
             resolved = context.classifier.classify(surface, hit)

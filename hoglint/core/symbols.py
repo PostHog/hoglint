@@ -161,14 +161,13 @@ class Hit:
 @dataclass(frozen=True, slots=True)
 class LazyEntry:
     """One name of a PEP 562 lazy map, at the module-level dict assignment it is read from.
-    `module` is the module path as written (a relative one anchored) when no module answers for
-    it (`found` false)."""
+    `module` is the module path as written (a relative one anchored) when no module of the tree
+    answers for it."""
 
     name: str
     module: str
     line: int
     column: int
-    found: bool
 
 
 @dataclass(frozen=False)
@@ -315,10 +314,8 @@ class Tables:
                 if resolves or ("." in path and not was_relative):
                     missing[name] = path
                     missing_at[name] = (row["l"], row["c"])
-        entries = [LazyEntry(name, found, *found_at[name], True) for name, found in out.items()]
-        entries += [
-            LazyEntry(name, path, *missing_at[name], False) for name, path in missing.items() if name not in out
-        ]
+        entries = [LazyEntry(name, found, *found_at[name]) for name, found in out.items()]
+        entries += [LazyEntry(name, path, *missing_at[name]) for name, path in missing.items() if name not in out]
         return out, entries
 
     def build(self, module: str) -> ModuleTable | None:

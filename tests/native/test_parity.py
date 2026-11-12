@@ -484,6 +484,14 @@ HANDED_CASES = {
         [],
         [GETATTR_INCOMPLETE, *BUILD_INCOMPLETE],
     ),
+    "a lazy member from a third-party module": (
+        LAZY_TWO.format(module="json", other="products.shop.backend.temporal.jobs"),
+        "run",
+        {"products/shop/backend/temporal/jobs.py": RUN.replace("run", "other")},
+        [GETATTR_FOUND, *BUILD_FOUND],
+        [],
+    ),
+    "a lazy member from a dotted third-party module": (LAZY_RUN.format(module="json.decoder"), "run", {}, [], []),
     "a module-level dict of names in a module with a lazy hook": (
         LAZY_RUN.format(module="runNow"),
         "build",
@@ -621,3 +629,22 @@ def test_a_lazy_edge_sits_at_the_dict_whose_entry_wins(tmp_path: Path, monkeypat
     assert import_edges(out["native"], HOOKS) == [
         ["products.shop.backend.temporal.jobs.run", 1, "resolved", ["products.shop.backend.temporal.jobs.run"]]
     ]
+
+
+# A lazy name that a third-party module answers for is a third-party name, as its import is.
+def test_a_lazy_name_from_a_third_party_module_reads_as_its_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plain = "products/shop/backend/plain.py"
+    repo = {
+        "hoglint.toml": HANDED_CONFIG,
+        **SHOP,
+        HOOKS: LAZY_TWO.format(module="json", other="products.shop.backend.temporal.jobs"),
+        plain: "from json import run\n",
+        "products/shop/backend/temporal/jobs.py": RUN,
+    }
+    out = dumps(tmp_path, repo, monkeypatch)
+    same_in_both_engines(out)
+    [imported] = import_edges(out["native"], plain)
+    lazy = [row for row in import_edges(out["native"], HOOKS) if row[0] == imported[0]]
+    assert [row[2:] for row in lazy] == [imported[2:]] == [["external", ["json.run"]]]

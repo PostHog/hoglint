@@ -912,16 +912,8 @@ impl Producers<'_> {
         let ctx = self.core.contexts(&mut self.scopes[owner], FUNC, -1);
         for entry in entries {
             let (name, line, col) = (entry.name, entry.line, entry.col);
-            if !entry.found {
-                // No module answers for it, so the name stays bound to an edge that does not resolve.
-                let k = &self.settings.k;
-                let attrs = [(k.binds, name), (k.lazy, k.one)];
-                let surface = self.core.it.join(entry.module, name);
-                self.push(
-                    IMPORT, owner, -1, line, col, ctx, surface, UNRESOLVED, EMPTY, &attrs,
-                );
-                continue;
-            }
+            // Read as `from <module> import <name>`: a third-party module makes an external edge, a
+            // first-party one no module answers for an edge that does not resolve.
             let (surface, hit, loaded) = Self::from_target(self.core, entry.module, name);
             let mut attrs = self.bound_attrs(name, loaded);
             let k = &self.settings.k;
