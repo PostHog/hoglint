@@ -869,10 +869,10 @@ impl Rules {
         else {
             return false;
         };
-        if !assign.allows(path) {
+        if !names.is_empty() && !names.iter().any(|name| name == symbol) {
             return false;
         }
-        if !names.is_empty() && !names.iter().any(|name| name == symbol) {
+        if !assign.allows(path) {
             return false;
         }
         if !decorated_by.is_empty() {
