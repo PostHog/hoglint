@@ -834,6 +834,9 @@ class Deriver:
             "importer_products": [[module, sorted(found)] for module, found in self.found_importer_products.items()],
         }
 
+    def registry_answer(self, key: str) -> list[Any]:
+        return self.registry
+
     def restore(self, state: dict[str, Any]) -> None:
         """The registry and origins from the fold's data, each origin map behind a traced view."""
         self.kinds = {kind: frozenset(products) for kind, products in state["kinds"]}
@@ -850,7 +853,7 @@ class Deriver:
         self.origin_products = TracedMap(tracer, self.ORIGIN_PRODUCTS, products, form=sorted)
         importers = {module: set(found) for module, found in state["importer_products"]}
         self.importer_products = TracedMap(tracer, self.IMPORTER_PRODUCTS, importers, form=sorted)
-        self.registry_read = TracedQuery(tracer, self.REGISTRY, lambda key: self.registry, plain=True)
+        self.registry_read = TracedQuery(tracer, self.REGISTRY, self.registry_answer, plain=True)
         for traced in (self.origins, self.origin_modules, self.origin_products, self.importer_products):
             traced.answer_reads()
         self.registry_read.answer_reads()

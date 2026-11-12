@@ -4,16 +4,20 @@ and files it cannot read."""
 
 from __future__ import annotations
 
+import gc
 import json
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from core.support import SITE, func_def, import_row
 from django_facts import APPS, DJANGO, FIRST_PARTY, FactRepo
 from hoglint.core.config import CoreConfig
 from hoglint.core.harness import GraphSink, ProducerPlan, ProducerStep
+from hoglint.core.memo import PackMemo
 from hoglint.core.reader import BuildReader, python_pack_io
 from hoglint.model import Edge, Graph
 from hoglint.native.build import NativeBuild
@@ -26,7 +30,9 @@ from hoglint.packs.django.pack import USES_KINDS, DjangoPack, DjangoRun
 from hoglint.packs.django.shapes import VOCABULARY
 from hoglint.packs.django.uses import UseProducer
 from hoglint.plugins import PackSink, Refinement, Refinements
+from hoglint.presets_py.posthog.pack import PosthogPack
 from native.require import native_module
+from test_drives import repo as drives_repo
 
 # One use per row: (model, chain, up). Rows run in scope 0 of shop/views.py, one line each.
 SHAPES = [
@@ -116,10 +122,12 @@ class Engines:
     native: tuple[NativeGraph, BuildReader, NativeSink]
 
 
-def engines(tmp_path: Path, *groups: dict[str, dict]) -> Engines:
+def engines(
+    tmp_path: Path, *groups: dict[str, dict], first_party: tuple[str, ...] = FIRST_PARTY, memo: PackMemo | None = None
+) -> Engines:
     native = native_module()
     repo = FactRepo(*groups)
-    config = CoreConfig(first_party=FIRST_PARTY)
+    config = CoreConfig(first_party=first_party)
     build = repo.build(config)
     graph = build.graph()
     python = (graph, *python_pack_io(build, graph))
@@ -131,7 +139,9 @@ def engines(tmp_path: Path, *groups: dict[str, dict]) -> Engines:
     native_graph = NativeGraph(link, {})
     native_build = NativeBuild(config, link, external, native_graph.core.maker)
     native_graph.modules = native_build.index.repo_modules()
-    reader = BuildReader(native_build, NativePackQueries(native_build, native_graph, link))
+    if memo is not None:
+        native_build.trace_with(memo.tracer)
+    reader = BuildReader(native_build, NativePackQueries(native_build, native_graph, link), memo)
     return Engines(python, (native_graph, reader, NativeSink(native_graph)))
 
 
@@ -229,3 +239,38 @@ def test_a_later_producer_meets_the_fields_the_link_producer_set(tmp_path: Path)
     reason = failed[1]["test.relabel@1"]
     assert reason.startswith("sets shape of edge ")
     assert reason.endswith(" (django.uses@1 set 'instance-single') and 2 more apart")
+
+
+def both_packs(tmp_path: Path, engine: str, memo: PackMemo | None) -> Graph:
+    """The Django pack and the PostHog drives over one fixture, on one engine."""
+    group = drives_repo().records
+    made = engines(tmp_path, group, first_party=(*FIRST_PARTY, "posthog", "products", "common"), memo=memo)
+    graph, reader, sink = made.python if engine == "python" else made.native
+    DjangoPack.run(reader, DjangoPackConfig(settings_modules=("proj.settings",)), sink, Path("."))
+    PosthogPack.run(reader, sink)
+    if memo is not None:
+        memo.flush()
+    return graph
+
+
+@pytest.mark.parametrize("engine, memo", [("python", False), ("native", False), ("native", True)])
+def test_the_packs_leave_no_reference_cycle_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, memo: bool
+) -> None:
+    # A native run turns the cyclic collector off, so a cycle keeps the pack objects until exit.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    gc.collect()
+    gc.disable()
+    try:
+        graph = both_packs(tmp_path, engine, PackMemo(None, "test") if memo else None)
+        gc.set_debug(gc.DEBUG_SAVEALL)
+        gc.collect()
+        left = sorted(
+            {type(found).__qualname__ for found in gc.garbage if type(found).__module__.startswith("hoglint")}
+        )
+    finally:
+        gc.set_debug(0)
+        gc.garbage.clear()
+        gc.enable()
+    assert graph.edges
+    assert left == []

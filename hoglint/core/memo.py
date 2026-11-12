@@ -28,10 +28,12 @@ import sys
 import time
 import zlib
 import hashlib
+import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
+from types import MethodType
 from typing import Any, Protocol, cast
 
 import orjson
@@ -331,6 +333,30 @@ class Traced(Protocol):
     def answer_reads(self) -> None: ...
 
 
+class OwnerMethod:
+    """A bound method held weakly, so a query that is an attribute of the method's owner makes no
+    reference cycle (a native run frees no cycle: `batch_mode`)."""
+
+    __slots__ = ("method", "name")
+
+    def __init__(self, method: MethodType) -> None:
+        self.method = weakref.WeakMethod(method)
+        self.name = method.__qualname__
+
+    def __call__(self, *args: Any) -> Any:
+        method = self.method()
+        if method is None:
+            raise ReferenceError(f"a traced read asked {self.name} after its owner was freed")
+        return method(*args)
+
+
+def held[F: Callable[..., Any]](function: F) -> F:
+    """`function`, or a bound method held weakly by its owner's query."""
+    if not isinstance(function, MethodType):
+        return function
+    return cast(F, OwnerMethod(function))
+
+
 class TracedQuery:
     """One kind of read, declared once: `ask(*parts)` gives a question's value, and `form(value)`
     is the answer its read is noted and checked by (the value itself with no form). The read's key
@@ -348,8 +374,9 @@ class TracedQuery:
     ) -> None:
         self.tracer = tracer
         self.kind = kind
-        self.ask = ask
-        self.form = form
+        # A query is an attribute of its owner and is called through it: the owner is alive when it runs.
+        self.ask = held(ask)
+        self.form = form if form is None else held(form)
         self.plain = plain
 
     def key(self, parts: tuple[Any, ...]) -> str:
@@ -960,6 +987,13 @@ class PackMemo:
             except Exception as error:  # noqa: BLE001 - the memo is a cache: it never fails a run
                 sys.stderr.write(f"hoglint: the pack memo of a step could not be made, so it is not stored: {error}\n")
 
+    def end_trace(self) -> None:
+        """Lets go of what the tracer answers by: its verifiers refer to their owners, which refer
+        to the tracer, so the pack phase's objects would sit in cycles until the process exits."""
+        self.tracer.verifiers.clear()
+        self.tracer.answers.clear()
+        self.tracer.files = None
+
     def flush(self) -> None:
         """Writes the steps' new states, after every pack ran."""
         if self.store is not None:
@@ -969,6 +1003,7 @@ class PackMemo:
                 sys.stderr.write(f"hoglint: the pack memo could not be written, so it is left as it was: {error}\n")
         self.written.clear()
         self.write_stats()
+        self.end_trace()
 
     def write_stats(self) -> None:
         if not self.stats_path or not self.stats:
