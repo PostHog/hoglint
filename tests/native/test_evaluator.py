@@ -321,6 +321,14 @@ class World:
         native = NativeRuleContext(config, self.graph, labeler, self.repo)
         return native, RuleContext(config, self.graph, labeler, self.repo)
 
+    def rows(self, config: Config, name: str) -> list[tuple[Any, ...]]:
+        """What rule `name` reports, the same in both engines."""
+        native, python = self.contexts(config)
+        spec = config.rules[name]
+        found = run_rows(primitive_of(spec)(native, spec).evaluate())
+        assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+        return found
+
 
 @pytest.fixture(scope="module")
 def world(tmp_path_factory: pytest.TempPathFactory) -> World:
@@ -721,19 +729,13 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
 
 def test_a_capture_over_a_directory_that_is_not_ascii_gives_one_zone_in_both_engines(world: World) -> None:
     config = world.config(rule_table("ascii", CORNERS["non-ascii-capture-under-within"]))
-    native, python = world.contexts(config)
-    spec = config.rules["ascii"]
-    found = run_rows(primitive_of(spec)(native, spec).evaluate())
-    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    found = world.rows(config, "ascii")
     assert {identity for identity, *_ in found} == {("products.é.jobs", "models", "é")}
 
 
 def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World) -> None:
     config = world.config(rule_table("text", CORNERS["set-read-as-text"]))
-    native, python = world.contexts(config)
-    spec = config.rules["text"]
-    found = run_rows(primitive_of(spec)(native, spec).evaluate())
-    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    found = world.rows(config, "text")
     assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
 
 
@@ -780,10 +782,7 @@ def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
     if "allow" in keys:
         del spec_table["deny"]
     config = world.config(rule_table("uses", spec_table))
-    native, python = world.contexts(config)
-    spec = config.rules["uses"]
-    found = run_rows(primitive_of(spec)(native, spec).evaluate())
-    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    found = world.rows(config, "uses")
     identities = {identity for identity, *_ in found}
     assert {(symbol, module) for symbol, module, kind in identities if kind == "reference"} == references
     assert ((INVOICE, "core.a", "import") in identities) is import_reported
@@ -817,10 +816,7 @@ def test_an_export_that_names_its_symbols_holds_them_and_not_their_subclasses_in
     base = CONFIG.replace(ADAPTER, f"{members}\naudience = \"src.tier == 'product'\"")
     assert base != CONFIG
     config = world.config(rule_table("doors", CORNERS["export-by-class-and-audience"]), base)
-    native, python = world.contexts(config)
-    spec = config.rules["doors"]
-    found = run_rows(primitive_of(spec)(native, spec).evaluate())
-    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    found = world.rows(config, "doors")
     presentation = {identity[0] for identity, *_ in found if ".presentation." in identity[0]}
     assert presentation == found_symbols
 
