@@ -1208,7 +1208,9 @@ class KeysRead:
 def test_each_rule_type_reads_exactly_the_keys_it_declares(world: World) -> None:
     tables = Tables(random.Random(20261112))
     read = KeysRead()
-    for mode in list(TYPES) * 24:
+    # A key such as `on_unresolved` is read only when a drawn rule meets an unresolved edge, so
+    # each type needs enough draws that every key it declares is read at least once.
+    for mode in list(TYPES) * 48:
         while True:
             rules = tables.rules("generated", mode)
             try:
