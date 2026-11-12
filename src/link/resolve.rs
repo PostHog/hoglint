@@ -574,25 +574,6 @@ impl Core {
         }
     }
 
-    /// The module a relative value (`.foo`, `..foo`) names, anchored at the module's package as
-    /// `import_module(text, __package__)` reads it; None above the top package or for a value that
-    /// is no dotted path.
-    fn relative_module(&mut self, package: Sid, text: &str) -> Option<Sid> {
-        let rest = text.trim_start_matches('.');
-        let level = text.len() - rest.len();
-        if self.it.s(package).is_empty() {
-            return None;
-        }
-        let parts = self.it.segs(package);
-        if level > parts.len() || !is_dotted_path(rest) {
-            return None;
-        }
-        let keep = parts.len() + 1 - level;
-        let base = self.it.from_segs(&parts[..keep]);
-        let anchored = format!("{}.{rest}", self.it.s(base));
-        Some(self.it.intern(&anchored))
-    }
-
     /// PEP 562 lazy exports: module-level dicts of name -> module string in a module with
     /// `__getattr__`. A value is the tail of a module-level string prefix, an absolute module,
     /// or a module under the package or one of its ancestors (nearest first). A relative value
@@ -648,8 +629,11 @@ impl Core {
                 sites.insert(*key, (row.l, row.c));
                 let tail = self.it.s(*value).to_string();
                 let relative = tail.starts_with('.');
-                let anchored = if relative {
-                    self.relative_module(package, &tail)
+                let rest = tail.trim_start_matches('.');
+                let anchored = if relative && is_dotted_path(rest) {
+                    let level = (tail.len() - rest.len()) as u32;
+                    let rest = self.it.intern(rest);
+                    absolute_import(&mut self.it, module, is_package, Some(rest), level)
                 } else {
                     None
                 };

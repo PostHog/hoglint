@@ -249,21 +249,6 @@ class Tables:
                 continue
             table.names[name] = binding
 
-    @staticmethod
-    def relative_module(package: str, text: str) -> str | None:
-        """The module a relative value (`.foo`, `..foo`) names, anchored at the module's package as
-        `import_module(text, __package__)` reads it; None above the top package or for a value
-        that is no dotted path."""
-        rest = text.lstrip(".")
-        level = len(text) - len(rest)
-        if not package:
-            return None
-        parts = package.split(".")
-        if level > len(parts) or not DOTTED_PATH.fullmatch(rest):
-            return None
-        keep = len(parts) + 1 - level
-        return ".".join([*parts[:keep], rest])
-
     def lazy_map(self, module: str, is_package: bool, record: dict) -> tuple[dict[str, str], list[LazyEntry]]:
         """PEP 562 lazy exports: module-level dicts of name -> module string, in a module that
         defines `__getattr__`. A value is the tail of a module-level string prefix
@@ -301,7 +286,9 @@ class Tables:
                 sites[key["s"]] = (row["l"], row["c"])
                 text = value["s"]
                 if text.startswith("."):
-                    anchored = self.relative_module(package, text)
+                    rest = text.lstrip(".")
+                    level = len(text) - len(rest)
+                    anchored = absolute_import(module, is_package, rest, level) if DOTTED_PATH.fullmatch(rest) else None
                     candidates: tuple[str, ...] = (anchored,) if anchored is not None else ()
                 else:
                     anchored = None
