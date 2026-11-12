@@ -71,6 +71,10 @@ The rule that reads the list is the signature rule: a listed model in a slot of 
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   Such an allowed shape is handed out as it stands: only a policy's `data` shapes are walked into, so the tree's own fields are not judged per facade.
 
+**What an export may hand out besides data** (the same batch).
+- Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
+- One slot, one rule: with `slots = "shape"` the export rule judges only a class's shape in a slot of what it hands out. A model, an unknown type, a missing annotation or an unresolved name there is the signature rule's finding, under its own identity. The fields of a data class found in a slot are still judged in full by the export rule.
+
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
   The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from).
@@ -111,8 +115,6 @@ The rule that reads the list is the signature rule: a listed model in a slot of 
 ## Open
 
 - **The per-surface signature question** (parked Nov 10, to come back with numbers): whether unannotated parameters on surfaces other than the facade count as unknown (D48 point 4).
-- `export-shape` knows only stdlib frozen dataclasses, and it treats every import in a facade file as an export.
-  The findings triage of Nov 11 names both as noise causes; the fixes are in the next engine phase.
 
 ## Sources
 

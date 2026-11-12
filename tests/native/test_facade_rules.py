@@ -205,3 +205,43 @@ def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, mo
     files = {**HOGQL, "products/shop/backend/facade/contracts.py": contracts}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert findings(out["native"], "export-shape") == []
+
+
+def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contracts = (
+        "from pydantic import BaseModel\n\n\n"
+        "class ShopError(Exception):\n    pass\n\n\n"
+        "class OrderMissing(ShopError):\n    pass\n\n\n"
+        "class Payload(BaseModel):\n    name: str\n\n\n"
+        "class Loose:\n    pass\n"
+    )
+    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
+    assert findings(out["native"], "export-shape") == [
+        [f"{SHOP}.facade.contracts.Loose", f"{SHOP}.facade.contracts", "export-shape(class)"],
+    ]
+
+
+def test_export_shape_leaves_a_slot_to_the_signature_rule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logic = (
+        "import dataclasses\n\nfrom products.shop.backend.models import Order\n\n\n"
+        "class Spec:\n    pass\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Wrapper:\n    order: Order\n"
+    )
+    api = (
+        "from typing import Any\n\n"
+        "from products.shop.backend.logic import Spec, Wrapper\n"
+        "from products.shop.backend.models import Order\n\n\n"
+        "def place(order: Order, extra: Any) -> int:\n    return 1\n\n\n"
+        "def build(spec: Spec) -> int:\n    return 1\n\n\n"
+        "def wrap(wrapper: Wrapper) -> int:\n    return 1\n"
+    )
+    files = {"products/shop/backend/logic.py": logic, "products/shop/backend/facade/api.py": api}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings(out["native"], "export-shape") == [
+        [f"{SHOP}.logic.Spec", API, "export-shape(class)"],
+        [f"{SHOP}.models.Order", API, "export-denied(model)"],
+    ]
+    assert [row[1:3] for row in findings(out["native"], "facade-signature")] == [
+        ["place", "param:extra"],
+        ["place", "param:order"],
+    ]

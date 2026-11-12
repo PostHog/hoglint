@@ -214,12 +214,13 @@ queryset = { subclass_of = ["django.db.models.query.QuerySet", "django.db.models
 command  = { subclass_of = ["django.core.management.base.BaseCommand"] }
 # Contract types besides frozen dataclasses and enums: core's query syntax tree, and pydantic models.
 hogql_ast = { subclass_of = ["posthog.hogql.base.AST"] }
+pydantic  = { subclass_of = ["pydantic.BaseModel", "pydantic.main.BaseModel", "pydantic.RootModel", "pydantic.root_model.RootModel"] }
 
 # A contract's signatures are part of it: an unannotated slot is unknown, and the slots of what a
 # facade hands out from elsewhere count as the facade's.
 [shapes.contract]
 data       = ["frozen-dataclass", "enum"]
-allow      = ["protocol", "hogql_ast"]
+allow      = ["protocol", "hogql_ast", "exception", "pydantic"]
 behavior   = { kind = "abc", where = "tier == 'core'" }
 deny       = ["model", "manager", "queryset", "command"]
 unknown    = "error"
@@ -338,7 +339,8 @@ growth_key    = ["dst.symbol", "edge.kind", "src.package"]
 
 [rules.export-shape]
 primitive  = "export"
-doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a signature, a base or a re-export."
+slots      = "shape"
+doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a base or a re-export. A model or an unknown type in a slot of what it hands out is facade-signature's to report."
 identity   = "module-symbol"
 growth_key = ["dst.symbol", "edge.label", "src.package"]
 
