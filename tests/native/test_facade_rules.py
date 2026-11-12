@@ -380,3 +380,37 @@ def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: p
         [contracts, "Payload.__init__", "field:invoice", invoice],
     ]
     assert findings(out["native"], "export-shape") == []
+
+
+# An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_where`
+# excuses only where it holds: a class in a file no assignment claims has an unknown tier.
+WALKED_CASES = {
+    "a product's class": ("products/shop/backend/kit.py", "products.shop.backend.kit"),
+    "a class whose tier is unknown": ("scripts/kit.py", "scripts.kit"),
+}
+
+
+@pytest.mark.parametrize("case", WALKED_CASES)
+def test_an_allowed_class_whose_walk_cannot_be_told_is_walked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    path, module = WALKED_CASES[case]
+    kit = (
+        "from pydantic import BaseModel\n\nfrom products.billing.backend.models import Invoice\n\n\n"
+        "class Payload(BaseModel):\n    invoice: Invoice\n"
+    )
+    files = {
+        "hoglint.toml": ROOT_CONFIG.replace(
+            'first_party = ["posthog", "products"]', 'first_party = ["posthog", "products", "scripts"]'
+        ),
+        "scripts/__init__.py": "",
+        "products/billing/__init__.py": "",
+        "products/billing/backend/__init__.py": "",
+        "products/billing/backend/models.py": MODEL.format(name="Invoice"),
+        path: kit,
+        "products/shop/backend/facade/api.py": f"from {module} import Payload\n\n\ndef get() -> Payload:\n    return Payload()\n",
+    }
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings(out["native"], "export-shape") == [
+        ["products.billing.backend.models.Invoice", API, "export-denied(model)"]
+    ]

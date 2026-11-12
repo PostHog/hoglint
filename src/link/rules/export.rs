@@ -579,7 +579,8 @@ impl<'a> Walk<'a> {
         (names, complete && !kind_unknown)
     }
 
-    /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged.
+    /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged. Where
+    /// `walk_where` cannot be told, the class is walked.
     fn walks(&self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
         let policy = &self.cx.rules.shapes[shape];
         let dataclass_like = shapes.contains("dataclass") || shapes.contains("frozen-dataclass");
@@ -594,7 +595,7 @@ impl<'a> Walk<'a> {
         };
         let owner = self.cx.module_of_symbol(symbol);
         let env = EntityEnv::of(self.cx, owner, Some(symbol), None);
-        evaluate(node, &env) == Truth::True
+        evaluate(node, &env) != Truth::False
     }
 
     /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.

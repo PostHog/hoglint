@@ -345,7 +345,8 @@ class ExportPrimitive(RuleType):
 
     def walks(self, symbol: str, shapes: frozenset[str], policy: ShapePolicy) -> bool:
         """Whether what an allowed class's members name is judged: always the fields of a data
-        shape; in a contract the members of any other allowed class, where `walk_where` holds."""
+        shape; in a contract the members of any other allowed class, unless `walk_where` is false.
+        Where it cannot be told the class is walked, as `allow_where` excuses only where it holds."""
         dataclass_like = bool(shapes & {"dataclass", "frozen-dataclass"})
         if dataclass_like and shapes & set(policy.data):
             return True
@@ -354,7 +355,7 @@ class ExportPrimitive(RuleType):
         if policy.walk_where is None:
             return True
         module = self.ctx.labeler.module_of_symbol(symbol)
-        return policy.walk_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is Truth.TRUE
+        return policy.walk_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is not Truth.FALSE
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
