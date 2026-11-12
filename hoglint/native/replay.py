@@ -21,6 +21,9 @@ From the two cold dumps the replay also computes which files truly changed (the 
 checks the mode's predicted files against it. With `--damage`, it damages the state directory
 between the parent's check and the child's, or runs two child checks at once, or kills a check
 in its writes and runs it again: the child's tables must stay equal and no run may fail (D28).
+After a damage to a store, one more child check runs live in the same state directory: it must
+report what the cold child reports, and its stores must be healthy as a warm side's are, so a
+store that the damage broke for good fails the pair.
 
 With `--mode traces` the replay is the certificate of stage S5: the cold checks record link
 traces (`hoglint.native.predict`), the prediction from the parent's traces must hold every file
@@ -37,8 +40,8 @@ Usage:
   python -m hoglint.native.replay determinism --repo <git repo> --tree <tree> [--tree ...] --work <dir>
       the cold dump of each tree under three hash seeds and one and four threads, each with an
       empty fact cache, compared with the first
-  python -m hoglint.native.replay check ...
-      one check in this process (the harness runs it)
+  python -m hoglint.native.replay check ... [--live]
+      one check in this process (the harness runs it); `--live` turns the run memo off
 
 Exit 0 only when at least one pair ran, every compared table is equal, no check failed, each
 cold check shows that it reused nothing, each warm check shows that it reused stored work, every
@@ -241,8 +244,10 @@ class RecordingCommands(Commands):
     (`write_outputs` gets every live run), the summary it reported (`report` gets every check)
     and the state of its stores."""
 
-    def __init__(self, repo: Path, work_dir: Path, engine: str, today: datetime.date, tree: str, head: str) -> None:
-        super().__init__(repo, work_dir, engine, today)
+    def __init__(
+        self, repo: Path, work_dir: Path, engine: str, today: datetime.date, tree: str, head: str, memo: bool = True
+    ) -> None:
+        super().__init__(repo, work_dir, engine, today, memo)
         self.snapshots = FixedSnapshots(repo, work_dir, tree, head)
         self.counting = CountingSummaryStore(self.stores)
         self.summaries = self.baselines.store = self.counting
@@ -300,10 +305,11 @@ def incomplete_files(item: IncompleteItem, modules: dict[str, str]) -> list[str]
 
 class TreeCheck:
     """One check of `tree` with HEAD at `head`; its state directory is `XDG_CACHE_HOME`. Writes
-    `check.json` (time, memo) into `out`, and with `tables` every table it can."""
+    `check.json` (time, memo) into `out`, and with `tables` every table it can. A `live` check
+    never takes a stored summary in place of the run."""
 
     def __init__(
-        self, repo: Path, engine: str, today: datetime.date, tree: str, head: str, out: Path, tables: bool
+        self, repo: Path, engine: str, today: datetime.date, tree: str, head: str, out: Path, tables: bool, live: bool
     ) -> None:
         self.repo = repo
         self.engine = engine
@@ -312,10 +318,11 @@ class TreeCheck:
         self.head = head
         self.out = out
         self.tables = tables
+        self.live = live
 
     def run(self, work: Path) -> None:
         batch_mode(self.engine)
-        commands = RecordingCommands(self.repo, work, self.engine, self.today, self.tree, self.head)
+        commands = RecordingCommands(self.repo, work, self.engine, self.today, self.tree, self.head, not self.live)
         wall, cpu = time.perf_counter(), self.cpu()
         printed = io.StringIO()
         try:
@@ -1058,12 +1065,15 @@ class Side:
     - warm: a state a parent's check filled, every store on; it must show that it reused stored work;
     - damaged: a filled state that a damage case touched; a store may fail there, so it shows neither;
     - fill: the parent's check that fills a state; its dump is never compared.
+
+    A `live` side runs with the run memo off.
     """
 
-    def __init__(self, kind: str, state: State, env: dict[str, str]) -> None:
+    def __init__(self, kind: str, state: State, env: dict[str, str], live: bool = False) -> None:
         self.kind = kind
         self.state = state
         self.env = env
+        self.live = live
 
     @staticmethod
     def cold(states: States, name: str, facts: str = "shared", env: dict[str, str] | None = None) -> Side:
@@ -1076,6 +1086,12 @@ class Side:
     @staticmethod
     def damaged(filled: Filled) -> Side:
         return Side(DAMAGED, Side.filled_state(filled), {})
+
+    @staticmethod
+    def recovered(filled: Filled) -> Side:
+        """A warm side on a state after a damaged check, run live: the run memo would serve it
+        from the summary the damaged check stored, and it would then read no other store."""
+        return Side(WARM, Side.filled_state(filled), {}, live=True)
 
     @staticmethod
     def filling(state: State) -> Side:
@@ -1113,10 +1129,10 @@ class Checker:
         self.today = today
         self.count = 0
 
-    def command(self, tree: str, head: str, out: Path, tables: bool) -> list[str]:
+    def command(self, tree: str, head: str, out: Path, tables: bool, live: bool) -> list[str]:
         command = [sys.executable, "-m", "hoglint.native.replay", "check", "--repo", str(self.repo)]
         command += ["--engine", self.engine, "--today", self.today.isoformat(), "--tree", tree, "--head", head]
-        return [*command, "--out", str(out), *(["--tables"] if tables else [])]
+        return [*command, "--out", str(out), *(["--tables"] if tables else []), *(["--live"] if live else [])]
 
     def start(self, side: Side, tree: str, head: str, label: str, tables: bool = True) -> Running:
         self.count += 1
@@ -1125,7 +1141,7 @@ class Checker:
             shutil.rmtree(out)
         env = check_env(dict(os.environ), {**self.mode.env(), **side.env, "XDG_CACHE_HOME": str(side.state.root)})
         process = subprocess.Popen(
-            self.command(tree, head, out, tables),
+            self.command(tree, head, out, tables, side.live),
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1208,7 +1224,8 @@ class Damage:
 
 class StoreDamage(Damage):
     """Done to the stored files under `part` of the cache root, after the parent's check and
-    before the child's. A damage to the fact cache works on a private copy of it."""
+    before the child's. A damage to the fact cache works on a private copy of it. The child's
+    check after it may find a store broken; the next one must find every store healthy."""
 
     part = ""
 
@@ -1224,7 +1241,9 @@ class StoreDamage(Damage):
         done = self.apply(filled.state, case.rng)
         child = case.child(Side.damaged(filled), f"{self.name}-child")
         what = f"{len(done)} damaged" if done else "nothing to damage"
-        return [case.against(labelled(self.name, what), case.cold_child, child)]
+        damaged = case.against(labelled(self.name, what), case.cold_child, child)
+        after = case.child(Side.recovered(filled), f"{self.name}-after")
+        return [damaged, case.against(f"{self.name}-after", case.cold_child, after)]
 
 
 class FileDamage(StoreDamage):
@@ -1352,14 +1371,16 @@ class GarbageMemoParts(SqliteRows):
 
 
 class RemoveMemoParts(SqliteRows):
-    """Removes parts that states still name, and some states' manifests: names that lead nowhere."""
+    """Removes parts that states still name, and some states' manifests: names that lead nowhere.
+    The newest manifest always goes, so the next state's new row takes an id a key still holds."""
 
     name = "remove-memo-parts"
     part = MEMO
 
     def damage(self, conn: sqlite3.Connection) -> int:
         removed = conn.execute("DELETE FROM parts WHERE digest < '8'").rowcount
-        return removed + conn.execute("DELETE FROM blobs WHERE id % 3 = 2").rowcount
+        newest = "SELECT max(id) FROM blobs"
+        return removed + conn.execute(f"DELETE FROM blobs WHERE id % 3 = 2 OR id = ({newest})").rowcount
 
 
 class TwoChildrenAtOnce(Damage):
@@ -1707,6 +1728,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--tables", action="store_true")
     parser.add_argument("--today", default="")
+    parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     repo = args.repo.resolve()
     today = datetime.date.fromisoformat(args.today) if args.today else datetime.date.today()
@@ -1717,7 +1739,8 @@ def main() -> None:
         work = out.parent / f"{out.name}.work"
         work.mkdir(parents=True, exist_ok=True)
         try:
-            TreeCheck(repo, args.engine, today, args.tree[0], args.head or args.tree[0], out, args.tables).run(work)
+            head = args.head or args.tree[0]
+            TreeCheck(repo, args.engine, today, args.tree[0], head, out, args.tables, args.live).run(work)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         return

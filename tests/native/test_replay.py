@@ -117,18 +117,24 @@ def test_a_replay_reports_a_pair_equal_only_when_every_check_reports_the_same(
     assert result.ok is equal, result.line()
     labels = [verdict.label.split(" ")[0] for verdict in result.verdicts]
     assert labels[:2] == ["child", "back"]
-    assert len(labels) == 2 + len(damages) + ("two-children-at-once" in damages)
+    # A store damage has a verdict for the damaged check and one for the check after it.
+    stores = [name for name in damages if name != "two-children-at-once"]
+    assert len(labels) == 2 + 2 * len(stores) + 2 * ("two-children-at-once" in damages)
+    assert all(f"{name}-after" in labels for name in stores)
     if not equal:
         child = result.verdicts[0]
         assert isinstance(child, Compared)
         assert [diff.name for diff in child.diffs if not diff.equal] == ["edges"]
 
 
-@pytest.mark.parametrize(("mode", "equal"), [("today", True), ("pack-memo-miss", False)])
-def test_a_pack_memo_that_forgets_its_reads_makes_the_replay_fail(
-    tmp_path: Path, model_pair: tuple[Path, Pair], mode: str, equal: bool
+@pytest.mark.parametrize(
+    ("mode", "damages", "equal"),
+    [("today", (), True), ("pack-memo-miss", (), False), ("today", ("remove-memo-parts",), True)],
+)
+def test_a_pack_memo_that_forgets_its_reads_or_stays_broken_makes_the_replay_fail(
+    tmp_path: Path, model_pair: tuple[Path, Pair], mode: str, damages: tuple[str, ...], equal: bool
 ) -> None:
-    result = replay(tmp_path, model_pair, mode)
+    result = replay(tmp_path, model_pair, mode, damages)
     assert result.ok is equal, result.line()
 
 
