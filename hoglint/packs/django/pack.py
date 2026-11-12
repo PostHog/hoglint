@@ -10,6 +10,7 @@ from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedQuery
 from hoglint.core.sites import FileScope
 from hoglint.facts import FactNeeds
+from hoglint.ledger.cache import PACKS
 from hoglint.ledger.store import cache_root
 from hoglint.model import Edge
 from hoglint.native.graph import NativeSink
@@ -110,7 +111,7 @@ class MigrationItems(Items):
         projection = AliasProjection(run.repo_root, run.config.routing)
         if run.config.routing is not None:
             self.routing.note(str(run.config.routing.path))
-        cache = SummaryCache(cache_root() / "packs")
+        cache = SummaryCache(cache_root() / PACKS)
         graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
         aliases = {app: sorted(found) for app, found in graph.aliases.items()}
         return ItemOutput(list(MigrationEdges(graph, run.reader.external).produce()), aliases)

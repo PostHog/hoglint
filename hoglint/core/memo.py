@@ -938,12 +938,6 @@ class PackMemo:
         self.stats: list[StepStats] = []
         self.written: list[Written] = []
 
-    @staticmethod
-    def mode() -> str:
-        from hoglint.ledger.cache import RunStores  # noqa: PLC0415 - the store list imports this module's switches
-
-        return RunStores.current().memo_mode()
-
     def step(self, name: str, stored: bool = True) -> StepMemo | None:
         """A step's memo. A step that is not `stored` keeps nothing, so with no stats it gets none:
         its items run in the step's frame, where shared memos still trace their entries."""
