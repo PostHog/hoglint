@@ -505,3 +505,80 @@ def test_posthog_preset_lists_installs_without_ledger_lines(tmp_path: Path) -> N
     assert [item.subjects for item in run.incomplete] == [("products.metrics.backend.task_profiles",)]
     assert not result.config.rules["installs"].ledger
     assert "installs" not in result.config.levels["isolated"].requires
+
+
+def test_posthog_preset_lets_test_support_and_dev_tools_import_test_code(tmp_path: Path) -> None:
+    factories = "products.billing.backend.test.factories"
+    sources = [
+        "products.billing.backend.facade.testing",
+        "products.warehouse_sources.backend.facade._access_control_base",
+        "products.warehouse_sources.sources.sdk.testing",
+        "posthog.management.commands.setup_test_environment",
+        "posthog.management.commands.reset_test_clickhouse_db",
+        "products.signals.eval.eval_scout_safety",
+        "posthog.hogql.scripts.pbt_diagnostic",
+        "products.cdp.backend.templates.helpers",
+        "products.billing.backend.facade.api",
+    ]
+    builder = GraphBuilder().module(factories, *sources)
+    for source in sources:
+        builder.edge("import", source, factories)
+    result = run_shape(tmp_path, "posthog", builder.graph)
+    assert found(result, "prod-imports-test") == [
+        ("products.billing.backend.facade.api", factories),
+        ("products.cdp.backend.templates.helpers", factories),
+    ]
+
+
+def test_posthog_preset_keeps_orm_independent_to_models(tmp_path: Path) -> None:
+    graph = (
+        GraphBuilder()
+        .module(
+            "posthog.egress.github.transport", "posthog.egress.test.test_transport", "products.billing.backend.models"
+        )
+        .symbol("products.billing.backend.models.Invoice", "model", abstract="false")
+        .edge(
+            "exposes",
+            "posthog.egress.github.transport",
+            "typing.Any",
+            resolution=Resolution.EXTERNAL,
+            attrs=(("callable", "github_request"), ("slot", "param:kwargs")),
+        )
+        .edge(
+            "exposes",
+            "posthog.egress.github.transport",
+            "products.billing.backend.models.Invoice",
+            attrs=(("callable", "charge"), ("slot", "param:invoice")),
+            line=2,
+        )
+        .edge(
+            "exposes",
+            "posthog.egress.test.test_transport",
+            "typing.Any",
+            resolution=Resolution.EXTERNAL,
+            attrs=(("callable", "fake"), ("slot", "param:kwargs")),
+            contexts=(Context.TEST,),
+            line=3,
+        )
+        .graph
+    )
+    result = run_shape(tmp_path, "posthog", graph)
+    run = result.runs["orm-independent"]
+    assert [f.identity for f in run.findings] == [
+        ("posthog.egress.github.transport", "charge", "param:invoice", "products.billing.backend.models.Invoice")
+    ]
+    assert [item.subjects[0] for item in run.incomplete] == ["posthog.egress.github.transport"]
+
+
+def test_posthog_preset_leaves_receivers_in_tests_out_of_receiver_direction(tmp_path: Path) -> None:
+    tile = "products.dashboards.backend.models.DashboardTile"
+    graph = (
+        GraphBuilder()
+        .module("products.dashboards.backend.models", "posthog.models.remote_config", "posthog.api.test.test_dashboard")
+        .symbol(tile, "model", abstract="false")
+        .edge("signal", "posthog.models.remote_config", tile)
+        .edge("signal", "posthog.api.test.test_dashboard", tile, contexts=(Context.TEST,), line=2)
+        .graph
+    )
+    result = run_shape(tmp_path, "posthog", graph)
+    assert found(result, "receiver-direction") == [(tile, "core", "posthog.models.remote_config")]

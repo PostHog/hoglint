@@ -184,6 +184,20 @@ symbols = { names = [
 ] }
 set     = { crosses = true }
 
+# Test support and dev tooling outside a test path: it never ships, so it may import test code.
+# `facade/testing.py` is the fixture surface architecture.md names.
+[[assign]]
+match = [
+  "products/*/backend/facade/testing.py",
+  "products/warehouse_sources/backend/facade/_access_control_base.py",
+  "products/warehouse_sources/sources/sdk/testing.py",
+  "posthog/management/commands/setup_test_environment.py",
+  "posthog/management/commands/reset_test_clickhouse_db.py",
+  "products/signals/eval/**",
+  "posthog/hogql/scripts/**",
+]
+set   = { testcode = true }
+
 # ── Zones inside a product ─────────────────────────────────────
 # A product file no zone path matches lands in the default private zone `internal`.
 
@@ -432,7 +446,7 @@ growth_key  = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.prod-imports-test]
 primitive  = "edge"
-doc        = "Production code never imports test code; a test path alone grants no exemption."
+doc        = "Production code never imports test code; test support and dev tooling that never ship count as test code."
 kinds      = ["import", "dotted-path"]
 contexts   = { exclude = ["test"] }
 from       = "src.testcode != true"
