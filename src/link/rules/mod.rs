@@ -77,6 +77,29 @@ fn longest_module(
     }
 }
 
+/// The longest dotted prefix of a first-party name that is a graph module or a directory without
+/// `__init__.py` (`directories`: their ids, a directory two graph modules place apart included),
+/// with the graph module's place (`Labeler.name_owner`).
+fn name_owner(
+    it: &Interner,
+    module_at: &FxHashMap<Sid, u32>,
+    directories: &FxHashSet<Sid>,
+    name: &str,
+) -> Option<(Sid, Option<u32>)> {
+    let mut head = name;
+    loop {
+        if let Some(sid) = it.get(head) {
+            if let Some(&at) = module_at.get(&sid) {
+                return Some((sid, Some(at)));
+            }
+            if directories.contains(&sid) {
+                return Some((sid, None));
+            }
+        }
+        head = head.rsplit_once('.')?.0;
+    }
+}
+
 /// The core shapes a class has by a base or a metaclass (`exports.SHAPE_BASES`), as sets: a
 /// lineage is tested against each.
 pub struct CoreBases {
@@ -301,6 +324,8 @@ pub struct Rules {
     export_inputs: OnceLock<ExportInputs>,
     /// What each export module hands out by import (`Labeler.handed_zones`).
     pub handed: FxHashMap<Sid, Handed>,
+    /// The ids of the directories without `__init__.py` an endpoint can name, clashes included.
+    pub directory_ids: FxHashSet<Sid>,
     /// The first declared field that holds a zone.
     pub zone_field: Option<usize>,
 }
@@ -510,11 +535,12 @@ impl Rules {
         let mut directories: Vec<&str> = labels.namespaces.keys().map(AsRef::as_ref).collect();
         directories.extend(labels.namespace_clashes.iter().map(AsRef::as_ref));
         directories.sort_unstable();
-        for name in directories {
-            link.core.it.intern(name);
-        }
+        let directory_ids: FxHashSet<Sid> = directories
+            .into_iter()
+            .map(|name| link.core.it.intern(name))
+            .collect();
         let endpoint_keys = Self::endpoint_keys(link);
-        let handed = Self::handed(link, &module_at, &labels);
+        let handed = Self::handed(link, &module_at, &directory_ids, &labels);
         let zone_field =
             (0..labels.fields.len()).find(|&field| labels.fields[field].kind == FieldKind::Zone);
         let mut out = Rules {
@@ -547,6 +573,7 @@ impl Rules {
             met: Mutex::new(FxHashSet::default()),
             export_inputs: OnceLock::new(),
             handed,
+            directory_ids,
             zone_field,
         };
         out.tainted = out.provider_reads();
@@ -599,6 +626,7 @@ impl Rules {
     fn handed(
         link: &mut Link,
         module_at: &FxHashMap<Sid, u32>,
+        directories: &FxHashSet<Sid>,
         labels: &Labels,
     ) -> FxHashMap<Sid, Handed> {
         let modules: Vec<(Sid, bool)> = link
@@ -611,7 +639,7 @@ impl Rules {
             let handed = if unread {
                 Handed::Unknown
             } else {
-                Self::handed_from(link, module_at, labels, module)
+                Self::handed_from(link, module_at, directories, labels, module)
             };
             out.insert(module, handed);
         }
@@ -624,6 +652,7 @@ impl Rules {
     fn handed_from(
         link: &mut Link,
         module_at: &FxHashMap<Sid, u32>,
+        directories: &FxHashSet<Sid>,
         labels: &Labels,
         module: Sid,
     ) -> Handed {
@@ -653,7 +682,9 @@ impl Rules {
         let mut from = Vec::new();
         let mut seen: FxHashSet<Sid> = FxHashSet::default();
         for (target, external) in targets {
-            let Some(owner) = Self::handed_owner(link, module_at, labels, &target) else {
+            let Some(owner) =
+                Self::handed_owner(&link.core.it, module_at, directories, labels, &target)
+            else {
                 if external {
                     continue;
                 }
@@ -670,26 +701,17 @@ impl Rules {
     /// directory (`Labeler.handed_owner`), with the graph module's place. None when there is
     /// none, or when a directory two graph modules place apart comes first.
     fn handed_owner(
-        link: &mut Link,
+        it: &Interner,
         module_at: &FxHashMap<Sid, u32>,
+        directories: &FxHashSet<Sid>,
         labels: &Labels,
         name: &str,
     ) -> Option<(Sid, Option<u32>)> {
-        let mut head = name;
-        loop {
-            if let Some(sid) = link.core.it.get(head)
-                && let Some(&at) = module_at.get(&sid)
-            {
-                return Some((sid, Some(at)));
-            }
-            if labels.namespaces.contains_key(head) {
-                return Some((link.core.it.intern(head), None));
-            }
-            if labels.namespace_clashes.contains(head) {
-                return None;
-            }
-            head = head.rsplit_once('.')?.0;
+        let owner = name_owner(it, module_at, directories, name)?;
+        if owner.1.is_none() && labels.namespace_clashes.contains(it.s(owner.0)) {
+            return None;
         }
+        Some(owner)
     }
 
     /// `graph.modules`: the modules with a file of the repo, in the module index's order.

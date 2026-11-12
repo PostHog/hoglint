@@ -6,7 +6,7 @@ use super::conflicts::Conflict;
 use super::labels::{Cell, FieldKind, NAMESPACE_PROBE, Namespace};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
-use super::{Handed, Rules, longest_module};
+use super::{Handed, Rules, longest_module, name_owner};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
@@ -130,19 +130,13 @@ impl<'a> Cx<'a> {
     /// without `__init__.py`, a directory two graph modules place apart included
     /// (`Labeler.name_owner`), with the graph module's place.
     fn name_owner(&self, name: &str) -> Option<(Sid, Option<u32>)> {
-        let labels = &self.rules.labels;
-        let mut head = name;
-        loop {
-            if let Some(sid) = self.link.core.it.get(head) {
-                if let Some(at) = self.module_at(sid) {
-                    return Some((sid, Some(at)));
-                }
-                if labels.namespaces.contains_key(head) || labels.namespace_clashes.contains(head) {
-                    return Some((sid, None));
-                }
-            }
-            head = head.rsplit_once('.')?.0;
-        }
+        let rules = self.rules;
+        name_owner(
+            &self.link.core.it,
+            &rules.module_at,
+            &rules.directory_ids,
+            name,
+        )
     }
 
     pub fn path_at(&self, at: Option<u32>) -> Option<&'a str> {

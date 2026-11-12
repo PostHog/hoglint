@@ -741,14 +741,8 @@ class Labeler:
         """The longest dotted prefix of a handed name that is a graph module or a namespace
         directory: the module whose zone the name has. None when there is none, or when a
         directory two graph modules place apart comes first."""
-        head = name
-        while head:
-            if head in self.graph.modules or head in self.namespaces.paths:
-                return head
-            if head in self.namespaces.clashes:
-                return None
-            head = head.rpartition(".")[0]
-        return None
+        owner = self.name_owner(name)
+        return None if owner in self.namespaces.clashes else owner
 
     def find_handed_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
