@@ -488,13 +488,14 @@ counted    = true
 growth_key = ["dst.symbol", "src.package"]
 
 [rules.installs]
-primitive  = "edge"
-doc        = "A product registers a callback into another package's hook; the callback's module must be watched."
-kinds      = ["installs"]
-select     = "src.package != dst.package"
-identity   = "module-symbol"
-counted    = true
-growth_key = ["dst.symbol", "src.package"]
+primitive     = "edge"
+doc           = "A product registers a callback into another package's hook: the approved way to send behavior across a boundary, so a list and not debt. wiring-watched checks that the callback's module is watched; an install whose hook cannot be resolved is incomplete."
+kinds         = ["installs"]
+select        = "src.package != dst.package"
+deny          = "false"
+contexts      = { exclude = ["test"] }
+on_unresolved = "incomplete"
+ledger        = false
 
 [rules.drives]
 primitive     = "edge"
@@ -658,6 +659,6 @@ select   = "tier == 'product'"
 requires = [
   "public-surface", "export-shape", "facade-signature", "presentation-uses-facade", "facade-no-drf",
   "contracts-no-django", "model-crossings", "get-model", "reverse-accessor", "receiver-direction",
-  "installs", "wiring-watched", "dynamic-imports",
+  "wiring-watched", "dynamic-imports",
 ]
 strict   = ["wiring-watched"]

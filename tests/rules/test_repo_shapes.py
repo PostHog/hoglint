@@ -470,3 +470,38 @@ def test_posthog_preset_lets_a_model_cross_only_in_shapes_that_hold_no_instance(
         "passed-as-class(build)",
         "instance-many(filter)",
     ]
+
+
+def test_posthog_preset_lists_installs_without_ledger_lines(tmp_path: Path) -> None:
+    hook = "products.tasks.backend.facade.profiles.register_task_profiles"
+    graph = (
+        GraphBuilder()
+        .module("products.tasks.backend.facade.profiles", "products.metrics.backend.task_profiles")
+        .module("products.metrics.backend.test.test_profiles")
+        .symbol(hook, "def")
+        .edge("installs", "products.metrics.backend.task_profiles", hook)
+        .edge(
+            "installs",
+            "products.metrics.backend.task_profiles",
+            None,
+            "self.family.register",
+            line=2,
+            resolution=Resolution.UNRESOLVED,
+        )
+        .edge(
+            "installs",
+            "products.metrics.backend.test.test_profiles",
+            None,
+            "module.register",
+            line=3,
+            resolution=Resolution.UNRESOLVED,
+            contexts=(Context.TEST,),
+        )
+        .graph
+    )
+    result = run_shape(tmp_path, "posthog", graph)
+    run = result.runs["installs"]
+    assert list(run.findings) == []
+    assert [item.subjects for item in run.incomplete] == [("products.metrics.backend.task_profiles",)]
+    assert not result.config.rules["installs"].ledger
+    assert "installs" not in result.config.levels["isolated"].requires
