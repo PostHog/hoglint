@@ -276,6 +276,9 @@ pub struct Walk<'a> {
     reported: FxHashSet<(String, String, String)>,
     visited: FxHashSet<(String, usize, String)>,
     shapes: FxHashMap<String, Shapes>,
+    /// `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
+    allowed: FxHashMap<(usize, String), bool>,
+    walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
     slots_seen: FxHashMap<String, bool>,
@@ -291,6 +294,8 @@ impl<'a> Walk<'a> {
             reported: FxHashSet::default(),
             visited: FxHashSet::default(),
             shapes: FxHashMap::default(),
+            allowed: FxHashMap::default(),
+            walked: FxHashMap::default(),
             exposes_by_name: FxHashMap::default(),
             top_level: FxHashMap::default(),
             slots_seen: FxHashMap::default(),
@@ -484,7 +489,7 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged. Where
     /// `walk_where` cannot be told, the class is walked.
-    fn walks(&self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
+    fn walks(&mut self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
         let policy = &self.cx.rules.shapes[shape];
         let dataclass_like = shapes.contains("dataclass") || shapes.contains("frozen-dataclass");
         if dataclass_like && policy.data.iter().any(|name| shapes.contains(name)) {
@@ -496,15 +501,28 @@ impl<'a> Walk<'a> {
         let Some(node) = &policy.walk_where else {
             return true;
         };
-        self.symbol_truth(node, symbol) != Truth::False
+        let key = (shape, symbol.to_string());
+        if let Some(&found) = self.walked.get(&key) {
+            return found;
+        }
+        let found = self.symbol_truth(node, symbol) != Truth::False;
+        self.walked.insert(key, found);
+        found
     }
 
     /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.
-    fn allowed_as_is(&self, symbol: &str, shape: usize) -> bool {
-        let Some(node) = &self.cx.rules.shapes[shape].allow_where else {
+    fn allowed_as_is(&mut self, symbol: &str, shape: usize) -> bool {
+        let rules = self.cx.rules;
+        let Some(node) = &rules.shapes[shape].allow_where else {
             return false;
         };
-        self.symbol_truth(node, symbol) == Truth::True
+        let key = (shape, symbol.to_string());
+        if let Some(&found) = self.allowed.get(&key) {
+            return found;
+        }
+        let found = self.symbol_truth(node, symbol) == Truth::True;
+        self.allowed.insert(key, found);
+        found
     }
 
     fn behavior_ok(&mut self, symbol: &str, shape: usize) -> bool {

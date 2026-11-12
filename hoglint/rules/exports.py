@@ -161,6 +161,9 @@ class ExportPrimitive(RuleType):
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
         self.shapes: dict[str, tuple[frozenset[str], bool]] = {}
+        # `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
+        self.allowed: dict[tuple[str, str], bool] = {}
+        self.walked: dict[tuple[str, str], bool] = {}
         self.members: dict[tuple[str, bool], list[Edge]] = {}
         self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
         self.made: dict[int, Edge] = {}
@@ -340,7 +343,11 @@ class ExportPrimitive(RuleType):
         """Whether the policy's `allow_where` holds for a symbol: it is handed out as it stands."""
         if policy.allow_where is None:
             return False
-        return self.symbol_truth(policy.allow_where, symbol) is Truth.TRUE
+        key = (policy.name, symbol)
+        found = self.allowed.get(key)
+        if found is None:
+            found = self.allowed[key] = self.symbol_truth(policy.allow_where, symbol) is Truth.TRUE
+        return found
 
     def walks(self, symbol: str, shapes: frozenset[str], policy: ShapePolicy) -> bool:
         """Whether what an allowed class's members name is judged: always the fields of a data
@@ -353,7 +360,11 @@ class ExportPrimitive(RuleType):
             return False
         if policy.walk_where is None:
             return True
-        return self.symbol_truth(policy.walk_where, symbol) is not Truth.FALSE
+        key = (policy.name, symbol)
+        found = self.walked.get(key)
+        if found is None:
+            found = self.walked[key] = self.symbol_truth(policy.walk_where, symbol) is not Truth.FALSE
+        return found
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
