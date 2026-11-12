@@ -183,6 +183,16 @@ infrastructure = {}
 backend        = { paths = ["backend/**"] }
 facade         = { parent = "backend", paths = ["backend/facade/**"] }
 contracts      = { parent = "facade", paths = ["backend/facade/contracts.py", "backend/facade/enums.py"] }
+# A capability submodule hands out wiring and holds no body. These names always are one; `api*.py`
+# holds the data capabilities and never is one. Both apply at the top of the facade only.
+capability     = { parent = "facade", paths = [
+  "backend/facade/dags.py", "backend/facade/hogql.py", "backend/facade/max_tools.py", "backend/facade/models.py",
+  "backend/facade/queries.py", "backend/facade/tasks.py", "backend/facade/temporal.py",
+] }
+data-api       = { parent = "facade", paths = ["backend/facade/api*.py"] }
+fixtures       = { parent = "facade", paths = ["backend/facade/testing.py"] }
+# Where core runs a product's code: what a facade module hands out from here makes it a capability.
+wiring         = { parent = "backend", paths = ["backend/hogql_queries/**", "backend/max_tools.py", "backend/temporal/**", "backend/tasks.py"] }
 presentation   = { parent = "backend", paths = ["backend/presentation/**", "backend/routes.py"] }
 # Viewsets that have not moved to presentation/ yet.
 api            = { parent = "backend", paths = ["backend/api/**", "backend/api.py"] }
@@ -340,13 +350,12 @@ growth_key = ["dst.symbol", "src.package"]
 
 [rules.facade-logic]
 primitive  = "edge"
-doc        = "Facade modules stay thin: every callable with a body in a facade is counted, so the count cannot grow."
+doc        = "A capability submodule of a facade holds no body: each top-level definition there is a re-export or a stub, so the wiring lives where core runs it."
 kinds      = ["declares"]
-from       = "src.zone == 'facade' and src.zone != 'contracts'"
-select     = "edge.body == '1' and edge.decl in ['def', 'async']"
-identity   = "package-module"
-counted    = true
-growth_key = ["src.package"]
+from       = "src.zone == 'capability' or (src.zone == 'facade' and src.zone not in ['contracts', 'data-api', 'fixtures'] and src.handed_zones in ['wiring', 'tasks', 'models', 'migrations'])"
+select     = "edge.body == '1' and src.scope == none and dst.name not in ['__getattr__', '__dir__']"
+identity   = ["dst.symbol", "src.module"]
+growth_key = ["dst.symbol", "src.package"]
 
 # ── Layers inside a product ────────────────────────────────────
 

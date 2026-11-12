@@ -61,6 +61,14 @@ The owner decided that a preset holds a named list of future-proof core models t
 Any model that core owns is not enough, because a core model may later move into a product.
 Which models a company lists is its own policy and is not published.
 
+**A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
+- A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
+  The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from).
+  The data module of a facade and its contract, enum and fixture modules never are one.
+- Each top-level definition with a body in such a module is one finding, named by its symbol, not a count per module.
+  A function in the facade's data module is never a finding of this rule: adding one is how a product offers something new.
+- Known gap: the old check also flagged a stub that carries a task or workflow decorator. The rule reads one edge at a time and does not see the decorator.
+
 ## Why
 
 - Publicness by location turned Packwerk's `app/public` into a catch-all drawer.
