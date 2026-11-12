@@ -12,6 +12,7 @@ import pytest
 from hoglint.config import Config
 from hoglint.ledger.file import LedgerFile
 from hoglint.model import Context, FindingStatus, Graph, HandOut, IncompleteCause, Resolution
+from hoglint.plugins import ProducerFailure
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
@@ -684,6 +685,18 @@ def test_coverage_cannot_tell_what_a_rule_it_reads_cannot_tell(tmp_path: Path) -
     assert [item.reason for item in result.runs["wiring-watched"].incomplete] == [
         "rule request-path cannot tell: import 'products.billing.gone' did not resolve"
     ]
+
+
+def test_coverage_blocks_every_level_group_when_a_rule_it_reads_did_not_run(tmp_path: Path) -> None:
+    for product in ("billing", "alerts"):
+        turbo_package(tmp_path, f"products/{product}", {"tasks": {"contract-check": {"inputs": ["**"]}}})
+    builder = base_graph().edge("import", "core.api", "products.billing.logic")
+    builder.graph.failed_producers["core-import@1"] = ProducerFailure("unreadable", frozenset({"import"}))
+    level = '[levels.isolated]\ngroup_by = "package"\nselect = "tier == \'product\'"\nrequires = ["wiring-watched"]\n'
+    result = run(tmp_path, COVER_A_REACH + level, builder.graph)
+    assert result.levels["isolated"].passing == []
+    assert sorted(result.levels["isolated"].failing) == ["alerts", "billing"]
+    assert [item.subjects for item in result.runs["wiring-watched"].incomplete] == [()]
 
 
 COVER_A_DIRECTORY = """

@@ -429,8 +429,12 @@ class CoveragePrimitive(EntityRule):
         """Why a cover needs a path, as a finding's message names it: the words of both engines."""
         return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
 
+    def everywhere(self, key: str, reason: str, subjects: tuple[str, ...] = ()) -> None:
+        """An item about no one module: with no subject it blocks every level group."""
+        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, subjects))
+
     def not_run(self, cover: CoverSpec) -> None:
-        self.incomplete(f"rules.{cover.rule}", None, f"rule {cover.rule} did not run before this coverage rule")
+        self.everywhere(f"rules.{cover.rule}", f"rule {cover.rule} did not run before this coverage rule")
 
     def unplaced(self, module: str | None, surface: str) -> None:
         self.incomplete(f"{module}|{surface}", module, f"cannot place {surface!r} for coverage")
@@ -443,10 +447,8 @@ class CoveragePrimitive(EntityRule):
             if run is None:
                 continue
             for item in run.incomplete:
-                module = item.subjects[0] if item.subjects else None
-                self.incomplete(
-                    f"rules.{cover.rule}|{item.key}", module, f"rule {cover.rule} cannot tell: {item.reason}"
-                )
+                reason = f"rule {cover.rule} cannot tell: {item.reason}"
+                self.everywhere(f"rules.{cover.rule}|{item.key}", reason, item.subjects)
 
     def from_rule(self, cover: CoverSpec, out: dict[str, tuple[str, str | None]]) -> None:
         run = self.ctx.results.get(cover.rule)
@@ -545,7 +547,7 @@ class CoveragePrimitive(EntityRule):
         name = str(self.spec.input("adapter"))
         adapter = REGISTRY.coverage_adapters[name]
         if repo is None:
-            self.incomplete("inputs", None, f"no repo root to read the {name} inputs from")
+            self.everywhere("inputs", f"no repo root to read the {name} inputs from")
             return self.run
         options = {key: value for key, value in self.spec.inputs if key != "adapter"}
         try:
@@ -555,7 +557,7 @@ class CoveragePrimitive(EntityRule):
             else:
                 handle = adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
-            self.incomplete("inputs", None, f"cannot read the {name} inputs: {error}")
+            self.everywhere("inputs", f"cannot read the {name} inputs: {error}")
             return self.run
         required = self.required()
         self.inherit_unknowns()
