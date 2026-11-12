@@ -13,7 +13,8 @@ A snapshot is a list of (path, blob id): the index, a commit, or the working tre
 There are no checkouts.
 
 **One fact database per facts id** (D19): SQLite in WAL mode, insert-or-ignore, shared by all worktrees.
-- Each entry holds the record as JSON for the Python packs, compressed with lz4 one key at a time (layout 4).
+- Each entry holds the record as JSON for the Python packs, compressed with lz4 one key at a time (since layout 4).
+- Entry ids are never given out twice (layout 5, `AUTOINCREMENT`): a key whose rows were lost from outside is a miss, never another entry's facts. A write that breaks a constraint can only come from outside, so the database is moved aside like a corrupt one.
   It also holds a binary body for the link, uncompressed (D57 as it stands).
 - Size for the PostHog monorepo: 321 MB at 461ef834c48 (Nov 11).
   It was 465-483 MB before phase N6.

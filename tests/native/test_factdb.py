@@ -182,27 +182,59 @@ def test_a_damaged_database_is_moved_aside_and_the_run_goes_on(tmp_path: Path) -
     assert database.open_for_run(TODAY)
 
 
-def test_a_database_whose_newest_facts_row_was_lost_is_moved_aside_and_stores_again(tmp_path: Path) -> None:
+def stored_ids(database: FactDatabase) -> list[int]:
+    with sqlite3.connect(database.path) as conn:
+        return [entry_id for (entry_id,) in conn.execute("SELECT id FROM keys ORDER BY id")]
+
+
+def corrupt_files(database: FactDatabase) -> list[str]:
+    return [path.name for path in database.directory.iterdir() if ".corrupt-" in path.name]
+
+
+def test_lost_newest_rows_are_a_miss_never_another_entrys_facts(tmp_path: Path) -> None:
+    native = native_module()
+    repo = make_repo(tmp_path)
+    views = repo / "app" / "views.py"
+    database = fact_database(native, tmp_path)
+    link(native, BlobSnapshot.index(repo), database)
+    # The newest entry, which loses its body and record; its key stays.
+    thing = "from app.models import Thing\n\nTHAT = Thing()\n"
+    views.write_text(thing)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    link(native, BlobSnapshot.index(repo), database)
+    with sqlite3.connect(database.path) as conn:
+        lost = conn.execute("SELECT max(id) FROM facts").fetchone()[0]
+        conn.execute("DELETE FROM facts WHERE id = ?", (lost,))
+        conn.execute("DELETE FROM records WHERE id = ?", (lost,))
+    # Another entry whose record has the same length as the lost one.
+    views.write_text(thing.replace("Thing", "Other"))
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    assert link(native, BlobSnapshot.index(repo), database)[1] == (2, 1)
+    views.write_text(thing)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    run, counts = link(native, BlobSnapshot.index(repo), database)
+    assert (imports(run), counts) == (["Thing"], (2, 1))
+    assert corrupt_files(database) == []
+    ids = stored_ids(database)
+    assert lost not in ids and max(ids) > lost
+
+
+def test_a_database_whose_store_breaks_a_constraint_is_moved_aside_and_stores_again(tmp_path: Path) -> None:
     native = native_module()
     repo = make_repo(tmp_path)
     database = fact_database(native, tmp_path)
     link(native, BlobSnapshot.index(repo), database)
-    # The next entry's `facts` row takes the lost row's id, which a `records` row still holds.
+    # A record at the id the next entry takes: its insert breaks the unique id.
     with sqlite3.connect(database.path) as conn:
-        conn.execute("DELETE FROM facts WHERE id = (SELECT max(id) FROM facts)")
+        taken = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'facts'").fetchone()[0]
+        conn.execute("INSERT INTO records VALUES (?, x'00')", (taken + 1,))
     (repo / "app" / "views.py").write_text("from app.models import Other\n")
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     link(native, BlobSnapshot.index(repo), database)
-    aside = [path.name for path in database.directory.iterdir() if ".corrupt-" in path.name]
-    assert len(aside) == 1
+    assert len(corrupt_files(database)) == 1
     assert link(native, BlobSnapshot.index(repo), database)[1] == (0, 3)
     run, counts = link(native, BlobSnapshot.index(repo), database)
     assert (imports(run), counts) == (["Other"], (3, 0))
-
-
-def stored_ids(database: FactDatabase) -> list[int]:
-    with sqlite3.connect(database.path) as conn:
-        return [entry_id for (entry_id,) in conn.execute("SELECT id FROM keys ORDER BY id")]
 
 
 def test_the_daily_prune_drops_unread_entries_then_other_files_then_entries_not_read_today(

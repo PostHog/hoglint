@@ -13,8 +13,10 @@
 //! under its key (a run stores only what it could not read) and runs in short transactions, so
 //! runs that extract the same blob at once leave one entry and hold the write lock briefly.
 //! Reads go through `pread`, not a memory map: ten runs that map one file at once wait on each
-//! other's page faults. Every read is by natural key (config, oid): an entry id can be reused
-//! after a prune. The daily prune lives in `hoglint/native/factdb.py`.
+//! other's page faults. Every read is by natural key (config, oid). An entry id is never given
+//! out twice (`AUTOINCREMENT`), not even after the newest entry's rows were lost: a key whose
+//! rows are gone then leads nowhere, never to another entry's facts. The daily prune lives in
+//! `hoglint/native/factdb.py`.
 //!
 //! The database is a cache. An entry that is gone is a miss, and an error is the caller's to
 //! log and run past (`blobs.rs`).
@@ -27,15 +29,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The table layout. It is part of the database file name (`hoglint/native/factdb.py`), so two
 /// builds with different layouts never share a file; a file with another `user_version` is
 /// emptied and set up again.
-pub const LAYOUT: i64 = 4;
+pub const LAYOUT: i64 = 5;
 /// Entries per write transaction.
 const ROWS_PER_WRITE: usize = 256;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fact database error; `corrupt` when the file is no database or a damaged one. A broken
 /// constraint is damage too: the writes here never break one, so only a change from outside
-/// does (such as a lost `facts` row, whose id the next entry then takes again while a `records`
-/// row still holds it), and it would break again on every run.
+/// does, and it would break again on every run.
 #[derive(Debug)]
 pub struct DbError {
     pub message: String,
@@ -264,7 +265,7 @@ impl FactDb {
                      bytes INTEGER NOT NULL,
                      PRIMARY KEY (config, oid)
                  ) WITHOUT ROWID;
-                 CREATE TABLE facts (id INTEGER PRIMARY KEY, body BLOB NOT NULL);
+                 CREATE TABLE facts (id INTEGER PRIMARY KEY AUTOINCREMENT, body BLOB NOT NULL);
                  CREATE TABLE records (id INTEGER PRIMARY KEY, json BLOB NOT NULL);
                  PRAGMA user_version = {LAYOUT};"
             ))
