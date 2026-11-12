@@ -76,6 +76,26 @@ fn longest_module(
     }
 }
 
+/// The core shapes a class has by a base or a metaclass (`exports.SHAPE_BASES`), as sets: a
+/// lineage is tested against each.
+pub struct CoreBases {
+    pub abc_metas: Vec<String>,
+    pub shapes: Vec<(String, FxHashSet<String>)>,
+}
+
+impl CoreBases {
+    fn new(plan: &CoreBasesPlan) -> CoreBases {
+        CoreBases {
+            abc_metas: plan.abc_metas.clone(),
+            shapes: plan
+                .bases
+                .iter()
+                .map(|(name, bases)| (name.clone(), bases.iter().cloned().collect()))
+                .collect(),
+        }
+    }
+}
+
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Judgment {
@@ -254,7 +274,7 @@ pub struct Rules {
     pub export_shapes: Vec<usize>,
     pub shapes: Vec<Shape>,
     /// The base classes and metaclasses that make each core shape.
-    pub core_bases: CoreBasesPlan,
+    pub core_bases: CoreBases,
     pub kind_names: Vec<String>,
     pub kind_sets: KindSets,
     facts: SymbolFacts,
@@ -502,7 +522,7 @@ impl Rules {
                 .collect(),
             export_shapes: plan.exports.iter().map(|export| export.shape).collect(),
             shapes,
-            core_bases: plan.core_bases.clone(),
+            core_bases: CoreBases::new(&plan.core_bases),
             kind_names: plan.kinds.iter().map(|kind| kind.name.clone()).collect(),
             kind_sets,
             facts,

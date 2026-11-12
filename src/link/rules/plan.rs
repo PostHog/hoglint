@@ -150,7 +150,7 @@ pub struct ShapePlan {
 
 /// The base classes and metaclasses that make each core shape (`exports.core_shape_bases`): the
 /// Python lists are the only copy.
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 pub struct CoreBasesPlan {
     pub abc_metas: Vec<String>,
     /// Each shape a class has when its lineage holds one of the shape's bases

@@ -444,10 +444,8 @@ impl<'a> Walk<'a> {
             return (names, !kind_unknown);
         }
         let (ancestors, complete) = rules.facts.ancestors(link, symbol);
-        let in_lineage = |bases: &[String]| {
-            bases
-                .iter()
-                .any(|base| base == symbol || ancestors.contains(base.as_str()))
+        let in_lineage = |bases: &FxHashSet<String>| {
+            bases.contains(symbol) || ancestors.iter().any(|name| bases.contains(*name))
         };
         let core = &rules.core_bases;
         match rules.symbol_decl(link, symbol) {
@@ -468,7 +466,7 @@ impl<'a> Walk<'a> {
                 names.insert("frozen-dataclass".into());
             }
         }
-        for (name, bases) in &core.bases {
+        for (name, bases) in &core.shapes {
             if in_lineage(bases) {
                 names.insert(name.clone());
             }
