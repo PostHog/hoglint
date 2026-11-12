@@ -358,7 +358,7 @@ zone = { type = "zone", required_on = ["**"] }
 [zones]
 within = "products/{product}"
 default = "internal"
-wiring = { paths = ["backend/temporal/**"] }
+wiring = { paths = ["backend/temporal/**", "backend/mixed/jobs.py"] }
 
 [shapes.loose]
 allow = ["class", "function"]
@@ -376,18 +376,48 @@ identity = ["dst.symbol"]
 ledger = false
 """
 BODY = "\n\n\ndef build() -> int:\n    return 1\n"
-# (the module a facade module hands a name out from, its findings, its incomplete items). A
-# member whose zone cannot be told makes the module's handed zones unknown.
+RUN = "def run() -> None:\n    pass\n"
+BUILD_FOUND = ["products.shop.backend.facade.hooks.build"]
+BUILD_INCOMPLETE = ["products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.build"]
+# (the import a facade module hands a name out by, the name, the files it reads, its findings, its
+# incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
+# directory without `__init__.py` has the zone a file directly inside it reads.
 HANDED_CASES = {
     "a member in a known zone": (
-        "products.shop.backend.temporal.jobs",
-        ["products.shop.backend.facade.hooks.build"],
+        "from products.shop.backend.temporal.jobs import run",
+        "run",
+        {"products/shop/backend/temporal/__init__.py": "", "products/shop/backend/temporal/jobs.py": RUN},
+        BUILD_FOUND,
         [],
     ),
-    "a member whose zone is unknown": (
-        "core.jobs",
+    "a member whose zone is unknown": ("from core.jobs import run", "run", {}, [], BUILD_INCOMPLETE),
+    "a namespace directory in a known zone": (
+        "from products.shop.backend import temporal",
+        "temporal",
+        {"products/shop/backend/temporal/jobs.py": RUN},
+        BUILD_FOUND,
         [],
-        ["products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.build"],
+    ),
+    "a namespace directory inside a namespace directory": (
+        "from products.shop.backend.temporal import flows",
+        "flows",
+        {"products/shop/backend/temporal/flows/run.py": RUN},
+        BUILD_FOUND,
+        [],
+    ),
+    "a namespace directory outside the zone": (
+        "from products.shop.backend import plain",
+        "plain",
+        {"products/shop/backend/plain/run.py": RUN},
+        [],
+        [],
+    ),
+    "a namespace directory whose files disagree on zone": (
+        "from products.shop.backend import mixed",
+        "mixed",
+        {"products/shop/backend/mixed/jobs.py": RUN, "products/shop/backend/mixed/other.py": RUN},
+        [],
+        BUILD_INCOMPLETE,
     ),
 }
 
@@ -396,18 +426,17 @@ HANDED_CASES = {
 def test_a_handed_member_whose_zone_is_unknown_makes_the_handed_zones_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    source, found, incomplete = HANDED_CASES[case]
+    line, name, files, found, incomplete = HANDED_CASES[case]
     repo = {
         "hoglint.toml": HANDED_CONFIG,
         "core/__init__.py": "",
-        "core/jobs.py": "def run() -> None:\n    pass\n",
+        "core/jobs.py": RUN,
         "products/__init__.py": "",
         "products/shop/__init__.py": "",
         "products/shop/backend/__init__.py": "",
-        "products/shop/backend/temporal/__init__.py": "",
-        "products/shop/backend/temporal/jobs.py": "def run() -> None:\n    pass\n",
         "products/shop/backend/facade/__init__.py": "",
-        "products/shop/backend/facade/hooks.py": f"from {source} import run\n\n__all__ = ['run']" + BODY,
+        "products/shop/backend/facade/hooks.py": f"{line}\n\n__all__ = ['{name}']" + BODY,
+        **files,
     }
     out = dumps(tmp_path, repo, monkeypatch)
     same_in_both_engines(out)

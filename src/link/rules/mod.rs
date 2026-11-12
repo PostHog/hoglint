@@ -31,7 +31,7 @@ use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{
     ExportInputs, ExportRow, ExportRule, Shape, Walk, binds_handed, module_scope_imports,
 };
-use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
+use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels, Namespace};
 use self::plan::{
     CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan,
     check_columns,
@@ -43,7 +43,7 @@ use self::symbols::{KindSets, SymbolFacts};
 use self::use_shape::UseShape;
 use self::value::{Truth, Value, any_of, render};
 use super::Link;
-use super::intern::{EMPTY, Interner, Sid};
+use super::intern::{Interner, Sid};
 use super::scope::{Res, ctx};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -54,8 +54,9 @@ use std::sync::{Mutex, OnceLock};
 pub enum Handed {
     /// Its `__all__` cannot be read, or a handed import did not resolve.
     Unknown,
-    /// The graph modules the handed names come from, and each one's place.
-    From(Vec<(Sid, u32)>),
+    /// The modules the handed names come from: a graph module with its place, or a namespace
+    /// directory with none.
+    From(Vec<(Sid, Option<u32>)>),
 }
 
 /// The longest dotted prefix of `name` that is a graph module, and its place
@@ -504,7 +505,7 @@ impl Rules {
             .build()
             .map_err(|error| error.to_string())?;
         let endpoint_keys = Self::endpoint_keys(link);
-        let handed = Self::handed(link, &module_at);
+        let handed = Self::handed(link, &module_at, &labels.namespaces);
         let zone_field =
             (0..labels.fields.len()).find(|&field| labels.fields[field].kind == FieldKind::Zone);
         let mut out = Rules {
@@ -584,9 +585,13 @@ impl Rules {
     }
 
     /// What each export module hands out by import, read once (`Labeler.handed_zones`): the
-    /// graph modules its run-time imports of handed names come from. A type-only or test import
-    /// hands nothing out, and a name with no graph module (third party) has no zone.
-    fn handed(link: &mut Link, module_at: &FxHashMap<Sid, u32>) -> FxHashMap<Sid, Handed> {
+    /// modules its run-time imports of handed names come from. A type-only or test import hands
+    /// nothing out, and a name with no module (third party) has no zone.
+    fn handed(
+        link: &mut Link,
+        module_at: &FxHashMap<Sid, u32>,
+        namespaces: &FxHashMap<Box<str>, Namespace>,
+    ) -> FxHashMap<Sid, Handed> {
         let modules: Vec<(Sid, bool)> = link
             .hand_outs
             .iter()
@@ -597,24 +602,28 @@ impl Rules {
             let handed = if unread {
                 Handed::Unknown
             } else {
-                Self::handed_from(link, module_at, module)
+                Self::handed_from(link, module_at, namespaces, module)
             };
             out.insert(module, handed);
         }
         out
     }
 
-    /// The graph modules the run-time imports of an export module's handed names come from, each
-    /// once, in first-seen order; unknown when one of those imports did not resolve.
-    fn handed_from(link: &mut Link, module_at: &FxHashMap<Sid, u32>, module: Sid) -> Handed {
+    /// The modules the run-time imports of an export module's handed names come from, each once,
+    /// in first-seen order; unknown when one of those imports did not resolve.
+    fn handed_from(
+        link: &mut Link,
+        module_at: &FxHashMap<Sid, u32>,
+        namespaces: &FxHashMap<Box<str>, Namespace>,
+        module: Sid,
+    ) -> Handed {
         let ids = match link.kind_sid("import") {
             Some(kind) => module_scope_imports(link, kind, module),
             None => Vec::new(),
         };
         let found = &link.hand_outs[&module];
         let edges = &link.edges;
-        let mut from = Vec::new();
-        let mut seen: FxHashSet<u32> = FxHashSet::default();
+        let mut targets: Vec<String> = Vec::new();
         for id in ids {
             if edges.seen_ctx(id) & (ctx::TYPE_ONLY | ctx::TEST) != 0 {
                 continue;
@@ -626,19 +635,42 @@ impl Rules {
                 return Handed::Unknown;
             }
             for target in edges.targets_of(id) {
-                // A module target needs no prefix walk unless it is no graph module itself.
-                let owner = match module_at.get(&target.m) {
-                    Some(&at) if target.s == EMPTY => Some((target.m, at)),
-                    _ => longest_module(&link.core.it, module_at, &link.core.ent_text(*target)),
-                };
-                if let Some(owner) = owner
-                    && seen.insert(owner.1)
-                {
-                    from.push(owner);
-                }
+                targets.push(link.core.ent_text(*target));
+            }
+        }
+        let mut from = Vec::new();
+        let mut seen: FxHashSet<Sid> = FxHashSet::default();
+        for target in targets {
+            let Some(owner) = Self::handed_owner(link, module_at, namespaces, &target) else {
+                continue;
+            };
+            if seen.insert(owner.0) {
+                from.push(owner);
             }
         }
         Handed::From(from)
+    }
+
+    /// The longest dotted prefix of a handed name that is a graph module or a namespace
+    /// directory (`Labeler.handed_owner`), with the graph module's place.
+    fn handed_owner(
+        link: &mut Link,
+        module_at: &FxHashMap<Sid, u32>,
+        namespaces: &FxHashMap<Box<str>, Namespace>,
+        name: &str,
+    ) -> Option<(Sid, Option<u32>)> {
+        let mut head = name;
+        loop {
+            if let Some(sid) = link.core.it.get(head)
+                && let Some(&at) = module_at.get(&sid)
+            {
+                return Some((sid, Some(at)));
+            }
+            if namespaces.contains_key(head) {
+                return Some((link.core.it.intern(head), None));
+            }
+            head = head.rsplit_once('.')?.0;
+        }
     }
 
     /// `graph.modules`: the modules with a file of the repo, in the module index's order.

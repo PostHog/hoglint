@@ -725,11 +725,22 @@ class Labeler:
         imports = self.index.module_imports.get(module, [])
         return [edge for edge in imports if hand_out.unread or edge.attr("binds") in hand_out.handed]
 
+    def handed_owner(self, name: str) -> str | None:
+        """The longest dotted prefix of a handed name that is a graph module or a namespace
+        directory: the module whose zone the name has."""
+        head = name
+        while head:
+            if head in self.graph.modules or head in self.namespaces.paths:
+                return head
+            head = head.rpartition(".")[0]
+        return None
+
     def find_handed_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
         import (`Graph.hand_outs`): none for a module that is no export or when no field is a
         zone, unknown when its `__all__` cannot be read, a handed import did not resolve or a
-        handed module's zone cannot be told. A third-party name has no zone."""
+        handed module's zone cannot be told. A namespace directory has the zone its files read.
+        A third-party name has no zone."""
         hand_out = self.graph.hand_outs.get(module)
         if hand_out is None or not self.zone_fields:
             return NONE
@@ -742,7 +753,7 @@ class Labeler:
             if edge.resolution is Resolution.UNRESOLVED:
                 return UNKNOWN
             for target in edge.targets:
-                owner = self.module_of_symbol(str(target))
+                owner = self.handed_owner(str(target))
                 if owner is None:
                     continue
                 zone, _ = self.field_value(owner, None, self.zone_fields[0])

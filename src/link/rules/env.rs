@@ -357,7 +357,7 @@ impl<'a> Cx<'a> {
         };
         let mut names: Vec<&'a str> = Vec::new();
         for &(module, at) in from {
-            match self.field_value(field, Some(module), Some(at), None) {
+            match self.field_value(field, Some(module), at, None) {
                 Value::Unknown => return Value::Unknown,
                 Value::Zone(zone) => names.extend(zone.chain.iter().map(String::as_str)),
                 _ => {}

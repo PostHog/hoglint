@@ -9,6 +9,7 @@ import pytest
 from hoglint import facts
 from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
+from hoglint.native.parity import read_lines
 from hoglint.rules import exports
 from rules.support import PRESET
 
@@ -112,6 +113,39 @@ def test_facade_logic_names_each_body_of_a_capability_submodule(
         files[f"products/shop/backend/facade/{name.split('/')[0]}/__init__.py"] = ""
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert findings_of(out["native"], "facade-logic") == sorted(expected)
+
+
+HANDS_OUT_QUERIES = "from products.shop.backend import hogql_queries\n\n__all__ = ['hogql_queries']\n\n\n"
+QUERIES = "products/shop/backend/hogql_queries"
+# (the files of a directory without `__init__.py` a facade module hands out, the findings, the
+# incomplete items). The directory has the zone its files read; where they disagree, unknown.
+NAMESPACE_CASES = {
+    "a namespace directory under wiring": (
+        {f"{QUERIES}/trends.py": "def run() -> int:\n    return 1\n"},
+        bodies_of(f"{SHOP}.facade.hooks"),
+        [],
+    ),
+    "a namespace directory whose files disagree on zone": (
+        {
+            f"{QUERIES}/trends.py": "def run() -> int:\n    return 1\n",
+            f"{QUERIES}/test_trends.py": "def test_run() -> None:\n    pass\n",
+        },
+        [],
+        [f"{SHOP}.facade.hooks|declares|{SHOP}.facade.hooks.{name}" for name in ("Runner", "_helper", "build")],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", NAMESPACE_CASES)
+def test_facade_logic_reads_the_zone_of_a_handed_namespace_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    directory, expected, incomplete = NAMESPACE_CASES[case]
+    files = {"products/shop/backend/facade/hooks.py": HANDS_OUT_QUERIES + BODIES, **directory}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out["native"], "facade-logic") == sorted(expected)
+    rows = read_lines(out["native"] / "incomplete.jsonl")
+    assert sorted(row[1] for row in rows if row[0] == "facade-logic") == incomplete
 
 
 CORE_MODELS = {
