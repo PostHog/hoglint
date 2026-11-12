@@ -27,18 +27,16 @@ from hoglint.globs import compile_label_glob
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.model import Context, Edge, Resolution, context_bits
 from hoglint.rules.base import (
-    PRIMITIVE_KINDS,
     IncompleteItem,
     RuleContext,
     RuleRun,
     RuleType,
-    conjuncts,
     context_ok,
-    endpoint_only,
-    joined,
     project,
+    rule_kinds,
+    source_part,
 )
-from hoglint.rules.edges import is_private
+from hoglint.rules.edges import SignaturePrimitive
 from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import NONE, Node, Ref, Resolver, Selector, State, Truth, Value, evaluate
 
@@ -215,10 +213,9 @@ class ExportPrimitive(RuleType):
         for rule in self.ctx.config.rules.values():
             if rule.primitive != "signature":
                 continue
-            if "exposes" not in (rule.kinds or PRIMITIVE_KINDS["signature"]):
+            if "exposes" not in rule_kinds(rule, self.ctx.config.views):
                 continue
-            parts = conjuncts((rule.from_, rule.select))
-            out.append(joined([part for part in parts if endpoint_only(part) == "src"]))
+            out.append(source_part((rule.from_, rule.select)))
         return out
 
     def signature_sees(self, module: str) -> bool:
@@ -482,7 +479,7 @@ class ExportPrimitive(RuleType):
         for edge in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
             if edge.attr("alias") == "expanded":
                 continue
-            shape_only = seen and not is_private(edge.attr("callable"))
+            shape_only = seen and SignaturePrimitive.sees_callable(edge)
             if edge.attr("annotation") == "missing":
                 if not shape_only:
                     self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))

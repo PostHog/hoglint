@@ -627,6 +627,11 @@ def joined(parts: list[Node]) -> Node | None:
     return parts[0] if len(parts) == 1 else And(tuple(parts))
 
 
+def source_part(selectors: tuple[Selector | None, ...]) -> Node | None:
+    """The conjuncts of a rule's selection that read only the source, joined."""
+    return joined([part for part in conjuncts(selectors) if endpoint_only(part) == "src"])
+
+
 def classes_of(node: Node | None) -> ClassSelection | None:
     return ClassSelection(node) if node is not None else None
 
@@ -642,7 +647,7 @@ class StagedSelection:
     def __init__(self, ctx: RuleContext, selectors: tuple[Selector | None, ...]) -> None:
         self.ctx = ctx
         parts = conjuncts(selectors)
-        self.src_part = joined([part for part in parts if endpoint_only(part) == "src"])
+        self.src_part = source_part(selectors)
         self.dst_part = joined([part for part in parts if endpoint_only(part) == "dst"])
         self.rest = joined([part for part in parts if endpoint_only(part) == ""])
         self.src_classes = classes_of(self.src_part)
