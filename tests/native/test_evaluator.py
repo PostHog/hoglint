@@ -36,6 +36,7 @@ from native.require import native_module
 SECTION = "flows"
 PRODUCER = "flows.{}@1"
 SLOTS = "products.billing.backend.facade.slots"
+NAMESPACE = "products.alerts.backend.queries"
 
 
 class Flows:
@@ -84,6 +85,7 @@ class Flows:
     @staticmethod
     def run(reader: PackReader) -> list[Output]:
         out: list[Output] = []
+        into_namespace = False
         for edge in reader.edges_spelled("reference", ["Invoice"]):
             if edge.site.module == "core.a":
                 out.append(Refinement(edge.handle, "instance-many", "filter", (("flow_shape", "write(delete)"),)))
@@ -96,7 +98,23 @@ class Flows:
                 out.extend([Flows.uses(site, edge.surface), uses])
                 unresolved = dataclasses.replace(uses, surface=f"{edge.surface}\x07", resolution=Resolution.UNRESOLVED)
                 out.append(dataclasses.replace(unresolved, targets=(), via=()))
+                if not into_namespace:
+                    out.append(Flows.into_namespace(site))
+                    into_namespace = True
         return out
+
+    @staticmethod
+    def into_namespace(site: Site) -> Edge:
+        """An edge to a directory with no `__init__.py`: no graph module, but under a product."""
+        return Edge(
+            "uses",
+            site,
+            NAMESPACE,
+            (EntityId("python", NAMESPACE, ""),),
+            Resolution.RESOLVED,
+            frozenset({Context.PROD}),
+            PRODUCER.format("flow"),
+        )
 
     @staticmethod
     def uses(site: Site, surface: str) -> Edge:
@@ -262,6 +280,8 @@ SOURCES = {
         "from products.billing.backend.facade.api import charge\nfrom products.alerts.backend.facade import notify\n"
     ),
     "products/alerts/backend/facade/api.py": "from core.legacy import api\n\n\ndef notify():\n    pass\n",
+    # A directory with no `__init__.py`: its module is a graph module, the directory is none.
+    "products/alerts/backend/queries/runner.py": "def run():\n    pass\n",
     # A product whose directory and module name are not ASCII: `within` captures it.
     "products/é/__init__.py": "",
     "products/é/backend/__init__.py": "",
@@ -601,6 +621,28 @@ CORNERS = {
         "ledger": False,
     },
 }
+
+
+def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines(world: World) -> None:
+    rules = rule_table(
+        "namespace",
+        {
+            **EDGE,
+            "kinds": ["uses"],
+            "select": f"dst.module == '{NAMESPACE}'",
+            "identity": ["dst.module", "dst.package", "dst.tier", "dst.zone", "dst.stage"],
+        },
+    )
+    assert differences(world, rules) == []
+    config = world.config(rules)
+    native, _ = world.contexts(config)
+    found = primitive_of(config.rules["namespace"])(native, config.rules["namespace"]).evaluate()
+    # the directory sits under products/alerts: the product's labels, and a zone from its path; the
+    # unresolved `uses` edge reads unknown everywhere
+    assert {finding.identity for finding in found.findings} == {
+        (NAMESPACE, "alerts", "product", "backend", "-"),
+        ("?", "?", "?", "?", "?"),
+    }
 
 
 @pytest.mark.parametrize("name", sorted(CORNERS))

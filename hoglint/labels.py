@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from functools import cached_property
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hoglint.config.model import (
@@ -162,6 +162,40 @@ class ProviderRunner:
         return out
 
 
+# ── Directories without `__init__.py` ───────────────────────────
+
+
+class NamespaceDirectories:
+    """The directories without `__init__.py` that hold graph modules, by dotted name: an edge can
+    name one (a namespace package), and its labels come from its path as a module's do. A name
+    two graph modules place in two directories gets no path."""
+
+    def __init__(self, modules: dict[str, str]) -> None:
+        found: dict[str, str] = {}
+        clashes: set[str] = set()
+        for module, path in modules.items():
+            for name, directory in self.parents(module, path):
+                if name in modules or name in clashes:
+                    continue
+                if found.setdefault(name, directory) != directory:
+                    clashes.add(name)
+                    del found[name]
+        self.paths = found
+
+    @staticmethod
+    def parents(module: str, path: str) -> list[tuple[str, str]]:
+        """Each dotted parent of `module` with the directory it names, when the path ends in the
+        module's own parts (`a/b/c.py` or `a/b/c/__init__.py` for `a.b.c`)."""
+        file = PurePosixPath(path)
+        own = file.parent if file.stem == "__init__" else file.with_suffix("")
+        parts = module.split(".")
+        directories = own.parts
+        if len(directories) < len(parts) or list(directories[len(directories) - len(parts) :]) != parts:
+            return []
+        root = len(directories) - len(parts)
+        return [(".".join(parts[:end]), "/".join(directories[: root + end])) for end in range(1, len(parts))]
+
+
 # ── Labeler ───────────────────────────────────────────────────────
 
 Labels = dict[str, Label]
@@ -252,6 +286,14 @@ class Labeler:
     def path_of(self, module: str) -> str | None:
         return self.graph.modules.get(module)
 
+    @cached_property
+    def namespaces(self) -> NamespaceDirectories:
+        return NamespaceDirectories(self.graph.modules)
+
+    def labelled_path(self, module: str) -> str | None:
+        """The path that labels a module: its file, or the directory of a namespace package."""
+        return self.path_of(module) or self.namespaces.paths.get(module)
+
     def zone_candidate(self, path: str) -> tuple[Candidate | None, str]:
         """The path's zone, or a conflict when several leaf zones match and none overrides."""
         table = self.config.zones
@@ -328,7 +370,7 @@ class Labeler:
         `label_provided`, so the conflict check never reads providers' files."""
         path = self.path_of(module)
         if path is None:
-            return {}
+            return self.label_namespace(module)
         cached = self.path_candidates(path)
         self.conflicts.extend(cached.conflicts)
         collected = {
@@ -338,6 +380,21 @@ class Labeler:
         registry = self.registry_of(path, module)
         if registry is not None:
             labels[REGISTRY_FIELD] = Label(registry.name, "registries")
+        return labels
+
+    def label_namespace(self, module: str) -> Labels:
+        """A namespace directory's labels from its path's assignments and zones. Two sources that
+        disagree leave the field unset here; the modules inside the directory report them."""
+        path = self.namespaces.paths.get(module)
+        if path is None:
+            return {}
+        cached = self.path_candidates(path)
+        collected = {
+            name: list(candidates) for name, candidates in cached.fields.items() if name not in self.provider_fields
+        }
+        before = len(self.conflicts)
+        labels = self.resolve_all(module, collected)
+        del self.conflicts[before:]
         return labels
 
     def label_provided(self, module: str) -> Labels:
@@ -553,7 +610,7 @@ class Labeler:
             return Value.known(self.facts.get(symbol, name)), "producer fact"
         if name in self.providers.failed_fields:
             return UNKNOWN, "provider failed"
-        path = self.path_of(module) if module else None
+        path = self.labelled_path(module) if module else None
         owner = symbol if spec.on == "symbol" else None
         if self.in_domain(spec.domain, path, self.label_resolver(module, owner)):
             return UNKNOWN, "inside the field's domain, but nothing sets it"

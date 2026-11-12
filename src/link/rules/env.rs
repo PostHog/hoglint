@@ -3,7 +3,7 @@
 //! (`Labeler.label_resolver`).
 
 use super::conflicts::Conflict;
-use super::labels::{Cell, FieldKind};
+use super::labels::{Cell, FieldKind, Namespace};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
 use super::{Handed, Rules};
@@ -118,6 +118,22 @@ impl<'a> Cx<'a> {
 
     pub fn path_at(&self, at: Option<u32>) -> Option<&'a str> {
         at.map(|at| self.rules.module_path(self.link, at))
+    }
+
+    /// The namespace directory a module outside the graph names, if it names one.
+    fn namespace(&self, module: Option<Sid>, at: Option<u32>) -> Option<&'a Namespace> {
+        if at.is_some() {
+            return None;
+        }
+        let rules: &'a Rules = self.rules;
+        rules.labels.namespaces.get(self.text(module?))
+    }
+
+    /// The path that labels a module (`Labeler.labelled_path`): its file, or the directory of a
+    /// namespace package.
+    fn labelled_path(&self, module: Option<Sid>, at: Option<u32>) -> Option<&'a str> {
+        self.path_at(at)
+            .or_else(|| self.namespace(module, at).map(|found| found.path.as_str()))
     }
 
     /// The `src` endpoint of edge `id` (`RuleContext.src_endpoint`).
@@ -355,6 +371,12 @@ impl<'a> Cx<'a> {
                 rules.read_module_field(field, at);
                 return self.cell(&rules.values[field][at as usize]);
             }
+            if let Some(label) = self
+                .namespace(module, at)
+                .and_then(|found| found.labels[field].as_ref())
+            {
+                return self.cell(label);
+            }
             if rules.labels.failed[field] {
                 return Value::Unknown;
             }
@@ -418,7 +440,7 @@ impl<'a> Cx<'a> {
             read = env.read_conflict.get();
             inside
         } else {
-            self.path_at(at)
+            self.labelled_path(module, at)
                 .is_some_and(|path| domain.globs.iter().any(|glob| glob.is_match(path)))
         };
         (if inside { Value::Unknown } else { Value::None }, read)
@@ -765,7 +787,13 @@ impl<'a> LabelEnv<'a, '_> {
             };
         }
         let Some(at) = self.at else {
-            return Value::None;
+            return match cx
+                .namespace(self.module, None)
+                .and_then(|found| found.labels[field].as_ref())
+            {
+                Some(label) => cx.cell(label),
+                None => Value::None,
+            };
         };
         let labels = &rules.labels;
         if labels.fields[field].provided && labels.provider_conflicts[at as usize] {

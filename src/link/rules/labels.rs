@@ -354,6 +354,68 @@ impl Export {
     }
 }
 
+/// A directory without `__init__.py` that holds graph modules (`labels.NamespaceDirectories`):
+/// an edge can name one, and its path labels it as a module's path does.
+pub struct Namespace {
+    pub path: String,
+    /// Per field, the label the path's assignments and zones give; None where none does, where
+    /// two disagree (the modules inside report that), and for symbol and provider fields.
+    pub labels: Vec<Option<Cell>>,
+}
+
+/// Each dotted parent of `module` with the directory it names, when the path ends in the
+/// module's own parts (`NamespaceDirectories.parents`).
+fn namespace_parents(module: &str, path: &str) -> Vec<(String, String)> {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    // `PurePosixPath.stem`: a suffix is the text from the last dot, which is neither first nor last.
+    let stem = match name.rfind('.') {
+        Some(dot) if dot > 0 && dot + 1 < name.len() => &name[..dot],
+        _ => name,
+    };
+    let mut directories: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    if stem != "__init__" {
+        directories.push(stem);
+    }
+    let parts: Vec<&str> = module.split('.').collect();
+    if directories.len() < parts.len()
+        || directories[directories.len() - parts.len()..] != parts[..]
+    {
+        return Vec::new();
+    }
+    let root = directories.len() - parts.len();
+    (1..parts.len())
+        .map(|end| (parts[..end].join("."), directories[..root + end].join("/")))
+        .collect()
+}
+
+/// The namespace directories of the graph's modules, by dotted name; a name two modules place
+/// in two directories is left out.
+fn namespace_paths(paths: &[&str], modules: &[&str]) -> Vec<(String, String)> {
+    let names: FxHashSet<&str> = modules.iter().copied().collect();
+    let mut found: FxHashMap<String, String> = FxHashMap::default();
+    let mut clashes: FxHashSet<String> = FxHashSet::default();
+    for (path, module) in paths.iter().zip(modules) {
+        for (name, directory) in namespace_parents(module, path) {
+            if names.contains(name.as_str()) || clashes.contains(&name) {
+                continue;
+            }
+            match found.get(&name) {
+                Some(seen) if *seen != directory => {
+                    found.remove(&name);
+                    clashes.insert(name);
+                }
+                Some(_) => {}
+                None => {
+                    found.insert(name, directory);
+                }
+            }
+        }
+    }
+    let mut out: Vec<(String, String)> = found.into_iter().collect();
+    out.sort();
+    out
+}
+
 /// The label tables of one run: per graph module, each field's label (None where no source
 /// sets it), its registry and the exports covering its path.
 pub struct Labels {
@@ -375,6 +437,8 @@ pub struct Labels {
     /// Per module, whether a Python provider's labels of it disagree with another source: met
     /// where something reads a provider column of the module, as `Labeler.label_provided` is.
     pub provider_conflicts: Vec<bool>,
+    /// The namespace directories by dotted name.
+    pub namespaces: FxHashMap<Box<str>, Namespace>,
 }
 
 /// The most exports a run reads: one bit each.
@@ -420,16 +484,22 @@ impl Labels {
             failed,
             conflicts: Vec::new(),
             provider_conflicts: vec![false; paths.len()],
+            namespaces: FxHashMap::default(),
         };
         for (at, (path, module)) in paths.iter().zip(modules).enumerate() {
             out.label_module(at as u32, path, module, exports);
+        }
+        for (name, path) in namespace_paths(paths, modules) {
+            let labels = out.label_namespace(&path);
+            out.namespaces
+                .insert(name.into(), Namespace { path, labels });
         }
         out.fill_provided(plan)?;
         Ok(out)
     }
 
-    /// One module's labels (`Labeler.label_module`), its registry and exports.
-    fn label_module(&mut self, module_at: u32, path: &str, module: &str, exports: &[Export]) {
+    /// What assignments and zones say about one path, and whether two leaf zones claim it.
+    fn path_candidates(&self, path: &str) -> (Vec<Vec<(Candidate, bool)>>, bool) {
         let mut collected: Vec<Vec<(Candidate, bool)>> = vec![Vec::new(); self.fields.len()];
         for assign in self
             .assigns
@@ -443,6 +513,7 @@ impl Labels {
                 collected[field].push((candidate, overrides));
             }
         }
+        let mut zone_conflict = false;
         if self
             .fields
             .iter()
@@ -458,8 +529,33 @@ impl Labels {
                     }
                 }
                 Ok(None) => {}
-                Err(()) => self.conflicts.push((module_at, None)),
+                Err(()) => zone_conflict = true,
             }
+        }
+        (collected, zone_conflict)
+    }
+
+    /// A namespace directory's labels from its path (`Labeler.label_namespace`): two sources that
+    /// disagree leave the field unset, and nothing is recorded as a conflict.
+    fn label_namespace(&mut self, path: &str) -> Vec<Option<Cell>> {
+        let (collected, _) = self.path_candidates(path);
+        let mut out = Vec::with_capacity(collected.len());
+        for (at, candidates) in collected.iter().enumerate() {
+            let field = &self.fields[at];
+            if field.provided || field.on_symbol {
+                out.push(None);
+                continue;
+            }
+            out.push(self.resolve(at, candidates).ok().flatten());
+        }
+        out
+    }
+
+    /// One module's labels (`Labeler.label_module`), its registry and exports.
+    fn label_module(&mut self, module_at: u32, path: &str, module: &str, exports: &[Export]) {
+        let (collected, zone_conflict) = self.path_candidates(path);
+        if zone_conflict {
+            self.conflicts.push((module_at, None));
         }
         for (at, candidates) in collected.iter().enumerate() {
             let field = &self.fields[at];
