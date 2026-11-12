@@ -82,6 +82,8 @@ UP_POSITIONS: tuple[tuple[str, str], ...] = (
 EXPANDED = ("alias", "expanded")
 # The attr of a slot row whose generic type is given arguments: `dict[str, str]`, not `dict`.
 SUBSCRIPTED = ("subscripted", "1")
+# The attrs of a slot row for an alias nested deeper than MAX_ALIAS_DEPTH: left unread, so unknown.
+TOO_DEEP = (("alias", "too-deep"),)
 # The attr of a slot row that is a type argument: the generic it is given to (`builtins.dict` for
 # the `Any` of `dict[str, Any]`).
 ARGUMENT_OF = "argument_of"
@@ -715,9 +717,10 @@ class DeclarationProducer(Producer):
         names: list[tuple[str, str, bool, str]],
     ) -> None:
         """One row per mention, each followed (in a contract only) by a row per name of the type
-        alias it is, when it is one. A slot names each name an alias expands to once per
-        position, however often its aliases repeat it."""
-        written: set[tuple[str, str, bool]] = set()
+        alias it is, when it is one. A slot names each row an alias expands to once, however
+        often its aliases repeat it; rows that differ in an attr (such as the generic a name is an
+        argument of) are different rows."""
+        written: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
         for value, mentioned, subscripted, argument_of in names:
             head = value.split(".")[0]
             found = self.lookup_at(context, lookup, value)
@@ -736,20 +739,21 @@ class DeclarationProducer(Producer):
             for item in expansion:
                 position = "whole" if mentioned == "whole" and item.top else "nested"
                 inner = self.lookup_at(context, item.lookup, item.value)
-                surface = item.value if item.too_deep else inner.surface
-                if (surface, position, item.too_deep) in written:
-                    continue
-                written.add((surface, position, item.too_deep))
                 if item.too_deep:
-                    graph.edges.append(rows.edge(surface, UNRESOLVED, slot, position, ("alias", "too-deep")))
+                    if (item.value, position, TOO_DEEP) not in written:
+                        written.add((item.value, position, TOO_DEEP))
+                        graph.edges.append(rows.edge(item.value, UNRESOLVED, slot, position, *TOO_DEEP))
                     continue
                 marker = (
                     *((EXPANDED,) if self.expanded_in(context, expansion, item, inner) else ()),
                     *((SUBSCRIPTED,) if item.subscripted else ()),
                     *self.argument_marker(context, item.lookup, item.argument_of),
                 )
+                if (inner.surface, position, marker) in written:
+                    continue
+                written.add((inner.surface, position, marker))
                 resolved = context.classifier.classify_lookup(inner)
-                graph.edges.append(rows.edge(surface, resolved, slot, position, *marker))
+                graph.edges.append(rows.edge(inner.surface, resolved, slot, position, *marker))
 
     def expose(
         self,

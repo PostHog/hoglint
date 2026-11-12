@@ -1271,8 +1271,9 @@ impl Producers<'_> {
     }
 
     /// One row per mention, each followed (in a contract only) by a row per name of the type
-    /// alias it is, when it is one. A slot names each name an alias expands to once per
-    /// position, however often its aliases repeat it.
+    /// alias it is, when it is one. A slot names each row an alias expands to once, however
+    /// often its aliases repeat it; rows that differ in an attr (such as the generic a name is an
+    /// argument of) are different rows.
     fn expose_mentions(
         &mut self,
         rows: SlotRows,
@@ -1281,7 +1282,7 @@ impl Producers<'_> {
         lookup: SlotLookup,
         names: Vec<Named>,
     ) {
-        let mut written: FxHashSet<(Sid, bool, bool)> = FxHashSet::default();
+        let mut written: FxHashSet<(Sid, bool, Vec<(Sid, Sid)>)> = FxHashSet::default();
         for (value, whole, subscripted, argument_of) in names {
             let mention = Mention {
                 value,
@@ -1320,19 +1321,13 @@ impl Producers<'_> {
             for &item in expansion.iter() {
                 let whole = mention.whole && item.top;
                 let inner = self.lookup_at(item.lookup, item.value);
-                let surface = if item.too_deep {
-                    item.value
-                } else {
-                    inner.surface
-                };
-                if !written.insert((surface, whole, item.too_deep)) {
-                    continue;
-                }
                 let k = &self.settings.k;
                 let position = if whole { k.whole } else { k.nested };
                 if item.too_deep {
-                    let marker = [(k.alias, k.too_deep)];
-                    self.push_slot(rows, surface, UNRESOLVED, slot, position, &marker);
+                    let marker = vec![(k.alias, k.too_deep)];
+                    if written.insert((item.value, whole, marker.clone())) {
+                        self.push_slot(rows, item.value, UNRESOLVED, slot, position, &marker);
+                    }
                     continue;
                 }
                 let mut extra = Vec::new();
@@ -1343,8 +1338,11 @@ impl Producers<'_> {
                     extra.push((self.settings.k.subscripted, self.settings.k.one));
                 }
                 self.argument_marker(item.lookup, item.argument_of, &mut extra);
+                if !written.insert((inner.surface, whole, extra.clone())) {
+                    continue;
+                }
                 let resolved = self.core.classify_lookup(inner);
-                self.push_slot(rows, surface, resolved, slot, position, &extra);
+                self.push_slot(rows, inner.surface, resolved, slot, position, &extra);
             }
         }
     }

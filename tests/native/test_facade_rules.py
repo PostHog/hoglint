@@ -158,7 +158,12 @@ UNKNOWN_CASES = {
     "a callback that returns Any": ("amount: Callable[..., Any]", "None", ["typing.Any"]),
     "a list of bare dicts": ("amount: list[dict]", "None", ["builtins.dict"]),
     "object": ("amount: object", "None", ["builtins.object"]),
+    "an alias of a payload and a list of Any": ("amount: Payload", "None", ["typing.Any"]),
+    "an alias of a typed and a bare dict": ("amount: Bag", "None", ["builtins.dict"]),
 }
+# Aliases name each type once per slot and position, so a second mention that is an argument of
+# another generic, or not subscripted, must still be its own row.
+ALIASES = "Payload = dict[str, Any] | list[Any]\nBag = dict[str, str] | dict\n\n\n"
 
 
 @pytest.mark.parametrize("case", UNKNOWN_CASES)
@@ -167,8 +172,8 @@ def test_facade_signature_reads_typed_mappings_and_payloads(
 ) -> None:
     param, returns, expected = UNKNOWN_CASES[case]
     api = (
-        "from collections.abc import Callable, Mapping\nfrom typing import Any, Optional\n\n\n"
-        f"def charge({param}) -> {returns}:\n    pass\n"
+        "from collections.abc import Callable, Mapping\nfrom typing import Any, Optional\n\n"
+        f"{ALIASES}def charge({param}) -> {returns}:\n    pass\n"
     )
     out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/api.py": api}, monkeypatch)
     assert [row[3] for row in findings(out["native"], "facade-signature")] == expected
