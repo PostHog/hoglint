@@ -79,6 +79,9 @@ cargo fmt --all --check
 - **A named delta when results are meant to change.**
   List every changed row and explain it with your own script, not with the build's own summary.
   Compare row multisets, not identities: one identity can have several rows.
+- **The model repository first.**
+  After a rule or preset change, `bin/model-repo` shows in a second which cases changed verdict (`tests/model_repo/CASES.md`).
+  It does not replace the run at real size.
 - **Same-minute pairs for speed.**
   Time base and new alternately, in the same minutes, CPU next to wall.
   A gap inside the spread is "not resolved".

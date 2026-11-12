@@ -32,6 +32,18 @@ The architect reruns repros, writes its own delta scripts, and does not take a b
 - A reviewer's finding is checked before use.
   Several were rejected after reading the code.
 
+**The model repository** (architect, D106, Nov 12, on the owner's idea).
+`tests/model_repo/` is a miniature of the PostHog monorepo's layout with one invented example per case, checked with the real preset in both engines inside the test suite.
+- **What it is for:** the small question behind most real-size runs, "does this kind of code still give this verdict?", answered in about a second.
+  Each case has a finding and a clean neighbor.
+  `CASES.md` lists the cases; `expected.toml` is the reviewed result, every row tied to a case.
+  Verdicts that are decided and not built yet are `[[wanted]]` entries, run as expected failures.
+- **How to use it:** `bin/model-repo` after a rule or preset change prints, per rule, the rows whose verdict changed and the case each is tied to.
+  `bin/model-repo --refresh` rewrites the expected file; a reviewer then reads its diff, ties every new row (case `"?"`) to a case, and checks each gone row against the decision behind the change.
+- **What it is not for:** it does not replace the proof at real size.
+  Twice on Nov 12 a change passed every small test and failed on the snapshot.
+- **Its own rule:** every row kind that a real-size run shows and no case predicts becomes a new case.
+
 **Checkpoints:** a phase stops in its first third if its cheapest steps do not show the gain in pairs.
 N2's bar was 0.45 s; it met it with 1.1-1.4 s.
 
