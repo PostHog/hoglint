@@ -33,10 +33,10 @@ facade-code = "src.zone == 'facade' and src.zone != 'fixtures'"
 # other settings entry is followed, so a key this list lacks adds rows and never hides one.
 setting-registers-apps = "edge.setting in ['INSTALLED_APPS', 'CELERY_IMPORTS', 'SHELL_PLUS_POST_IMPORTS']"  # registers apps, task modules and shell imports
 setting-mounts-views   = "edge.setting in ['ROOT_URLCONF', 'WSGI_APPLICATION', 'ASGI_APPLICATION']"  # mounts every view; the URL conf and the app entry points
-setting-static-files   = "edge.setting == 'STATICFILES_FINDERS'"  # serves static files
+setting-static-files   = "edge.setting == 'STATICFILES_FINDERS'"
 setting-api-schema     = "edge.setting == 'SPECTACULAR_SETTINGS' or edge.setting startswith 'SPECTACULAR_SETTINGS.'"  # builds the API schema, not a request
-setting-logging        = "edge.setting == 'LOGGING' or edge.setting startswith 'LOGGING.'"  # log handlers and filters
-setting-caches         = "edge.setting == 'CACHES' or edge.setting startswith 'CACHES.'"  # cache backends
+setting-logging        = "edge.setting == 'LOGGING' or edge.setting startswith 'LOGGING.'"
+setting-caches         = "edge.setting == 'CACHES' or edge.setting startswith 'CACHES.'"
 setting-login-flow     = "edge.setting in ['SOCIAL_AUTH_PIPELINE', 'AXES_LOCKOUT_CALLABLE']"  # a login flow behind a URL, not the per-request pipeline
 
 # ── Fields ─────────────────────────────────────────────────────
@@ -588,9 +588,8 @@ identity      = "location-module-trigger"
 counted       = true
 growth_key    = ["edge.location", "edge.label", "src.package"]
 
-# The request path: every settings entry but the keys of the conditions above, and module-level
-# imports out of every other module. A path string in a settings module is followed whatever
-# function holds it; an import inside a function is not.
+# A path string in a settings module is followed whatever function holds it; an import inside a
+# function is not.
 [rules.request-path]
 primitive     = "reach"
 doc           = "A product module that core's request pipeline reaches by module-level imports is a watched file (D103): wiring-watched checks it. The search starts at the modules settings name, except under the keys that are not the per-request pipeline, and at the view base class, and goes on through product code. A list, not debt."
