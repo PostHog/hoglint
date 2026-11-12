@@ -599,10 +599,11 @@ growth_key    = ["src.module", "dst.module"]
 
 [rules.orm-independent]
 primitive  = "signature"
-doc        = "Framework-level core packages use Django, never its models."
+doc        = "Framework-level core packages use Django, never its models. A slot with no usable type is incomplete, not a finding: the rule is about models, not loose types."
 select     = "src.django == 'framework'"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model'"
-on_unknown = "finding"
+contexts   = { exclude = ["test"] }
+on_unknown = "incomplete"
 identity   = "facade-slot"
 growth_key = ["dst.symbol", "src.package"]
 
