@@ -55,6 +55,8 @@ wiring    = { type = "enum", values = ["location", "registration"] }
 # core reaches them past the facade by design, and the contract-check inputs watch them.
 permanent = { type = "bool" }
 crosses   = { type = "bool", on = "symbol" }
+# A core module the request pipeline starts from that no setting names: the class every API view inherits.
+request_seed = { type = "bool" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -130,6 +132,10 @@ set = { zone = "composition" }
 [[assign]]
 match = "posthog/settings/**"
 set   = { settings = true }
+
+[[assign]]
+match = "posthog/api/routing.py"
+set   = { request_seed = true }
 
 [[assign]]
 match = [
@@ -572,11 +578,27 @@ identity      = "location-module-trigger"
 counted       = true
 growth_key    = ["edge.location", "edge.label", "src.package"]
 
+[rules.request-path]
+primitive     = "reach"
+doc           = "A product module that core's request pipeline reaches by module-level imports is a watched file (D103): wiring-watched checks it. The search starts at the modules settings name under the request-pipeline keys and at the view base class, and goes on through product code. A list, not debt."
+kinds         = ["import", "dotted-path"]
+from          = "src.settings == true or src.request_seed == true"
+select        = "(src.settings == true and edge.kind == 'dotted-path' and edge.up in ['elt:list assign:MIDDLEWARE', 'elt:list annassign:MIDDLEWARE', 'elt:list assign:AUTHENTICATION_BACKENDS', 'elt:list annassign:AUTHENTICATION_BACKENDS', 'assign:SESSION_ENGINE', 'elt:list dict:val:DEFAULT_AUTHENTICATION_CLASSES assign:REST_FRAMEWORK', 'elt:list dict:val:DEFAULT_PERMISSION_CLASSES assign:REST_FRAMEWORK', 'elt:list dict:val:DEFAULT_THROTTLE_CLASSES assign:REST_FRAMEWORK', 'elt:list dict:val:DEFAULT_RENDERER_CLASSES assign:REST_FRAMEWORK', 'dict:val:DEFAULT_PAGINATION_CLASS assign:REST_FRAMEWORK', 'dict:val:EXCEPTION_HANDLER assign:REST_FRAMEWORK']) or (src.settings != true and edge.kind == 'import')"
+deny          = "dst.tier == 'product'"
+through_denied = true
+contexts      = { exclude = ["type_only", "test", "function_local"] }
+on_unresolved = "incomplete"
+identity      = "module-pair"
+growth_key    = ["dst.module"]
+report        = "advisory"
+ledger        = false
+
 [rules.wiring-watched]
 primitive  = "coverage"
-doc        = "Every wiring location another package drives, every receiver or hook callback, and every module outside tests patch is in the contract-check inputs."
+doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback, and every module outside tests patch is in the contract-check inputs."
 covers     = [
   "rules.drives.dst.path",
+  "rules.request-path.dst.path",
   "edge.kind in ['signal', 'installs'] and crosses-package: src",
   "edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface",
 ]

@@ -651,6 +651,41 @@ def test_coverage_selects_each_edge_by_its_own_contexts(tmp_path: Path) -> None:
     assert [item.key for item in result.runs["wiring-watched"].incomplete] == ["core.views|products.billing.lost"]
 
 
+COVER_A_REACH = """
+[rules.request-path]
+primitive = "reach"
+view = "file-imports"
+from = "src.module == 'core.api'"
+deny = "dst.tier == 'product'"
+on_unresolved = "incomplete"
+identity = "module-pair"
+report = "advisory"
+ledger = false
+
+[rules.wiring-watched]
+primitive = "coverage"
+covers = ["rules.request-path.dst.path"]
+inputs = { adapter = "turbo", task = "contract-check" }
+identity = "entity"
+growth_key = ["subject"]
+"""
+
+
+def test_coverage_cannot_tell_what_a_rule_it_reads_cannot_tell(tmp_path: Path) -> None:
+    turbo_package(tmp_path, "products/billing", {"tasks": {"contract-check": {"inputs": ["facade/**"]}}})
+    graph = (
+        base_graph()
+        .edge("import", "core.api", "products.billing.logic")
+        .edge("import", "core.api", None, "products.billing.gone", resolution=Resolution.UNRESOLVED)
+        .graph
+    )
+    result = run(tmp_path, COVER_A_REACH, graph)
+    assert identities(result, "wiring-watched") == [("products/billing/logic.py",)]
+    assert [item.reason for item in result.runs["wiring-watched"].incomplete] == [
+        "rule request-path cannot tell: import 'products.billing.gone' did not resolve"
+    ]
+
+
 LEVEL = (
     USE_SHAPE
     + LAYOUT_AND_COVERAGE

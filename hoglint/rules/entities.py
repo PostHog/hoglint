@@ -433,6 +433,19 @@ class CoveragePrimitive(EntityRule):
     def unplaced(self, module: str | None, surface: str) -> None:
         self.incomplete(f"{module}|{surface}", module, f"cannot place {surface!r} for coverage")
 
+    def inherit_unknowns(self) -> None:
+        """What a rule a cover reads cannot tell, this rule cannot tell either: its paths may be
+        missing a path. It holds even when that rule is advisory and its own items are not shown."""
+        for cover in self.spec.covers:
+            run = self.ctx.results.get(cover.rule) if cover.rule else None
+            if run is None:
+                continue
+            for item in run.incomplete:
+                module = item.subjects[0] if item.subjects else None
+                self.incomplete(
+                    f"rules.{cover.rule}|{item.key}", module, f"rule {cover.rule} cannot tell: {item.reason}"
+                )
+
     def from_rule(self, cover: CoverSpec, out: dict[str, tuple[str, str | None]]) -> None:
         run = self.ctx.results.get(cover.rule)
         if run is None:
@@ -511,7 +524,9 @@ class CoveragePrimitive(EntityRule):
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
             self.incomplete("inputs", None, f"cannot read the {name} inputs: {error}")
             return self.run
-        for location, (why, module) in sorted(self.required().items()):
+        required = self.required()
+        self.inherit_unknowns()
+        for location, (why, module) in sorted(required.items()):
             for path in self.expand(location):
                 covered, decided = adapter.covered(handle, path)
                 if covered:

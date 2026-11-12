@@ -1203,6 +1203,32 @@ rule = "registry-slots"
 verdict = "incomplete"
 identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
 
+# request-path
+
+[[row]]
+case = "WW01"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.api.routing", "products.gatekeeper.backend.facade.api"]
+
+[[row]]
+case = "WW01"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.api.routing", "products.gatekeeper.backend.logic.decisions"]
+
+[[row]]
+case = "WW03"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.logic.session"]
+
+[[row]]
+case = "WW03"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
+
 # reverse-accessor
 
 [[row]]
@@ -1244,6 +1270,12 @@ verdict = "finding"
 identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
 
 # wiring-watched
+
+[[row]]
+case = "WW01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/logic/decisions.py"]
 
 [[row]]
 case = "DR01"
@@ -1306,13 +1338,6 @@ decision = "D100: a model class registered into another package is a crossing"
 rule = "*"
 verdict = "finding"
 match = ["products.legacy.backend.models.Widget", "registered_models"]
-
-[[wanted]]
-case = "WW01"
-decision = "D103: the request path is a watched channel"
-rule = "wiring-watched"
-verdict = "finding"
-match = ["products/gatekeeper/backend/logic/decisions.py"]
 
 [[wanted]]
 case = "DO01"

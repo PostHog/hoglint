@@ -151,9 +151,9 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `DR01` | `posthog/test/test_widget_query.py`, `products/catalog/backend/hogql_queries/entries.py` | A core test runs a product's query kind | drives finding; wiring-watched finding for the location's `__init__.py` | |
 | `DR02` | `posthog/test/test_widget_query.py`, `products/reports/backend/hogql_queries/widget.py` | The same into a location without `__init__.py`, unwatched | drives finding; wiring-watched clean | Defect: nothing asks for the location (wanted) |
 | `DR03` | `products/reports/backend/tests/test_widget_query.py` | A product's own test runs its kind | clean | |
-| `WW01` | `posthog/auth.py`, `products/gatekeeper/backend/facade/api.py`, `products/gatekeeper/backend/logic/decisions.py` | Core's request code imports a facade at module level; the logic behind it is unwatched | no-product-lists-in-core finding; wiring-watched clean | D103 (wanted) |
+| `WW01` | `posthog/auth.py`, `products/gatekeeper/backend/facade/api.py`, `products/gatekeeper/backend/logic/decisions.py` | Core's request code imports a facade at module level; the logic behind it is unwatched | no-product-lists-in-core finding; request-path rows for the facade and the logic; wiring-watched finding for `logic/decisions.py` | D103 |
 | `WW02` | `posthog/permissions.py`, `products/access_control/backend/logic/rules.py` | The same through an import inside a function | no-product-lists-in-core finding; wiring-watched clean | A written limit of D103 |
-| `WW03` | `posthog/settings/web.py`, `products/gatekeeper/backend/middleware.py`, `products/gatekeeper/backend/logic/session.py` | Settings wire a product middleware whose logic is watched | clean for wiring-watched | D103 |
+| `WW03` | `posthog/settings/web.py`, `products/gatekeeper/backend/middleware.py`, `products/gatekeeper/backend/logic/session.py` | Settings wire a product middleware whose logic is watched | request-path rows for the middleware and the logic; clean for wiring-watched | D103 |
 | `UK01` | `scripts/new_tool.py` | A file in a top folder no assignment names imports product internals (the source end unknown) | incomplete in every rule that crosses packages; product-code-at-home incomplete | D105: a new top folder reads unknown |
 | `UK02` | `products/legacy/backend/logic/widgets.py`, `scripts/helpers.py` | A product imports from such a folder (the destination end unknown) | public-surface and cycle incomplete | D105 |
 | `DI01` | `products/legacy/backend/logic/widgets.py` | A computed import outside a registry loader | dynamic-imports incomplete | |
@@ -310,6 +310,9 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | wiring-watched | A test module treated as a hook source | None |
 | wiring-watched | A patch target resolved to its origin | `PS10` (patched where defined) |
 | wiring-watched | A drives location reported as its `__init__.py` | `DR01` |
+| wiring-watched | A product module the request path reaches, unwatched | `WW01` |
+| request-path | Core's request code reaches product modules by module-level imports, past the first one | `WW01`, `WW03` |
+| request-path | The same through an import inside a function | `WW02` (not followed) |
 | foundation-direction | A foundation model points at a feature product | None: `FO01` shows the import form |
 | infrastructure-direction | Infrastructure imports a product | `IF01` |
 | no-product-lists-in-core | Hub files that list products | `PS24` |
