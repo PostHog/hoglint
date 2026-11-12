@@ -343,3 +343,73 @@ def test_a_namespace_directory_reads_the_labels_of_a_file_inside_it(
         ["products.shop.backend.presentation", "presentation", "shop"],
         ["tools.hogli", "-", "tools-hogli"],
     ]
+
+
+HANDED_CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core", "products"]
+
+[fields]
+zone = { type = "zone", required_on = ["**"] }
+
+[zones]
+within = "products/{product}"
+default = "internal"
+wiring = { paths = ["backend/temporal/**"] }
+
+[shapes.loose]
+allow = ["class", "function"]
+
+[exports.facade]
+within = "products/{product}"
+paths = ["backend/facade/**"]
+shape = "loose"
+
+[rules.logic]
+primitive = "edge"
+kinds = ["declares"]
+from = "src.handed_zones in ['wiring']"
+identity = ["dst.symbol"]
+ledger = false
+"""
+BODY = "\n\n\ndef build() -> int:\n    return 1\n"
+# (the module a facade module hands a name out from, its findings, its incomplete items). A
+# member whose zone cannot be told makes the module's handed zones unknown.
+HANDED_CASES = {
+    "a member in a known zone": (
+        "products.shop.backend.temporal.jobs",
+        ["products.shop.backend.facade.hooks.build"],
+        [],
+    ),
+    "a member whose zone is unknown": (
+        "core.jobs",
+        [],
+        ["products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.build"],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", HANDED_CASES)
+def test_a_handed_member_whose_zone_is_unknown_makes_the_handed_zones_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    source, found, incomplete = HANDED_CASES[case]
+    repo = {
+        "hoglint.toml": HANDED_CONFIG,
+        "core/__init__.py": "",
+        "core/jobs.py": "def run() -> None:\n    pass\n",
+        "products/__init__.py": "",
+        "products/shop/__init__.py": "",
+        "products/shop/backend/__init__.py": "",
+        "products/shop/backend/temporal/__init__.py": "",
+        "products/shop/backend/temporal/jobs.py": "def run() -> None:\n    pass\n",
+        "products/shop/backend/facade/__init__.py": "",
+        "products/shop/backend/facade/hooks.py": f"from {source} import run\n\n__all__ = ['run']" + BODY,
+    }
+    out = dumps(tmp_path, repo, monkeypatch)
+    same_in_both_engines(out)
+    assert [row[1] for row in read_lines(out["native"] / "findings.jsonl")] == [[symbol] for symbol in found]
+    assert [row[1] for row in read_lines(out["native"] / "incomplete.jsonl")] == incomplete

@@ -690,8 +690,8 @@ class Labeler:
     def handed_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
         import (`Graph.hand_outs`): none for a module that is no export or when no field is a
-        zone, unknown when its `__all__` cannot be read or a handed import did not resolve. A
-        third-party name has no zone."""
+        zone, unknown when its `__all__` cannot be read, a handed import did not resolve or a
+        handed module's zone cannot be told. A third-party name has no zone."""
         hand_out = self.graph.hand_outs.get(module)
         if hand_out is None or not self.zone_fields:
             return NONE
@@ -708,6 +708,8 @@ class Labeler:
                 if owner is None:
                     continue
                 zone, _ = self.field_value(owner, None, self.zone_fields[0])
+                if zone.state is State.UNKNOWN:
+                    return UNKNOWN
                 if zone.state is State.KNOWN:
                     names.update(zone.chain or (str(zone.data),))
         return Value.known(frozenset(names))

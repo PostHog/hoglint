@@ -319,7 +319,7 @@ impl<'a> Cx<'a> {
     }
 
     /// `Labeler.handed_zones`: the zones, each with its ancestors, of the modules whose names a
-    /// module hands out by import.
+    /// module hands out by import; unknown when one of those zones cannot be told.
     pub fn handed_zones(&self, module: Option<Sid>) -> Value<'a> {
         let rules = self.rules;
         let Some(found) = module.and_then(|module| rules.handed.get(&module)) else {
@@ -334,8 +334,10 @@ impl<'a> Cx<'a> {
         };
         let mut names: Vec<&'a str> = Vec::new();
         for &(module, at) in from {
-            if let Value::Zone(zone) = self.field_value(field, Some(module), Some(at), None) {
-                names.extend(zone.chain.iter().map(String::as_str));
+            match self.field_value(field, Some(module), Some(at), None) {
+                Value::Unknown => return Value::Unknown,
+                Value::Zone(zone) => names.extend(zone.chain.iter().map(String::as_str)),
+                _ => {}
             }
         }
         names.sort_unstable();
