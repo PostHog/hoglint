@@ -12,10 +12,12 @@ the facts hold no text of the receiver), and one in a list that flows into two s
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from hoglint.core.records import sequence_items
+from hoglint.core.sites import MODULE_SCOPE
 from hoglint.model import UNKNOWN_ATTRS
 from hoglint.plugins import PackReader, Refinement
 
@@ -25,7 +27,7 @@ DOTTED_PATH = "dotted-path"
 # Steps of a string's syntax chain that keep it a value of the same setting.
 CONTAINER_STEPS = ("elt:", "star", "ifexp:body", "ifexp:else")
 # The statement kinds that name the setting a value goes into.
-ASSIGN_STEPS = ("assign:", "annassign:")
+ASSIGN_STEPS = ("assign:", "annassign:", "augassign:")
 # The name an assignment step gives a subscript target.
 SUBSCRIPT = "[]"
 # Statements whose strings are no value of a setting: a condition.
@@ -44,40 +46,52 @@ class SettingPlaces:
     def __init__(self, settings: set[str]) -> None:
         self.settings = settings
 
+    @staticmethod
+    def receiver_of(step: str) -> str:
+        """The name a call step's callee is a method of (`arg:0:MIDDLEWARE.index`)."""
+        return step.split(":", 2)[2].rpartition(".")[0]
+
     def method_of_setting(self, inner: list[str]) -> tuple[str, list[str], list[str]] | None:
         """The setting whose method takes the string as an argument, innermost call first."""
         for index, step in enumerate(inner):
             if not step.startswith(("arg:", "kw:")):
                 continue
-            receiver = step.split(":", 2)[2].rpartition(".")[0]
+            receiver = self.receiver_of(step)
             if receiver in self.settings:
                 return receiver, [], inner[:index]
         return None
 
-    def target(self, steps: list[str], subscript: Subscript | None) -> tuple[str, list[str], list[str]] | None:
+    def target(
+        self, steps: list[str], statements: Statements, line: int, column: int
+    ) -> tuple[str, list[str], list[str]] | None:
         """The statement's name, the literal keys of a subscript target, and the steps inside the
-        statement; None when no name can be read (a call that is no method of a plain name)."""
+        statement; None when no name can be read (a call that is no method of a plain name). The
+        subscript target is looked up only for a statement that assigns to one."""
         last = steps[-1]
-        if last.startswith(ASSIGN_STEPS) or last.startswith("augassign:"):
+        if last.startswith(ASSIGN_STEPS):
             lookup = self.method_of_setting(steps[:-1])
             if lookup is not None:
                 return lookup
             name = last.rsplit(":", 1)[1]
-            if name == SUBSCRIPT and subscript is not None:
+            subscript = statements.subscript_at(line, column) if name == SUBSCRIPT else None
+            if subscript is not None:
                 return subscript.name, subscript.keys, steps[:-1]
             return name, [], steps[:-1]
         if last == "expr" and len(steps) >= 2 and steps[-2].startswith("arg:"):
-            receiver = steps[-2].split(":", 2)[2].rpartition(".")[0]
-            return receiver, [], steps[:-2]
+            return self.receiver_of(steps[-2]), [], steps[:-2]
         return None
 
-    def place(self, up: str, subscript: Subscript | None) -> str | None:
+    @staticmethod
+    def in_condition(up: str) -> bool:
+        return up.rpartition(" ")[2] in CONDITION_STEPS
+
+    def place(self, up: str, statements: Statements, line: int, column: int) -> str | None:
         """`NAME` or `NAME.KEY.KEY`; NO_SETTING for a string in a condition; None when the name
         cannot be read."""
-        steps = up.split(" ")
-        if steps[-1] in CONDITION_STEPS:
+        if self.in_condition(up):
             return NO_SETTING
-        found = self.target(steps, subscript)
+        steps = up.split(" ")
+        found = self.target(steps, statements, line, column)
         if found is None:
             return None
         name, keys, inner = found
@@ -118,32 +132,25 @@ class Subscript:
 
 
 class Statements:
-    """The module-level assignments of one settings module in source order, to find the subscript
-    target of the statement a string sits in."""
+    """The module-level assignments of one settings module, and their targets in source order to
+    find the subscript target of the statement a string sits in."""
 
     def __init__(self, record: Mapping[str, Any]) -> None:
-        rows = [row for row in record.get("assigns", ()) if row["s"] == -1]
-        self.starts = sorted(((row["l"], row["c"]), row["t"]) for row in rows)
+        self.rows = [row for row in record.get("assigns", ()) if row["s"] == -1]
+        ordered = sorted(((row["l"], row["c"]), row["t"]) for row in self.rows)
+        self.starts = [start for start, _ in ordered]
+        self.targets = [targets for _, targets in ordered]
 
-    @staticmethod
-    def names(record: Mapping[str, Any]) -> set[str]:
+    def names(self) -> set[str]:
         """The plain names the module assigns at module level: its settings."""
-        out: set[str] = set()
-        for row in record.get("assigns", ()):
-            if row["s"] == -1:
-                out.update(target for target in row["t"] if isinstance(target, str) and target.isidentifier())
-        return out
+        return {target for row in self.rows for target in row["t"] if isinstance(target, str) and target.isidentifier()}
 
     def subscript_at(self, line: int, column: int) -> Subscript | None:
         """The subscript target of the last statement that starts before the string."""
-        found = None
-        for start, targets in self.starts:
-            if start > (line, column):
-                break
-            found = targets
-        if not found:
+        index = bisect.bisect_right(self.starts, (line, column)) - 1
+        if index < 0 or not self.targets[index]:
             return None
-        return Subscript.of(found[0])
+        return Subscript.of(self.targets[index][0])
 
 
 class SettingFlows:
@@ -153,9 +160,9 @@ class SettingFlows:
     def __init__(self) -> None:
         self.into: dict[str, set[str]] = {}
 
-    def read(self, record: Mapping[str, Any]) -> None:
-        for row in record.get("assigns", ()):
-            if row["s"] != -1 or "v" not in row:
+    def read(self, statements: Statements) -> None:
+        for row in statements.rows:
+            if "v" not in row:
                 continue
             for target in row["t"]:
                 if isinstance(target, str) and target.isidentifier():
@@ -209,37 +216,35 @@ class SettingNames:
 
     def produce(self) -> list[Refinement]:
         records = [(module, self.reader.tables.record(module) or {}) for module in self.modules]
+        statements = {module: Statements(record) for module, record in records}
         flows = SettingFlows()
         settings: set[str] = set()
-        for _, record in records:
-            flows.read(record)
-            settings.update(Statements.names(record))
+        for module, _ in records:
+            flows.read(statements[module])
+            settings.update(statements[module].names())
         places = SettingPlaces(settings)
-        wanted: dict[tuple[str, int, int], str | None] = {}
         names: set[str] = set()
-        for module, record in records:
-            statements = Statements(record)
+        for _, record in records:
             for row in record.get("strs", ()):
-                at_scope, _header, line, column, _flags, value, _chain, up = row[:8]
-                # A string inside a function is no value of a setting.
-                if at_scope != -1:
+                at_scope, _header, _line, _column, _flags, value, _chain, up = row[:8]
+                # A string inside a function or in a condition is no value of a setting.
+                if at_scope != -1 or places.in_condition(up):
                     continue
                 parts = row[8] if len(row) > 8 else None
                 texts = [value] if parts is None else [*parts, value]
                 names.update(text.rpartition(".")[2] for text in texts if text)
-                place = places.place(up, statements.subscript_at(line, column))
-                if place == NO_SETTING:
-                    continue
-                wanted[(module, line, column)] = flows.setting(place) if place is not None else None
         out: list[Refinement] = []
-        if not wanted:
+        if not names:
             return out
         for edge in self.reader.edges_spelled(DOTTED_PATH, names):
             site = edge.site
-            key = (site.module, site.line, site.column)
-            if key not in wanted:
+            found = statements.get(site.module)
+            if found is None or site.scope != MODULE_SCOPE:
                 continue
-            setting = wanted[key]
+            place = places.place(edge.attr("up"), found, site.line, site.column)
+            if place == NO_SETTING:
+                continue
+            setting = flows.setting(place) if place is not None else None
             attrs = ((SETTING, setting),) if setting is not None else ((UNKNOWN_ATTRS, SETTING),)
             out.append(Refinement(edge.handle, attrs=attrs))
         return out
