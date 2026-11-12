@@ -718,6 +718,9 @@ fn fields_by_class(it: &Interner, assigns: &[Assign]) -> FxHashMap<i32, Vec<u32>
     fields
 }
 
+/// An alias expansion row of a slot, as written once: (surface, whole position, attrs).
+type AliasRow = (Sid, bool, Vec<(Sid, Sid)>);
+
 /// A field of a dataclass's generated `__init__`: its assign row (file and index), where its
 /// names are looked up, and whether the class itself declares it (else a base does).
 #[derive(Clone, Copy)]
@@ -1284,7 +1287,7 @@ impl Producers<'_> {
         lookup: SlotLookup,
         names: Vec<Named>,
     ) {
-        let mut written: FxHashSet<(Sid, bool, Vec<(Sid, Sid)>)> = FxHashSet::default();
+        let mut written: FxHashSet<AliasRow> = FxHashSet::default();
         for (value, whole, subscripted, argument_of) in names {
             let mention = Mention {
                 value,
