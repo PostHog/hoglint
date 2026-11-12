@@ -42,6 +42,9 @@ settings  = { type = "bool" }
 # The wiring channel (products/architecture.md, "Wiring couplings"): a product's wiring locations,
 # and the core registration points that name them to register them.
 wiring    = { type = "enum", values = ["location", "registration"] }
+# Interfaces the old boundary config (tach.toml, `isolation:permanent-interface`) declares permanent:
+# core reaches them past the facade by design, and the contract-check inputs watch them.
+permanent = { type = "bool" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -135,6 +138,25 @@ match = [
   "ee/hogai/core/agent_modes/presets/**",
 ]
 set = { wiring = "registration" }
+
+[[assign]]
+match = [
+  "products/error_tracking/backend/sql.py", "products/error_tracking/backend/sql/**",
+  "products/error_tracking/backend/embedding.py", "products/error_tracking/backend/embedding/**",
+  "products/error_tracking/backend/indexed_embedding.py", "products/error_tracking/backend/indexed_embedding/**",
+  "products/batch_exports/backend/sql.py", "products/batch_exports/backend/sql/**",
+  "products/warehouse_sources/backend/models.py", "products/warehouse_sources/backend/models/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/common/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**",
+  "products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**",
+]
+set = { permanent = true }
 
 # Every package under packages/ is a leaf (B13).
 [[assign]]
@@ -273,13 +295,13 @@ field-of-model           = ["edge.model", "edge.field"]
 
 [rules.public-surface]
 primitive     = "entrypoint"
-doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings; a core registration point may name a wiring location."
+doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings; a core registration point may name a wiring location; core production code may name a declared permanent interface."
 kinds         = ["import", "reference", "dotted-path"]
 contexts      = { exclude = ["migration"] }
 select        = "src.package != dst.package and dst.tier == 'product' and src.history != true"
 endpoint      = "surface"
 uses_at_import = true
-allow         = "dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location')"
+allow         = "dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context)"
 on_unresolved = "finding"
 identity      = ["dst.symbol", "src.module", "edge.kind"]
 growth_key    = ["dst.symbol", "edge.kind", "src.package"]

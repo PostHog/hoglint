@@ -299,6 +299,18 @@ PUBLIC_SURFACE_CASES = [
             ("products.billing.backend.temporal.workflows", "posthog.api.thing", "import"),
         ],
     ),
+    (
+        "core production code may name a permanent interface; a test or a product may not",
+        [
+            ("import", "posthog.clickhouse.schema", "products.error_tracking.backend.sql.TABLE", (Context.PROD,)),
+            ("import", "posthog.test.base", "products.error_tracking.backend.sql.TABLE", (Context.TEST,)),
+            ("import", "products.billing.backend.logic", "products.error_tracking.backend.sql.TABLE", (Context.PROD,)),
+        ],
+        [
+            ("products.error_tracking.backend.sql.TABLE", "posthog.test.base", "import"),
+            ("products.error_tracking.backend.sql.TABLE", "products.billing.backend.logic", "import"),
+        ],
+    ),
 ]
 
 
