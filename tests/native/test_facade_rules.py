@@ -120,6 +120,7 @@ CORE_MODELS = {
     "posthog/models/team/__init__.py": "",
     "posthog/models/team/team.py": MODEL.format(name="Team"),
     "posthog/models/activity.py": MODEL.format(name="ActivityLog"),
+    "posthog/models/organization.py": MODEL.format(name="OrganizationMembership"),
 }
 API = f"{SHOP}.facade.api"
 
@@ -127,10 +128,12 @@ API = f"{SHOP}.facade.api"
 def test_facade_signature_lets_the_named_core_models_cross(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     api = (
         "from posthog.models.activity import ActivityLog\n"
+        "from posthog.models.organization import OrganizationMembership\n"
         "from posthog.models.team.team import Team\n"
         "from products.shop.backend.models import Order\n\n\n"
         "def for_team(team: Team) -> int:\n    return 1\n\n\n"
         "def logged(entry: ActivityLog) -> int:\n    return 1\n\n\n"
+        "def member(membership: OrganizationMembership) -> int:\n    return 1\n\n\n"
         "def place(order: Order) -> int:\n    return 1\n"
     )
     files = {**CORE_MODELS, "products/shop/backend/facade/api.py": api}

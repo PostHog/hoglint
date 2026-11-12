@@ -346,7 +346,7 @@ select     = "src.zone == 'facade'"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
 # The core models a facade may take or return (D65). One line changes the list.
-unless     = "dst.symbol in ['posthog.models.organization.Organization', 'posthog.models.project.Project', 'posthog.models.team.team.Team', 'posthog.models.user.User']"
+unless     = "dst.symbol in ['posthog.models.organization.Organization', 'posthog.models.organization.OrganizationMembership', 'posthog.models.project.Project', 'posthog.models.team.team.Team', 'posthog.models.user.User']"
 identity   = "facade-slot"
 growth_key = ["dst.symbol", "src.package"]
 
