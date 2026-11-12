@@ -29,7 +29,6 @@ from hoglint.model import Context, Edge, Resolution, context_bits
 from hoglint.rules.base import (
     PRIMITIVE_KINDS,
     IncompleteItem,
-    ModuleEnv,
     RuleContext,
     RuleRun,
     RuleType,
@@ -227,7 +226,7 @@ class ExportPrimitive(RuleType):
         rule cannot tell about is not seen, so its slots are judged here."""
         seen = self.slots_seen.get(module)
         if seen is None:
-            resolve = ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve
+            resolve = self.ctx.module_env(module).resolve
             seen = any(node is None or evaluate(node, resolve) is Truth.TRUE for node in self.slot_owners)
             self.slots_seen[module] = seen
         return seen
@@ -267,8 +266,7 @@ class ExportPrimitive(RuleType):
         module it cannot tell about is judged."""
         if self.spec.from_ is None:
             return True
-        env = ModuleEnv(self.ctx, self.ctx.module_endpoint(module))
-        return self.spec.from_.evaluate(env.resolve) is not Truth.FALSE
+        return self.spec.from_.evaluate(self.ctx.module_env(module).resolve) is not Truth.FALSE
 
     def evaluate(self) -> RuleRun:
         found = self.ctx.export_run(self)

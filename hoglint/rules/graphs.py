@@ -17,7 +17,6 @@ from hoglint.rules.base import (
     Endpoint,
     IncompleteItem,
     Judgment,
-    ModuleEnv,
     RuleContext,
     RuleRun,
     project,
@@ -109,7 +108,7 @@ class ReachPrimitive(EdgeRule):
         for module in self.ctx.source_modules(self.kinds()):
             truth = Truth.TRUE
             if self.from_classes is not None:
-                truth = self.from_classes.truth(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
+                truth = self.from_classes.truth(self.ctx.module_env(module).resolve)
             if truth is Truth.FALSE or not has_hops(module):
                 continue
             if truth is Truth.TRUE:

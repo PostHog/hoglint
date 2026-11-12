@@ -53,6 +53,18 @@ const UNRESOLVED: Endpoint<'static> = Endpoint {
     scope: "",
 };
 
+/// The endpoint `from` reads no destination of: every `dst.*` field is unknown, as `ModuleEnv`
+/// answers it.
+const NO_DESTINATION: Endpoint<'static> = Endpoint {
+    module: None,
+    at: None,
+    symbol: Symbol::None,
+    path: None,
+    external: None,
+    unresolved: true,
+    scope: "",
+};
+
 /// The link and the run's tables, which every environment reads.
 #[derive(Clone, Copy)]
 pub struct Cx<'a> {
@@ -175,6 +187,12 @@ impl<'a> Cx<'a> {
             unresolved: false,
             scope: "",
         }
+    }
+
+    /// `RuleContext.module_env`: the environment of a module on its own, with no edge and no
+    /// destination.
+    pub fn module_env(&self, module: Sid) -> Env<'a> {
+        Env::new(*self, None, self.module_endpoint(module), NO_DESTINATION)
     }
 
     /// `RuleContext.new_symbol_endpoint`: the endpoint a dotted name is.

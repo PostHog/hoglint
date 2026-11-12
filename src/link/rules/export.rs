@@ -3,9 +3,8 @@
 //! signatures, fields and bases name, in the order the Python primitive checks them.
 
 use super::Rules;
-use super::env::{Cx, EntityEnv, Env};
+use super::env::{Cx, EntityEnv};
 use super::plan::{ExportRulePlan, ShapePlan};
-use super::reach::NO_DESTINATION;
 use super::selector::{Compiler, EntityField, Node, Ref, evaluate};
 use super::signature::{callable_of, is_private};
 use super::value::{Truth, Value, render};
@@ -338,13 +337,7 @@ impl<'a> Walk<'a> {
         let Some(start) = &self.rule.start else {
             return true;
         };
-        let env = Env::new(
-            self.cx,
-            None,
-            self.cx.module_endpoint(module),
-            NO_DESTINATION,
-        );
-        evaluate(start, &env) != Truth::False
+        evaluate(start, &self.cx.module_env(module)) != Truth::False
     }
 
     /// `TopLevel.of`: the module's public top-level symbols, sorted.
@@ -689,7 +682,7 @@ impl<'a> Walk<'a> {
         let seen = match self.cx.link.core.it.get(module) {
             None => false,
             Some(sid) => {
-                let env = Env::new(self.cx, None, self.cx.module_endpoint(sid), NO_DESTINATION);
+                let env = self.cx.module_env(sid);
                 self.rule.slot_owners.iter().any(|owner| match owner {
                     None => true,
                     Some(node) => evaluate(node, &env) == Truth::True,

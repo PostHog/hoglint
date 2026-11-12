@@ -3,7 +3,7 @@
 //! each (start, hop) verdict judged by the evaluator. Hops are taken in the order the Python
 //! search takes them, so a start reports the same targets through the same witness paths.
 
-use super::env::{Cx, Endpoint, Env, Symbol};
+use super::env::{Cx, Endpoint, Env};
 use super::staged::truth;
 use super::value::Truth;
 use super::{Reach, RuleKind, Rules};
@@ -38,18 +38,6 @@ pub enum Found {
         verdict: Truth,
     },
 }
-
-/// The endpoint `from` reads no destination of: every `dst.*` field is unknown, as `ModuleEnv`
-/// answers it.
-pub const NO_DESTINATION: Endpoint<'static> = Endpoint {
-    module: None,
-    at: None,
-    symbol: Symbol::None,
-    path: None,
-    external: None,
-    unresolved: true,
-    scope: "",
-};
 
 /// The hops out of each module, made when a search first reads them, as `ReachPrimitive.hops`
 /// makes them: the module's candidate edges kind by kind in graph order, each destination the
@@ -160,8 +148,7 @@ impl Rules {
         let Some(start) = &rule.start else {
             return Truth::True;
         };
-        let env = Env::new(*cx, None, cx.module_endpoint(module), NO_DESTINATION);
-        truth(start, &env)
+        truth(start, &cx.module_env(module))
     }
 
     /// `ReachPrimitive.search` from one start module.

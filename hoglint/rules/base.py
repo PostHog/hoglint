@@ -314,6 +314,10 @@ class RuleContext:
     def module_endpoint(self, module: str) -> Endpoint:
         return Endpoint(module, None, self.labeler.path_of(module))
 
+    def module_env(self, module: str) -> ModuleEnv:
+        """The environment of a module on its own, with no edge and no destination."""
+        return ModuleEnv(self, self.module_endpoint(module))
+
     def symbol_endpoint(self, name: str, resolution: Resolution) -> Endpoint:
         key = (name, resolution)
         cached = self.symbol_cache.get(key)
@@ -665,7 +669,7 @@ class StagedSelection:
             return False
         cached = self.module_cache.get(module)
         if cached is None:
-            cached = self.src_classes.truth(ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve)
+            cached = self.src_classes.truth(self.ctx.module_env(module).resolve)
             self.module_cache[module] = cached
         return cached is Truth.FALSE
 
