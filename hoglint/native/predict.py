@@ -15,7 +15,9 @@ a commit changed, the prediction runs in two steps, as a check that reuses store
    too. Labels of every module are recomputed when a file a label provider declares changed.
 
 Rules folded over packages or the whole graph rerun when what they read moved: any predicted
-file's edges outside their positions, any label, any symbol fact, or a declared side input.
+file's edges outside their positions, any label, any symbol fact, or a declared side input. The
+rules every run makes from the config and the whole tree (`run_level_rules`: a name the config
+writes out that names nothing, an unreadable source, a failed provider) rerun on every commit.
 
 What it sees of the packs: the modules a pack declares it reads as one unit (the pack hook
 `whole_modules`). A changed file in such a unit predicts every file of it.
@@ -57,7 +59,7 @@ from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.inputs import InputPatterns, RunInputs
 from hoglint.native.normal import FIELDS
 from hoglint.native.parity import read_rows
-from hoglint.rules.engine import primitive_of
+from hoglint.rules.engine import primitive_of, run_level_rules
 from hoglint.source import active_packs
 
 TRACES = "traces.jsonl"
@@ -87,12 +89,14 @@ class TraceConfig:
     """What a run's config says about its inputs, written next to its trace dump: the patterns of
     the files label providers and coverage adapters read, the policy files (every config file of
     the repo, each rule's `classify` file and each pack's policy files), the rules whose rows
-    fold many edges, and the modules a pack reads as one unit (`whole_modules`)."""
+    fold many edges, the modules a pack reads as one unit (`whole_modules`), and the rules every
+    run makes from the config and the whole tree (`run_level_rules`)."""
 
     side: tuple[str, ...]
     policy: tuple[str, ...]
     folded: tuple[str, ...]
     whole: tuple[str, ...] = ()
+    run_level: tuple[str, ...] = ()
 
     @staticmethod
     def of(config: Any) -> TraceConfig:
@@ -102,7 +106,8 @@ class TraceConfig:
                 folded.append(spec.id)
         policy = ConfigInputs.of(config).predicted_policy()
         whole = TraceConfig.whole_modules(config)
-        return TraceConfig(RunInputs.of(config).side(), policy, tuple(sorted(folded)), whole)
+        side = RunInputs.of(config).side()
+        return TraceConfig(side, policy, tuple(sorted(folded)), whole, run_level_rules(config))
 
     @staticmethod
     def whole_modules(config: Any) -> tuple[str, ...]:
@@ -121,6 +126,7 @@ class TraceConfig:
             "policy": list(self.policy),
             "folded": list(self.folded),
             "whole": list(self.whole),
+            "run_level": list(self.run_level),
         }
         (out / TRACE_CONFIG).write_text(json.dumps(data))
 
@@ -128,7 +134,8 @@ class TraceConfig:
     def read(out: Path) -> TraceConfig:
         data = json.loads((out / TRACE_CONFIG).read_text())
         whole = tuple(data.get("whole", ()))
-        return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]), whole)
+        run_level = tuple(data.get("run_level", ()))
+        return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]), whole, run_level)
 
     def in_whole(self, module: str) -> bool:
         return any(fnmatch.fnmatchcase(module, pattern) for pattern in self.whole)
@@ -406,7 +413,8 @@ class Moved:
 @dataclass(frozen=True)
 class Prediction:
     """A commit's prediction: the files to recompute, the label modules recomputed (None for
-    every module), and the folded rules that rerun."""
+    every module), and the rules that rerun: the folded rules whose input moved, and the rules
+    every run makes from the whole tree."""
 
     files: frozenset[str]
     labels: frozenset[str] | None
@@ -502,13 +510,13 @@ class PairPrediction:
         config = self.config
         if any(path in set(config.policy) for path in self.changed):
             every = frozenset(self.parent.traces) | frozenset(self.child.modules)
-            return Prediction(every, None, frozenset(config.folded))
+            return Prediction(every, None, frozenset(config.folded) | frozenset(config.run_level))
         predictor = Predictor(self.parent, self.changes, self.parent.mask(ignored_kinds))
         link = predictor.link_files() | self.whole_files
         moved = self.moved(link)
         readers = predictor.readers(moved.symbols, moved.labels)
         folded_moved = moved.edges or bool(moved.labels) or bool(moved.symbols) or self.side_changed
-        rerun = frozenset(config.folded) if folded_moved else frozenset()
+        rerun = frozenset(config.run_level) | (frozenset(config.folded) if folded_moved else frozenset())
         labels = frozenset(self.label_modules) if self.label_modules is not None else None
         return Prediction(frozenset(link | readers), labels, rerun)
 

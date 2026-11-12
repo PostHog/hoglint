@@ -37,6 +37,17 @@ STALE_NAMES = "config:stale-name"
 GLOB_CHARACTERS = frozenset("*?[{")
 
 
+def provider_rule(name: str) -> str:
+    """The rule of a provider that failed: one incomplete item of it says why."""
+    return f"provider:{name}"
+
+
+def run_level_rules(config: Config) -> tuple[str, ...]:
+    """The rules every run makes from the config and the whole tree, not from one file: their
+    items belong to no file, so every run makes them again."""
+    return (STALE_NAMES, UNREADABLE, *(provider_rule(name) for name in sorted(config.providers)))
+
+
 class StaleNames:
     """The names the config writes out in full, checked against the tree: the config loads before
     the tree is read, so only a run can tell that one names nothing."""
@@ -253,7 +264,7 @@ class Engine:
         if confirm:
             ctx.confirm_findings(ran)
         for name in sorted(self.labeler.providers.failures):
-            rule_id = f"provider:{name}"
+            rule_id = provider_rule(name)
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
             self.add_incomplete_run(
                 ctx, rule_id, [IncompleteItem(rule_id, reason, reason, (), IncompleteCause.EXTRACTOR)]

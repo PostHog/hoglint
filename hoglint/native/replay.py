@@ -829,7 +829,7 @@ class PredictionScore:
     @staticmethod
     def covers(item: TruthItem, predicted: Prediction) -> bool:
         """A file the item names is predicted; a label row's module is relabelled; a finding or
-        an incomplete item belongs to a folded rule that reruns."""
+        an incomplete item belongs to a rule that reruns."""
         if item.files & predicted.files:
             return True
         if item.table == "labels":

@@ -6,6 +6,8 @@ import os
 import re
 import json
 import datetime
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ import pytest
 import hoglint
 from hoglint.ledger.cache import STORES, Store, StoreList
 from hoglint.native.parity import RowDiff
+from hoglint.native.predict import Prediction
 from hoglint.native.replay import (
     CHECK_OUTPUTS,
     COLD,
@@ -25,6 +28,7 @@ from hoglint.native.replay import (
     CheckDump,
     Checker,
     Compared,
+    Mode,
     Pair,
     PairResult,
     PairsReport,
@@ -33,6 +37,7 @@ from hoglint.native.replay import (
     Side,
     States,
     StoreRules,
+    Traces,
     TruthItem,
     certify,
     check_env,
@@ -69,13 +74,17 @@ DJANGO_REPO = {
 MODEL_EDITS = {"app/models.py": MODEL + "\n\nclass Refund(models.Model):\n    pass\n"}
 
 
-def write_tree(repo: Path, files: dict[str, str]) -> str:
-    write_files(repo, files)
+def write_tree(repo: Path, files: Mapping[str, str | None]) -> str:
+    """The tree of `files` over the last one; None deletes a file."""
+    write_files(repo, {path: text for path, text in files.items() if text is not None})
+    for path, text in files.items():
+        if text is None:
+            (repo / path).unlink()
     git_in(repo, "add", ".")
     return git_in(repo, "write-tree").strip()
 
 
-def git_pair(root: Path, name: str, files: dict[str, str], edits: dict[str, str]) -> tuple[Path, Pair]:
+def git_pair(root: Path, name: str, files: dict[str, str], edits: Mapping[str, str | None]) -> tuple[Path, Pair]:
     repo = root / "repo"
     repo.mkdir()
     git_in(repo, "init", "-q")
@@ -94,11 +103,12 @@ def model_pair(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
     return git_pair(tmp_path_factory.mktemp("replay-django"), "gain-model", DJANGO_REPO, MODEL_EDITS)
 
 
-def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str, damages: tuple[str, ...] = ()) -> PairResult:
+def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str | Mode, damages: tuple[str, ...] = ()) -> PairResult:
     native_module()
     os.environ.setdefault("PYTHONHASHSEED", "0")
     repo, found = pair
-    checker = Checker(repo, "native", MODES[mode](), tmp_path / "work", datetime.date(2026, 1, 1))
+    picked = MODES[mode]() if isinstance(mode, str) else mode
+    checker = Checker(repo, "native", picked, tmp_path / "work", datetime.date(2026, 1, 1))
     return Replay(checker, pick_damages(",".join(damages))).run(found)
 
 
@@ -171,6 +181,84 @@ def test_the_certificate_predicts_from_the_parents_traces_and_reports_each_gap(
     assert "core/b.py" in prediction.predicted
     assert not prediction.missed
     assert [note for note in result.notes if note.startswith("gaps ")] == ["gaps none"]
+
+
+NAMED_REPO = {
+    "hoglint.toml": """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core"]
+
+[fields]
+seed = { type = "bool" }
+gate = { type = "bool", on = "symbol" }
+owners = { type = "set" }
+
+[providers.codeowners]
+use = "codeowners"
+file = "CODEOWNERS"
+sets = ["owners"]
+
+[[assign]]
+match = "core/seed.py"
+set = { seed = true }
+
+[[assign]]
+symbols = { names = ["core.seed.Gate"] }
+set = { gate = true }
+""",
+    "CODEOWNERS": "core/ @team-a\n",
+    "core/__init__.py": "",
+    "core/seed.py": "class Gate:\n    pass\n",
+    "core/use.py": "from core.seed import Gate\n",
+}
+# Each child makes an item of a rule that every run makes from the config and the whole tree: the
+# item belongs to no file, so no predicted file covers it.
+RUN_LEVEL_CHANGES: dict[str, tuple[dict[str, str | None], str]] = {
+    "a file a literal assignment path names is deleted": ({"core/seed.py": None}, "config:stale-name"),
+    "a symbol an assignment names is renamed": ({"core/seed.py": "class Door:\n    pass\n"}, "config:stale-name"),
+    "the file a provider reads is deleted": ({"CODEOWNERS": None}, "provider:codeowners"),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(RUN_LEVEL_CHANGES))
+def run_level_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    edits, _ = RUN_LEVEL_CHANGES[request.param]
+    return git_pair(tmp_path_factory.mktemp("replay-run-level"), request.param, NAMED_REPO, edits)
+
+
+def run_level_rule(pair: tuple[Path, Pair]) -> str:
+    return RUN_LEVEL_CHANGES[pair[1].name][1]
+
+
+def test_a_warm_check_makes_a_run_level_item_again_that_no_changed_file_holds(
+    tmp_path: Path, run_level_pair: tuple[Path, Pair]
+) -> None:
+    result = replay(tmp_path, run_level_pair, "today")
+    assert result.status() == "EQUAL", result.line()
+    assert result.prediction is not None
+    assert run_level_rule(run_level_pair) in {item.rule for item in result.prediction.missed}
+
+
+# The certificate with the run-level rules left out of what reruns, as a predictor that lost them would.
+class WithoutRunLevelRules(Traces):
+    def predict(self, changed: set[str], dumps: tuple[Path, Path]) -> Prediction:
+        found = super().predict(changed, dumps)
+        assert self.pair is not None
+        return replace(found, rerun=found.rerun - set(self.pair.config.run_level))
+
+
+@pytest.mark.parametrize(("mode", "word"), [(Traces, "HELD"), (WithoutRunLevelRules, "MISSED")])
+def test_the_certificate_reruns_the_rules_every_run_makes_from_the_whole_tree(
+    tmp_path: Path, run_level_pair: tuple[Path, Pair], mode: type[Traces], word: str
+) -> None:
+    result = replay(tmp_path, run_level_pair, mode())
+    assert result.status() == word, result.line()
+    if word == "MISSED":
+        assert result.prediction is not None
+        assert {item.rule for item in result.prediction.missed} == {run_level_rule(run_level_pair)}
 
 
 def missed_prediction() -> PredictionScore:
