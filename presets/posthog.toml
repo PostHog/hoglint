@@ -26,6 +26,8 @@ migrations = ["ee/migrations/**", "posthog/migrations/**", "posthog/session/migr
 # A third-party end reads no package, so it is no crossing.
 [conditions]
 crosses-package = "src.package != dst.package and dst.external == none"
+# A facade's own code, its fixtures left out.
+facade-code = "src.zone == 'facade' and src.zone != 'fixtures'"
 
 # ── Fields ─────────────────────────────────────────────────────
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
@@ -423,7 +425,7 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 [rules.facade-signature]
 primitive  = "signature"
 doc        = "A public facade function neither accepts nor returns a model, manager or queryset. Any, object and a bare dict are unknown; a mapping with type arguments is typed, and Any as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
-select     = "src.zone == 'facade' and src.zone != 'fixtures' and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
+select     = "facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
 # A core model on the list (`crosses`) may be taken or returned.
@@ -456,7 +458,7 @@ growth_key = ["dst.module", "src.package"]
 primitive  = "edge"
 doc        = "A facade stays framework-free: no DRF, no django.http, no presentation."
 view       = "zones"
-from       = "src.zone == 'facade' and src.zone != 'fixtures'"
+from       = "facade-code"
 deny       = "dst.external == 'rest_framework' or dst.module startswith 'django.http' or dst.zone == 'presentation'"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
@@ -534,7 +536,7 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 primitive     = "edge"
 doc           = "A relation into another package is sealed: hidden, with no explicit query name. Owner by defining module. A third-party app is no package."
 kinds         = ["reverse-accessor"]
-select        = "crosses-package and dst.external == none"
+select        = "crosses-package"
 on_unresolved = "block"
 identity      = "relation"
 growth_key    = ["dst.symbol"]
