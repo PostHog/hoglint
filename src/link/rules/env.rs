@@ -126,6 +126,25 @@ impl<'a> Cx<'a> {
         longest_module(&self.link.core.it, &self.rules.module_at, name)
     }
 
+    /// The longest dotted prefix of a first-party name that is a graph module or a directory
+    /// without `__init__.py`, a directory two graph modules place apart included
+    /// (`Labeler.name_owner`), with the graph module's place.
+    fn name_owner(&self, name: &str) -> Option<(Sid, Option<u32>)> {
+        let labels = &self.rules.labels;
+        let mut head = name;
+        loop {
+            if let Some(sid) = self.link.core.it.get(head) {
+                if let Some(at) = self.module_at(sid) {
+                    return Some((sid, Some(at)));
+                }
+                if labels.namespaces.contains_key(head) || labels.namespace_clashes.contains(head) {
+                    return Some((sid, None));
+                }
+            }
+            head = head.rsplit_once('.')?.0;
+        }
+    }
+
     pub fn path_at(&self, at: Option<u32>) -> Option<&'a str> {
         at.map(|at| self.rules.module_path(self.link, at))
     }
@@ -236,8 +255,8 @@ impl<'a> Cx<'a> {
     /// `RuleContext.new_symbol_endpoint`: the endpoint a dotted name is.
     fn symbol_endpoint(&self, name: Symbol, external: bool) -> Endpoint<'a> {
         let text = self.symbol_text(name).unwrap_or_default();
-        let found = self.module_of_symbol(&text);
         if external {
+            let found = self.module_of_symbol(&text);
             let module = match found {
                 Some((module, _)) => Some(module),
                 None => match name {
@@ -256,7 +275,7 @@ impl<'a> Cx<'a> {
                 scope: "",
             };
         }
-        let Some((module, at)) = found else {
+        let Some((module, at)) = self.name_owner(&text) else {
             return Endpoint {
                 symbol: name,
                 ..UNRESOLVED
@@ -264,13 +283,13 @@ impl<'a> Cx<'a> {
         };
         Endpoint {
             module: Some(module),
-            at: Some(at),
+            at,
             symbol: if self.text(module) == text {
                 Symbol::None
             } else {
                 name
             },
-            path: self.path_at(Some(at)),
+            path: self.path_at(at),
             external: None,
             unresolved: false,
             scope: "",

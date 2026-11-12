@@ -285,12 +285,6 @@ identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.b
 # facade-logic
 
 [[row]]
-case = "HZ12"
-rule = "facade-logic"
-verdict = "finding"
-identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
-
-[[row]]
 case = "FL03"
 rule = "facade-logic"
 verdict = "finding"
@@ -331,6 +325,12 @@ case = "HZ10"
 rule = "facade-logic"
 verdict = "incomplete"
 identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
+
+[[row]]
+case = "HZ12"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
 
 # facade-no-drf
 
@@ -1100,6 +1100,12 @@ identity = ["products.reports.backend.models.ReportRun"]
 # presentation-uses-facade
 
 [[row]]
+case = "PF08"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
+
+[[row]]
 case = "PF02"
 rule = "presentation-uses-facade"
 verdict = "finding"
@@ -1130,6 +1136,12 @@ verdict = "finding"
 identity = ["products.legacy.backend.presentation.views", "products.inventory.backend.presentation.serializers"]
 
 # prod-imports-test
+
+[[row]]
+case = "PF07"
+rule = "prod-imports-test"
+verdict = "finding"
+identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.reviews.tests"]
 
 [[row]]
 case = "CR03"
@@ -1785,12 +1797,6 @@ rule = "*"
 verdict = "*"
 match = ["StockHolder", "StockItem"]
 
-# Levels: the products that pass and fail each level.
-
-[levels.isolated]
-passing = ["ai_observability", "visual_review"]
-failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]
-
 [[wanted]]
 case = "HZ13"
 decision = "Unknown is never clean: a lazy map of bare names where no entry resolves (a written limit, Nov 12)"
@@ -1804,3 +1810,9 @@ decision = "Unknown is never clean: a lazy value that names the attribute, 'pkg.
 rule = "*"
 verdict = "*"
 match = ["products.legacy.backend.facade.colonlazy"]
+
+# Levels: the products that pass and fail each level.
+
+[levels.isolated]
+passing = ["ai_observability", "visual_review"]
+failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]

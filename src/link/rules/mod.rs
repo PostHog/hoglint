@@ -506,6 +506,13 @@ impl Rules {
             .num_threads(threads)
             .build()
             .map_err(|error| error.to_string())?;
+        // A name can stop at a directory without `__init__.py`; each gets an id an endpoint holds.
+        let mut directories: Vec<&str> = labels.namespaces.keys().map(AsRef::as_ref).collect();
+        directories.extend(labels.namespace_clashes.iter().map(AsRef::as_ref));
+        directories.sort_unstable();
+        for name in directories {
+            link.core.it.intern(name);
+        }
         let endpoint_keys = Self::endpoint_keys(link);
         let handed = Self::handed(link, &module_at, &labels);
         let zone_field =

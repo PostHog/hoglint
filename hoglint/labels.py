@@ -726,6 +726,17 @@ class Labeler:
         imports = self.index.module_imports.get(module, [])
         return [edge for edge in imports if hand_out.unread or edge.attr("binds") in hand_out.handed]
 
+    def name_owner(self, name: str) -> str | None:
+        """The longest dotted prefix of a first-party name that is a graph module or a directory
+        without `__init__.py`, a directory two graph modules place apart included: the module whose
+        labels the name reads, as a destination's are. None when there is none."""
+        head = name
+        while head:
+            if head in self.graph.modules or head in self.namespaces.paths or head in self.namespaces.clashes:
+                return head
+            head = head.rpartition(".")[0]
+        return None
+
     def handed_owner(self, name: str) -> str | None:
         """The longest dotted prefix of a handed name that is a graph module or a namespace
         directory: the module whose zone the name has. None when there is none, or when a

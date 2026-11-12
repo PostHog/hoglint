@@ -329,7 +329,7 @@ class RuleContext:
         if resolution is Resolution.EXTERNAL:
             module = self.labeler.module_of_symbol(name) or name
             return Endpoint(module, name, self.labeler.path_of(module), external=name.split(".", 1)[0])
-        module = self.labeler.module_of_symbol(name)
+        module = self.labeler.name_owner(name)
         if module is None:
             return Endpoint(None, name, unresolved=True)
         symbol = name if name != module else None
