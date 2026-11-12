@@ -32,7 +32,10 @@ pub const LAYOUT: i64 = 4;
 const ROWS_PER_WRITE: usize = 256;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A fact database error; `corrupt` when the file is no database or a damaged one.
+/// A fact database error; `corrupt` when the file is no database or a damaged one. A broken
+/// constraint is damage too: the writes here never break one, so only a change from outside
+/// does (such as a lost `facts` row, whose id the next entry then takes again while a `records`
+/// row still holds it), and it would break again on every run.
 #[derive(Debug)]
 pub struct DbError {
     pub message: String,
@@ -43,7 +46,11 @@ impl From<rusqlite::Error> for DbError {
     fn from(e: rusqlite::Error) -> DbError {
         let corrupt = matches!(
             e.sqlite_error_code(),
-            Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase)
+            Some(
+                ErrorCode::DatabaseCorrupt
+                    | ErrorCode::NotADatabase
+                    | ErrorCode::ConstraintViolation
+            )
         );
         DbError {
             message: format!("fact database: {e}"),

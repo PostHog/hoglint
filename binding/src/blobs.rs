@@ -13,8 +13,8 @@
 //!   file whose bytes no longer hash to the snapshot's oid changed during the run: the run
 //!   uses what it read, stores nothing for it, and reports it as drifted;
 //! - an entry that went away is a miss, and the file is extracted again;
-//! - an error opening or reading the database is logged once and the run goes on without it; a
-//!   damaged database is moved aside;
+//! - an error opening or reading the database, or a write that finds it damaged, is logged once
+//!   and the run goes on without it; a damaged database is moved aside;
 //! - no read transaction is held while files are extracted.
 
 use crate::factdb::{DbError, FactDb, NewEntry, Row, move_aside, pack};
@@ -682,9 +682,23 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         .map(|f| f.expect("every file has facts"))
         .collect();
     mark("facts.decode");
-    let saved = db
-        .as_ref()
-        .is_some_and(|db| save(db, it, &slots, &files, (&full, &lite)));
+    let saved = match (db.take(), request.db.as_deref()) {
+        (Some(found), Some(path)) => {
+            let saved = save(&found, it, &slots, &files, (&full, &lite));
+            // Closed first: a connection that closes after the move could delete the new `-wal`.
+            drop(found);
+            match saved {
+                Ok(()) => true,
+                Err(error) => {
+                    if error.corrupt {
+                        give_up(path, &error);
+                    }
+                    false
+                }
+            }
+        }
+        _ => false,
+    };
     mark("facts.save");
     let records: Vec<Json> = slots
         .iter_mut()
@@ -756,14 +770,15 @@ fn key_ranges(facts: &FileFacts) -> Vec<Range<usize>> {
 
 /// Stores the new entries whose key is the id of the bytes they were extracted from, and marks
 /// the read ones as used today. A failed write only costs a later re-extraction or an early
-/// prune, so it never fails the run. True when the new entries are stored.
+/// prune, so it never fails the run; the error of a failed store is returned, so a damaged
+/// database can be moved aside.
 fn save(
     db: &FactDb,
     it: &Interner,
     slots: &[Slot],
     files: &[FileFacts],
     profiles: (&Profile, &Profile),
-) -> bool {
+) -> Result<(), DbError> {
     let profile_id = |slot: &Slot| -> &str {
         if slot.lite {
             &profiles.1.id
@@ -786,7 +801,7 @@ fn save(
             })
         })
         .collect();
-    let stored = db.store(&entries).is_ok();
+    let stored = db.store(&entries);
     let stale: Vec<(&str, &str)> = slots
         .iter()
         .filter(|slot| slot.found.is_some_and(|row| row.used < db.today))
