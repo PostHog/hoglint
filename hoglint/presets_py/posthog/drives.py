@@ -809,6 +809,11 @@ class Deriver:
                 if rel.startswith("products/") and rel.count("/") >= 2 and rel.split("/", 2)[2].startswith(location)
             }
         )
+        self.derive()
+
+    def derive(self) -> None:
+        """What follows from the registry: the wiring labels and module prefixes, and the filter
+        of test files."""
         self.labels = {product: f"{product}:{QUERY_WIRING_LOCATION}" for product in self.query_products}
         self.prefixes = [
             (location_module(product, QUERY_WIRING_LOCATION) + ".", label, product)
@@ -835,13 +840,7 @@ class Deriver:
         self.members = dict(state["members"])
         self.enums = frozenset(state["enums"])
         self.query_products = list(state["query_products"])
-        self.labels = {product: f"{product}:{QUERY_WIRING_LOCATION}" for product in self.query_products}
-        self.prefixes = [
-            (location_module(product, QUERY_WIRING_LOCATION) + ".", label, product)
-            for product, label in self.labels.items()
-        ]
-        labelled = {kind: products & self.labels.keys() for kind, products in self.kinds.items()}
-        self.test_filter = TestFilter(self.snapshot, labelled, self.members)
+        self.derive()
         self.registry = [state["kinds"], state["members"], state["enums"], state["query_products"]]
         origins = {(module, name): label for module, name, label in state["origins"]}
         tracer = self.tracer

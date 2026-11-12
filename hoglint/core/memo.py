@@ -13,7 +13,9 @@ the file's content key, which the store looks up when it writes the item.
 
 With a store (hoglint/native/memo_store.py), each item is kept with its reads and output, and a
 later run takes the stored output when every read has the same answer again (`Tracer.current`):
-the reader answers its own reads again, a fold answers the reads of its state.
+the reader answers its own reads again, a fold answers the reads of its state. Each kind of read
+is declared once (`TracedQuery`, `TracedMap`, `PerFileRead`), so its note and its answer again
+build the same form.
 
 The tracer belongs to the run's pack memo, and the pack reader hands it out (`reader.tracer`).
 With no memo it is a `NullTracer`, which notes and answers nothing. With no frame open, a read
@@ -564,6 +566,26 @@ class StepStats:
     check_wall: float = 0.0
     check_cpu: float = 0.0
     changed: dict[str, int] = field(default_factory=dict)  # read kind -> stored reads whose answer changed
+    seen_changed: set[Read] = field(default_factory=set)  # a read held by several parts counts once
+
+    def timed[T](self, check: bool, work: Callable[[], T]) -> T:
+        """`work()`, its seconds added to the items' run time, or with `check` to their check time."""
+        wall, cpu = time.perf_counter(), time.process_time()
+        found = work()
+        wall, cpu = time.perf_counter() - wall, time.process_time() - cpu
+        if check:
+            self.check_wall += wall
+            self.check_cpu += cpu
+        else:
+            self.run_wall += wall
+            self.run_cpu += cpu
+        return found
+
+    def count_changed(self, kind: str, key: str) -> None:
+        if (kind, key) in self.seen_changed:
+            return
+        self.seen_changed.add((kind, key))
+        self.changed[kind] = self.changed.get(kind, 0) + 1
 
     def row(self) -> dict[str, Any]:
         counts = [r + f for r, f in zip(self.reads, self.files, strict=True)]
@@ -707,8 +729,24 @@ def part_of(key: str) -> str:
     return str(zlib.crc32(key.encode()) % PARTS)
 
 
-def encode_part(part: dict[str, Any]) -> bytes:
-    return zlib.compress(orjson.dumps(part), ZLIB_LEVEL)
+def body_digest(body: bytes) -> str:
+    return hashlib.blake2b(body, digest_size=16).hexdigest()
+
+
+def encode_body(value: object) -> tuple[str, bytes]:
+    """A stored body: zlib-compressed JSON, and the digest of those bytes it is kept under."""
+    body = zlib.compress(orjson.dumps(value), ZLIB_LEVEL)
+    return body_digest(body), body
+
+
+def decode_body(found: str, body: object) -> Any:
+    """A stored body's JSON value, or None when its bytes do not check or do not decode."""
+    if not isinstance(body, bytes) or body_digest(body) != found:
+        return None
+    try:
+        return orjson.loads(zlib.decompress(body))
+    except Exception:  # noqa: BLE001 - bytes that do not decode are a miss, whatever the error
+        return None
 
 
 class MemoStore(Protocol):
@@ -788,8 +826,7 @@ class StepMemo:
                 continue
             if self.stats is not None:
                 for at in failing:
-                    kind = part.reads[at][0]
-                    self.stats.changed[kind] = self.stats.changed.get(kind, 0) + 1
+                    self.stats.count_changed(*part.reads[at][:2])
             for key, entry in part.items.items():
                 if key not in wanted:
                     continue
@@ -851,8 +888,7 @@ class StepMemo:
                 manifest[name] = old[name]
                 continue
             fresh = self.fresh.get(name, {})
-            body = encode_part(self.part_state([*kept.get(name, ()), *fresh], fresh))
-            found = hashlib.blake2b(body, digest_size=16).hexdigest()
+            found, body = encode_body(self.part_state([*kept.get(name, ()), *fresh], fresh))
             manifest[name] = found
             new[found] = body
         self.loaded = None
@@ -961,41 +997,37 @@ class ItemRun:
         self.memo = memo
         self.order = order
 
-    def run(self, key: str) -> ItemOutput:
-        if self.memo is None:
-            return self.items.run_item(key)
-        stats = self.memo.stats
-        wall, cpu = (time.perf_counter(), time.process_time()) if stats is not None else (0.0, 0.0)
-        with self.memo.tracer.frame() as reads:
+    def traced_run(self, memo: StepMemo, key: str) -> ItemOutput:
+        with memo.tracer.frame() as reads:
             result = self.items.run_item(key)
-        result = self.memo.keep(key, reads, result)
-        if stats is not None:
-            stats.run_wall += time.perf_counter() - wall
-            stats.run_cpu += time.process_time() - cpu
-        return result
+        return memo.keep(key, reads, result)
+
+    def run(self, key: str) -> ItemOutput:
+        memo = self.memo
+        if memo is None:
+            return self.items.run_item(key)
+        if memo.stats is None:
+            return self.traced_run(memo, key)
+        return memo.stats.timed(False, lambda: self.traced_run(memo, key))
 
     def reused(self, key: str) -> ItemOutput | None:
-        if self.memo is None:
+        memo = self.memo
+        if memo is None:
             return None
-        stats = self.memo.stats
-        wall, cpu = (time.perf_counter(), time.process_time()) if stats is not None else (0.0, 0.0)
-        found = self.memo.stored(key)
-        if stats is not None:
-            stats.check_wall += time.perf_counter() - wall
-            stats.check_cpu += time.process_time() - cpu
-            stats.reused += found is not None
+        if memo.stats is None:
+            return memo.stored(key)
+        found = memo.stats.timed(True, lambda: memo.stored(key))
+        memo.stats.reused += found is not None
         return found
 
     def reused_all(self, keys: list[str]) -> dict[str, ItemOutput]:
-        if self.memo is None:
+        memo = self.memo
+        if memo is None:
             return {}
-        stats = self.memo.stats
-        wall, cpu = (time.perf_counter(), time.process_time()) if stats is not None else (0.0, 0.0)
-        found = self.memo.stored_all(keys)
-        if stats is not None:
-            stats.check_wall += time.perf_counter() - wall
-            stats.check_cpu += time.process_time() - cpu
-            stats.reused += len(found)
+        if memo.stats is None:
+            return memo.stored_all(keys)
+        found = memo.stats.timed(True, lambda: memo.stored_all(keys))
+        memo.stats.reused += len(found)
         return found
 
     def outputs(self) -> list[Output]:

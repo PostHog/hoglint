@@ -24,7 +24,6 @@ is moved aside.
 from __future__ import annotations
 
 import time
-import zlib
 import hashlib
 import sqlite3
 import datetime
@@ -33,9 +32,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, ClassVar
 
-import orjson
-
-from hoglint.core.memo import Written
+from hoglint.core.memo import Written, decode_body, encode_body
 from hoglint.ledger.cache import MEMO, MEMO_STORE, RunStores
 from hoglint.ledger.envelope import EngineId, EngineSources
 from hoglint.native import bridge
@@ -47,7 +44,6 @@ ENGINE_NATIVE = "native"
 LAYOUT = 3
 # States of a step past the newest few are not read again and go.
 STATES_KEPT = 4
-ZLIB_LEVEL = 1
 SCHEMA = (
     "CREATE TABLE keys (id INTEGER PRIMARY KEY, step TEXT NOT NULL, digest TEXT NOT NULL, used INTEGER NOT NULL,"
     " bytes INTEGER NOT NULL, touched REAL NOT NULL, UNIQUE (step, digest))",
@@ -62,20 +58,6 @@ SCHEMA = (
 
 def today() -> int:
     return (datetime.datetime.now(datetime.UTC).date() - EPOCH).days
-
-
-def body_digest(body: bytes) -> str:
-    return hashlib.blake2b(body, digest_size=16).hexdigest()
-
-
-def decoded(found: str, body: object) -> Any:
-    """A stored body's JSON value, or None when its bytes do not check or do not decode."""
-    if not isinstance(body, bytes) or body_digest(body) != found:
-        return None
-    try:
-        return orjson.loads(zlib.decompress(body))
-    except Exception:  # noqa: BLE001 - bytes that do not decode are a miss, whatever the error
-        return None
 
 
 @dataclass(frozen=True)
@@ -180,7 +162,7 @@ class MemoStore:
             return None
         if row is None:
             return None
-        manifest = decoded(row[0], row[1])
+        manifest = decode_body(row[0], row[1])
         if not isinstance(manifest, dict) or not all(isinstance(v, str) for v in manifest.values()):
             return None
         return row[0], manifest
@@ -199,7 +181,7 @@ class MemoStore:
             return {}
         out = {}
         for found, body in rows:
-            part = decoded(found, body)
+            part = decode_body(found, body)
             if isinstance(part, dict) and isinstance(part.get("reads"), list) and isinstance(part.get("items"), dict):
                 out[found] = part
         return out
@@ -239,8 +221,7 @@ class MemoStore:
         assert step.manifest is not None
         for found, body in step.parts.items():
             conn.execute("INSERT OR REPLACE INTO parts (digest, body) VALUES (?, ?)", (found, body))
-        body = zlib.compress(orjson.dumps(step.manifest), ZLIB_LEVEL)
-        found = body_digest(body)
+        found, body = encode_body(step.manifest)
         old = conn.execute("SELECT id FROM keys WHERE step = ? AND digest = ?", (step.step, found)).fetchone()
         if old is not None:
             conn.execute("DELETE FROM blobs WHERE id = ?", old)
