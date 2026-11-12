@@ -45,7 +45,7 @@ pub struct Endpoint<'a> {
 
 /// The edge attr that lists, comma-separated, the attrs its producer could not tell
 /// (`model.UNKNOWN_ATTRS`).
-const UNKNOWN_ATTRS: &str = "unknown";
+pub const UNKNOWN_ATTRS: &str = "unknown";
 
 const UNRESOLVED: Endpoint<'static> = Endpoint {
     module: None,
@@ -358,7 +358,7 @@ impl<'a> Cx<'a> {
         let Some(name) = name else {
             return false;
         };
-        let listed = self.attr(id, self.link.core.it.get(UNKNOWN_ATTRS));
+        let listed = self.attr(id, Some(self.rules.unknown_attr));
         let name = self.text(name);
         listed.split(',').any(|found| found == name)
     }

@@ -152,7 +152,8 @@ class Edge:
     def attr_unknown(self, name: str) -> bool:
         """Whether the producer could not tell attr `name`: it names it in the `unknown` attr, so
         a rule reads it as unknown, never as absent."""
-        return name in self.attr(UNKNOWN_ATTRS).split(",")
+        listed = self.attr(UNKNOWN_ATTRS)
+        return bool(listed) and name in listed.split(",")
 
     def run_id(self, ordinal: int) -> str:
         """Run-local id for witnesses and explain output. Never a ledger or exception key."""

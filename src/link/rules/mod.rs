@@ -27,7 +27,7 @@ pub mod value;
 use self::conflicts::Conflict;
 use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
 use self::entities::EntityRule;
-use self::env::{Cx, Endpoint, Env, Role};
+use self::env::{Cx, Endpoint, Env, Role, UNKNOWN_ATTRS};
 use self::export::{
     ExportInputs, ExportRow, ExportRule, Shape, Walk, binds_handed, module_scope_imports,
 };
@@ -326,6 +326,8 @@ pub struct Rules {
     pub handed: FxHashMap<Sid, Handed>,
     /// The ids of the directories without `__init__.py` an endpoint can name, clashes included.
     pub directory_ids: FxHashSet<Sid>,
+    /// The id of the `unknown` attr key.
+    pub unknown_attr: Sid,
     /// The first declared field that holds a zone.
     pub zone_field: Option<usize>,
 }
@@ -539,6 +541,7 @@ impl Rules {
             .into_iter()
             .map(|name| link.core.it.intern(name))
             .collect();
+        let unknown_attr = link.core.it.intern(UNKNOWN_ATTRS);
         let endpoint_keys = Self::endpoint_keys(link);
         let handed = Self::handed(link, &module_at, &directory_ids, &labels);
         let zone_field =
@@ -574,6 +577,7 @@ impl Rules {
             export_inputs: OnceLock::new(),
             handed,
             directory_ids,
+            unknown_attr,
             zone_field,
         };
         out.tainted = out.provider_reads();
