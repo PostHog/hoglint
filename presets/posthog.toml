@@ -39,6 +39,9 @@ producer  = { type = "set" }
 history   = { type = "bool" }
 # Django settings modules: they must name product paths (installed apps, middleware, loggers).
 settings  = { type = "bool" }
+# The wiring channel (products/architecture.md, "Wiring couplings"): a product's wiring locations,
+# and the core registration points that name them to register them.
+wiring    = { type = "enum", values = ["location", "registration"] }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -114,6 +117,24 @@ set = { zone = "composition" }
 [[assign]]
 match = "posthog/settings/**"
 set   = { settings = true }
+
+[[assign]]
+match = [
+  "products/*/backend/temporal/**", "products/*/backend/hogql_queries/**", "products/*/backend/max_tools.py",
+  "products/*/backend/max_tools/**", "products/*/backend/tasks.py", "products/*/backend/tasks/**",
+  "posthog/temporal/ai_observability/**",
+]
+set = { wiring = "location" }
+
+[[assign]]
+match = [
+  "posthog/management/commands/start_temporal_worker.py", "posthog/management/commands/execute_temporal_workflow.py",
+  "posthog/management/commands/start_temporal_workflow.py", "posthog/temporal/schedule.py",
+  "posthog/temporal/common/worker.py", "posthog/temporal/ai/__init__.py", "posthog/temporal/health_checks/registry.py",
+  "posthog/hogql_queries/query_runner.py", "posthog/tasks/scheduled.py", "posthog/apps.py",
+  "ee/hogai/core/agent_modes/presets/**",
+]
+set = { wiring = "registration" }
 
 # Every package under packages/ is a leaf (B13).
 [[assign]]
@@ -252,13 +273,13 @@ field-of-model           = ["edge.model", "edge.field"]
 
 [rules.public-surface]
 primitive     = "entrypoint"
-doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings."
+doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings; a core registration point may name a wiring location."
 kinds         = ["import", "reference", "dotted-path"]
 contexts      = { exclude = ["migration"] }
 select        = "src.package != dst.package and dst.tier == 'product' and src.history != true"
 endpoint      = "surface"
 uses_at_import = true
-allow         = "dst.exported or (src.settings == true and edge.kind == 'dotted-path')"
+allow         = "dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location')"
 on_unresolved = "finding"
 identity      = ["dst.symbol", "src.module", "edge.kind"]
 growth_key    = ["dst.symbol", "edge.kind", "src.package"]
