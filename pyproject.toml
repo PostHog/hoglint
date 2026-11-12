@@ -27,7 +27,8 @@ target-version = "py313"
 force-exclude = true
 # Keeps hoglint and the test helper modules classified as in the monorepo (isort order).
 src = ["src"]
-exclude = [".git", "target"]
+# The model repository is data: its files hold the code shapes the tests check, not hoglint code.
+exclude = [".git", "target", "tests/model_repo/repo", "tests/model_repo/site"]
 
 [tool.ruff.lint]
 ignore = [
@@ -85,3 +86,4 @@ section-order = ["future", "standard-library", "testing", "third-party", "first-
 
 [tool.ty.src]
 include = ["hoglint", "tests"]
+exclude = ["tests/model_repo/repo", "tests/model_repo/site"]

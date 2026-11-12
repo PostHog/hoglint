@@ -1,0 +1,8 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "backend:contract-check": {
+      "inputs": ["backend/facade/**", "backend/middleware.py", "backend/logic/session.py", "backend/apps.py"]
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{"name": "@posthog/products-gatekeeper", "scripts": {"backend:contract-check": "true"}}

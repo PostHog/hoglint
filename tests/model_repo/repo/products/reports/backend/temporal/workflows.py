@@ -1,0 +1,2 @@
+class BuildReportWorkflow:
+    pass

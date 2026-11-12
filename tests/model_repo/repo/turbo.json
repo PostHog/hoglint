@@ -1,0 +1,5 @@
+{
+  "tasks": {
+    "backend:contract-check": {}
+  }
+}

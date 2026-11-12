@@ -1,0 +1,28 @@
+# The model repository's root config: the monorepo's root config without the owners provider.
+schema = 1
+extends = ["hoglint:django", "tools/hoglint/presets/posthog.toml"]
+
+[discovery]
+source_roots = ["."]
+first_party  = ["posthog", "ee", "common", "products", "tools", "services", "packages"]
+exclude      = ["docs/**"]
+external     = ["django", "rest_framework"]
+plugins      = ["hoglint.presets_py.posthog"]
+
+[django]
+settings            = ["posthog.settings", "posthog.settings.*"]
+db_routing          = "products/db_routing.yaml"
+db_alias_template   = "{database}_db_writer"
+receiver_decorators = ["django.dispatch.dispatcher.receiver", "posthog.models.signals.mutable_receiver"]
+oracles             = ["registry", "migration-loader"]
+hooks = [
+  "posthog.api.file_system.deletion.register_post_delete_hook",
+  "posthog.models.resource_transfer.registered_models.register_model",
+  "products.inventory.backend.facade.hooks.register_restock_hook",
+]
+
+[posthog]
+
+[ledger]
+file       = "hoglint.ledger"
+exceptions = "hoglint.exceptions.toml"
