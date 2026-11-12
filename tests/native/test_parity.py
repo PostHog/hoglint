@@ -380,6 +380,7 @@ RUN = "def run() -> None:\n    pass\n"
 BUILD_FOUND = ["products.shop.backend.facade.hooks.build"]
 BUILD_INCOMPLETE = ["products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.build"]
 GETATTR_FOUND = "products.shop.backend.facade.hooks.__getattr__"
+GETATTR_INCOMPLETE = "products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.__getattr__"
 LAZY_RUN = '_LAZY = {{"run": "{module}"}}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
 # (the import a facade module hands a name out by, the name, the files it reads, its findings, its
 # incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
@@ -460,6 +461,20 @@ HANDED_CASES = {
     ),
     "a relative import above the top package": ("from ...... import gone", "gone", {}, [], BUILD_INCOMPLETE),
     "a star import above the top package": ("from ...... import *", "gone", {}, [], BUILD_INCOMPLETE),
+    "a lazy member whose module does not exist": (
+        LAZY_RUN.format(module="products.shop.backend.gone"),
+        "run",
+        {},
+        [],
+        [GETATTR_INCOMPLETE, *BUILD_INCOMPLETE],
+    ),
+    "a module-level dict of text in a module with a lazy hook": (
+        LAZY_RUN.format(module="Run the job"),
+        "build",
+        {},
+        [],
+        [],
+    ),
     "a relative import that resolves": (
         "from ..temporal.jobs import run",
         "run",
@@ -502,6 +517,11 @@ HANDING_IMPORTS = {
         ["hidden"],
     ),
     "a relative import above the top package": ("from ...... import gone\n\n__all__ = ['gone', 'build']", ["gone"], []),
+    "a lazy name whose module does not exist": (
+        LAZY_RUN.format(module="products.shop.backend.gone") + "\n__all__ = ['run', 'build']",
+        ["run"],
+        [],
+    ),
 }
 
 

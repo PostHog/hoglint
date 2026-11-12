@@ -164,6 +164,8 @@ pub struct ModuleTable {
     pub names: OrderedMap<Binding>,
     pub star_imports: Vec<Sid>,
     pub lazy: OrderedMap<Sid>,
+    /// Name -> the module path as written, for a lazy map entry no module answers for.
+    pub lazy_missing: OrderedMap<Sid>,
     pub record: Option<u32>,
     pub stub_record: Option<u32>,
     /// Names only the `.pyi` beside the module binds.
@@ -240,6 +242,21 @@ pub fn unresolved_surface(it: &mut Interner, target: Option<Sid>, level: u32, na
     }
     text.push_str(it.s(name));
     it.intern(&text)
+}
+
+/// An ASCII identifier, as a lazy map's name is written.
+fn is_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Dotted ASCII identifiers, as a lazy map writes a module path.
+fn is_dotted_path(text: &str) -> bool {
+    text.split('.').all(is_identifier)
 }
 
 /// (line, column) of the module-level dict assignment each lazy name is read from: the last one
@@ -379,6 +396,7 @@ impl Core {
                 t.names.heap()
                     + heap::vec(&t.star_imports)
                     + t.lazy.heap()
+                    + t.lazy_missing.heap()
                     + heap::set(&t.stub_names)
             })
             .sum();
@@ -541,7 +559,16 @@ impl Core {
     /// PEP 562 lazy exports: module-level dicts of name -> module string in a module with
     /// `__getattr__`. A value is the tail of a module-level string prefix, an absolute module,
     /// or a module under the package or one of its ancestors (nearest first).
-    fn lazy_map(&mut self, module: Sid, is_package: bool, file: u32) -> OrderedMap<Sid> {
+    ///
+    /// Second, the entries no module answers for, by name, with the module path as written. Only
+    /// an entry that reads as a name and a dotted path counts: another dict of text in the module
+    /// is no lazy map.
+    fn lazy_map(
+        &mut self,
+        module: Sid,
+        is_package: bool,
+        file: u32,
+    ) -> (OrderedMap<Sid>, OrderedMap<Sid>) {
         let package = if is_package {
             module
         } else {
@@ -569,6 +596,7 @@ impl Core {
             }
         }
         let mut out = OrderedMap::default();
+        let mut missing = OrderedMap::default();
         for items in maps {
             for (key, value) in items {
                 let (Some(V::Str(key, _)), V::Str(value, _)) = (key, value) else {
@@ -585,10 +613,18 @@ impl Core {
                 }
                 if let Some(found) = candidates.into_iter().find(|&c| self.exists(c)) {
                     out.insert(*key, found);
+                } else if is_identifier(self.it.s(*key)) && is_dotted_path(&tail) {
+                    missing.insert(*key, *value);
                 }
             }
         }
-        out
+        let mut unresolved = OrderedMap::default();
+        for (name, written) in missing.iter() {
+            if out.get(&name).is_none() {
+                unresolved.insert(name, written);
+            }
+        }
+        (out, unresolved)
     }
 
     fn build_table(&mut self, module: Sid) -> Option<ModuleTable> {
@@ -601,6 +637,7 @@ impl Core {
             names: OrderedMap::default(),
             star_imports: Vec::new(),
             lazy: OrderedMap::default(),
+            lazy_missing: OrderedMap::default(),
             record: None,
             stub_record: None,
             stub_names: FxHashSet::default(),
@@ -610,7 +647,8 @@ impl Core {
             if self.facts.files[file as usize].ok() {
                 self.collect(&mut table, file, false);
                 if matches!(table.names.get(&self.getattr_id), Some(Binding::Def(_, _))) {
-                    table.lazy = self.lazy_map(module, table.is_package, file);
+                    (table.lazy, table.lazy_missing) =
+                        self.lazy_map(module, table.is_package, file);
                 }
             }
         }
@@ -623,6 +661,7 @@ impl Core {
                     names: OrderedMap::default(),
                     star_imports: Vec::new(),
                     lazy: OrderedMap::default(),
+                    lazy_missing: OrderedMap::default(),
                     record: None,
                     stub_record: None,
                     stub_names: FxHashSet::default(),

@@ -35,16 +35,10 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "HZ06"
+case = "HZ10"
 rule = "export-shape"
 verdict = "unknown"
-identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
-
-[[row]]
-case = "FD06"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.serializers", "export-shape(class)"]
+identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
 
 [[row]]
 case = "ES01"
@@ -70,13 +64,25 @@ rule = "export-shape"
 verdict = "finding"
 identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.api", "export-shape(class)"]
 
-# facade-logic
+[[row]]
+case = "FD06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.serializers", "export-shape(class)"]
 
 [[row]]
 case = "HZ06"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
+
+# facade-logic
+
+[[row]]
+case = "HZ10"
 rule = "facade-logic"
 verdict = "incomplete"
-identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
+identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
 
 [[row]]
 case = "FL03"
@@ -108,25 +114,25 @@ rule = "facade-logic"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.aliasworkers.start_alias", "products.legacy.backend.facade.aliasworkers"]
 
+[[row]]
+case = "HZ06"
+rule = "facade-logic"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
+
 # facade-no-drf
+
+[[row]]
+case = "HZ10"
+rule = "facade-no-drf"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 [[row]]
 case = "CR03"
 rule = "facade-no-drf"
 verdict = "unknown"
 identity = ["products.catalog.backend.facade.api", "?"]
-
-[[row]]
-case = "FD04"
-rule = "facade-no-drf"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.api", "products.catalog.backend.api.serializers"]
-
-[[row]]
-case = "FD06"
-rule = "facade-no-drf"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.serializers", "products.catalog.backend.api.serializers"]
 
 [[row]]
 case = "FD01"
@@ -147,12 +153,30 @@ verdict = "finding"
 identity = ["products.legacy.backend.facade.api", "products.legacy.backend.presentation.views"]
 
 [[row]]
+case = "FD04"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "products.catalog.backend.api.serializers"]
+
+[[row]]
+case = "FD06"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.serializers", "products.catalog.backend.api.serializers"]
+
+[[row]]
 case = "HZ06"
 rule = "facade-no-drf"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.aboveworkers", "?"]
 
 # facade-signature
+
+[[row]]
+case = "HZ10"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "run_gone", "signature", "products.legacy.backend.temporal.gone.run_gone"]
 
 [[row]]
 case = "CM01"
@@ -498,7 +522,7 @@ case = "CY03"
 rule = "no-new-package-cycles"
 verdict = "unknown"
 identity = ["legacy", "?"]
-count = 2
+count = 3
 
 [[row]]
 case = "UK01"
@@ -840,6 +864,12 @@ verdict = "finding"
 identity = ["products.legacy.backend.presentation.views", "products.inventory.backend.presentation.serializers"]
 
 # prod-imports-test
+
+[[row]]
+case = "HZ10"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 [[row]]
 case = "CR03"

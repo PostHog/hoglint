@@ -381,7 +381,7 @@ class ImportProducer(Producer):
 
     def lazy_edges(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
         table = context.resolver.tables.get(scope.module)
-        if table is None or not table.lazy or table.path != scope.path:
+        if table is None or not (table.lazy or table.lazy_missing) or table.path != scope.path:
             return
         sites = lazy_sites(scope.record)
         contexts = scope.contexts(FUNC, -1)
@@ -391,6 +391,14 @@ class ImportProducer(Producer):
             attrs = (*self.bound_attrs(context, name, loaded), LAZY_ATTR)
             resolved = context.classifier.classify(surface, hit)
             graph.edges.append(self.edge(self.kind, scope, -1, line, column, surface, resolved, contexts, attrs=attrs))
+        # No module answers for these, so the name stays bound to an edge that does not resolve.
+        for name, written in table.lazy_missing.items():
+            line, column = sites.get(name, (0, 0))
+            attrs = (("binds", name), LAZY_ATTR)
+            surface = f"{written}.{name}"
+            graph.edges.append(
+                self.edge(self.kind, scope, -1, line, column, surface, UNRESOLVED, contexts, attrs=attrs)
+            )
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         resolver = context.resolver

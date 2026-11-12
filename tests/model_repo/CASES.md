@@ -94,6 +94,8 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `HZ07` | `products/legacy/backend/facade/lazylabels.py` | A facade module with a body that hands out a name from its product's logic lazily | clean | Neighbor of `HZ04` |
 | `HZ08` | `products/legacy/backend/facade/aliaslabels.py` | A facade module with a body that imports wiring as `import a.b as name` and does not list the name in `__all__` | clean | Neighbor of `HZ05` |
 | `HZ09` | `products/legacy/backend/facade/relativelabels.py` | A facade module with a body that hands out a name from logic by a relative import that resolves | clean | Neighbor of `HZ06` |
+| `HZ10` | `products/legacy/backend/facade/lazygoneworkers.py` | A facade module with a body whose lazy map names a module that does not exist | facade-logic incomplete; export-shape, facade-signature, facade-no-drf and prod-imports-test unknown; one more cycle unknown (`CY03`) | The entry is an import edge that does not resolve and keeps its name: unknown is never clean (Nov 12) |
+| `HZ11` | `products/legacy/backend/facade/lazytext.py` | A facade module with `__getattr__` and a module-level dict of text | clean | Neighbor of `HZ10`: a value that is no dotted path is no lazy entry |
 | `FQ01` | `products/catalog/backend/facade/api.py` | A facade function runs an ORM query itself (`count_entries`) | clean | D95, D96 (wanted) |
 | `FQ02` | `products/inventory/backend/facade/api.py` | A facade function maps a list that its logic returned | clean | D96 |
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |
@@ -158,7 +160,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `DI02` | `posthog/products.py` | The registry loader's computed import | clean | |
 | `CY01` | `products/catalog/backend/facade/api.py`, `products/reports/backend/logic/build.py` | Two products that depend on each other | no-new-package-cycles finding, one per direction | |
 | `CY02` | `products/reports/backend/logic/build.py`, `products/catalog/backend/facade/shapes.py` | One-way dependencies | clean | |
-| `CY03` | `products/legacy/backend/logic/widgets.py`, `products/legacy/backend/facade/aboveworkers.py` | An unresolved model label; an unresolved relative import | no-new-package-cycles unknown onto `?` (one identity, two rows) | Open (see `GM03`) |
+| `CY03` | `products/legacy/backend/logic/widgets.py`, `products/legacy/backend/facade/aboveworkers.py`, `products/legacy/backend/facade/lazygoneworkers.py` | An unresolved model label; an unresolved relative import; a lazy entry no module answers for | no-new-package-cycles unknown onto `?` (one identity, three rows) | Open (see `GM03`) |
 | `FO01` | `products/access_control/backend/logic/rules.py` | A foundation product imports a feature product's facade | foundation-direction finding | |
 | `FO02` | `products/access_control/backend/logic/rules.py` | A foundation product imports another foundation product | clean | |
 | `IF01` | `posthog/egress/client.py` | Infrastructure imports a product's facade | infrastructure-direction and no-product-lists-in-core findings | |

@@ -367,11 +367,17 @@ impl HandedOut {
                 });
             }
         }
-        let lazy: Vec<(Sid, Sid)> = match core.table(scope.module) {
-            Some(table) => core.table_at(table).lazy.iter().collect(),
-            None => Vec::new(),
+        let (lazy, missing): (Vec<(Sid, Sid)>, Vec<(Sid, Sid)>) = match core.table(scope.module) {
+            Some(table) => {
+                let table = core.table_at(table);
+                (
+                    table.lazy.iter().collect(),
+                    table.lazy_missing.iter().collect(),
+                )
+            }
+            None => (Vec::new(), Vec::new()),
         };
-        for (name, module) in lazy {
+        for (name, module) in lazy.into_iter().chain(missing) {
             let target = core.it.join(module, name);
             if seen.insert((name, target)) {
                 out.push(Handed {

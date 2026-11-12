@@ -259,11 +259,13 @@ class HandedOut:
                 seen.add((bound, target_name))
                 out.append(Handed(bound, target_name, clause, line, column))
         lazy = self.table.lazy if self.table is not None else {}
-        for name, module in lazy.items():
-            key = (name, f"{module}.{name}")
+        missing = self.table.lazy_missing if self.table is not None else {}
+        lazy_targets = [(name, f"{module}.{name}") for name, module in lazy.items()]
+        lazy_targets += [(name, f"{written}.{name}") for name, written in missing.items()]
+        for key in lazy_targets:
             if key not in seen:
                 seen.add(key)
-                out.append(Handed(name, key[1], LAZY_CLAUSE, 0, 0))
+                out.append(Handed(key[0], key[1], LAZY_CLAUSE, 0, 0))
         return out
 
     def hand_out(self, used: frozenset[str]) -> HandOut:

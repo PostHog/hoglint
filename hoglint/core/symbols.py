@@ -6,6 +6,7 @@ origin, so edges can keep surface, via and origin apart.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -30,6 +31,9 @@ RUN_TIME_MODULE_FLAGS = TC_ELSE | IF | TRY | BLOCK
 # Statements that may not run, or run instead of another branch.
 CONDITIONAL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY
 
+# A name and a module path as a lazy map writes them: ASCII identifiers, the path dotted.
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+DOTTED_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 MODULE_ATTRIBUTES = frozenset(
     {"__doc__", "__file__", "__name__", "__path__", "__spec__", "__loader__", "__package__", "__dict__", "__all__"}
 )
@@ -162,6 +166,8 @@ class ModuleTable:
     names: dict[str, Binding] = field(default_factory=dict)
     star_imports: list[str] = field(default_factory=list)
     lazy: dict[str, str] = field(default_factory=dict)  # name -> module, from a PEP 562 lazy map
+    # name -> the module path as written, for a lazy map entry no module answers for
+    lazy_missing: dict[str, str] = field(default_factory=dict)
     values: dict[str, object] = field(default_factory=dict)  # name -> V value of its last module-level assign
     stub_names: set[str] = field(default_factory=set)  # names only the `.pyi` beside the module binds
 
@@ -232,11 +238,15 @@ class Tables:
                 continue
             table.names[name] = binding
 
-    def lazy_map(self, module: str, is_package: bool, record: dict) -> dict[str, str]:
+    def lazy_map(self, module: str, is_package: bool, record: dict) -> tuple[dict[str, str], dict[str, str]]:
         """PEP 562 lazy exports: module-level dicts of name -> module string, in a module that
         defines `__getattr__`. A value is the tail of a module-level string prefix
         (`_BASE + value`), an absolute module, or a module under the package or one of its
-        ancestors (nearest first), in that order."""
+        ancestors (nearest first), in that order.
+
+        Second, the entries no module answers for, by name, with the module path as written. Only
+        an entry that reads as a name and a dotted path counts: another dict of text in the
+        module is no lazy map."""
         package = module if is_package else module.rpartition(".")[0]
         parts = package.split(".")
         ancestors = [".".join(parts[:end]) for end in range(len(parts), 0, -1)]
@@ -251,16 +261,19 @@ class Tables:
             elif isinstance(value, dict) and "dict" in value:
                 maps.append(value["dict"])
         out: dict[str, str] = {}
+        missing: dict[str, str] = {}
         for items in maps:
             for key, value in items:
                 if not (isinstance(key, dict) and "s" in key and isinstance(value, dict) and "s" in value):
                     continue
                 relative = [f"{ancestor}.{value['s']}" for ancestor in ancestors]
-                for candidate in (*(p + value["s"] for p in prefixes), value["s"], *relative):
-                    if self.index.exists(candidate):
-                        out[key["s"]] = candidate
-                        break
-        return out
+                candidates = (*(p + value["s"] for p in prefixes), value["s"], *relative)
+                found = next((candidate for candidate in candidates if self.index.exists(candidate)), None)
+                if found is not None:
+                    out[key["s"]] = found
+                elif IDENTIFIER.fullmatch(key["s"]) and DOTTED_PATH.fullmatch(value["s"]):
+                    missing[key["s"]] = value["s"]
+        return out, {name: path for name, path in missing.items() if name not in out}
 
     def build(self, module: str) -> ModuleTable | None:
         """The module's own names; a `.pyi` beside the `.py` adds the names the source leaves
@@ -272,7 +285,7 @@ class Tables:
         if record is not None and record.get("status") == "ok":
             self.collect(table, record, "")
             if table.names.get("__getattr__", ("",))[0] == "def":
-                table.lazy = self.lazy_map(module, table.is_package, record)
+                table.lazy, table.lazy_missing = self.lazy_map(module, table.is_package, record)
         stub = self.stub_record(module)
         if stub is not None and stub.get("status") == "ok":
             stub_table = ModuleTable(module, self.index.stub_of[module], table.is_package)

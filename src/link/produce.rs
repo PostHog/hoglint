@@ -911,7 +911,8 @@ impl Producers<'_> {
             return;
         }
         let lazy: Vec<(Sid, Sid)> = table.lazy.iter().collect();
-        if lazy.is_empty() {
+        let missing: Vec<(Sid, Sid)> = table.lazy_missing.iter().collect();
+        if lazy.is_empty() && missing.is_empty() {
             return;
         }
         let facts = self.core.facts.clone();
@@ -926,6 +927,16 @@ impl Producers<'_> {
             let resolved = self.core.classify(surface, hit);
             self.push(
                 IMPORT, owner, -1, line, col, ctx, surface, resolved, EMPTY, &attrs,
+            );
+        }
+        // No module answers for these, so the name stays bound to an edge that does not resolve.
+        for (name, written) in missing {
+            let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
+            let k = &self.settings.k;
+            let attrs = [(k.binds, name), (k.lazy, k.one)];
+            let surface = self.core.it.join(written, name);
+            self.push(
+                IMPORT, owner, -1, line, col, ctx, surface, UNRESOLVED, EMPTY, &attrs,
             );
         }
     }

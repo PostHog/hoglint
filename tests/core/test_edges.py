@@ -29,6 +29,9 @@ def repo() -> list[FileFacts]:
         .define("__getattr__")
         .assign("_BASE", {"s": "checkout."})
         .assign("_LAZY", {"dict": [[{"s": "refund"}, {"s": "logic"}]]}),
+        FileFacts("checkout/lazygone.py")
+        .define("__getattr__")
+        .assign("_LAZY", {"dict": [[{"s": "ghost"}, {"s": "checkout.gone"}], [{"s": "label"}, {"s": "Run it"}]]}),
         FileFacts("nspkg/sub/mod.py"),
         FileFacts("checkout/optional.py")
         .import_from("checkout.logic", "refund", flags=TRY)
@@ -82,6 +85,13 @@ def test_a_lazy_name_gets_an_import_edge_that_does_not_run_on_import() -> None:
     assert (edge.site.scope, edge.site.line) == ("<module>", 3)
     assert edge.contexts == {Context.PROD, Context.FUNCTION_LOCAL}
     assert edge.attrs == (("binds", "refund"), ("module", "checkout.logic"), ("lazy", "1"))
+
+
+def test_a_lazy_name_whose_module_does_not_exist_gets_an_unresolved_edge() -> None:
+    [edge] = edges_of(build(repo()), "import", "checkout/lazygone.py")
+    assert (edge.surface, edge.targets, edge.resolution) == ("checkout.gone.ghost", (), Resolution.UNRESOLVED)
+    assert (edge.site.line, edge.contexts) == (2, {Context.PROD, Context.FUNCTION_LOCAL})
+    assert edge.attrs == (("binds", "ghost"), ("lazy", "1"))
 
 
 def test_a_relative_import_above_the_top_package_keeps_the_name_it_binds() -> None:

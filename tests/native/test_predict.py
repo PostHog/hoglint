@@ -469,23 +469,33 @@ HANDING_BASE = {
     "app/views.py": "from app.api import ping\n",
 }
 PING = "\n\ndef ping():\n    pass\n"
-# (the facade before, the facade after, other files of the child): each moves the zones the facade
-# hands out names from, so a row that reads `dst.handed_zones` at the facade moves.
+# (the facade before, the facade after, other files of the child, the read kinds the reader cannot do
+# without): each moves the zones the facade hands out names from, so a row that reads
+# `dst.handed_zones` at the facade moves.
 HAND_OUT_MOVES = {
     "a lazy map entry names another module": (
         '_LAZY = {"run": "app.jobs.tasks"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
         '_LAZY = {"run": "app.logic"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
         {},
+        ("label",),
     ),
     "an import of a module under a listed name is added": (
         '__all__ = ["ping"]' + PING,
         'import app.jobs.tasks as run\n\n__all__ = ["run", "ping"]' + PING,
         {},
+        ("label",),
+    ),
+    "the module a lazy name names is added": (
+        '_LAZY = {"run": "app.jobs.later"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        None,
+        {"app/jobs/later.py": "def run():\n    pass\n"},
+        ("label", "module"),
     ),
     "the module a lazy name comes from changes": (
         '_LAZY = {"run": "app.shim"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
         None,
         {"app/shim.py": "from app.logic import run as run\n"},
+        ("label",),
     ),
 }
 
@@ -495,7 +505,7 @@ def test_a_moved_hand_out_edge_rejudges_a_row_that_reads_handed_zones_at_the_des
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     native_module()
-    before, after, other = HAND_OUT_MOVES[case]
+    before, after, other, kinds = HAND_OUT_MOVES[case]
     parent_files = {
         **HANDING_BASE,
         "app/shim.py": "from app.jobs.tasks import run as run\n",
@@ -510,4 +520,4 @@ def test_a_moved_hand_out_edge_rejudges_a_row_that_reads_handed_zones_at_the_des
     assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
     changed = {path for path in child_files if child_files[path] != parent_files.get(path)}
     assert reader in predict(parent, child, changed).files
-    assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files
+    assert reader not in predict(parent, child, changed, ignored_kinds=kinds).files
