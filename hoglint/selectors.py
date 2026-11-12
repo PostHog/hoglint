@@ -228,25 +228,21 @@ class Parser:
 
     # An `and` inside an `and` (from parentheses or a named condition) joins it, and so does an
     # `or` inside an `or`: rules stage the top-level parts of a selection one by one.
-    def parse_or(self) -> Node:
+    def parse_joined(self, word: str, joiner: type[And] | type[Or], parse_part: Callable[[], Node]) -> Node:
         parts: list[Node] = []
         while True:
-            part = self.parse_and()
-            parts.extend(part.parts if isinstance(part, Or) else (part,))
-            if self.peek_word() != "or":
+            part = parse_part()
+            parts.extend(part.parts if isinstance(part, joiner) else (part,))
+            if self.peek_word() != word:
                 break
             self.take()
-        return parts[0] if len(parts) == 1 else Or(tuple(parts))
+        return parts[0] if len(parts) == 1 else joiner(tuple(parts))
+
+    def parse_or(self) -> Node:
+        return self.parse_joined("or", Or, self.parse_and)
 
     def parse_and(self) -> Node:
-        parts: list[Node] = []
-        while True:
-            part = self.parse_not()
-            parts.extend(part.parts if isinstance(part, And) else (part,))
-            if self.peek_word() != "and":
-                break
-            self.take()
-        return parts[0] if len(parts) == 1 else And(tuple(parts))
+        return self.parse_joined("and", And, self.parse_not)
 
     def parse_not(self) -> Node:
         if self.peek_word() == "not":
