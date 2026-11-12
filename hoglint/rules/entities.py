@@ -14,6 +14,7 @@ from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 from hoglint.rules.base import (
     EdgeEnv,
     EdgeRule,
+    Endpoint,
     IncompleteItem,
     Judgment,
     RuleContext,
