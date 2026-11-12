@@ -185,31 +185,32 @@ impl Rules {
                     .unless
                     .as_ref()
                     .is_some_and(|unless| truth(unless, &env) == Truth::True);
-                let target = match cx
-                    .symbol_text(hop.dst.symbol)
-                    .filter(|symbol| !symbol.is_empty())
-                {
-                    Some(symbol) => symbol.into_owned(),
-                    None => hop
-                        .dst
-                        .module
-                        .map_or(String::new(), |module| cx.text(module).to_string()),
-                };
                 let denied = verdict != Truth::False && !excused;
-                if denied && !reported.contains(&target) {
-                    reported.insert(target);
-                    let mut path = vec![step];
-                    let mut back = parents.get(&module).copied().flatten();
-                    while let Some((previous, step)) = back {
-                        path.push(step);
-                        back = parents.get(&previous).copied().flatten();
+                if denied {
+                    let target = match cx
+                        .symbol_text(hop.dst.symbol)
+                        .filter(|symbol| !symbol.is_empty())
+                    {
+                        Some(symbol) => symbol.into_owned(),
+                        None => hop
+                            .dst
+                            .module
+                            .map_or(String::new(), |module| cx.text(module).to_string()),
+                    };
+                    if reported.insert(target) {
+                        let mut path = vec![step];
+                        let mut back = parents.get(&module).copied().flatten();
+                        while let Some((previous, step)) = back {
+                            path.push(step);
+                            back = parents.get(&previous).copied().flatten();
+                        }
+                        path.reverse();
+                        out.push(Found::Denied {
+                            source,
+                            path,
+                            verdict,
+                        });
                     }
-                    path.reverse();
-                    out.push(Found::Denied {
-                        source,
-                        path,
-                        verdict,
-                    });
                 }
                 // A denied module is entered only with `through_denied`, never because a second
                 // hop names it.

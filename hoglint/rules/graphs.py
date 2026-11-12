@@ -198,11 +198,12 @@ class ReachPrimitive(EdgeRule):
                     continue
                 verdict, excused = self.kept_verdict(module, at, hop, origin)
                 denied = verdict is not Truth.FALSE and not excused
-                target = dst.symbol or dst.module or ""
-                if denied and target not in reported:
-                    reported.add(target)
-                    path = [*self.path_to(parents, module), hop]
-                    self.report(self.hop_env(hop, origin), [step.edge for step in path], verdict)
+                if denied:
+                    target = dst.symbol or dst.module or ""
+                    if target not in reported:
+                        reported.add(target)
+                        path = [*self.path_to(parents, module), hop]
+                        self.report(self.hop_env(hop, origin), [step.edge for step in path], verdict)
                 # A denied module is entered only with `through_denied`, never because a second hop names it.
                 if denied and not self.spec.through_denied:
                     continue
