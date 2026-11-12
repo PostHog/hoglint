@@ -695,24 +695,30 @@ def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World)
     assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
 
 
+# A module that reaches a product's model as an attribute of the imported models module.
+THROUGH_A_MODULE = "from products.billing.backend import models\n\n\ndef h():\n    models.Invoice.objects.all()\n"
+
+
 @pytest.mark.parametrize(
     ("uses_at_import", "references"),
     [
         (
             False,
             {
-                ("products.billing.backend.facade.api.charge", "products.alerts.backend.logic"),
                 ("products.billing.backend.models.Invoice", "core.a"),
                 ("products.billing.backend.models.Invoice", "core.b"),
+                ("products.billing.backend.models.Invoice", "core.c"),
             },
         ),
         # A use of a name the module imports goes; a use through an imported module stays.
-        (True, {("products.billing.backend.facade.api.charge", "products.alerts.backend.logic")}),
+        (True, {("products.billing.backend.models.Invoice", "core.c")}),
     ],
 )
 def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
-    world: World, uses_at_import: bool, references: set[tuple[str, str]]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uses_at_import: bool, references: set[tuple[str, str]]
 ) -> None:
+    monkeypatch.setitem(SOURCES, "core/c.py", THROUGH_A_MODULE)
+    world = World(tmp_path)
     spec_table = {**CORNERS["uses-judged-at-their-import"], "uses_at_import": uses_at_import}
     config = world.config(rule_table("uses", spec_table))
     native, python = world.contexts(config)
