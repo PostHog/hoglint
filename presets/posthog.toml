@@ -37,6 +37,8 @@ generated = { type = "bool", required_on = ["posthog/schema.py", "posthog/schema
 producer  = { type = "set" }
 # Frozen history outside the `migration` context: migration files nobody rewrites.
 history   = { type = "bool" }
+# Django settings modules: they must name product paths (installed apps, middleware, loggers).
+settings  = { type = "bool" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -108,6 +110,10 @@ match = [
   "posthog/product_urls.py", "posthog/products.py", "posthog/apps.py", "posthog/settings/**",
 ]
 set = { zone = "composition" }
+
+[[assign]]
+match = "posthog/settings/**"
+set   = { settings = true }
 
 # Every package under packages/ is a leaf (B13).
 [[assign]]
@@ -246,13 +252,13 @@ field-of-model           = ["edge.model", "edge.field"]
 
 [rules.public-surface]
 primitive     = "entrypoint"
-doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged."
+doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings."
 kinds         = ["import", "reference", "dotted-path"]
 contexts      = { exclude = ["migration"] }
 select        = "src.package != dst.package and dst.tier == 'product' and src.history != true"
 endpoint      = "surface"
 uses_at_import = true
-allow         = "dst.exported"
+allow         = "dst.exported or (src.settings == true and edge.kind == 'dotted-path')"
 on_unresolved = "finding"
 identity      = ["dst.symbol", "src.module", "edge.kind"]
 growth_key    = ["dst.symbol", "edge.kind", "src.package"]

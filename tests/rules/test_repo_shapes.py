@@ -279,6 +279,14 @@ PUBLIC_SURFACE_CASES = [
         ],
         [("products.billing.backend.logic.charge", "posthog.rbac.migrations.rbac_team_migration", "import")],
     ),
+    (
+        "Django settings may name a product path as a string, not import it",
+        [
+            ("dotted-path", "posthog.settings.web", "products.billing.backend.logic.charge", (Context.PROD,)),
+            ("import", "posthog.settings.web", "products.billing.backend.logic.charge", (Context.PROD,)),
+        ],
+        [("products.billing.backend.logic.charge", "posthog.settings.web", "import")],
+    ),
 ]
 
 
