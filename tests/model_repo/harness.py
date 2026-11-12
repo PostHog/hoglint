@@ -35,6 +35,7 @@ UNTIED = "?"
 # A case id as the catalog writes it: two letters and two digits, as code.
 CASE_ID = re.compile(r"`[A-Z]{2}[0-9]{2}`")
 ANY_RULE = "*"
+ANY_VERDICT = "*"
 # The column of a findings row that says it exists because something did not resolve.
 UNKNOWN_COLUMN = 10
 
@@ -47,7 +48,8 @@ EXPECTED_HEADER = """\
 WANTED_HEADER = """\
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
 # is an expected failure of test_model_repo.py until the rule gives it. A wanted row matches a
-# row of `rule` ("*" for any rule) with `verdict` whose identity holds every string of `match`.
+# row of `rule` ("*" for any rule) with `verdict` ("*" for any: a finding or an incomplete row)
+# whose identity holds every string of `match`.
 """
 LEVELS_HEADER = "# Levels: the products that pass and fail each level.\n"
 
@@ -179,7 +181,7 @@ class ExpectedRow:
 @dataclass(frozen=True)
 class WantedRow:
     """A verdict that a decided rule gives once it is built: a row of `rule` ("*" for any rule)
-    with `verdict` whose identity holds every string of `match`."""
+    with `verdict` ("*" for any) whose identity holds every string of `match`."""
 
     case: str
     decision: str
@@ -189,7 +191,7 @@ class WantedRow:
 
     def found_in(self, rows: Counter[Row]) -> bool:
         for row in rows:
-            if self.rule not in (ANY_RULE, row.rule) or row.verdict != self.verdict:
+            if self.rule not in (ANY_RULE, row.rule) or self.verdict not in (ANY_VERDICT, row.verdict):
                 continue
             text = " | ".join(row.identity)
             if all(part in text for part in self.match):
