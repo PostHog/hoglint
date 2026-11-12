@@ -104,6 +104,34 @@ def test_a_damaged_store_is_a_miss(tmp_path: Path, damage: str) -> None:
     assert [edge.surface for edge in outputs] == ["1", "1"]
 
 
+@pytest.mark.parametrize("damage", ["lost-newest-state", "garbage-file"])
+def test_a_store_damaged_from_outside_is_moved_aside_and_the_next_run_stores_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    monkeypatch.setattr(RunStores, "warned", set())
+    store = MemoStore(tmp_path, "engine")
+    check(store, {"a": "1"})
+    store.close()
+    gc.collect()
+    path = store.database.path
+    if damage == "lost-newest-state":
+        # The next state's `blobs` row takes the lost row's id, which a `keys` row still holds.
+        with sqlite3.connect(path) as conn:
+            conn.execute("DELETE FROM blobs WHERE id = (SELECT max(id) FROM blobs)")
+    else:
+        for suffix in ("-wal", "-shm"):
+            Path(f"{path}{suffix}").unlink(missing_ok=True)
+        path.write_bytes(b"not a database at all" * 100)
+    damaged = MemoStore(tmp_path, "engine")
+    check(damaged, {"a": "2"})
+    assert damaged.state() == "failed"
+    healed = MemoStore(tmp_path, "engine")
+    check(healed, {"a": "2"})
+    world, outputs = check(healed, {"a": "2"})
+    assert (world.ran, healed.state()) == ([], "open")
+    assert [edge.surface for edge in outputs] == ["2", "2"]
+
+
 class Folded(World):
     """A fold that builds a state, and items in the fold's own part that read it."""
 

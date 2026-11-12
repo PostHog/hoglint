@@ -18,7 +18,9 @@ bytes do not hash to its digest is damage.
 
 The store is a cache (D28): a state or part that cannot be read, decoded or checked is a miss,
 any error warns once and the run goes on without the store, and a database SQLite calls damaged
-is moved aside.
+is moved aside. So is one whose write breaks a constraint: every write of a state deletes and
+adds its rows in one transaction, so only a change from outside (such as a lost `blobs` row,
+whose id the next state then takes again) breaks one, and it would break again on every run.
 """
 
 from __future__ import annotations
@@ -90,7 +92,8 @@ class MemoStore:
     def fail(self, error: Exception) -> None:
         self.broken = True
         self.stores.fail(MEMO_STORE.name, error)
-        if is_corrupt(error):
+        # The store's own writes never break a constraint, so a broken one is damage from outside.
+        if is_corrupt(error) or isinstance(error, sqlite3.IntegrityError):
             self.close()
             self.database.move_aside()
 
