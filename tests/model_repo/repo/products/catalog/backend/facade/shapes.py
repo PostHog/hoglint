@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from posthog.dataclasses import frozen
 from posthog.models import Integration, Organization, OrganizationMembership, Project, Team, User
+from products.catalog.backend.management.commands.import_entries import Command as ImportCommand
 from products.inventory.backend.models import StockItem
 
 
@@ -54,3 +55,14 @@ class EntryDraft:
 @frozen
 class EntryTitles:
     names: list[str]
+
+
+@frozen
+class EntryTeams:
+    teams: list[Team]
+    integrations: list[Integration]
+
+
+@frozen
+class EntryJob:
+    command: ImportCommand

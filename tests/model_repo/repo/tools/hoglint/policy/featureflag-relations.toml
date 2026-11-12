@@ -1,7 +1,0 @@
-[[entry]]
-identity = ["products.inventory.backend.models.StockItem", "flag"]
-class = "reference"
-
-[[entry]]
-identity = ["products.catalog.backend.models.CatalogEntry", "flag"]
-class = "reference"

@@ -1,8 +1,11 @@
+from collections.abc import Mapping
 from typing import Any
 
 from django.db.models import QuerySet
 
 from posthog.models import Integration, Organization, OrganizationMembership, Project, Team, User
+from posthog.models.ghost import Ghost
+from products.catalog.backend.management.commands.import_entries import Command as ImportCommand
 from products.catalog.backend.facade.contracts import EntryInfo
 from products.catalog.backend.logic import pricing
 from products.catalog.backend.models import CatalogEntry, EntryManager
@@ -124,3 +127,35 @@ def give_payload(entry_id: int) -> dict[str, Any]:
 
 def take_unannotated(value) -> int:
     return 0
+
+
+def take_union(value: dict[str, Any] | list[Any]) -> int:
+    return len(value)
+
+
+def take_mapping(value: Mapping[str, Any]) -> int:
+    return len(value)
+
+
+def take_bare_list(value: list) -> int:
+    return len(value)
+
+
+def take_team_map(value: dict[str, Team]) -> int:
+    return len(value)
+
+
+def give_list_any(entry_id: int) -> list[Any]:
+    return [entry_id]
+
+
+def for_ghost(ghost: Ghost) -> int:
+    return 0
+
+
+def run_import(command: ImportCommand) -> int:
+    return 0
+
+
+def import_command(entry_id: int) -> ImportCommand:
+    return ImportCommand()

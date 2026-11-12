@@ -4,7 +4,7 @@ extends = ["hoglint:django", "tools/hoglint/presets/posthog.toml"]
 
 [discovery]
 source_roots = ["."]
-first_party  = ["posthog", "ee", "common", "products", "tools", "services", "packages"]
+first_party  = ["posthog", "ee", "common", "products", "tools", "services", "packages", "sandbox"]
 exclude      = ["docs/**"]
 external     = ["django", "rest_framework"]
 plugins      = ["hoglint.presets_py.posthog"]
