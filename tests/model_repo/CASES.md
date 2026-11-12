@@ -141,6 +141,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `RA04` | `products/inventory/backend/models.py`, `products/reports/backend/models.py`, `posthog/models/organization.py` | Sealed relations and core-to-core relations | clean | |
 | `RD01` | `products/legacy/backend/receivers.py` | A receiver on another product's sender, in a watched module | receiver-direction finding; public-surface finding for the import; model-crossings clean (`sender`); wiring-watched clean | Cross-check of Nov 12; Nov 12 |
 | `RD02` | `products/legacy/backend/stock_listeners.py` | The same in an unwatched module | the same, and a wiring-watched finding | |
+| `RD03` | `products/legacy/backend/tests/test_stock_signals.py` | The same in a product's test file | public-surface finding for the import; receiver-direction and wiring-watched clean | A receiver in a test is no wiring (Nov 12) |
 | `RD03` | `products/inventory/backend/logic/stock.py` | A receiver on its own product's sender | clean | |
 | `IN01` | `products/legacy/backend/apps.py`, `products/legacy/backend/hooks.py` | A product registers a function into a core hook from an unwatched module | installs clean (a list); wiring-watched finding | `installs` is a list (Nov 12) |
 | `IN02` | `products/legacy/backend/apps.py` | A product registers a model class into a core registry | clean beyond `IN01` | D100 (wanted) |
@@ -308,7 +309,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | installs | An install made from a test | None |
 | installs | A hook call that does not resolve | None |
 | wiring-watched | An unwatched module that installs a hook callback | `IN01`, `IN03` |
-| wiring-watched | A test module treated as a hook source | None |
+| wiring-watched | A test module treated as a receiver or hook source | `RD03` (clean) |
 | wiring-watched | A patch target resolved to its origin | `PS10` (patched where defined) |
 | wiring-watched | A drives location reported as its `__init__.py` | `DR01` |
 | wiring-watched | A product module the request path reaches, unwatched | `WW01` |

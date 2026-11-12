@@ -597,11 +597,11 @@ ledger        = false
 
 [rules.wiring-watched]
 primitive  = "coverage"
-doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback, and every module outside tests patch is in the contract-check inputs."
+doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback outside tests, and every module outside tests patch is in the contract-check inputs."
 covers     = [
   "rules.drives.dst.path",
   "rules.request-path.dst.path",
-  "edge.kind in ['signal', 'installs'] and crosses-package: src",
+  "edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src",
   "edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface",
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }

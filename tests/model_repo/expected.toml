@@ -1136,6 +1136,12 @@ identity = ["scripts.shapes"]
 # public-surface
 
 [[row]]
+case = "RD03"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_stock_signals", "import"]
+
+[[row]]
 case = "HZ06"
 rule = "public-surface"
 verdict = "unknown"
@@ -1478,16 +1484,16 @@ identity = ["products.legacy.backend.management.commands.sync_widgets", "product
 # wiring-watched
 
 [[row]]
-case = "DR02"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/hogql_queries/widget.py"]
-
-[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/catalog/backend/hogql_queries/__init__.py"]
+
+[[row]]
+case = "DR02"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/hogql_queries/widget.py"]
 
 [[row]]
 case = "IN01"
