@@ -178,9 +178,18 @@ class NamespaceDirectories:
         found: dict[str, str] = {}
         clashes: set[str] = set()
         for module, path in modules.items():
-            for name, directory in self.parents(module, path):
+            directories = self.directories(module, path)
+            if directories is None:
+                continue
+            root = len(directories) - module.count(".") - 1
+            # Each dotted parent is a prefix of the module: most are normal packages, so the
+            # membership test comes before any text is built.
+            dots = [at for at, char in enumerate(module) if char == "."]
+            for end, dot in enumerate(dots):
+                name = module[:dot]
                 if name in modules or name in clashes:
                     continue
+                directory = "/".join(directories[: root + end + 1])
                 if found.setdefault(name, directory) != directory:
                     clashes.add(name)
                     del found[name]
@@ -193,17 +202,16 @@ class NamespaceDirectories:
                 self.inside.setdefault(name, []).append(module)
 
     @staticmethod
-    def parents(module: str, path: str) -> list[tuple[str, str]]:
-        """Each dotted parent of `module` with the directory it names, when the path ends in the
-        module's own parts (`a/b/c.py` or `a/b/c/__init__.py` for `a.b.c`)."""
+    def directories(module: str, path: str) -> tuple[str, ...] | None:
+        """The directories of a module's path, when the path ends in the module's own parts
+        (`a/b/c.py` or `a/b/c/__init__.py` for `a.b.c`)."""
         file = PurePosixPath(path)
         own = file.parent if file.stem == "__init__" else file.with_suffix("")
         parts = module.split(".")
         directories = own.parts
         if len(directories) < len(parts) or list(directories[len(directories) - len(parts) :]) != parts:
-            return []
-        root = len(directories) - len(parts)
-        return [(".".join(parts[:end]), "/".join(directories[: root + end])) for end in range(1, len(parts))]
+            return None
+        return directories
 
 
 # ── Labeler ───────────────────────────────────────────────────────

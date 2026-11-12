@@ -364,9 +364,10 @@ pub struct Namespace {
     pub labels: Vec<Option<Cell>>,
 }
 
-/// Each dotted parent of `module` with the directory it names, when the path ends in the
-/// module's own parts (`NamespaceDirectories.parents`).
-fn namespace_parents(module: &str, path: &str) -> Vec<(String, String)> {
+/// The directories of a module's path, and where the module's first part sits among them, when
+/// the path ends in the module's own parts (`a/b/c.py` or `a/b/c/__init__.py` for `a.b.c`)
+/// (`NamespaceDirectories.directories`).
+fn module_directories<'p>(module: &str, path: &'p str) -> Option<(Vec<&'p str>, usize)> {
     let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
     // `PurePosixPath.stem`: a suffix is the text from the last dot, which is neither first nor last.
     let stem = match name.rfind('.') {
@@ -381,12 +382,10 @@ fn namespace_parents(module: &str, path: &str) -> Vec<(String, String)> {
     if directories.len() < parts.len()
         || directories[directories.len() - parts.len()..] != parts[..]
     {
-        return Vec::new();
+        return None;
     }
     let root = directories.len() - parts.len();
-    (1..parts.len())
-        .map(|end| (parts[..end].join("."), directories[..root + end].join("/")))
-        .collect()
+    Some((directories, root))
 }
 
 /// The namespace directories of the graph's modules, by dotted name; a name two modules place
@@ -396,18 +395,25 @@ fn namespace_paths(paths: &[&str], modules: &[&str]) -> Vec<(String, String)> {
     let mut found: FxHashMap<String, String> = FxHashMap::default();
     let mut clashes: FxHashSet<String> = FxHashSet::default();
     for (path, module) in paths.iter().zip(modules) {
-        for (name, directory) in namespace_parents(module, path) {
-            if names.contains(name.as_str()) || clashes.contains(&name) {
+        let Some((directories, root)) = module_directories(module, path) else {
+            continue;
+        };
+        // Each dotted parent is a prefix of the module: most are normal packages, so the
+        // membership test comes before any text is built.
+        for (end, (dot, _)) in module.match_indices('.').enumerate() {
+            let name = &module[..dot];
+            if names.contains(name) || clashes.contains(name) {
                 continue;
             }
-            match found.get(&name) {
+            let directory = directories[..root + end + 1].join("/");
+            match found.get(name) {
                 Some(seen) if *seen != directory => {
-                    found.remove(&name);
-                    clashes.insert(name);
+                    found.remove(name);
+                    clashes.insert(name.to_string());
                 }
                 Some(_) => {}
                 None => {
-                    found.insert(name, directory);
+                    found.insert(name.to_string(), directory);
                 }
             }
         }
