@@ -146,6 +146,9 @@ pub struct ShapePlan {
     /// An entity selector: a symbol it holds for is allowed as it stands.
     #[serde(default)]
     pub allow_where: Option<NodePlan>,
+    /// An entity selector: an allowed class that is no data shape is walked only where it holds.
+    #[serde(default)]
+    pub walk_where: Option<NodePlan>,
 }
 
 /// What an export rule checks (`ExportPrimitive`).

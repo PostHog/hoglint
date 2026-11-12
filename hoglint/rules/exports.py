@@ -302,6 +302,19 @@ class ExportPrimitive(RuleType):
         module = self.ctx.labeler.module_of_symbol(symbol)
         return policy.allow_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is Truth.TRUE
 
+    def walks(self, symbol: str, shapes: frozenset[str], policy: ShapePolicy) -> bool:
+        """Whether what an allowed class's members name is judged: always the fields of a data
+        shape; in a contract the members of any other allowed class, where `walk_where` holds."""
+        dataclass_like = bool(shapes & {"dataclass", "frozen-dataclass"})
+        if dataclass_like and shapes & set(policy.data):
+            return True
+        if not (policy.signatures or dataclass_like):
+            return False
+        if policy.walk_where is None:
+            return True
+        module = self.ctx.labeler.module_of_symbol(symbol)
+        return policy.walk_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is Truth.TRUE
+
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
         if behavior is None:
@@ -361,9 +374,7 @@ class ExportPrimitive(RuleType):
                     return
                 self.finding(symbol, module, "export-shape(class)", trail, edge)
                 return
-            # An allowed class's own shape is fine; what its fields and, in a contract, its methods
-            # name is still judged.
-            if policy.signatures or shapes & {"dataclass", "frozen-dataclass"}:
+            if self.walks(symbol, shapes, policy):
                 self.check_members(symbol, module, policy, trail)
             return
         if "function" in shapes:

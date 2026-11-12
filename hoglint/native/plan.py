@@ -166,6 +166,7 @@ class RulePlan:
                     "incomplete": policy.unknown == "incomplete",
                     "signatures": policy.signatures,
                     "allow_where": selector_tree(policy.allow_where),
+                    "walk_where": selector_tree(policy.walk_where),
                 }
                 for policy in config.shapes.values()
             ],

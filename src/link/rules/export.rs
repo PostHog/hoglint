@@ -112,6 +112,8 @@ pub struct Shape {
     signatures: bool,
     /// `allow_where`: a symbol it holds for is allowed as it stands.
     allow_where: Option<Node>,
+    /// `walk_where`: where an allowed class that is no data shape is walked.
+    walk_where: Option<Node>,
 }
 
 impl Shape {
@@ -139,13 +141,22 @@ impl Shape {
                 .as_ref()
                 .map(|node| entity.node(node))
                 .transpose()?,
+            walk_where: plan
+                .walk_where
+                .as_ref()
+                .map(|node| entity.node(node))
+                .transpose()?,
         })
     }
 
-    /// The entity selectors the policy reads: its behavior's `where` and its `allow_where`.
+    /// The entity selectors the policy reads: its behavior's `where`, `allow_where`, `walk_where`.
     pub fn reads(&self) -> Vec<&Node> {
         let behavior = self.behavior.as_ref().and_then(|(_, found)| found.as_ref());
-        behavior.into_iter().chain(&self.allow_where).collect()
+        behavior
+            .into_iter()
+            .chain(&self.allow_where)
+            .chain(&self.walk_where)
+            .collect()
     }
 }
 
@@ -563,6 +574,24 @@ impl<'a> Walk<'a> {
         (names, complete && !kind_unknown)
     }
 
+    /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged.
+    fn walks(&self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
+        let policy = &self.cx.rules.shapes[shape];
+        let dataclass_like = shapes.contains("dataclass") || shapes.contains("frozen-dataclass");
+        if dataclass_like && policy.data.iter().any(|name| shapes.contains(name)) {
+            return true;
+        }
+        if !(policy.signatures || dataclass_like) {
+            return false;
+        }
+        let Some(node) = &policy.walk_where else {
+            return true;
+        };
+        let owner = self.cx.module_of_symbol(symbol);
+        let env = EntityEnv::of(self.cx, owner, Some(symbol), None);
+        evaluate(node, &env) == Truth::True
+    }
+
     /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.
     fn allowed_as_is(&self, symbol: &str, shape: usize) -> bool {
         let Some(node) = &self.cx.rules.shapes[shape].allow_where else {
@@ -671,12 +700,7 @@ impl<'a> Walk<'a> {
                 );
                 return;
             }
-            // An allowed class's own shape is fine; what its fields and, in a contract, its methods
-            // name is still judged.
-            if policy.signatures
-                || shapes.contains("dataclass")
-                || shapes.contains("frozen-dataclass")
-            {
+            if self.walks(symbol, &shapes, shape) {
                 self.check_members(symbol, module, shape, trail);
             }
             return;

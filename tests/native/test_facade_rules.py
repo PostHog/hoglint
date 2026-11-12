@@ -194,8 +194,8 @@ HOGQL = {
 }
 
 
-# A contract may hand out a hook's Protocol and core's query syntax tree. The allowance covers the
-# class; what the tree's fields name is still judged.
+# A contract may hand out a hook's Protocol and core's query syntax tree. Core's own types are
+# core's contract: a product's facade hands them out as they stand, without judging their fields.
 def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     contracts = (
         "from typing import Protocol\n\nfrom posthog.hogql.base import Expr\n\n\n"
@@ -204,9 +204,7 @@ def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, mo
     )
     files = {**HOGQL, "products/shop/backend/facade/contracts.py": contracts}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "export-shape") == [
-        ["posthog.hogql.base.Context", f"{SHOP}.facade.contracts", "export-shape(class)"],
-    ]
+    assert findings(out["native"], "export-shape") == []
 
 
 def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

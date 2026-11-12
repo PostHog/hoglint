@@ -234,6 +234,8 @@ pydantic  = { subclass_of = ["pydantic.BaseModel", "pydantic.main.BaseModel", "p
 data       = ["frozen-dataclass", "enum"]
 allow      = ["protocol", "hogql_ast", "exception", "pydantic"]
 allow_where = "crosses == true"
+# Core's own types (its syntax tree, its Protocols) are core's contract: allowed as they stand.
+walk_where = "tier != 'core'"
 behavior   = { kind = "abc", where = "tier == 'core'" }
 deny       = ["model", "manager", "queryset", "command"]
 unknown    = "error"

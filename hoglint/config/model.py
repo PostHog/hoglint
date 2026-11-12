@@ -110,6 +110,8 @@ class ShapePolicy:
     signatures: bool = False  # the signatures of what the export hands out are part of the contract
     # An entity selector: a symbol it holds for is allowed as it stands, whatever its kind.
     allow_where: Selector | None = None
+    # An entity selector: an allowed class that is no data shape is walked only where it holds.
+    walk_where: Selector | None = None
     source: str = ""
 
 

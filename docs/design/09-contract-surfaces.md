@@ -71,7 +71,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   `Any` in any other generic (`list[Any]`, `Optional[Any]`) stays unknown.
   The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
-  An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged.
+  An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
+  A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
