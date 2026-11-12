@@ -65,15 +65,24 @@ class EntrypointPrimitive(EdgeRule):
         super().__init__(ctx, spec)
         self.default_allow = spec.deny is None and spec.allow is None and spec.require is None
         self.uses_at_import = spec.uses_at_import
-        self.imported: frozenset[tuple[str, str]] | None = None
+        self.imports: dict[tuple[str, str], list[Edge]] | None = None
+        self.reported: dict[tuple[str, str], bool] = {}
 
-    def imported_names(self) -> frozenset[tuple[str, str]]:
-        """(module, surface) of every import edge the rule reports."""
-        if self.imported is None:
-            self.imported = frozenset(
-                (edge.site.module, edge.surface) for edge in self.ctx.edges_of((IMPORT,)) if self.reports(edge)
-            )
-        return self.imported
+    def imports_named(self, key: tuple[str, str]) -> list[Edge]:
+        """The import edges of a (module, surface)."""
+        if self.imports is None:
+            self.imports = {}
+            for edge in self.ctx.edges_of((IMPORT,)):
+                self.imports.setdefault((edge.site.module, edge.surface), []).append(edge)
+        return self.imports.get(key, [])
+
+    def import_reported(self, key: tuple[str, str]) -> bool:
+        """Whether the rule reports an import edge of a (module, surface): judged once per key,
+        only for the keys a use asks about."""
+        found = self.reported.get(key)
+        if found is None:
+            found = self.reported[key] = any(self.reports(edge) for edge in self.imports_named(key))
+        return found
 
     def reports(self, edge: Edge) -> bool:
         """Whether the rule judges any destination of an edge it sees other than clean."""
@@ -84,7 +93,7 @@ class EntrypointPrimitive(EdgeRule):
             return False
         if not self.uses_at_import or edge.kind != REFERENCE:
             return True
-        return (edge.site.module, edge.surface) not in self.imported_names()
+        return not self.import_reported((edge.site.module, edge.surface))
 
     def violation(self, env: EdgeEnv) -> Truth:
         if self.default_allow:
