@@ -126,17 +126,22 @@ ledger = false
 }
 
 
+def write_repo(repo: Path, sources: dict[str, str]) -> None:
+    """A git repo that holds `sources`, staged."""
+    for path, text in sources.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+
+
 def dumps(
     tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPatch, unreadable: tuple[str, ...] = ()
 ) -> dict[str, Path]:
     native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
-    for path, text in sources.items():
-        (repo / path).parent.mkdir(parents=True, exist_ok=True)
-        (repo / path).write_text(text)
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    write_repo(repo, sources)
     for path in unreadable:
         (repo / path).chmod(0)
         if os.access(repo / path, os.R_OK):
@@ -383,9 +388,15 @@ GETATTR_FOUND = "products.shop.backend.facade.hooks.__getattr__"
 GETATTR_INCOMPLETE = "products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.__getattr__"
 LAZY_RUN = '_LAZY = {{"run": "{module}"}}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
 LAZY_TWO = (
-    '_LAZY = {{"run": "{module}", "other": "products.shop.backend.logic"}}\n\n\n'
-    "def __getattr__(name):\n    raise AttributeError(name)\n"
+    '_LAZY = {{"run": "{module}", "other": "{other}"}}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
 )
+# The packages above the facade module the handed tests read.
+SHOP = {
+    "products/__init__.py": "",
+    "products/shop/__init__.py": "",
+    "products/shop/backend/__init__.py": "",
+    "products/shop/backend/facade/__init__.py": "",
+}
 # (the import a facade module hands a name out by, the name, the files it reads, its findings, its
 # incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
 # directory without `__init__.py` has the zone a file directly inside it reads; a first-party name
@@ -494,7 +505,7 @@ HANDED_CASES = {
         [],
     ),
     "a relative lazy member whose module does not exist": (
-        LAZY_TWO.format(module="..temporal.gone"),
+        LAZY_TWO.format(module="..temporal.gone", other="products.shop.backend.logic"),
         "run",
         {"products/shop/backend/logic.py": RUN},
         [],
@@ -526,10 +537,7 @@ def test_a_handed_member_whose_zone_is_unknown_makes_the_handed_zones_unknown(
         "hoglint.toml": HANDED_CONFIG,
         "core/__init__.py": "",
         "core/jobs.py": RUN,
-        "products/__init__.py": "",
-        "products/shop/__init__.py": "",
-        "products/shop/backend/__init__.py": "",
-        "products/shop/backend/facade/__init__.py": "",
+        **SHOP,
         "products/shop/backend/facade/hooks.py": f"{line}\n\n__all__ = ['{name}']" + BODY,
         **files,
     }
@@ -556,7 +564,7 @@ HANDING_IMPORTS = {
     ),
     "a relative lazy name": (LAZY_RUN.format(module="..temporal.jobs") + "\n__all__ = ['run', 'build']", ["run"], []),
     "a relative lazy name whose module does not exist": (
-        LAZY_TWO.format(module="..temporal.gone").replace("backend.logic", "backend.temporal.jobs")
+        LAZY_TWO.format(module="..temporal.gone", other="products.shop.backend.temporal.jobs")
         + "\n__all__ = ['run', 'build']",
         ["other", "run"],
         [],
@@ -574,19 +582,12 @@ def test_the_hand_out_set_holds_every_name_a_handed_import_binds(
     text, handed, kept = HANDING_IMPORTS[case]
     repo = {
         "hoglint.toml": HANDED_CONFIG,
-        "products/__init__.py": "",
-        "products/shop/__init__.py": "",
-        "products/shop/backend/__init__.py": "",
-        "products/shop/backend/facade/__init__.py": "",
+        **SHOP,
         "products/shop/backend/facade/hooks.py": text + BODY,
         "products/shop/backend/temporal/jobs.py": RUN,
     }
     root = tmp_path / "repo"
-    for path, source in repo.items():
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text(source)
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    write_repo(root, repo)
     (tmp_path / "work").mkdir()
     try:
         graph, _, _, _ = Dump(root, engine, tmp_path / "out", tmp_path / "work").check()

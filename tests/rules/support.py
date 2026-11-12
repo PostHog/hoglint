@@ -8,6 +8,7 @@ from pathlib import Path
 
 from hoglint.config import Config, load_config
 from hoglint.config.loader import PACKS_DIR
+from hoglint.labels import NamespaceDirectories
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
 
 DJANGO_PACK_STUB = """
@@ -90,7 +91,7 @@ class GraphBuilder:
         if dotted in self.graph.modules:
             return EntityId(LANGUAGE_PYTHON, dotted)
         # A directory without `__init__.py` that holds modules: the module is the directory.
-        if any(module.startswith(dotted + ".") for module in self.graph.modules):
+        if dotted in NamespaceDirectories(self.graph.modules).paths:
             return EntityId(LANGUAGE_PYTHON, dotted)
         head = dotted
         while "." in head:

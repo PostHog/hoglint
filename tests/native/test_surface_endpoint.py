@@ -10,7 +10,7 @@ import pytest
 
 from hoglint.native.parity import read_lines
 
-from native.test_parity import dumps, same_in_both_engines
+from native.test_contract_slots import both_engines
 
 CONFIG = """
 schema = 1
@@ -66,6 +66,5 @@ def test_a_surface_that_names_a_directory_without_init_reads_the_directory_label
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     line, findings = CASES[case]
-    out = dumps(tmp_path, {**TREE, VIEWS: f"{line}\n"}, monkeypatch)
-    same_in_both_engines(out)
+    out = both_engines(tmp_path, TREE, {VIEWS: f"{line}\n"}, monkeypatch)
     assert [(row[1], row[-1]) for row in read_lines(out["native"] / "findings.jsonl")] == findings

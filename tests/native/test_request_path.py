@@ -6,23 +6,28 @@ from __future__ import annotations
 
 import json
 import tomllib
+from functools import cache
 from pathlib import Path
 
 import pytest
 
 from hoglint.native.parity import read_lines
+from hoglint.packs.django.pack import MODELS_PRODUCER, SYMBOLS_PRODUCER
+from hoglint.packs.django.relations import RELATIONS_PRODUCER
+from hoglint.packs.django.signals import SIGNALS_PRODUCER
+from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER
 
 from native.test_contract_slots import findings_of
 from native.test_evaluator import rule_table
 from native.test_parity import dumps, same_in_both_engines
 
 MODEL_PRODUCERS = {
-    "django.models@1",
-    "django.relations@1",
-    "django.uses@1",
-    "django.get-model@1",
-    "django.signals@1",
-    "django.symbols@1",
+    MODELS_PRODUCER,
+    RELATIONS_PRODUCER,
+    USES_PRODUCER,
+    GET_MODEL_PRODUCER,
+    SIGNALS_PRODUCER,
+    SYMBOLS_PRODUCER,
 }
 PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
 
@@ -132,6 +137,7 @@ EXCLUDED = {
 }
 
 
+@cache
 def request_path_rule() -> str:
     """The preset's rule, with the conditions its selectors name."""
     preset = tomllib.loads(PRESET.read_text())

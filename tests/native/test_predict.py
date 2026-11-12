@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import gc
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -19,6 +19,7 @@ from hoglint.native.predict import predict, write_trace_dump
 from rules.test_compare import git_in, write_files
 
 from native.require import native_module
+from native.test_contract_slots import findings_of
 
 CONFIG = """
 schema = 1
@@ -79,15 +80,16 @@ BASE = {
 
 @dataclass(frozen=True)
 class Case:
-    """A parent repo, the files the child changes (None deletes one), the reader that must be
-    predicted although the child leaves it alone, and the read kinds it cannot do without: the
-    kinds that read the part that moved."""
+    """A parent repo over `base`, the files the child changes (None deletes one), the reader that
+    must be predicted although the child leaves it alone, and the read kinds it cannot do without:
+    the kinds that read the part that moved."""
 
     name: str
     parent: dict[str, str]
     child: dict[str, str | None]
     reader: str
     kinds: tuple[str, ...]
+    base: dict[str, str] = field(default_factory=lambda: BASE)
 
 
 CASES = [
@@ -213,12 +215,9 @@ def rows_of(out: Path, path: str) -> list[str]:
     return sorted(edges + findings)
 
 
-@pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-def test_a_reader_of_what_a_commit_moved_is_predicted(
-    case: Case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def check_reader_is_predicted(case: Case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     native_module()
-    parent_files = {**BASE, **case.parent}
+    parent_files = {**case.base, **case.parent}
     child_files = {**parent_files, **case.child}
     child_files = {path: text for path, text in child_files.items() if text is not None}
     parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
@@ -228,6 +227,13 @@ def test_a_reader_of_what_a_commit_moved_is_predicted(
     changed = set(case.child)
     assert case.reader in predict(parent, child, changed).files
     assert case.reader not in predict(parent, child, changed, ignored_kinds=case.kinds).files
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
+def test_a_reader_of_what_a_commit_moved_is_predicted(
+    case: Case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check_reader_is_predicted(case, tmp_path, monkeypatch)
 
 
 def test_an_ownership_file_relabels_the_modules_it_owns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -404,31 +410,6 @@ ledger = false
 """
 
 
-def test_a_moved_hand_out_source_rejudges_a_row_that_reads_handed_zones_at_the_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    native_module()
-    parent_files = {
-        "hoglint.toml": HANDED_CONFIG,
-        "app/__init__.py": "",
-        "app/jobs/__init__.py": "",
-        "app/jobs/tasks.py": "def run():\n    pass\n",
-        "app/logic.py": "def run():\n    pass\n",
-        "app/shim.py": "from app.jobs.tasks import run as run\n",
-        "app/api/__init__.py": "from app.shim import run\n\n__all__ = ['run', 'ping']\n\n\ndef ping():\n    pass\n",
-        "app/views.py": "from app.api import ping\n",
-    }
-    # The facade hands out the same name; where it comes from moves, and its zones with it.
-    child_files = {**parent_files, "app/shim.py": "from app.logic import run as run\n"}
-    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
-    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
-    reader = "app/views.py"
-    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
-    changed = {"app/shim.py"}
-    assert reader in predict(parent, child, changed).files
-    assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files
-
-
 NAMESPACE_HANDED = {
     "hoglint.toml": HANDED_CONFIG.replace(
         'wiring = { paths = ["jobs/**"] }',
@@ -466,61 +447,58 @@ HANDING_BASE = {
     "app/jobs/__init__.py": "",
     "app/jobs/tasks.py": "def run():\n    pass\n",
     "app/logic.py": "def run():\n    pass\n",
+    "app/shim.py": "from app.jobs.tasks import run as run\n",
     "app/views.py": "from app.api import ping\n",
 }
+FACADE = "app/api/__init__.py"
 PING = "\n\ndef ping():\n    pass\n"
-# (the facade before, the facade after, other files of the child, the read kinds the reader cannot do
-# without): each moves the zones the facade hands out names from, so a row that reads
-# `dst.handed_zones` at the facade moves.
-HAND_OUT_MOVES = {
-    "a lazy map entry names another module": (
-        '_LAZY = {"run": "app.jobs.tasks"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
-        '_LAZY = {"run": "app.logic"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
-        {},
-        ("label",),
-    ),
-    "an import of a module under a listed name is added": (
-        '__all__ = ["ping"]' + PING,
-        'import app.jobs.tasks as run\n\n__all__ = ["run", "ping"]' + PING,
-        {},
-        ("label",),
-    ),
-    "the module a lazy name names is added": (
-        '_LAZY = {"run": "app.jobs.later"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
-        None,
-        {"app/jobs/later.py": "def run():\n    pass\n"},
-        ("label", "module"),
-    ),
-    "the module a lazy name comes from changes": (
-        '_LAZY = {"run": "app.shim"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
-        None,
+
+
+def hand_out_move(name: str, facade: str, child: dict[str, str | None], kinds: tuple[str, ...]) -> Case:
+    return Case(name, {FACADE: facade}, child, "app/views.py", kinds, HANDING_BASE)
+
+
+# Each moves the zones the facade hands out names from, so a row that reads `dst.handed_zones` at
+# the facade moves.
+HAND_OUT_MOVES = [
+    hand_out_move(
+        "the module a handed name comes from changes in the file it is imported from",
+        "from app.shim import run\n\n__all__ = ['run', 'ping']\n\n\ndef ping():\n    pass\n",
         {"app/shim.py": "from app.logic import run as run\n"},
         ("label",),
     ),
-}
+    hand_out_move(
+        "a lazy map entry names another module",
+        '_LAZY = {"run": "app.jobs.tasks"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        {FACADE: '_LAZY = {"run": "app.logic"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING},
+        ("label",),
+    ),
+    hand_out_move(
+        "an import of a module under a listed name is added",
+        '__all__ = ["ping"]' + PING,
+        {FACADE: 'import app.jobs.tasks as run\n\n__all__ = ["run", "ping"]' + PING},
+        ("label",),
+    ),
+    hand_out_move(
+        "the module a lazy name names is added",
+        '_LAZY = {"run": "app.jobs.later"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        {"app/jobs/later.py": "def run():\n    pass\n"},
+        ("label", "module"),
+    ),
+    hand_out_move(
+        "the module a lazy name comes from changes",
+        '_LAZY = {"run": "app.shim"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        {"app/shim.py": "from app.logic import run as run\n"},
+        ("label",),
+    ),
+]
 
 
-@pytest.mark.parametrize("case", HAND_OUT_MOVES)
-def test_a_moved_hand_out_edge_rejudges_a_row_that_reads_handed_zones_at_the_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+@pytest.mark.parametrize("case", HAND_OUT_MOVES, ids=[case.name for case in HAND_OUT_MOVES])
+def test_a_moved_hand_out_rejudges_a_row_that_reads_handed_zones_at_the_destination(
+    case: Case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    native_module()
-    before, after, other, kinds = HAND_OUT_MOVES[case]
-    parent_files = {
-        **HANDING_BASE,
-        "app/shim.py": "from app.jobs.tasks import run as run\n",
-        "app/api/__init__.py": before,
-    }
-    child_files = {**parent_files, **other}
-    if after is not None:
-        child_files["app/api/__init__.py"] = after
-    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
-    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
-    reader = "app/views.py"
-    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
-    changed = {path for path in child_files if child_files[path] != parent_files.get(path)}
-    assert reader in predict(parent, child, changed).files
-    assert reader not in predict(parent, child, changed, ignored_kinds=kinds).files
+    check_reader_is_predicted(case, tmp_path, monkeypatch)
 
 
 WATCHED_CONFIG = """
@@ -609,22 +587,24 @@ WATCHED_CHANGES = {
 }
 
 
-def rule_rows(out: Path, rule: str) -> list[str]:
-    """A rule's findings and incomplete items in a dump."""
-    findings = [line for line in (out / "findings.jsonl").read_text().splitlines() if json.loads(line)[0] == rule]
-    return sorted(findings)
+@pytest.fixture(scope="module")
+def watched_parent(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The parent dump every watched change starts from."""
+    native_module()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        return traced_dump(tmp_path_factory.mktemp("watched"), "parent", WATCHED_REPO, monkeypatch)
 
 
 @pytest.mark.parametrize("change", sorted(WATCHED_CHANGES))
 def test_a_change_to_the_request_path_or_a_watched_directory_reruns_the_rules_whose_rows_move(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, watched_parent: Path, change: str
 ) -> None:
     native_module()
     edits, rule = WATCHED_CHANGES[change]
     child_files = {path: text for path, text in {**WATCHED_REPO, **edits}.items() if text is not None}
-    parent = traced_dump(tmp_path, "parent", WATCHED_REPO, monkeypatch)
+    parent = watched_parent
     child = traced_dump(tmp_path, "child", child_files, monkeypatch)
-    assert rule_rows(parent, rule) != rule_rows(child, rule), "the change must move the rule's rows"
+    assert findings_of(parent, rule) != findings_of(child, rule), "the change must move the rule's rows"
     assert {"request-path", "wiring-watched"} <= predict(parent, child, set(edits)).rerun
 
 

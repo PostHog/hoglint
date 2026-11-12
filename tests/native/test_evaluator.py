@@ -1224,6 +1224,11 @@ class Recording:
         return getattr(self.spec, name)
 
 
+# Rounds of one draw per rule type: at least the first, and at most the second while a declared key
+# is still unread, so a new key needs no new seed.
+KEY_ROUNDS, KEY_ROUNDS_MAX = 48, 480
+
+
 class KeysRead:
     """Per mode, the keys its rule class read in a run of the Python engine, and the keys the
     native plan read to plan it; both among the keys its primitive accepts and some rules do not
@@ -1248,6 +1253,9 @@ class KeysRead:
             rule.plan()
             self.by_plan[cls.MODE] |= planned.keys & accepted
 
+    def every_key_read(self) -> bool:
+        return all(cls.READS <= self.by_class[mode] for mode, cls in TYPES.items())
+
     def problems(self) -> list[str]:
         out = []
         for mode, cls in TYPES.items():
@@ -1267,16 +1275,19 @@ def test_each_rule_type_reads_exactly_the_keys_it_declares(world: World) -> None
     tables = Tables(random.Random(20261113))
     read = KeysRead()
     # A key such as `on_unresolved` is read only when a drawn rule meets an unresolved edge, so
-    # each type needs enough draws that every key it declares is read at least once.
-    for mode in list(TYPES) * 48:
-        while True:
-            rules = tables.rules("generated", mode)
-            try:
-                config = world.config(rules)
-            except ConfigError:
-                continue
+    # each type is drawn a number of rounds, then more until it has read every key it declares.
+    for drawn in range(KEY_ROUNDS_MAX):
+        if drawn >= KEY_ROUNDS and read.every_key_read():
             break
-        read.record(world, config)
+        for mode in TYPES:
+            while True:
+                rules = tables.rules("generated", mode)
+                try:
+                    config = world.config(rules)
+                except ConfigError:
+                    continue
+                break
+            read.record(world, config)
     assert read.problems() == []
 
 

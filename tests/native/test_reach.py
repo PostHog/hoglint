@@ -59,8 +59,8 @@ PAST_THE_FACADE = [["core.start", "products.shop.logic"], ["core.start", "produc
 
 
 def reach_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start: str, through: str) -> list[list[str]]:
-    files = {**BASE, "hoglint.toml": CONFIG.format(through=through), "core/start.py": STARTS[start]}
-    out = both_engines(tmp_path, {}, files, monkeypatch)
+    files = {"hoglint.toml": CONFIG.format(through=through), "core/start.py": STARTS[start]}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
     return findings_of(out["native"], "request-path")
 
 

@@ -565,21 +565,21 @@ set = { gate = true }
 """
 )
 SEEDED = {"hoglint.toml": NAMED_CONFIG, "core/__init__.py": "", "core/seed.py": "class Gate:\n    pass\n"}
+# (the child's edits, None deleting a file; the stored summary's count of new items)
 STALE_CHANGES = {
-    "the named file is deleted": ("core/seed.py", None, "2 introduced"),
-    "the named file is moved": ("core/seed.py", "core/moved.py", "2 introduced"),
-    "the named symbol is renamed": ("core/seed.py", "core/seed.py", "1 introduced"),
+    "the named file is deleted": ({"core/seed.py": None}, "2 introduced"),
+    "the named file is moved": ({"core/seed.py": None, "core/moved.py": SEEDED["core/seed.py"]}, "2 introduced"),
+    "the named symbol is renamed": ({"core/seed.py": "class Door:\n    pass\n"}, "1 introduced"),
 }
 
 
 def make_stale(repo: Path, change: str) -> None:
-    path, moved_to, _ = STALE_CHANGES[change]
-    if moved_to is None:
-        git_in(repo, "rm", "-q", path)
-    elif moved_to != path:
-        git_in(repo, "mv", path, moved_to)
-    else:
-        (repo / path).write_text("class Door:\n    pass\n")
+    edits, _ = STALE_CHANGES[change]
+    for path, text in edits.items():
+        if text is None:
+            (repo / path).unlink()
+        else:
+            (repo / path).write_text(text)
     git_in(repo, "add", "-A")
 
 
@@ -597,7 +597,7 @@ def test_a_commit_that_makes_a_config_name_stale_is_blocked_as_introduced(tmp_pa
     make_stale(repo, change)
     stale = hoglint(repo, "check", "--index")
     assert stale.returncode == 2, stale.stdout + stale.stderr
-    assert f"stored summary): {STALE_CHANGES[change][2]}, 0 ambiguous\n" in stale.stdout
+    assert f"stored summary): {STALE_CHANGES[change][1]}, 0 ambiguous\n" in stale.stdout
     assert "config:stale-name [introduced]" in stale.stdout
 
 
