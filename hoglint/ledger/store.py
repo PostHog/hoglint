@@ -50,6 +50,8 @@ from hoglint.facts import BINARY_NAME
 from hoglint.ledger.cache import (
     EXTRACTOR_STORE,
     EXTRACTORS,
+    FACTS as FACTS,  # the replay reads the store directories from here
+    MEMO as MEMO,
     STORES,
     SUMMARIES,
     SUMMARY_STORE,
