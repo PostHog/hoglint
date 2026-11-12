@@ -495,6 +495,13 @@ impl<'a> Walk<'a> {
         (names, complete && !kind_unknown)
     }
 
+    /// `ExportPrimitive.symbol_truth`: a `[shapes]` entity selector, read of a symbol in the
+    /// module that defines it.
+    fn symbol_truth(&self, node: &Node, symbol: &str) -> Truth {
+        let owner = self.cx.module_of_symbol(symbol);
+        evaluate(node, &EntityEnv::of(self.cx, owner, Some(symbol), None))
+    }
+
     /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged. Where
     /// `walk_where` cannot be told, the class is walked.
     fn walks(&self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
@@ -509,9 +516,7 @@ impl<'a> Walk<'a> {
         let Some(node) = &policy.walk_where else {
             return true;
         };
-        let owner = self.cx.module_of_symbol(symbol);
-        let env = EntityEnv::of(self.cx, owner, Some(symbol), None);
-        evaluate(node, &env) != Truth::False
+        self.symbol_truth(node, symbol) != Truth::False
     }
 
     /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.
@@ -519,9 +524,7 @@ impl<'a> Walk<'a> {
         let Some(node) = &self.cx.rules.shapes[shape].allow_where else {
             return false;
         };
-        let owner = self.cx.module_of_symbol(symbol);
-        let env = EntityEnv::of(self.cx, owner, Some(symbol), None);
-        evaluate(node, &env) == Truth::True
+        self.symbol_truth(node, symbol) == Truth::True
     }
 
     fn behavior_ok(&mut self, symbol: &str, shape: usize) -> bool {
@@ -542,9 +545,7 @@ impl<'a> Walk<'a> {
             let Some(node) = found else {
                 return true;
             };
-            let owner = self.cx.module_of_symbol(&candidate);
-            let env = EntityEnv::of(self.cx, owner, Some(&candidate), None);
-            if evaluate(node, &env) == Truth::True {
+            if self.symbol_truth(node, &candidate) == Truth::True {
                 return true;
             }
         }

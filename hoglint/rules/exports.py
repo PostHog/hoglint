@@ -41,7 +41,7 @@ from hoglint.rules.base import (
 )
 from hoglint.rules.edges import is_private
 from hoglint.rules.plan import identity_paths, selector_tree, tree
-from hoglint.selectors import NONE, Node, Ref, Resolver, State, Truth, Value, evaluate
+from hoglint.selectors import NONE, Node, Ref, Resolver, Selector, State, Truth, Value, evaluate
 
 ABC_BASES = frozenset({"abc.ABC"})
 ABC_METAS = frozenset({"abc.ABCMeta"})
@@ -348,12 +348,16 @@ class ExportPrimitive(RuleType):
             names.add("exception")
         return frozenset(names), complete and kind.state is not State.UNKNOWN
 
+    def symbol_truth(self, selector: Selector, symbol: str) -> Truth:
+        """A `[shapes]` entity selector, read of a symbol in the module that defines it."""
+        labeler = self.ctx.labeler
+        return selector.evaluate(labeler.entity_resolver(labeler.module_of_symbol(symbol), symbol))
+
     def allowed_as_is(self, symbol: str, policy: ShapePolicy) -> bool:
         """Whether the policy's `allow_where` holds for a symbol: it is handed out as it stands."""
         if policy.allow_where is None:
             return False
-        module = self.ctx.labeler.module_of_symbol(symbol)
-        return policy.allow_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is Truth.TRUE
+        return self.symbol_truth(policy.allow_where, symbol) is Truth.TRUE
 
     def walks(self, symbol: str, shapes: frozenset[str], policy: ShapePolicy) -> bool:
         """Whether what an allowed class's members name is judged: always the fields of a data
@@ -366,8 +370,7 @@ class ExportPrimitive(RuleType):
             return False
         if policy.walk_where is None:
             return True
-        module = self.ctx.labeler.module_of_symbol(symbol)
-        return policy.walk_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is not Truth.FALSE
+        return self.symbol_truth(policy.walk_where, symbol) is not Truth.FALSE
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
@@ -380,8 +383,7 @@ class ExportPrimitive(RuleType):
                 continue
             if behavior.where is None:
                 return True
-            module = self.ctx.labeler.module_of_symbol(candidate)
-            if behavior.where.evaluate(self.ctx.labeler.entity_resolver(module, candidate)) is Truth.TRUE:
+            if self.symbol_truth(behavior.where, candidate) is Truth.TRUE:
                 return True
         return False
 
