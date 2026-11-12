@@ -352,10 +352,11 @@ growth_key = ["src.package"]
 
 [rules.presentation-uses-facade]
 primitive  = "edge"
-doc        = "Presentation reaches any product's code through a facade or presentation."
+doc        = "Presentation reaches product code through a facade, its own product's presentation or another product's exported adapter; an import is judged where it lands."
 view       = "zones"
 from       = "src.zone == 'presentation'"
-deny       = "dst.tier == 'product' and dst.zone not in ['facade', 'presentation', 'tests']"
+endpoint   = "surface"
+deny       = "dst.tier == 'product' and (dst.zone not in ['facade', 'presentation', 'tests'] or (dst.zone == 'presentation' and dst.package != src.package and not dst.exported))"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 

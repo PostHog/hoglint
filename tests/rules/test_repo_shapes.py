@@ -372,3 +372,65 @@ def test_posthog_preset_public_surface(
     for kind, src, target, contexts in edges:
         builder.module(src, target.rpartition(".")[0]).edge(kind, src, target, contexts=contexts)
     assert found(run_shape(tmp_path, "posthog", builder.graph), "public-surface") == sorted(expected)
+
+
+MIXIN = "products.access_control.backend.presentation.access_control.AccessControlViewSetMixin"
+# (case, edges as (source module, origin, surface), presentation-uses-facade identities)
+PRESENTATION_CASES = [
+    (
+        "an import through another product's facade lands on the facade",
+        [
+            (
+                "products.alerts.backend.presentation.views",
+                "products.billing.backend.logic.charge",
+                "products.billing.backend.facade.api.charge",
+            )
+        ],
+        [],
+    ),
+    (
+        "another product's presentation is judged where the import lands",
+        [
+            (
+                "products.alerts.backend.presentation.views",
+                "products.billing.backend.logic.charge",
+                "products.billing.backend.presentation.helpers.charge",
+            )
+        ],
+        [("products.alerts.backend.presentation.views", "products.billing.backend.presentation.helpers")],
+    ),
+    (
+        "the product's own presentation and an exported adapter are allowed",
+        [
+            (
+                "products.alerts.backend.presentation.views",
+                "products.alerts.backend.presentation.forms.Form",
+                "products.alerts.backend.presentation.forms.Form",
+            ),
+            ("products.alerts.backend.presentation.views", MIXIN, MIXIN),
+        ],
+        [],
+    ),
+    (
+        "the product's own internals stay a finding",
+        [
+            (
+                "products.alerts.backend.presentation.views",
+                "products.alerts.backend.logic.run",
+                "products.alerts.backend.logic.run",
+            )
+        ],
+        [("products.alerts.backend.presentation.views", "products.alerts.backend.logic")],
+    ),
+]
+
+
+@pytest.mark.parametrize(("case", "edges", "expected"), PRESENTATION_CASES, ids=[c[0] for c in PRESENTATION_CASES])
+def test_posthog_preset_presentation_uses_facade(
+    tmp_path: Path, case: str, edges: list[tuple[str, str, str]], expected: list[tuple[str, ...]]
+) -> None:
+    builder = GraphBuilder()
+    for src, origin, surface in edges:
+        builder.module(src, origin.rpartition(".")[0], surface.rpartition(".")[0]).symbol(origin, "def")
+        builder.edge("import", src, origin, surface)
+    assert found(run_shape(tmp_path, "posthog", builder.graph), "presentation-uses-facade") == sorted(expected)
