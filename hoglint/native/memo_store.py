@@ -10,7 +10,9 @@ A step's state is a manifest (part -> digest) and its parts (hoglint/core/memo.p
 - `keys`: one row per stored manifest: the step key (step and policy), the digest of the
   manifest's bytes, the day a run last read it (`used`), its size with the parts first written
   with it, and when a run last wrote or read it (`touched`), which orders a step's states.
-- `blobs`: the manifest's bytes under the same id.
+- `blobs`: the manifest's bytes under the same id. Its ids are never given out twice
+  (`AUTOINCREMENT`), not even after the newest row was lost, so a key whose manifest is gone
+  leads nowhere and a new state never meets an old key's id.
 - `parts`: each part's bytes by their digest, shared by every manifest that names it, and
   `refs` which manifests name it; a part no manifest names goes with the last one.
 Every body is zlib-compressed JSON and is never changed: a new state is new rows. A body whose
@@ -19,8 +21,8 @@ bytes do not hash to its digest is damage.
 The store is a cache (D28): a state or part that cannot be read, decoded or checked is a miss,
 any error warns once and the run goes on without the store, and a database SQLite calls damaged
 is moved aside. So is one whose write breaks a constraint: every write of a state deletes and
-adds its rows in one transaction, so only a change from outside (such as a lost `blobs` row,
-whose id the next state then takes again) breaks one, and it would break again on every run.
+adds its rows in one transaction, so only a change from outside breaks one, and it would break
+again on every run.
 """
 
 from __future__ import annotations
@@ -43,14 +45,14 @@ from hoglint.native.factdb import EPOCH, FactDatabase, is_corrupt
 CRATE = bridge.CRATE
 PACKAGE = CRATE / "hoglint"
 ENGINE_NATIVE = "native"
-LAYOUT = 3
+LAYOUT = 4
 # States of a step past the newest few are not read again and go.
 STATES_KEPT = 4
 SCHEMA = (
     "CREATE TABLE keys (id INTEGER PRIMARY KEY, step TEXT NOT NULL, digest TEXT NOT NULL, used INTEGER NOT NULL,"
     " bytes INTEGER NOT NULL, touched REAL NOT NULL, UNIQUE (step, digest))",
     "CREATE INDEX keys_by_step ON keys (step, touched)",
-    "CREATE TABLE blobs (id INTEGER PRIMARY KEY, body BLOB NOT NULL)",
+    "CREATE TABLE blobs (id INTEGER PRIMARY KEY AUTOINCREMENT, body BLOB NOT NULL)",
     "CREATE TABLE parts (digest TEXT PRIMARY KEY, body BLOB NOT NULL) WITHOUT ROWID",
     "CREATE TABLE refs (state INTEGER NOT NULL, part TEXT NOT NULL)",
     "CREATE INDEX refs_by_state ON refs (state)",

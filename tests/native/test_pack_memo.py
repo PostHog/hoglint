@@ -104,7 +104,29 @@ def test_a_damaged_store_is_a_miss(tmp_path: Path, damage: str) -> None:
     assert [edge.surface for edge in outputs] == ["1", "1"]
 
 
-@pytest.mark.parametrize("damage", ["lost-newest-state", "garbage-file"])
+def test_a_lost_newest_state_is_a_miss_and_the_next_state_takes_a_new_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RunStores, "warned", set())
+    store = MemoStore(tmp_path, "engine")
+    check(store, {"a": "1"})
+    store.close()
+    gc.collect()
+    path = store.database.path
+    with sqlite3.connect(path) as conn:
+        lost = conn.execute("SELECT max(id) FROM blobs").fetchone()[0]
+        conn.execute("DELETE FROM blobs WHERE id = ?", (lost,))
+    again = MemoStore(tmp_path, "engine")
+    world, _ = check(again, {"a": "2"})
+    assert (world.ran, again.state()) == (["a"], "open")
+    world, outputs = check(again, {"a": "2"})
+    assert (world.ran, [edge.surface for edge in outputs]) == ([], ["2", "2"])
+    assert [found.name for found in path.parent.iterdir() if ".corrupt-" in found.name] == []
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT min(id) FROM blobs").fetchone()[0] > lost
+
+
+@pytest.mark.parametrize("damage", ["stray-key-row", "garbage-file"])
 def test_a_store_damaged_from_outside_is_moved_aside_and_the_next_run_stores_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
 ) -> None:
@@ -114,10 +136,11 @@ def test_a_store_damaged_from_outside_is_moved_aside_and_the_next_run_stores_aga
     store.close()
     gc.collect()
     path = store.database.path
-    if damage == "lost-newest-state":
-        # The next state's `blobs` row takes the lost row's id, which a `keys` row still holds.
+    if damage == "stray-key-row":
+        # A key at the id the next state's manifest takes: its insert breaks the unique id.
         with sqlite3.connect(path) as conn:
-            conn.execute("DELETE FROM blobs WHERE id = (SELECT max(id) FROM blobs)")
+            taken = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'blobs'").fetchone()[0]
+            conn.execute("INSERT INTO keys VALUES (?, 'stray', 'stray', 0, 0, 0)", (taken + 1,))
     else:
         for suffix in ("-wal", "-shm"):
             Path(f"{path}{suffix}").unlink(missing_ok=True)
