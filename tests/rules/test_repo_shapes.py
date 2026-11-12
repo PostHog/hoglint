@@ -323,6 +323,41 @@ PUBLIC_SURFACE_CASES = [
             ("products.billing.backend.logic.charge", "posthog.api.thing", "dotted-path"),
         ],
     ),
+    (
+        "a viewset not yet in presentation/ may use an access-control mixin by name, nothing that inherits one",
+        [
+            (
+                "import",
+                "products.billing.backend.api.invoice",
+                "products.access_control.backend.presentation.access_control.AccessControlViewSetMixin",
+                (Context.PROD,),
+            ),
+            (
+                "import",
+                "products.billing.backend.api.invoice",
+                "products.product_analytics.backend.presentation.insight.InsightViewSet",
+                (Context.PROD,),
+            ),
+            (
+                "import",
+                "products.billing.backend.logic",
+                "products.access_control.backend.presentation.access_control.AccessControlViewSetMixin",
+                (Context.PROD,),
+            ),
+        ],
+        [
+            (
+                "products.product_analytics.backend.presentation.insight.InsightViewSet",
+                "products.billing.backend.api.invoice",
+                "import",
+            ),
+            (
+                "products.access_control.backend.presentation.access_control.AccessControlViewSetMixin",
+                "products.billing.backend.logic",
+                "import",
+            ),
+        ],
+    ),
 ]
 
 

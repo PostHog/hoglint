@@ -331,6 +331,7 @@ impl Registry {
 pub struct Export {
     paths: ExportPaths,
     pub subclass_of: Vec<String>,
+    pub symbols: Vec<String>,
     pub audience: Option<Node>,
 }
 
@@ -339,6 +340,7 @@ impl Export {
         Ok(Export {
             paths: ExportPaths::new(&plan.within, &plan.paths)?,
             subclass_of: plan.subclass_of.clone(),
+            symbols: plan.symbols.clone(),
             audience,
         })
     }

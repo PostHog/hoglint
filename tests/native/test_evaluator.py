@@ -730,6 +730,48 @@ def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
     assert ("products.billing.backend.models.Invoice", "core.a", "import") in identities
 
 
+ADAPTER = 'subclass_of = ["products.billing.backend.presentation.mixins.Mixin"]\naudience = "src.tier == \'core\'"'
+
+
+@pytest.mark.parametrize(
+    ("members", "found_symbols"),
+    [
+        # By class: a class that inherits the listed base is a member too.
+        (
+            'subclass_of = ["products.billing.backend.presentation.mixins.Mixin"]',
+            {"products.billing.backend.presentation.views.Plain"},
+        ),
+        # By name: only the listed symbols, not their subclasses.
+        (
+            'symbols = ["products.billing.backend.presentation.mixins.Mixin"]',
+            {"products.billing.backend.presentation.views.Plain", "products.billing.backend.presentation.views.View"},
+        ),
+        (
+            'symbols = ["products.billing.backend.presentation.views.Plain"]',
+            {"products.billing.backend.presentation.views.View"},
+        ),
+    ],
+)
+def test_an_export_that_names_its_symbols_holds_them_and_not_their_subclasses_in_both_engines(
+    world: World, members: str, found_symbols: set[str]
+) -> None:
+    base = CONFIG.replace(ADAPTER, f"{members}\naudience = \"src.tier == 'product'\"")
+    assert base != CONFIG
+    config = world.config(rule_table("doors", CORNERS["export-by-class-and-audience"]), base)
+    native, python = world.contexts(config)
+    spec = config.rules["doors"]
+    found = run_rows(primitive_of(spec)(native, spec).evaluate())
+    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    presentation = {identity[0] for identity, *_ in found if ".presentation." in identity[0]}
+    assert presentation == found_symbols
+
+
+def test_an_export_cannot_name_its_symbols_and_decide_by_class(world: World) -> None:
+    base = CONFIG.replace(ADAPTER, ADAPTER + '\nsymbols = ["products.billing.backend.presentation.mixins.Mixin"]')
+    with pytest.raises(ConfigError, match="symbols"):
+        world.config("", base)
+
+
 class Refusing:
     """An evaluator that refuses every call, as one that meets a limit only it has would."""
 

@@ -14,6 +14,11 @@ The engine's word is `export`; "facade" is a name in the PostHog preset (D48).
 - Shape is checked recursively (fields, signatures, bases, through re-exports).
   `Result(model: Team)` fails even inside a dataclass.
 - Presentation splits into `registration`, `presentation-adapter` (by base class plus an audience; owner, Nov 9) and private code.
+- An export can name its members exactly with `symbols`: only the listed symbols are in it, not the classes that inherit them (T3).
+  An export by base class holds every subclass too, so a viewset that uses a listed mixin is itself an adapter.
+  The PostHog preset uses `symbols` for viewsets that have not moved to `presentation/` yet: they may use the five access-control mixins and nothing else.
+  The five names are a closed list.
+  A sixth needs its name added to that export in the preset, through code-owner review like any other policy line.
 
 **The public surface is first class in the engine** (owner, Nov 10; D48).
 The owner's principle: a facade, or whatever other patterns call it, is a first-class concept.

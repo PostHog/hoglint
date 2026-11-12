@@ -147,6 +147,7 @@ class RulePlan:
                     "within": spec.within,
                     "paths": list(spec.paths),
                     "subclass_of": list(spec.subclass_of),
+                    "symbols": list(spec.symbols),
                     "audience": selector_tree(spec.audience),
                     "shape": self.shape_at[spec.shape],
                 }

@@ -623,9 +623,12 @@ class Labeler:
         return frozenset(spec.name for spec in self.config.exports.values() if spec.files.covers(path))
 
     def export_reads_symbol(self, path: str) -> bool:
-        """Whether an export that decides by class (`subclass_of`) covers the path. Elsewhere a
+        """Whether an export that decides by class or by name covers the path. Elsewhere a
         symbol's export membership is its path's."""
-        return any(self.config.exports[name].subclass_of for name in self.path_exports(path))
+        return any(
+            self.config.exports[name].subclass_of or self.config.exports[name].symbols
+            for name in self.path_exports(path)
+        )
 
     def export_covers(self, spec: ExportSpec, path: str) -> bool:
         """Whether the path lies inside the export's `within` and `paths`."""
@@ -635,11 +638,14 @@ class Labeler:
         """Whether a module (symbol None) or a symbol at `path` belongs to the export.
 
         With `subclass_of` only symbols count: a listed base itself, or a class that inherits one.
+        With `symbols` only the listed symbols count.
         """
         name, path, symbol = key
         spec = self.config.exports[name]
         if not self.export_covers(spec, path):
             return Truth.FALSE
+        if spec.symbols:
+            return Truth.of(symbol in spec.symbols)
         if not spec.subclass_of:
             return Truth.TRUE
         if symbol is None:

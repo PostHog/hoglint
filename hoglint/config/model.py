@@ -118,6 +118,7 @@ class ExportSpec:
     shape: str
     audience: Selector | None = None  # None: everyone
     subclass_of: tuple[str, ...] = ()
+    symbols: tuple[str, ...] = ()  # only these symbols, not their subclasses
     source: str = ""
     files: ExportPaths = field(init=False, compare=False, repr=False)
 

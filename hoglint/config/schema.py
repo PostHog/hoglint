@@ -129,7 +129,7 @@ ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_p
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
 SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "signatures", "doc"})
-EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "doc"})
+EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict"})
 LEDGER_KEYS = frozenset({"file", "exceptions"})
@@ -536,13 +536,18 @@ class SchemaBuilder:
             if not paths:
                 self.fail(key, "an export needs `paths`")
             self.check_within(key, str(table.get("within", "")))
+            subclass_of = as_tuple(table.get("subclass_of"))
+            symbols = as_tuple(table.get("symbols"))
+            if subclass_of and symbols:
+                self.fail(key, "an export names its `symbols` or decides by `subclass_of`, not both")
             out[name] = ExportSpec(
                 name,
                 str(table.get("within", "")),
                 paths,
                 str(shape or ""),
                 audience,
-                as_tuple(table.get("subclass_of")),
+                subclass_of,
+                symbols,
                 self.source(key),
             )
         if len(out) > MAX_EXPORTS:

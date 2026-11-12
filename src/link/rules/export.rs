@@ -279,12 +279,8 @@ impl<'a> Walk<'a> {
             for &(module, _) in &self.inputs.covered[export] {
                 let module_name = self.cx.text(module).to_string();
                 for (symbol, edge) in self.exported_symbols(module) {
-                    let bases = &rules.exports[export].subclass_of;
-                    let member = if bases.is_empty() {
-                        Truth::True
-                    } else {
-                        rules.member_by_class(self.cx.link, bases, &symbol)
-                    };
+                    let member =
+                        rules.export_member(self.cx.link, &rules.exports[export], Some(&symbol));
                     match member {
                         Truth::False => {}
                         Truth::Unknown => {

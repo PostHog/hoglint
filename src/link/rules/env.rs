@@ -648,16 +648,9 @@ impl<'a> Env<'a> {
             if bits & (1 << index) == 0 {
                 continue;
             }
-            let mut truth = if export.subclass_of.is_empty() {
-                Truth::True
-            } else {
-                match &symbol {
-                    None => Truth::False,
-                    Some(symbol) => cx
-                        .rules
-                        .member_by_class(cx.link, &export.subclass_of, symbol),
-                }
-            };
+            let mut truth = cx
+                .rules
+                .export_member(cx.link, export, symbol.as_deref());
             if truth == Truth::False {
                 continue;
             }

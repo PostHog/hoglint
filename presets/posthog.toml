@@ -184,6 +184,8 @@ backend        = { paths = ["backend/**"] }
 facade         = { parent = "backend", paths = ["backend/facade/**"] }
 contracts      = { parent = "facade", paths = ["backend/facade/contracts.py", "backend/facade/enums.py"] }
 presentation   = { parent = "backend", paths = ["backend/presentation/**", "backend/routes.py"] }
+# Viewsets that have not moved to presentation/ yet.
+api            = { parent = "backend", paths = ["backend/api/**", "backend/api.py"] }
 logic          = { parent = "backend", paths = ["backend/logic.py", "backend/logic/**"] }
 models         = { parent = "backend", paths = ["backend/models.py", "backend/models/**"] }
 migrations     = { parent = "backend", paths = ["backend/migrations/**"] }
@@ -243,6 +245,21 @@ subclass_of = [
 ]
 audience    = "src.zone == 'presentation' or src.tier == 'core'"
 shape       = "registration"
+
+# The same five mixins by name, for viewsets that have not moved to presentation/ yet. By name, so
+# a class that inherits a mixin gets no door to them.
+[exports.access-control-mixins]
+within   = "products/{product}"
+paths    = ["backend/presentation/**"]
+symbols  = [
+  "products.access_control.backend.presentation.access_control.AccessControlViewSetMixin",
+  "products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin",
+  "products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin",
+  "products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin",
+  "products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin",
+]
+audience = "src.zone == 'api'"
+shape    = "registration"
 
 # ── Registries: core finds product code by file convention ─────
 

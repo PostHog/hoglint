@@ -660,6 +660,23 @@ impl Rules {
         SymbolFacts::fact(link, name, key)
     }
 
+    /// Whether a symbol (none for a module) belongs to an export past its paths
+    /// (`Labeler.find_export_member`): a listed symbol when the export names them, else by class
+    /// when it decides by class, else always.
+    pub fn export_member(&self, link: &Link, export: &Export, symbol: Option<&str>) -> Truth {
+        if !export.symbols.is_empty() {
+            let listed = symbol.is_some_and(|symbol| export.symbols.iter().any(|name| name == symbol));
+            return if listed { Truth::True } else { Truth::False };
+        }
+        if export.subclass_of.is_empty() {
+            return Truth::True;
+        }
+        match symbol {
+            None => Truth::False,
+            Some(symbol) => self.member_by_class(link, &export.subclass_of, symbol),
+        }
+    }
+
     /// Whether a symbol belongs to an export that decides by class (`Labeler.find_export_member`
     /// past the path test): a listed base itself or a class that inherits one; unknown when a
     /// base on the way up did not resolve.

@@ -114,6 +114,9 @@ pub struct ExportPlan {
     pub within: String,
     pub paths: Vec<String>,
     pub subclass_of: Vec<String>,
+    /// Only these symbols are members, not their subclasses (`ExportSpec.symbols`).
+    #[serde(default)]
+    pub symbols: Vec<String>,
     pub audience: Option<NodePlan>,
 }
 
