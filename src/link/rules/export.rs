@@ -7,7 +7,7 @@ use super::env::{Cx, EntityEnv, Env};
 use super::plan::{ExportRulePlan, ShapePlan};
 use super::reach::NO_DESTINATION;
 use super::selector::{Compiler, EntityField, Node, Ref, evaluate};
-use super::signature::callable_of;
+use super::signature::{callable_of, is_private};
 use super::value::{Truth, Value, render};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
@@ -184,8 +184,10 @@ pub struct ExportRule {
     exports: Vec<usize>,
     /// Its `from`: the export modules it judges, read of the module alone.
     pub start: Option<Node>,
-    /// `slots = "shape"`: in the slots of an exported symbol only a class's shape is judged.
-    shape_slots: bool,
+    /// `slots = "shape"`: where each signature rule sees the slots of an exported symbol, in which
+    /// only a class's shape is judged; None for a rule that sees them in every module. Empty when
+    /// the rule judges every slot in full.
+    slot_owners: Vec<Option<Node>>,
     include: u8,
     exclude: u8,
     unknown_types: Vec<String>,
@@ -200,6 +202,7 @@ impl ExportRule {
         identity: &[Vec<String>],
         entity: &Compiler,
         start: Option<Node>,
+        slot_owners: Vec<Option<Node>>,
     ) -> ExportRule {
         let field = |name: &str| match entity.reference(&[name.to_string()]) {
             Ref::Entity(found) => found,
@@ -228,7 +231,7 @@ impl ExportRule {
         ExportRule {
             exports: plan.exports.clone(),
             start,
-            shape_slots: plan.slots == "shape",
+            slot_owners,
             include: plan.include,
             exclude: plan.exclude,
             unknown_types: plan.unknown_types.clone(),
@@ -364,6 +367,7 @@ pub struct Walk<'a> {
     shapes: FxHashMap<String, Shapes>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
+    slots_seen: FxHashMap<String, bool>,
 }
 
 impl<'a> Walk<'a> {
@@ -378,6 +382,7 @@ impl<'a> Walk<'a> {
             shapes: FxHashMap::default(),
             exposes_by_name: FxHashMap::default(),
             top_level: FxHashMap::default(),
+            slots_seen: FxHashMap::default(),
         }
     }
 
@@ -757,18 +762,41 @@ impl<'a> Walk<'a> {
         out
     }
 
+    /// `ExportPrimitive.signature_sees`: whether a signature rule sees the slots of a module's
+    /// public callables. A module a rule cannot tell about is not seen.
+    fn signature_sees(&mut self, module: &str) -> bool {
+        if let Some(&seen) = self.slots_seen.get(module) {
+            return seen;
+        }
+        let seen = match self.cx.link.core.it.get(module) {
+            None => false,
+            Some(sid) => {
+                let env = Env::new(self.cx, None, self.cx.module_endpoint(sid), NO_DESTINATION);
+                self.rule.slot_owners.iter().any(|owner| match owner {
+                    None => true,
+                    Some(node) => evaluate(node, &env) == Truth::True,
+                })
+            }
+        };
+        self.slots_seen.insert(module.to_string(), seen);
+        seen
+    }
+
     /// `ExportPrimitive.check_members`.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
-        let shape_only = self.rule.shape_slots && trail.len() == 1;
+        let seen =
+            trail.len() == 1 && !self.rule.slot_owners.is_empty() && self.signature_sees(module);
         let link = self.cx.link;
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let annotation = link.core.it.get("annotation");
         let slot = link.core.it.get("slot");
         let alias = link.core.it.get("alias");
+        let callable = link.core.it.get("callable");
         for id in self.member_edges(symbol, include_bases) {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
+            let shape_only = seen && !is_private(self.cx.attr(id, callable));
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));

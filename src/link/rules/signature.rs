@@ -14,7 +14,7 @@ pub struct Signature {
 
 /// A callable is private when any part of its qualname starts with `_`, dunders excepted
 /// (`edges.is_private`).
-fn is_private(callable: &str) -> bool {
+pub fn is_private(callable: &str) -> bool {
     callable
         .split('.')
         .any(|part| part.starts_with('_') && !part.ends_with("__"))

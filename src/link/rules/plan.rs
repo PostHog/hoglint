@@ -165,8 +165,9 @@ pub struct ExportRulePlan {
     pub on_unresolved: String,
     /// Its `from`: which export modules it judges, read of the module alone.
     pub start: Option<NodePlan>,
-    /// What it judges in the slots of a member: "all", or "shape" (only a class's shape).
-    pub slots: String,
+    /// With `slots = "shape"`, where each signature rule sees a member's slots (None: in every
+    /// module); there only a class's shape is judged. Empty: every slot is judged in full.
+    pub slot_owners: Vec<Option<NodePlan>>,
 }
 
 /// One thing a coverage rule needs covered (`CoverSpec`).

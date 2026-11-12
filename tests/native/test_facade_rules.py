@@ -252,6 +252,48 @@ def test_export_shape_leaves_a_slot_to_the_signature_rule(tmp_path: Path, monkey
     ]
 
 
+TAKES_AN_ORDER = (
+    "from typing import Any\n\n"
+    "from products.shop.backend.models import Order\n"
+    "from products.shop.backend.nowhere import Missing\n\n\n"
+    "def place(order: Order, extra: Any, other: Missing) -> None:\n    pass\n"
+)
+PRIVATE_METHOD = (
+    "import dataclasses\n\nfrom products.shop.backend.models import Order\n\n\n"
+    "@dataclasses.dataclass(frozen=True)\nclass Receipt:\n    total: int\n\n"
+    "    def _load(self, order: Order) -> None:\n        pass\n"
+)
+ROUTES = f"{SHOP}.routes"
+# A slot is left to the signature rule only where that rule sees it: in a facade module, in a
+# public callable. A registration surface and a private method are judged by the export rule.
+SLOT_OWNER_CASES = {
+    "a facade function": ("facade/api.py", TAKES_AN_ORDER, []),
+    "a registration function": (
+        "routes.py",
+        TAKES_AN_ORDER,
+        [
+            [f"{SHOP}.models.Order", ROUTES, "export-denied(model)"],
+            [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
+            ["typing.Any", ROUTES, "export-unknown"],
+        ],
+    ),
+    "a private method of a contract": (
+        "facade/contracts.py",
+        PRIVATE_METHOD,
+        [[f"{SHOP}.models.Order", f"{SHOP}.facade.contracts", "export-denied(model)"]],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", SLOT_OWNER_CASES)
+def test_export_shape_judges_a_slot_no_signature_rule_sees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    name, text, expected = SLOT_OWNER_CASES[case]
+    out = both_engines(tmp_path, BASE, {f"products/shop/backend/{name}": text}, monkeypatch)
+    assert findings(out["native"], "export-shape") == expected
+
+
 def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     testing = (
         "from typing import Any\n\nfrom rest_framework import serializers\n\n"

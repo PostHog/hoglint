@@ -722,11 +722,18 @@ impl Rules {
             }
             ModePlan::Export(found) => {
                 let start = optional(edge, &found.export.start)?;
+                let slot_owners = found
+                    .export
+                    .slot_owners
+                    .iter()
+                    .map(|owner| optional(edge, owner))
+                    .collect::<Result<Vec<_>, _>>()?;
                 RuleKind::Export(ExportRule::new(
                     &found.export,
                     &found.identity,
                     entity,
                     start,
+                    slot_owners,
                 ))
             }
             ModePlan::Coverage(found) => RuleKind::Coverage(

@@ -9,9 +9,12 @@ Membership is the labeler's: an export's paths, narrowed by `subclass_of`. The a
 read here: it limits who may use an export, not what the export hands out, so every member is
 checked whatever its audience. `from` leaves out the export modules it is false for.
 
-With `slots = "shape"` the rule judges only the shape of a class named in a slot of a member: a
-denied kind, an unknown type, a missing annotation or an unresolved name there is a signature
-rule's to report. Deeper slots (the fields of such a class) are judged in full.
+With `slots = "shape"` the rule judges only the shape of a class named in a slot of a member,
+where a signature rule of the config sees that slot: a denied kind, an unknown type, a missing
+annotation or an unresolved name there is the signature rule's to report. A signature rule sees
+the slots of a public callable in a module its `from` and the source-only parts of its `select`
+hold for; the other parts of its selection judge the slot's type. A slot no signature rule sees,
+and every deeper slot (the fields of such a class), is judged in full.
 """
 
 from __future__ import annotations
@@ -23,9 +26,22 @@ from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.model import Context, Edge, Resolution, context_bits
-from hoglint.rules.base import IncompleteItem, ModuleEnv, RuleContext, RuleRun, RuleType, context_ok, project
-from hoglint.rules.plan import identity_paths, selector_tree
-from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
+from hoglint.rules.base import (
+    PRIMITIVE_KINDS,
+    IncompleteItem,
+    ModuleEnv,
+    RuleContext,
+    RuleRun,
+    RuleType,
+    conjuncts,
+    context_ok,
+    endpoint_only,
+    joined,
+    project,
+)
+from hoglint.rules.edges import is_private
+from hoglint.rules.plan import identity_paths, selector_tree, tree
+from hoglint.selectors import NONE, Node, Ref, Resolver, State, Truth, Value, evaluate
 
 ABC_BASES = frozenset({"abc.ABC"})
 ABC_METAS = frozenset({"abc.ABCMeta"})
@@ -141,6 +157,8 @@ class ExportPrimitive(RuleType):
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
+        self.slot_owners = self.signature_scopes() if spec.slots == "shape" else []
+        self.slots_seen: dict[str, bool] = {}
 
     @staticmethod
     def message(module: str, trail: Sequence[str], label: str) -> str:
@@ -179,6 +197,29 @@ class ExportPrimitive(RuleType):
         names = self.spec.exports or tuple(self.ctx.config.exports)
         return [self.ctx.config.exports[name] for name in names]
 
+    def signature_scopes(self) -> list[Node | None]:
+        """Where each signature rule of the config sees slots: its `from` and the parts of its
+        `select` that read only the source, None when it sees them in every module."""
+        out: list[Node | None] = []
+        for rule in self.ctx.config.rules.values():
+            if rule.primitive != "signature":
+                continue
+            if "exposes" not in (rule.kinds or PRIMITIVE_KINDS["signature"]):
+                continue
+            parts = conjuncts((rule.from_, rule.select))
+            out.append(joined([part for part in parts if endpoint_only(part) == "src"]))
+        return out
+
+    def signature_sees(self, module: str) -> bool:
+        """Whether a signature rule sees the slots of a module's public callables. A module a
+        rule cannot tell about is not seen, so its slots are judged here."""
+        seen = self.slots_seen.get(module)
+        if seen is None:
+            resolve = ModuleEnv(self.ctx, self.ctx.module_endpoint(module)).resolve
+            seen = any(node is None or evaluate(node, resolve) is Truth.TRUE for node in self.slot_owners)
+            self.slots_seen[module] = seen
+        return seen
+
     def plan(self) -> dict[str, Any]:
         """The exports it checks by place, the contexts it reads and leaves out, and how it
         reports what it cannot tell."""
@@ -192,7 +233,7 @@ class ExportPrimitive(RuleType):
             "on_unknown": spec.on_unknown,
             "on_unresolved": spec.on_unresolved,
             "start": selector_tree(spec.from_),
-            "slots": spec.slots,
+            "slot_owners": [None if node is None else tree(node) for node in self.slot_owners],
         }
         return {"id": spec.id, "mode": self.NATIVE_MODE, "identity": identity_paths(spec.identity), "export": checked}
 
@@ -422,11 +463,13 @@ class ExportPrimitive(RuleType):
 
     def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
         """The types in the slots of a member. In the slots of an exported symbol itself, a rule
-        with `slots = "shape"` judges only the shape of a class."""
-        shape_only = self.spec.slots == "shape" and len(trail) == 1
+        with `slots = "shape"` judges only the shape of a class where a signature rule sees the
+        slot."""
+        seen = len(trail) == 1 and bool(self.slot_owners) and self.signature_sees(module)
         for edge in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
             if edge.attr("alias") == "expanded":
                 continue
+            shape_only = seen and not is_private(edge.attr("callable"))
             if edge.attr("annotation") == "missing":
                 if not shape_only:
                     self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))
