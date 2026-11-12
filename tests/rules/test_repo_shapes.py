@@ -255,6 +255,30 @@ PUBLIC_SURFACE_CASES = [
             ("products.billing.backend.logic.charge", "posthog.api.thing", "reference"),
         ],
     ),
+    (
+        "a Django or ClickHouse migration is frozen history; other migration folders are not",
+        [
+            (
+                "import",
+                "posthog.migrations.0001_initial",
+                "products.billing.backend.logic.charge",
+                (Context.MIGRATION,),
+            ),
+            (
+                "import",
+                "posthog.clickhouse.migrations.0001_initial",
+                "products.billing.backend.logic.charge",
+                (Context.PROD,),
+            ),
+            (
+                "import",
+                "posthog.rbac.migrations.rbac_team_migration",
+                "products.billing.backend.logic.charge",
+                (Context.PROD,),
+            ),
+        ],
+        [("products.billing.backend.logic.charge", "posthog.rbac.migrations.rbac_team_migration", "import")],
+    ),
 ]
 
 
@@ -267,6 +291,5 @@ def test_posthog_preset_public_surface(
 ) -> None:
     builder = GraphBuilder().symbol("products.billing.backend.logic.charge", "def")
     for kind, src, target, contexts in edges:
-        builder.module(src).edge(kind, src, target, contexts=contexts)
-    builder.module("products.billing.backend.logic")
+        builder.module(src, target.rpartition(".")[0]).edge(kind, src, target, contexts=contexts)
     assert found(run_shape(tmp_path, "posthog", builder.graph), "public-surface") == sorted(expected)

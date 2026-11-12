@@ -35,6 +35,8 @@ testcode  = { type = "bool" }
 database  = { type = "string", on = "symbol", required_on = "kind == 'model'" }
 generated = { type = "bool", required_on = ["posthog/schema.py", "posthog/schema_enums.py"] }
 producer  = { type = "set" }
+# Frozen history outside the `migration` context: migration files nobody rewrites.
+history   = { type = "bool" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -111,6 +113,11 @@ set = { zone = "composition" }
 [[assign]]
 match = "packages/{pkg}/**"
 set   = { package = "{pkg}", tier = "leaf" }
+
+# ClickHouse migrations are frozen history, but no Django migrations: they keep the prod context.
+[[assign]]
+match = "posthog/clickhouse/migrations/**"
+set   = { history = true }
 
 [[assign]]
 match = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
@@ -239,9 +246,10 @@ field-of-model           = ["edge.model", "edge.field"]
 
 [rules.public-surface]
 primitive     = "entrypoint"
-doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import."
+doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged."
 kinds         = ["import", "reference", "dotted-path"]
-select        = "src.package != dst.package and dst.tier == 'product'"
+contexts      = { exclude = ["migration"] }
+select        = "src.package != dst.package and dst.tier == 'product' and src.history != true"
 endpoint      = "surface"
 uses_at_import = true
 allow         = "dst.exported"
