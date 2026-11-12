@@ -573,6 +573,7 @@ class SchemaBuilder:
     def read_shapes(self) -> dict[str, ShapePolicy]:
         out: dict[str, ShapePolicy] = {}
         known = self.shape_names()
+        entity = self.entity_catalog()
         for name, table in self.raw.get("shapes", {}).items():
             key = f"shapes.{name}"
             self.check_keys(key, table, SHAPE_KEYS)
@@ -582,7 +583,7 @@ class SchemaBuilder:
                 self.check_keys(f"{key}.behavior", raw_behavior, frozenset({"kind", "where"}))
                 behavior = Behavior(
                     self.check_enum(f"{key}.behavior.kind", raw_behavior.get("kind"), known),
-                    self.parse(f"{key}.behavior.where", raw_behavior.get("where"), self.entity_catalog()),
+                    self.parse(f"{key}.behavior.where", raw_behavior.get("where"), entity),
                 )
             policy = ShapePolicy(
                 name,
@@ -592,8 +593,8 @@ class SchemaBuilder:
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
                 signatures=self.check_bool(f"{key}.signatures", table.get("signatures", False)),
-                allow_where=self.parse(f"{key}.allow_where", table.get("allow_where"), self.entity_catalog()),
-                walk_where=self.parse(f"{key}.walk_where", table.get("walk_where"), self.entity_catalog()),
+                allow_where=self.parse(f"{key}.allow_where", table.get("allow_where"), entity),
+                walk_where=self.parse(f"{key}.walk_where", table.get("walk_where"), entity),
                 source=self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):

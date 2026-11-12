@@ -135,6 +135,17 @@ impl<'a> Cx<'a> {
         rules.labels.namespaces.get(self.text(module?))
     }
 
+    /// A field's label on the namespace directory a module outside the graph names.
+    fn namespace_label(
+        &self,
+        module: Option<Sid>,
+        at: Option<u32>,
+        field: usize,
+    ) -> Option<&'a Cell> {
+        self.namespace(module, at)
+            .and_then(|found| found.labels[field].as_ref())
+    }
+
     /// The path that labels a module (`Labeler.labelled_path`): its file, or the directory of a
     /// namespace package.
     fn labelled_path(&self, module: Option<Sid>, at: Option<u32>) -> Option<&'a str> {
@@ -385,10 +396,7 @@ impl<'a> Cx<'a> {
                 rules.read_module_field(field, at);
                 return self.cell(&rules.values[field][at as usize]);
             }
-            if let Some(label) = self
-                .namespace(module, at)
-                .and_then(|found| found.labels[field].as_ref())
-            {
+            if let Some(label) = self.namespace_label(module, at, field) {
                 return self.cell(label);
             }
             if rules.labels.failed[field] {
@@ -801,10 +809,7 @@ impl<'a> LabelEnv<'a, '_> {
             };
         }
         let Some(at) = self.at else {
-            return match cx
-                .namespace(self.module, None)
-                .and_then(|found| found.labels[field].as_ref())
-            {
+            return match cx.namespace_label(self.module, None, field) {
                 Some(label) => cx.cell(label),
                 None => Value::None,
             };
