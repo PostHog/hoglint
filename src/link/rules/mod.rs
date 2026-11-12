@@ -28,7 +28,9 @@ use self::conflicts::Conflict;
 use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
 use self::entities::EntityRule;
 use self::env::{Cx, Endpoint, Env, Role};
-use self::export::{ExportInputs, ExportRow, ExportRule, Shape, Walk};
+use self::export::{
+    ExportInputs, ExportRow, ExportRule, Shape, Walk, binds_handed, module_scope_imports,
+};
 use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
     CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan,
@@ -41,7 +43,7 @@ use self::symbols::{KindSets, SymbolFacts};
 use self::use_shape::UseShape;
 use self::value::{Truth, Value, any_of, render};
 use super::Link;
-use super::intern::{EMPTY, Interner, Sid};
+use super::intern::{Interner, Sid};
 use super::scope::{Res, ctx};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -578,73 +580,59 @@ impl Rules {
             .collect()
     }
 
-    /// `graph.modules`: the modules with a file of the repo, in the module index's order.
     /// What each export module hands out by import, read once (`Labeler.handed_zones`): the
     /// graph modules its run-time imports of handed names come from. A type-only or test import
     /// hands nothing out, and a name with no graph module (third party) has no zone.
     fn handed(link: &mut Link, module_at: &FxHashMap<Sid, u32>) -> FxHashMap<Sid, Handed> {
-        let mut out = FxHashMap::default();
-        let kind = link.kind_sid("import");
-        let binds = link.core.it.get("binds");
-        let module_scope = link.settings.module_scope;
         let mut modules: Vec<(Sid, bool)> = link
             .hand_outs
             .iter()
             .map(|(module, found)| (*module, found.unread))
             .collect();
         modules.sort_unstable();
+        let mut out = FxHashMap::default();
         for (module, unread) in modules {
-            if unread {
-                out.insert(module, Handed::Unknown);
-                continue;
-            }
-            let ids = kind.map_or_else(Vec::new, |kind| link.ids_from(kind, module));
-            let handed = &link.hand_outs[&module].handed;
-            let it = &link.core.it;
-            let edges = &link.edges;
-            let mut from = Vec::new();
-            let mut unknown = false;
-            for id in ids {
-                let scope = link.site_of(id).1;
-                if scope != module_scope && scope != EMPTY {
-                    continue;
-                }
-                if edges.seen_ctx(id) & (ctx::TYPE_ONLY | ctx::TEST) != 0 {
-                    continue;
-                }
-                let bound = edges
-                    .attrs_with(id)
-                    .any(|&(key, value)| Some(key) == binds && handed.contains(&value));
-                if !bound {
-                    continue;
-                }
-                if edges.res_of(id) == Res::Unresolved {
-                    unknown = true;
-                    break;
-                }
-                for target in edges.targets_of(id) {
-                    let name = if target.s == EMPTY {
-                        it.s(target.m).to_string()
-                    } else {
-                        format!("{}.{}", it.s(target.m), it.s(target.s))
-                    };
-                    if let Some(found) = longest_module(it, module_at, &name) {
-                        from.push(found);
-                    }
-                }
-            }
-            out.insert(
-                module,
-                if unknown {
-                    Handed::Unknown
-                } else {
-                    Handed::From(from)
-                },
-            );
+            let handed = if unread {
+                Handed::Unknown
+            } else {
+                Self::handed_from(link, module_at, module)
+            };
+            out.insert(module, handed);
         }
         out
     }
 
+    /// The graph modules the run-time imports of an export module's handed names come from;
+    /// unknown when one of those imports did not resolve.
+    fn handed_from(link: &mut Link, module_at: &FxHashMap<Sid, u32>, module: Sid) -> Handed {
+        let ids = match link.kind_sid("import") {
+            Some(kind) => module_scope_imports(link, kind, module),
+            None => Vec::new(),
+        };
+        let found = &link.hand_outs[&module];
+        let edges = &link.edges;
+        let mut from = Vec::new();
+        for id in ids {
+            if edges.seen_ctx(id) & (ctx::TYPE_ONLY | ctx::TEST) != 0 {
+                continue;
+            }
+            if !binds_handed(link, found, id) {
+                continue;
+            }
+            if edges.res_of(id) == Res::Unresolved {
+                return Handed::Unknown;
+            }
+            for target in edges.targets_of(id) {
+                let name = link.core.ent_text(*target);
+                if let Some(found) = longest_module(&link.core.it, module_at, &name) {
+                    from.push(found);
+                }
+            }
+        }
+        Handed::From(from)
+    }
+
+    /// `graph.modules`: the modules with a file of the repo, in the module index's order.
     fn graph_modules(link: &Link) -> (Vec<Sid>, Vec<u32>) {
         let index = &link.core.index;
         let mut modules = Vec::new();

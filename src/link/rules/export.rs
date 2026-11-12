@@ -11,6 +11,7 @@ use super::value::{Truth, Value, render};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
+use crate::link::surface::HandOut;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A `[shapes]` policy (`ShapePolicy`).
@@ -193,6 +194,26 @@ pub enum ExportRow {
     Unresolved { surface: String, module: String },
 }
 
+/// The module-scope `kind` edges of a module: the imports that can bind a name it hands out.
+pub fn module_scope_imports(link: &mut Link, kind: Sid, module: Sid) -> Vec<u32> {
+    let module_scope = link.settings.module_scope;
+    link.ids_from(kind, module)
+        .into_iter()
+        .filter(|&id| {
+            let scope = link.site_of(id).1;
+            scope == module_scope || scope == EMPTY
+        })
+        .collect()
+}
+
+/// Whether import edge `id` binds a name a hand-out holds (`Graph.hand_outs`).
+pub fn binds_handed(link: &Link, found: &HandOut, id: u32) -> bool {
+    let binds = link.core.it.get("binds");
+    link.edges
+        .attrs_with(id)
+        .any(|&(key, value)| Some(key) == binds && found.handed.contains(&value))
+}
+
 /// The link's edges an export rule reads, gathered while the link can still build its indexes.
 pub struct ExportInputs {
     /// (module, path) of every graph module an export covers, per export, in module name order.
@@ -222,22 +243,13 @@ impl ExportInputs {
                 }
             }
         }
-        let module_scope = link.settings.module_scope;
         let mut imports = FxHashMap::default();
         if let Some(kind) = link.kind_sid("import") {
             for module in covered.iter().flatten().map(|(module, _)| *module) {
                 if imports.contains_key(&module) {
                     continue;
                 }
-                let ids: Vec<u32> = link
-                    .ids_from(kind, module)
-                    .into_iter()
-                    .filter(|&id| {
-                        let scope = link.site_of(id).1;
-                        scope == module_scope || scope == EMPTY
-                    })
-                    .collect();
-                imports.insert(module, ids);
+                imports.insert(module, module_scope_imports(link, kind, module));
             }
         }
         let mut exposes = FxHashMap::default();
@@ -371,13 +383,7 @@ impl<'a> Walk<'a> {
         let Some(found) = link.hand_outs.get(&module) else {
             return false;
         };
-        if found.unread {
-            return true;
-        }
-        let binds = link.core.it.get("binds");
-        link.edges
-            .attrs_with(id)
-            .any(|&(key, value)| Some(key) == binds && found.handed.contains(&value))
+        found.unread || binds_handed(link, found, id)
     }
 
     /// `ExportPrimitive.exported_symbols`: top-level symbols, then the imports the module hands

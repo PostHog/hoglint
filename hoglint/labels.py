@@ -27,9 +27,9 @@ from hoglint.config.model import (
 from hoglint.config.schema import canonical
 from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
-from hoglint.model import Context, Graph, Resolution
+from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, Provided
-from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, any_of, refs
+from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, any_of, members, refs
 
 REGISTRY_FIELD = "registry"
 HANDED_ZONES = "handed_zones"
@@ -38,7 +38,7 @@ BUILTIN_ENTITY_NAMES = frozenset(
     {"module", "subject", "symbol", "path", "name", "decl", "kind", "registry", "lifecycle", HANDED_ZONES}
 )
 MODULE_LEVEL_BUILTINS = frozenset({"module", "path", "external", "registry", "lifecycle", HANDED_ZONES})
-# A type-only or test import hands nothing out (the export primitive's default too).
+# A type-only or test import hands nothing out (the export primitive's default exclude).
 NOT_HANDED_CONTEXTS = frozenset({Context.TYPE_ONLY, Context.TEST})
 
 
@@ -687,6 +687,15 @@ class Labeler:
         lifecycle = self.config.registries[str(label.value)].lifecycle
         return Value.known(lifecycle) if lifecycle else NONE
 
+    def handed_imports(self, module: str) -> list[Edge]:
+        """The module-scope imports of the names a module hands out (`Graph.hand_outs`): every
+        one when its `__all__` cannot be read, none when the module is no export."""
+        hand_out = self.graph.hand_outs.get(module)
+        if hand_out is None:
+            return []
+        imports = self.index.module_imports.get(module, [])
+        return [edge for edge in imports if hand_out.unread or edge.attr("binds") in hand_out.handed]
+
     def handed_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
         import (`Graph.hand_outs`): none for a module that is no export or when no field is a
@@ -698,8 +707,8 @@ class Labeler:
         if hand_out.unread:
             return UNKNOWN
         names: set[str] = set()
-        for edge in self.index.module_imports.get(module, []):
-            if edge.attr("binds") not in hand_out.handed or edge.contexts & NOT_HANDED_CONTEXTS:
+        for edge in self.handed_imports(module):
+            if edge.contexts & NOT_HANDED_CONTEXTS:
                 continue
             if edge.resolution is Resolution.UNRESOLVED:
                 return UNKNOWN
@@ -711,7 +720,7 @@ class Labeler:
                 if zone.state is State.UNKNOWN:
                     return UNKNOWN
                 if zone.state is State.KNOWN:
-                    names.update(zone.chain or (str(zone.data),))
+                    names.update(members(zone))
         return Value.known(frozenset(names))
 
     def resolver(self, module: str | None, symbol: str | None, read_field: Callable[..., Value]) -> Resolver:

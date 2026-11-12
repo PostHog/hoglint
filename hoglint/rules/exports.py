@@ -24,8 +24,9 @@ from typing import Any
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
+from hoglint.labels import NOT_HANDED_CONTEXTS
 from hoglint.ledger.envelope import ConfigInputs
-from hoglint.model import Context, Edge, Resolution, context_bits
+from hoglint.model import Edge, Resolution, context_bits
 from hoglint.rules.base import (
     IncompleteItem,
     RuleContext,
@@ -132,8 +133,6 @@ def core_shape_bases() -> dict[str, list[str]]:
     }
 
 
-DEFAULT_EXCLUDED = (Context.TYPE_ONLY, Context.TEST)  # a type-only or test import hands nothing out
-
 # Why an export rule cannot tell about a symbol, by code; `{detail}` is the export's name or the
 # slot. The native evaluator reports the code (`export.rs`).
 UNKNOWN_WHY = {
@@ -165,7 +164,7 @@ class ExportPrimitive(RuleType):
         self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
-        self.exclude = frozenset(DEFAULT_EXCLUDED if spec.contexts_exclude is None else spec.contexts_exclude)
+        self.exclude = frozenset(NOT_HANDED_CONTEXTS if spec.contexts_exclude is None else spec.contexts_exclude)
         self.slot_owners = self.signature_scopes() if spec.slots == "shape" else []
         self.slots_seen: dict[str, bool] = {}
 
@@ -197,10 +196,6 @@ class ExportPrimitive(RuleType):
     @property
     def top_level(self) -> Mapping[str, list[str]]:
         return self.index.top_level
-
-    @property
-    def module_imports(self) -> Mapping[str, list[Edge]]:
-        return self.index.module_imports
 
     def selected_exports(self) -> list[ExportSpec]:
         names = self.spec.exports or tuple(self.ctx.config.exports)
@@ -290,11 +285,8 @@ class ExportPrimitive(RuleType):
         """The module's public top-level definitions, then the imports it hands out
         (`Graph.hand_outs`): an import it keeps to itself is no part of what it exports."""
         out: list[tuple[str, Edge | None]] = [(symbol, None) for symbol in self.top_level.get(module, [])]
-        hand_out = self.ctx.graph.hand_outs.get(module)
-        for edge in self.module_imports.get(module, []):
+        for edge in self.ctx.labeler.handed_imports(module):
             if not context_ok(edge, self.include, self.exclude):
-                continue
-            if hand_out is None or not (edge.attr("binds") in hand_out.handed or hand_out.unread):
                 continue
             if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
                 self.unresolved(edge, module)

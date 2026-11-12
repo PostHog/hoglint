@@ -6,7 +6,7 @@ use super::conflicts::Conflict;
 use super::labels::{Cell, FieldKind, Namespace};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
-use super::{Handed, Rules};
+use super::{Handed, Rules, longest_module};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
@@ -119,13 +119,7 @@ impl<'a> Cx<'a> {
 
     /// The longest dotted prefix of `name` that is a graph module (`GraphIndex.find_module`).
     pub fn module_of_symbol(&self, name: &str) -> Option<(Sid, u32)> {
-        let mut head = name;
-        loop {
-            if let Some(found) = self.module_named(head) {
-                return Some(found);
-            }
-            head = head.rsplit_once('.')?.0;
-        }
+        longest_module(&self.link.core.it, &self.rules.module_at, name)
     }
 
     pub fn path_at(&self, at: Option<u32>) -> Option<&'a str> {
