@@ -113,6 +113,7 @@ A move across products goes through move admission.
   The findings triage of Nov 11 named the double count as the largest single cause of noise: one row at the import, one more at every later use of the name.
   Since T3 the rule sets `uses_at_import`, so a later use of a name its module imports is judged once, at the import.
   A use with no import of its own, such as a name reached as an attribute of an imported module, keeps its own row.
+  So does a use whose import the rule judges clean: the rule can tell the two apart (by `edge.kind`, `edge.context` or the source symbol), so the import's judgment does not cover the use.
   The identity still holds `edge.kind`.
 
 ## Sources

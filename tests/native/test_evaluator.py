@@ -741,27 +741,44 @@ def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World)
 THROUGH_A_MODULE = "from products.billing.backend import models\n\n\ndef h():\n    models.Invoice.objects.all()\n"
 
 
-@pytest.mark.parametrize(
-    ("uses_at_import", "references"),
-    [
-        (
-            False,
-            {
-                ("products.billing.backend.models.Invoice", "core.a"),
-                ("products.billing.backend.models.Invoice", "core.b"),
-                ("products.billing.backend.models.Invoice", "core.c"),
-            },
-        ),
-        # A use of a name the module imports goes; a use through an imported module stays.
-        (True, {("products.billing.backend.models.Invoice", "core.c")}),
-    ],
-)
+INVOICE = "products.billing.backend.models.Invoice"
+EVERY_USE = {(INVOICE, "core.a"), (INVOICE, "core.b"), (INVOICE, "core.c")}
+JUDGED_AT_THE_IMPORT = CORNERS["uses-judged-at-their-import"]
+# (rule keys over the corner, the uses reported, whether the import is reported). A use is left
+# to its import only when the rule reports that import: a use the import's judgment does not
+# cover, because the rule tells the two apart, is judged on its own.
+USES_AT_IMPORT_CASES = {
+    "every use, without the key": ({"uses_at_import": False}, EVERY_USE, True),
+    # A use of a name the module imports goes; a use through an imported module stays.
+    "the key": ({}, {(INVOICE, "core.c")}, True),
+    "a deny that reads the edge kind": (
+        {"deny": "dst.tier == 'product' and edge.kind == 'reference'"},
+        EVERY_USE,
+        False,
+    ),
+    "a select that reads the edge kind": (
+        {"select": f"{JUDGED_AT_THE_IMPORT['select']} and edge.kind == 'reference'"},
+        EVERY_USE,
+        False,
+    ),
+    "an allow that reads the source symbol": (
+        {"allow": "src.symbol == src.module"},
+        EVERY_USE,
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", USES_AT_IMPORT_CASES)
 def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uses_at_import: bool, references: set[tuple[str, str]]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
+    keys, references, import_reported = USES_AT_IMPORT_CASES[case]
     monkeypatch.setitem(SOURCES, "core/c.py", THROUGH_A_MODULE)
     world = World(tmp_path)
-    spec_table = {**CORNERS["uses-judged-at-their-import"], "uses_at_import": uses_at_import}
+    spec_table = {**JUDGED_AT_THE_IMPORT, **keys}
+    if "allow" in keys:
+        del spec_table["deny"]
     config = world.config(rule_table("uses", spec_table))
     native, python = world.contexts(config)
     spec = config.rules["uses"]
@@ -769,7 +786,7 @@ def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
     assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
     identities = {identity for identity, *_ in found}
     assert {(symbol, module) for symbol, module, kind in identities if kind == "reference"} == references
-    assert ("products.billing.backend.models.Invoice", "core.a", "import") in identities
+    assert ((INVOICE, "core.a", "import") in identities) is import_reported
 
 
 ADAPTER = 'subclass_of = ["products.billing.backend.presentation.mixins.Mixin"]\naudience = "src.tier == \'core\'"'

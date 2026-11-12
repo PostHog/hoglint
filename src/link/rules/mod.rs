@@ -885,9 +885,6 @@ impl Rules {
         if let Some(signature) = &rule.signature {
             ids = signature.seen(link, ids);
         }
-        if rule.uses_at_import {
-            ids = uses_at_import(link, ids);
-        }
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
             cx.dst_endpoints(id, edges.role, dsts);
@@ -919,6 +916,11 @@ impl Rules {
                 });
             }
         });
+        let rows = if rule.uses_at_import {
+            uses_at_import(link, rows)
+        } else {
+            rows
+        };
         let rows = self.in_rule_order(link, rule_id, edges, rows, |row| row.edge)?;
         if !matches!(rule.verdict, Verdict::Inventory) {
             return Ok(rows);
@@ -1132,23 +1134,24 @@ fn known_kinds(link: &Link, names: &[String]) -> Option<Vec<Sid>> {
     (!out.is_empty() || names.is_empty()).then_some(out)
 }
 
-/// `EntrypointPrimitive.sees` past what every edge rule sees: `ids` less each reference edge
-/// whose module has an import edge among `ids` with the same surface. Keeps the order of `ids`.
-fn uses_at_import(link: &Link, ids: Vec<u32>) -> Vec<u32> {
+/// `EntrypointPrimitive.sees` past what every edge rule sees: `rows` less those of each
+/// reference edge whose module has an import edge with the same surface that the rule reports
+/// (a row is reported: it is not clean). Keeps the order of `rows`.
+fn uses_at_import(link: &Link, rows: Vec<Row>) -> Vec<Row> {
     let (Some(import), Some(reference)) = (link.kind_sid("import"), link.kind_sid("reference"))
     else {
-        return ids;
+        return rows;
     };
     let edges = &link.edges;
-    let imported: FxHashSet<(Sid, Sid)> = ids
+    let reported: FxHashSet<(Sid, Sid)> = rows
         .iter()
-        .filter(|&&id| edges.kind_of(id) == import)
-        .map(|&id| (link.module_of_edge(id), edges.surface_of(id)))
+        .filter(|row| edges.kind_of(row.edge) == import)
+        .map(|row| (link.module_of_edge(row.edge), edges.surface_of(row.edge)))
         .collect();
-    ids.into_iter()
-        .filter(|&id| {
-            edges.kind_of(id) != reference
-                || !imported.contains(&(link.module_of_edge(id), edges.surface_of(id)))
+    rows.into_iter()
+        .filter(|row| {
+            edges.kind_of(row.edge) != reference
+                || !reported.contains(&(link.module_of_edge(row.edge), edges.surface_of(row.edge)))
         })
         .collect()
 }

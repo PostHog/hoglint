@@ -48,8 +48,11 @@ class EntrypointPrimitive(EdgeRule):
     """Did a cross-package edge name a public surface? Judges the surface the caller wrote.
 
     With `uses_at_import = true` a coupling is judged once, at its import: a `reference` edge is
-    not seen when its module has an `import` edge the rule sees with the same surface. A use with
-    no such import (a name reached as an attribute of an imported module) is still seen.
+    not seen when its module has an `import` edge with the same surface that the rule reports (a
+    finding, or an item it cannot tell about). A use whose import the rule judges clean or does not
+    select is still seen, since the rule may tell the two apart (by `edge.kind`, `edge.context` or a
+    field of the source symbol); so is a use with no such import (a name reached as an attribute of
+    an imported module).
     """
 
     PRIMITIVE = MODE = "entrypoint"
@@ -65,11 +68,16 @@ class EntrypointPrimitive(EdgeRule):
         self.imported: frozenset[tuple[str, str]] | None = None
 
     def imported_names(self) -> frozenset[tuple[str, str]]:
-        """(module, surface) of every import edge the rule sees."""
+        """(module, surface) of every import edge the rule reports."""
         if self.imported is None:
-            edges = self.ctx.edges_of((IMPORT,))
-            self.imported = frozenset((edge.site.module, edge.surface) for edge in edges if EdgeRule.sees(self, edge))
+            self.imported = frozenset(
+                (edge.site.module, edge.surface) for edge in self.ctx.edges_of((IMPORT,)) if self.reports(edge)
+            )
         return self.imported
+
+    def reports(self, edge: Edge) -> bool:
+        """Whether the rule judges any destination of an edge it sees other than clean."""
+        return any(self.decide(env) is not Judgment.CLEAN for env in self.edge_envs(edge))
 
     def sees(self, edge: Edge) -> bool:
         if not super().sees(edge):
