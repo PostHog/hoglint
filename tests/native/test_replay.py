@@ -15,7 +15,7 @@ import pytest
 import hoglint
 from hoglint.ledger.cache import STORES, Store, StoreList
 from hoglint.native.parity import RowDiff
-from hoglint.native.predict import Prediction
+from hoglint.native.predict import PairPrediction, Prediction
 from hoglint.native.replay import (
     CHECK_OUTPUTS,
     COLD,
@@ -259,6 +259,74 @@ def test_the_certificate_reruns_the_rules_every_run_makes_from_the_whole_tree(
     if word == "MISSED":
         assert result.prediction is not None
         assert {item.rule for item in result.prediction.missed} == {run_level_rule(run_level_pair)}
+
+
+APPS_SETTINGS = 'INSTALLED_APPS = ["shop", "billing"]\n'
+APPS_REPO = {
+    **{path: text for path, text in DJANGO_REPO.items() if path.startswith("django/")},
+    "hoglint.toml": (
+        'schema = 1\nextends = ["hoglint:django"]\n\n[discovery]\nsource_roots = ["."]\n'
+        'first_party = ["shop", "billing", "promo", "proj", "django"]\n\n[django]\nsettings = "proj.settings"\n\n'
+        '[kinds]\n"django-app" = { decl = "django-app" }\n\n'
+        '[rules.no-app-imports]\nprimitive = "edge"\nkinds = ["import"]\ndeny = "dst.kind == \'django-app\'"\n'
+        'identity = ["dst.symbol"]\nledger = false\n'
+    ),
+    "proj/settings.py": APPS_SETTINGS,
+    "shop/__init__.py": "",
+    "shop/models.py": MODEL,
+    "billing/__init__.py": "",
+    "billing/models.py": MODEL.replace("Invoice", "Refund"),
+    "billing/tasks.py": "def run():\n    pass\n",
+    "billing/use.py": "from billing.tasks import run\n",
+    "promo/__init__.py": "",
+    "promo/apps.py": (
+        "from django.apps.config import AppConfig\n\n\nclass PromoConfig(AppConfig):\n    name = 'promo'\n"
+    ),
+    "django/apps/__init__.py": "",
+    "django/apps/config.py": "class AppConfig:\n    pass\n",
+}
+# Each moves an app or model fact the Django pack writes on every run on a symbol in a file the
+# commit leaves alone.
+APP_CHANGES: dict[str, dict[str, str | None]] = {
+    "an entry is appended through a splat": {
+        "proj/settings.py": APPS_SETTINGS + 'INSTALLED_APPS = [*INSTALLED_APPS, "billing.tasks.run"]\n'
+    },
+    "an entry is removed": {"proj/settings.py": 'INSTALLED_APPS = ["shop"]\n'},
+    "an entry names an app config class": {
+        "proj/settings.py": 'INSTALLED_APPS = ["shop", "billing", "promo.apps.PromoConfig"]\n'
+    },
+}
+APPENDED = "an entry is appended through a splat"
+
+
+@pytest.fixture(scope="module", params=sorted(APP_CHANGES))
+def app_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    return git_pair(tmp_path_factory.mktemp("replay-apps"), request.param, APPS_REPO, APP_CHANGES[request.param])
+
+
+# The certificate without the symbol kinds the packs compute from the whole tree, as a predictor
+# that lost the pack hook would be.
+class WithoutWholeKinds(Traces):
+    def predict(self, changed: set[str], dumps: tuple[Path, Path]) -> Prediction:
+        self.pair = PairPrediction(dumps[0], dumps[1], changed)
+        self.pair.config = replace(self.pair.config, whole_kinds=())
+        return self.pair.predict()
+
+
+def test_the_certificate_compares_the_app_facts_a_pack_writes_from_the_whole_tree(
+    tmp_path: Path, app_pair: tuple[Path, Pair]
+) -> None:
+    result = replay(tmp_path, app_pair, "traces")
+    assert result.status() == "HELD", result.line()
+    assert result.prediction is not None
+    moved = {"an entry names an app config class": "promo/__init__.py", APPENDED: "billing/tasks.py"}
+    if app_pair[1].name in moved:
+        assert moved[app_pair[1].name] in result.prediction.truth
+    if app_pair[1].name == APPENDED:
+        assert "billing/use.py" in result.prediction.truth, "its rule row reads the kind of the symbol"
+        assert "billing/use.py" in result.prediction.predicted
+        planted = replay(tmp_path / "planted", app_pair, WithoutWholeKinds())
+        assert planted.status() == "MISSED", planted.line()
 
 
 def missed_prediction() -> PredictionScore:

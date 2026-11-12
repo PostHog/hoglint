@@ -13,6 +13,9 @@ from hoglint.packs.django.models import LabelRef, ModelEntry, ModelRegistry, Rel
 
 RELATIONS_PRODUCER = "django.relations@1"
 PROD = frozenset({Context.PROD})
+# The `kind` facts of the model and app symbols.
+MODEL_KIND = "model"
+APP_KIND = "django-app"
 
 
 class ModelFacts:
@@ -26,7 +29,7 @@ class ModelFacts:
         out: dict[str, dict[str, str]] = {}
         for ref, entry in self.registry.models.items():
             out[str(ref)] = {
-                "kind": "model",
+                "kind": MODEL_KIND,
                 "app_label": entry.app_label,
                 "label": entry.label,
                 "abstract": flag(entry.abstract),
@@ -36,7 +39,7 @@ class ModelFacts:
             }
         for app in self.apps.apps:
             facts = {
-                "kind": "django-app",
+                "kind": APP_KIND,
                 "label": app.label,
                 "entry": app.entry,
                 "known": flag(app.known),

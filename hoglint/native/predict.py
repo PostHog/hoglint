@@ -19,17 +19,27 @@ file's edges outside their positions, any label, any symbol fact, or a declared 
 rules every run makes from the config and the whole tree (`run_level_rules`: a name the config
 writes out that names nothing, an unreadable source, a failed provider) rerun on every commit.
 
-What it sees of the packs: the modules a pack declares it reads as one unit (the pack hook
-`whole_modules`). A changed file in such a unit predicts every file of it.
+What it sees of the packs, by two pack hooks (`hoglint.plugins.Pack`):
+- `whole_modules`: the modules a pack reads as one unit. A changed file in such a unit predicts
+  every file of it.
+- `whole_symbol_kinds`: the kinds of the symbol facts a pack writes from the whole tree on every
+  run, so a check recomputes them all. Step 2 compares every symbol of such a kind in both trees,
+  in any file. One that moved is a moved symbol (its readers are predicted), and the file that
+  holds it is predicted.
 
 What it does not see: the other reads of the packs. Trace recording ends when the link has made its
 edges, before the packs run, while the truth set holds pack edges by the file they sit in. A pack
-edge can depend on what it read of another file, such as a function body that an interface
-digest leaves out: a helper gains a call that reaches another product's wiring, and the drives
-pack makes a new edge in an unchanged test file that calls the helper, while no key of the
-helper's interface moves. That test file is not predicted. The pack memo
-(hoglint/core/memo.py) traces the reads of each pack item, but nothing joins those reads to this
-prediction yet.
+edge can depend on what it read of another file:
+- a function body that an interface digest leaves out: a helper gains a call that reaches
+  another product's wiring, and a pack makes a new edge in an unchanged test file that calls the
+  helper, while no key of the helper's interface moves;
+- a module whose existence a pack checks: a file is added at a module name that a listed entry
+  implies, and the pack edge in the unchanged file that holds the list moves;
+- the files a pack scans, when a list decides them: an entry is removed, its package is no
+  longer scanned, and the pack edges in its unchanged files go.
+Those files are not predicted. The pack memo (hoglint/core/memo.py) traces the reads of each pack
+item, but nothing joins those reads to this prediction yet, and a pack step that is no memo item
+traces nothing.
 
 This module is generic: it knows trace kinds, not any repo's names.
 
@@ -89,13 +99,15 @@ class TraceConfig:
     """What a run's config says about its inputs, written next to its trace dump: the patterns of
     the files label providers and coverage adapters read, the policy files (every config file of
     the repo, each rule's `classify` file and each pack's policy files), the rules whose rows
-    fold many edges, the modules a pack reads as one unit (`whole_modules`), and the rules every
-    run makes from the config and the whole tree (`run_level_rules`)."""
+    fold many edges, the modules a pack reads as one unit (`whole_modules`), the symbol kinds a
+    pack writes from the whole tree on every run (`whole_symbol_kinds`), and the rules every run
+    makes from the config and the whole tree (`run_level_rules`)."""
 
     side: tuple[str, ...]
     policy: tuple[str, ...]
     folded: tuple[str, ...]
     whole: tuple[str, ...] = ()
+    whole_kinds: tuple[str, ...] = ()
     run_level: tuple[str, ...] = ()
 
     @staticmethod
@@ -105,19 +117,26 @@ class TraceConfig:
             if primitive_of(spec).FOLDS or spec.view in FOLDING_VIEWS:
                 folded.append(spec.id)
         policy = ConfigInputs.of(config).predicted_policy()
-        whole = TraceConfig.whole_modules(config)
-        side = RunInputs.of(config).side()
-        return TraceConfig(side, policy, tuple(sorted(folded)), whole, run_level_rules(config))
+        return TraceConfig(
+            side=RunInputs.of(config).side(),
+            policy=policy,
+            folded=tuple(sorted(folded)),
+            whole=TraceConfig.pack_hook(config, "whole_modules"),
+            whole_kinds=TraceConfig.pack_hook(config, "whole_symbol_kinds"),
+            run_level=run_level_rules(config),
+        )
 
     @staticmethod
-    def whole_modules(config: Any) -> tuple[str, ...]:
-        """The module names and fnmatch globs each active pack reads as one unit: a pack row in
-        one of them can move when another of them changes, which no trace records."""
+    def pack_hook(config: Any, hook: str) -> tuple[str, ...]:
+        """What every active pack that has the hook gives, sorted: `whole_modules` (the modules a
+        pack reads as one unit, as names and fnmatch globs) or `whole_symbol_kinds` (the kinds of
+        the symbol facts it writes from the whole tree on every run). No trace records these
+        reads (`hoglint.plugins.Pack`)."""
         out: list[str] = []
         for pack, section in active_packs(config):
-            reads = getattr(pack, "whole_modules", None)
-            if reads is not None:
-                out.extend(reads(section))
+            found = getattr(pack, hook, None)
+            if found is not None:
+                out.extend(found(section))
         return tuple(sorted(set(out)))
 
     def write(self, out: Path) -> None:
@@ -126,6 +145,7 @@ class TraceConfig:
             "policy": list(self.policy),
             "folded": list(self.folded),
             "whole": list(self.whole),
+            "whole_kinds": list(self.whole_kinds),
             "run_level": list(self.run_level),
         }
         (out / TRACE_CONFIG).write_text(json.dumps(data))
@@ -133,9 +153,14 @@ class TraceConfig:
     @staticmethod
     def read(out: Path) -> TraceConfig:
         data = json.loads((out / TRACE_CONFIG).read_text())
-        whole = tuple(data.get("whole", ()))
-        run_level = tuple(data.get("run_level", ()))
-        return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]), whole, run_level)
+        return TraceConfig(
+            side=tuple(data["side"]),
+            policy=tuple(data["policy"]),
+            folded=tuple(data["folded"]),
+            whole=tuple(data.get("whole", ())),
+            whole_kinds=tuple(data.get("whole_kinds", ())),
+            run_level=tuple(data.get("run_level", ())),
+        )
 
     def in_whole(self, module: str) -> bool:
         return any(fnmatch.fnmatchcase(module, pattern) for pattern in self.whole)
@@ -342,22 +367,26 @@ class TreeTables:
     `label_modules` (None: every module) only: a check that reuses stored answers has these rows
     for what it recomputed, and stored rows for the rest. The labels of the modules of `files` are
     read too: a label derived from a module's edges, such as the zones it hands out names from,
-    moves when those edges do."""
+    moves when those edges do. The symbols of a kind in `whole_kinds` are read in every file: a
+    pack writes them from the whole tree on every run, so a check recomputes them all."""
 
     modules: dict[str, str]
     symbols: dict[str, list[Any]] = field(default_factory=dict)
+    whole_symbols: dict[str, list[Any]] = field(default_factory=dict)
     classes: dict[str, list[Any]] = field(default_factory=dict)
     edges: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     labels: dict[str, list[Any]] = field(default_factory=dict)
 
     @staticmethod
-    def read(dump: Path, files: set[str], label_modules: set[str] | None) -> TreeTables:
+    def read(dump: Path, files: set[str], label_modules: set[str] | None, whole_kinds: set[str]) -> TreeTables:
         modules = dict(read_rows(dump / "modules.jsonl"))
         out = TreeTables(modules)
         for name, facts in read_rows(dump / "symbols.jsonl"):
             module = longest_module(name, modules)
             if modules.get(module) in files:
                 out.symbols[name] = facts
+            if whole_kinds and dict(facts).get("kind") in whole_kinds:
+                out.whole_symbols[name] = facts
         for row in read_rows(dump / "edges.jsonl"):
             path = row[PATH]
             if path not in files:
@@ -408,6 +437,8 @@ class Moved:
     # Modules whose labels or hand-outs moved: what a rule row reads of a module, not a symbol.
     labels: set[str] = field(default_factory=set)
     edges: bool = False
+    # The files that hold a symbol of a whole-tree kind whose facts moved.
+    files: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -447,9 +478,10 @@ class PairPrediction:
         """Both trees' rows of `files`; read once for the largest set asked."""
         if self.tables is None or not files <= self.tables_of:
             self.tables_of = frozenset(files)
+            whole_kinds = set(self.config.whole_kinds)
             self.tables = (
-                TreeTables.read(self.parent_dump, files, self.label_modules),
-                TreeTables.read(self.child_dump, files, self.label_modules),
+                TreeTables.read(self.parent_dump, files, self.label_modules, whole_kinds),
+                TreeTables.read(self.child_dump, files, self.label_modules, whole_kinds),
             )
         return self.tables
 
@@ -462,7 +494,8 @@ class PairPrediction:
 
     def moved(self, files: set[str]) -> Moved:
         """Symbols whose facts or class ancestry moved, modules whose labels moved, and whether
-        any edge moved, among `files` and the recomputed label modules."""
+        any edge moved, among `files` and the recomputed label modules; and every symbol of a
+        whole-tree kind that moved, wherever it is, with the file that holds it."""
         before, after = self.read_tables(files)
         modules = {**before.modules, **after.modules}
         out = Moved()
@@ -473,6 +506,13 @@ class PairPrediction:
         for name in set(before.symbols) | set(after.symbols):
             if mine(name) and before.symbols.get(name) != after.symbols.get(name):
                 out.symbols.add(symbol_key(name, modules))
+        for name in set(before.whole_symbols) | set(after.whole_symbols):
+            if before.whole_symbols.get(name) == after.whole_symbols.get(name):
+                continue
+            out.symbols.add(symbol_key(name, modules))
+            path = modules.get(longest_module(name, modules))
+            if path is not None:
+                out.files.add(path)
         changed_classes = {
             owner
             for owner in set(before.classes) | set(after.classes)
@@ -518,7 +558,7 @@ class PairPrediction:
         folded_moved = moved.edges or bool(moved.labels) or bool(moved.symbols) or self.side_changed
         rerun = frozenset(config.run_level) | (frozenset(config.folded) if folded_moved else frozenset())
         labels = frozenset(self.label_modules) if self.label_modules is not None else None
-        return Prediction(frozenset(link | readers), labels, rerun)
+        return Prediction(frozenset(link | readers | moved.files), labels, rerun)
 
 
 def predict(parent_dump: Path, child_dump: Path, changed: set[str], ignored_kinds: Iterable[str] = ()) -> Prediction:

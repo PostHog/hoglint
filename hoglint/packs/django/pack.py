@@ -27,7 +27,14 @@ from hoglint.packs.django.migrations import (
 )
 from hoglint.packs.django.models import ModelItems, ModelRegistry, RelationBuilder
 from hoglint.packs.django.native_uses import NativeUses
-from hoglint.packs.django.relations import RELATIONS_PRODUCER, ModelFacts, RelationEdges, RelationItems
+from hoglint.packs.django.relations import (
+    APP_KIND,
+    MODEL_KIND,
+    RELATIONS_PRODUCER,
+    ModelFacts,
+    RelationEdges,
+    RelationItems,
+)
 from hoglint.packs.django.setting_names import SETTINGS_PRODUCER, SettingNames
 from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalItems, SignalProducer
 from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelItems, GetModelProducer, UseProducer
@@ -268,6 +275,11 @@ class DjangoPack:
         """The settings modules: a list one of them hands another moves the setting name the
         pack writes on the other's edges."""
         return DjangoPackConfig.from_section(section).settings_modules
+
+    def whole_symbol_kinds(self, section: Mapping[str, Any]) -> tuple[str, ...]:
+        """The symbol facts the symbols step writes on every run from the settings and the app
+        configs: an entry in a settings module moves the fact on a symbol in another file."""
+        return (APP_KIND, MODEL_KIND)
 
     def produce(self, section: Mapping[str, Any], reader: PackReader, sink: PackSink, root: Path) -> None:
         self.run(reader, DjangoPackConfig.from_section(section), sink, root)

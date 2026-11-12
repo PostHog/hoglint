@@ -278,7 +278,12 @@ class Pack(Protocol):
     A pack whose row in one module can move when another module changes, with no trace of that
     read, declares `whole_modules(section) -> tuple[str, ...]`: the module names and fnmatch globs
     it reads as one unit. The predictor (hoglint/native/predict.py) predicts all of them when one
-    changes."""
+    changes.
+
+    A pack that writes a symbol fact on every run from the whole tree, where the fact can sit in
+    another file than what it was read from, declares `whole_symbol_kinds(section) ->
+    tuple[str, ...]`: the `kind` facts of those symbols. The predictor compares every symbol of
+    such a kind in both trees."""
 
     name: str  # the config section it owns, e.g. "django"
     allowed_keys: frozenset[str]
