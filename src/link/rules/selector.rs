@@ -220,6 +220,11 @@ impl Compiler<'_> {
         plans.iter().map(|plan| self.node(plan)).collect()
     }
 
+    /// A selector the plan may leave out.
+    pub fn optional(&self, plan: &Option<NodePlan>) -> Result<Option<Node>, String> {
+        plan.as_ref().map(|plan| self.node(plan)).transpose()
+    }
+
     fn operand(&self, plan: &OperandPlan) -> Operand {
         match plan {
             OperandPlan::Ref(path) => Operand::Ref(self.reference(path)),

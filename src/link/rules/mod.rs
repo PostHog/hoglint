@@ -342,11 +342,7 @@ impl Compiled {
                         .iter()
                         .map(|glob| glob::Glob::new(glob))
                         .collect::<Result<_, _>>()?,
-                    selector: domain
-                        .selector
-                        .as_ref()
-                        .map(|node| entity.node(node))
-                        .transpose()?,
+                    selector: entity.optional(&domain.selector)?,
                 }),
             };
             fields.push(Field {
@@ -360,16 +356,7 @@ impl Compiled {
         let exports = plan
             .exports
             .iter()
-            .map(|export| {
-                Export::new(
-                    export,
-                    export
-                        .audience
-                        .as_ref()
-                        .map(|node| edge.node(node))
-                        .transpose()?,
-                )
-            })
+            .map(|export| Export::new(export, edge.optional(&export.audience)?))
             .collect::<Result<Vec<_>, String>>()?;
         let rules = plan
             .rules
@@ -387,11 +374,7 @@ impl Compiled {
             .map(|level| {
                 Ok(Level {
                     field: entity.reference(std::slice::from_ref(&level.group_by)),
-                    select: level
-                        .select
-                        .as_ref()
-                        .map(|node| entity.node(node))
-                        .transpose()?,
+                    select: entity.optional(&level.select)?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -653,9 +636,6 @@ impl Rules {
         plan: &RulePlan,
         fields: &[Field],
     ) -> Result<Rule, String> {
-        let optional = |compiler: &Compiler, node: &Option<NodePlan>| {
-            node.as_ref().map(|node| compiler.node(node)).transpose()
-        };
         let edges = |found: &EdgesPlan| -> Result<Edges, String> {
             let selection = edge.nodes(&found.selection)?;
             Ok(Edges {
@@ -674,7 +654,7 @@ impl Rules {
                     .iter()
                     .map(|path| edge.reference(path))
                     .collect(),
-                unless: optional(edge, &found.unless)?,
+                unless: edge.optional(&found.unless)?,
                 signature: found.signature.as_ref().map(|signature| Signature {
                     unknown_types: signature.unknown_types.clone(),
                     annotation: edge.it.get("annotation"),
@@ -685,9 +665,9 @@ impl Rules {
                         allow,
                         require,
                     } => Verdict::Predicates {
-                        deny: optional(edge, deny)?,
-                        allow: optional(edge, allow)?,
-                        require: optional(edge, require)?,
+                        deny: edge.optional(deny)?,
+                        allow: edge.optional(allow)?,
+                        require: edge.optional(require)?,
                     },
                     VerdictPlan::DefaultAllow => Verdict::DefaultAllow,
                     VerdictPlan::UseShape(shapes) => Verdict::UseShape(UseShape {
@@ -701,9 +681,9 @@ impl Rules {
             }),
             ModePlan::Reach(found) => RuleKind::Reach(Reach {
                 edges: edges(&found.edges)?,
-                start: optional(edge, &found.start)?,
-                deny: optional(edge, &found.deny)?,
-                unless: optional(edge, &found.unless)?,
+                start: edge.optional(&found.start)?,
+                deny: edge.optional(&found.deny)?,
+                unless: edge.optional(&found.unless)?,
             }),
             ModePlan::Cycle(found) => {
                 let path = |root: &str| [root.to_string(), found.group.clone()];
@@ -713,12 +693,12 @@ impl Rules {
                 })
             }
             ModePlan::Export(found) => {
-                let start = optional(edge, &found.export.start)?;
+                let start = edge.optional(&found.export.start)?;
                 let slot_owners = found
                     .export
                     .slot_owners
                     .iter()
-                    .map(|owner| optional(edge, owner))
+                    .map(|owner| edge.optional(owner))
                     .collect::<Result<Vec<_>, _>>()?;
                 RuleKind::Export(ExportRule::new(
                     &found.export,

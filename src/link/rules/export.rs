@@ -35,14 +35,7 @@ impl Shape {
     pub fn new(plan: &ShapePlan, entity: &Compiler) -> Result<Shape, String> {
         let behavior = match &plan.behavior {
             None => None,
-            Some(found) => Some((
-                found.kind.clone(),
-                found
-                    .r#where
-                    .as_ref()
-                    .map(|node| entity.node(node))
-                    .transpose()?,
-            )),
+            Some(found) => Some((found.kind.clone(), entity.optional(&found.r#where)?)),
         };
         Ok(Shape {
             data: plan.data.clone(),
@@ -51,16 +44,8 @@ impl Shape {
             behavior,
             incomplete: plan.incomplete,
             signatures: plan.signatures,
-            allow_where: plan
-                .allow_where
-                .as_ref()
-                .map(|node| entity.node(node))
-                .transpose()?,
-            walk_where: plan
-                .walk_where
-                .as_ref()
-                .map(|node| entity.node(node))
-                .transpose()?,
+            allow_where: entity.optional(&plan.allow_where)?,
+            walk_where: entity.optional(&plan.walk_where)?,
         })
     }
 
