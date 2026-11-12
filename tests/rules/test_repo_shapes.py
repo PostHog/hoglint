@@ -290,13 +290,13 @@ PUBLIC_SURFACE_CASES = [
     (
         "a core registration point may name a wiring location, other core code may not",
         [
-            ("import", "posthog.temporal.schedule", "products.billing.backend.temporal.workflows", (Context.PROD,)),
-            ("import", "posthog.api.thing", "products.billing.backend.temporal.workflows", (Context.PROD,)),
+            ("import", "posthog.temporal.schedule", "products.billing.backend.temporal.workflows.Run", (Context.PROD,)),
+            ("import", "posthog.api.thing", "products.billing.backend.temporal.workflows.Run", (Context.PROD,)),
             ("import", "posthog.temporal.schedule", "products.billing.backend.logic.charge", (Context.PROD,)),
         ],
         [
             ("products.billing.backend.logic.charge", "posthog.temporal.schedule", "import"),
-            ("products.billing.backend.temporal.workflows", "posthog.api.thing", "import"),
+            ("products.billing.backend.temporal.workflows.Run", "posthog.api.thing", "import"),
         ],
     ),
     (
