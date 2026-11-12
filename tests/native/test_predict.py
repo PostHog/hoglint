@@ -16,9 +16,9 @@ from hoglint.native.graph import NativeGraph
 from hoglint.native.normal import FIELDS, edge_row
 from hoglint.native.parity import Dump, finding_row
 from hoglint.native.predict import predict, write_trace_dump
+from rules.test_compare import git_in, write_files
 
 from native.require import native_module
-from rules.test_compare import git_in, write_files
 
 CONFIG = """
 schema = 1
