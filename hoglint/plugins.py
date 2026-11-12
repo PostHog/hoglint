@@ -273,7 +273,12 @@ class Pack(Protocol):
 
     A pack reads no file but the policy files its `policy_file_keys` name (the section keys that
     hold a path). `produce` gets a root of its own that holds exactly those files, and the
-    section it gets names each one relative to that root, so a read of any other file fails."""
+    section it gets names each one relative to that root, so a read of any other file fails.
+
+    A pack whose row in one module can move when another module changes, with no trace of that
+    read, declares `whole_modules(section) -> tuple[str, ...]`: the module names and fnmatch globs
+    it reads as one unit. The predictor (hoglint/native/predict.py) predicts all of them when one
+    changes."""
 
     name: str  # the config section it owns, e.g. "django"
     allowed_keys: frozenset[str]

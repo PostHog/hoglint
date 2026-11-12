@@ -17,7 +17,10 @@ a commit changed, the prediction runs in two steps, as a check that reuses store
 Rules folded over packages or the whole graph rerun when what they read moved: any predicted
 file's edges outside their positions, any label, any symbol fact, or a declared side input.
 
-What it does not see: the reads of the packs. Trace recording ends when the link has made its
+What it sees of the packs: the modules a pack declares it reads as one unit (the pack hook
+`whole_modules`). A changed file in such a unit predicts every file of it.
+
+What it does not see: the other reads of the packs. Trace recording ends when the link has made its
 edges, before the packs run, while the truth set holds pack edges by the file they sit in. A pack
 edge can depend on what it read of another file, such as a function body that an interface
 digest leaves out: a helper gains a call that reaches another product's wiring, and the drives
@@ -44,6 +47,7 @@ import argparse
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +57,8 @@ from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.inputs import InputPatterns, RunInputs
 from hoglint.native.normal import FIELDS
 from hoglint.native.parity import read_rows
-from hoglint.plugins import REGISTRY
 from hoglint.rules.engine import primitive_of
+from hoglint.source import active_packs
 
 TRACES = "traces.jsonl"
 TRACE_CONFIG = "trace-config.json"
@@ -105,16 +109,19 @@ class TraceConfig:
         """The module names and fnmatch globs each active pack reads as one unit: a pack row in
         one of them can move when another of them changes, which no trace records."""
         out: list[str] = []
-        for name in config.pack_sections:
-            section = config.sections.get(name)
-            reads = getattr(REGISTRY.packs.get(name), "whole_modules", None)
-            if reads is not None and isinstance(section, dict):
+        for pack, section in active_packs(config):
+            reads = getattr(pack, "whole_modules", None)
+            if reads is not None:
                 out.extend(reads(section))
         return tuple(sorted(set(out)))
 
     def write(self, out: Path) -> None:
-        data = {"side": list(self.side), "policy": list(self.policy), "folded": list(self.folded)}
-        data["whole"] = list(self.whole)
+        data = {
+            "side": list(self.side),
+            "policy": list(self.policy),
+            "folded": list(self.folded),
+            "whole": list(self.whole),
+        }
         (out / TRACE_CONFIG).write_text(json.dumps(data))
 
     @staticmethod
@@ -124,7 +131,7 @@ class TraceConfig:
         return TraceConfig(tuple(data["side"]), tuple(data["policy"]), tuple(data["folded"]), whole)
 
     def in_whole(self, module: str) -> bool:
-        return any(module == pattern or fnmatch.fnmatchcase(module, pattern) for pattern in self.whole)
+        return any(fnmatch.fnmatchcase(module, pattern) for pattern in self.whole)
 
 
 def write_trace_dump(link: Any, config: Any, out: Path) -> None:
@@ -479,10 +486,13 @@ class PairPrediction:
                 break
         return out
 
+    @cached_property
     def whole_files(self) -> set[str]:
         """Every file of a unit a pack reads whole (`TraceConfig.whole`), when a changed file is
         one of them."""
         config = self.config
+        if not config.whole:
+            return set()
         modules = {**self.parent.modules, **self.child.modules}
         if not any(config.in_whole(modules[path]) for path in self.changed if path in modules):
             return set()
@@ -494,7 +504,7 @@ class PairPrediction:
             every = frozenset(self.parent.traces) | frozenset(self.child.modules)
             return Prediction(every, None, frozenset(config.folded))
         predictor = Predictor(self.parent, self.changes, self.parent.mask(ignored_kinds))
-        link = predictor.link_files() | self.whole_files()
+        link = predictor.link_files() | self.whole_files
         moved = self.moved(link)
         readers = predictor.readers(moved.symbols, moved.labels)
         folded_moved = moved.edges or bool(moved.labels) or bool(moved.symbols) or self.side_changed
