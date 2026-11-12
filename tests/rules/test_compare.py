@@ -285,6 +285,24 @@ def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> No
     assert "code growth (fails) (1)" in grown.stdout
 
 
+@needs_extractor
+def test_compare_blocks_a_config_name_the_change_made_stale(tmp_path: Path) -> None:
+    seeded = CONFIG + '[fields.seed]\ntype = "bool"\n\n[[assign]]\nmatch = "core/api.py"\nset = { seed = true }\n'
+    repo = tmp_path / "repo"
+    write_files(repo, {**FILES, "hoglint.toml": seeded})
+    git_in(repo, "init", "-q")
+    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+    git_in(repo, "mv", "core/api.py", "core/views.py")
+    git_in(repo, "commit", "-qm", "move the seeded file")
+    compared = hoglint(repo, "compare", "--base", "base")
+    assert compared.returncode == 2, compared.stdout + compared.stderr
+    introduced = compared.stdout.split("incomplete, introduced (blocks)")[1].split("\n\n")[0]
+    assert "config:stale-name: core/api.py is named by [[assign]] core/api.py" in introduced
+
+
 ENGINE_PACKAGE = "tools/hoglint/hoglint"
 FAKE_CRATE = {
     "tools/hoglint/Cargo.toml": "[package]\nname = 'fake'\n",

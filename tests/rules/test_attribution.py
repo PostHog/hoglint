@@ -543,6 +543,64 @@ def test_staged_check_blocks_only_what_it_introduced_against_head_and_chains_its
     assert "stored summary): 0 introduced, 0 ambiguous, 2 inherited" in chained.stdout
 
 
+# A literal path and a symbol the config writes out in full: a change that makes one name nothing
+# leaves a config:stale-name item with no file behind it. Moving the file also loses the symbol.
+NAMED_CONFIG = (
+    CONFIG
+    + """
+[fields.seed]
+type = "bool"
+
+[fields.gate]
+type = "bool"
+on = "symbol"
+
+[[assign]]
+match = "core/seed.py"
+set = { seed = true }
+
+[[assign]]
+symbols = { names = ["core.seed.Gate"] }
+set = { gate = true }
+"""
+)
+SEEDED = {"hoglint.toml": NAMED_CONFIG, "core/__init__.py": "", "core/seed.py": "class Gate:\n    pass\n"}
+STALE_CHANGES = {
+    "the named file is deleted": ("core/seed.py", None, "2 introduced"),
+    "the named file is moved": ("core/seed.py", "core/moved.py", "2 introduced"),
+    "the named symbol is renamed": ("core/seed.py", "core/seed.py", "1 introduced"),
+}
+
+
+def make_stale(repo: Path, change: str) -> None:
+    path, moved_to, _ = STALE_CHANGES[change]
+    if moved_to is None:
+        git_in(repo, "rm", "-q", path)
+    elif moved_to != path:
+        git_in(repo, "mv", path, moved_to)
+    else:
+        (repo / path).write_text("class Door:\n    pass\n")
+    git_in(repo, "add", "-A")
+
+
+@needs_extractor
+@pytest.mark.parametrize("change", sorted(STALE_CHANGES))
+def test_a_commit_that_makes_a_config_name_stale_is_blocked_as_introduced(tmp_path: Path, change: str) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, SEEDED)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "the named file and symbol exist")
+    clean = hoglint(repo, "check", "--index")
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+
+    make_stale(repo, change)
+    stale = hoglint(repo, "check", "--index")
+    assert stale.returncode == 2, stale.stdout + stale.stderr
+    assert f"stored summary): {STALE_CHANGES[change][2]}, 0 ambiguous\n" in stale.stdout
+    assert "config:stale-name [introduced]" in stale.stdout
+
+
 def stored_incomplete_counts(cache: Path) -> dict[str, int]:
     """Inputs digest -> incomplete items of every stored summary."""
     store = SummaryStore(cache)
