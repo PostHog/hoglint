@@ -7,8 +7,8 @@ a commit changed, the prediction runs in two steps, as a check that reuses store
 
 1. The link. The changed files' interfaces of parent and child give the (module, name) keys that
    moved; an added or deleted file moves its whole module, the existence of every module above
-   it and the labels of a directory without `__init__.py` that holds it. A file whose trace reads a moved key is predicted, with every changed file and every file
-   of a changed module.
+   it and the labels of a directory without `__init__.py` that holds it. A file whose trace
+   reads a moved key is predicted, with every changed file and every file of a changed module.
 2. What rule rows read. The predicted files are recomputed (here: their rows are taken from the
    child's dump), which tells whose symbol facts, class ancestry and labels really moved. A file
    whose edges name such a symbol, or whose rule rows read such a module's labels, is predicted
