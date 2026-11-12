@@ -91,8 +91,8 @@ pub struct Assign {
     /// (field index, value) for each declared field it sets.
     sets: Vec<(usize, SetValue)>,
     pub overrides: bool,
-    /// For a symbol assignment: (decorated_by, subclass_of).
-    pub symbols: Option<(Vec<String>, Vec<String>)>,
+    /// For a symbol assignment: (decorated_by, subclass_of, names).
+    pub symbols: Option<(Vec<String>, Vec<String>, Vec<String>)>,
 }
 
 impl Assign {
@@ -114,10 +114,13 @@ impl Assign {
             only_values: plan.only_values.clone(),
             sets,
             overrides: plan.overrides,
-            symbols: plan
-                .symbols
-                .as_ref()
-                .map(|found| (found.decorated_by.clone(), found.subclass_of.clone())),
+            symbols: plan.symbols.as_ref().map(|found| {
+                (
+                    found.decorated_by.clone(),
+                    found.subclass_of.clone(),
+                    found.names.clone(),
+                )
+            }),
         })
     }
 
@@ -733,10 +736,13 @@ impl Rules {
         symbol: &str,
         path: Option<&str>,
     ) -> bool {
-        let Some((decorated_by, subclass_of)) = &assign.symbols else {
+        let Some((decorated_by, subclass_of, names)) = &assign.symbols else {
             return false;
         };
         if !assign.allows(path) {
+            return false;
+        }
+        if !names.is_empty() && !names.iter().any(|name| name == symbol) {
             return false;
         }
         if !decorated_by.is_empty() {

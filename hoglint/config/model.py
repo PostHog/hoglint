@@ -32,6 +32,7 @@ class FieldSpec:
 class SymbolMatch:
     decorated_by: tuple[str, ...] = ()
     subclass_of: tuple[str, ...] = ()
+    names: tuple[str, ...] = ()  # the symbols' full dotted names
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +108,8 @@ class ShapePolicy:
     deny: tuple[str, ...] = ()
     unknown: str = "error"  # error | incomplete
     signatures: bool = False  # the signatures of what the export hands out are part of the contract
+    # An entity selector: a symbol it holds for is allowed as it stands, whatever its kind.
+    allow_where: Selector | None = None
     source: str = ""
 
 

@@ -285,3 +285,23 @@ def test_contracts_no_django_reads_what_runs_on_import(
     }
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert findings(out["native"], "contracts-no-django") == [[f"{SHOP}.facade.contracts", dst] for dst in reached]
+
+
+# The core models on the list may cross a contract at any depth: in a slot of a facade function
+# and in a field of a data class that slot names. Any other model is a finding at both depths.
+def test_the_core_model_list_holds_at_any_depth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logic = (
+        "import dataclasses\n\n"
+        "from posthog.models.team.team import Team\n"
+        "from products.shop.backend.models import Order\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Scope:\n    team: Team\n    order: Order\n"
+    )
+    api = (
+        "from posthog.models.team.team import Team\n"
+        "from products.shop.backend.logic import Scope\n\n\n"
+        "def for_team(team: Team, scope: Scope) -> int:\n    return 1\n"
+    )
+    files = {**CORE_MODELS, "products/shop/backend/logic.py": logic, "products/shop/backend/facade/api.py": api}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings(out["native"], "export-shape") == [[f"{SHOP}.models.Order", API, "export-denied(model)"]]
+    assert findings(out["native"], "facade-signature") == []

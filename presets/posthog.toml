@@ -45,6 +45,7 @@ wiring    = { type = "enum", values = ["location", "registration"] }
 # Interfaces the old boundary config (tach.toml, `isolation:permanent-interface`) declares permanent:
 # core reaches them past the facade by design, and the contract-check inputs watch them.
 permanent = { type = "bool" }
+crosses   = { type = "bool", on = "symbol" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -172,6 +173,15 @@ set   = { history = true }
 match = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
 set   = { testcode = true }
 
+# The core models a contract may name (D65, D98): read by the facade signatures and the contract
+# shape alike, so the verdict does not depend on how deep a model sits.
+[[assign]]
+symbols = { names = [
+  "posthog.models.organization.Organization", "posthog.models.organization.OrganizationMembership",
+  "posthog.models.project.Project", "posthog.models.team.team.Team", "posthog.models.user.User",
+] }
+set     = { crosses = true }
+
 # ── Zones inside a product ─────────────────────────────────────
 # A product file no zone path matches lands in the default private zone `internal`.
 
@@ -221,6 +231,7 @@ pydantic  = { subclass_of = ["pydantic.BaseModel", "pydantic.main.BaseModel", "p
 [shapes.contract]
 data       = ["frozen-dataclass", "enum"]
 allow      = ["protocol", "hogql_ast", "exception", "pydantic"]
+allow_where = "crosses == true"
 behavior   = { kind = "abc", where = "tier == 'core'" }
 deny       = ["model", "manager", "queryset", "command"]
 unknown    = "error"
@@ -351,8 +362,8 @@ doc        = "A public facade function neither accepts nor returns a model, mana
 select     = "src.zone == 'facade' and src.zone != 'fixtures' and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
-# The core models a facade may take or return (D65). One line changes the list.
-unless     = "dst.symbol in ['posthog.models.organization.Organization', 'posthog.models.organization.OrganizationMembership', 'posthog.models.project.Project', 'posthog.models.team.team.Team', 'posthog.models.user.User']"
+# A core model on the list (`crosses`) may be taken or returned.
+unless     = "dst.crosses == true"
 identity   = "facade-slot"
 growth_key = ["dst.symbol", "src.package"]
 

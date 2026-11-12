@@ -140,7 +140,7 @@ FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
 ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_paths", "symbols", "doc", "__source__"})
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
-SHAPE_KEYS = frozenset({"data", "behavior", "allow", "deny", "unknown", "signatures", "doc"})
+SHAPE_KEYS = frozenset({"data", "behavior", "allow", "allow_where", "deny", "unknown", "signatures", "doc"})
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict"})
@@ -523,6 +523,7 @@ class SchemaBuilder:
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
                 self.check_bool(f"{key}.signatures", table.get("signatures", False)),
+                self.parse(f"{key}.allow_where", table.get("allow_where"), self.entity_catalog()),
                 self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):
@@ -643,9 +644,11 @@ class SchemaBuilder:
             symbols = None
             raw_symbols = table.get("symbols")
             if isinstance(raw_symbols, dict):
-                self.check_keys(f"{key}.symbols", raw_symbols, frozenset({"decorated_by", "subclass_of"}))
+                self.check_keys(f"{key}.symbols", raw_symbols, frozenset({"decorated_by", "subclass_of", "names"}))
                 symbols = SymbolMatch(
-                    as_tuple(raw_symbols.get("decorated_by")), as_tuple(raw_symbols.get("subclass_of"))
+                    as_tuple(raw_symbols.get("decorated_by")),
+                    as_tuple(raw_symbols.get("subclass_of")),
+                    as_tuple(raw_symbols.get("names")),
                 )
             if not match and symbols is None:
                 self.fail(key, "an assignment needs `match` or `symbols`")

@@ -410,7 +410,7 @@ impl Compiled {
             .exports
             .iter()
             .filter_map(|export| export.audience.as_ref());
-        let behaviors = self.shapes.iter().filter_map(Shape::reads);
+        let behaviors = self.shapes.iter().flat_map(Shape::reads);
         let domains = self
             .fields
             .iter()

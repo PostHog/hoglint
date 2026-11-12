@@ -114,6 +114,7 @@ class RulePlan:
                 else {
                     "decorated_by": list(assign.symbols.decorated_by),
                     "subclass_of": list(assign.symbols.subclass_of),
+                    "names": list(assign.symbols.names),
                 },
             }
             for assign in self.config.assigns
@@ -163,6 +164,8 @@ class RulePlan:
                     if policy.behavior is None
                     else {"kind": policy.behavior.kind, "where": selector_tree(policy.behavior.where)},
                     "incomplete": policy.unknown == "incomplete",
+                    "signatures": policy.signatures,
+                    "allow_where": selector_tree(policy.allow_where),
                 }
                 for policy in config.shapes.values()
             ],

@@ -67,6 +67,9 @@ pub enum SetValue {
 pub struct SymbolMatchPlan {
     pub decorated_by: Vec<String>,
     pub subclass_of: Vec<String>,
+    /// The symbols' full dotted names.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -137,6 +140,12 @@ pub struct ShapePlan {
     pub behavior: Option<BehaviorPlan>,
     /// `unknown = "incomplete"`.
     pub incomplete: bool,
+    /// `signatures = true`: the signatures of what the export hands out are part of it.
+    #[serde(default)]
+    pub signatures: bool,
+    /// An entity selector: a symbol it holds for is allowed as it stands.
+    #[serde(default)]
+    pub allow_where: Option<NodePlan>,
 }
 
 /// What an export rule checks (`ExportPrimitive`).

@@ -404,6 +404,8 @@ class Labeler:
             return False
         if not self.path_allows(assignment, path):
             return False
+        if match.names and symbol not in match.names:
+            return False
         if match.decorated_by and not set(match.decorated_by) & set(self.facts.decorators(symbol)):
             return False
         if match.subclass_of:

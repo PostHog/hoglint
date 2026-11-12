@@ -295,6 +295,13 @@ class ExportPrimitive(RuleType):
             names.add("exception")
         return frozenset(names), complete and kind.state is not State.UNKNOWN
 
+    def allowed_as_is(self, symbol: str, policy: ShapePolicy) -> bool:
+        """Whether the policy's `allow_where` holds for a symbol: it is handed out as it stands."""
+        if policy.allow_where is None:
+            return False
+        module = self.ctx.labeler.module_of_symbol(symbol)
+        return policy.allow_where.evaluate(self.ctx.labeler.entity_resolver(module, symbol)) is Truth.TRUE
+
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
         if behavior is None:
@@ -327,6 +334,9 @@ class ExportPrimitive(RuleType):
         a denied kind or an unknown type marks nothing: a full check may still report it."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
+            return
+        if self.allowed_as_is(symbol, policy):
+            self.visited.add(visit)
             return
         shapes, complete = self.recognize(symbol)
         denied = sorted(shapes & set(policy.deny))

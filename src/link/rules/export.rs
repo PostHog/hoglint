@@ -108,6 +108,10 @@ pub struct Shape {
     behavior: Option<(String, Option<Node>)>,
     /// `unknown = "incomplete"`.
     incomplete: bool,
+    /// `signatures = true`: an allowed class's methods are part of the contract too.
+    signatures: bool,
+    /// `allow_where`: a symbol it holds for is allowed as it stands.
+    allow_where: Option<Node>,
 }
 
 impl Shape {
@@ -129,11 +133,19 @@ impl Shape {
             deny: plan.deny.clone(),
             behavior,
             incomplete: plan.incomplete,
+            signatures: plan.signatures,
+            allow_where: plan
+                .allow_where
+                .as_ref()
+                .map(|node| entity.node(node))
+                .transpose()?,
         })
     }
 
-    pub fn reads(&self) -> Option<&Node> {
-        self.behavior.as_ref().and_then(|(_, found)| found.as_ref())
+    /// The entity selectors the policy reads: its behavior's `where` and its `allow_where`.
+    pub fn reads(&self) -> Vec<&Node> {
+        let behavior = self.behavior.as_ref().and_then(|(_, found)| found.as_ref());
+        behavior.into_iter().chain(&self.allow_where).collect()
     }
 }
 
@@ -551,6 +563,16 @@ impl<'a> Walk<'a> {
         (names, complete && !kind_unknown)
     }
 
+    /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.
+    fn allowed_as_is(&self, symbol: &str, shape: usize) -> bool {
+        let Some(node) = &self.cx.rules.shapes[shape].allow_where else {
+            return false;
+        };
+        let owner = self.cx.module_of_symbol(symbol);
+        let env = EntityEnv::of(self.cx, owner, Some(symbol), None);
+        evaluate(node, &env) == Truth::True
+    }
+
     fn behavior_ok(&mut self, symbol: &str, shape: usize) -> bool {
         let rules = self.cx.rules;
         let Some((kind, found)) = &rules.shapes[shape].behavior else {
@@ -595,6 +617,10 @@ impl<'a> Walk<'a> {
         }
         let rules = self.cx.rules;
         let policy = &rules.shapes[shape];
+        if self.allowed_as_is(symbol, shape) {
+            self.visited.insert(visit);
+            return;
+        }
         let (shapes, complete) = self.recognize(symbol);
         let mut denied: Vec<&String> = policy
             .deny

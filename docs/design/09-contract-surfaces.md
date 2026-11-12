@@ -60,7 +60,8 @@ The reasoning matches D63: where something is defined must not change the verdic
 The owner decided that a preset holds a named list of future-proof core models that may cross.
 Any model that core owns is not enough, because a core model may later move into a product.
 Which models a company lists is its own policy and is not published.
-The rule that reads the list is the signature rule: a listed model in a slot of a facade is no finding (`unless`), every other model is.
+The preset keeps the list once, as a symbol label, and both contract rules read it: the signature rule (`unless`) and the shape policy (`allow_where`, a symbol it holds for is allowed as it stands).
+So the verdict on a listed model does not depend on how deep it sits, in a slot or in a field of a class a slot names.
 
 **What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
 - A slot type is unknown when it is `Any`, `object`, a bare `dict` or no annotation.
