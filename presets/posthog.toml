@@ -22,6 +22,11 @@ path_callees = ["import_string", "include"]
 # migrations and stay prod.
 migrations = ["ee/migrations/**", "posthog/migrations/**", "posthog/session/migrations/**", "products/*/backend/migrations/**"]
 
+# The cross-package relation, named once (D97, D105): a first-party destination in another package.
+# A third-party end reads no package, so it is no crossing.
+[conditions]
+crosses-package = "src.package != dst.package and dst.external == none"
+
 # ── Fields ─────────────────────────────────────────────────────
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
 
@@ -399,7 +404,7 @@ primitive     = "entrypoint"
 doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings; a core registration point may name a wiring location; core production code may name a declared permanent interface. A test's patch target is wiring-watched's, not this rule's."
 kinds         = ["import", "reference", "dotted-path"]
 contexts      = { exclude = ["migration"] }
-select        = "src.package != dst.package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context)"
+select        = "crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context)"
 endpoint      = "surface"
 uses_at_import = true
 allow         = "dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context)"
@@ -443,7 +448,7 @@ doc        = "Presentation reaches product code through a facade, its own produc
 view       = "zones"
 from       = "src.zone == 'presentation'"
 endpoint   = "surface"
-deny       = "dst.tier == 'product' and (dst.zone not in ['facade', 'presentation', 'tests'] or (dst.zone == 'presentation' and dst.package != src.package and not dst.exported))"
+deny       = "dst.tier == 'product' and (dst.zone not in ['facade', 'presentation', 'tests'] or (dst.zone == 'presentation' and crosses-package and not dst.exported))"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 
@@ -502,7 +507,7 @@ growth_key = ["dst.module", "src.package"]
 primitive    = "use-shape"
 doc          = "Outside its package, a model appears only in allowed shapes: a type, a cast, value rows, a signal sender, the team-extension registry. Judged at the origin, so a re-export hides nothing."
 kinds        = ["reference"]
-select       = "dst.kind == 'model' and dst.tier == 'product' and src.package != dst.package and edge.shape != none"
+select       = "dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none"
 endpoint     = "origin"
 allow_shapes = [
   "annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch", "sender",
@@ -519,7 +524,7 @@ growth_key   = ["dst.symbol", "edge.label", "src.package"]
 primitive  = "edge"
 doc        = "apps.get_model naming another package's model is counted."
 kinds      = ["model-label"]
-select     = "edge.shape == 'get_model' and dst.tier == 'product' and src.package != dst.package"
+select     = "edge.shape == 'get_model' and dst.tier == 'product' and crosses-package"
 contexts   = { exclude = ["test", "migration"] }
 identity   = "crossing"
 counted    = true
@@ -529,7 +534,7 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 primitive     = "edge"
 doc           = "A relation into another package is sealed: hidden, with no explicit query name. Owner by defining module. A third-party app is no package."
 kinds         = ["reverse-accessor"]
-select        = "src.package != dst.package and dst.external == none"
+select        = "crosses-package and dst.external == none"
 on_unresolved = "block"
 identity      = "relation"
 growth_key    = ["dst.symbol"]
@@ -538,7 +543,7 @@ growth_key    = ["dst.symbol"]
 primitive  = "edge"
 doc        = "A product never listens to another product's sender (B6). The ledger keeps the sender. A receiver in a test is no wiring."
 kinds      = ["signal"]
-select     = "src.package != dst.package and dst.tier == 'product'"
+select     = "crosses-package and dst.tier == 'product'"
 contexts   = { exclude = ["test"] }
 identity   = "receiver-sender"
 counted    = true
@@ -548,7 +553,7 @@ growth_key = ["dst.symbol", "src.package"]
 primitive     = "edge"
 doc           = "A product registers a callback into another package's hook: the approved way to send behavior across a boundary, so a list and not debt. wiring-watched checks that the callback's module is watched; an install whose hook cannot be resolved is incomplete."
 kinds         = ["installs"]
-select        = "src.package != dst.package"
+select        = "crosses-package"
 deny          = "false"
 contexts      = { exclude = ["test"] }
 on_unresolved = "incomplete"
@@ -559,7 +564,7 @@ primitive     = "edge"
 doc           = "A test outside a product that executes the product's wiring is recorded."
 kinds         = ["drives"]
 contexts      = { include = ["test"] }
-select        = "src.package != dst.package and edge.execution != 'none'"
+select        = "crosses-package and edge.execution != 'none'"
 resolve_calls = "bare-name"
 identity      = "location-module-trigger"
 counted       = true
@@ -570,8 +575,8 @@ primitive  = "coverage"
 doc        = "Every wiring location another package drives, every receiver or hook callback, and every module outside tests patch is in the contract-check inputs."
 covers     = [
   "rules.drives.dst.path",
-  "edge.kind in ['signal', 'installs'] and src.package != dst.package: src",
-  "edge.kind == 'dotted-path' and edge.context == 'test' and src.package != dst.package: surface",
+  "edge.kind in ['signal', 'installs'] and crosses-package: src",
+  "edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface",
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
