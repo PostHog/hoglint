@@ -40,11 +40,38 @@ use self::symbols::{KindSets, SymbolFacts};
 use self::use_shape::UseShape;
 use self::value::{Truth, Value, any_of, render};
 use super::Link;
-use super::intern::Sid;
+use super::intern::{EMPTY, Interner, Sid};
+use super::scope::{Res, ctx};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::hash::Hash;
 use std::sync::{Mutex, OnceLock};
+
+/// What an export module hands out by import, as `handed_zones` reads it.
+pub enum Handed {
+    /// Its `__all__` cannot be read, or a handed import did not resolve.
+    Unknown,
+    /// The graph modules the handed names come from, and each one's place.
+    From(Vec<(Sid, u32)>),
+}
+
+/// The longest dotted prefix of `name` that is a graph module, and its place
+/// (`GraphIndex.find_module`).
+fn longest_module(
+    it: &Interner,
+    module_at: &FxHashMap<Sid, u32>,
+    name: &str,
+) -> Option<(Sid, u32)> {
+    let mut head = name;
+    loop {
+        if let Some(sid) = it.get(head)
+            && let Some(&at) = module_at.get(&sid)
+        {
+            return Some((sid, at));
+        }
+        head = head.rsplit_once('.')?.0;
+    }
+}
 
 /// What a rule decides for one destination of one edge (`rules.base.Judgment`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -244,6 +271,10 @@ pub struct Rules {
     met: Mutex<FxHashSet<Conflict>>,
     /// The link's edges every export rule reads, gathered for the first one.
     export_inputs: OnceLock<ExportInputs>,
+    /// What each export module hands out by import (`Labeler.handed_zones`).
+    pub handed: FxHashMap<Sid, Handed>,
+    /// The first declared field that holds a zone.
+    pub zone_field: Option<usize>,
 }
 
 fn role_of(name: &str) -> Result<Role, String> {
@@ -465,6 +496,9 @@ impl Rules {
             .build()
             .map_err(|error| error.to_string())?;
         let endpoint_keys = Self::endpoint_keys(link);
+        let handed = Self::handed(link, &module_at);
+        let zone_field =
+            (0..labels.fields.len()).find(|&field| labels.fields[field].kind == FieldKind::Zone);
         let mut out = Rules {
             endpoint_keys,
             modules,
@@ -493,6 +527,8 @@ impl Rules {
             tainted: FxHashSet::default(),
             met: Mutex::new(FxHashSet::default()),
             export_inputs: OnceLock::new(),
+            handed,
+            zone_field,
         };
         out.tainted = out.provider_reads();
         out.values = out.module_values(link);
@@ -539,6 +575,72 @@ impl Rules {
     }
 
     /// `graph.modules`: the modules with a file of the repo, in the module index's order.
+    /// What each export module hands out by import, read once (`Labeler.handed_zones`): the
+    /// graph modules its run-time imports of handed names come from. A type-only or test import
+    /// hands nothing out, and a name with no graph module (third party) has no zone.
+    fn handed(link: &mut Link, module_at: &FxHashMap<Sid, u32>) -> FxHashMap<Sid, Handed> {
+        let mut out = FxHashMap::default();
+        let kind = link.kind_sid("import");
+        let binds = link.core.it.get("binds");
+        let module_scope = link.settings.module_scope;
+        let mut modules: Vec<(Sid, bool)> = link
+            .hand_outs
+            .iter()
+            .map(|(module, found)| (*module, found.unread))
+            .collect();
+        modules.sort_unstable();
+        for (module, unread) in modules {
+            if unread {
+                out.insert(module, Handed::Unknown);
+                continue;
+            }
+            let ids = kind.map_or_else(Vec::new, |kind| link.ids_from(kind, module));
+            let handed = &link.hand_outs[&module].handed;
+            let it = &link.core.it;
+            let edges = &link.edges;
+            let mut from = Vec::new();
+            let mut unknown = false;
+            for id in ids {
+                let scope = link.site_of(id).1;
+                if scope != module_scope && scope != EMPTY {
+                    continue;
+                }
+                if edges.seen_ctx(id) & (ctx::TYPE_ONLY | ctx::TEST) != 0 {
+                    continue;
+                }
+                let bound = edges
+                    .attrs_with(id)
+                    .any(|&(key, value)| Some(key) == binds && handed.contains(&value));
+                if !bound {
+                    continue;
+                }
+                if edges.res_of(id) == Res::Unresolved {
+                    unknown = true;
+                    break;
+                }
+                for target in edges.targets_of(id) {
+                    let name = if target.s == EMPTY {
+                        it.s(target.m).to_string()
+                    } else {
+                        format!("{}.{}", it.s(target.m), it.s(target.s))
+                    };
+                    if let Some(found) = longest_module(it, module_at, &name) {
+                        from.push(found);
+                    }
+                }
+            }
+            out.insert(
+                module,
+                if unknown {
+                    Handed::Unknown
+                } else {
+                    Handed::From(from)
+                },
+            );
+        }
+        out
+    }
+
     fn graph_modules(link: &Link) -> (Vec<Sid>, Vec<u32>) {
         let index = &link.core.index;
         let mut modules = Vec::new();

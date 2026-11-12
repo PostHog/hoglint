@@ -2,11 +2,11 @@
 //! `EdgeEnv`, `read_endpoint`), and the label environment a field's domain reads
 //! (`Labeler.label_resolver`).
 
-use super::Rules;
 use super::conflicts::Conflict;
 use super::labels::{Cell, FieldKind};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
+use super::{Handed, Rules};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
@@ -302,6 +302,31 @@ impl<'a> Cx<'a> {
         Value::None
     }
 
+    /// `Labeler.handed_zones`: the zones, each with its ancestors, of the modules whose names a
+    /// module hands out by import.
+    pub fn handed_zones(&self, module: Option<Sid>) -> Value<'a> {
+        let rules = self.rules;
+        let Some(found) = module.and_then(|module| rules.handed.get(&module)) else {
+            return Value::None;
+        };
+        let Some(field) = rules.zone_field else {
+            return Value::None;
+        };
+        let from = match found {
+            Handed::Unknown => return Value::Unknown,
+            Handed::From(from) => from,
+        };
+        let mut names: Vec<&'a str> = Vec::new();
+        for &(module, at) in from {
+            if let Value::Zone(zone) = self.field_value(field, Some(module), Some(at), None) {
+                names.extend(zone.chain.iter().map(String::as_str));
+            }
+        }
+        names.sort_unstable();
+        names.dedup();
+        Value::Set(names)
+    }
+
     /// The registry of a graph module, and its lifecycle.
     fn registry(&self, at: Option<u32>, lifecycle: bool) -> Value<'a> {
         let Some(found) = at.and_then(|at| self.rules.labels.registry_of[at as usize]) else {
@@ -550,6 +575,7 @@ impl<'a> Env<'a> {
             },
             EndField::Registry => cx.registry(endpoint.at, false),
             EndField::Lifecycle => cx.registry(endpoint.at, true),
+            EndField::HandedZones => cx.handed_zones(endpoint.module),
             EndField::Field(at, attr) => self.declared(endpoint, at, attr),
             EndField::Undeclared(attr) => match self.own_attr(attr) {
                 "" => Value::Unknown,
@@ -718,6 +744,7 @@ impl<'a> Resolve<'a> for LabelEnv<'a, '_> {
             },
             EntityField::Registry => cx.registry(self.at, false),
             EntityField::Lifecycle => cx.registry(self.at, true),
+            EntityField::HandedZones => cx.handed_zones(self.module),
             EntityField::Field(field) => self.label_only(field),
             EntityField::Unknown => Value::Unknown,
         }

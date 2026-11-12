@@ -162,6 +162,8 @@ ENTITY_FIELDS: dict[str, FieldInfo] = {
     "decl": FieldInfo(FieldType.STRING),
     "registry": FieldInfo(FieldType.STRING),
     "lifecycle": FieldInfo(FieldType.ENUM, LIFECYCLES),
+    # The zones of the modules whose names a module hands out by import.
+    "handed_zones": FieldInfo(FieldType.SET),
 }
 # Endpoint-only attributes: where the edge names it from, and what the edge says about it.
 ENDPOINT_FIELDS: dict[str, FieldInfo] = {

@@ -35,6 +35,8 @@ pub enum EndField {
     Decl,
     Registry,
     Lifecycle,
+    /// The zones of what the endpoint's module hands out (`Labeler.handed_zones`).
+    HandedZones,
     Context,
     Exported,
     /// A declared field, and the edge attr (`src.<name>` or `dst.<name>`) that overrides it.
@@ -54,6 +56,7 @@ pub enum EntityField {
     Kind,
     Registry,
     Lifecycle,
+    HandedZones,
     /// A bare `subject`: what an entity rule names (`EntityRule.resolver`); elsewhere the module.
     Subject,
     /// A declared field, read from its labels alone.
@@ -254,6 +257,7 @@ impl Compiler<'_> {
             "kind" => EntityField::Kind,
             "registry" => EntityField::Registry,
             "lifecycle" => EntityField::Lifecycle,
+            "handed_zones" => EntityField::HandedZones,
             other => self
                 .field(other)
                 .map_or(EntityField::Unknown, EntityField::Field),
@@ -301,6 +305,7 @@ impl Compiler<'_> {
             "decl" => EndField::Decl,
             "registry" => EndField::Registry,
             "lifecycle" => EndField::Lifecycle,
+            "handed_zones" => EndField::HandedZones,
             "context" => EndField::Context,
             "exported" => EndField::Exported,
             other => {
