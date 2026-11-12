@@ -7,6 +7,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -595,3 +596,28 @@ def test_the_hand_out_set_holds_every_name_a_handed_import_binds(
         gc.enable()
     found = graph.hand_outs["products.shop.backend.facade.hooks"]
     assert (sorted(found.handed), sorted(found.kept), found.unread) == (handed, kept, False)
+
+
+HOOKS = "products/shop/backend/facade/hooks.py"
+HOOK = "\n\ndef __getattr__(name):\n    raise AttributeError(name)\n"
+
+
+def import_edges(out: Path, path: str) -> list[list[Any]]:
+    """(surface, line, resolution, targets) of each import edge sited in `path`, in graph order."""
+    return [
+        [row[6], row[4], row[8], row[7]]
+        for row in read_lines(out / "edges.jsonl")
+        if row[0] == "import" and row[1] == path
+    ]
+
+
+# A later dict takes a lazy name only when its entry resolves, so the edge sits at the dict whose
+# entry the name is read from.
+def test_a_lazy_edge_sits_at_the_dict_whose_entry_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    hooks = '_A = {"run": "products.shop.backend.temporal.jobs"}\n_B = {"run": "Run it"}\n' + HOOK
+    repo = {"hoglint.toml": HANDED_CONFIG, **SHOP, HOOKS: hooks, "products/shop/backend/temporal/jobs.py": RUN}
+    out = dumps(tmp_path, repo, monkeypatch)
+    same_in_both_engines(out)
+    assert import_edges(out["native"], HOOKS) == [
+        ["products.shop.backend.temporal.jobs.run", 1, "resolved", ["products.shop.backend.temporal.jobs.run"]]
+    ]

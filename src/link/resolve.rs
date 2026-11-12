@@ -573,8 +573,8 @@ impl Core {
     /// Second, every entry: those a module answers for, then the others with the module path as
     /// written (a relative one anchored). Only an entry that reads as a name and a dotted path
     /// counts, and a path of one name or a relative path only in a dict where another entry
-    /// resolves: another dict of text or names is no lazy map. An entry sits at the last dict
-    /// that maps its name to a string.
+    /// resolves: another dict of text or names is no lazy map. An entry sits at the dict it is
+    /// read from: the last one whose entry for the name counts.
     fn lazy_map(
         &mut self,
         module: Sid,
@@ -608,8 +608,9 @@ impl Core {
             }
         }
         let mut out = OrderedMap::default();
-        let mut missing = OrderedMap::default();
-        let mut sites: FxHashMap<Sid, (u32, u32)> = FxHashMap::default();
+        let mut found_at: FxHashMap<Sid, (u32, u32)> = FxHashMap::default();
+        let mut missing: OrderedMap<Sid> = OrderedMap::default();
+        let mut missing_at: FxHashMap<Sid, (u32, u32)> = FxHashMap::default();
         for (row, items) in maps {
             let mut unresolved: Vec<(Sid, Sid, bool)> = Vec::new();
             let mut resolves = false;
@@ -617,7 +618,6 @@ impl Core {
                 let (Some(V::Str(key, _)), V::Str(value, _)) = (key, value) else {
                     continue;
                 };
-                sites.insert(*key, (row.l, row.c));
                 let tail = self.it.s(*value).to_string();
                 let relative = tail.starts_with('.');
                 let rest = tail.trim_start_matches('.');
@@ -642,6 +642,7 @@ impl Core {
                 }
                 if let Some(found) = candidates.into_iter().find(|&c| self.exists(c)) {
                     out.insert(*key, found);
+                    found_at.insert(*key, (row.l, row.c));
                     resolves = true;
                 } else if !is_identifier(self.it.s(*key)) {
                     continue;
@@ -656,11 +657,16 @@ impl Core {
                 // dict that is a lazy map.
                 if resolves || (self.it.s(path).contains('.') && !relative) {
                     missing.insert(name, path);
+                    missing_at.insert(name, (row.l, row.c));
                 }
             }
         }
         let entry = |name: Sid, module: Sid, found: bool| {
-            let (line, col) = sites[&name];
+            let (line, col) = if found {
+                found_at[&name]
+            } else {
+                missing_at[&name]
+            };
             LazyEntry {
                 name,
                 module,

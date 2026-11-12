@@ -263,8 +263,8 @@ class Tables:
         Second, every entry: those a module answers for, then the others with the module path as
         written (a relative one anchored). Only an entry that reads as a name and a dotted path
         counts, and a path of one name or a relative path only in a dict where another entry
-        resolves: another dict of text or names is no lazy map. An entry sits at the last dict
-        that maps its name to a string."""
+        resolves: another dict of text or names is no lazy map. An entry sits at the dict it is
+        read from: the last one whose entry for the name counts."""
         package = module if is_package else module.rpartition(".")[0]
         parts = package.split(".")
         ancestors = [".".join(parts[:end]) for end in range(len(parts), 0, -1)]
@@ -279,15 +279,15 @@ class Tables:
             elif isinstance(value, dict) and "dict" in value:
                 maps.append(row)
         out: dict[str, str] = {}
+        found_at: dict[str, tuple[int, int]] = {}
         missing: dict[str, str] = {}
-        sites: dict[str, tuple[int, int]] = {}
+        missing_at: dict[str, tuple[int, int]] = {}
         for row in maps:
             unresolved: list[tuple[str, str, bool]] = []
             resolves = False
             for key, value in row["v"]["dict"]:
                 if not (isinstance(key, dict) and "s" in key and isinstance(value, dict) and "s" in value):
                     continue
-                sites[key["s"]] = (row["l"], row["c"])
                 text = value["s"]
                 if text.startswith("."):
                     rest = text.lstrip(".")
@@ -301,6 +301,7 @@ class Tables:
                 found = next((candidate for candidate in candidates if self.index.exists(candidate)), None)
                 if found is not None:
                     out[key["s"]] = found
+                    found_at[key["s"]] = (row["l"], row["c"])
                     resolves = True
                 elif not IDENTIFIER.fullmatch(key["s"]):
                     continue
@@ -313,8 +314,11 @@ class Tables:
                 # dict that is a lazy map.
                 if resolves or ("." in path and not was_relative):
                     missing[name] = path
-        entries = [LazyEntry(name, found, *sites[name], True) for name, found in out.items()]
-        entries += [LazyEntry(name, path, *sites[name], False) for name, path in missing.items() if name not in out]
+                    missing_at[name] = (row["l"], row["c"])
+        entries = [LazyEntry(name, found, *found_at[name], True) for name, found in out.items()]
+        entries += [
+            LazyEntry(name, path, *missing_at[name], False) for name, path in missing.items() if name not in out
+        ]
         return out, entries
 
     def build(self, module: str) -> ModuleTable | None:
