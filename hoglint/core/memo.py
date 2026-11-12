@@ -53,9 +53,19 @@ PARTS = 64
 ZLIB_LEVEL = 1
 
 
+# Longer answer texts (a listing, a whole map) rarely repeat and would only fill the cache.
+SHORT_TEXT = 256
+
+
 @lru_cache(maxsize=1 << 16)
+def short_digest(text: str) -> str:
+    """Short answers repeat (None, a label, an empty list), so their digest is kept."""
+    return hashlib.blake2b(text.encode(), digest_size=DIGEST_BYTES).hexdigest()
+
+
 def text_digest(text: str) -> str:
-    """Answers repeat (None, a label, an empty list), so a text's digest is kept."""
+    if len(text) <= SHORT_TEXT:
+        return short_digest(text)
     return hashlib.blake2b(text.encode(), digest_size=DIGEST_BYTES).hexdigest()
 
 
@@ -655,23 +665,28 @@ class Part:
         self.items: dict[str, list[Any]] = part["items"]
         self.failing: set[int] | None = None
 
+    def failed(self, indices: Iterable[int], tracer: Tracer) -> set[int]:
+        """Of the reads at `indices`, those whose answer changed: file reads and reads answered
+        by a map of digests are checked with no call per read."""
+        files = tracer.files.keys if isinstance(tracer.files, FileKeysMap) else None
+        maps, current = tracer.maps(), tracer.current
+        failing = set()
+        for at in indices:
+            kind, key, wanted = self.reads[at]
+            if kind == FILE and files is not None:
+                held = files.get(key) == wanted
+            elif kind in maps:
+                held = maps[kind](key) == wanted
+            else:
+                held = current(kind, key) == wanted
+            if not held:
+                failing.add(at)
+        return failing
+
     def failed_reads(self, tracer: Tracer) -> set[int]:
-        """The indices of the reads whose answer changed: file reads and reads answered by a map
-        of digests are checked with no call per read."""
+        """The indices of every read whose answer changed, checked once."""
         if self.failing is None:
-            files = tracer.files.keys if isinstance(tracer.files, FileKeysMap) else None
-            maps, current = tracer.maps(), tracer.current
-            failing = set()
-            for at, (kind, key, wanted) in enumerate(self.reads):
-                if kind == FILE and files is not None:
-                    held = files.get(key) == wanted
-                elif kind in maps:
-                    held = maps[kind](key) == wanted
-                else:
-                    held = current(kind, key) == wanted
-                if not held:
-                    failing.add(at)
-            self.failing = failing
+            self.failing = self.failed(range(len(self.reads)), tracer)
         return self.failing
 
     @staticmethod
@@ -681,7 +696,7 @@ class Part:
         if not isinstance(entry, list) or len(entry) != 3:
             return None
         try:
-            if not failing.isdisjoint(entry[0]):
+            if failing and not failing.isdisjoint(entry[0]):
                 return None
             outputs, data = entry[1], entry[2]
             return ItemOutput(decode_outputs(outputs), data) if outputs or data is not None else NOTHING
@@ -693,8 +708,7 @@ class Part:
         state it builds is taken, and the other items of its part read that state."""
         entry = self.items.get(key)
         try:
-            indices = entry[0] if isinstance(entry, list) else []
-            failing = {at for at in indices if tracer.current(*self.reads[at][:2]) != self.reads[at][2]}
+            failing = self.failed(entry[0] if isinstance(entry, list) else [], tracer)
         except Exception:  # noqa: BLE001 - a damaged read table is a miss
             return None
         return self.output(entry, failing)
@@ -742,7 +756,7 @@ class StepMemo:
         self.manifest: tuple[str, dict[str, str]] | None = None
         self.loaded: dict[str, Part] | None = None
         self.reused: dict[str, Part] = {}  # item key -> the part its stored output came from
-        self.fresh: dict[str, list[Any]] = {}  # item key -> the entry of an item that ran
+        self.fresh: dict[str, dict[str, list[Any]]] = {}  # part -> item key -> the entry of an item that ran
         self.dirty: set[str] = set()  # parts that hold an item that ran
 
     def parts(self) -> dict[str, Part]:
@@ -797,7 +811,8 @@ class StepMemo:
             self.stats.keys.append(key)
         if self.store is None:
             return result
-        self.dirty.add(part_of(key))
+        part = part_of(key)
+        self.dirty.add(part)
         stored = self.tracer.stored_reads(reads)
         outputs = encode_outputs(result.outputs)
         try:
@@ -805,7 +820,7 @@ class StepMemo:
         except TypeError:
             return result
         if stored is not None and outputs is not None:
-            self.fresh[key] = [stored, outputs, data]
+            self.fresh.setdefault(part, {})[key] = [stored, outputs, data]
         return ItemOutput(result.outputs, data)
 
     def written(self) -> Written:
@@ -825,13 +840,12 @@ class StepMemo:
                 dirty.add(name)
         manifest: dict[str, str] = {}
         new: dict[str, bytes] = {}
-        names = set(kept) | {part_of(key) for key in self.fresh}
-        for name in sorted(names):
+        for name in sorted(set(kept) | set(self.fresh)):
             if name not in dirty:
                 manifest[name] = old[name]
                 continue
-            keys = [*kept.get(name, ()), *(key for key in self.fresh if part_of(key) == name)]
-            body = encode_part(self.part_state(keys))
+            fresh = self.fresh.get(name, {})
+            body = encode_part(self.part_state([*kept.get(name, ()), *fresh], fresh))
             found = hashlib.blake2b(body, digest_size=16).hexdigest()
             manifest[name] = found
             new[found] = body
@@ -843,14 +857,15 @@ class StepMemo:
             return Written(self.key, None, {}, used)
         return Written(self.key, manifest, new, used)
 
-    def part_state(self, keys: list[str]) -> dict[str, Any]:
+    def part_state(self, keys: list[str], fresh: dict[str, list[Any]]) -> dict[str, Any]:
+        """One part's state: the items of `keys`, each reused or in `fresh`, over one read table."""
         table: dict[tuple[str, ...], int] = {}
         reads: list[list[str]] = []
         items: dict[str, list[Any]] = {}
         for key in keys:
             part = self.reused.get(key)
             if part is None:
-                triples, outputs, data = self.fresh[key]
+                triples, outputs, data = fresh[key]
             else:
                 indices, outputs, data = part.items[key]
                 triples = [part.reads[at] for at in indices]

@@ -129,7 +129,7 @@ class FileFacts:
         self.rel = reader.rel
         self.dotted = reader.scope.module
         self.is_test = reader.is_test
-        self.lazy: TracedMemo[str, dict[str, str]] = TracedMemo(reader.snapshot.tracer)
+        self.lazy: TracedMemo[str, dict[str, str]] | None = None
 
     def touch(self) -> None:
         self.reader.snapshot.note_file(self.reader.scope)
@@ -178,6 +178,9 @@ class FileFacts:
 
     @property
     def lazy_map(self) -> dict[str, str]:
+        # Made on first use: most files never read their lazy map, and a reused step reads none.
+        if self.lazy is None:
+            self.lazy = TracedMemo(self.reader.snapshot.tracer)
         return self.lazy.get("lazy", self.reader.lazy_map)
 
     @property
