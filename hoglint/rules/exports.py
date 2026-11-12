@@ -7,7 +7,11 @@ imports it hands out; a re-export is judged at its origin, so a shim module hide
 
 Membership is the labeler's: an export's paths, narrowed by `subclass_of`. The audience is not
 read here: it limits who may use an export, not what the export hands out, so every member is
-checked whatever its audience.
+checked whatever its audience. `from` leaves out the export modules it is false for.
+
+With `slots = "shape"` the rule judges only the shape of a class named in a slot of a member: a
+denied kind, an unknown type, a missing annotation or an unresolved name there is a signature
+rule's to report. Deeper slots (the fields of such a class) are judged in full.
 """
 
 from __future__ import annotations
@@ -19,14 +23,88 @@ from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
 from hoglint.globs import compile_label_glob
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.model import Context, Edge, Resolution, context_bits
-from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project
-from hoglint.rules.plan import identity_paths
+from hoglint.rules.base import IncompleteItem, ModuleEnv, RuleContext, RuleRun, RuleType, context_ok, project
+from hoglint.rules.plan import identity_paths, selector_tree
 from hoglint.selectors import NONE, Ref, Resolver, State, Truth, Value
 
 ABC_BASES = frozenset({"abc.ABC"})
 ABC_METAS = frozenset({"abc.ABCMeta"})
 ENUM_BASES = frozenset({"enum.Enum", "enum.StrEnum", "enum.IntEnum", "enum.Flag", "enum.IntFlag"})
 PROTOCOL_BASES = frozenset({"typing.Protocol", "typing_extensions.Protocol"})
+# Python's own exception classes: a class that inherits one is an exception.
+BUILTIN_EXCEPTIONS = (
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "BaseExceptionGroup",
+    "BlockingIOError",
+    "BrokenPipeError",
+    "BufferError",
+    "BytesWarning",
+    "ChildProcessError",
+    "ConnectionAbortedError",
+    "ConnectionError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "DeprecationWarning",
+    "EOFError",
+    "EncodingWarning",
+    "EnvironmentError",
+    "Exception",
+    "ExceptionGroup",
+    "FileExistsError",
+    "FileNotFoundError",
+    "FloatingPointError",
+    "FutureWarning",
+    "GeneratorExit",
+    "IOError",
+    "ImportError",
+    "ImportWarning",
+    "IndentationError",
+    "IndexError",
+    "InterruptedError",
+    "IsADirectoryError",
+    "KeyError",
+    "KeyboardInterrupt",
+    "LookupError",
+    "MemoryError",
+    "ModuleNotFoundError",
+    "NameError",
+    "NotADirectoryError",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PendingDeprecationWarning",
+    "PermissionError",
+    "ProcessLookupError",
+    "PythonFinalizationError",
+    "RecursionError",
+    "ReferenceError",
+    "ResourceWarning",
+    "RuntimeError",
+    "RuntimeWarning",
+    "StopAsyncIteration",
+    "StopIteration",
+    "SyntaxError",
+    "SyntaxWarning",
+    "SystemError",
+    "SystemExit",
+    "TabError",
+    "TimeoutError",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "UnicodeTranslateError",
+    "UnicodeWarning",
+    "UserWarning",
+    "ValueError",
+    "Warning",
+    "ZeroDivisionError",
+)
+EXCEPTION_BASES = frozenset(f"builtins.{name}" for name in BUILTIN_EXCEPTIONS)
 
 
 DEFAULT_EXCLUDED = (Context.TYPE_ONLY, Context.TEST)  # a type-only or test import hands nothing out
@@ -46,7 +124,7 @@ class ExportPrimitive(RuleType):
     PRIMITIVE = MODE = "export"
     NATIVE_MODE = "export"
     CONFIRM = "whole"
-    READS = frozenset({"exports", "contexts", "on_unknown", "unknown_types", "on_unresolved"})
+    READS = frozenset({"exports", "contexts", "from", "slots", "on_unknown", "unknown_types", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
@@ -113,6 +191,8 @@ class ExportPrimitive(RuleType):
             "unknown_types": list(spec.unknown_types),
             "on_unknown": spec.on_unknown,
             "on_unresolved": spec.on_unresolved,
+            "start": selector_tree(spec.from_),
+            "slots": spec.slots,
         }
         return {"id": spec.id, "mode": self.NATIVE_MODE, "identity": identity_paths(spec.identity), "export": checked}
 
@@ -129,6 +209,14 @@ class ExportPrimitive(RuleType):
                 out.setdefault(name, []).append((module, path))
         return out
 
+    def judges(self, module: str) -> bool:
+        """Whether the rule judges what a module exports: `from`, read of the module alone. A
+        module it cannot tell about is judged."""
+        if self.spec.from_ is None:
+            return True
+        env = ModuleEnv(self.ctx, self.ctx.module_endpoint(module))
+        return self.spec.from_.evaluate(env.resolve) is not Truth.FALSE
+
     def evaluate(self) -> RuleRun:
         found = self.ctx.export_run(self)
         if found is not None:
@@ -138,6 +226,8 @@ class ExportPrimitive(RuleType):
         for export in self.selected_exports():
             policy = self.ctx.config.shapes[export.shape]
             for module, path in covered.get(export.name, []):
+                if not self.judges(module):
+                    continue
                 for symbol, edge in self.exported_symbols(module):
                     member = labeler.export_member((export.name, path, symbol))
                     if member is Truth.FALSE:
@@ -201,6 +291,8 @@ class ExportPrimitive(RuleType):
             names.add("enum")
         if lineage & PROTOCOL_BASES:
             names.add("protocol")
+        if lineage & EXCEPTION_BASES:
+            names.add("exception")
         return frozenset(names), complete and kind.state is not State.UNKNOWN
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
@@ -221,15 +313,26 @@ class ExportPrimitive(RuleType):
 
     # ── recursion ──
 
-    def check(self, symbol: str, module: str, policy: ShapePolicy, edge: Edge | None, trail: tuple[str, ...]) -> None:
+    def check(
+        self,
+        symbol: str,
+        module: str,
+        policy: ShapePolicy,
+        edge: Edge | None,
+        trail: tuple[str, ...],
+        shape_only: bool = False,
+    ) -> None:
         """Findings are keyed by (symbol, module), so a symbol already checked for this module and
-        policy adds nothing the second time."""
+        policy adds nothing the second time. A check of the shape alone (`shape_only`) that finds
+        a denied kind or an unknown type marks nothing: a full check may still report it."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
             return
-        self.visited.add(visit)
         shapes, complete = self.recognize(symbol)
         denied = sorted(shapes & set(policy.deny))
+        if shape_only and (denied or symbol in self.spec.unknown_types):
+            return
+        self.visited.add(visit)
         if denied:
             self.finding(symbol, module, f"export-denied({denied[0]})", trail, edge)
             return
@@ -295,19 +398,24 @@ class ExportPrimitive(RuleType):
         return out
 
     def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
+        """The types in the slots of a member. In the slots of an exported symbol itself, a rule
+        with `slots = "shape"` judges only the shape of a class."""
+        shape_only = self.spec.slots == "shape" and len(trail) == 1
         for edge in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
             if edge.attr("alias") == "expanded":
                 continue
             if edge.attr("annotation") == "missing":
-                self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))
+                if not shape_only:
+                    self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))
                 continue
             if edge.resolution is Resolution.UNRESOLVED:
-                self.unresolved(edge, module)
+                if not shape_only:
+                    self.unresolved(edge, module)
                 continue
             names = [str(target) for target in edge.targets] or [edge.surface]
             for name in names:
                 if name and name not in trail:
-                    self.check(name, module, policy, edge, (*trail, name))
+                    self.check(name, module, policy, edge, (*trail, name), shape_only)
 
     # ── output ──
 

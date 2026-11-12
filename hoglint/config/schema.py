@@ -70,7 +70,17 @@ CORE_USES = (
     "name",
     "other",
 )
-CORE_SHAPES = ("frozen-dataclass", "dataclass", "abc", "enum", "protocol", "function", "constant", "class")
+CORE_SHAPES = (
+    "frozen-dataclass",
+    "dataclass",
+    "abc",
+    "enum",
+    "protocol",
+    "exception",
+    "function",
+    "constant",
+    "class",
+)
 CORE_VIEWS: dict[str, tuple[str, ...]] = {
     "refs": (),
     "file-imports": ("import", "dotted-path"),
@@ -112,7 +122,7 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "use-shape": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"allow_shapes", "deny_shapes", "flow"},
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
-    "export": COMMON_RULE_KEYS | {"exports", "contexts", "on_unknown", "unknown_types"},
+    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots", "on_unknown", "unknown_types"},
     "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
@@ -123,6 +133,8 @@ RULE_KEYS: dict[str, frozenset[str]] = {
 # call resolution with `resolve_calls`. They go when the preset drops them.
 UNREAD_ACCEPTED: dict[str, frozenset[str]] = {"edge": frozenset(PRODUCER_OPTION_KEYS)}
 DEFAULT_UNKNOWN_TYPES = ("typing.Any", "builtins.dict", "typing.Dict", "builtins.object")
+# What an export rule judges in the slots of a member: everything, or only a class's shape.
+EXPORT_SLOTS = ("all", "shape")
 
 FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
 ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_paths", "symbols", "doc", "__source__"})
@@ -283,7 +295,8 @@ class SchemaBuilder:
         return Catalog({root: all_roots[root] for root in roots}, open_roots=frozenset({"edge"}) & set(roots))
 
     def module_catalog(self) -> Catalog:
-        """`src.*` of a module alone: reach's `from` sees no edge, so no `edge.*` and no context."""
+        """`src.*` of a module alone: the `from` of reach and export sees no edge, so no `edge.*` and
+        no context."""
         fields = self.endpoint_fields(dst=False)
         del fields["context"]
         return Catalog({"src": fields})
@@ -809,7 +822,7 @@ class SchemaBuilder:
         edge_catalog = self.edge_catalog()
         entity_catalog = self.entity_catalog()
         predicate_catalog = entity_catalog if entity_rule else edge_catalog
-        from_catalog = self.module_catalog() if primitive == "reach" else self.edge_catalog(("src", "edge"))
+        from_catalog = self.module_catalog() if primitive in ("reach", "export") else self.edge_catalog(("src", "edge"))
 
         kinds = as_tuple(table.get("kinds"))
         for kind in kinds:
@@ -897,6 +910,7 @@ class SchemaBuilder:
             exports=as_tuple(table.get("exports")),
             unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
             uses_at_import=self.check_bool(f"{key}.uses_at_import", table.get("uses_at_import", False)),
+            slots=self.check_enum(f"{key}.slots", table.get("slots", "all"), EXPORT_SLOTS),
             producer_options=tuple(producer_options),
             source=self.source(key),
         )

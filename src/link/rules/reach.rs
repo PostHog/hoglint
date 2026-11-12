@@ -41,7 +41,7 @@ pub enum Found {
 
 /// The endpoint `from` reads no destination of: every `dst.*` field is unknown, as `ModuleEnv`
 /// answers it.
-const NO_DESTINATION: Endpoint<'static> = Endpoint {
+pub const NO_DESTINATION: Endpoint<'static> = Endpoint {
     module: None,
     at: None,
     symbol: Symbol::None,

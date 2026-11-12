@@ -721,7 +721,13 @@ impl Rules {
                 })
             }
             ModePlan::Export(found) => {
-                RuleKind::Export(ExportRule::new(&found.export, &found.identity, entity))
+                let start = optional(edge, &found.export.start)?;
+                RuleKind::Export(ExportRule::new(
+                    &found.export,
+                    &found.identity,
+                    entity,
+                    start,
+                ))
             }
             ModePlan::Coverage(found) => RuleKind::Coverage(
                 found
@@ -1067,7 +1073,8 @@ impl Rule {
             }
             RuleKind::Cycle(rule) => rule.edges.staged.parts.iter().collect(),
             RuleKind::Entities(rule) => rule.nodes(),
-            RuleKind::Export(_) | RuleKind::Coverage(_) => Vec::new(),
+            RuleKind::Export(rule) => rule.start.iter().collect(),
+            RuleKind::Coverage(_) => Vec::new(),
         }
     }
 

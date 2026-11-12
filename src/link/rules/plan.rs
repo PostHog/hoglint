@@ -151,6 +151,10 @@ pub struct ExportRulePlan {
     pub unknown_types: Vec<String>,
     pub on_unknown: String,
     pub on_unresolved: String,
+    /// Its `from`: which export modules it judges, read of the module alone.
+    pub start: Option<NodePlan>,
+    /// What it judges in the slots of a member: "all", or "shape" (only a class's shape).
+    pub slots: String,
 }
 
 /// One thing a coverage rule needs covered (`CoverSpec`).

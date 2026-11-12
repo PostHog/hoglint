@@ -3,8 +3,9 @@
 //! signatures, fields and bases name, in the order the Python primitive checks them.
 
 use super::Rules;
-use super::env::{Cx, EntityEnv};
+use super::env::{Cx, EntityEnv, Env};
 use super::plan::{ExportRulePlan, ShapePlan};
+use super::reach::NO_DESTINATION;
 use super::selector::{Compiler, EntityField, Node, Ref, evaluate};
 use super::signature::callable_of;
 use super::value::{Truth, Value, render};
@@ -23,6 +24,80 @@ const ENUM_BASES: [&str; 5] = [
     "enum.IntFlag",
 ];
 const PROTOCOL_BASES: [&str; 2] = ["typing.Protocol", "typing_extensions.Protocol"];
+/// Python's own exception classes (`exports.BUILTIN_EXCEPTIONS`): a class that inherits one is an
+/// exception.
+const EXCEPTION_BASES: [&str; 70] = [
+    "builtins.ArithmeticError",
+    "builtins.AssertionError",
+    "builtins.AttributeError",
+    "builtins.BaseException",
+    "builtins.BaseExceptionGroup",
+    "builtins.BlockingIOError",
+    "builtins.BrokenPipeError",
+    "builtins.BufferError",
+    "builtins.BytesWarning",
+    "builtins.ChildProcessError",
+    "builtins.ConnectionAbortedError",
+    "builtins.ConnectionError",
+    "builtins.ConnectionRefusedError",
+    "builtins.ConnectionResetError",
+    "builtins.DeprecationWarning",
+    "builtins.EOFError",
+    "builtins.EncodingWarning",
+    "builtins.EnvironmentError",
+    "builtins.Exception",
+    "builtins.ExceptionGroup",
+    "builtins.FileExistsError",
+    "builtins.FileNotFoundError",
+    "builtins.FloatingPointError",
+    "builtins.FutureWarning",
+    "builtins.GeneratorExit",
+    "builtins.IOError",
+    "builtins.ImportError",
+    "builtins.ImportWarning",
+    "builtins.IndentationError",
+    "builtins.IndexError",
+    "builtins.InterruptedError",
+    "builtins.IsADirectoryError",
+    "builtins.KeyError",
+    "builtins.KeyboardInterrupt",
+    "builtins.LookupError",
+    "builtins.MemoryError",
+    "builtins.ModuleNotFoundError",
+    "builtins.NameError",
+    "builtins.NotADirectoryError",
+    "builtins.NotImplementedError",
+    "builtins.OSError",
+    "builtins.OverflowError",
+    "builtins.PendingDeprecationWarning",
+    "builtins.PermissionError",
+    "builtins.ProcessLookupError",
+    "builtins.PythonFinalizationError",
+    "builtins.RecursionError",
+    "builtins.ReferenceError",
+    "builtins.ResourceWarning",
+    "builtins.RuntimeError",
+    "builtins.RuntimeWarning",
+    "builtins.StopAsyncIteration",
+    "builtins.StopIteration",
+    "builtins.SyntaxError",
+    "builtins.SyntaxWarning",
+    "builtins.SystemError",
+    "builtins.SystemExit",
+    "builtins.TabError",
+    "builtins.TimeoutError",
+    "builtins.TypeError",
+    "builtins.UnboundLocalError",
+    "builtins.UnicodeDecodeError",
+    "builtins.UnicodeEncodeError",
+    "builtins.UnicodeError",
+    "builtins.UnicodeTranslateError",
+    "builtins.UnicodeWarning",
+    "builtins.UserWarning",
+    "builtins.ValueError",
+    "builtins.Warning",
+    "builtins.ZeroDivisionError",
+];
 
 /// A `[shapes]` policy (`ShapePolicy`).
 pub struct Shape {
@@ -84,6 +159,10 @@ enum Column {
 /// What an export rule adds to a rule.
 pub struct ExportRule {
     exports: Vec<usize>,
+    /// Its `from`: the export modules it judges, read of the module alone.
+    pub start: Option<Node>,
+    /// `slots = "shape"`: in the slots of an exported symbol only a class's shape is judged.
+    shape_slots: bool,
     include: u8,
     exclude: u8,
     unknown_types: Vec<String>,
@@ -93,7 +172,12 @@ pub struct ExportRule {
 }
 
 impl ExportRule {
-    pub fn new(plan: &ExportRulePlan, identity: &[Vec<String>], entity: &Compiler) -> ExportRule {
+    pub fn new(
+        plan: &ExportRulePlan,
+        identity: &[Vec<String>],
+        entity: &Compiler,
+        start: Option<Node>,
+    ) -> ExportRule {
         let field = |name: &str| match entity.reference(&[name.to_string()]) {
             Ref::Entity(found) => found,
             _ => EntityField::Unknown,
@@ -120,6 +204,8 @@ impl ExportRule {
             .collect();
         ExportRule {
             exports: plan.exports.clone(),
+            start,
+            shape_slots: plan.slots == "shape",
             include: plan.include,
             exclude: plan.exclude,
             unknown_types: plan.unknown_types.clone(),
@@ -277,6 +363,9 @@ impl<'a> Walk<'a> {
         for &export in &self.rule.exports {
             let shape = rules.export_shapes[export];
             for &(module, _) in &self.inputs.covered[export] {
+                if !self.judges(module) {
+                    continue;
+                }
                 let module_name = self.cx.text(module).to_string();
                 for (symbol, edge) in self.exported_symbols(module) {
                     let member =
@@ -291,13 +380,28 @@ impl<'a> Walk<'a> {
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
-                            self.check(&symbol, &module_name, shape, edge, &trail);
+                            self.check(&symbol, &module_name, shape, edge, &trail, false);
                         }
                     }
                 }
             }
         }
         self.rows
+    }
+
+    /// `ExportPrimitive.judges`: whether the rule judges what a module exports, by its `from`
+    /// read of the module alone. A module it cannot tell about is judged.
+    fn judges(&self, module: Sid) -> bool {
+        let Some(start) = &self.rule.start else {
+            return true;
+        };
+        let env = Env::new(
+            self.cx,
+            None,
+            self.cx.module_endpoint(module),
+            NO_DESTINATION,
+        );
+        evaluate(start, &env) != Truth::False
     }
 
     /// `TopLevel.of`: the module's public top-level symbols, sorted.
@@ -441,6 +545,9 @@ impl<'a> Walk<'a> {
         if in_lineage(&PROTOCOL_BASES) {
             names.insert("protocol".into());
         }
+        if in_lineage(&EXCEPTION_BASES) {
+            names.insert("exception".into());
+        }
         (names, complete && !kind_unknown)
     }
 
@@ -471,7 +578,8 @@ impl<'a> Walk<'a> {
         false
     }
 
-    /// `ExportPrimitive.check`.
+    /// `ExportPrimitive.check`. A check of the shape alone (`shape_only`) that finds a denied kind
+    /// or an unknown type marks nothing: a full check may still report it.
     fn check(
         &mut self,
         symbol: &str,
@@ -479,11 +587,10 @@ impl<'a> Walk<'a> {
         shape: usize,
         edge: Option<u32>,
         trail: &[String],
+        shape_only: bool,
     ) {
-        if !self
-            .visited
-            .insert((module.to_string(), shape, symbol.to_string()))
-        {
+        let visit = (module.to_string(), shape, symbol.to_string());
+        if self.visited.contains(&visit) {
             return;
         }
         let rules = self.cx.rules;
@@ -495,12 +602,17 @@ impl<'a> Walk<'a> {
             .filter(|name| shapes.contains(*name))
             .collect();
         denied.sort();
+        let unknown_type = self.rule.unknown_types.iter().any(|name| name == symbol);
+        if shape_only && (!denied.is_empty() || unknown_type) {
+            return;
+        }
+        self.visited.insert(visit);
         if let Some(first) = denied.first() {
             let label = format!("export-denied({first})");
             self.finding(symbol, module, &label, trail, edge, true, false);
             return;
         }
-        if self.rule.unknown_types.iter().any(|name| name == symbol) {
+        if unknown_type {
             self.unknown(symbol, module, shape, trail, edge, ("unknown-type", ""));
             return;
         }
@@ -592,6 +704,7 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.check_members`.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
+        let shape_only = self.rule.shape_slots && trail.len() == 1;
         let link = self.cx.link;
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let annotation = link.core.it.get("annotation");
@@ -602,13 +715,17 @@ impl<'a> Walk<'a> {
                 continue;
             }
             if self.cx.attr(id, annotation) == "missing" {
-                let why = ("no-annotation", self.cx.attr(id, slot));
-                self.unknown(symbol, module, shape, trail, Some(id), why);
+                if !shape_only {
+                    let why = ("no-annotation", self.cx.attr(id, slot));
+                    self.unknown(symbol, module, shape, trail, Some(id), why);
+                }
                 continue;
             }
             let edges = &link.edges;
             if edges.res_of(id) == Res::Unresolved {
-                self.unresolved(id, module);
+                if !shape_only {
+                    self.unresolved(id, module);
+                }
                 continue;
             }
             let targets = edges.targets_of(id);
@@ -627,7 +744,7 @@ impl<'a> Walk<'a> {
                 if !name.is_empty() && !trail.contains(&name) {
                     let mut deeper = trail.to_vec();
                     deeper.push(name.clone());
-                    self.check(&name, module, shape, Some(id), &deeper);
+                    self.check(&name, module, shape, Some(id), &deeper, shape_only);
                 }
             }
         }
