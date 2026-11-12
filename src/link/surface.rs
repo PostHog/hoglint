@@ -367,22 +367,20 @@ impl HandedOut {
                 });
             }
         }
-        let (lazy, missing): (Vec<(Sid, Sid)>, Vec<(Sid, Sid)>) = match core.table(scope.module) {
+        // The lazy map, then the entries no module answers for.
+        let lazy: Vec<(Sid, Sid)> = match core.table(scope.module) {
             Some(table) => {
                 let table = core.table_at(table);
-                (
-                    table.lazy.iter().collect(),
-                    table.lazy_missing.iter().collect(),
-                )
+                table.lazy.iter().chain(table.lazy_missing.iter()).collect()
             }
-            None => (Vec::new(), Vec::new()),
+            None => Vec::new(),
         };
-        let sites = if lazy.is_empty() && missing.is_empty() {
+        let sites = if lazy.is_empty() {
             FxHashMap::default()
         } else {
             lazy_sites(&facts.files[scope.file as usize].assigns)
         };
-        for (name, module) in lazy.into_iter().chain(missing) {
+        for (name, module) in lazy {
             let target = core.it.join(module, name);
             if seen.insert((name, target)) {
                 let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
