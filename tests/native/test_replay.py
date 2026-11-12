@@ -300,3 +300,13 @@ def test_a_pair_without_a_verdict_its_mode_owes_fails() -> None:
     assert not PairResult(Pair("p", "a", "b"), owed=owed).ok
     assert not PairResult(Pair("p", "a", "b"), owed=MODES["traces"].owes).ok
     assert not PairResult(Pair("p", "a", "b"), [Compared("child", (), False)]).ok
+
+
+def test_a_laid_file_replaces_its_path_in_both_trees_and_keeps_the_rest(tmp_path: Path) -> None:
+    repo, found = git_pair(tmp_path, "move-import", OWNERS_REPO, CHILD_EDITS)
+    preset = tmp_path / "hoglint.toml"
+    preset.write_text(OWNERS_REPO["hoglint.toml"] + "# laid\n")
+    laid = found.laid(repo, {"hoglint.toml": preset})
+    for tree, edits in ((laid.parent, {}), (laid.child, CHILD_EDITS)):
+        assert git_in(repo, "show", f"{tree}:hoglint.toml") == preset.read_text()
+        assert git_in(repo, "show", f"{tree}:core/b.py") == {**OWNERS_REPO, **edits}["core/b.py"]

@@ -31,7 +31,9 @@ table was compared.
 Usage:
   python -m hoglint.native.replay pairs --repo <git repo> --pairs <tsv> [--pairs <tsv>] --work <dir>
       [--engine native] [--mode today|planted-miss|traces|pack-memo-miss] [--only <name,...>]
-      [--damage all|<name,...>]
+      [--damage all|<name,...>] [--lay <path in tree>=<local file> ...]
+      `--lay` replaces that path of both trees of every pair by the local file's bytes (new trees
+      in the repo), so a sample whose trees carry an old preset is checked with the current one
   python -m hoglint.native.replay determinism --repo <git repo> --tree <tree> [--tree ...] --work <dir>
       the cold dump of each tree under three hash seeds and one and four threads, each with an
       empty fact cache, compared with the first
@@ -59,6 +61,7 @@ import sqlite3
 import argparse
 import datetime
 import resource
+import tempfile
 import contextlib
 import statistics
 import subprocess
@@ -868,6 +871,23 @@ class PredictionScore:
 # ── modes ─────────────────────────────────────────────────────────
 
 
+def git_with_index(repo: Path, index: Path, *args: str) -> str:
+    """A git command in `repo` that reads and writes the index file `index`."""
+    env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env).stdout
+
+
+def lay_tree(repo: Path, tree: str, files: dict[str, Path]) -> str:
+    """`tree` with each path's blob replaced by the bytes of a local file, written as a new tree."""
+    with tempfile.TemporaryDirectory() as scratch:
+        index = Path(scratch) / "index"
+        git_with_index(repo, index, "read-tree", tree)
+        for path, source in files.items():
+            blob = git(repo, "hash-object", "-w", str(source)).strip()
+            git_with_index(repo, index, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
+        return git_with_index(repo, index, "write-tree").strip()
+
+
 @dataclass(frozen=True)
 class Pair:
     name: str
@@ -884,6 +904,13 @@ class Pair:
             name, parent, child = line.split("\t")[:3]
             out.append(Pair(name, parent, child))
         return out
+
+    def laid(self, repo: Path, files: dict[str, Path]) -> Pair:
+        """Both trees with the files laid over them. HEAD is the parent tree, so the cold child's
+        baseline is checked with them too."""
+        if not files:
+            return self
+        return Pair(self.name, lay_tree(repo, self.parent, files), lay_tree(repo, self.child, files))
 
 
 def changed_paths(repo: Path, pair: Pair) -> set[str]:
@@ -1663,11 +1690,23 @@ def pick_damages(text: str) -> tuple[Damage, ...]:
     return tuple(by_name[name] for name in names)
 
 
+def laid_files(entries: list[str]) -> dict[str, Path]:
+    files = {}
+    for entry in entries:
+        path, sep, source = entry.partition("=")
+        if not sep or not Path(source).is_file():
+            raise SystemExit(f"--lay takes <path in tree>=<existing local file>, not {entry!r}")
+        files[path] = Path(source).resolve()
+    return files
+
+
 def run_pairs(args: argparse.Namespace, checker: Checker) -> bool:
     pairs = [pair for path in args.pairs for pair in Pair.read(path)]
     if args.only:
         wanted = set(args.only.split(","))
         pairs = [pair for pair in pairs if pair.name in wanted]
+    files = laid_files(args.lay)
+    pairs = [pair.laid(checker.repo, files) for pair in pairs]
     replay = Replay(checker, pick_damages(args.damage))
     report = PairsReport()
     for pair in pairs:
@@ -1685,6 +1724,7 @@ def main() -> None:
     parser.add_argument("--only", default="")
     parser.add_argument("--mode", choices=sorted(MODES), default=Mode.name)
     parser.add_argument("--damage", default="")
+    parser.add_argument("--lay", action="append", default=[])
     parser.add_argument("--tree", action="append", default=[])
     parser.add_argument("--head", default="")
     parser.add_argument("--out", type=Path)
