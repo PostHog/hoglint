@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
 
 from hoglint.adapters.codeowners import CodeownersFile
-from hoglint.config import ConfigError
+from hoglint.config import ConfigError, load_config
+from hoglint.config.loader import PACKS_DIR
 from hoglint.labels import CandidateCache, Labeler, render
 from hoglint.model import Resolution
 from hoglint.rules.base import RuleContext, read_endpoint
@@ -258,3 +260,46 @@ def test_labelers_sharing_a_cache_keep_the_sources_of_their_own_config(tmp_path:
 
     assert inline.policy_hash == split.policy_hash
     assert ["base.toml" in source for source in sources] == [False, True]
+
+
+SHAPES = Path(__file__).parent / "shapes"
+PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
+
+
+@pytest.mark.parametrize(
+    "module, package",
+    [
+        ("bin.build", "bin"),
+        ("tools.hogli.main", "tools-hogli"),
+        ("tools.loose", "tools"),
+        ("manage", "root"),
+        ("scripts.new_tool", "unknown"),
+    ],
+)
+def test_the_posthog_preset_gives_every_first_party_file_a_package_or_unknown(
+    tmp_path: Path, module: str, package: str
+) -> None:
+    shutil.copy(SHAPES / "posthog.toml", tmp_path / "hoglint.toml")
+    preset = tmp_path / "tools" / "hoglint" / "presets" / "posthog.toml"
+    preset.parent.mkdir(parents=True)
+    shutil.copy(PRESET, preset)
+    config = load_config(tmp_path, tmp_path / "hoglint.toml", PACKS_DIR)
+    charge = "products.billing.backend.logic.charge"
+    graph = (
+        GraphBuilder()
+        .module(module, "products.billing.backend.logic")
+        .symbol(charge, "def")
+        .edge("import", module, charge)
+        .graph
+    )
+
+    assert render(Labeler(config, graph, tmp_path).field_value(module, None, "package")[0]) == package
+    run = Engine(config, graph, tmp_path).evaluate().runs["public-surface"]
+    # A folder no assignment claims is not clean: its edge into a product is incomplete, not passed.
+    if package == "unknown":
+        assert ([f.identity for f in run.findings], [item.key for item in run.incomplete]) == (
+            [],
+            [f"{module}|import|{charge}"],
+        )
+    else:
+        assert ([f.identity for f in run.findings], run.incomplete) == ([(charge, module, "import")], [])

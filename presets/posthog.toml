@@ -26,8 +26,8 @@ migrations = ["ee/migrations/**", "posthog/migrations/**", "posthog/session/migr
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
 
 [fields]
-package   = { type = "id", required_on = ["products/**", "posthog/**", "ee/**", "common/**", "packages/**"] }
-tier      = { type = "enum", values = ["core", "product", "leaf"], required_on = ["products/**", "posthog/**", "ee/**", "common/**", "packages/**"] }
+package   = { type = "id", required_on = ["**"] }
+tier      = { type = "enum", values = ["core", "product", "leaf", "tool"], required_on = ["**"] }
 role      = { type = "enum", values = ["foundation", "feature"], required_on = ["products/**"] }
 zone      = { type = "zone" }
 owners    = { type = "set" }
@@ -211,6 +211,34 @@ match = [
   "products/web_analytics/backend/management/commands/generate_aeo_content.py",
 ]
 set   = { testcode = true }
+
+# Every first-party folder no other assignment claims is its own package; services/ and tools/
+# hold separate deployables, one package per second-level folder (D105). The folders are named,
+# so a file in a new top folder reads unknown and a cross-package rule cannot pass it silently.
+[[assign]]
+match = "{top}/**"
+only  = { top = ["bin", "frontend", "livestream", "nodejs", "rust"] }
+set   = { package = "{top}", tier = "tool" }
+
+[[assign]]
+match = "services/{name}/**"
+set   = { package = "services-{name}", tier = "tool" }
+
+[[assign]]
+match = "services/*"
+set   = { package = "services", tier = "tool" }
+
+[[assign]]
+match = "tools/{name}/**"
+set   = { package = "tools-{name}", tier = "tool" }
+
+[[assign]]
+match = "tools/*"
+set   = { package = "tools", tier = "tool" }
+
+[[assign]]
+match = "*"
+set   = { package = "root", tier = "tool" }
 
 # ── Zones inside a product ─────────────────────────────────────
 # A product file no zone path matches lands in the default private zone `internal`.
