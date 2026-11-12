@@ -184,7 +184,8 @@ symbols = { names = [
 ] }
 set     = { crosses = true }
 
-# Test support and dev tooling outside a test path: it never ships, so it may import test code.
+# Test support and dev tooling outside a test path: it never ships, so it may import test code, and a
+# dev command is no entrypoint thin-commands guards.
 # `facade/testing.py` is the fixture surface architecture.md names.
 [[assign]]
 match = [
@@ -195,6 +196,19 @@ match = [
   "posthog/management/commands/reset_test_clickhouse_db.py",
   "products/signals/eval/**",
   "posthog/hogql/scripts/**",
+  # Dev seeders, demo and smoke commands, each by name: a new one needs a reviewed line here.
+  "products/aeo/backend/management/commands/seed_aeo_prompts.py",
+  "products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py",
+  "products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py",
+  "products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py",
+  "products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py",
+  "products/signals/backend/management/commands/seed_inbox_data.py",
+  "products/signals/backend/management/commands/seed_refund_test_data.py",
+  "products/tasks/backend/management/commands/bake_dev_stack_image.py",
+  "products/tasks/backend/management/commands/demo_mts_example.py",
+  "products/visual_review/backend/management/commands/seed_dummy_runs.py",
+  "products/visual_review/backend/management/commands/seed_snapshot_history.py",
+  "products/web_analytics/backend/management/commands/generate_aeo_content.py",
 ]
 set   = { testcode = true }
 
@@ -427,9 +441,9 @@ growth_key    = ["src.module"]
 
 [rules.thin-commands]
 primitive  = "edge"
-doc        = "A management command reaches its own product through the facade (B2)."
+doc        = "A management command reaches its own product through the facade (B2). Dev seeders named as test code are out."
 view       = "zones"
-from       = "src.zone == 'commands'"
+from       = "src.zone == 'commands' and src.testcode != true"
 deny       = "dst.package == src.package and dst.zone in ['models', 'logic', 'tasks']"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]

@@ -530,6 +530,25 @@ def test_posthog_preset_lets_test_support_and_dev_tools_import_test_code(tmp_pat
     ]
 
 
+def test_posthog_preset_leaves_named_dev_seeders_out_of_thin_commands(tmp_path: Path) -> None:
+    models = "products.visual_review.backend.models"
+    commands = "products.visual_review.backend.management.commands"
+    graph = (
+        GraphBuilder()
+        .module(models, f"{commands}.seed_dummy_runs", f"{commands}.backfill_run_status", f"{commands}.seed_other")
+        .edge("import", f"{commands}.seed_dummy_runs", models)
+        .edge("import", f"{commands}.backfill_run_status", models)
+        .edge("import", f"{commands}.seed_other", models)
+        .graph
+    )
+    result = run_shape(tmp_path, "posthog", graph)
+    # Only named files are seeders: a new file with the same prefix is not.
+    assert found(result, "thin-commands") == [
+        (f"{commands}.backfill_run_status", models),
+        (f"{commands}.seed_other", models),
+    ]
+
+
 def test_posthog_preset_keeps_orm_independent_to_models(tmp_path: Path) -> None:
     graph = (
         GraphBuilder()
