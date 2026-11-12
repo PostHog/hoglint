@@ -593,7 +593,7 @@ impl Core {
         let facts = self.facts.clone();
         let record = &facts.files[file as usize];
         let mut prefixes: Vec<String> = Vec::new();
-        let mut maps: Vec<(&Assign, &Vec<(Option<V>, V)>)> = Vec::new();
+        let mut maps: Vec<&Assign> = Vec::new();
         for row in &record.assigns {
             if row.s != -1 {
                 continue;
@@ -602,7 +602,7 @@ impl Core {
                 Some(V::Str(text, None)) if self.it.s(*text).ends_with('.') => {
                     prefixes.push(self.it.s(*text).to_string());
                 }
-                Some(V::Dict(items)) => maps.push((row, items)),
+                Some(V::Dict(_)) => maps.push(row),
                 _ => {}
             }
         }
@@ -610,7 +610,10 @@ impl Core {
         let mut found_at: FxHashMap<Sid, (u32, u32)> = FxHashMap::default();
         let mut missing: OrderedMap<Sid> = OrderedMap::default();
         let mut missing_at: FxHashMap<Sid, (u32, u32)> = FxHashMap::default();
-        for (row, items) in maps {
+        for row in maps {
+            let Some(V::Dict(items)) = &row.value else {
+                continue;
+            };
             let mut unresolved: Vec<(Sid, Sid, bool)> = Vec::new();
             let mut resolves = false;
             for (key, value) in items {
