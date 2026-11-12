@@ -142,3 +142,66 @@ def test_facade_signature_lets_the_named_core_models_cross(tmp_path: Path, monke
         [API, "logged", "param:entry", "posthog.models.activity.ActivityLog"],
         [API, "place", "param:order", f"{SHOP}.models.Order"],
     ]
+
+
+# A mapping given type arguments is typed; `Any` stays unknown, except as the value type of a
+# mapping in a parameter or a field (an opaque payload). `object` asks the caller to narrow.
+UNKNOWN_CASES = {
+    "a bare dict": ("amount: dict", "None", ["builtins.dict"]),
+    "a dict with arguments": ("amount: dict[str, str]", "None", []),
+    "a payload parameter": ("amount: dict[str, Any]", "None", []),
+    "a payload mapping": ("amount: Mapping[str, Any]", "None", []),
+    "a payload returned": ("amount: int", "dict[str, Any]", ["typing.Any"]),
+    "a bare Any": ("amount: Any", "None", ["typing.Any"]),
+    "an optional Any": ("amount: Optional[Any]", "None", ["typing.Any"]),
+    "Any in a list": ("amount: list[Any]", "None", ["typing.Any"]),
+    "a callback that returns Any": ("amount: Callable[..., Any]", "None", ["typing.Any"]),
+    "a list of bare dicts": ("amount: list[dict]", "None", ["builtins.dict"]),
+    "object": ("amount: object", "None", []),
+}
+
+
+@pytest.mark.parametrize("case", UNKNOWN_CASES)
+def test_facade_signature_reads_typed_mappings_and_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    param, returns, expected = UNKNOWN_CASES[case]
+    api = (
+        "from collections.abc import Callable, Mapping\nfrom typing import Any, Optional\n\n\n"
+        f"def charge({param}) -> {returns}:\n    pass\n"
+    )
+    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/api.py": api}, monkeypatch)
+    assert [row[3] for row in findings(out["native"], "facade-signature")] == expected
+
+
+def test_a_payload_field_of_a_contract_is_typed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contracts = (
+        "import dataclasses\nfrom typing import Any\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Event:\n    properties: dict[str, Any]\n    extra: Any\n"
+    )
+    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
+    assert findings(out["native"], "facade-signature") == [
+        [f"{SHOP}.facade.contracts", "Event.__init__", "field:extra", "typing.Any"],
+    ]
+
+
+HOGQL = {
+    "posthog/hogql/__init__.py": "",
+    "posthog/hogql/base.py": (
+        "import dataclasses\n\n\nclass Context:\n    pass\n\n\nclass AST:\n    pass\n\n\n"
+        "@dataclasses.dataclass\nclass Expr(AST):\n    context: Context\n"
+    ),
+}
+
+
+# A contract may hand out a hook's Protocol and core's query syntax tree. An allowed shape that is no
+# data shape is handed out as it stands: the syntax tree's own fields are core's business.
+def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contracts = (
+        "from typing import Protocol\n\nfrom posthog.hogql.base import Expr\n\n\n"
+        "class Chooser(Protocol):\n    def __call__(self, name: str) -> str: ...\n\n\n"
+        "def where(expr: Expr) -> Expr:\n    return expr\n"
+    )
+    files = {**HOGQL, "products/shop/backend/facade/contracts.py": contracts}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert findings(out["native"], "export-shape") == []

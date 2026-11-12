@@ -212,11 +212,14 @@ model    = { decl = "model", abstract = false, expected = true }
 manager  = { subclass_of = ["django.db.models.manager.BaseManager", "django.db.models.manager.Manager", "django.db.models.Manager"] }
 queryset = { subclass_of = ["django.db.models.query.QuerySet", "django.db.models.QuerySet"] }
 command  = { subclass_of = ["django.core.management.base.BaseCommand"] }
+# Contract types besides frozen dataclasses and enums: core's query syntax tree, and pydantic models.
+hogql_ast = { subclass_of = ["posthog.hogql.base.AST"] }
 
 # A contract's signatures are part of it: an unannotated slot is unknown, and the slots of what a
 # facade hands out from elsewhere count as the facade's.
 [shapes.contract]
 data       = ["frozen-dataclass", "enum"]
+allow      = ["protocol", "hogql_ast"]
 behavior   = { kind = "abc", where = "tier == 'core'" }
 deny       = ["model", "manager", "queryset", "command"]
 unknown    = "error"
@@ -341,8 +344,9 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.facade-signature]
 primitive  = "signature"
-doc        = "A public facade function neither accepts nor returns a model, manager or queryset; Any and bare dict read as unknown."
-select     = "src.zone == 'facade'"
+doc        = "A public facade function neither accepts nor returns a model, manager or queryset. Any and a bare dict are unknown; a mapping with type arguments is typed, and Any as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
+select     = "src.zone == 'facade' and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
+unknown_types = ["typing.Any", "builtins.dict", "typing.Dict"]
 deny       = "dst.kind in ['model', 'manager', 'queryset'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
 # The core models a facade may take or return (D65). One line changes the list.

@@ -62,6 +62,15 @@ Any model that core owns is not enough, because a core model may later move into
 Which models a company lists is its own policy and is not published.
 The rule that reads the list is the signature rule: a listed model in a slot of a facade is no finding (`unless`), every other model is.
 
+**What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
+- A slot type is unknown when it is `Any`, a bare `dict` or no annotation.
+  A mapping given type arguments (`dict[str, str]`) is typed, and so is `object`, which makes the caller narrow.
+- `Any` as an argument of a mapping (`dict[str, Any]`) is an opaque payload: allowed in a parameter and a field, a finding in a return value.
+  `Any` in any other generic (`list[Any]`, `Optional[Any]`) stays unknown.
+  The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
+- A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
+  Such an allowed shape is handed out as it stands: only a policy's `data` shapes are walked into, so the tree's own fields are not judged per facade.
+
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
   The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from).
