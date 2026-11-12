@@ -72,27 +72,29 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from hoglint.cli import Commands, Run, RunMemo, Snapshots
-from hoglint.core.memo import (
-    DROP_ENV as PACK_MEMO_DROP,
-    MODE_ENV as PACK_MEMO_SWITCH,
-    OFF as PACK_MEMO_OFF,
-    STATS_ENV as PACK_MEMO_STATS,
-    PackMemo,
-)
+from hoglint.core.memo import DROP_ENV as PACK_MEMO_DROP
 from hoglint.core.modules import longest_prefix
 from hoglint.ledger.cache import (
-    ANSWERS,
-    OFF_SWITCH as ANSWER_CACHE_SWITCH,
-    AnswerStore,
+    FACTS,
+    INPUTS,
+    MEMO,
+    PACKS,
+    STATE_OFF,
+    STATE_OPEN,
+    STATE_UNUSED,
+    STORES,
+    SUMMARIES,
+    SUMMARY_STORE,
+    TRACE_ENV,
+    RunStores,
+    StoreList,
 )
 from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.listing import git, records
 from hoglint.ledger.scan import ALL_SECTIONS, SUMMARY_SECTIONS, ScanSummary
-from hoglint.ledger.store import FACTS, MEMO, SummaryStore
+from hoglint.ledger.store import SummaryStore
 from hoglint.model import Finding, Graph
-from hoglint.native.config import TRACE_ENV
 from hoglint.native.graph import NativeGraph
-from hoglint.native.memo_store import MemoStore
 from hoglint.native.normal import FIELDS, Row
 from hoglint.native.parity import (
     LIST_OUTPUTS,
@@ -105,7 +107,7 @@ from hoglint.native.parity import (
     stored_summary,
 )
 from hoglint.native.predict import PairPrediction, Prediction, write_trace_dump
-from hoglint.native.source import ENGINES, NativeGraphSource, batch_mode
+from hoglint.native.source import ENGINES, batch_mode
 from hoglint.rules.base import IncompleteItem
 
 # The tables a check writes besides the parity tables, and the ones every check writes.
@@ -126,33 +128,75 @@ COLD, WARM, DAMAGED, FILL = "cold", "warm", "damaged", "fill"
 
 
 # ── the stores of a run ───────────────────────────────────────────
-# Kept by hand, together: a new store of a run adds itself to each list in this block.
 
-# A cold check runs with every store of reused answers switched off. Its own baseline fills the
-# cold state directory first, so a store left on would hand the cold child the same stored
-# answers as the warm child, and a wrong answer would compare equal. Every new store of reused
-# answers adds its off switch here. The per-blob fact cache stays on: its entries are what the
-# extractor makes of a file's bytes, keyed by those bytes.
-COLD_SWITCHES = {PACK_MEMO_SWITCH: PACK_MEMO_OFF, ANSWER_CACHE_SWITCH: "1"}
-# Every switch that turns a store of reused answers or a recording on or off. A check never
-# takes them from the caller's shell: the replay sets what each side needs, so a warm side
-# reuses what it stored. Every new store adds its switch here too.
-REUSE_SWITCHES = (*COLD_SWITCHES, PACK_MEMO_DROP, PACK_MEMO_STATS, TRACE_ENV)
-# A cold check may share only the stores whose entries are keyed by the content they come from:
-# the per-blob fact cache (`facts/`) and the migration summaries under `packs/`. `cold_problem`
-# reads the check's own reuse record: every other store must have been off or unread there.
-# The files a check reads from the cache root, by store: (store, part, file pattern). A damage
-# case makes each kind garbage, empty and cut to half.
-CACHE_FILES = (
-    ("summaries", "summaries", "*"),
-    ("inputs", "inputs", "*"),
-    ("packs", "packs", "*"),
-    ("fact-database", FACTS, "*.sqlite"),
-    ("fact-marks", FACTS, "*.sqlite.*"),
-    ("pack-memo", MEMO, "*.sqlite"),
-    ("pack-memo-wal", MEMO, "*.sqlite-*"),
-    ("answers", ANSWERS, "*.json"),
-)
+
+class StoreRules:
+    """What the replay takes from the list of the stores of a run (`ledger.cache.STORES`), so a
+    store added there reaches the cold environment, the switches no check takes from the
+    caller, the damage cases and both record checks with no edit here.
+
+    A cold check runs with every store that is not shared switched off. Its own baseline fills
+    the cold state directory first, so a store left on would hand the cold child the same stored
+    answers as the warm child, and a wrong answer would compare equal. A shared store is keyed
+    by the content its entries come from, such as the per-blob fact cache, so a cold check may
+    use it."""
+
+    def __init__(self, listed: StoreList) -> None:
+        self.listed = listed
+
+    def cold_switches(self) -> dict[str, str]:
+        return self.listed.cold_environment()
+
+    def reuse_switches(self) -> tuple[str, ...]:
+        """Every switch that turns a store or a recording on or off. A check never takes them
+        from the caller's shell: the replay sets what each side needs."""
+        return self.listed.switches()
+
+    def damage_files(self) -> list[tuple[str, str]]:
+        """(store, directory under the cache root) of every store, for the file damage cases."""
+        return [(store.name, store.directory) for store in self.listed.stores]
+
+    def cold_problem(self, meta: dict[str, Any]) -> str:
+        """Why a cold check may have reused stored work, or "" when it shows it reused none.
+        Every store that is not shared was off or unused. A store with no switch cannot be off:
+        it may be open only to write, so its record must count no read. Only the summary store
+        is such a store, and the check counts its reads (`reads`)."""
+        if meta.get("memo"):
+            return "the run memo served it"
+        states = meta.get("stores")
+        if not isinstance(states, dict):
+            return "the check did not say what it reused"
+        reads = meta.get("reads") or {}
+        for store in self.listed.stores:
+            state = states.get(store.name, "not recorded")
+            if store.shared or state in (STATE_OFF, STATE_UNUSED):
+                continue
+            if not store.switch and state == STATE_OPEN:
+                if reads.get(store.name) == 0:
+                    continue
+                return f"it read the {store.name} store"
+            return f"the {store.name} store was {state}"
+        return ""
+
+    def warm_problem(self, meta: dict[str, Any]) -> str:
+        """Why a warm check reused no stored work, or "" when it could. A check the run memo
+        served reused a stored summary. Otherwise no store was off or failed. A count of reused
+        items cannot be the test, since a pair that changes the config rightly reuses none."""
+        if meta.get("memo"):
+            return ""
+        states = meta.get("stores")
+        if not isinstance(states, dict):
+            return "the check did not say what it reused"
+        for store in self.listed.stores:
+            state = states.get(store.name, "not recorded")
+            if state not in (STATE_OPEN, STATE_UNUSED):
+                return f"the {store.name} store was {state}"
+        return ""
+
+
+STORE_RULES = StoreRules(STORES)
+COLD_SWITCHES = STORE_RULES.cold_switches()
+REUSE_SWITCHES = STORE_RULES.reuse_switches()
 DAMAGE_HOW = ("garbage", "empty", "truncate")
 
 
@@ -177,38 +221,12 @@ class FixedSnapshots(Snapshots):
         return self.tree
 
 
-class RecordingNativeSource(NativeGraphSource):
-    """A native graph source that keeps the pack memo of each build, so a check can say whether
-    its pack memo was on and its store opened."""
-
-    def __init__(self, work_dir: Path) -> None:
-        super().__init__(work_dir)
-        self.memos: list[PackMemo | None] = []
-
-    def pack_memo(self, options: Any, build: Any, config_key: str) -> PackMemo | None:
-        memo = super().pack_memo(options, build, config_key)
-        self.memos.append(memo)
-        return memo
-
-    def memo_states(self) -> list[str]:
-        """Per build: `off`, `no store` (the trace mode, or no cache root), or the store's state."""
-        states = []
-        for memo in self.memos:
-            if memo is None:
-                states.append("off")
-            elif isinstance(memo.store, MemoStore):
-                states.append(memo.store.state())
-            else:
-                states.append("no store")
-        return states
-
-
 class CountingSummaryStore(SummaryStore):
     """A summary store that counts the stored summaries it handed out, so a cold check can show
     that it read none."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, stores: RunStores) -> None:
+        super().__init__(stores=stores)
         self.reads = 0
 
     def get(self, key: Envelope, sections: frozenset[str] = ALL_SECTIONS) -> ScanSummary | None:
@@ -221,20 +239,17 @@ class CountingSummaryStore(SummaryStore):
 class RecordingCommands(Commands):
     """`check --index` of a fixed tree that keeps what the run made: its graph when it ran live
     (`write_outputs` gets every live run), the summary it reported (`report` gets every check)
-    and its pack memos."""
+    and the state of its stores."""
 
     def __init__(self, repo: Path, work_dir: Path, engine: str, today: datetime.date, tree: str, head: str) -> None:
         super().__init__(repo, work_dir, engine, today)
-        self.recording: RecordingNativeSource | None = None
-        if isinstance(self.source, NativeGraphSource):
-            self.recording = RecordingNativeSource(work_dir)
-            self.source = self.runner.source = self.recording
         self.snapshots = FixedSnapshots(repo, work_dir, tree, head)
-        self.summaries = self.baselines.store = CountingSummaryStore()
+        self.counting = CountingSummaryStore(self.stores)
+        self.summaries = self.baselines.store = self.counting
         self.baselines.snapshots = self.snapshots
         if self.memo is not None:
             self.memo.snapshots = self.snapshots
-            self.memo.store = self.summaries
+            self.memo.store = self.counting
         self.live: Run | None = None
         self.reported: ScanSummary | None = None
         self.against = ""
@@ -257,16 +272,9 @@ class RecordingCommands(Commands):
         return super().report(summary, config, policy_root, files_root, touched, attributed)
 
     def reuse(self) -> dict[str, Any]:
-        """Which stores of reused work this check had: the answer stores, the summary store and
-        how many stored summaries it read, and per native build its pack memo (`memo_states`;
-        absent on the Python engine)."""
-        summaries = self.summaries
-        out: dict[str, Any] = {"answers": not AnswerStore.off(), "summaries": not summaries.broken}
-        if isinstance(summaries, CountingSummaryStore):
-            out["summary_reads"] = summaries.reads
-        if self.recording is not None:
-            out["pack_memo"] = self.recording.memo_states()
-        return out
+        """The state of each store of the run (`RunStores.record`), and how many stored summaries
+        it read: the record says a store was open, not whether it was read."""
+        return {"stores": self.stores.record(), "reads": {SUMMARY_STORE.name: self.counting.reads}}
 
 
 def summary_rows(summary: ScanSummary) -> list[Row]:
@@ -311,7 +319,7 @@ class TreeCheck:
         wall, cpu = time.perf_counter(), self.cpu()
         printed = io.StringIO()
         try:
-            with contextlib.redirect_stdout(printed):
+            with contextlib.redirect_stdout(printed), commands.stores.as_current():
                 code = commands.check(index=True, write_ledger=False, changed=False)
         finally:
             commands.snapshots.close()
@@ -322,7 +330,7 @@ class TreeCheck:
             "memo": commands.live is None,
             "against": commands.against,
             "engine": commands.engine.id,
-            "reuse": commands.reuse(),
+            **commands.reuse(),
             **timing,
         }
         (self.out / "check.json").write_text(json.dumps(meta))
@@ -374,7 +382,7 @@ class TreeCheck:
         tables.write_lines("labels", labels)
         tables.write_lines("finding-files", [finding_files(f, modules) for f in run.result.findings()])
         tables.write_lines("incomplete-files", [incomplete_files(i, modules) for i in run.result.incomplete()])
-        if os.environ.get(TRACE_ENV) == "1" and isinstance(graph, NativeGraph):
+        if commands.stores.trace_on() and isinstance(graph, NativeGraph):
             write_trace_dump(graph.link, run.config, self.out)
 
 
@@ -417,46 +425,6 @@ class CheckDump:
 
     def has(self, table: str) -> bool:
         return (self.path / f"{table}.jsonl").is_file()
-
-
-def reuse_problem(meta: dict[str, Any]) -> str:
-    """Why a warm check reused no stored work, or "" when it could. A check the run memo served
-    reused a stored summary. Otherwise every store must have been on, and each pack memo's store
-    opened and read, or never asked because no step had items: a count of reused items cannot
-    be the test, since a pair that changes the config rightly reuses none."""
-    if meta.get("memo"):
-        return ""
-    reuse = meta.get("reuse")
-    if not isinstance(reuse, dict):
-        return "the check did not say what it reused"
-    if not reuse.get("answers"):
-        return "the answer stores were off"
-    if not reuse.get("summaries"):
-        return "the summary store failed"
-    memos = reuse.get("pack_memo")
-    if memos is None:
-        return ""
-    if not memos:
-        return "no build made a pack memo"
-    bad = [state for state in memos if state not in ("open", "unused")]
-    return f"the pack memo was {bad[0]}" if bad else ""
-
-
-def cold_problem(meta: dict[str, Any]) -> str:
-    """Why a cold check may have reused stored work, or "" when it shows it reused none: no
-    stored summary stood in for it or served as its baseline, and every answer store and pack
-    memo was off. See the stores a cold check may share, next to `COLD_SWITCHES`."""
-    if meta.get("memo"):
-        return "the run memo served it"
-    reuse = meta.get("reuse")
-    if not isinstance(reuse, dict):
-        return "the check did not say what it reused"
-    if reuse.get("answers"):
-        return "the answer stores were on"
-    if reuse.get("summary_reads", 1):
-        return "it read a stored summary"
-    on = [state for state in reuse.get("pack_memo", []) if state != "off"]
-    return f"the pack memo was {on[0]}" if on else ""
 
 
 class Outcome:
@@ -655,7 +623,7 @@ def compare(label: str, base: CheckDump, other: CheckDump) -> Outcome:
     if base.engine != other.engine:
         return Refused(label, (base.engine, other.engine))
     for dump in (base, other):
-        problem = cold_problem(dump.meta) if dump.side == COLD else ""
+        problem = STORE_RULES.cold_problem(dump.meta) if dump.side == COLD else ""
         if problem:
             return NotCold(label, problem)
     diffs = tuple(compare_dumps(base.path, other.path, (*CHECK_OUTPUTS, *GRAPH_OUTPUTS), skip_missing=True))
@@ -664,7 +632,7 @@ def compare(label: str, base: CheckDump, other: CheckDump) -> Outcome:
     if missing:
         return NotCompared(label, diffs, missing)
     if other.side == WARM:
-        problem = reuse_problem(other.meta)
+        problem = STORE_RULES.warm_problem(other.meta)
         if problem:
             return NoReuse(label, diffs, problem)
         if not other.memo and graph_tables(diffs) == 0:
@@ -1294,7 +1262,7 @@ class RemoveSummarySection(StoreDamage):
     """Removes the section every baseline reads (incompletes) of each stored summary."""
 
     name = "remove-summary-section"
-    part = "summaries"
+    part = SUMMARIES
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
@@ -1308,7 +1276,7 @@ class RemoveSummarySection(StoreDamage):
 
 class RemoveInputs(StoreDamage):
     name = "remove-inputs"
-    part = "inputs"
+    part = INPUTS
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
@@ -1322,7 +1290,7 @@ class RemovePackEntry(StoreDamage):
     """Removes one stored migration summary of each pack cache file."""
 
     name = "remove-pack-entry"
-    part = "packs"
+    part = PACKS
 
     def apply(self, state: State, rng: random.Random) -> list[str]:
         done = []
@@ -1440,7 +1408,7 @@ class KilledInSummaryWrite(Damage):
     def run(self, case: DamageCase) -> list[Outcome]:
         filled = case.fill(self.name)
         state = filled.state
-        known = set(state.files("summaries"))
+        known = set(state.files(SUMMARIES))
         checker, pair = case.checker, case.pair
         child = f"{self.name}-child"
         what = checker.killed(Side.damaged(filled), pair.child, pair.parent, child, lambda: self.new_file(state, known))
@@ -1449,13 +1417,12 @@ class KilledInSummaryWrite(Damage):
 
     @staticmethod
     def new_file(state: State, known: set[Path]) -> bool:
-        root = state.cache / "summaries"
+        root = state.cache / SUMMARIES
         return root.is_dir() and any(path not in known for path in root.rglob("*"))
 
 
-DAMAGES: tuple[Damage, ...] = (
-    *(FileDamage(store, part, pattern, how) for store, part, pattern in CACHE_FILES for how in DAMAGE_HOW),
-    FileDamage("inputs", "inputs", "*", "not-a-digest"),
+LAYOUT_DAMAGES: tuple[Damage, ...] = (
+    FileDamage(INPUTS, INPUTS, "*", "not-a-digest"),
     RemoveSummarySection(),
     RemoveInputs(),
     RemovePackEntry(),
@@ -1467,6 +1434,16 @@ DAMAGES: tuple[Damage, ...] = (
     KilledInFactWrites(),
     KilledInSummaryWrite(),
 )
+
+
+def damages_of(rules: StoreRules) -> tuple[Damage, ...]:
+    """Every damage case: each store's files made garbage, empty and cut to half, then the
+    damages that know a store's layout, then the ways of running checks."""
+    files = tuple(FileDamage(store, part, "*", how) for store, part in rules.damage_files() for how in DAMAGE_HOW)
+    return (*files, *LAYOUT_DAMAGES)
+
+
+DAMAGES = damages_of(STORE_RULES)
 
 
 # ── the harness ───────────────────────────────────────────────────
@@ -1556,7 +1533,7 @@ class Replay:
         cold_child = checker.check(Side.cold(self.states, "cold-child"), pair.child, pair.parent, "cold-child")
         result.cold = cold_child
         for label, dump in (("cold-parent", cold_parent), ("cold-child", cold_child)):
-            problem = cold_problem(dump.meta)
+            problem = STORE_RULES.cold_problem(dump.meta)
             if problem:
                 result.verdicts.append(NotCold(label, problem))
                 return

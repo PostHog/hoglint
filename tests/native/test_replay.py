@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import hoglint
+from hoglint.ledger.cache import STORES, Store, StoreList
 from hoglint.native.parity import RowDiff
 from hoglint.native.replay import (
     CHECK_OUTPUTS,
@@ -19,6 +20,7 @@ from hoglint.native.replay import (
     DAMAGED,
     MODES,
     REUSE_SWITCHES,
+    STORE_RULES,
     WARM,
     CheckDump,
     Checker,
@@ -30,10 +32,12 @@ from hoglint.native.replay import (
     Replay,
     Side,
     States,
+    StoreRules,
     TruthItem,
     certify,
     check_env,
     compare,
+    damages_of,
     labelled,
     pick_damages,
 )
@@ -103,7 +107,7 @@ def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str, damages: tuple[st
     [
         ("today", (), True),
         ("planted-miss", (), False),
-        ("today", ("garbage-summaries", "garbage-inputs", "garbage-answers", "two-children-at-once"), True),
+        ("today", ("garbage-summaries", "garbage-inputs", "garbage-site-packages", "two-children-at-once"), True),
     ],
 )
 def test_a_replay_reports_a_pair_equal_only_when_every_check_reports_the_same(
@@ -209,23 +213,29 @@ def write_check(side: Path, meta: dict[str, object], graph: bool) -> Path:
     return side
 
 
-OPEN = {"answers": True, "summaries": True, "pack_memo": ["open"]}
-# What a cold check records: every store it may not share off or unread.
-COLD_REUSE: dict[str, object] = {"answers": False, "summaries": True, "summary_reads": 0, "pack_memo": ["off"]}
-COLD_RECORD: dict[str, object] = {"memo": False, "reuse": COLD_REUSE}
+# What a warm check records: every store open or unused.
+OPEN: dict[str, str] = {store.name: "open" for store in STORES.stores}
+# What a cold check records: every store that is not shared off, and the summaries only written.
+COLD_STATES: dict[str, str] = {
+    **{store.name: "off" for store in STORES.stores if store.switch},
+    **{store.name: "open" for store in STORES.stores if store.shared or not store.switch},
+}
+NO_READS = {"summaries": 0}
+COLD_RECORD: dict[str, object] = {"memo": False, "stores": COLD_STATES, "reads": NO_READS}
 
 
 @pytest.mark.parametrize(
     ("meta", "graph", "word"),
     [
-        ({"memo": False, "reuse": OPEN}, True, ""),
-        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["unused"]}}, True, ""),
-        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["off"]}}, True, "NO REUSE"),
-        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["no store"]}}, True, "NO REUSE"),
-        ({"memo": False, "reuse": {**OPEN, "pack_memo": ["failed"]}}, True, "NO REUSE"),
-        ({"memo": False, "reuse": {**OPEN, "answers": False}}, True, "NO REUSE"),
-        ({"memo": False, "reuse": OPEN}, False, "NO GRAPH TABLES"),
-        ({"memo": True, "reuse": {**OPEN, "pack_memo": []}}, False, ""),
+        ({"memo": False, "stores": OPEN}, True, ""),
+        ({"memo": False, "stores": {**OPEN, "pack-memo": "unused"}}, True, ""),
+        ({"memo": False, "stores": {**OPEN, "pack-memo": "off"}}, True, "NO REUSE"),
+        ({"memo": False, "stores": {**OPEN, "pack-memo": "failed"}}, True, "NO REUSE"),
+        ({"memo": False, "stores": {**OPEN, "site-packages": "off"}}, True, "NO REUSE"),
+        ({"memo": False, "stores": {**OPEN, "summaries": "failed"}}, True, "NO REUSE"),
+        ({"memo": False}, True, "NO REUSE"),
+        ({"memo": False, "stores": OPEN}, False, "NO GRAPH TABLES"),
+        ({"memo": True}, False, ""),
     ],
 )
 def test_a_warm_check_must_show_that_it_reused_stored_work(
@@ -242,7 +252,7 @@ def test_a_warm_check_must_show_that_it_reused_stored_work(
 @pytest.mark.parametrize("side", [DAMAGED, WARM])
 def test_a_side_without_its_check_tables_is_not_compared(tmp_path: Path, side: str) -> None:
     cold = write_check(tmp_path / "cold", COLD_RECORD, graph=True)
-    other = write_check(tmp_path / "other", {"memo": False, "reuse": OPEN}, graph=True)
+    other = write_check(tmp_path / "other", {"memo": False, "stores": OPEN}, graph=True)
     (other / "check-summary.jsonl").unlink()
     verdict = compare("child", CheckDump.load(cold, COLD), CheckDump.load(other, side))
     assert verdict.word == "NOT COMPARED"
@@ -271,16 +281,20 @@ def test_a_side_that_reuses_stored_work_needs_a_state_a_parent_check_filled(tmp_
 
 
 @pytest.mark.parametrize(
-    ("reuse", "memo"),
+    ("states", "reads", "memo"),
     [
-        ({"answers": True}, False),
-        ({"pack_memo": ["open"]}, False),
-        ({"summary_reads": 1}, False),
-        ({}, True),
+        ({"site-packages": "open"}, NO_READS, False),
+        ({"pack-memo": "open"}, NO_READS, False),
+        ({"pack-memo": "failed"}, NO_READS, False),
+        ({}, {"summaries": 1}, False),
+        ({}, {}, False),
+        ({}, NO_READS, True),
     ],
 )
-def test_a_cold_check_that_shared_a_store_is_not_compared(tmp_path: Path, reuse: dict[str, object], memo: bool) -> None:
-    record: dict[str, object] = {"memo": memo, "reuse": {**COLD_REUSE, **reuse}}
+def test_a_cold_check_that_shared_a_store_is_not_compared(
+    tmp_path: Path, states: dict[str, str], reads: dict[str, int], memo: bool
+) -> None:
+    record: dict[str, object] = {"memo": memo, "stores": {**COLD_STATES, **states}, "reads": reads}
     cold = write_check(tmp_path / "cold", record, graph=True)
     other = write_check(tmp_path / "other", COLD_RECORD, graph=True)
     verdict = compare("seed1-threads1", CheckDump.load(cold, COLD), CheckDump.load(other, COLD))
@@ -310,3 +324,16 @@ def test_a_laid_file_replaces_its_path_in_both_trees_and_keeps_the_rest(tmp_path
     for tree, edits in ((laid.parent, {}), (laid.child, CHILD_EDITS)):
         assert git_in(repo, "show", f"{tree}:hoglint.toml") == preset.read_text()
         assert git_in(repo, "show", f"{tree}:core/b.py") == {**OWNERS_REPO, **edits}["core/b.py"]
+
+
+def test_a_store_added_to_the_list_reaches_every_rule_of_the_replay() -> None:
+    made_up = Store("made-up", "made-up", shared=False, warning="", switch="HOGLINT_MADE_UP", off="1")
+    rules = StoreRules(StoreList((*STORES.stores, made_up), STORES.recordings))
+    assert rules.cold_switches() == {**STORE_RULES.cold_switches(), "HOGLINT_MADE_UP": "1"}
+    assert "HOGLINT_MADE_UP" in rules.reuse_switches()
+    assert {"garbage-made-up", "empty-made-up", "truncate-made-up"} <= {damage.name for damage in damages_of(rules)}
+    cold = {"memo": False, "stores": {**COLD_STATES, "made-up": "open"}, "reads": NO_READS}
+    assert rules.cold_problem(cold) == "the made-up store was open"
+    assert rules.cold_problem({**cold, "stores": {**COLD_STATES, "made-up": "off"}}) == ""
+    assert rules.warm_problem({"memo": False, "stores": {**OPEN, "made-up": "off"}}) == "the made-up store was off"
+    assert rules.warm_problem({"memo": False, "stores": OPEN}) == "the made-up store was not recorded"
