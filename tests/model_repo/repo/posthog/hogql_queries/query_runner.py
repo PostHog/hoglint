@@ -8,6 +8,10 @@ def get_query_runner(query, team):
         from products.catalog.backend.hogql_queries.entries import EntryQueryRunner
 
         return EntryQueryRunner(query, team)
+    if kind == "AuditQuery":
+        from products.legacy.backend.hogql_queries.audit import AuditQueryRunner
+
+        return AuditQueryRunner(query, team)
     raise ValueError(kind)
 
 

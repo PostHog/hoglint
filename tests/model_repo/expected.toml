@@ -5,10 +5,10 @@
 # config:stale-name
 
 [[row]]
-case = "SN01"
+case = "WW07"
 rule = "config:stale-name"
 verdict = "incomplete"
-identity = ["ee/settings.py"]
+identity = ["posthog/api/view_base.py"]
 
 [[row]]
 case = "SN01"
@@ -217,6 +217,12 @@ verdict = "finding"
 identity = ["products.legacy.backend.facade.contracts", "django.conf"]
 
 # drives
+
+[[row]]
+case = "DR04"
+rule = "drives"
+verdict = "finding"
+identity = ["legacy:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(AuditQuery)"]
 
 [[row]]
 case = "DR01"
@@ -781,6 +787,36 @@ identity = ["scripts.shapes|reference|products.inventory.backend.models.StockIte
 # no-product-lists-in-core
 
 [[row]]
+case = "WW05"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
+
+[[row]]
+case = "DR04"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.hogql_queries.query_runner", "products.legacy.backend.hogql_queries.audit"]
+
+[[row]]
+case = "WW04"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
+
+[[row]]
+case = "WW06"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.throttles"]
+
+[[row]]
+case = "WW08"
+rule = "no-product-lists-in-core"
+verdict = "unknown"
+identity = ["posthog.request_log", "?"]
+
+[[row]]
 case = "IF01"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1078,6 +1114,12 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 [[row]]
+case = "WW08"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["posthog.request_log", "?"]
+
+[[row]]
 case = "CR03"
 rule = "prod-imports-test"
 verdict = "unknown"
@@ -1134,12 +1176,6 @@ verdict = "incomplete"
 identity = ["scripts.shapes"]
 
 # public-surface
-
-[[row]]
-case = "RD03"
-rule = "public-surface"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_stock_signals", "import"]
 
 [[row]]
 case = "HZ06"
@@ -1316,6 +1352,12 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.stock_listeners", "import"]
 
 [[row]]
+case = "RD03"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_stock_signals", "import"]
+
+[[row]]
 case = "SY02"
 rule = "public-surface"
 verdict = "finding"
@@ -1418,6 +1460,18 @@ identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
 # request-path
 
 [[row]]
+case = "WW05"
+rule = "request-path"
+verdict = "finding"
+identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
+
+[[row]]
+case = "WW04"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
+
+[[row]]
 case = "WW01"
 rule = "request-path"
 verdict = "finding"
@@ -1482,6 +1536,30 @@ verdict = "finding"
 identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
 
 # wiring-watched
+
+[[row]]
+case = "WW05"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/admin_gate.py"]
+
+[[row]]
+case = "WW04"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/debug_gate.py"]
+
+[[row]]
+case = "WW06"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["rules.request-path|posthog.settings.web|dotted-path|products.gatekeeper.backend.throttles.GateThrottle"]
+
+[[row]]
+case = "WW08"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["rules.request-path|posthog.settings.web|import|products.gatekeeper.backend.facade.trail"]
 
 [[row]]
 case = "DR01"

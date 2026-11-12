@@ -10,7 +10,7 @@ external     = ["django", "rest_framework"]
 plugins      = ["hoglint.presets_py.posthog"]
 
 [django]
-settings            = ["posthog.settings", "posthog.settings.*"]
+settings            = ["posthog.settings", "posthog.settings.*", "ee.settings"]
 db_routing          = "products/db_routing.yaml"
 db_alias_template   = "{database}_db_writer"
 receiver_decorators = ["django.dispatch.dispatcher.receiver", "posthog.models.signals.mutable_receiver"]
@@ -26,3 +26,8 @@ hooks = [
 [ledger]
 file       = "hoglint.ledger"
 exceptions = "hoglint.exceptions.toml"
+
+# Planted (case WW07): a request seed whose file was moved away; the run reports it, never drops it.
+[[assign]]
+match = "posthog/api/view_base.py"
+set   = { request_seed = true }

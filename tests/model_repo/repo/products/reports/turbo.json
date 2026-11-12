@@ -1,8 +1,16 @@
 {
-  "extends": ["//"],
+  "extends": [
+    "//"
+  ],
   "tasks": {
     "backend:contract-check": {
-      "inputs": ["backend/facade/**", "backend/presentation/**", "backend/models.py", "backend/migrations/**"]
+      "inputs": [
+        "backend/facade/**",
+        "backend/presentation/**",
+        "backend/models.py",
+        "backend/migrations/**",
+        "backend/hogql_queries/chart.py"
+      ]
     }
   }
 }

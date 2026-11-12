@@ -150,11 +150,17 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `UI01` | `products/gatekeeper/backend/wiring.py` | An install whose hook cannot be resolved, in an unwatched module of a narrowed product | installs incomplete; wiring-watched incomplete; the product is not Isolated | `wiring-watched` is strict for the level |
 | `UI02` | `products/notifications/backend/wiring.py` | The same in a product with no contract-check task | the same; the product is not Isolated | |
 | `DR01` | `posthog/test/test_widget_query.py`, `products/catalog/backend/hogql_queries/entries.py` | A core test runs a product's query kind | drives finding; wiring-watched finding for the location's `__init__.py` | |
-| `DR02` | `posthog/test/test_widget_query.py`, `products/reports/backend/hogql_queries/widget.py` | The same into a location without `__init__.py`, unwatched | drives finding; wiring-watched finding for `widget.py`, the file directly inside | Each module file directly inside such a location stands for it, as `__init__.py` does for a package (Nov 12) |
+| `DR02` | `posthog/test/test_widget_query.py`, `products/reports/backend/hogql_queries/widget.py`, `chart.py` | The same into a location without `__init__.py`: one file directly inside unwatched, one watched | drives finding; wiring-watched finding for `widget.py` only | Each module file directly inside such a location stands for it, as `__init__.py` does for a package (Nov 12) |
 | `DR03` | `products/reports/backend/tests/test_widget_query.py` | A product's own test runs its kind | clean | |
+| `DR04` | `posthog/test/test_widget_query.py`, `products/legacy/backend/hogql_queries/audit.py` | A core test runs a kind of a location without `__init__.py` whose files are all watched | drives finding (a list); wiring-watched clean | Clean neighbor of `DR02` |
 | `WW01` | `posthog/auth.py`, `products/gatekeeper/backend/facade/api.py`, `products/gatekeeper/backend/logic/decisions.py` | Core's request code imports a facade at module level; the logic behind it is unwatched | no-product-lists-in-core finding; request-path rows for the facade and the logic; wiring-watched finding for `logic/decisions.py` | D103 |
-| `WW02` | `posthog/permissions.py`, `products/access_control/backend/logic/rules.py` | The same through an import inside a function | no-product-lists-in-core finding; wiring-watched clean | A written limit of D103 |
+| `WW02` | `posthog/middleware.py`, `posthog/permissions.py`, `products/access_control/backend/logic/rules.py` | The same through an import inside a function of a module the request path reaches | no-product-lists-in-core finding; no request-path row; wiring-watched clean | A written limit of D103 |
 | `WW03` | `posthog/settings/web.py`, `products/gatekeeper/backend/middleware.py`, `products/gatekeeper/backend/logic/session.py` | Settings wire a product middleware whose logic is watched | request-path rows for the middleware and the logic; clean for wiring-watched | D103 |
+| `WW04` | `posthog/settings/web.py`, `products/gatekeeper/backend/debug_gate.py` | A middleware in a list that `MIDDLEWARE` splats in (`*_DEBUG_GATES`), unwatched | no-product-lists-in-core finding; request-path row; wiring-watched finding | The splatted list belongs to `MIDDLEWARE` (Nov 12) |
+| `WW05` | `ee/settings.py`, `products/gatekeeper/backend/admin_gate.py` | A second settings module inserts a middleware (`MIDDLEWARE.insert`), unwatched | the same three | `insert` names `MIDDLEWARE` (Nov 12) |
+| `WW06` | `posthog/settings/web.py`, `products/gatekeeper/backend/throttles.py` | A request key extended through a subscript (`REST_FRAMEWORK[...].append`): the setting cannot be told | no-product-lists-in-core finding; wiring-watched incomplete (`rule request-path cannot tell`); `throttles.py` is not followed | Unknown is never clean: the setting reads unknown, never absent (Nov 12) |
+| `WW07` | `hoglint.toml` (planted line) | A request seed whose path matches no file | config:stale-name incomplete | A path the config writes out in full and the tree lacks is incomplete (Nov 12) |
+| `WW08` | `posthog/middleware.py`, `posthog/request_log.py` | An import on the request path that does not resolve | no-product-lists-in-core and prod-imports-test unknown; wiring-watched incomplete (`rule request-path cannot tell`) | Unknown is never clean (Nov 12) |
 | `SN01` | the preset | The preset writes out monorepo paths and symbols this miniature does not hold | config:stale-name incomplete for each | A path or symbol the config writes out in full and the tree lacks is incomplete, never silent (Nov 12) |
 | `UK01` | `scripts/new_tool.py` | A file in a top folder no assignment names imports product internals (the source end unknown) | incomplete in every rule that crosses packages; product-code-at-home incomplete | D105: a new top folder reads unknown |
 | `UK02` | `products/legacy/backend/logic/widgets.py`, `scripts/helpers.py` | A product imports from such a folder (the destination end unknown) | public-surface and cycle incomplete | D105 |
@@ -203,6 +209,10 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `crosses` | A slot typed with a name that does not resolve | `CR03` | unknown |
 | `installs` as a list | A hook call that does not resolve | `UI01`, `UI02` | incomplete; the product is not Isolated |
 | Namespace-directory labels | A drives location without `__init__.py` | `DR02` | wiring-watched finding for the file directly inside |
+| `through_denied` (reach) | An import on the request path that does not resolve | `WW08` | request-path incomplete, carried into wiring-watched |
+| `setting` on settings edges | An entry added through a subscript (`X[...].append`) | `WW06` | the setting reads unknown: wiring-watched incomplete |
+| Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks | `WW07`, `SN01` | config:stale-name incomplete |
+| Rule covers of a coverage rule | What the covered rule cannot tell (an advisory rule's own items never reach a check's output) | `WW06`, `WW08` | wiring-watched incomplete |
 | `uses_at_import` | A use whose import the rule does not report | `PS03` | the use is a finding of its own; with this preset no import is reported clean while its use is not, so no stronger case can be built (`tests/native/test_evaluator.py` holds it) |
 | `slots = "shape"` | A module the signature rule cannot tell about | none | A file's zone is never unknown in this preset (the zone field has no domain); `tests/native/test_facade_rules.py` holds it |
 | Namespace-directory labels | A directory whose files disagree on zone | none | Zones come from globs only here, so a directory reads one answer; a provider-set zone would be needed |
@@ -315,6 +325,11 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | wiring-watched | A product module the request path reaches, unwatched | `WW01` |
 | request-path | Core's request code reaches product modules by module-level imports, past the first one | `WW01`, `WW03` |
 | request-path | The same through an import inside a function | `WW02` (not followed) |
+| request-path | A list splatted into `MIDDLEWARE`, an `insert` from a second settings module | `WW04`, `WW05` |
+| request-path | A request key the settings reader cannot name | `WW06` (incomplete) |
+| request-path | An unresolved import on the request path | `WW08` (incomplete) |
+| config:stale-name | A seed path that matches no file | `WW07` |
+| wiring-watched | A location without `__init__.py`, one file unwatched, one watched; all watched | `DR02`; `DR04` (clean) |
 | foundation-direction | A foundation model points at a feature product | None: `FO01` shows the import form |
 | infrastructure-direction | Infrastructure imports a product | `IF01` |
 | no-product-lists-in-core | Hub files that list products | `PS24` |
