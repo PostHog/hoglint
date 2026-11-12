@@ -887,13 +887,17 @@ class Labeler:
                 self.symbol_labels(symbol)
 
     def explain(self, module: str) -> list[tuple[str, str, str]]:
-        """(field, value, source) for every declared field of a module, unassigned ones included."""
+        """(field, value, source) for every declared field of a module, unassigned ones included,
+        and the zones it hands out names from when it is an export module: what a rule row reads
+        of the module, so the change predictor compares it."""
         rows: list[tuple[str, str, str]] = []
         for name, spec in self.config.fields.items():
             if spec.on == "symbol":
                 continue
             value, source = self.field_value(module, None, name, sourced=True)
             rows.append((name, render(value), source))
+        if self.zone_fields and module in self.graph.hand_outs:
+            rows.append((HANDED_ZONES, render(self.handed_zones(module)), "hand-outs"))
         registry = self.module_labels(module).get(REGISTRY_FIELD)
         if registry is not None:
             rows.append(("registry", str(registry.value), registry.source))

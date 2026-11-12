@@ -368,3 +368,62 @@ def test_a_pack_edge_that_reads_a_helpers_body_predicts_the_unchanged_file_it_si
     reader = "posthog/test/test_trends.py"
     assert rows_of(parent, reader) != rows_of(child, reader), "the helper's new call must move the test's drives"
     assert reader in predict(parent, child, {"common/helpers.py"}).files
+
+
+HANDED_CONFIG = """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["app"]
+
+[fields]
+zone = { type = "zone" }
+
+[zones]
+within = "app"
+default = "internal"
+wiring = { paths = ["jobs/**"] }
+
+[shapes.loose]
+allow = ["class", "function"]
+
+[exports.api]
+within = "app"
+paths = ["api/**"]
+shape = "loose"
+
+[rules.no-wiring-doors]
+primitive = "edge"
+kinds = ["import"]
+endpoint = "surface"
+from = "src.module == 'app.views'"
+deny = "dst.handed_zones in ['wiring']"
+identity = ["dst.module"]
+ledger = false
+"""
+
+
+def test_a_moved_hand_out_source_rejudges_a_row_that_reads_handed_zones_at_the_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_module()
+    parent_files = {
+        "hoglint.toml": HANDED_CONFIG,
+        "app/__init__.py": "",
+        "app/jobs/__init__.py": "",
+        "app/jobs/tasks.py": "def run():\n    pass\n",
+        "app/logic.py": "def run():\n    pass\n",
+        "app/shim.py": "from app.jobs.tasks import run as run\n",
+        "app/api/__init__.py": "from app.shim import run\n\n__all__ = ['run', 'ping']\n\n\ndef ping():\n    pass\n",
+        "app/views.py": "from app.api import ping\n",
+    }
+    # The facade hands out the same name; where it comes from moves, and its zones with it.
+    child_files = {**parent_files, "app/shim.py": "from app.logic import run as run\n"}
+    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    reader = "app/views.py"
+    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
+    changed = {"app/shim.py"}
+    assert reader in predict(parent, child, changed).files
+    assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files

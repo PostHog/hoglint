@@ -298,7 +298,9 @@ def symbol_key(name: str, modules: dict[str, str]) -> tuple[str, str]:
 class TreeTables:
     """What step 2 reads of one tree's tables, for the files `files` and the label modules
     `label_modules` (None: every module) only: a check that reuses stored answers has these rows
-    for what it recomputed, and stored rows for the rest."""
+    for what it recomputed, and stored rows for the rest. The labels of the modules of `files` are
+    read too: a label derived from a module's edges, such as the zones it hands out names from,
+    moves when those edges do."""
 
     modules: dict[str, str]
     symbols: dict[str, list[Any]] = field(default_factory=dict)
@@ -325,8 +327,8 @@ class TreeTables:
             if owner:
                 found = [kind, row[SURFACE], row[TARGETS], row[RESOLUTION]]
                 out.classes.setdefault(f"{row[MODULE]}.{owner}", []).append(found)
-        for module, _, rows in read_rows(dump / "labels.jsonl"):
-            if label_modules is None or module in label_modules:
+        for module, path, rows in read_rows(dump / "labels.jsonl"):
+            if label_modules is None or module in label_modules or path in files:
                 out.labels[module] = rows
         return out
 
