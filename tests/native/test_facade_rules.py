@@ -38,6 +38,9 @@ SITE_PACKAGES = {
     "django/db/models/base.py": "class Model:\n    pass\n",
     "rest_framework/__init__.py": "",
     "rest_framework/serializers.py": "class Serializer:\n    pass\n",
+    "django/core/__init__.py": "",
+    "django/core/management/__init__.py": "",
+    "django/core/management/base.py": "class BaseCommand:\n    pass\n",
 }
 BASE = {
     "hoglint.toml": ROOT_CONFIG,
@@ -255,6 +258,48 @@ def test_export_shape_leaves_a_slot_to_the_signature_rule(tmp_path: Path, monkey
         ["place", "param:extra"],
         ["place", "param:order"],
     ]
+
+
+COMMANDS = f"{SHOP}.management.commands"
+COMMAND = f"{COMMANDS}.charge.Command"
+COMMAND_FILES = {
+    "products/shop/backend/management/__init__.py": "",
+    "products/shop/backend/management/commands/__init__.py": "",
+    "products/shop/backend/management/commands/charge.py": (
+        "from django.core.management.base import BaseCommand\n\n\nclass Command(BaseCommand):\n    pass\n"
+    ),
+    "products/shop/backend/logic.py": (
+        f"import dataclasses\n\nfrom {COMMANDS}.charge import Command\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Job:\n    command: Command\n"
+    ),
+}
+IMPORTS_COMMAND = f"from {COMMANDS}.charge import Command\nfrom {SHOP}.logic import Job\n\n\n"
+# A command class in a slot the signature rule sees is that rule's; in a field one level down it is
+# the export rule's. Each case is one finding of exactly one rule.
+COMMAND_SLOT_CASES = {
+    "a parameter": (
+        "def run(command: Command) -> None:\n    pass\n",
+        {"facade-signature": [[API, "run", "param:command", COMMAND]], "export-shape": []},
+    ),
+    "a return value": (
+        "def make() -> Command:\n    return Command()\n",
+        {"facade-signature": [[API, "make", "return", COMMAND]], "export-shape": []},
+    ),
+    "a field of a contract": (
+        "def schedule(job: Job) -> None:\n    pass\n",
+        {"facade-signature": [], "export-shape": [[COMMAND, API, "export-denied(command)"]]},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", COMMAND_SLOT_CASES)
+def test_a_command_class_in_a_facade_slot_is_one_rules_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    body, expected = COMMAND_SLOT_CASES[case]
+    files = {**COMMAND_FILES, "products/shop/backend/facade/api.py": IMPORTS_COMMAND + body}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
 
 
 TAKES_AN_ORDER = (
