@@ -24,7 +24,6 @@ costs one check.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 import zlib
@@ -927,11 +926,12 @@ class PackMemo:
     under its name and `policy`, the digest of everything outside the snapshot its items depend
     on. `HOGLINT_PACK_MEMO=off` runs items with no memo, so with no frames, and reads and writes
     nothing; `trace` runs them in frames and stores nothing. `stats` names a file that gets one
-    JSON line per step."""
+    JSON line per step. `dropped` is the test-only list of `HOGLINT_PACK_MEMO_DROP`: read kinds
+    left out of every kept item."""
 
-    def __init__(self, store: MemoStore | None, policy: str, stats: str = "") -> None:
+    def __init__(self, store: MemoStore | None, policy: str, stats: str = "", dropped: str = "") -> None:
         self.tracer = Tracer()
-        self.dropped = frozenset(filter(None, os.environ.get(DROP_ENV, "").split(",")))
+        self.dropped = frozenset(filter(None, dropped.split(",")))
         self.store = store
         self.policy = policy
         self.stats_path = stats

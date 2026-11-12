@@ -114,7 +114,7 @@ class NativeGraphSource(GraphSource):
         store = None
         if mode != TRACE and options.cache_dir is not None:
             store = MemoStore(options.cache_dir.parent, engine_id(), self.stores)
-        return PackMemo(store, policy, self.stores.memo_stats())
+        return PackMemo(store, policy, self.stores.memo_stats(), self.stores.memo_drop())
 
 
 def batch_mode(engine: str) -> None:

@@ -183,7 +183,7 @@ STORES = StoreList(
     (
         Recording("trace-dump", TRACE_ENV),
         Recording("pack-memo-stats", STATS_ENV),
-        # Test only: leaves reads out of every pack item's trace (read by the tracer).
+        # Test only: leaves reads out of every kept pack item (`RunStores.memo_drop`).
         Recording("pack-memo-drop", DROP_ENV),
     ),
 )
@@ -250,6 +250,10 @@ class RunStores:
     def memo_stats(self) -> str:
         """The file `HOGLINT_PACK_MEMO_STATS` names for the memo's step stats; empty for none."""
         return self.values[STATS_ENV]
+
+    def memo_drop(self) -> str:
+        """`HOGLINT_PACK_MEMO_DROP`, test only: the read kinds a kept pack item leaves out."""
+        return self.values[DROP_ENV]
 
     def trace_on(self) -> bool:
         return self.values[TRACE_ENV] == "1"
