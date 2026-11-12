@@ -199,8 +199,6 @@ class RuleSpec:
     allow_shapes: tuple[str, ...] = ()
     deny_shapes: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
-    # Edge attribute values the rule starts from; a value no edge of its kinds carries is stale.
-    expect: tuple[tuple[str, tuple[str, ...]], ...] = ()
     classify: str = ""
     exactly_one: str = ""
     covers: tuple[CoverSpec, ...] = ()

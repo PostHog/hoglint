@@ -4,10 +4,10 @@ edges core makes there: a rule selects a setting's entries by its name (`MIDDLEW
 
 A string in a list that another setting takes in (`[*EXTRA]`, `A + B`, `B = A`, `{**A}`) belongs to
 that setting; one under a subscript target or a computed key belongs to the name and literal keys
-above it. A string in a condition is no value of a setting and gets no attr. A string whose
-setting cannot be told gets `unknown = "setting"`: one passed to a call that is no method of a
-plain name (`X["k"].append(...)`: the facts hold no text of the receiver), and one in a list that
-flows into two settings.
+above it; one passed to a method of a setting belongs to that setting. A string in a condition is
+no value of a setting and gets no attr. A string whose setting cannot be told gets
+`unknown = "setting"`: one passed to a call that is no method of a plain name (`X["k"].append(...)`:
+the facts hold no text of the receiver), and one in a list that flows into two settings.
 """
 
 from __future__ import annotations
@@ -37,13 +37,31 @@ NO_SETTING = ""
 class SettingPlaces:
     """Reads a string's setting from its syntax chain (`up`, innermost step first): the name the
     statement assigns or mutates, and the literal keys on the way down to the string, up to the
-    first key that is computed. A string in a condition is no value of a setting."""
+    first key that is computed. A string in a condition is no value of a setting, and a string
+    passed to a method of a setting (`x = MIDDLEWARE.index("...")`) belongs to that setting, not
+    to the name the result is assigned to."""
+
+    def __init__(self, settings: set[str]) -> None:
+        self.settings = settings
+
+    def method_of_setting(self, inner: list[str]) -> tuple[str, list[str], list[str]] | None:
+        """The setting whose method takes the string as an argument, innermost call first."""
+        for index, step in enumerate(inner):
+            if not step.startswith(("arg:", "kw:")):
+                continue
+            receiver = step.split(":", 2)[2].rpartition(".")[0]
+            if receiver in self.settings:
+                return receiver, [], inner[:index]
+        return None
 
     def target(self, steps: list[str], subscript: Subscript | None) -> tuple[str, list[str], list[str]] | None:
         """The statement's name, the literal keys of a subscript target, and the steps inside the
         statement; None when no name can be read (a call that is no method of a plain name)."""
         last = steps[-1]
         if last.startswith(ASSIGN_STEPS) or last.startswith("augassign:"):
+            lookup = self.method_of_setting(steps[:-1])
+            if lookup is not None:
+                return lookup
             name = last.rsplit(":", 1)[1]
             if name == SUBSCRIPT and subscript is not None:
                 return subscript.name, subscript.keys, steps[:-1]
@@ -106,6 +124,15 @@ class Statements:
     def __init__(self, record: Mapping[str, Any]) -> None:
         rows = [row for row in record.get("assigns", ()) if row["s"] == -1]
         self.starts = sorted(((row["l"], row["c"]), row["t"]) for row in rows)
+
+    @staticmethod
+    def names(record: Mapping[str, Any]) -> set[str]:
+        """The plain names the module assigns at module level: its settings."""
+        out: set[str] = set()
+        for row in record.get("assigns", ()):
+            if row["s"] == -1:
+                out.update(target for target in row["t"] if isinstance(target, str) and target.isidentifier())
+        return out
 
     def subscript_at(self, line: int, column: int) -> Subscript | None:
         """The subscript target of the last statement that starts before the string."""
@@ -183,9 +210,11 @@ class SettingNames:
     def produce(self) -> list[Refinement]:
         records = [(module, self.reader.tables.record(module) or {}) for module in self.modules]
         flows = SettingFlows()
+        settings: set[str] = set()
         for _, record in records:
             flows.read(record)
-        places = SettingPlaces()
+            settings.update(Statements.names(record))
+        places = SettingPlaces(settings)
         wanted: dict[tuple[str, int, int], str | None] = {}
         names: set[str] = set()
         for module, record in records:

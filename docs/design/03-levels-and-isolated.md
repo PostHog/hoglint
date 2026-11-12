@@ -40,13 +40,16 @@ Following their imports would add about 170 watched files.
 **The request path is a watched channel** (owner, Nov 12).
 A product module that core's request pipeline reaches by imports that run at import time is a watched file, like a receiver or a hook callback: it must be in the product's contract-check inputs.
 There is no list and no special level; a product keeps the skip for the code the pipeline does not reach.
-- The rule `request-path` is a `reach` with `through_denied`: it starts at the modules the Django settings name under the request-pipeline keys (middleware, authentication backends, the session engine, the default classes of the REST framework and its exception handler), and at the module of the class every API view inherits.
+- The rule `request-path` is a `reach` with `through_denied`: it starts at the modules the Django settings name, and at the module of the class every API view inherits.
+  Out of a settings module it follows every settings entry except those under a short list of keys that are not the per-request pipeline (app registration, task and shell imports, the root URL conf, the application entry points, static files, the API schema, logging, caches, and two login-flow keys that a single URL runs).
+  An entry whose setting cannot be named is an incomplete item; a key missing from the list is followed, so a stale list adds rows and never hides one.
+  A path string in a settings module is followed whatever function holds it.
   It follows module-level imports through core and on through product code, so every product module on a chain is a row.
 - Its rows are a list, not debt: the rule is advisory and keeps no ledger lines.
   `wiring-watched` requires the file of every module on each row's chain.
 - What the rule cannot tell, `wiring-watched` cannot tell either: an import on the path that does not resolve, or a settings entry whose setting cannot be named, is an incomplete item of `wiring-watched`.
   An advisory rule's own incomplete items do not reach a check's output, so they must be carried.
-- A seed written as a path that matches no file, and a request key that no settings edge carries, are reported (`config:stale-name`), never dropped.
+- A seed written as a path that matches no file is reported (`config:stale-name`), never dropped.
 
 Its limits, in plain words:
 1. An import inside a function is not followed.

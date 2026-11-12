@@ -202,60 +202,6 @@ rule = "config:stale-name"
 verdict = "incomplete"
 identity = ["posthog/api/view_base.py"]
 
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["AUTHENTICATION_BACKENDS"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_PAGINATION_CLASS"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_RENDERER_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.DEFAULT_THROTTLE_CLASSES"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["REST_FRAMEWORK.EXCEPTION_HANDLER"]
-
-[[row]]
-case = "WW09"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["SESSION_ENGINE"]
-
 # contracts-no-django
 
 [[row]]
@@ -833,6 +779,30 @@ verdict = "incomplete"
 identity = ["scripts.shapes|reference|products.inventory.backend.models.StockItem"]
 
 # no-product-lists-in-core
+
+[[row]]
+case = "WW14"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
+
+[[row]]
+case = "WW11"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
+
+[[row]]
+case = "WW12"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
+
+[[row]]
+case = "WW13"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
 
 [[row]]
 case = "DR04"
@@ -1508,10 +1478,22 @@ identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
 # request-path
 
 [[row]]
-case = "WW10"
+case = "WW11"
 rule = "request-path"
 verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.facade.lazy_gate"]
+identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
+
+[[row]]
+case = "WW12"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
+
+[[row]]
+case = "WW13"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
 
 [[row]]
 case = "WW01"
@@ -1548,6 +1530,12 @@ case = "WW05"
 rule = "request-path"
 verdict = "finding"
 identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
+
+[[row]]
+case = "WW10"
+rule = "request-path"
+verdict = "finding"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.facade.lazy_gate"]
 
 # reverse-accessor
 
@@ -1590,6 +1578,24 @@ verdict = "finding"
 identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
 
 # wiring-watched
+
+[[row]]
+case = "WW11"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/session_gate.py"]
+
+[[row]]
+case = "WW12"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/token_check.py"]
+
+[[row]]
+case = "WW13"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/validator.py"]
 
 [[row]]
 case = "DR01"

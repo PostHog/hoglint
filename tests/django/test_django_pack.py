@@ -135,6 +135,8 @@ SETTINGS = {
             setting_string(10, "billing.models", "arg:0:?.append expr"),
             setting_string(11, "shop.apps.ShopConfig", "dict:val dict:val:filters assign:LOGGING"),
             setting_string(12, "billing.models.Invoice", "cmp:left if-test"),
+            setting_string(13, "shop.apps.ShopConfig", "arg:0:MIDDLEWARE.index assign:at"),
+            setting_string(14, "shop.models.Order", "arg:1:env.str assign:SESSION_ENGINE"),
         ],
     }
 }
@@ -159,6 +161,8 @@ def test_a_settings_string_carries_its_setting_or_says_it_cannot_tell() -> None:
         10: "unknown:setting",
         11: "LOGGING.filters",
         12: "none",
+        13: "MIDDLEWARE",
+        14: "SESSION_ENGINE",
     }
 
 
