@@ -43,7 +43,7 @@ use self::symbols::{KindSets, SymbolFacts};
 use self::use_shape::UseShape;
 use self::value::{Truth, Value, any_of, render};
 use super::Link;
-use super::intern::{Interner, Sid};
+use super::intern::{EMPTY, Interner, Sid};
 use super::scope::{Res, ctx};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -567,12 +567,11 @@ impl Rules {
     /// graph modules its run-time imports of handed names come from. A type-only or test import
     /// hands nothing out, and a name with no graph module (third party) has no zone.
     fn handed(link: &mut Link, module_at: &FxHashMap<Sid, u32>) -> FxHashMap<Sid, Handed> {
-        let mut modules: Vec<(Sid, bool)> = link
+        let modules: Vec<(Sid, bool)> = link
             .hand_outs
             .iter()
             .map(|(module, found)| (*module, found.unread))
             .collect();
-        modules.sort_unstable();
         let mut out = FxHashMap::default();
         for (module, unread) in modules {
             let handed = if unread {
@@ -585,8 +584,8 @@ impl Rules {
         out
     }
 
-    /// The graph modules the run-time imports of an export module's handed names come from;
-    /// unknown when one of those imports did not resolve.
+    /// The graph modules the run-time imports of an export module's handed names come from, each
+    /// once, in first-seen order; unknown when one of those imports did not resolve.
     fn handed_from(link: &mut Link, module_at: &FxHashMap<Sid, u32>, module: Sid) -> Handed {
         let ids = match link.kind_sid("import") {
             Some(kind) => module_scope_imports(link, kind, module),
@@ -595,6 +594,7 @@ impl Rules {
         let found = &link.hand_outs[&module];
         let edges = &link.edges;
         let mut from = Vec::new();
+        let mut seen: FxHashSet<u32> = FxHashSet::default();
         for id in ids {
             if edges.seen_ctx(id) & (ctx::TYPE_ONLY | ctx::TEST) != 0 {
                 continue;
@@ -606,9 +606,15 @@ impl Rules {
                 return Handed::Unknown;
             }
             for target in edges.targets_of(id) {
-                let name = link.core.ent_text(*target);
-                if let Some(found) = longest_module(&link.core.it, module_at, &name) {
-                    from.push(found);
+                // A module target needs no prefix walk unless it is no graph module itself.
+                let owner = match module_at.get(&target.m) {
+                    Some(&at) if target.s == EMPTY => Some((target.m, at)),
+                    _ => longest_module(&link.core.it, module_at, &link.core.ent_text(*target)),
+                };
+                if let Some(owner) = owner
+                    && seen.insert(owner.1)
+                {
+                    from.push(owner);
                 }
             }
         }

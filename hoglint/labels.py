@@ -278,6 +278,7 @@ class Labeler:
         self.namespace_labels = Memo(self.label_namespace)
         self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
+        self.handed_zones = Memo(self.find_handed_zones)
         self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
         self.export_member = Memo(self.find_export_member)
         self.path_exports = Memo(self.find_path_exports)
@@ -716,7 +717,7 @@ class Labeler:
         imports = self.index.module_imports.get(module, [])
         return [edge for edge in imports if hand_out.unread or edge.attr("binds") in hand_out.handed]
 
-    def handed_zones(self, module: str) -> Value:
+    def find_handed_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
         import (`Graph.hand_outs`): none for a module that is no export or when no field is a
         zone, unknown when its `__all__` cannot be read, a handed import did not resolve or a
