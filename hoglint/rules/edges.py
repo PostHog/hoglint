@@ -10,6 +10,9 @@ from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContex
 from hoglint.selectors import Selector, Truth
 
 EXPORTED = Selector.parse("dst.exported")
+# Core's edge kinds of a name bound by an import, and of a later use of a bound name.
+IMPORT = "import"
+REFERENCE = "reference"
 
 
 # What an edge rule reads; an entrypoint rule reads the same.
@@ -42,17 +45,38 @@ class EdgePrimitive(EdgeRule):
 
 
 class EntrypointPrimitive(EdgeRule):
-    """Did a cross-package edge name a public surface? Judges the surface the caller wrote."""
+    """Did a cross-package edge name a public surface? Judges the surface the caller wrote.
+
+    With `uses_at_import = true` a coupling is judged once, at its import: a `reference` edge is
+    not seen when its module has an `import` edge the rule sees with the same surface. A use with
+    no such import (a name reached as an attribute of an imported module) is still seen.
+    """
 
     PRIMITIVE = MODE = "entrypoint"
     NATIVE_MODE = "judge"
     FOLDS = False
     CONFIRM = "row"
-    READS = EDGE_READS
+    READS = EDGE_READS | {"uses_at_import"}
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)
         self.default_allow = spec.deny is None and spec.allow is None and spec.require is None
+        self.uses_at_import = spec.uses_at_import
+        self.imported: frozenset[tuple[str, str]] | None = None
+
+    def imported_names(self) -> frozenset[tuple[str, str]]:
+        """(module, surface) of every import edge the rule sees."""
+        if self.imported is None:
+            edges = self.ctx.edges_of((IMPORT,))
+            self.imported = frozenset((edge.site.module, edge.surface) for edge in edges if EdgeRule.sees(self, edge))
+        return self.imported
+
+    def sees(self, edge: Edge) -> bool:
+        if not super().sees(edge):
+            return False
+        if not self.uses_at_import or edge.kind != REFERENCE:
+            return True
+        return (edge.site.module, edge.surface) not in self.imported_names()
 
     def violation(self, env: EdgeEnv) -> Truth:
         if self.default_allow:
@@ -67,6 +91,9 @@ class EntrypointPrimitive(EdgeRule):
 
     def verdict_plan(self) -> dict[str, Any]:
         return {"kind": "default-allow"} if self.default_allow else super().verdict_plan()
+
+    def plan(self) -> dict[str, Any]:
+        return {**super().plan(), "uses_at_import": self.uses_at_import}
 
 
 class UseShapePrimitive(EdgeRule):

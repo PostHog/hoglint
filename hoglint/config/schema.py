@@ -108,7 +108,7 @@ EDGE_SELECT_KEYS = frozenset({"kinds", "contexts", "view", "from", "select", "en
 PRODUCER_OPTION_KEYS = {"flow": ("syntax", "def-use"), "resolve_calls": ("bare-name", "import")}
 RULE_KEYS: dict[str, frozenset[str]] = {
     "edge": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"deny", "allow", "require", *PRODUCER_OPTION_KEYS},
-    "entrypoint": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"deny", "allow", "require"},
+    "entrypoint": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"deny", "allow", "require", "uses_at_import"},
     "use-shape": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"allow_shapes", "deny_shapes", "flow"},
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
@@ -889,6 +889,7 @@ class SchemaBuilder:
             registry=registry,
             exports=as_tuple(table.get("exports")),
             unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
+            uses_at_import=self.check_bool(f"{key}.uses_at_import", table.get("uses_at_import", False)),
             producer_options=tuple(producer_options),
             source=self.source(key),
         )

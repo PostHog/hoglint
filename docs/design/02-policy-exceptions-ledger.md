@@ -110,8 +110,10 @@ A move across products goes through move admission.
   The module-level default stayed after spike D.
   No later decision.
 - **The `public-surface` identity holds `edge.kind`** (architect, Nov 9, to restore the baseline's scan lines).
-  The findings triage of Nov 11 names this as the largest single cause of noise, a double count.
-  Not yet changed.
+  The findings triage of Nov 11 named the double count as the largest single cause of noise: one row at the import, one more at every later use of the name.
+  Since T3 the rule sets `uses_at_import`, so a later use of a name its module imports is judged once, at the import.
+  A use with no import of its own, such as a name reached as an attribute of an imported module, keeps its own row.
+  The identity still holds `edge.kind`.
 
 ## Sources
 

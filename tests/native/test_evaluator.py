@@ -498,6 +498,15 @@ CORNERS = {
         "identity": ["dst.symbol"],
         "ledger": False,
     },
+    "uses-judged-at-their-import": {
+        "primitive": "entrypoint",
+        "kinds": ["import", "reference"],
+        "select": "src.package != dst.package and dst.tier == 'product'",
+        "deny": "dst.tier == 'product'",
+        "uses_at_import": True,
+        "identity": ["dst.symbol", "src.module", "edge.kind"],
+        "ledger": False,
+    },
     "contexts-and-ordinals": {
         **EDGE,
         "deny": "edge.context subset_of ['prod', 'test']",
@@ -684,6 +693,35 @@ def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World)
     found = run_rows(primitive_of(spec)(native, spec).evaluate())
     assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
     assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
+
+
+@pytest.mark.parametrize(
+    ("uses_at_import", "references"),
+    [
+        (
+            False,
+            {
+                ("products.billing.backend.facade.api.charge", "products.alerts.backend.logic"),
+                ("products.billing.backend.models.Invoice", "core.a"),
+                ("products.billing.backend.models.Invoice", "core.b"),
+            },
+        ),
+        # A use of a name the module imports goes; a use through an imported module stays.
+        (True, {("products.billing.backend.facade.api.charge", "products.alerts.backend.logic")}),
+    ],
+)
+def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
+    world: World, uses_at_import: bool, references: set[tuple[str, str]]
+) -> None:
+    spec_table = {**CORNERS["uses-judged-at-their-import"], "uses_at_import": uses_at_import}
+    config = world.config(rule_table("uses", spec_table))
+    native, python = world.contexts(config)
+    spec = config.rules["uses"]
+    found = run_rows(primitive_of(spec)(native, spec).evaluate())
+    assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+    identities = {identity for identity, *_ in found}
+    assert {(symbol, module) for symbol, module, kind in identities if kind == "reference"} == references
+    assert ("products.billing.backend.models.Invoice", "core.a", "import") in identities
 
 
 class Refusing:
@@ -927,6 +965,7 @@ class Tables:
             "unless": lambda: self.selector(mode, "unless"),
             "flow": lambda: rng.choice(["def-use", "def-use", "syntax"]),
             "resolve_calls": lambda: rng.choice(["bare-name", "import"]),
+            "uses_at_import": lambda: rng.random() < 0.5,
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),

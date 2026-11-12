@@ -239,10 +239,11 @@ field-of-model           = ["edge.model", "edge.field"]
 
 [rules.public-surface]
 primitive     = "entrypoint"
-doc           = "Other packages name a product only through an export whose audience includes them."
+doc           = "Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import."
 kinds         = ["import", "reference", "dotted-path"]
 select        = "src.package != dst.package and dst.tier == 'product'"
 endpoint      = "surface"
+uses_at_import = true
 allow         = "dst.exported"
 on_unresolved = "finding"
 identity      = ["dst.symbol", "src.module", "edge.kind"]

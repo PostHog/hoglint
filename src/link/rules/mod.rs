@@ -133,6 +133,8 @@ pub struct Judged {
     /// What a signature rule adds.
     signature: Option<Signature>,
     verdict: Verdict,
+    /// Whether a reference edge is left to the import edge of its module with the same surface.
+    uses_at_import: bool,
 }
 
 /// How a judged rule decides a selected destination (`EdgeRule.violation` and its overrides).
@@ -601,6 +603,7 @@ impl Rules {
                     }),
                     VerdictPlan::Inventory => Verdict::Inventory,
                 },
+                uses_at_import: found.uses_at_import,
             }),
             ModePlan::Reach(found) => RuleKind::Reach(Reach {
                 edges: edges(&found.edges)?,
@@ -748,6 +751,9 @@ impl Rules {
         let mut ids = self.candidates(link, edges);
         if let Some(signature) = &rule.signature {
             ids = signature.seen(link, ids);
+        }
+        if rule.uses_at_import {
+            ids = uses_at_import(link, ids);
         }
         let rows = self.over_candidates(link, &ids, |cx, id, dsts, out| {
             let src = cx.src_endpoint(id);
@@ -990,6 +996,27 @@ fn known_kinds(link: &Link, names: &[String]) -> Option<Vec<Sid>> {
         }
     }
     (!out.is_empty() || names.is_empty()).then_some(out)
+}
+
+/// `EntrypointPrimitive.sees` past what every edge rule sees: `ids` less each reference edge
+/// whose module has an import edge among `ids` with the same surface. Keeps the order of `ids`.
+fn uses_at_import(link: &Link, ids: Vec<u32>) -> Vec<u32> {
+    let (Some(import), Some(reference)) = (link.kind_sid("import"), link.kind_sid("reference"))
+    else {
+        return ids;
+    };
+    let edges = &link.edges;
+    let imported: FxHashSet<(Sid, Sid)> = ids
+        .iter()
+        .filter(|&&id| edges.kind_of(id) == import)
+        .map(|&id| (link.module_of_edge(id), edges.surface_of(id)))
+        .collect();
+    ids.into_iter()
+        .filter(|&id| {
+            edges.kind_of(id) != reference
+                || !imported.contains(&(link.module_of_edge(id), edges.surface_of(id)))
+        })
+        .collect()
 }
 
 /// `rows`, grouped by edge in id order (`edges` lists each edge once), with the edges put in

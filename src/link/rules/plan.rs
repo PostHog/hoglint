@@ -249,6 +249,10 @@ pub struct JudgePlan {
     /// usable type apart (`SignaturePrimitive`).
     pub signature: Option<SignaturePlan>,
     pub verdict: VerdictPlan,
+    /// An entrypoint rule that judges a later use of an imported name at its import
+    /// (`EntrypointPrimitive.sees`).
+    #[serde(default)]
+    pub uses_at_import: bool,
 }
 
 #[derive(Deserialize)]

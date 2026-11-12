@@ -204,6 +204,7 @@ class RuleSpec:
     registry: tuple[str, ...] = ()  # layout: the registries whose slots it checks
     exports: tuple[str, ...] = ()
     unknown_types: tuple[str, ...] = ()
+    uses_at_import: bool = False  # entrypoint: a later use of an imported name is judged at its import
     producer_options: tuple[tuple[str, Any], ...] = ()
     source: str = ""
 

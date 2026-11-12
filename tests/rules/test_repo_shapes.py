@@ -6,6 +6,8 @@ import shutil
 import datetime
 from pathlib import Path
 
+import pytest
+
 from hoglint.config import load_config
 from hoglint.config.loader import PACKS_DIR
 from hoglint.model import Context, Graph, Resolution
@@ -230,3 +232,41 @@ def test_posthog_preset_gives_only_django_migration_files_the_migration_context(
         "posthog/models/team/team.py": False,
     }
     assert {path: globs.matches(path) for path in migrations} == migrations
+
+
+# (case, edges as (kind, source module, target, contexts), public-surface identities that stay)
+PUBLIC_SURFACE_CASES = [
+    (
+        "a later use of an imported name is judged at its import",
+        [
+            ("import", "posthog.api.thing", "products.billing.backend.logic.charge", (Context.PROD,)),
+            ("reference", "posthog.api.thing", "products.billing.backend.logic.charge", (Context.PROD,)),
+        ],
+        [("products.billing.backend.logic.charge", "posthog.api.thing", "import")],
+    ),
+    (
+        "a use through an imported module keeps its own row",
+        [
+            ("import", "posthog.api.thing", "products.billing.backend.logic", (Context.PROD,)),
+            ("reference", "posthog.api.thing", "products.billing.backend.logic.charge", (Context.PROD,)),
+        ],
+        [
+            ("products.billing.backend.logic", "posthog.api.thing", "import"),
+            ("products.billing.backend.logic.charge", "posthog.api.thing", "reference"),
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize(("case", "edges", "expected"), PUBLIC_SURFACE_CASES, ids=[c[0] for c in PUBLIC_SURFACE_CASES])
+def test_posthog_preset_public_surface(
+    tmp_path: Path,
+    case: str,
+    edges: list[tuple[str, str, str, tuple[Context, ...]]],
+    expected: list[tuple[str, ...]],
+) -> None:
+    builder = GraphBuilder().symbol("products.billing.backend.logic.charge", "def")
+    for kind, src, target, contexts in edges:
+        builder.module(src).edge(kind, src, target, contexts=contexts)
+    builder.module("products.billing.backend.logic")
+    assert found(run_shape(tmp_path, "posthog", builder.graph), "public-surface") == sorted(expected)
