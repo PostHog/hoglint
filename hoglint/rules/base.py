@@ -554,7 +554,9 @@ class EdgeEnv:
         if name == "ordinal":
             return Value.known(str(self.ctx.ordinal(edge)))
         raw = edge.attr(name)
-        return Value.known(raw) if raw else NONE
+        if raw:
+            return Value.known(raw)
+        return UNKNOWN if edge.attr_unknown(name) else NONE
 
     def endpoint_value(self, endpoint: Endpoint, name: str, root: str) -> Value:
         if name == "context":

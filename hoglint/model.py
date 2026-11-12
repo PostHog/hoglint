@@ -106,6 +106,10 @@ def flag(value: bool) -> str:
     return "true" if value else "false"
 
 
+# An edge attr that lists, comma-separated, the attrs its producer could not tell.
+UNKNOWN_ATTRS = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class Edge:
     """One coupling between a site and the code it names.
@@ -144,6 +148,11 @@ class Edge:
             if key == name:
                 return value
         return default
+
+    def attr_unknown(self, name: str) -> bool:
+        """Whether the producer could not tell attr `name`: it names it in the `unknown` attr, so
+        a rule reads it as unknown, never as absent."""
+        return name in self.attr(UNKNOWN_ATTRS).split(",")
 
     def run_id(self, ordinal: int) -> str:
         """Run-local id for witnesses and explain output. Never a ledger or exception key."""

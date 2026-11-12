@@ -31,6 +31,46 @@ from hoglint.rules.levels import LevelEvaluator, LevelResult
 UNREADABLE = "source:unreadable"
 READ_ERROR = ("status", "read_error")
 
+# Every literal path of an assignment that no file has, and every symbol an assignment or an export
+# names that no symbol has, is an incomplete item of this rule: the labels it sets are missing.
+STALE_NAMES = "config:stale-name"
+GLOB_CHARACTERS = frozenset("*?[{")
+
+
+class StaleNames:
+    """The names the config writes out in full, checked against the tree: the config loads before
+    the tree is read, so only a run can tell that one names nothing."""
+
+    def __init__(self, config: Config, graph: Graph, labeler: Labeler) -> None:
+        self.config = config
+        self.paths = set(graph.modules.values())
+        self.modules = graph.modules
+        self.facts = labeler.facts
+
+    def items(self) -> list[IncompleteItem]:
+        out: list[IncompleteItem] = []
+        for assignment in self.config.assigns:
+            for path in (*assignment.match, *assignment.except_paths):
+                if GLOB_CHARACTERS.isdisjoint(path) and path not in self.paths:
+                    out.append(self.item(path, f"{path} is named by {assignment.label()} but no file has it"))
+            if assignment.symbols is not None:
+                for name in assignment.symbols.names:
+                    if not self.known(name):
+                        out.append(self.item(name, f"{name} is named by {assignment.label()} but no symbol has it"))
+        for export in self.config.exports.values():
+            for name in export.symbols:
+                if not self.known(name):
+                    reason = f"{name} is named by [exports.{export.name}]  ({export.source}) but no symbol has it"
+                    out.append(self.item(name, reason))
+        return out
+
+    def known(self, name: str) -> bool:
+        return self.facts.has(name) or name in self.modules
+
+    @staticmethod
+    def item(key: str, reason: str) -> IncompleteItem:
+        return IncompleteItem(STALE_NAMES, key, reason)
+
 
 # Every rule type, one per mode, in the order the test generator draws them.
 RULE_TYPES: tuple[type[RuleType], ...] = (
@@ -211,6 +251,11 @@ class Engine:
             run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))
             run.incomplete.append(IncompleteItem(run.spec.id, reason, reason, (), IncompleteCause.EXTRACTOR))
             ctx.results[run.spec.id] = run
+        stale = StaleNames(self.config, self.graph, self.labeler).items()
+        if stale:
+            run = RuleRun(RuleSpec(STALE_NAMES, "layout", ledger=False))
+            run.incomplete.extend(stale)
+            ctx.results[STALE_NAMES] = run
         unread = sorted({edge.site.path for edge in self.graph.by_kind("unparsed") if READ_ERROR in edge.attrs})
         if unread:
             run = RuleRun(RuleSpec(UNREADABLE, "layout", ledger=False))

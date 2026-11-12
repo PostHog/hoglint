@@ -110,6 +110,53 @@ def test_signal_edges_resolve_class_and_label_senders_and_keep_the_rest_unresolv
     assert {e.attr("signal") for e in edges.values()} == {"django.db.models.signals.post_save"}
 
 
+def setting_string(line: int, value: str, up: str) -> list:
+    return [-1, -1, line, 0, 0, value, "", up]
+
+
+SETTINGS = {
+    "proj/settings.py": {
+        "assigns": [
+            assign("INSTALLED_APPS", {"list": [{"s": "shop"}, {"s": "billing"}, {"s": "ghost"}]}, 1),
+            assign("_EXTRA", {"o": "IfExp"}, 2),
+            assign("MIDDLEWARE", {"list": [{"s": "billing.models.Invoice"}, {"star": "_EXTRA"}]}, 3),
+            assign("_TWICE", {"list": [{"s": "shop.models"}]}, 5),
+            assign("A", {"list": [{"star": "_TWICE"}]}, 6),
+            assign("B", {"bin": "+", "l": "_TWICE", "r": {"list": []}}, 7),
+        ],
+        "strs": [
+            setting_string(2, "shop.models.Order", "elt:list ifexp:body assign:_EXTRA"),
+            setting_string(3, "billing.models.Invoice", "elt:list assign:MIDDLEWARE"),
+            setting_string(4, "shop.apps.ShopConfig", "arg:1:MIDDLEWARE.insert expr"),
+            setting_string(5, "shop.models", "elt:list assign:_TWICE"),
+            setting_string(8, "shop.apps", "elt:list dict:val:DEFAULT_AUTHENTICATION_CLASSES assign:REST_FRAMEWORK"),
+            setting_string(9, "shop.models.Order", "dict:val:h assign:[]"),
+            setting_string(10, "billing.models", "arg:0:?.append expr"),
+        ],
+    }
+}
+
+
+def test_a_settings_string_carries_its_setting_or_says_it_cannot_tell() -> None:
+    graph = FactRepo(SETTINGS).graph()
+
+    found = {
+        e.site.line: e.attr("setting") or f"unknown:{e.attr('unknown')}"
+        for e in graph.by_kind("dotted-path")
+        if e.site.module == "proj.settings"
+    }
+
+    assert found == {
+        2: "MIDDLEWARE",
+        3: "MIDDLEWARE",
+        4: "MIDDLEWARE",
+        5: "unknown:setting",
+        8: "REST_FRAMEWORK.DEFAULT_AUTHENTICATION_CLASSES",
+        9: "unknown:setting",
+        10: "unknown:setting",
+    }
+
+
 def test_installs_edges_see_imports_only_where_they_are_bound_follow_aliases_and_skip_class_hooks() -> None:
     graph = FactRepo(HOOKS).graph(hooks=("billing.hooks.register_refund_hook", "billing.hooks.register_payload"))
 

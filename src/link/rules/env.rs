@@ -43,6 +43,10 @@ pub struct Endpoint<'a> {
     pub scope: &'a str,
 }
 
+/// The edge attr that lists, comma-separated, the attrs its producer could not tell
+/// (`model.UNKNOWN_ATTRS`).
+const UNKNOWN_ATTRS: &str = "unknown";
+
 const UNRESOLVED: Endpoint<'static> = Endpoint {
     module: None,
     at: None,
@@ -313,6 +317,17 @@ impl<'a> Cx<'a> {
         attr_sid(self.link, id, name).map_or("", |value| self.text(value))
     }
 
+    /// Whether the producer could not tell attr `name` of edge `id`: it names it in the edge's
+    /// `unknown` attr (`Edge.attr_unknown`).
+    pub fn attr_unknown(&self, id: u32, name: Option<Sid>) -> bool {
+        let Some(name) = name else {
+            return false;
+        };
+        let listed = self.attr(id, self.link.core.it.get(UNKNOWN_ATTRS));
+        let name = self.text(name);
+        listed.split(',').any(|found| found == name)
+    }
+
     pub fn cell(&self, cell: &'a Cell) -> Value<'a> {
         match cell {
             Cell::Unknown => Value::Unknown,
@@ -544,7 +559,10 @@ impl<'a> Env<'a> {
             EdgeField::Context => Value::Contexts(edges.seen_ctx(id)),
             EdgeField::Ordinal => Value::Text(Cow::Owned(cx.rules.ordinal(id).to_string())),
             EdgeField::Label => self.label(id),
-            EdgeField::Attr(name) => Value::text_or_none(cx.attr(id, name)),
+            EdgeField::Attr(name) => match cx.attr(id, name) {
+                "" if cx.attr_unknown(id, name) => Value::Unknown,
+                raw => Value::text_or_none(raw),
+            },
         }
     }
 

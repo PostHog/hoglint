@@ -2,6 +2,212 @@
 # row, each tied to a case of CASES.md. Refresh it with `bin/model-repo --refresh`, then review
 # the diff: a row with case "?" is new and must get a case (or the tree has a bug), a row that
 # went is a verdict that changed. See docs/design/12-how-work-is-done.md, "The model repository".
+# config:stale-name
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["ee/settings.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/api/rest_router.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/cache_utils.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/ee_urls.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/execute_temporal_workflow.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/reset_test_clickhouse_db.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/setup_test_environment.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/start_temporal_workflow.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/product_urls.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/ai/__init__.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/health_checks/registry.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/schedule.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/aeo/backend/management/commands/seed_aeo_prompts.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/error_tracking/backend/embedding.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/error_tracking/backend/indexed_embedding.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/error_tracking/backend/sql.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/signals/backend/management/commands/seed_inbox_data.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/signals/backend/management/commands/seed_refund_test_data.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/tasks/backend/management/commands/bake_dev_stack_image.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/tasks/backend/management/commands/demo_mts_example.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/visual_review/backend/management/commands/seed_snapshot_history.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/warehouse_sources/backend/facade/_access_control_base.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/warehouse_sources/backend/models.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/warehouse_sources/sources/sdk/testing.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["products/web_analytics/backend/management/commands/generate_aeo_content.py"]
+
 # contracts-no-django
 
 [[row]]
@@ -1272,12 +1478,6 @@ identity = ["products.legacy.backend.management.commands.sync_widgets", "product
 # wiring-watched
 
 [[row]]
-case = "WW01"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/gatekeeper/backend/logic/decisions.py"]
-
-[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"
@@ -1318,6 +1518,12 @@ case = "UI02"
 rule = "wiring-watched"
 verdict = "incomplete"
 identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
+
+[[row]]
+case = "WW01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/logic/decisions.py"]
 
 
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each

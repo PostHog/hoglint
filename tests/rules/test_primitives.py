@@ -766,6 +766,56 @@ def test_exceptions_allow_and_stale_or_expired_entries_are_reported(tmp_path: Pa
     assert result.exit_code() == 1  # the stale entry fails; the expired one only reports
 
 
+SETTING_ENTRIES = """
+[rules.middleware]
+primitive = "edge"
+kinds = ["dotted-path"]
+select = "edge.setting == 'MIDDLEWARE'"
+deny = "true"
+identity = ["dst.module"]
+ledger = false
+"""
+
+
+def test_an_attr_its_producer_could_not_tell_reads_unknown_not_absent(tmp_path: Path) -> None:
+    graph = (
+        base_graph()
+        .edge("dotted-path", "core.api", "products.billing.logic", attrs=(("setting", "MIDDLEWARE"),))
+        .edge("dotted-path", "core.api", "products.billing.models", attrs=(("unknown", "setting"),))
+        .edge("dotted-path", "core.api", "products.alerts.logic")
+        .graph
+    )
+    run_ = run(tmp_path, SETTING_ENTRIES, graph).runs["middleware"]
+    assert [f.identity for f in run_.findings] == [("products.billing.logic",)]
+    assert [item.reason for item in run_.incomplete] == ["selection reads unknown edge.setting"]
+
+
+STALE_NAMES = """
+[fields.crosses]
+type = "bool"
+on = "symbol"
+
+[[assign]]
+match = ["core/api.py", "core/gone.py", "core/*.py"]
+set = { tier = "core" }
+
+[[assign]]
+symbols = { names = ["products.billing.models.Invoice", "core.api.Gone"] }
+set = { crosses = true }
+"""
+
+
+def test_an_assignment_that_names_no_file_or_symbol_is_incomplete_not_silent(tmp_path: Path) -> None:
+    result = run(tmp_path, STALE_NAMES, base_graph().graph)
+    assert [(item.key, item.reason) for item in result.runs["config:stale-name"].incomplete] == [
+        (
+            "core/gone.py",
+            "core/gone.py is named by [[assign]] core/api.py, core/gone.py, core/*.py  (hoglint.toml) but no file has it",
+        ),
+        ("core.api.Gone", "core.api.Gone is named by [[assign]] symbols  (hoglint.toml) but no symbol has it"),
+    ]
+
+
 @pytest.mark.parametrize(
     "entry, problem",
     [
