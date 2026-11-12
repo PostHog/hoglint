@@ -161,8 +161,8 @@ class Hit:
 @dataclass(frozen=True, slots=True)
 class LazyEntry:
     """One name of a PEP 562 lazy map, at the module-level dict assignment it is read from.
-    `module` is the module path as written (a relative one anchored) when no module of the tree
-    answers for it."""
+    `module` is the first path the map gives it (a relative one anchored) when no module of the
+    tree answers for it."""
 
     name: str
     module: str
@@ -259,11 +259,12 @@ class Tables:
         ancestors (nearest first), in that order. A relative value (`.foo`) is anchored at the
         package, as a relative import is.
 
-        Second, every entry: those a module answers for, then the others with the module path as
-        written (a relative one anchored). Only an entry that reads as a name and a dotted path
-        counts, and a path of one name or a relative path only in a dict where another entry
-        resolves: another dict of text or names is no lazy map. An entry sits at the dict it is
-        read from: the last one whose entry for the name counts."""
+        Second, every entry: those a module answers for, then the others with the first path the
+        map gives them: under a prefix the prefix and the value, else the value as written (a
+        relative one anchored). Only an entry whose value reads as a dotted path counts, and a
+        value of one name or a relative value only in a dict where another entry resolves:
+        another dict of text or names is no lazy map. An entry sits at the dict it is read from:
+        the last one whose entry for the name counts."""
         package = module if is_package else module.rpartition(".")[0]
         parts = package.split(".")
         ancestors = [".".join(parts[:end]) for end in range(len(parts), 0, -1)]
@@ -305,13 +306,13 @@ class Tables:
                 elif not IDENTIFIER.fullmatch(key["s"]):
                     continue
                 elif anchored is not None:
-                    unresolved.append((key["s"], anchored, True))
+                    unresolved.append((key["s"], anchored, False))
                 elif is_module_path(text):
-                    unresolved.append((key["s"], text, False))
-            for name, path, was_relative in unresolved:
+                    unresolved.append((key["s"], candidates[0], "." in text))
+            for name, path, dotted in unresolved:
                 # A bare name or a relative path may be any text; it reads as a module only in a
                 # dict that is a lazy map.
-                if resolves or ("." in path and not was_relative):
+                if resolves or dotted:
                     missing[name] = path
                     missing_at[name] = (row["l"], row["c"])
         entries = [LazyEntry(name, found, *found_at[name]) for name, found in out.items()]

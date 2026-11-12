@@ -272,6 +272,35 @@ def test_a_module_level_import_in_a_block_is_handed_out(
     assert findings_of(out["native"], "export-shape") == expected
 
 
+# A lazy name that does not resolve is named by the full path its map gives it, the base its values
+# are joined to included, whether its module is missing or only its name. Read without the base, a
+# missing module under a head no repo file has would read as third-party, with no row at all.
+UNRESOLVED_LAZY_CASES = {
+    "its module is missing": ("sub.gone", {}, f"{SHOP}.sub.gone.Gone"),
+    "its module is missing, and a repo package has the value's head": (
+        "sub.gone",
+        {"sub/__init__.py": ""},
+        f"{SHOP}.sub.gone.Gone",
+    ),
+    "its name is missing": ("logic", {}, f"{SHOP}.logic.Gone"),
+}
+
+
+@pytest.mark.parametrize("case", UNRESOLVED_LAZY_CASES)
+def test_an_unresolved_lazy_name_is_named_by_its_full_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    value, extra, path = UNRESOLVED_LAZY_CASES[case]
+    lazy = (
+        f'_BASE = "{SHOP}."\n_LAZY = {{"Order": "logic", "Gone": "{value}"}}\n\n\n'
+        "def __getattr__(name):\n    return _BASE + _LAZY[name]\n"
+    )
+    files = {"products/shop/backend/logic.py": LOGIC, "products/shop/backend/facade/lazy.py": lazy, **extra}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    unresolved = [row for row in findings_of(out["native"], "export-shape") if row[-1] == "unresolved-import"]
+    assert unresolved == [[path, f"{SHOP}.facade.lazy", "unresolved-import"]]
+
+
 def test_a_bare_string_names_one_dataclass_decorator_in_both_engines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -160,8 +160,8 @@ impl<V: Copy> OrderedMap<V> {
 }
 
 /// One name of a PEP 562 lazy map, at the module-level dict assignment it is read from
-/// (`symbols.LazyEntry`). `module` is the module path as written (a relative one anchored) when no
-/// module of the tree answers for it.
+/// (`symbols.LazyEntry`). `module` is the first path the map gives it (a relative one anchored)
+/// when no module of the tree answers for it.
 #[derive(Clone, Copy)]
 pub struct LazyEntry {
     pub name: Sid,
@@ -569,11 +569,12 @@ impl Core {
     /// or a module under the package or one of its ancestors (nearest first). A relative value
     /// (`.foo`) is anchored at the package, as a relative import is.
     ///
-    /// Second, every entry: those a module answers for, then the others with the module path as
-    /// written (a relative one anchored). Only an entry that reads as a name and a dotted path
-    /// counts, and a path of one name or a relative path only in a dict where another entry
-    /// resolves: another dict of text or names is no lazy map. An entry sits at the dict it is
-    /// read from: the last one whose entry for the name counts.
+    /// Second, every entry: those a module answers for, then the others with the first path the
+    /// map gives them: under a prefix the prefix and the value, else the value as written (a
+    /// relative one anchored). Only an entry whose value reads as a dotted path counts, and a
+    /// value of one name or a relative value only in a dict where another entry resolves:
+    /// another dict of text or names is no lazy map. An entry sits at the dict it is read from:
+    /// the last one whose entry for the name counts.
     fn lazy_map(
         &mut self,
         module: Sid,
@@ -642,6 +643,7 @@ impl Core {
                         candidates.push(self.it.join(ancestor, *value));
                     }
                 }
+                let first = candidates.first().copied();
                 if let Some(found) = candidates.into_iter().find(|&c| self.exists(c)) {
                     out.insert(*key, found);
                     found_at.insert(*key, (row.l, row.c));
@@ -649,15 +651,17 @@ impl Core {
                 } else if !is_identifier(self.it.s(*key)) {
                     continue;
                 } else if let Some(path) = anchored {
-                    unresolved.push((*key, path, true));
-                } else if is_module_path(&tail) {
-                    unresolved.push((*key, *value, false));
+                    unresolved.push((*key, path, false));
+                } else if let Some(path) = first
+                    && is_module_path(&tail)
+                {
+                    unresolved.push((*key, path, tail.contains('.')));
                 }
             }
-            for (name, path, relative) in unresolved {
+            for (name, path, dotted) in unresolved {
                 // A bare name or a relative path may be any text; it reads as a module only in a
                 // dict that is a lazy map.
-                if resolves || (self.it.s(path).contains('.') && !relative) {
+                if resolves || dotted {
                     missing.insert(name, path);
                     missing_at.insert(name, (row.l, row.c));
                 }
