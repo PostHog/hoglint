@@ -26,11 +26,11 @@ use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
-    Core, RUN_TIME_MODULE_FLAGS, absolute_import, lazy_sites, module_level, unresolved_surface,
+    Core, RUN_TIME_MODULE_FLAGS, absolute_import, module_level, unresolved_surface,
 };
 use super::scope::Scope;
 use super::trace::Kind;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 pub const ALL_CLAUSE: &str = "all";
 pub const ALIAS_CLAUSE: &str = "alias";
@@ -367,29 +367,19 @@ impl HandedOut {
                 });
             }
         }
-        // The lazy map, then the entries no module answers for.
-        let lazy: Vec<(Sid, Sid)> = match core.table(scope.module) {
-            Some(table) => {
-                let table = core.table_at(table);
-                table.lazy.iter().chain(table.lazy_missing.iter()).collect()
-            }
+        let entries = match core.table(scope.module) {
+            Some(table) => core.table_at(table).lazy_entries.clone(),
             None => Vec::new(),
         };
-        let sites = if lazy.is_empty() {
-            FxHashMap::default()
-        } else {
-            lazy_sites(&facts.files[scope.file as usize].assigns)
-        };
-        for (name, module) in lazy {
-            let target = core.it.join(module, name);
-            if seen.insert((name, target)) {
-                let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
+        for entry in entries {
+            let target = core.it.join(entry.module, entry.name);
+            if seen.insert((entry.name, target)) {
                 out.push(Handed {
-                    bound: name,
+                    bound: entry.name,
                     target,
                     clause: LAZY_CLAUSE,
-                    line,
-                    col,
+                    line: entry.line,
+                    col: entry.col,
                 });
             }
         }

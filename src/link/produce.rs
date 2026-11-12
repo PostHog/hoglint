@@ -6,8 +6,8 @@ use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
-    Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, absolute_import, lazy_sites,
-    module_assigns, unresolved_surface,
+    Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, absolute_import, module_assigns,
+    unresolved_surface,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -907,36 +907,30 @@ impl Producers<'_> {
             return;
         };
         let table = self.core.table_at(table);
-        if table.record != Some(file) {
+        if table.record != Some(file) || table.lazy_entries.is_empty() {
             return;
         }
-        let lazy: Vec<(Sid, Sid)> = table.lazy.iter().collect();
-        let missing: Vec<(Sid, Sid)> = table.lazy_missing.iter().collect();
-        if lazy.is_empty() && missing.is_empty() {
-            return;
-        }
-        let facts = self.core.facts.clone();
-        let sites = lazy_sites(&facts.files[file as usize].assigns);
+        let entries = table.lazy_entries.clone();
         let ctx = self.core.contexts(&mut self.scopes[owner], FUNC, -1);
-        for (name, source) in lazy {
-            let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
-            let (surface, hit, loaded) = Self::from_target(self.core, source, name);
+        for entry in entries {
+            let (name, line, col) = (entry.name, entry.line, entry.col);
+            if !entry.found {
+                // No module answers for it, so the name stays bound to an edge that does not resolve.
+                let k = &self.settings.k;
+                let attrs = [(k.binds, name), (k.lazy, k.one)];
+                let surface = self.core.it.join(entry.module, name);
+                self.push(
+                    IMPORT, owner, -1, line, col, ctx, surface, UNRESOLVED, EMPTY, &attrs,
+                );
+                continue;
+            }
+            let (surface, hit, loaded) = Self::from_target(self.core, entry.module, name);
             let mut attrs = self.bound_attrs(name, loaded);
             let k = &self.settings.k;
             attrs.push((k.lazy, k.one));
             let resolved = self.core.classify(surface, hit);
             self.push(
                 IMPORT, owner, -1, line, col, ctx, surface, resolved, EMPTY, &attrs,
-            );
-        }
-        // No module answers for these, so the name stays bound to an edge that does not resolve.
-        for (name, written) in missing {
-            let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
-            let k = &self.settings.k;
-            let attrs = [(k.binds, name), (k.lazy, k.one)];
-            let surface = self.core.it.join(written, name);
-            self.push(
-                IMPORT, owner, -1, line, col, ctx, surface, UNRESOLVED, EMPTY, &attrs,
             );
         }
     }
