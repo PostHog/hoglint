@@ -735,8 +735,37 @@ fn fields_by_class(it: &Interner, assigns: &[Assign]) -> FxHashMap<i32, Vec<u32>
     fields
 }
 
-/// An alias expansion row of a slot, as written once: (surface, whole position, attrs).
-type AliasRow = (Sid, bool, Vec<(Sid, Sid)>);
+/// What tells a slot's rows of one name apart (`DeclarationProducer.markers`), as the attrs are
+/// made of it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Marks {
+    /// The `alias` attr: expanded, too deep, or EMPTY for none.
+    alias: Sid,
+    /// Whether the name is given arguments.
+    subscripted: bool,
+    /// The generic it is an argument of, as it resolves.
+    argument_of: Option<Sid>,
+}
+
+impl Marks {
+    /// The attrs, in the order every row writes them.
+    fn attrs(self, k: &Keys) -> Vec<(Sid, Sid)> {
+        let mut out = Vec::new();
+        if self.alias != EMPTY {
+            out.push((k.alias, self.alias));
+        }
+        if self.subscripted {
+            out.push((k.subscripted, k.one));
+        }
+        if let Some(surface) = self.argument_of {
+            out.push((k.argument_of, surface));
+        }
+        out
+    }
+}
+
+/// An alias expansion row of a slot, as written once: (surface, whole position, marks).
+type AliasRow = (Sid, bool, Marks);
 
 /// A field of a dataclass's generated `__init__`: its assign row (file and index), where its
 /// names are looked up, and whether the class itself declares it (else a base does).
@@ -1019,33 +1048,31 @@ impl Producers<'_> {
     }
 
     /// The `argument_of` attr of a type argument: the generic it is given to, as it resolves.
-    fn argument_marker(&mut self, at: SlotLookup, argument_of: Sid, extra: &mut Vec<(Sid, Sid)>) {
+    fn argument_marker(&mut self, at: SlotLookup, argument_of: Sid) -> Option<Sid> {
         if argument_of == EMPTY {
-            return;
+            return None;
         }
-        let surface = self.lookup_at(at, argument_of).surface;
-        extra.push((self.settings.k.argument_of, surface));
+        Some(self.lookup_at(at, argument_of).surface)
     }
 
-    /// The attrs that tell a slot's rows of one name apart (`DeclarationProducer.markers`): an
-    /// expanded alias, a generic given arguments, and the generic it is an argument of.
+    /// What tells a slot's rows of one name apart (`DeclarationProducer.markers`): an expanded
+    /// alias, a generic given arguments, and the generic it is an argument of.
     fn markers(
         &mut self,
         expanded: bool,
         subscripted: bool,
         at: SlotLookup,
         argument_of: Sid,
-    ) -> Vec<(Sid, Sid)> {
-        let k = &self.settings.k;
-        let mut out = Vec::new();
-        if expanded {
-            out.push((k.alias, k.expanded));
+    ) -> Marks {
+        Marks {
+            alias: if expanded {
+                self.settings.k.expanded
+            } else {
+                EMPTY
+            },
+            subscripted,
+            argument_of: self.argument_marker(at, argument_of),
         }
-        if subscripted {
-            out.push((k.subscripted, k.one));
-        }
-        self.argument_marker(at, argument_of, &mut out);
-        out
     }
 
     /// A dotted name, looked up where a slot's names are.
@@ -1354,7 +1381,8 @@ impl Producers<'_> {
             if !builtin {
                 let resolved = core.classify_lookup(found);
                 let expanded = expansion.as_ref().is_some_and(|items| !items.is_empty());
-                let extra = self.markers(expanded, named.subscripted, lookup, named.argument_of);
+                let marks = self.markers(expanded, named.subscripted, lookup, named.argument_of);
+                let extra = marks.attrs(&self.settings.k);
                 self.push_slot(rows, found.surface, resolved, slot, position, &extra);
             }
             let Some(expansion) = expansion else {
@@ -1366,17 +1394,23 @@ impl Producers<'_> {
                 let k = &self.settings.k;
                 let position = if whole { k.whole } else { k.nested };
                 if item.too_deep {
-                    let marker = vec![(k.alias, k.too_deep)];
-                    if written.insert((item.value, whole, marker.clone())) {
+                    let marks = Marks {
+                        alias: k.too_deep,
+                        subscripted: false,
+                        argument_of: None,
+                    };
+                    if written.insert((item.value, whole, marks)) {
+                        let marker = marks.attrs(k);
                         self.push_slot(rows, item.value, UNRESOLVED, slot, position, &marker);
                     }
                     continue;
                 }
                 let expanded = self.expanded_in(&expansion, item, inner);
-                let extra = self.markers(expanded, item.subscripted, item.lookup, item.argument_of);
-                if !written.insert((inner.surface, whole, extra.clone())) {
+                let marks = self.markers(expanded, item.subscripted, item.lookup, item.argument_of);
+                if !written.insert((inner.surface, whole, marks)) {
                     continue;
                 }
+                let extra = marks.attrs(&self.settings.k);
                 let resolved = self.core.classify_lookup(inner);
                 self.push_slot(rows, inner.surface, resolved, slot, position, &extra);
             }
