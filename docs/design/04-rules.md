@@ -76,6 +76,19 @@ A rule selects on labels, never on a folder alone:
 
 **Rule states today:** enforced (blocks new debt; existing debt is in the ledger) and `off` (added by the architect, Nov 11).
 
+**A reach stops at a denied module, unless it says otherwise** (Nov 12).
+A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.
+With `through_denied = true` it goes on through a denied module, so every denied module on a chain past the first is reported too, each with its chain.
+
+**An attribute a producer could not tell reads unknown** (Nov 12).
+An edge's `unknown` attribute lists, comma-separated, the attributes its producer could not tell.
+A rule reads each of them as `unknown`, never as a missing value.
+The Django pack uses it for `setting`, the name of the setting a string of a settings module sits in.
+
+**A name the config writes out in full must exist** (Nov 12).
+A literal path of an assignment that no file has, and a symbol an assignment or an export names that no symbol has, are incomplete items of `config:stale-name`.
+The config loads before the tree is read, so only a run can tell.
+
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
 Never `ignore` (architect default, Nov 4).

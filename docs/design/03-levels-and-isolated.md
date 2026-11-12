@@ -1,7 +1,7 @@
 # 3. Levels and the Isolated test skip
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 12, 2026.
 
 Background: in the PostHog monorepo, a product on the Isolated rung skips other products' test suites when only that product changes.
 The skip is sound only if no coupling is missed.
@@ -36,6 +36,29 @@ The rung of the time was read from a baseline file, which is circular.
 Following their imports would add about 170 watched files.
 
 **New producers that feed the skip** (owner, Nov 9): signal edges, installed callbacks, mock patch targets, dynamic imports.
+
+**The request path is a watched channel** (owner, Nov 12).
+A product module that core's request pipeline reaches by imports that run at import time is a watched file, like a receiver or a hook callback: it must be in the product's contract-check inputs.
+There is no list and no special level; a product keeps the skip for the code the pipeline does not reach.
+- The rule `request-path` is a `reach` with `through_denied`: it starts at the modules the Django settings name under the request-pipeline keys (middleware, authentication backends, the session engine, the default classes of the REST framework and its exception handler), and at the module of the class every API view inherits.
+  It follows module-level imports through core and on through product code, so every product module on a chain is a row.
+- Its rows are a list, not debt: the rule is advisory and keeps no ledger lines.
+  `wiring-watched` requires the file of every module on each row's chain.
+- What the rule cannot tell, `wiring-watched` cannot tell either: an import on the path that does not resolve, or a settings entry whose setting cannot be named, is an incomplete item of `wiring-watched`.
+  An advisory rule's own incomplete items do not reach a check's output, so they must be carried.
+- A seed written as a path that matches no file is reported (`config:stale-name`), never dropped.
+
+Its limits, in plain words:
+1. An import inside a function is not followed.
+   A decision that core reaches only through such an import is not on the path.
+2. The `__init__.py` of a package above a reached module is not followed, although Python runs it.
+3. A name is followed to the module that defines it, not to the module the code wrote.
+   A facade that only re-exports the name is skipped, together with what that facade imports for its own functions.
+
+**A wiring location without `__init__.py` is watched through its files** (Nov 12).
+Each module file directly inside the directory stands for it, as `__init__.py` stands for a package: `wiring-watched` requires each of them.
+Files further down and the tests under it are not asked for.
+A directory with no file directly inside falls back to every file under it.
 
 ## Why
 
