@@ -24,7 +24,7 @@ from hoglint.config.model import (
     ProviderSpec,
     RegistrySpec,
 )
-from hoglint.config.schema import canonical
+from hoglint.config.schema import ENTITY_FIELDS, canonical
 from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
 from hoglint.model import Context, Edge, Graph, Resolution
@@ -34,9 +34,7 @@ from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Tr
 REGISTRY_FIELD = "registry"
 HANDED_ZONES = "handed_zones"
 # Entity attributes the labeler answers itself; every other name is a declared field.
-BUILTIN_ENTITY_NAMES = frozenset(
-    {"module", "subject", "symbol", "path", "name", "decl", "kind", "registry", "lifecycle", HANDED_ZONES}
-)
+BUILTIN_ENTITY_NAMES = frozenset({*ENTITY_FIELDS, "kind", "subject"})
 MODULE_LEVEL_BUILTINS = frozenset({"module", "path", "external", "registry", "lifecycle", HANDED_ZONES})
 # A type-only or test import hands nothing out (the export primitive's default exclude).
 NOT_HANDED_CONTEXTS = frozenset({Context.TYPE_ONLY, Context.TEST})

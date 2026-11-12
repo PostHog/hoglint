@@ -138,14 +138,16 @@ KEYWORDS = frozenset({"and", "or", "not", "in", "startswith", "subset_of", "true
 # config, so both engines judge every selector that loads.
 MAX_DEPTH = 32
 
+# One dotted part of a name: a condition's whole name, or a segment of `src.zone`.
+NAME_PART = r"[A-Za-z_][A-Za-z0-9_\-]*"
 TOKEN_RE = re.compile(
-    r"""
+    rf"""
     \s*(?:
       (?P<string>'[^']*'|"[^"]*")
     | (?P<number>-?\d+)
     | (?P<op>==|!=)
     | (?P<punct>[()\[\],])
-    | (?P<name>[A-Za-z_][A-Za-z0-9_\-]*(?:\.[A-Za-z_][A-Za-z0-9_\-]*)*)
+    | (?P<name>{NAME_PART}(?:\.{NAME_PART})*)
     )
     """,
     re.VERBOSE,

@@ -41,6 +41,7 @@ from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
 from hoglint.selectors import (
     KEYWORDS,
+    NAME_PART,
     Catalog,
     Condition,
     FieldInfo,
@@ -200,9 +201,8 @@ ENDPOINT_FIELDS: dict[str, FieldInfo] = {
 }
 BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
 CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles", "conditions")
-# A condition's name is one word: with no dot it never reads as `src.x`, `dst.x` or `edge.x`.
-CONDITION_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]*")
-SELECTOR_ROOTS = frozenset({"src", "dst", "edge"})
+# The roots of an edge selector's names (`src.x`, `dst.x`, `edge.x`).
+SELECTOR_ROOTS = ("src", "dst", "edge")
 
 
 def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
@@ -308,7 +308,7 @@ class SchemaBuilder:
             "ordinal": FieldInfo(FieldType.INT),
         }
 
-    def edge_catalog(self, roots: tuple[str, ...] = ("src", "dst", "edge")) -> Catalog:
+    def edge_catalog(self, roots: tuple[str, ...] = SELECTOR_ROOTS) -> Catalog:
         all_roots = {
             "src": self.endpoint_fields(dst=False),
             "dst": self.endpoint_fields(dst=True),
@@ -414,7 +414,8 @@ class SchemaBuilder:
         taken = {*self.raw.get("fields", {}), *BUILTIN_NAMES, *KEYWORDS, *SELECTOR_ROOTS}
         for name, text in table.items():
             key = f"conditions.{name}"
-            if CONDITION_NAME_RE.fullmatch(name) is None:
+            # One word: with no dot it never reads as `src.x`, `dst.x` or `edge.x`.
+            if re.fullmatch(NAME_PART, name) is None:
                 self.fail(key, "a condition's name is one word of letters, digits, `_` and `-`")
                 continue
             if name in taken:
