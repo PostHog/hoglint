@@ -30,6 +30,8 @@ from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules import engine
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project, subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
+from hoglint.rules.exports import ExportPrimitive
+from hoglint.selectors import Selector
 
 from native.require import native_module
 
@@ -1974,3 +1976,17 @@ def test_a_provider_field_read_in_each_role_gets_its_column(
         assert level_differences(world, config, monkeypatch) == []
     else:
         assert differences(world, rules, base) == []
+
+
+# An export rule's slot owners are selectors it compiles itself: a provider field one reads gets its
+# column even where no signature rule reads that field in its own selection.
+def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    owner = Selector.parse("src.team == '@team-billing'").node
+    monkeypatch.setattr(ExportPrimitive, "signature_scopes", lambda self: [owner])
+    export = {"primitive": "export", "slots": "shape", "identity": ["src.module", "dst.symbol", "edge.label"]}
+    rules = rule_table("read", {**export, "ledger": False}) + rule_table("seer", SIGNATURE)
+    config = world.config(rules, PROVIDED)
+    native, _ = world.contexts(config)
+    reads = native_module().Rules.reads(native.native.native.link, json.dumps(native.plan.data()))
+    assert reads == ["team"]
+    assert differences(world, rules, PROVIDED) == []

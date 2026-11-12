@@ -1080,7 +1080,7 @@ impl Rule {
             }
             RuleKind::Cycle(rule) => rule.edges.staged.parts.iter().collect(),
             RuleKind::Entities(rule) => rule.nodes(),
-            RuleKind::Export(rule) => rule.start.iter().collect(),
+            RuleKind::Export(rule) => rule.nodes(),
             RuleKind::Coverage(_) => Vec::new(),
         }
     }

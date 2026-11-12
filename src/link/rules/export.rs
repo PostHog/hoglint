@@ -141,6 +141,14 @@ impl ExportRule {
         }
     }
 
+    /// The selectors it compiles: its `from` and its slot owners.
+    pub fn nodes(&self) -> Vec<&Node> {
+        self.start
+            .iter()
+            .chain(self.slot_owners.iter().flatten())
+            .collect()
+    }
+
     /// The fields its identity columns read of a module or a symbol.
     pub fn refs(&self, out: &mut Vec<Ref>) {
         for column in &self.columns {
