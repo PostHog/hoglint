@@ -428,9 +428,9 @@ class CoveragePrimitive(EntityRule):
         """Why a cover needs a path, as a finding's message names it: the words of both engines."""
         return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
 
-    def everywhere(self, key: str, reason: str, subjects: tuple[str, ...] = ()) -> None:
+    def everywhere(self, key: str, reason: str) -> None:
         """An item about no one module: with no subject it blocks every level group."""
-        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, subjects))
+        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason))
 
     def not_run(self, cover: CoverSpec) -> None:
         self.everywhere(f"rules.{cover.rule}", f"rule {cover.rule} did not run before this coverage rule")
@@ -447,7 +447,8 @@ class CoveragePrimitive(EntityRule):
                 continue
             for item in run.incomplete:
                 reason = f"rule {cover.rule} cannot tell: {item.reason}"
-                self.everywhere(f"rules.{cover.rule}|{item.key}", reason, item.subjects)
+                key = f"rules.{cover.rule}|{item.key}"
+                self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, item.subjects))
 
     def from_rule(self, cover: CoverSpec, out: dict[str, tuple[str, str | None]]) -> None:
         run = self.ctx.results.get(cover.rule)
