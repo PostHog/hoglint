@@ -1,0 +1,65 @@
+# How a selector reads a side that has no value. Both engines read this table:
+# tests/rules/test_selectors.py (Python) and src/link/rules/selector.rs (Rust).
+#
+# Columns: operator, left operand, right operand, truth, truth under `not`.
+# Operands:
+#   field:none     a field outside its domain (a known none)
+#   field:unknown  a field inside its domain that nothing sets
+#   field:<x>      a field with the known text <x>
+#   set:<x>,<y>    a set field with these items
+#   lit:none       the keyword `none`
+#   lit:<x>        the string literal '<x>'
+#   list:<x>,<y>   a list literal
+#   -              no right operand (a bare operand)
+#
+# The reason: a rule that denies must not pass an edge because a label is missing. So a missing
+# side differs from every value, two missing sides are equal, and unknown stays unknown.
+
+==          field:none     field:none     true     false
+==          field:none     field:a        false    true
+==          field:a        field:none     false    true
+==          field:none     lit:none       true     false
+==          field:a        lit:none       false    true
+==          field:none     lit:a          false    true
+==          field:unknown  field:none     unknown  unknown
+==          field:unknown  lit:none       unknown  unknown
+==          field:unknown  field:a        unknown  unknown
+
+!=          field:none     field:none     false    true
+!=          field:none     field:a        true     false
+!=          field:a        field:none     true     false
+!=          field:none     lit:none       false    true
+!=          field:a        lit:none       true     false
+!=          field:none     lit:a          true     false
+!=          field:unknown  field:none     unknown  unknown
+!=          field:unknown  lit:none       unknown  unknown
+
+in          field:none     list:a,b       false    true
+in          field:a        list:a,b       true     false
+in          field:a        field:none     false    true
+in          field:none     field:none     false    true
+in          field:unknown  list:a,b       unknown  unknown
+in          field:none     field:unknown  unknown  unknown
+
+not-in      field:none     list:a,b       true     false
+not-in      field:a        field:none     true     false
+not-in      field:none     field:none     true     false
+not-in      field:unknown  list:a         unknown  unknown
+
+startswith  field:a        lit:a          true     false
+startswith  field:none     lit:a          false    true
+startswith  field:a        lit:none       false    true
+startswith  field:none     field:none     false    true
+startswith  field:unknown  lit:a          unknown  unknown
+
+# A missing side reads as the empty set, so it is a subset of every set.
+subset_of   set:a          set:a,b        true     false
+subset_of   field:none     set:a,b        true     false
+subset_of   set:a          field:none     false    true
+subset_of   field:none     field:none     true     false
+subset_of   field:unknown  field:none     unknown  unknown
+
+bare        field:a        -              true     false
+bare        field:none     -              false    true
+bare        field:unknown  -              unknown  unknown
+bare        lit:none       -              false    true

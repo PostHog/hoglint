@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import itertools
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -69,6 +71,65 @@ def resolve(ref: Ref) -> Value:
 )
 def test_three_valued_evaluation(source: str, expected: Truth) -> None:
     assert Selector.parse(source).evaluate(resolve) is expected
+
+
+MISSING_SIDE_TABLE = Path(__file__).with_name("missing_side.txt")
+
+
+@dataclass(frozen=True, slots=True)
+class MissingSideCase:
+    """One row of missing_side.txt: a comparison with a side that may have no value."""
+
+    op: str
+    left: str
+    right: str
+    truth: Truth
+    negated: Truth
+
+    @staticmethod
+    def read_all() -> list[MissingSideCase]:
+        cases = []
+        for line in MISSING_SIDE_TABLE.read_text().splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            op, left, right, truth, negated = line.split()
+            cases.append(MissingSideCase(op, left, right, Truth(truth), Truth(negated)))
+        return cases
+
+    @staticmethod
+    def operand_text(spec: str, ref: str) -> str:
+        kind, _, rest = spec.partition(":")
+        if kind in ("field", "set"):
+            return ref
+        if kind == "list":
+            return "[" + ", ".join(f"'{item}'" for item in rest.split(",")) + "]"
+        return "none" if rest == "none" else f"'{rest}'"
+
+    @staticmethod
+    def operand_value(spec: str) -> Value:
+        kind, _, rest = spec.partition(":")
+        if kind == "set":
+            return Value.known(frozenset(rest.split(",")))
+        if rest == "none":
+            return NONE
+        if rest == "unknown":
+            return UNKNOWN
+        return Value.known(rest)
+
+    def text(self) -> str:
+        left = self.operand_text(self.left, "src.left")
+        if self.op == "bare":
+            return left
+        return f"{left} {self.op.replace('-', ' ')} {self.operand_text(self.right, 'dst.right')}"
+
+    def resolve(self, ref: Ref) -> Value:
+        return self.operand_value(self.left if str(ref) == "src.left" else self.right)
+
+
+@pytest.mark.parametrize("case", MissingSideCase.read_all(), ids=lambda case: case.text())
+def test_a_missing_side_differs_from_every_value_and_equals_another_missing_side(case: MissingSideCase) -> None:
+    assert Selector.parse(case.text()).evaluate(case.resolve) is case.truth
+    assert Selector.parse(f"not ({case.text()})").evaluate(case.resolve) is case.negated
 
 
 def test_a_selector_judged_per_label_class_answers_like_evaluating_each_entity() -> None:

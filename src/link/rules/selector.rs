@@ -318,3 +318,97 @@ impl Compiler<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The table both engines read (`tests/rules/test_selectors.py` reads it too).
+    const MISSING_SIDE: &str = include_str!("../../../tests/rules/missing_side.txt");
+
+    /// The two sides of one row: `src.left` and `dst.right`.
+    struct Sides {
+        left: String,
+        right: String,
+    }
+
+    fn side_value(spec: &str) -> Value<'_> {
+        let (kind, rest) = spec.split_once(':').unwrap_or((spec, ""));
+        match (kind, rest) {
+            ("set", items) => Value::Set(items.split(',').collect()),
+            (_, "none") => Value::None,
+            (_, "unknown") => Value::Unknown,
+            (_, text) => Value::text(text),
+        }
+    }
+
+    impl<'a> Resolve<'a> for &'a Sides {
+        fn resolve(&self, field: Ref) -> Value<'a> {
+            let sides: &'a Sides = self;
+            match field {
+                Ref::Src(_) => side_value(&sides.left),
+                _ => side_value(&sides.right),
+            }
+        }
+    }
+
+    fn operand(spec: &str, field: Ref) -> Operand {
+        let (kind, rest) = spec.split_once(':').unwrap_or((spec, ""));
+        match (kind, rest) {
+            ("field" | "set", _) => Operand::Ref(field),
+            ("list", items) => Operand::List(items.split(',').map(str::to_string).collect()),
+            (_, "none") => Operand::None,
+            (_, text) => Operand::Text(text.to_string()),
+        }
+    }
+
+    fn truth(name: &str) -> Truth {
+        match name {
+            "true" => Truth::True,
+            "false" => Truth::False,
+            _ => Truth::Unknown,
+        }
+    }
+
+    #[test]
+    fn a_missing_side_differs_from_every_value_and_equals_another_missing_side() {
+        let left_field = Ref::Src(EndField::Field(0, None));
+        let right_field = Ref::Dst(EndField::Field(1, None));
+        let mut rows = 0;
+        for line in MISSING_SIDE.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let [op, left, right, expected, negated] =
+                line.split_whitespace().collect::<Vec<_>>()[..]
+            else {
+                panic!("a row needs five columns: {line}");
+            };
+            let left_operand = operand(left, left_field);
+            let node = match op {
+                "bare" => Node::Bare(left_operand),
+                _ => {
+                    let op = match op {
+                        "==" => Op::Equals,
+                        "!=" => Op::NotEquals,
+                        "in" => Op::In,
+                        "not-in" => Op::NotIn,
+                        "startswith" => Op::Starts,
+                        "subset_of" => Op::Subset,
+                        other => panic!("an operator the table does not know: {other}"),
+                    };
+                    Node::Compare(op, left_operand, operand(right, right_field))
+                }
+            };
+            let sides = Sides {
+                left: left.to_string(),
+                right: right.to_string(),
+            };
+            assert_eq!(evaluate(&node, &&sides), truth(expected), "{line}");
+            let not = Node::Not(Box::new(node));
+            assert_eq!(evaluate(&not, &&sides), truth(negated), "not {line}");
+            rows += 1;
+        }
+        assert!(rows > 30, "the table has {rows} rows");
+    }
+}
