@@ -456,10 +456,10 @@ growth_key = ["dst.module", "src.package"]
 
 [rules.facade-no-drf]
 primitive  = "edge"
-doc        = "A facade stays framework-free: no DRF, no django.http, no presentation."
+doc        = "A facade stays framework-free: no DRF, no django.http, no presentation. The viewsets and serializers under backend/api/ that have not moved to presentation/ yet count as presentation."
 view       = "zones"
 from       = "facade-code"
-deny       = "dst.external == 'rest_framework' or dst.module startswith 'django.http' or dst.zone == 'presentation'"
+deny       = "dst.external == 'rest_framework' or dst.module startswith 'django.http' or dst.zone in ['presentation', 'api']"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 

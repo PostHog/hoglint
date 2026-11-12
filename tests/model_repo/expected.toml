@@ -41,6 +41,12 @@ verdict = "unknown"
 identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
 
 [[row]]
+case = "FD06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.serializers", "export-shape(class)"]
+
+[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -109,6 +115,18 @@ case = "CR03"
 rule = "facade-no-drf"
 verdict = "unknown"
 identity = ["products.catalog.backend.facade.api", "?"]
+
+[[row]]
+case = "FD04"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.api", "products.catalog.backend.api.serializers"]
+
+[[row]]
+case = "FD06"
+rule = "facade-no-drf"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.serializers", "products.catalog.backend.api.serializers"]
 
 [[row]]
 case = "FD01"
@@ -1279,13 +1297,6 @@ decision = "B10; Nov 12: the rule gets the edge it needs or goes off"
 rule = "atomic-outside-views"
 verdict = "finding"
 match = ["products.legacy.backend.presentation.views"]
-
-[[wanted]]
-case = "FD04"
-decision = "Nov 12, a known loss: facade-no-drf sees a lazily handed-out name"
-rule = "facade-no-drf"
-verdict = "finding"
-match = ["products.catalog.backend.facade.api", "serializers"]
 
 [[wanted]]
 case = "RS02"

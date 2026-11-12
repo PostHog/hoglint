@@ -99,7 +99,8 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |
 | `FD02` | `products/legacy/backend/facade/api.py` | A facade imports a DRF exception | facade-no-drf finding | |
 | `FD03` | `products/legacy/backend/facade/api.py` | A facade imports its own presentation | facade-no-drf finding | |
-| `FD04` | `products/catalog/backend/facade/api.py` | A facade lazily re-exports a DRF serializer | export-shape finding; facade-no-drf clean | The lazy edge reaches the rule, but the serializer sits in zone `api`, which the rule does not deny; an eager import of it is clean too. Open: a preset question (wanted) |
+| `FD04` | `products/catalog/backend/facade/api.py` | A facade lazily re-exports a DRF serializer from `backend/api/` | facade-no-drf finding; export-shape finding | The lazy edge is judged like any import; `backend/api/` counts as presentation for this rule (Nov 12) |
+| `FD06` | `products/catalog/backend/facade/serializers.py` | A facade eagerly re-exports the same serializer | facade-no-drf finding; export-shape finding | The eager neighbor of `FD04`: the same verdict |
 | `FD05` | `products/inventory/backend/facade/api.py`, `products/catalog/backend/facade/testing.py` | A facade that raises its own errors; `facade/testing.py` that imports DRF | clean | `facade-code` leaves fixtures out |
 | `ME01` | `products/catalog/backend/logic/errors.py`, `products/catalog/backend/facade/errors.py` | Methods that return or take another product's model on a handed-out exception, pydantic model and Protocol defined outside the facade | public-surface finding for the model import; the methods clean | Narrow form decided, not built (wanted) |
 | `WK01` | `products/catalog/backend/logic/views_out.py`, `products/catalog/backend/facade/handout.py` | A pydantic class defined in the product's logic, handed out, with a field typed as another product's model | facade-signature finding at the facade | Fields of a handed-out class count where it is defined (D63) |
@@ -275,6 +276,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | facade-no-drf | `django.http` in a facade | `FD01` |
 | facade-no-drf | DRF in a facade | `FD02` |
 | facade-no-drf | A facade imports its own presentation | `FD03` |
+| facade-no-drf | A facade imports a serializer from `backend/api/` | `FD04`, `FD06` |
 | facade-no-drf | An unresolved type-only import routed here | None |
 | presentation-uses-facade | An import through a facade re-export | `PF01` (clean on the facade itself) |
 | presentation-uses-facade | The same whose origin is a model | None |
