@@ -21,9 +21,16 @@ pub struct Vocabulary {
     pub meta_class_attrs: Vec<String>,
     pub write_methods: Vec<String>,
     pub subquery_calls: Vec<String>,
+    /// Methods after which a chain yields rows of values, never an instance.
+    pub value_methods: Vec<String>,
+    /// The keywords a signal call takes its sending model by.
+    pub sender_keywords: Vec<String>,
     /// Prefixes of an escape step that ends an annotation, and of one that assigns a local.
     pub annotation_terminals: Vec<String>,
     pub local_assign_steps: Vec<String>,
+    /// The steps of a union of classes, and the prefixes of a step that assigns it to a name.
+    pub union_steps: Vec<String>,
+    pub alias_assign_steps: Vec<String>,
 }
 
 /// Whether `names` holds `name`.
@@ -260,6 +267,20 @@ impl Vocabulary {
         false
     }
 
+    /// An operand of a union of classes that is assigned to a name: `Target = A | B`.
+    fn in_type_alias(&self, position: &UsePosition) -> bool {
+        let unions = position
+            .up
+            .iter()
+            .take_while(|step| holds(&self.union_steps, step))
+            .count();
+        unions > 0
+            && position
+                .up
+                .get(unions)
+                .is_some_and(|step| starts_with_any(step, &self.alias_assign_steps))
+    }
+
     fn manager_chain(&self, methods: &[&str], enclosing: Option<&str>) -> Shape {
         let terminal = methods.last().copied().unwrap_or("manager");
         if methods.contains(&"select_for_update") {
@@ -281,6 +302,12 @@ impl Vocabulary {
         }
         if holds(&self.scalar_terminals, terminal) {
             return Shape::with("scalar-chain", terminal);
+        }
+        if let Some(values) = methods
+            .iter()
+            .find(|method| holds(&self.value_methods, method))
+        {
+            return Shape::with("scalar-chain", *values);
         }
         if enclosing.is_some_and(|call| call.ends_with("Field")) {
             return Shape::of("drf-field-queryset");
@@ -328,6 +355,9 @@ impl Vocabulary {
         if self.in_annotation(position) {
             return Ok(Shape::of("annotation"));
         }
+        if position.trailers.is_empty() && self.in_type_alias(position) {
+            return Ok(Shape::of("annotation"));
+        }
         let (methods, rest) = position.methods();
         if !methods.is_empty() {
             return Ok(self.attribute_chain(&methods, enclosing_call(position, rest)?));
@@ -352,6 +382,11 @@ impl Vocabulary {
                 return Ok(Shape::of("isinstance"));
             }
             return Ok(Shape::with("passed-as-class", name));
+        }
+        if let Some(rest) = step.strip_prefix("kw:")
+            && holds(&self.sender_keywords, rest.split(':').next().unwrap_or(""))
+        {
+            return Ok(Shape::of("sender"));
         }
         if let Some(targets) = step.strip_prefix("assign:")
             && targets.split(',').any(|target| target == "model")
@@ -403,8 +438,12 @@ mod tests {
             meta_class_attrs: names(&["model"]),
             write_methods: names(&["update"]),
             subquery_calls: names(&["Exists"]),
-            annotation_terminals: names(&["param-ann:", "returns", "annotation"]),
+            value_methods: names(&["values", "values_list"]),
+            sender_keywords: names(&["sender"]),
+            annotation_terminals: names(&["param-ann:", "returns", "annotation", "typealias:"]),
             local_assign_steps: names(&["assign:", "annassign:", "walrus:"]),
+            union_steps: names(&["bin:|"]),
+            alias_assign_steps: names(&["assign:", "annassign:"]),
         }
     }
 
@@ -435,6 +474,20 @@ mod tests {
             (".objects", "?Call.func", "instance-many(manager)"),
             (".Meta", "expr", "nested-class-attr(Meta)"),
             (".pk", "expr", "other(Attribute:pk)"),
+            (
+                ".objects.filter().values_list().first()",
+                "return",
+                "scalar-chain(values_list)",
+            ),
+            (
+                ".objects.values().filter().update()",
+                "expr",
+                "write(update)",
+            ),
+            ("", "kw:sender:receiver", "sender"),
+            ("", "bin:| bin:| assign:Target", "annotation"),
+            ("", "bin:| typealias:Target", "annotation"),
+            ("", "bin:| arg:1:isinstance", "other(BinOp)"),
         ];
         for (chain, up, expected) in cases {
             assert_eq!(

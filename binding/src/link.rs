@@ -486,8 +486,12 @@ impl Link {
             meta_class_attrs: names("meta_class_attrs")?,
             write_methods: names("write_methods")?,
             subquery_calls: names("subquery_calls")?,
+            value_methods: names("value_methods")?,
+            sender_keywords: names("sender_keywords")?,
             annotation_terminals: names("annotation_terminals")?,
             local_assign_steps: names("local_assign_steps")?,
+            union_steps: names("union_steps")?,
+            alias_assign_steps: names("alias_assign_steps")?,
         };
         let models: Vec<Ent> = models.iter().map(|(m, s)| self.ent(m, s)).collect();
         let uses = self.inner.django_uses(&files, &models, &vocabulary);

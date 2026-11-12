@@ -26,6 +26,8 @@ MANAGERS = frozenset(
     }
 )
 SCALAR_TERMINALS = frozenset({"values", "values_list", "count", "exists", "aggregate"})
+# After one of these a chain yields rows of values, never an instance, whatever follows.
+VALUE_METHODS = frozenset({"values", "values_list"})
 SINGLE_TERMINALS = frozenset({"get", "first", "last", "earliest", "latest"})
 META_MANAGERS = frozenset({"default_manager", "base_manager"})
 META_CLASS_ATTRS = frozenset({"model", "concrete_model", "proxy_for_model"})
@@ -45,6 +47,8 @@ WRITE_METHODS = frozenset(
     }
 )
 SUBQUERY_CALLS = frozenset({"Exists", "Subquery"})
+# The keyword a signal's `connect`, `send` and `receiver` take the sending model by.
+SENDER_KEYWORDS = frozenset({"sender"})
 
 # AST class of the parent named by the first escape step, for `other(<class>)`.
 STEP_PARENT = {
@@ -100,7 +104,10 @@ STEP_PARENT = {
     "typealias-target": "TypeAlias",
     "typeparam": "TypeVar",
 }
-ANNOTATION_TERMINALS = ("param-ann:", "returns", "annotation")
+ANNOTATION_TERMINALS = ("param-ann:", "returns", "annotation", "typealias:")
+# A union of classes assigned to a name (`Target = A | B`) is a type alias.
+UNION_STEPS = ("bin:|",)
+ALIAS_ASSIGN_STEPS = ("assign:", "annassign:")
 LOCAL_ASSIGN_STEPS = ("assign:", "annassign:", "walrus:")
 
 # The names the link's shape code reads (src/link/packs/django/shapes.rs `Vocabulary`), handed
@@ -113,8 +120,12 @@ VOCABULARY: dict[str, list[str]] = {
     "meta_class_attrs": sorted(META_CLASS_ATTRS),
     "write_methods": sorted(WRITE_METHODS),
     "subquery_calls": sorted(SUBQUERY_CALLS),
+    "value_methods": sorted(VALUE_METHODS),
+    "sender_keywords": sorted(SENDER_KEYWORDS),
     "annotation_terminals": list(ANNOTATION_TERMINALS),
     "local_assign_steps": list(LOCAL_ASSIGN_STEPS),
+    "union_steps": list(UNION_STEPS),
+    "alias_assign_steps": list(ALIAS_ASSIGN_STEPS),
 }
 
 
@@ -205,6 +216,16 @@ class OrmShapes:
             return False
         return False
 
+    @staticmethod
+    def in_type_alias(position: UsePosition) -> bool:
+        """An operand of a union of classes that is assigned to a name: `Target = A | B`."""
+        steps = list(position.up)
+        unions = 0
+        while steps and steps[0] in UNION_STEPS:
+            steps.pop(0)
+            unions += 1
+        return unions > 0 and bool(steps) and steps[0].startswith(ALIAS_ASSIGN_STEPS)
+
     def manager_chain(self, methods: list[str], enclosing: str | None) -> Shape:
         terminal = methods[-1] if methods else "manager"
         if "select_for_update" in methods:
@@ -218,6 +239,9 @@ class OrmShapes:
             return Shape("subquery", enclosing or "")
         if terminal in SCALAR_TERMINALS:
             return Shape("scalar-chain", terminal)
+        values = [m for m in methods if m in VALUE_METHODS]
+        if values:
+            return Shape("scalar-chain", values[0])
         if enclosing is not None and enclosing.endswith("Field"):
             return Shape("drf-field-queryset")
         if terminal in SINGLE_TERMINALS:
@@ -245,6 +269,8 @@ class OrmShapes:
     def classify(self, position: UsePosition) -> Shape:
         if self.in_annotation(position):
             return Shape("annotation")
+        if not position.trailers and self.in_type_alias(position):
+            return Shape("annotation")
         methods, rest = position.methods()
         if methods:
             return self.attribute_chain(methods, self.enclosing_call(position, rest))
@@ -256,6 +282,8 @@ class OrmShapes:
             callee = step.split(":", 2)[2]
             name = "?" if callee.startswith("?") else callee.rsplit(".", 1)[-1]
             return Shape("isinstance") if name == "isinstance" else Shape("passed-as-class", name)
+        if step.startswith("kw:") and step.split(":")[1] in SENDER_KEYWORDS:
+            return Shape("sender")
         if step.startswith("assign:") and "model" in step[len("assign:") :].split(","):
             return Shape("drf-model-serializer")
         if step.startswith(("kw:model:", "classkw:model")) and step.split(":")[1] == "model":

@@ -20,6 +20,16 @@ from hoglint.packs.django.shapes import OrmShapes, Shape, UsePosition
         ("", "arg:1:isinstance", Shape("isinstance")),
         ("", "arg:0:cast", Shape("passed-as-class", "cast")),
         ("()", "assign:obj", Shape("construct")),
+        (".objects.filter().values_list().first()", "return", Shape("scalar-chain", "values_list")),
+        (".objects.values().order_by().distinct()", "assign:rows", Shape("scalar-chain", "values")),
+        (".objects.values().filter().update()", "expr", Shape("write", "update")),
+        ("", "kw:sender:receiver", Shape("sender")),
+        ("", "kw:sender:post_save.connect", Shape("sender")),
+        ("", "bin:| bin:| assign:Target", Shape("annotation")),
+        ("", "bin:| annassign:Target", Shape("annotation")),
+        ("", "typealias:Target", Shape("annotation")),
+        ("", "bin:| arg:1:isinstance", Shape("other", "BinOp")),
+        ("", "bin:+ assign:total", Shape("other", "BinOp")),
     ],
 )
 def test_classify(chain: str, up: str, expected: Shape) -> None:

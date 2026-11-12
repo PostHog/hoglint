@@ -66,6 +66,12 @@ SHAPES = [
     ("Order", "", "return"),
     ("Order", "", "comp:elt"),
     ("Order", "", "?Call.func"),
+    ("Order", ".objects.filter().values_list().first()", "return"),
+    ("Order", ".objects.values().filter().update()", "expr"),
+    ("Order", "", "kw:sender:receiver"),
+    ("Order", "", "bin:| bin:| assign:Target"),
+    ("Order", "", "bin:| typealias:Target"),
+    ("Order", "", "bin:| arg:1:isinstance"),
     ("Invoice", ".objects.filter()", "await assign:qs"),
     ("Invoice", ".objects.all()", "assign:later"),
 ]

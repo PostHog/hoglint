@@ -7,7 +7,7 @@ edge_kinds = ["model-label", "relation", "reverse-accessor", "migration-parent",
 use_shapes = [
   "_meta", "annotation", "construct", "drf-field-queryset", "drf-model-serializer", "exception", "get_model",
   "in-collection", "instance-many", "instance-single", "isinstance", "lock", "nested-class-attr", "passed-as-class",
-  "prefetch", "scalar-chain", "subquery", "type-use", "write",
+  "prefetch", "scalar-chain", "sender", "subquery", "type-use", "write",
 ]
 sections = ["django"]
 
