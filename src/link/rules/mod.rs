@@ -31,7 +31,7 @@ use self::env::{Cx, Endpoint, Env, Role};
 use self::export::{
     ExportInputs, ExportRow, ExportRule, Shape, Walk, binds_handed, module_scope_imports,
 };
-use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels, Namespace};
+use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
     CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan,
     check_columns,
@@ -505,7 +505,7 @@ impl Rules {
             .build()
             .map_err(|error| error.to_string())?;
         let endpoint_keys = Self::endpoint_keys(link);
-        let handed = Self::handed(link, &module_at, &labels.namespaces);
+        let handed = Self::handed(link, &module_at, &labels);
         let zone_field =
             (0..labels.fields.len()).find(|&field| labels.fields[field].kind == FieldKind::Zone);
         let mut out = Rules {
@@ -586,11 +586,11 @@ impl Rules {
 
     /// What each export module hands out by import, read once (`Labeler.handed_zones`): the
     /// modules its run-time imports of handed names come from. A type-only or test import hands
-    /// nothing out, and a name with no module (third party) has no zone.
+    /// nothing out, and a third-party name has no zone.
     fn handed(
         link: &mut Link,
         module_at: &FxHashMap<Sid, u32>,
-        namespaces: &FxHashMap<Box<str>, Namespace>,
+        labels: &Labels,
     ) -> FxHashMap<Sid, Handed> {
         let modules: Vec<(Sid, bool)> = link
             .hand_outs
@@ -602,7 +602,7 @@ impl Rules {
             let handed = if unread {
                 Handed::Unknown
             } else {
-                Self::handed_from(link, module_at, namespaces, module)
+                Self::handed_from(link, module_at, labels, module)
             };
             out.insert(module, handed);
         }
@@ -610,11 +610,12 @@ impl Rules {
     }
 
     /// The modules the run-time imports of an export module's handed names come from, each once,
-    /// in first-seen order; unknown when one of those imports did not resolve.
+    /// in first-seen order; unknown when one of those imports did not resolve, or a first-party
+    /// name no module answers for.
     fn handed_from(
         link: &mut Link,
         module_at: &FxHashMap<Sid, u32>,
-        namespaces: &FxHashMap<Box<str>, Namespace>,
+        labels: &Labels,
         module: Sid,
     ) -> Handed {
         let ids = match link.kind_sid("import") {
@@ -623,7 +624,8 @@ impl Rules {
         };
         let found = &link.hand_outs[&module];
         let edges = &link.edges;
-        let mut targets: Vec<String> = Vec::new();
+        // Each target's name, and whether its import is third party.
+        let mut targets: Vec<(String, bool)> = Vec::new();
         for id in ids {
             if edges.seen_ctx(id) & (ctx::TYPE_ONLY | ctx::TEST) != 0 {
                 continue;
@@ -631,18 +633,22 @@ impl Rules {
             if !binds_handed(link, found, id) {
                 continue;
             }
-            if edges.res_of(id) == Res::Unresolved {
+            let res = edges.res_of(id);
+            if res == Res::Unresolved {
                 return Handed::Unknown;
             }
             for target in edges.targets_of(id) {
-                targets.push(link.core.ent_text(*target));
+                targets.push((link.core.ent_text(*target), res == Res::External));
             }
         }
         let mut from = Vec::new();
         let mut seen: FxHashSet<Sid> = FxHashSet::default();
-        for target in targets {
-            let Some(owner) = Self::handed_owner(link, module_at, namespaces, &target) else {
-                continue;
+        for (target, external) in targets {
+            let Some(owner) = Self::handed_owner(link, module_at, labels, &target) else {
+                if external {
+                    continue;
+                }
+                return Handed::Unknown;
             };
             if seen.insert(owner.0) {
                 from.push(owner);
@@ -652,11 +658,12 @@ impl Rules {
     }
 
     /// The longest dotted prefix of a handed name that is a graph module or a namespace
-    /// directory (`Labeler.handed_owner`), with the graph module's place.
+    /// directory (`Labeler.handed_owner`), with the graph module's place. None when there is
+    /// none, or when a directory two graph modules place apart comes first.
     fn handed_owner(
         link: &mut Link,
         module_at: &FxHashMap<Sid, u32>,
-        namespaces: &FxHashMap<Box<str>, Namespace>,
+        labels: &Labels,
         name: &str,
     ) -> Option<(Sid, Option<u32>)> {
         let mut head = name;
@@ -666,8 +673,11 @@ impl Rules {
             {
                 return Some((sid, Some(at)));
             }
-            if namespaces.contains_key(head) {
+            if labels.namespaces.contains_key(head) {
                 return Some((link.core.it.intern(head), None));
+            }
+            if labels.namespace_clashes.contains(head) {
+                return None;
             }
             head = head.rsplit_once('.')?.0;
         }

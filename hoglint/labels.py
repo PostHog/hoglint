@@ -171,8 +171,8 @@ NAMESPACE_PROBE = "\x00.py"
 class NamespaceDirectories:
     """The directories without `__init__.py` that hold graph modules, by dotted name: an edge can
     name one (a namespace package), and its labels come from the path of a file directly inside
-    it. A name two graph modules place in two directories gets no path. `inside` holds, per name,
-    the graph modules whose file lies directly in the directory."""
+    it. A name two graph modules place in two directories gets no path and is held in `clashes`.
+    `inside` holds, per name, the graph modules whose file lies directly in the directory."""
 
     def __init__(self, modules: dict[str, str]) -> None:
         found: dict[str, str] = {}
@@ -194,6 +194,7 @@ class NamespaceDirectories:
                     clashes.add(name)
                     del found[name]
         self.paths = {name: f"{directory}/{NAMESPACE_PROBE}" for name, directory in found.items()}
+        self.clashes = frozenset(clashes)
         named = {directory: name for name, directory in found.items()}
         self.inside: dict[str, list[str]] = {}
         for module, path in modules.items():
@@ -727,11 +728,14 @@ class Labeler:
 
     def handed_owner(self, name: str) -> str | None:
         """The longest dotted prefix of a handed name that is a graph module or a namespace
-        directory: the module whose zone the name has."""
+        directory: the module whose zone the name has. None when there is none, or when a
+        directory two graph modules place apart comes first."""
         head = name
         while head:
             if head in self.graph.modules or head in self.namespaces.paths:
                 return head
+            if head in self.namespaces.clashes:
+                return None
             head = head.rpartition(".")[0]
         return None
 
@@ -740,7 +744,7 @@ class Labeler:
         import (`Graph.hand_outs`): none for a module that is no export or when no field is a
         zone, unknown when its `__all__` cannot be read, a handed import did not resolve or a
         handed module's zone cannot be told. A namespace directory has the zone its files read.
-        A third-party name has no zone."""
+        A third-party name has no zone; a first-party name no module answers for is unknown."""
         hand_out = self.graph.hand_outs.get(module)
         if hand_out is None or not self.zone_fields:
             return NONE
@@ -754,8 +758,10 @@ class Labeler:
                 return UNKNOWN
             for target in edge.targets:
                 owner = self.handed_owner(str(target))
-                if owner is None:
+                if owner is None and edge.resolution is Resolution.EXTERNAL:
                     continue
+                if owner is None:
+                    return UNKNOWN
                 zone, _ = self.field_value(owner, None, self.zone_fields[0])
                 if zone.state is State.UNKNOWN:
                     return UNKNOWN

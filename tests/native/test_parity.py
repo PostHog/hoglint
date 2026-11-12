@@ -349,7 +349,7 @@ HANDED_CONFIG = """
 schema = 1
 
 [discovery]
-source_roots = ["."]
+source_roots = [".", "src"]
 first_party = ["core", "products"]
 
 [fields]
@@ -381,7 +381,8 @@ BUILD_FOUND = ["products.shop.backend.facade.hooks.build"]
 BUILD_INCOMPLETE = ["products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.build"]
 # (the import a facade module hands a name out by, the name, the files it reads, its findings, its
 # incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
-# directory without `__init__.py` has the zone a file directly inside it reads.
+# directory without `__init__.py` has the zone a file directly inside it reads; a first-party name
+# that no module and no such directory answers for has none that can be told.
 HANDED_CASES = {
     "a member in a known zone": (
         "from products.shop.backend.temporal.jobs import run",
@@ -416,6 +417,14 @@ HANDED_CASES = {
         "from products.shop.backend import mixed",
         "mixed",
         {"products/shop/backend/mixed/jobs.py": RUN, "products/shop/backend/mixed/other.py": RUN},
+        [],
+        BUILD_INCOMPLETE,
+    ),
+    "an unresolved first-party name": ("from products.shop.backend.gone import run", "run", {}, [], BUILD_INCOMPLETE),
+    "a directory two source roots place apart": (
+        "from products.shop.backend import temporal",
+        "temporal",
+        {"products/shop/backend/temporal/jobs.py": RUN, "src/products/shop/backend/temporal/other.py": RUN},
         [],
         BUILD_INCOMPLETE,
     ),

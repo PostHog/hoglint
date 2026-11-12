@@ -388,9 +388,9 @@ fn module_directories<'p>(module: &str, path: &'p str) -> Option<(Vec<&'p str>, 
     Some((directories, root))
 }
 
-/// The namespace directories of the graph's modules, by dotted name; a name two modules place
-/// in two directories is left out.
-fn namespace_paths(paths: &[&str], modules: &[&str]) -> Vec<(String, String)> {
+/// The namespace directories of the graph's modules, by dotted name, and the names two modules
+/// place in two directories, which are left out of the first.
+fn namespace_paths(paths: &[&str], modules: &[&str]) -> (Vec<(String, String)>, Vec<String>) {
     let names: FxHashSet<&str> = modules.iter().copied().collect();
     let mut found: FxHashMap<String, String> = FxHashMap::default();
     let mut clashes: FxHashSet<String> = FxHashSet::default();
@@ -420,7 +420,7 @@ fn namespace_paths(paths: &[&str], modules: &[&str]) -> Vec<(String, String)> {
     }
     let mut out: Vec<(String, String)> = found.into_iter().collect();
     out.sort();
-    out
+    (out, clashes.into_iter().collect())
 }
 
 /// The label tables of one run: per graph module, each field's label (None where no source
@@ -446,6 +446,8 @@ pub struct Labels {
     pub provider_conflicts: Vec<bool>,
     /// The namespace directories by dotted name.
     pub namespaces: FxHashMap<Box<str>, Namespace>,
+    /// The dotted names two graph modules place in two directories (`NamespaceDirectories.clashes`).
+    pub namespace_clashes: FxHashSet<Box<str>>,
 }
 
 /// The most exports a run reads: one bit each.
@@ -492,11 +494,13 @@ impl Labels {
             conflicts: Vec::new(),
             provider_conflicts: vec![false; paths.len()],
             namespaces: FxHashMap::default(),
+            namespace_clashes: FxHashSet::default(),
         };
         for (at, (path, module)) in paths.iter().zip(modules).enumerate() {
             out.label_module(at as u32, path, module, exports);
         }
-        let directories = namespace_paths(paths, modules);
+        let (directories, clashes) = namespace_paths(paths, modules);
+        out.namespace_clashes = clashes.into_iter().map(String::into_boxed_str).collect();
         let mut inside: FxHashMap<&str, Vec<u32>> = FxHashMap::default();
         for (_, directory) in &directories {
             inside.insert(directory.as_str(), Vec::new());
