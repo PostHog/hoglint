@@ -850,15 +850,34 @@ class DeclarationProducer(Producer):
         wanted = context.config.dataclass_decorators
         return surface in wanted or any(str(target) in wanted for target in resolved.targets)
 
-    def is_dataclass_like(self, context: BuildContext, scope: FileScope, node: dict) -> bool:
-        """Whether a class takes a decorator that makes it a dataclass."""
+    def has_dataclass_base(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
+        """Whether a class or one of its ancestors names a base of `dataclass_bases`, by spelling
+        or target: a model library's base makes annotated class attributes `__init__` fields."""
+        wanted = context.config.dataclass_bases
+        if not wanted:
+            return False
+        for owner, at in self.lineage(context, scope, idx):
+            node = owner.defs[at]
+            for base in node.get("bases", ()):
+                found = context.value_lookup(owner, base, node["s"], node["l"])
+                if found is None:
+                    continue
+                if found.surface in wanted:
+                    return True
+                if any(str(target) in wanted for target in context.classifier.classify_lookup(found).targets):
+                    return True
+        return False
+
+    def is_dataclass_like(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
+        """Whether a class takes a decorator that makes it a dataclass, or has a dataclass base."""
+        node = scope.defs[idx]
         for dec in node.get("dec", ()):
             found = context.value_lookup(scope, dec, node["s"], node["l"])
             if found is None:
                 continue
             if self.is_dataclass_decorator(context, found.surface, context.classifier.classify_lookup(found)):
                 return True
-        return False
+        return self.has_dataclass_base(context, scope, idx)
 
     def mro_fields(
         self, context: BuildContext, lineage: list[tuple[FileScope, int]], lookup: SlotLookup
@@ -870,7 +889,7 @@ class DeclarationProducer(Producer):
         for position in range(len(lineage) - 1, -1, -1):
             scope, idx = lineage[position]
             node = scope.defs[idx]
-            if position and not self.is_dataclass_like(context, scope, node):
+            if position and not self.is_dataclass_like(context, scope, idx):
                 continue
             where = lookup if not position else SlotLookup(scope, node["s"], node["l"])
             for row in self.fields_by_class(scope).get(idx, []):
@@ -976,6 +995,8 @@ class DeclarationProducer(Producer):
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs
                     )
                 )
+        if is_class and not dataclass and not nested:
+            dataclass = self.has_dataclass_base(context, scope, idx)
         if nested or (is_class and not dataclass):
             return
         site = SlotSite(scope, enclosing, line, column, contexts)
@@ -1035,7 +1056,7 @@ class DeclarationProducer(Producer):
             if node["k"] != "class":
                 self.expose_signature(context, graph, rows, lookup, node, True)
                 continue
-            if not self.is_dataclass_like(context, origin, node):
+            if not self.is_dataclass_like(context, origin, idx):
                 continue
             init = SlotRows(rows.site, f"{item.bound}.__init__", item.clause)
             self.expose_dataclass(context, graph, init, lookup, idx)

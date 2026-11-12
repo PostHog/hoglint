@@ -12,6 +12,8 @@ sections   = ["posthog"]  # the PostHog pack (hoglint.presets_py.posthog): drive
 [discovery]
 dataclass_decorators        = ["dataclasses.dataclass", "posthog.dataclasses.frozen", "pydantic.dataclasses.dataclass"]
 frozen_dataclass_decorators = ["posthog.dataclasses.frozen"]
+# A pydantic model's annotated class attributes are its fields, as a dataclass's are.
+dataclass_bases             = ["pydantic.BaseModel", "pydantic.main.BaseModel"]
 # A string that names nothing is a path edge only where the code holds a path: a patch target, or
 # the first argument of these.
 path_callees = ["import_string", "include"]

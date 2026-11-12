@@ -71,11 +71,12 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   `Any` in any other generic (`list[Any]`, `Optional[Any]`) stays unknown.
   The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
-  Such an allowed shape is handed out as it stands: only a policy's `data` shapes are walked into, so the tree's own fields are not judged per facade.
+  An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged.
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
-- One slot, one rule: with `slots = "shape"` the export rule judges only a class's shape in a slot of what it hands out. A model, an unknown type, a missing annotation or an unresolved name there is the signature rule's finding, under its own identity. The fields of a data class found in a slot are still judged in full by the export rule.
+- One slot, one rule: with `slots = "shape"` the export rule judges only a class's shape in a slot of what it hands out. A model, an unknown type, a missing annotation or an unresolved name there is the signature rule's finding, under its own identity. The fields of a class found in a slot are still judged in full by the export rule.
+- A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 
 **The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).
 Other packages import it, so it stays in the export and its audience holds; but the contract rules (`export-shape` by its `from`, `facade-signature`, `facade-logic`, `facade-no-drf`) do not judge it: its helpers take and return models on purpose.

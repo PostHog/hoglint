@@ -293,6 +293,7 @@ pub struct Producing {
     pub loaders: Vec<Sid>,
     pub loader_last_names: Vec<String>,
     pub dataclass_decorators: Vec<Sid>,
+    pub dataclass_bases: Vec<Sid>,
     pub patch_callees: Vec<String>,
     pub path_callees: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
@@ -374,6 +375,7 @@ impl Producing {
         builtins: &[String],
         loaders: &[String],
         dataclass_decorators: &[String],
+        dataclass_bases: &[String],
         patch_callees: &[String],
         path_callees: &[String],
         contract_surfaces: Vec<ExportPaths>,
@@ -451,6 +453,7 @@ impl Producing {
                 .iter()
                 .map(|name| it.intern(name))
                 .collect(),
+            dataclass_bases: dataclass_bases.iter().map(|name| it.intern(name)).collect(),
             patch_callees: patch_callees.to_vec(),
             path_callees: path_callees.to_vec(),
             contract_surfaces,
@@ -1518,15 +1521,38 @@ impl Producers<'_> {
         wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
     }
 
-    /// Whether a class takes a decorator that makes it a dataclass.
-    fn is_dataclass_like(&mut self, owner: usize, node: &Def) -> bool {
+    /// `DeclarationProducer.has_dataclass_base`: whether a class or one of its ancestors names a
+    /// base of `dataclass_bases`, by spelling or target.
+    fn has_dataclass_base(&mut self, owner: usize, idx: u32) -> bool {
+        if self.settings.dataclass_bases.is_empty() {
+            return false;
+        }
+        let facts = self.core.facts.clone();
+        for (at_owner, at) in self.lineage(owner, idx) {
+            let node = &facts.files[self.scopes[at_owner].file as usize].defs[at as usize];
+            for base in &node.bases {
+                let (surface, resolved) = self.lookup_value(at_owner, base, node.s, node.l);
+                let target = resolved.target.map(|target| self.core.ent_sid(target));
+                let wanted = &self.settings.dataclass_bases;
+                if wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether a class takes a decorator that makes it a dataclass, or has a dataclass base.
+    fn is_dataclass_like(&mut self, owner: usize, idx: u32) -> bool {
+        let facts = self.core.facts.clone();
+        let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
         for dec in &node.dec {
             let (surface, resolved) = self.lookup_value(owner, dec, node.s, node.l);
             if self.is_dataclass_decorator(surface, resolved) {
                 return true;
             }
         }
-        false
+        self.has_dataclass_base(owner, idx)
     }
 
     /// The fields of the generated `__init__`, as the dataclass machinery collects them: from
@@ -1540,7 +1566,7 @@ impl Producers<'_> {
             let file = self.scopes[owner].file;
             let record = &facts.files[file as usize];
             let node = &record.defs[idx as usize];
-            if position > 0 && !self.is_dataclass_like(owner, node) {
+            if position > 0 && !self.is_dataclass_like(owner, idx) {
                 continue;
             }
             let at_lookup = if position == 0 {
@@ -1763,7 +1789,7 @@ impl Producers<'_> {
                 self.expose_signature(rows, lookup, node, true);
                 continue;
             }
-            if !self.is_dataclass_like(origin, node) {
+            if !self.is_dataclass_like(origin, idx) {
                 continue;
             }
             let init = SlotRows {
@@ -1838,6 +1864,9 @@ impl Producers<'_> {
                         &attrs,
                     );
                 }
+            }
+            if node.is_class() && !dataclass && !nested {
+                dataclass = self.has_dataclass_base(owner, idx as u32);
             }
             if nested || (node.is_class() && !dataclass) {
                 continue;

@@ -361,9 +361,9 @@ class ExportPrimitive(RuleType):
                     return
                 self.finding(symbol, module, "export-shape(class)", trail, edge)
                 return
-            # A data shape is part of the contract, so its fields are; any other allowed shape is
-            # handed out as it stands.
-            if shapes & set(policy.data) and shapes & {"dataclass", "frozen-dataclass"}:
+            # An allowed class's own shape is fine; what its fields and, in a contract, its methods
+            # name is still judged.
+            if policy.signatures or shapes & {"dataclass", "frozen-dataclass"}:
                 self.check_members(symbol, module, policy, trail)
             return
         if "function" in shapes:

@@ -179,6 +179,9 @@ pub struct LinkConfig {
     /// Those of `dataclass_decorators` that always make a frozen dataclass.
     #[serde(default)]
     pub frozen_dataclass_decorators: Vec<String>,
+    /// Base classes whose subclasses' annotated class attributes are `__init__` fields too.
+    #[serde(default)]
+    pub dataclass_bases: Vec<String>,
     #[serde(default)]
     pub patch_callees: Vec<String>,
     /// Last names of other callees whose first argument is a dotted path.
@@ -361,6 +364,7 @@ impl Link {
             &config.builtins,
             &config.dynamic_loaders,
             &config.dataclass_decorators,
+            &config.dataclass_bases,
             &config.patch_callees,
             &config.path_callees,
             contract_surfaces,

@@ -120,6 +120,8 @@ class CoreConfig:
       ancestry resolve through third-party code (for example a web framework's base classes).
     - dynamic_loaders: callables that import a module named at runtime.
     - dataclass_decorators: decorators whose class fields form the generated `__init__`.
+    - dataclass_bases: base classes whose subclasses' annotated class attributes are their
+      `__init__` fields as well (a model library's base class).
     - frozen_dataclass_decorators: those of them that always make a frozen dataclass; any other
       freezes it only when its call passes `frozen=True`.
     - patch_callees: last names of callees whose first argument is a dotted patch target.
@@ -142,6 +144,7 @@ class CoreConfig:
     dynamic_loaders: tuple[str, ...] = DEFAULT_DYNAMIC_LOADERS
     dataclass_decorators: tuple[str, ...] = DEFAULT_DATACLASS_DECORATORS
     frozen_dataclass_decorators: tuple[str, ...] = ()
+    dataclass_bases: tuple[str, ...] = ()
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
     path_callees: tuple[str, ...] = ()
     contract_surfaces: tuple[ExportPaths, ...] = ()
@@ -169,6 +172,7 @@ class CoreConfig:
             ("dataclass_decorators", "dataclass_decorators"),
             ("path_callees", "path_callees"),
             ("frozen_dataclass_decorators", "frozen_dataclass_decorators"),
+            ("dataclass_bases", "dataclass_bases"),
         ):
             if key in discovery:
                 fields[field_name] = as_tuple(discovery[key])

@@ -160,6 +160,7 @@ DISCOVERY_KEYS = frozenset(
         "plugins",
         "dataclass_decorators",
         "frozen_dataclass_decorators",
+        "dataclass_bases",
         "path_callees",
     }
 )

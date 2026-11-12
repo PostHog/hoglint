@@ -43,7 +43,7 @@ BASE = {
     "hoglint.toml": ROOT_CONFIG,
     "tools/hoglint/presets/posthog.toml": PRESET.read_text(),
     "posthog/__init__.py": "",
-    "posthog/settings.py": "INSTALLED_APPS = ['posthog', 'products.shop.backend']\n",
+    "posthog/settings.py": "INSTALLED_APPS = ['posthog', 'products.shop.backend', 'products.billing.backend']\n",
     "products/__init__.py": "",
     "products/shop/__init__.py": "",
     "products/shop/backend/__init__.py": "",
@@ -194,8 +194,8 @@ HOGQL = {
 }
 
 
-# A contract may hand out a hook's Protocol and core's query syntax tree. An allowed shape that is no
-# data shape is handed out as it stands: the syntax tree's own fields are core's business.
+# A contract may hand out a hook's Protocol and core's query syntax tree. The allowance covers the
+# class; what the tree's fields name is still judged.
 def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     contracts = (
         "from typing import Protocol\n\nfrom posthog.hogql.base import Expr\n\n\n"
@@ -204,7 +204,9 @@ def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, mo
     )
     files = {**HOGQL, "products/shop/backend/facade/contracts.py": contracts}
     out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings(out["native"], "export-shape") == []
+    assert findings(out["native"], "export-shape") == [
+        ["posthog.hogql.base.Context", f"{SHOP}.facade.contracts", "export-shape(class)"],
+    ]
 
 
 def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,3 +307,31 @@ def test_the_core_model_list_holds_at_any_depth(tmp_path: Path, monkeypatch: pyt
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert findings(out["native"], "export-shape") == [[f"{SHOP}.models.Order", API, "export-denied(model)"]]
     assert findings(out["native"], "facade-signature") == []
+
+
+# An allowed contract type is allowed as a class; what its fields and methods name is still judged.
+ALLOWED_WITH_A_MODEL = (
+    "from typing import Protocol\n\nfrom pydantic import BaseModel\n\n"
+    "from products.billing.backend.models import Invoice\n\n\n"
+    "class Payload(BaseModel):\n    invoice: Invoice\n\n\n"
+    "class BillingError(Exception):\n    def __init__(self, invoice: Invoice) -> None:\n        self.invoice = invoice\n\n\n"
+    "class Chooser(Protocol):\n    def __call__(self, invoice: Invoice) -> None: ...\n"
+)
+
+
+def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    files = {
+        "products/billing/__init__.py": "",
+        "products/billing/backend/__init__.py": "",
+        "products/billing/backend/models.py": MODEL.format(name="Invoice"),
+        "products/shop/backend/facade/contracts.py": ALLOWED_WITH_A_MODEL,
+    }
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    invoice = "products.billing.backend.models.Invoice"
+    contracts = f"{SHOP}.facade.contracts"
+    assert findings(out["native"], "facade-signature") == [
+        [contracts, "BillingError.__init__", "param:invoice", invoice],
+        [contracts, "Chooser.__call__", "param:invoice", invoice],
+        [contracts, "Payload.__init__", "field:invoice", invoice],
+    ]
+    assert findings(out["native"], "export-shape") == []
