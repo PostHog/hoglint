@@ -245,8 +245,8 @@ class Tables:
         ancestors (nearest first), in that order.
 
         Second, the entries no module answers for, by name, with the module path as written. Only
-        an entry that reads as a name and a dotted path counts: another dict of text in the
-        module is no lazy map."""
+        an entry that reads as a name and a dotted path counts, and a path of one name only in a
+        dict where another entry resolves: another dict of text or names is no lazy map."""
         package = module if is_package else module.rpartition(".")[0]
         parts = package.split(".")
         ancestors = [".".join(parts[:end]) for end in range(len(parts), 0, -1)]
@@ -263,6 +263,8 @@ class Tables:
         out: dict[str, str] = {}
         missing: dict[str, str] = {}
         for items in maps:
+            unresolved: list[tuple[str, str]] = []
+            resolves = False
             for key, value in items:
                 if not (isinstance(key, dict) and "s" in key and isinstance(value, dict) and "s" in value):
                     continue
@@ -271,8 +273,13 @@ class Tables:
                 found = next((candidate for candidate in candidates if self.index.exists(candidate)), None)
                 if found is not None:
                     out[key["s"]] = found
+                    resolves = True
                 elif IDENTIFIER.fullmatch(key["s"]) and DOTTED_PATH.fullmatch(value["s"]):
-                    missing[key["s"]] = value["s"]
+                    unresolved.append((key["s"], value["s"]))
+            for name, path in unresolved:
+                # A bare name may be any word; it reads as a module only in a dict that is a lazy map.
+                if resolves or "." in path:
+                    missing[name] = path
         return out, {name: path for name, path in missing.items() if name not in out}
 
     def build(self, module: str) -> ModuleTable | None:

@@ -561,8 +561,8 @@ impl Core {
     /// or a module under the package or one of its ancestors (nearest first).
     ///
     /// Second, the entries no module answers for, by name, with the module path as written. Only
-    /// an entry that reads as a name and a dotted path counts: another dict of text in the module
-    /// is no lazy map.
+    /// an entry that reads as a name and a dotted path counts, and a path of one name only in a
+    /// dict where another entry resolves: another dict of text or names is no lazy map.
     fn lazy_map(
         &mut self,
         module: Sid,
@@ -598,6 +598,8 @@ impl Core {
         let mut out = OrderedMap::default();
         let mut missing = OrderedMap::default();
         for items in maps {
+            let mut unresolved: Vec<(Sid, Sid)> = Vec::new();
+            let mut resolves = false;
             for (key, value) in items {
                 let (Some(V::Str(key, _)), V::Str(value, _)) = (key, value) else {
                     continue;
@@ -613,8 +615,15 @@ impl Core {
                 }
                 if let Some(found) = candidates.into_iter().find(|&c| self.exists(c)) {
                     out.insert(*key, found);
+                    resolves = true;
                 } else if is_identifier(self.it.s(*key)) && is_dotted_path(&tail) {
-                    missing.insert(*key, *value);
+                    unresolved.push((*key, *value));
+                }
+            }
+            for (name, path) in unresolved {
+                // A bare name may be any word; it reads as a module only in a dict that is a lazy map.
+                if resolves || self.it.s(path).contains('.') {
+                    missing.insert(name, path);
                 }
             }
         }

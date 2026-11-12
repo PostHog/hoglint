@@ -468,6 +468,13 @@ HANDED_CASES = {
         [],
         [GETATTR_INCOMPLETE, *BUILD_INCOMPLETE],
     ),
+    "a module-level dict of names in a module with a lazy hook": (
+        LAZY_RUN.format(module="runNow"),
+        "build",
+        {},
+        [],
+        [],
+    ),
     "a module-level dict of text in a module with a lazy hook": (
         LAZY_RUN.format(module="Run the job"),
         "build",
