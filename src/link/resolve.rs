@@ -231,6 +231,26 @@ pub fn absolute_import(
     })
 }
 
+/// (line, column) of the module-level dict assignment each lazy name is read from: the last one
+/// that maps the name to a string, as a later map wins in `Core::lazy_map`.
+pub fn lazy_sites(assigns: &[Assign]) -> FxHashMap<Sid, (u32, u32)> {
+    let mut out = FxHashMap::default();
+    for row in assigns {
+        let Some(V::Dict(items)) = &row.value else {
+            continue;
+        };
+        if row.s != -1 {
+            continue;
+        }
+        for (key, value) in items {
+            if let (Some(V::Str(key, _)), V::Str(_, _)) = (key, value) {
+                out.insert(*key, (row.l, row.c));
+            }
+        }
+    }
+    out
+}
+
 /// (bound name, binding) of one import row; None for a star import or a bad relative one.
 pub fn import_binding(
     it: &mut Interner,

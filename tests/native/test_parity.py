@@ -379,6 +379,8 @@ BODY = "\n\n\ndef build() -> int:\n    return 1\n"
 RUN = "def run() -> None:\n    pass\n"
 BUILD_FOUND = ["products.shop.backend.facade.hooks.build"]
 BUILD_INCOMPLETE = ["products.shop.backend.facade.hooks|declares|products.shop.backend.facade.hooks.build"]
+GETATTR_FOUND = "products.shop.backend.facade.hooks.__getattr__"
+LAZY_RUN = '_LAZY = {{"run": "{module}"}}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
 # (the import a facade module hands a name out by, the name, the files it reads, its findings, its
 # incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
 # directory without `__init__.py` has the zone a file directly inside it reads; a first-party name
@@ -427,6 +429,20 @@ HANDED_CASES = {
         {"products/shop/backend/temporal/jobs.py": RUN, "src/products/shop/backend/temporal/other.py": RUN},
         [],
         BUILD_INCOMPLETE,
+    ),
+    "a lazy member in a known zone": (
+        LAZY_RUN.format(module="products.shop.backend.temporal.jobs"),
+        "run",
+        {"products/shop/backend/temporal/jobs.py": RUN},
+        [GETATTR_FOUND, *BUILD_FOUND],
+        [],
+    ),
+    "a lazy member outside the zone": (
+        LAZY_RUN.format(module="products.shop.backend.logic"),
+        "run",
+        {"products/shop/backend/logic.py": RUN},
+        [],
+        [],
     ),
 }
 

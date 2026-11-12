@@ -72,6 +72,18 @@ def test_import_edges_keep_surface_via_and_origin(
     assert [str(hop) for hop in edge.via] == via
 
 
+def test_a_lazy_name_gets_an_import_edge_that_does_not_run_on_import() -> None:
+    [edge] = edges_of(build(repo()), "import", "checkout/lazy.py")
+    assert (edge.surface, [str(t) for t in edge.targets], edge.resolution) == (
+        "checkout.logic.refund",
+        ["checkout.logic.refund"],
+        Resolution.RESOLVED,
+    )
+    assert (edge.site.scope, edge.site.line) == ("<module>", 3)
+    assert edge.contexts == {Context.PROD, Context.FUNCTION_LOCAL}
+    assert edge.attrs == (("binds", "refund"), ("module", "checkout.logic"), ("lazy", "1"))
+
+
 def test_reference_names_surface_and_origin_with_a_use_position() -> None:
     [edge] = edges_of(build(repo()), "reference", VIEWS)
     assert (edge.surface, str(edge.target), edge.use) == ("checkout.facade.charge", "checkout.logic.charge", "call")

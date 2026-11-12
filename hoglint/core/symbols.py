@@ -80,6 +80,20 @@ def absolute_import(module: str, is_package: bool, target: str | None, level: in
     return f"{base}.{target}" if target else base
 
 
+def lazy_sites(record: Mapping[str, Any]) -> dict[str, tuple[int, int]]:
+    """(line, column) of the module-level dict assignment each lazy name is read from: the last
+    one that maps the name to a string, as a later map wins in `Tables.lazy_map`."""
+    out: dict[str, tuple[int, int]] = {}
+    for row in record.get("assigns", ()):
+        value = row.get("v")
+        if row["s"] != -1 or not isinstance(value, dict) or "dict" not in value:
+            continue
+        for key, item in value["dict"]:
+            if isinstance(key, dict) and "s" in key and isinstance(item, dict) and "s" in item:
+                out[key["s"]] = (row["l"], row["c"])
+    return out
+
+
 def import_binding(module: str, is_package: bool, row: list) -> tuple[str, Binding] | None:
     """(bound name, binding) for one `imports` row; None for a star import or a bad relative one."""
     _, _, _, _, target, level, name, asname = row

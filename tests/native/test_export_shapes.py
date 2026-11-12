@@ -137,6 +137,7 @@ def test_a_surface_module_exports_only_what_it_hands_out(tmp_path: Path, monkeyp
     findings = sorted([row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl"))
     assert findings == [
         ["export-shape", [f"{SHOP}.facade.contracts.Own", f"{SHOP}.facade.contracts", "export-shape(class)"]],
+        ["export-shape", [f"{SHOP}.logic.Late", f"{SHOP}.facade.lazy", "export-shape(class)"]],
         ["export-shape", [f"{SHOP}.logic.Receipt", f"{SHOP}.facade.api", "export-shape(class)"]],
         ["export-shape", [f"{SHOP}.logic.Spare", f"{SHOP}.facade.contracts", "export-shape(class)"]],
         ["export-shape", [f"{SHOP}.logic.Ticket", f"{SHOP}.facade.api", "export-shape(class)"]],

@@ -457,3 +457,52 @@ def test_a_file_added_to_a_handed_namespace_directory_rejudges_a_row_that_reads_
     reader = "app/views.py"
     assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
     assert reader in predict(parent, child, {TEST_FILE}).files
+
+
+LAZY_GETATTR = "\n\ndef __getattr__(name):\n    raise AttributeError(name)\n"
+HANDING_BASE = {
+    "hoglint.toml": HANDED_CONFIG,
+    "app/__init__.py": "",
+    "app/jobs/__init__.py": "",
+    "app/jobs/tasks.py": "def run():\n    pass\n",
+    "app/logic.py": "def run():\n    pass\n",
+    "app/views.py": "from app.api import ping\n",
+}
+PING = "\n\ndef ping():\n    pass\n"
+# (the facade before, the facade after, other files of the child): each moves the zones the facade
+# hands out names from, so a row that reads `dst.handed_zones` at the facade moves.
+HAND_OUT_MOVES = {
+    "a lazy map entry names another module": (
+        '_LAZY = {"run": "app.jobs.tasks"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        '_LAZY = {"run": "app.logic"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        {},
+    ),
+    "the module a lazy name comes from changes": (
+        '_LAZY = {"run": "app.shim"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
+        None,
+        {"app/shim.py": "from app.logic import run as run\n"},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", HAND_OUT_MOVES)
+def test_a_moved_hand_out_edge_rejudges_a_row_that_reads_handed_zones_at_the_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    native_module()
+    before, after, other = HAND_OUT_MOVES[case]
+    parent_files = {
+        **HANDING_BASE,
+        "app/shim.py": "from app.jobs.tasks import run as run\n",
+        "app/api/__init__.py": before,
+    }
+    child_files = {**parent_files, **other}
+    if after is not None:
+        child_files["app/api/__init__.py"] = after
+    parent = traced_dump(tmp_path, "parent", parent_files, monkeypatch)
+    child = traced_dump(tmp_path, "child", child_files, monkeypatch)
+    reader = "app/views.py"
+    assert rows_of(parent, reader) != rows_of(child, reader), "the case must move the reader's rows"
+    changed = {path for path in child_files if child_files[path] != parent_files.get(path)}
+    assert reader in predict(parent, child, changed).files
+    assert reader not in predict(parent, child, changed, ignored_kinds=["label"]).files

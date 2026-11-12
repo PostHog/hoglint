@@ -15,12 +15,24 @@ from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import is_class_var
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
-from hoglint.core.symbols import CLASS, ClassIndex, Hit, Resolver, absolute_import, entity, module_assigns
+from hoglint.core.symbols import (
+    CLASS,
+    FUNC,
+    ClassIndex,
+    Hit,
+    Resolver,
+    absolute_import,
+    entity,
+    lazy_sites,
+    module_assigns,
+)
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, Graph, Resolution
 
 PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
+# The attr of an import edge that a lazy (PEP 562) name gets.
+LAZY_ATTR = ("lazy", "1")
 BUILTIN_NAMES = frozenset(dir(builtins))
 CHAIN_TOKEN = re.compile(r"\.\w+|\(\)|\[\]")
 # Escape steps that pass a value through unchanged, as the extractor's local derivation reads them.
@@ -341,12 +353,46 @@ class Producer:
 
 
 class ImportProducer(Producer):
-    """One edge per import binding, in every context. Relative imports become absolute."""
+    """One edge per import binding, in every context. Relative imports become absolute.
+
+    A lazy (PEP 562) name gets an edge too, at the dict entry that names its module: the import
+    `__getattr__` runs when the name is first read. It does not run on import, so its context is
+    `function_local`, and its `lazy` attr tells it apart from an import written in a function."""
 
     kind = "import"
 
+    @staticmethod
+    def from_target(context: BuildContext, source: str, name: str) -> tuple[str, Hit | None, str]:
+        """(surface, hit, loaded module) of `from source import name`."""
+        surface = f"{source}.{name}"
+        hit = context.resolver.resolve_name(source, name)
+        if hit is None and context.index.exists(surface):
+            hit = context.resolver.module_hit(surface)
+        loaded = surface if context.index.exists(surface) else source
+        return surface, hit, loaded
+
+    @staticmethod
+    def bound_attrs(context: BuildContext, binds: str, loaded: str) -> list[tuple[str, str]]:
+        attrs = [("binds", binds)]
+        if context.index.exists(loaded):
+            attrs.append(("module", loaded))
+        return attrs
+
+    def lazy_edges(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
+        table = context.resolver.tables.get(scope.module)
+        if table is None or not table.lazy or table.path != scope.path:
+            return
+        sites = lazy_sites(scope.record)
+        contexts = scope.contexts(FUNC, -1)
+        for name, module in table.lazy.items():
+            line, column = sites.get(name, (0, 0))
+            surface, hit, loaded = self.from_target(context, module, name)
+            attrs = (*self.bound_attrs(context, name, loaded), LAZY_ATTR)
+            resolved = context.classifier.classify(surface, hit)
+            graph.edges.append(self.edge(self.kind, scope, -1, line, column, surface, resolved, contexts, attrs=attrs))
+
     def run(self, context: BuildContext, graph: Graph) -> None:
-        resolver, index, classifier = context.resolver, context.index, context.classifier
+        resolver = context.resolver
         for scope in context.files:
             for row in scope.record.get("imports", ()):
                 at_scope, line, column, flags, target, level, name, asname = row
@@ -359,27 +405,21 @@ class ImportProducer(Producer):
                     source = absolute_import(scope.module, scope.is_package, target, level)
                     if source is None:
                         surface = "." * level + (f"{target}." if target else "") + name
-                        unresolved = UNRESOLVED
                         graph.edges.append(
-                            self.edge(self.kind, scope, at_scope, line, column, surface, unresolved, contexts)
+                            self.edge(self.kind, scope, at_scope, line, column, surface, UNRESOLVED, contexts)
                         )
                         continue
                     if name == "*":
                         surface, hit, loaded, binds = f"{source}.*", resolver.module_hit(source), source, "*"
                     else:
-                        surface = f"{source}.{name}"
-                        hit = resolver.resolve_name(source, name)
-                        if hit is None and index.exists(surface):
-                            hit = resolver.module_hit(surface)
-                        loaded = surface if index.exists(surface) else source
+                        surface, hit, loaded = self.from_target(context, source, name)
                         binds = asname or name
-                attrs = [("binds", binds)]
-                if index.exists(loaded):
-                    attrs.append(("module", loaded))
-                resolved = classifier.classify(surface, hit)
+                attrs = self.bound_attrs(context, binds, loaded)
+                resolved = context.classifier.classify(surface, hit)
                 graph.edges.append(
                     self.edge(self.kind, scope, at_scope, line, column, surface, resolved, contexts, attrs=tuple(attrs))
                 )
+            self.lazy_edges(context, graph, scope)
 
 
 class ReferenceProducer(Producer):

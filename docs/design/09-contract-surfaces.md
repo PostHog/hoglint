@@ -32,6 +32,9 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   That exception removed 86 findings; 60 of them were the `frozen` decorator reported as part of its own module's contract.
 - An unreadable `__all__` leaves an unresolved marker.
   A star import hands out its source's public names (N3b review, items 4 and 5).
+- A lazy name has an import edge, written by the core producer: an import of the name from the module the lazy map names, at the map's line (Nov 12).
+  Its context is `function_local`, because `__getattr__` runs the import when the name is first read, not when the module is imported; its attr `lazy` tells it apart.
+  So every rule that reads what a module hands out finds it with no special path, and every edge rule judges it as it judges any other import.
 
 **Signature slots** (architect, D62; the key was named in N3b):
 - `[shapes.<name>] signatures = true` says signatures are part of the contract.

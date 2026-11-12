@@ -6,7 +6,8 @@ use super::facts::{Argument, Assign, Def, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
-    Binding, CLASS, Core, Ent, HitId, HitKind, OrderedMap, absolute_import, module_assigns,
+    Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, absolute_import, lazy_sites,
+    module_assigns,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
@@ -307,6 +308,7 @@ pub struct Producing {
 /// Attr keys and fixed values.
 struct Keys {
     binds: Sid,
+    lazy: Sid,
     module: Sid,
     chain: Sid,
     up: Sid,
@@ -385,6 +387,7 @@ impl Producing {
         last_names.dedup();
         let k = Keys {
             binds: it.intern("binds"),
+            lazy: it.intern("lazy"),
             module: it.intern("module"),
             chain: it.intern("chain"),
             up: it.intern("up"),
@@ -870,9 +873,65 @@ impl Producers<'_> {
         self.core.rec.finish();
     }
 
+    /// (surface, hit, loaded module) of `from source import name`.
+    fn from_target(core: &mut Core, source: Sid, name: Sid) -> (Sid, Option<HitId>, Sid) {
+        let surface = core.it.join(source, name);
+        let mut hit = core.resolve_name(source, name);
+        if hit.is_none() && core.exists(surface) {
+            hit = Some(core.module_hit(surface));
+        }
+        let loaded = if core.exists(surface) {
+            surface
+        } else {
+            source
+        };
+        (surface, hit, loaded)
+    }
+
+    fn bound_attrs(&mut self, binds: Sid, loaded: Sid) -> Vec<(Sid, Sid)> {
+        let k = &self.settings.k;
+        let mut attrs = vec![(k.binds, binds)];
+        if self.core.exists(loaded) {
+            attrs.push((k.module, loaded));
+        }
+        attrs
+    }
+
+    /// An edge per lazy (PEP 562) name, at the dict entry that names its module: the import
+    /// `__getattr__` runs when the name is first read. It does not run on import, so its context
+    /// is `function_local`, and its `lazy` attr tells it apart from an import in a function.
+    fn lazy_imports(&mut self, owner: usize) {
+        let file = self.scopes[owner].file;
+        let module = self.scopes[owner].module;
+        let Some(table) = self.core.table(module) else {
+            return;
+        };
+        let table = self.core.table_at(table);
+        if table.record != Some(file) {
+            return;
+        }
+        let lazy: Vec<(Sid, Sid)> = table.lazy.iter().collect();
+        if lazy.is_empty() {
+            return;
+        }
+        let facts = self.core.facts.clone();
+        let sites = lazy_sites(&facts.files[file as usize].assigns);
+        let ctx = self.core.contexts(&mut self.scopes[owner], FUNC, -1);
+        for (name, source) in lazy {
+            let (line, col) = sites.get(&name).copied().unwrap_or((0, 0));
+            let (surface, hit, loaded) = Self::from_target(self.core, source, name);
+            let mut attrs = self.bound_attrs(name, loaded);
+            let k = &self.settings.k;
+            attrs.push((k.lazy, k.one));
+            let resolved = self.core.classify(surface, hit);
+            self.push(
+                IMPORT, owner, -1, line, col, ctx, surface, resolved, EMPTY, &attrs,
+            );
+        }
+    }
+
     fn imports(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
-        let k = &self.settings.k;
         let file = self.scopes[owner].file as usize;
         for row in &facts.files[file].imports {
             let core = &mut *self.core;
@@ -916,36 +975,24 @@ impl Producers<'_> {
                         );
                         continue;
                     };
-                    if name == k.star {
-                        surface = core.it.join(source, k.star);
+                    if name == self.settings.k.star {
+                        surface = core.it.join(source, name);
                         hit = Some(core.module_hit(source));
                         loaded = source;
-                        binds = k.star;
+                        binds = name;
                     } else {
-                        surface = core.it.join(source, name);
-                        let mut found = core.resolve_name(source, name);
-                        if found.is_none() && core.exists(surface) {
-                            found = Some(core.module_hit(surface));
-                        }
-                        hit = found;
-                        loaded = if core.exists(surface) {
-                            surface
-                        } else {
-                            source
-                        };
+                        (surface, hit, loaded) = Self::from_target(core, source, name);
                         binds = named(row.asname, name);
                     }
                 }
             }
-            let mut attrs = vec![(k.binds, binds)];
-            if core.exists(loaded) {
-                attrs.push((k.module, loaded));
-            }
-            let resolved = core.classify(surface, hit);
+            let attrs = self.bound_attrs(binds, loaded);
+            let resolved = self.core.classify(surface, hit);
             self.push(
                 IMPORT, owner, row.scope, row.line, row.col, ctx, surface, resolved, EMPTY, &attrs,
             );
         }
+        self.lazy_imports(owner);
     }
 
     fn references(&mut self, owner: usize) {
