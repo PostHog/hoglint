@@ -477,6 +477,11 @@ HAND_OUT_MOVES = {
         '_LAZY = {"run": "app.logic"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
         {},
     ),
+    "an import of a module under a listed name is added": (
+        '__all__ = ["ping"]' + PING,
+        'import app.jobs.tasks as run\n\n__all__ = ["run", "ping"]' + PING,
+        {},
+    ),
     "the module a lazy name comes from changes": (
         '_LAZY = {"run": "app.shim"}\n__all__ = ["run", "ping"]' + LAZY_GETATTR + PING,
         None,

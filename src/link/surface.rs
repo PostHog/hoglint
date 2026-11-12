@@ -9,7 +9,8 @@
 //!
 //! A star import hands out the names it binds (the source's `__all__`, else its public top-level
 //! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
-//! follows.
+//! follows. `import a.b as name` binds the module `a.b` under `name` and is handed out by the same
+//! clauses; a plain `import a.b` binds `a`, no surface of its own, and hands out nothing.
 //!
 //! Every rule reads this notion of what a module exports: core records it for every export
 //! module (`Link::hand_outs`).
@@ -276,41 +277,65 @@ impl HandedOut {
             .collect()
     }
 
+    /// (bound, target, clause) of an import that binds one name; `used` as in `names`.
+    fn single(
+        &self,
+        bound: Sid,
+        target: Sid,
+        name: Sid,
+        asname: Option<Sid>,
+        used: &FxHashSet<Sid>,
+    ) -> (Sid, Sid, &'static str) {
+        let kept = self.no_functions && !used.contains(&bound);
+        (bound, target, self.clause(bound, name, asname, kept))
+    }
+
+    /// (bound, target, clause) of each name one import of the module body binds. `import a.b`
+    /// binds `a`, no surface of its own, so it hands out nothing; `import a.b as name` binds the
+    /// module.
+    fn import_names(
+        &self,
+        core: &mut Core,
+        scope: &Scope,
+        row: &Import,
+        used: &FxHashSet<Sid>,
+    ) -> Vec<(Sid, Sid, &'static str)> {
+        let asname = row.asname.filter(|&a| a != EMPTY);
+        let Some(name) = row.name else {
+            let target = row.target.unwrap_or(EMPTY);
+            return match asname {
+                Some(bound) => vec![self.single(bound, target, target, asname, used)],
+                None => Vec::new(),
+            };
+        };
+        let source = absolute_import(
+            &mut core.it,
+            scope.module,
+            scope.is_package,
+            row.target,
+            row.level,
+        );
+        let Some(source) = source else {
+            return Vec::new();
+        };
+        if name == core.star() {
+            return self.star(core, source);
+        }
+        let target = core.it.join(source, name);
+        vec![self.single(named(row.asname, name), target, name, row.asname, used)]
+    }
+
     /// `used`: the names the module's own code refers to. In a module with no function such a
     /// name is no import kept only to be handed on, so another clause has to hand it out.
     pub fn names(&self, core: &mut Core, scope: &Scope, used: &FxHashSet<Sid>) -> Vec<Handed> {
         let facts = core.facts.clone();
         let mut out = Vec::new();
         let mut seen: FxHashSet<(Sid, Sid)> = FxHashSet::default();
-        let star = core.star();
         for row in &facts.files[scope.file as usize].imports {
-            let Some(name) = row.name else {
-                continue;
-            };
             if !binds_at_run_time(row) {
                 continue;
             }
-            let Some(source) = absolute_import(
-                &mut core.it,
-                scope.module,
-                scope.is_package,
-                row.target,
-                row.level,
-            ) else {
-                continue;
-            };
-            let handed = if name == star {
-                self.star(core, source)
-            } else {
-                let bound = named(row.asname, name);
-                let kept = self.no_functions && !used.contains(&bound);
-                let clause = self.clause(bound, name, row.asname, kept);
-                if clause.is_empty() {
-                    continue;
-                }
-                vec![(bound, core.it.join(source, name), clause)]
-            };
-            for (bound, target, clause) in handed {
+            for (bound, target, clause) in self.import_names(core, scope, row, used) {
                 if clause.is_empty() || !seen.insert((bound, target)) {
                     continue;
                 }
@@ -355,9 +380,10 @@ impl HandedOut {
             .imports
             .iter()
             .filter(|row| binds_at_run_time(row))
-            .filter_map(|row| {
-                let name = row.name.filter(|&name| name != star)?;
-                Some(named(row.asname, name))
+            .filter_map(|row| match row.name {
+                Some(name) if name == star => None,
+                Some(name) => Some(named(row.asname, name)),
+                None => row.asname.filter(|&a| a != EMPTY),
             })
             .filter(|bound| !handed.contains(bound))
             .collect();

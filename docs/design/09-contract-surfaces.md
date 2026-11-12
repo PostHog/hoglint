@@ -27,6 +27,7 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
 **What "hands out" means** (architect, D62 point 4, D64):
 - `__all__` in every literal form, and a form built from a module-level literal such as `sorted(_LAZY)`;
 - `import x as x`;
+- `import a.b as name`, when a clause holds for `name` (Nov 12); a plain `import a.b` binds `a` and hands out nothing;
 - lazy names;
 - every import of a module that has no top-level function, except a name the module's own code uses (D64).
   That exception removed 86 findings; 60 of them were the `frozen` decorator reported as part of its own module's contract.

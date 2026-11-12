@@ -89,9 +89,10 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `HZ02` | `products/legacy/backend/facade/labels.py` | A facade module that hands out a name from logic and has a body | clean | |
 | `HZ03` | `products/legacy/backend/facade/nsworkers.py` | A facade module that hands out a namespace directory under a wiring location and has a body | facade-logic finding | The directory's zone is read (Nov 12 handed_zones fix) |
 | `HZ04` | `products/legacy/backend/facade/lazyworkers.py` | A facade module with a body that hands out wiring lazily (`_LAZY`, `__getattr__`) | facade-logic finding | A lazy name has an import edge that does not run on import (`function_local`, attr `lazy`) |
-| `HZ05` | `products/legacy/backend/facade/aliasworkers.py` | A facade module with a body that hands out `import a.b as name` from wiring, listed in `__all__` | clean | Defect, not fixed: such an import is never handed out (wanted) |
+| `HZ05` | `products/legacy/backend/facade/aliasworkers.py` | A facade module with a body that hands out `import a.b as name` from wiring, listed in `__all__` | facade-logic finding | `import a.b as name` hands out the module when `__all__` lists the name |
 | `HZ06` | `products/legacy/backend/facade/aboveworkers.py` | A facade module with a body and a relative import above the top package in `__all__` | facade-logic clean; unknown rows in public-surface, facade-no-drf, prod-imports-test and the cycle rule | Defect, not fixed: the import binds no handed name, so `handed_zones` stays known (wanted as unknown) |
 | `HZ07` | `products/legacy/backend/facade/lazylabels.py` | A facade module with a body that hands out a name from its product's logic lazily | clean | Neighbor of `HZ04` |
+| `HZ08` | `products/legacy/backend/facade/aliaslabels.py` | A facade module with a body that imports wiring as `import a.b as name` and does not list the name in `__all__` | clean | Neighbor of `HZ05` |
 | `FQ01` | `products/catalog/backend/facade/api.py` | A facade function runs an ORM query itself (`count_entries`) | clean | D95, D96 (wanted) |
 | `FQ02` | `products/inventory/backend/facade/api.py` | A facade function maps a list that its logic returned | clean | D96 |
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |

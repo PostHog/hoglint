@@ -444,6 +444,20 @@ HANDED_CASES = {
         [],
         [],
     ),
+    "a module imported under a listed name": (
+        "import products.shop.backend.temporal.jobs as run",
+        "run",
+        {"products/shop/backend/temporal/jobs.py": RUN},
+        BUILD_FOUND,
+        [],
+    ),
+    "a module imported under a name that is not listed": (
+        "import products.shop.backend.temporal.jobs as run",
+        "build",
+        {"products/shop/backend/temporal/jobs.py": RUN},
+        [],
+        [],
+    ),
 }
 
 
@@ -467,3 +481,47 @@ def test_a_handed_member_whose_zone_is_unknown_makes_the_handed_zones_unknown(
     same_in_both_engines(out)
     assert [row[1] for row in read_lines(out["native"] / "findings.jsonl")] == [[symbol] for symbol in found]
     assert [row[1] for row in read_lines(out["native"] / "incomplete.jsonl")] == incomplete
+
+
+HANDING_IMPORTS = {
+    "a module under a listed name": (
+        "import products.shop.backend.temporal.jobs as jobs\n"
+        "import products.shop.backend.temporal.jobs as hidden\n"
+        "import products.shop.backend.temporal.jobs\n\n"
+        "__all__ = ['jobs', 'build']",
+        ["jobs"],
+        ["hidden"],
+    ),
+}
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("case", HANDING_IMPORTS)
+def test_the_hand_out_set_holds_every_name_a_handed_import_binds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, engine: str
+) -> None:
+    native_module()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    text, handed, kept = HANDING_IMPORTS[case]
+    repo = {
+        "hoglint.toml": HANDED_CONFIG,
+        "products/__init__.py": "",
+        "products/shop/__init__.py": "",
+        "products/shop/backend/__init__.py": "",
+        "products/shop/backend/facade/__init__.py": "",
+        "products/shop/backend/facade/hooks.py": text + BODY,
+        "products/shop/backend/temporal/jobs.py": RUN,
+    }
+    root = tmp_path / "repo"
+    for path, source in repo.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(source)
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    (tmp_path / "work").mkdir()
+    try:
+        graph, _, _, _ = Dump(root, engine, tmp_path / "out", tmp_path / "work").check()
+    finally:
+        gc.enable()
+    found = graph.hand_outs["products.shop.backend.facade.hooks"]
+    assert (sorted(found.handed), sorted(found.kept), found.unread) == (handed, kept, False)

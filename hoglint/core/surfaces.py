@@ -13,6 +13,8 @@ binds the name at run time; one under `if TYPE_CHECKING:` does not.
 
 A star import hands out the names it binds (the source's `__all__`, else its public top-level
 names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
+`import a.b as name` binds the module `a.b` under `name` and is handed out by the same clauses; a
+plain `import a.b` binds `a`, no surface of its own, and hands out nothing.
 
 Every rule reads this notion of what a module exports: a surface also imports the code it calls,
 and that code is not part of its contract. Core records it for every export module
@@ -208,25 +210,38 @@ class HandedOut:
             found = [name for name in found if name in listed]
         return [(name, f"{source}.{name}", clause) for name in found]
 
+    def single(
+        self, bound: str, target: str, name: str, asname: str | None, used: frozenset[str]
+    ) -> tuple[str, str, str]:
+        """(bound, target, clause) of an import that binds one name; `used` as in `names`."""
+        kept = self.no_functions and bound not in used
+        return bound, target, self.clause(bound, name, asname, kept)
+
+    def import_names(self, row: list, used: frozenset[str]) -> list[tuple[str, str, str]]:
+        """(bound, target, clause) of each name one import of the module body binds. `import a.b`
+        binds `a`, no surface of its own, so it hands out nothing; `import a.b as name` binds the
+        module."""
+        scope = self.scope
+        _, _, _, _, target, level, name, asname = row
+        if name is None:
+            return [self.single(asname, target, target, asname, used)] if asname else []
+        source = absolute_import(scope.module, scope.is_package, target, level)
+        if source is None:
+            return []
+        if name == "*":
+            return self.star(source)
+        return [self.single(asname or name, f"{source}.{name}", name, asname, used)]
+
     def names(self, used: frozenset[str]) -> list[Handed]:
         """`used`: the names the module's own code refers to. In a module with no function such
         a name is no import kept only to be handed on, so another clause has to hand it out."""
-        scope = self.scope
         out: list[Handed] = []
         seen: set[tuple[str, str]] = set()
-        for scope_id, line, column, flags, target, level, name, asname in scope.record.get("imports", ()):
-            if name is None or not binds_at_run_time(scope_id, flags):
+        for row in self.scope.record.get("imports", ()):
+            scope_id, line, column, flags = row[:4]
+            if not binds_at_run_time(scope_id, flags):
                 continue
-            source = absolute_import(scope.module, scope.is_package, target, level)
-            if source is None:
-                continue
-            if name == "*":
-                handed = self.star(source)
-            else:
-                bound = asname or name
-                kept = self.no_functions and bound not in used
-                handed = [(bound, f"{source}.{name}", self.clause(bound, name, asname, kept))]
-            for bound, target_name, clause in handed:
+            for bound, target_name, clause in self.import_names(row, used):
                 if not clause or (bound, target_name) in seen:
                     continue
                 seen.add((bound, target_name))
@@ -243,10 +258,13 @@ class HandedOut:
         """The names the module hands out and the ones it binds by import and keeps to itself.
         `used` as in `names`."""
         handed = frozenset(item.bound for item in self.names(used))
-        bound = frozenset(
-            asname or name
-            for scope_id, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ())
-            if name is not None and name != "*" and binds_at_run_time(scope_id, flags)
-        )
+        bound: set[str] = set()
+        for scope_id, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ()):
+            if not binds_at_run_time(scope_id, flags) or name == "*":
+                continue
+            if name is not None:
+                bound.add(asname or name)
+            elif asname:
+                bound.add(asname)
         unread = not self.no_functions and self.dunder_all.unread is not None
         return HandOut(handed, bound - handed, unread)

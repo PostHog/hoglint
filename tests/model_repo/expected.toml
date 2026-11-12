@@ -35,12 +35,6 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "FD04"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.api", "export-shape(class)"]
-
-[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -58,13 +52,19 @@ rule = "export-shape"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.backfill_command.Command", "products.legacy.backend.facade.backfill_command", "export-denied(command)"]
 
+[[row]]
+case = "FD04"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.api", "export-shape(class)"]
+
 # facade-logic
 
 [[row]]
-case = "HZ04"
+case = "HZ05"
 rule = "facade-logic"
 verdict = "finding"
-identity = ["products.legacy.backend.facade.lazyworkers.start_lazy", "products.legacy.backend.facade.lazyworkers"]
+identity = ["products.legacy.backend.facade.aliasworkers.start_alias", "products.legacy.backend.facade.aliasworkers"]
 
 [[row]]
 case = "FL03"
@@ -83,6 +83,12 @@ case = "HZ03"
 rule = "facade-logic"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.nsworkers.job_names", "products.legacy.backend.facade.nsworkers"]
+
+[[row]]
+case = "HZ04"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.legacy.backend.facade.lazyworkers.start_lazy", "products.legacy.backend.facade.lazyworkers"]
 
 # facade-no-drf
 
@@ -1331,13 +1337,6 @@ decision = "unknown is never clean: a class from a top folder outside first_part
 rule = "*"
 verdict = "*"
 match = ["ExternalView", "StockItem"]
-
-[[wanted]]
-case = "HZ05"
-decision = "unknown is never clean: `import a.b as name` in __all__ is handed out (Nov 12 handed_zones fix, not fixed)"
-rule = "facade-logic"
-verdict = "*"
-match = ["products.legacy.backend.facade.aliasworkers"]
 
 [[wanted]]
 case = "HZ06"
