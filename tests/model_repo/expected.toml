@@ -241,6 +241,12 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "RG02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.inventory.backend.routes", "export-denied(model)"]
+
+[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -1100,10 +1106,16 @@ identity = ["products.reports.backend.models.ReportRun"]
 # presentation-uses-facade
 
 [[row]]
-case = "PF08"
+case = "RG02"
 rule = "presentation-uses-facade"
 verdict = "finding"
-identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
+identity = ["products.inventory.backend.routes", "products.inventory.backend.route_helpers"]
+
+[[row]]
+case = "RG01"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.routes", "products.legacy.backend.route_helpers"]
 
 [[row]]
 case = "PF02"
@@ -1135,13 +1147,13 @@ rule = "presentation-uses-facade"
 verdict = "finding"
 identity = ["products.legacy.backend.presentation.views", "products.inventory.backend.presentation.serializers"]
 
-# prod-imports-test
-
 [[row]]
-case = "PF07"
-rule = "prod-imports-test"
+case = "PF08"
+rule = "presentation-uses-facade"
 verdict = "finding"
-identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.reviews.tests"]
+identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
+
+# prod-imports-test
 
 [[row]]
 case = "CR03"
@@ -1160,6 +1172,12 @@ case = "HZ10"
 rule = "prod-imports-test"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
+
+[[row]]
+case = "PF07"
+rule = "prod-imports-test"
+verdict = "finding"
+identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.reviews.tests"]
 
 [[row]]
 case = "PT01"
@@ -1816,3 +1834,10 @@ match = ["products.legacy.backend.facade.colonlazy"]
 [levels.isolated]
 passing = ["ai_observability", "visual_review"]
 failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]
+
+[[wanted]]
+case = "RG01"
+decision = "F1, proof round 2: a model in a slot of a function routes.py takes in by import is reported by no rule (measured, open)"
+rule = "export-shape"
+verdict = "finding"
+match = ["products.legacy.backend.models.Widget", "products.legacy.backend.routes"]
