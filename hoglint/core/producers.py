@@ -82,6 +82,9 @@ UP_POSITIONS: tuple[tuple[str, str], ...] = (
 EXPANDED = ("alias", "expanded")
 # The attr of a slot row whose generic type is given arguments: `dict[str, str]`, not `dict`.
 SUBSCRIPTED = ("subscripted", "1")
+# The attr of a slot row that is a type argument: the generic it is given to (`builtins.dict` for
+# the `Any` of `dict[str, Any]`).
+ARGUMENT_OF = "argument_of"
 # How many type aliases deep one slot's names are followed.
 MAX_ALIAS_DEPTH = 32
 TARGET_STEPS = ("assign-target", "annassign-target", "augassign-target", "for-target", "comp:target", "walrus-target")
@@ -475,13 +478,15 @@ class Mention:
 class Expanded:
     """A name a type alias expands to: whether it sits at the top of the expansion (the whole
     annotation, when the alias is), where it is looked up, whether the expansion stopped at it
-    because the alias it names is too deep to follow, and whether it is given arguments."""
+    because the alias it names is too deep to follow, whether it is given arguments, and the
+    generic it is an argument of, as written ("" for none)."""
 
     value: str
     top: bool
     lookup: SlotLookup
     too_deep: bool = False
     subscripted: bool = False
+    argument_of: str = ""
 
 
 @dataclass(frozen=False, slots=True)
@@ -593,31 +598,40 @@ class DeclarationProducer(Producer):
         """A dotted name, looked up where a slot's names are."""
         return context.dotted_lookup(place.scope, name, place.at_scope, place.line)
 
-    def mentions(self, value: object, position: str) -> list[tuple[str, str, bool]]:
-        """Every dotted name in a type expression, with whether it is the whole annotation and
-        whether it is a generic given arguments (`dict[str, str]`, not `dict`)."""
+    def mentions(self, value: object, position: str, argument_of: str = "") -> list[tuple[str, str, bool, str]]:
+        """Every dotted name in a type expression, with whether it is the whole annotation,
+        whether it is a generic given arguments (`dict[str, str]`, not `dict`), and the generic
+        it is an argument of, as written. `Annotated` passes its type through as it stands."""
         if isinstance(value, str):
-            return [(value, position, False)]
+            return [(value, position, False, argument_of)]
         if not isinstance(value, dict):
             return []
         if "sa" in value:
-            return self.mentions(value["sa"], position)
+            return self.mentions(value["sa"], position, argument_of)
         if "sub" in value:
-            outer = [(name, at, True) for name, at, _ in self.mentions(value["sub"], position)]
+            outer = [(name, at, True, of) for name, at, _, of in self.mentions(value["sub"], position, argument_of)]
             container = value["sub"] if isinstance(value["sub"], str) else ""
             last = container.rpartition(".")[2]
             if last == "Literal":
                 return outer
             index = value.get("i")
             if last == "Annotated" and isinstance(index, dict) and "tuple" in index and index["tuple"]:
-                return outer + self.mentions(index["tuple"][0], "nested")
-            return outer + self.mentions(index, "nested")
+                return outer + self.mentions(index["tuple"][0], "nested", argument_of)
+            return outer + self.mentions(index, "nested", container)
         if "bin" in value and value["bin"] == "|":
-            return self.mentions(value["l"], position) + self.mentions(value["r"], position)
+            return self.mentions(value["l"], position, argument_of) + self.mentions(value["r"], position, argument_of)
         for key in ("tuple", "list"):
             if key in value:
-                return [m for item in value[key] for m in self.mentions(item, "nested")]
+                return [m for item in value[key] for m in self.mentions(item, "nested", argument_of)]
         return []
+
+    def argument_marker(
+        self, context: BuildContext, lookup: SlotLookup, argument_of: str
+    ) -> tuple[tuple[str, str], ...]:
+        """The `argument_of` attr of a type argument: the generic it is given to, as it resolves."""
+        if not argument_of:
+            return ()
+        return ((ARGUMENT_OF, self.lookup_at(context, lookup, argument_of).surface),)
 
     def alias_of(
         self, context: BuildContext, mention: Mention, found: Lookup
@@ -655,8 +669,8 @@ class DeclarationProducer(Producer):
         """Depth first, the names in an alias's value, each alias in it followed once per place
         (top or nested). A cycle stops at the alias that closes it; an alias deeper than
         MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown."""
-        for name, position, subscripted in self.mentions(value, "whole"):
-            item = Expanded(name, top and position == "whole", where, subscripted=subscripted)
+        for name, position, subscripted, argument_of in self.mentions(value, "whole"):
+            item = Expanded(name, top and position == "whole", where, subscripted=subscripted, argument_of=argument_of)
             expansion.write(item)
             found = self.lookup_at(context, where, name)
             alias = self.alias_of(context, Mention(name, position, where), found)
@@ -698,20 +712,24 @@ class DeclarationProducer(Producer):
         slot: str,
         contract: bool,
         lookup: SlotLookup,
-        names: list[tuple[str, str, bool]],
+        names: list[tuple[str, str, bool, str]],
     ) -> None:
         """One row per mention, each followed (in a contract only) by a row per name of the type
         alias it is, when it is one. A slot names each name an alias expands to once per
         position, however often its aliases repeat it."""
         written: set[tuple[str, str, bool]] = set()
-        for value, mentioned, subscripted in names:
+        for value, mentioned, subscripted, argument_of in names:
             head = value.split(".")[0]
             found = self.lookup_at(context, lookup, value)
             alias = self.alias_of(context, Mention(value, mentioned, lookup), found) if contract else None
             expansion = self.expansion(context, *alias) if alias is not None else None
             if contract or found.hit is not None or found.surface != f"builtins.{head}":
                 resolved = context.classifier.classify_lookup(found)
-                marker = (*((EXPANDED,) if expansion else ()), *((SUBSCRIPTED,) if subscripted else ()))
+                marker = (
+                    *((EXPANDED,) if expansion else ()),
+                    *((SUBSCRIPTED,) if subscripted else ()),
+                    *self.argument_marker(context, lookup, argument_of),
+                )
                 graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned, *marker))
             if expansion is None:
                 continue
@@ -728,6 +746,7 @@ class DeclarationProducer(Producer):
                 marker = (
                     *((EXPANDED,) if self.expanded_in(context, expansion, item, inner) else ()),
                     *((SUBSCRIPTED,) if item.subscripted else ()),
+                    *self.argument_marker(context, item.lookup, item.argument_of),
                 )
                 resolved = context.classifier.classify_lookup(inner)
                 graph.edges.append(rows.edge(surface, resolved, slot, position, *marker))
@@ -983,7 +1002,7 @@ class DeclarationProducer(Producer):
             annotations.append(node.get("ret"))
         for annotation in annotations:
             if annotation is not None:
-                names.update(value.split(".")[0] for value, _, _ in self.mentions(annotation, "whole"))
+                names.update(value.split(".")[0] for value, _, _, _ in self.mentions(annotation, "whole"))
         return frozenset(names)
 
     def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
