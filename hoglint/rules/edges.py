@@ -65,28 +65,22 @@ class EntrypointPrimitive(EdgeRule):
         super().__init__(ctx, spec)
         self.default_allow = spec.deny is None and spec.allow is None and spec.require is None
         self.uses_at_import = spec.uses_at_import
-        self.imports: dict[tuple[str, str], list[Edge]] | None = None
         self.reported: dict[tuple[str, str], bool] = {}
 
-    def imports_named(self, key: tuple[str, str]) -> list[Edge]:
-        """The import edges of a (module, surface)."""
-        if self.imports is None:
-            self.imports = {}
-            for edge in self.ctx.edges_of((IMPORT,)):
-                self.imports.setdefault((edge.site.module, edge.surface), []).append(edge)
-        return self.imports.get(key, [])
-
     def import_reported(self, key: tuple[str, str]) -> bool:
-        """Whether the rule reports an import edge of a (module, surface): judged once per key,
-        only for the keys a use asks about."""
+        """Whether the rule judges any destination of an import edge of a (module, surface) other
+        than clean: judged once per key, only for the keys a use asks about."""
         found = self.reported.get(key)
         if found is None:
-            found = self.reported[key] = any(self.reports(edge) for edge in self.imports_named(key))
+            module, surface = key
+            found = self.reported[key] = any(
+                self.decide(env) is not Judgment.CLEAN
+                for group in self.ctx.groups_of((IMPORT,), module)
+                for edge in group.edges
+                if edge.surface == surface
+                for env in self.edge_envs(edge)
+            )
         return found
-
-    def reports(self, edge: Edge) -> bool:
-        """Whether the rule judges any destination of an edge it sees other than clean."""
-        return any(self.decide(env) is not Judgment.CLEAN for env in self.edge_envs(edge))
 
     def sees(self, edge: Edge) -> bool:
         if not super().sees(edge):
