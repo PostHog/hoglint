@@ -93,12 +93,23 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                 for &id in ids {
                     let src = cx.src_endpoint(id);
                     cx.dst_endpoints(id, Role::Origin, &mut dsts);
-                    let env = Env::new(cx, Some(id), src, dsts[0]);
-                    let value = env.resolve(*column);
-                    if matches!(value, Value::Unknown | Value::None) {
+                    let dst = dsts[0];
+                    let value = Env::new(cx, Some(id), src, dst).resolve(*column);
+                    if !matches!(value, Value::Unknown | Value::None) {
+                        found.entry(render(&value)).or_insert((at, None));
                         continue;
                     }
-                    found.entry(render(&value)).or_insert((at, None));
+                    let files = match column {
+                        Ref::Dst(_) => cx.namespace_files(&dst),
+                        _ => None,
+                    };
+                    if let Some(files) = files {
+                        for path in files {
+                            found.entry(path).or_insert((at, None));
+                        }
+                    } else if matches!(value, Value::Unknown) || cx.namespace_clash(&dst) {
+                        out.incomplete.push(unplaced(cx, at, &src, id));
+                    }
                 }
             }
             Cover::Edges {
@@ -130,21 +141,25 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                             continue;
                         }
                         let endpoint = if *from_src { &src } else { dst };
-                        let module = src.module.map(|module| cx.text(module).to_string());
                         if endpoint.unresolved || truth == Truth::Unknown {
-                            let surface = cx.text(cx.link.edges.surface_of(id));
-                            out.incomplete
-                                .push(("unplaced", at, module, surface.to_string()));
+                            out.incomplete.push(unplaced(cx, at, &src, id));
                             continue;
                         }
-                        let Some(path) = endpoint.path.filter(|path| !path.is_empty()) else {
-                            continue;
-                        };
                         if endpoint.external.is_some() {
                             continue;
                         }
-                        let owner = endpoint.module.map(|module| cx.text(module).to_string());
-                        found.entry(path.to_string()).or_insert((at, owner));
+                        if let Some(path) = endpoint.path.filter(|path| !path.is_empty()) {
+                            let owner = endpoint.module.map(|module| cx.text(module).to_string());
+                            found.entry(path.to_string()).or_insert((at, owner));
+                            continue;
+                        }
+                        let Some(files) = cx.namespace_files(endpoint) else {
+                            out.incomplete.push(unplaced(cx, at, &src, id));
+                            continue;
+                        };
+                        for path in files {
+                            found.entry(path).or_insert((at, None));
+                        }
                     }
                 }
             }
@@ -157,6 +172,18 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     paths.sort();
     out.paths = paths;
     out
+}
+
+/// A cover cannot place edge `id` (`CoveragePrimitive.unplaced`).
+fn unplaced(
+    cx: Cx,
+    at: u32,
+    src: &Endpoint,
+    id: u32,
+) -> (&'static str, u32, Option<String>, String) {
+    let module = src.module.map(|module| cx.text(module).to_string());
+    let surface = cx.text(cx.link.edges.surface_of(id)).to_string();
+    ("unplaced", at, module, surface)
 }
 
 /// The edges an edge cover reads, in the order Python reads them: kind by kind, or every edge.

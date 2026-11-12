@@ -3,7 +3,7 @@
 //! (`Labeler.label_resolver`).
 
 use super::conflicts::Conflict;
-use super::labels::{Cell, FieldKind, Namespace};
+use super::labels::{Cell, FieldKind, NAMESPACE_PROBE, Namespace};
 use super::selector::{EdgeField, EndField, EntityField, Ref, Resolve, evaluate};
 use super::value::{Truth, Value, any_of, split_list};
 use super::{Handed, Rules, longest_module};
@@ -137,6 +137,35 @@ impl<'a> Cx<'a> {
         }
         let rules: &'a Rules = self.rules;
         rules.labels.namespaces.get(self.text(module?))
+    }
+
+    /// What stands for a directory without `__init__.py` an endpoint names
+    /// (`CoveragePrimitive.namespace_files`): each module file directly inside it, else the
+    /// directory itself with a trailing slash. None for an endpoint that names no such directory.
+    pub fn namespace_files(&self, endpoint: &Endpoint<'a>) -> Option<Vec<String>> {
+        if endpoint.external.is_some() {
+            return None;
+        }
+        let found = self.namespace(endpoint.module, endpoint.at)?;
+        if !found.inside.is_empty() {
+            return Some(found.inside.clone());
+        }
+        let directory = found
+            .path
+            .strip_suffix(NAMESPACE_PROBE)
+            .unwrap_or(&found.path);
+        Some(vec![directory.to_string()])
+    }
+
+    /// Whether an endpoint names a dotted name two directories without `__init__.py` hold
+    /// (`CoveragePrimitive.namespace_clash`).
+    pub fn namespace_clash(&self, endpoint: &Endpoint<'a>) -> bool {
+        endpoint.module.is_some_and(|module| {
+            self.rules
+                .labels
+                .namespace_clashes
+                .contains(self.text(module))
+        })
     }
 
     /// A field's label on the namespace directory a module outside the graph names.

@@ -89,6 +89,9 @@ class GraphBuilder:
     def entity(self, dotted: str) -> EntityId:
         if dotted in self.graph.modules:
             return EntityId(LANGUAGE_PYTHON, dotted)
+        # A directory without `__init__.py` that holds modules: the module is the directory.
+        if any(module.startswith(dotted + ".") for module in self.graph.modules):
+            return EntityId(LANGUAGE_PYTHON, dotted)
         head = dotted
         while "." in head:
             head = head.rpartition(".")[0]

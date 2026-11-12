@@ -352,12 +352,15 @@ impl Export {
 
 /// A file name no glob spells (`labels.NAMESPACE_PROBE`): a namespace directory is labelled by
 /// the path of a module file directly inside it.
-const NAMESPACE_PROBE: &str = "\0.py";
+pub const NAMESPACE_PROBE: &str = "\0.py";
 
 /// A directory without `__init__.py` that holds graph modules (`labels.NamespaceDirectories`):
 /// an edge can name one, and the path of a file directly inside it labels it.
 pub struct Namespace {
     pub path: String,
+    /// The paths of the module files directly inside the directory, sorted
+    /// (`NamespaceDirectories.inside`).
+    pub inside: Vec<String>,
     /// Per field, the label that path's assignments and zones give; None where none does and for
     /// symbol and provider fields; unknown where two sources disagree or a module file directly
     /// inside the directory reads the field otherwise.
@@ -513,9 +516,21 @@ impl Labels {
         }
         for (name, directory) in &directories {
             let path = format!("{directory}/{NAMESPACE_PROBE}");
-            let labels = out.label_namespace(&path, &inside[directory.as_str()]);
-            out.namespaces
-                .insert(name.as_str().into(), Namespace { path, labels });
+            let found = &inside[directory.as_str()];
+            let labels = out.label_namespace(&path, found);
+            let mut files: Vec<String> = found
+                .iter()
+                .map(|&at| paths[at as usize].to_string())
+                .collect();
+            files.sort();
+            out.namespaces.insert(
+                name.as_str().into(),
+                Namespace {
+                    path,
+                    inside: files,
+                    labels,
+                },
+            );
         }
         out.fill_provided(plan)?;
         Ok(out)

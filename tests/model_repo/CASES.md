@@ -149,7 +149,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `UI01` | `products/gatekeeper/backend/wiring.py` | An install whose hook cannot be resolved, in an unwatched module of a narrowed product | installs incomplete; wiring-watched incomplete; the product is not Isolated | `wiring-watched` is strict for the level |
 | `UI02` | `products/notifications/backend/wiring.py` | The same in a product with no contract-check task | the same; the product is not Isolated | |
 | `DR01` | `posthog/test/test_widget_query.py`, `products/catalog/backend/hogql_queries/entries.py` | A core test runs a product's query kind | drives finding; wiring-watched finding for the location's `__init__.py` | |
-| `DR02` | `posthog/test/test_widget_query.py`, `products/reports/backend/hogql_queries/widget.py` | The same into a location without `__init__.py`, unwatched | drives finding; wiring-watched clean | Defect: nothing asks for the location (wanted) |
+| `DR02` | `posthog/test/test_widget_query.py`, `products/reports/backend/hogql_queries/widget.py` | The same into a location without `__init__.py`, unwatched | drives finding; wiring-watched finding for `widget.py`, the file directly inside | Each module file directly inside such a location stands for it, as `__init__.py` does for a package (Nov 12) |
 | `DR03` | `products/reports/backend/tests/test_widget_query.py` | A product's own test runs its kind | clean | |
 | `WW01` | `posthog/auth.py`, `products/gatekeeper/backend/facade/api.py`, `products/gatekeeper/backend/logic/decisions.py` | Core's request code imports a facade at module level; the logic behind it is unwatched | no-product-lists-in-core finding; request-path rows for the facade and the logic; wiring-watched finding for `logic/decisions.py` | D103 |
 | `WW02` | `posthog/permissions.py`, `products/access_control/backend/logic/rules.py` | The same through an import inside a function | no-product-lists-in-core finding; wiring-watched clean | A written limit of D103 |
@@ -201,7 +201,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `dst.zone` | A directory two source roots place apart | none | The tree has one source root; a second would change every other case's module names |
 | `crosses` | A slot typed with a name that does not resolve | `CR03` | unknown |
 | `installs` as a list | A hook call that does not resolve | `UI01`, `UI02` | incomplete; the product is not Isolated |
-| Namespace-directory labels | A drives location without `__init__.py` | `DR02` | clean for wiring-watched (defect, wanted) |
+| Namespace-directory labels | A drives location without `__init__.py` | `DR02` | wiring-watched finding for the file directly inside |
 | `uses_at_import` | A use whose import the rule does not report | `PS03` | the use is a finding of its own; with this preset no import is reported clean while its use is not, so no stronger case can be built (`tests/native/test_evaluator.py` holds it) |
 | `slots = "shape"` | A module the signature rule cannot tell about | none | A file's zone is never unknown in this preset (the zone field has no domain); `tests/native/test_facade_rules.py` holds it |
 | Namespace-directory labels | A directory whose files disagree on zone | none | Zones come from globs only here, so a directory reads one answer; a provider-set zone would be needed |

@@ -8,6 +8,7 @@ from typing import Any
 from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.globs import fill, glob_match
+from hoglint.labels import NAMESPACE_PROBE
 from hoglint.model import Edge
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 from hoglint.rules.base import (
@@ -455,10 +456,32 @@ class CoveragePrimitive(EntityRule):
         for finding in run.findings:
             for edge in finding.witnesses:
                 src = self.ctx.src_endpoint(edge.site)
-                env = EdgeEnv(self.ctx, edge, src, self.ctx.dst_endpoints(edge, "origin")[0])
-                value = env.resolve(ref)
+                dst = self.ctx.dst_endpoints(edge, "origin")[0]
+                value = EdgeEnv(self.ctx, edge, src, dst).resolve(ref)
                 if value.state is State.KNOWN:
                     out.setdefault(render_value(value), (self.why(cover), None))
+                    continue
+                files = self.namespace_files(dst) if ref.path[0] == "dst" else None
+                if files is not None:
+                    for path in files:
+                        out.setdefault(path, (self.why(cover), None))
+                elif value.state is State.UNKNOWN or self.namespace_clash(dst):
+                    self.unplaced(src.module, edge.surface)
+
+    def namespace_files(self, endpoint: Endpoint) -> list[str] | None:
+        """What stands for a directory without `__init__.py`: each module file directly inside it,
+        as `__init__.py` stands for a package; the directory itself (`expand`) when it holds none.
+        None for an endpoint that is no such directory."""
+        namespaces = self.ctx.labeler.namespaces
+        module = endpoint.module
+        if endpoint.external is not None or module is None or module not in namespaces.paths:
+            return None
+        inside = sorted(self.ctx.graph.modules[name] for name in namespaces.inside.get(module, ()))
+        return inside or [namespaces.paths[module].removesuffix(NAMESPACE_PROBE)]
+
+    def namespace_clash(self, endpoint: Endpoint) -> bool:
+        """A name two directories without `__init__.py` hold: no file can stand for it."""
+        return endpoint.module is not None and endpoint.module in self.ctx.labeler.namespaces.clashes
 
     @staticmethod
     def reads_kind_and_context(node: Node) -> bool:
@@ -498,8 +521,17 @@ class CoveragePrimitive(EntityRule):
                 if endpoint.unresolved or truth is Truth.UNKNOWN:
                     self.unplaced(src.module, edge.surface)
                     continue
-                if endpoint.path and endpoint.external is None:
+                if endpoint.external is not None:
+                    continue
+                if endpoint.path:
                     out.setdefault(endpoint.path, (self.why(cover), endpoint.module))
+                    continue
+                files = self.namespace_files(endpoint)
+                if files is None:
+                    self.unplaced(src.module, edge.surface)
+                    continue
+                for path in files:
+                    out.setdefault(path, (self.why(cover), None))
 
     def expand(self, location: str) -> list[str]:
         if not location.endswith("/"):

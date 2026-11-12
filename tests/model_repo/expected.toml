@@ -1478,6 +1478,12 @@ identity = ["products.legacy.backend.management.commands.sync_widgets", "product
 # wiring-watched
 
 [[row]]
+case = "DR02"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/hogql_queries/widget.py"]
+
+[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"
@@ -1607,13 +1613,6 @@ decision = "bare list as unknown (open since Nov 12)"
 rule = "facade-signature"
 verdict = "unknown"
 match = ["take_bare_list"]
-
-[[wanted]]
-case = "DR02"
-decision = "unknown is never clean: a drives location without __init__.py must be watched"
-rule = "wiring-watched"
-verdict = "*"
-match = ["products/reports/backend/hogql_queries"]
 
 [[wanted]]
 case = "WK04"

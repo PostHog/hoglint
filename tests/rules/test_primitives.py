@@ -686,6 +686,62 @@ def test_coverage_cannot_tell_what_a_rule_it_reads_cannot_tell(tmp_path: Path) -
     ]
 
 
+COVER_A_DIRECTORY = """
+[rules.drives]
+primitive = "edge"
+kinds = ["drives"]
+contexts = { include = ["test"] }
+select = "src.package != dst.package"
+identity = ["dst.module", "src.module"]
+counted = true
+growth_key = ["dst.module"]
+
+[rules.wiring-watched]
+primitive = "coverage"
+covers = ["rules.drives.dst.path", "edge.kind == 'dotted-path' and edge.context == 'test': dst"]
+inputs = { adapter = "turbo", task = "contract-check" }
+identity = "entity"
+growth_key = ["subject"]
+"""
+
+
+def directory_graph() -> GraphBuilder:
+    """`products.billing.queries` is a directory without `__init__.py`: two files directly inside,
+    a test and a package below it."""
+    return (
+        base_graph()
+        .module(
+            "core.tests.test_billing",
+            "products.billing.queries.runner",
+            "products.billing.queries.other",
+            "products.billing.queries.tests.test_runner",
+        )
+        .package("products.billing.queries.nested")
+    )
+
+
+@pytest.mark.parametrize("kind", ["drives", "dotted-path"])
+def test_a_directory_without_init_needs_each_file_directly_inside_it_watched(tmp_path: Path, kind: str) -> None:
+    turbo_package(tmp_path, "products/billing", {"tasks": {"contract-check": {"inputs": ["queries/runner.py"]}}})
+    graph = directory_graph().edge(
+        kind, "core.tests.test_billing", "products.billing.queries", contexts=(Context.TEST,)
+    )
+    result = run(tmp_path, COVER_A_DIRECTORY, graph.graph)
+    assert identities(result, "wiring-watched") == [("products/billing/queries/other.py",)]
+    assert result.runs["wiring-watched"].incomplete == []
+
+
+def test_a_destination_with_no_path_that_is_no_directory_is_incomplete(tmp_path: Path) -> None:
+    turbo_package(tmp_path, "products/billing", {"tasks": {"contract-check": {"inputs": ["**"]}}})
+    graph = directory_graph().edge(
+        "dotted-path", "core.tests.test_billing", "nowhere.vanished", contexts=(Context.TEST,)
+    )
+    result = run(tmp_path, COVER_A_DIRECTORY, graph.graph)
+    assert [item.reason for item in result.runs["wiring-watched"].incomplete] == [
+        "cannot place 'nowhere.vanished' for coverage"
+    ]
+
+
 LEVEL = (
     USE_SHAPE
     + LAYOUT_AND_COVERAGE
