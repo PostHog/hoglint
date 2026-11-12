@@ -130,6 +130,9 @@ class ExportSpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, "files", ExportPaths(self.within, self.paths))
 
+    def label(self) -> str:
+        return f"[exports.{self.name}]  ({self.source})"
+
 
 @dataclass(frozen=True, slots=True)
 class RegistrySpec:

@@ -41,11 +41,10 @@ class StaleNames:
     """The names the config writes out in full, checked against the tree: the config loads before
     the tree is read, so only a run can tell that one names nothing."""
 
-    def __init__(self, config: Config, graph: Graph, labeler: Labeler) -> None:
+    def __init__(self, config: Config, labeler: Labeler) -> None:
         self.config = config
-        self.graph = graph
-        self.paths = set(graph.modules.values())
-        self.modules = graph.modules
+        self.paths = labeler.path_to_module
+        self.modules = labeler.graph.modules
         self.facts = labeler.facts
 
     def items(self) -> list[IncompleteItem]:
@@ -61,8 +60,7 @@ class StaleNames:
         for export in self.config.exports.values():
             for name in export.symbols:
                 if not self.known(name):
-                    reason = f"{name} is named by [exports.{export.name}]  ({export.source}) but no symbol has it"
-                    out.append(self.item(name, reason))
+                    out.append(self.item(name, f"{name} is named by {export.label()} but no symbol has it"))
         return out
 
     def known(self, name: str) -> bool:
@@ -224,6 +222,13 @@ class Engine:
     def rule_context(self) -> RuleContext:
         return context_class(self.labeler.index)(self.config, self.graph, self.labeler, self.repo_root)
 
+    @staticmethod
+    def add_incomplete_run(ctx: RuleContext, rule_id: str, items: list[IncompleteItem]) -> None:
+        """A run of a rule no config declares that holds only incomplete items."""
+        run = RuleRun(RuleSpec(rule_id, "layout", ledger=False))
+        run.incomplete.extend(items)
+        ctx.results[rule_id] = run
+
     def run_rules(self, confirm: bool = False, ctx: RuleContext | None = None) -> dict[str, RuleRun]:
         """Every rule's run. With `confirm` (a run that writes a ledger), every finding a judge
         outside its rule's code made is judged again by that code first."""
@@ -248,22 +253,21 @@ class Engine:
         if confirm:
             ctx.confirm_findings(ran)
         for name in sorted(self.labeler.providers.failures):
+            rule_id = f"provider:{name}"
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
-            run = RuleRun(RuleSpec(f"provider:{name}", "layout", ledger=False))
-            run.incomplete.append(IncompleteItem(run.spec.id, reason, reason, (), IncompleteCause.EXTRACTOR))
-            ctx.results[run.spec.id] = run
-        stale = StaleNames(self.config, self.graph, self.labeler).items()
+            self.add_incomplete_run(
+                ctx, rule_id, [IncompleteItem(rule_id, reason, reason, (), IncompleteCause.EXTRACTOR)]
+            )
+        stale = StaleNames(self.config, self.labeler).items()
         if stale:
-            run = RuleRun(RuleSpec(STALE_NAMES, "layout", ledger=False))
-            run.incomplete.extend(stale)
-            ctx.results[STALE_NAMES] = run
+            self.add_incomplete_run(ctx, STALE_NAMES, stale)
         unread = sorted({edge.site.path for edge in self.graph.by_kind("unparsed") if READ_ERROR in edge.attrs})
         if unread:
-            run = RuleRun(RuleSpec(UNREADABLE, "layout", ledger=False))
+            items: list[IncompleteItem] = []
             for path in unread:
                 reason = f"{path} could not be read, so its facts are missing"
-                run.incomplete.append(IncompleteItem(UNREADABLE, path, reason, (), IncompleteCause.EXTRACTOR))
-            ctx.results[UNREADABLE] = run
+                items.append(IncompleteItem(UNREADABLE, path, reason, (), IncompleteCause.EXTRACTOR))
+            self.add_incomplete_run(ctx, UNREADABLE, items)
         self.raise_conflicts(ctx)
         return ctx.results
 
