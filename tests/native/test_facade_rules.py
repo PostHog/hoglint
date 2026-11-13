@@ -308,8 +308,9 @@ COMMAND_FILES = {
     ),
 }
 IMPORTS_COMMAND = f"from {COMMANDS}.charge import Command\nfrom {SHOP}.logic import Job\n\n\n"
-# A command class in a slot the signature rule sees is that rule's; in a field one level down it is
-# the export rule's. Each case is one finding of exactly one rule.
+# A command class in a slot the signature rule reads is that rule's; in a field of `Job`, whose row in
+# the product's logic no signature rule reads, it is the export rule's. Each case is one finding of
+# exactly one rule.
 COMMAND_SLOT_CASES = {
     "a parameter": (
         "def run(command: Command) -> None:\n    pass\n",
@@ -387,34 +388,53 @@ deny       = "dst.kind == 'model'"
 identity   = "facade-slot"
 ledger     = false
 """
+CONTRACTS = f"{SHOP}.facade.contracts"
+CLEAN = {"export-shape": [], "facade-signature": []}
 DENIED_AT_ERRORS = {"export-shape": [[ORDER, ERRORS, "export-denied(model)"]], "facade-signature": []}
+ANY_AT_ERRORS = {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []}
+JUDGED_AT_ROUTES = [
+    [ORDER, ROUTES, "export-denied(model)"],
+    [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
+    ["typing.Any", ROUTES, "export-unknown"],
+]
+# A frozen dataclass whose one field is a model, by its name.
+ORDER_DATACLASS = "@dataclasses.dataclass(frozen=True)\nclass {name}:\n    order: Order\n"
+INFO_FIELD = [API, "Info.__init__", "field:order", ORDER]
+INFO_FIELD_AT_CONTRACTS = [CONTRACTS, "Info.__init__", "field:order", ORDER]
+# An exception whose `__init__` takes an opaque payload.
+OPAQUE_INIT = (
+    "from typing import Any\n\n\nclass Rejected(Exception):\n"
+    "    def __init__(self, extra: dict[str, Any]) -> None:\n        self.extra = extra\n"
+)
+# The class and function of the hand-out order cases, defined in the product's logic.
+INFO_AND_GET = IMPORTS_ORDER + ORDER_DATACLASS.format(name="Info") + "\n\ndef get() -> Info:\n    raise ValueError\n"
+# A contract dataclass the facade defines, with a field it inherits from the product's logic.
+INHERITED_FIELD = {
+    f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Base"),
+    f"{SHOP_DIR}/facade/contracts.py": f"import dataclasses\n\nfrom {SHOP}.logic import Base\n\n\n"
+    "@dataclasses.dataclass(frozen=True)\nclass Info(Base):\n    pass\n",
+}
+
+
+def returns(module: str, name: str) -> str:
+    """A facade file whose one function returns a class it imports from `module`."""
+    return f"from {module} import {name}\n\n\ndef get() -> {name}:\n    raise ValueError\n"
+
+
 # A slot is left to the signature rule only where that rule reads the slot's row: in a facade
 # module, in a public callable, or in the copy a facade holds of a function or a data shape's fields
 # it hands out. A registration surface, a private method and a member of a class handed out from
 # outside the facade are judged by the export rule.
 SLOT_OWNER_CASES = {
     "a facade function": ({f"{SHOP_DIR}/facade/api.py": TAKES_AN_ORDER}, {"export-shape": []}),
-    "a registration function": (
-        {f"{SHOP_DIR}/routes.py": TAKES_AN_ORDER},
-        {
-            "export-shape": [
-                [ORDER, ROUTES, "export-denied(model)"],
-                [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
-                ["typing.Any", ROUTES, "export-unknown"],
-            ]
-        },
-    ),
+    "a registration function": ({f"{SHOP_DIR}/routes.py": TAKES_AN_ORDER}, {"export-shape": JUDGED_AT_ROUTES}),
     "a registration function an unnamed signature rule reads": (
         {
             "hoglint.toml": ROOT_CONFIG + UNNAMED_SIGNATURE_RULE,
             f"{SHOP_DIR}/routes.py": TAKES_AN_ORDER,
         },
         {
-            "export-shape": [
-                [ORDER, ROUTES, "export-denied(model)"],
-                [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
-                ["typing.Any", ROUTES, "export-unknown"],
-            ],
+            "export-shape": JUDGED_AT_ROUTES,
             "routes-signature": [
                 [ROUTES, "place", "param:extra", "typing.Any"],
                 [ROUTES, "place", "param:order", ORDER],
@@ -424,7 +444,7 @@ SLOT_OWNER_CASES = {
     ),
     "a private method of a contract": (
         {f"{SHOP_DIR}/facade/contracts.py": PRIVATE_METHOD},
-        {"export-shape": [[ORDER, f"{SHOP}.facade.contracts", "export-denied(model)"]]},
+        {"export-shape": [[ORDER, CONTRACTS, "export-denied(model)"]]},
     ),
     "a method of a handed-out exception": (
         handed_out("class Rejected(Exception):\n    def order(self) -> Order:\n        raise ValueError\n", "Rejected"),
@@ -463,7 +483,7 @@ SLOT_OWNER_CASES = {
         {"export-shape": [], "facade-signature": [[ERRORS, "place", "param:order", ORDER]]},
     ),
     "a field of a handed-out dataclass": (
-        handed_out("@dataclasses.dataclass(frozen=True)\nclass Receipt:\n    order: Order\n", "Receipt"),
+        handed_out(ORDER_DATACLASS.format(name="Receipt"), "Receipt"),
         {"export-shape": [], "facade-signature": [[ERRORS, "Receipt.__init__", "field:order", ORDER]]},
     ),
     "a method inherited from a class core defines": (
@@ -474,7 +494,7 @@ SLOT_OWNER_CASES = {
                 "from posthog.errors import CoreError\n\n\nclass Rejected(CoreError):\n    pass\n", "Rejected"
             ),
         },
-        {"export-shape": [], "facade-signature": []},
+        CLEAN,
     ),
     "a method inherited from a base in the same product": (
         {
@@ -491,21 +511,14 @@ SLOT_OWNER_CASES = {
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
     ),
-    "an opaque payload parameter of a handed-out exception": (
-        handed_out(
-            "from typing import Any\n\n\nclass Rejected(Exception):\n"
-            "    def __init__(self, extra: dict[str, Any]) -> None:\n        self.extra = extra\n",
-            "Rejected",
-        ),
-        {"export-shape": [], "facade-signature": []},
-    ),
+    "an opaque payload parameter of a handed-out exception": (handed_out(OPAQUE_INIT, "Rejected"), CLEAN),
     "an opaque payload returned by a method of a handed-out exception": (
         handed_out(
             "from typing import Any\n\n\nclass Rejected(Exception):\n"
             "    def extra(self) -> dict[str, Any]:\n        return {}\n",
             "Rejected",
         ),
-        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+        ANY_AT_ERRORS,
     ),
     "a bare Any parameter of a handed-out exception": (
         handed_out(
@@ -513,7 +526,7 @@ SLOT_OWNER_CASES = {
             "    def __init__(self, extra: Any) -> None:\n        self.extra = extra\n",
             "Rejected",
         ),
-        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+        ANY_AT_ERRORS,
     ),
     "a model as a mapping's argument on a handed-out exception": (
         handed_out(
@@ -527,63 +540,37 @@ SLOT_OWNER_CASES = {
         {
             f"{SHOP_DIR}/logic.py": "import dataclasses\nfrom typing import Any\n\n\n"
             "@dataclasses.dataclass(frozen=True)\nclass Info:\n    payload: dict[str, Any]\n",
-            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Info\n\n\ndef get() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/facade/api.py": returns(f"{SHOP}.logic", "Info"),
         },
-        {"export-shape": [], "facade-signature": []},
+        CLEAN,
     ),
     "an opaque payload only one of two named rules leaves out": (
         {
             "hoglint.toml": ROOT_CONFIG
             + UNNAMED_SIGNATURE_RULE
             + '\n[rules.export-shape]\nleave_slots_to = { add = ["routes-signature"] }\n',
-            **handed_out(
-                "from typing import Any\n\n\nclass Rejected(Exception):\n"
-                "    def __init__(self, extra: dict[str, Any]) -> None:\n        self.extra = extra\n",
-                "Rejected",
-            ),
+            **handed_out(OPAQUE_INIT, "Rejected"),
         },
-        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+        ANY_AT_ERRORS,
     ),
     "a field of a contract class a facade function returns": (
         {
-            f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n",
-            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.facade.contracts import Info\n\n\ndef get() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Info"),
+            f"{SHOP_DIR}/facade/api.py": returns(CONTRACTS, "Info"),
         },
-        {
-            "export-shape": [],
-            "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
-        },
+        {"export-shape": [], "facade-signature": [INFO_FIELD_AT_CONTRACTS]},
     ),
     "an inherited field of a contract dataclass the facade defines": (
-        {
-            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Base:\n    order: Order\n",
-            f"{SHOP_DIR}/facade/contracts.py": f"import dataclasses\n\nfrom {SHOP}.logic import Base\n\n\n"
-            "@dataclasses.dataclass(frozen=True)\nclass Info(Base):\n    pass\n",
-        },
-        {
-            "export-shape": [],
-            "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
-        },
+        INHERITED_FIELD,
+        {"export-shape": [], "facade-signature": [INFO_FIELD_AT_CONTRACTS]},
     ),
     "an inherited field of a contract dataclass the facade package hands out": (
-        {
-            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Base:\n    order: Order\n",
-            f"{SHOP_DIR}/facade/contracts.py": f"import dataclasses\n\nfrom {SHOP}.logic import Base\n\n\n"
-            "@dataclasses.dataclass(frozen=True)\nclass Info(Base):\n    pass\n",
-            f"{SHOP_DIR}/facade/__init__.py": f"from {SHOP}.facade.contracts import Info\n\n__all__ = ['Info']\n",
-        },
-        {
-            "export-shape": [],
-            "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
-        },
+        {**INHERITED_FIELD, f"{SHOP_DIR}/facade/__init__.py": f"from {CONTRACTS} import Info\n\n__all__ = ['Info']\n"},
+        {"export-shape": [], "facade-signature": [INFO_FIELD_AT_CONTRACTS]},
     ),
     "a dataclass handed out under a private name": (
         {
-            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Receipt:\n    order: Order\n",
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Receipt"),
             f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Receipt as _Receipt\n\n__all__ = ['_Receipt']\n",
         },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
@@ -597,36 +584,31 @@ SLOT_OWNER_CASES = {
     ),
     "a class a facade function names and the module hands out": (
         {
-            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n",
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Info"),
             f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Info\n\n__all__ = ['get', 'Info']\n\n\n"
             "def get() -> Info:\n    raise ValueError\n",
         },
-        {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
+        {"export-shape": [], "facade-signature": [INFO_FIELD]},
     ),
     "a class a handed-out function names, handed out after it": (
         {
-            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n\n\n"
-            "def get() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/logic.py": INFO_AND_GET,
             f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import get\nfrom {SHOP}.logic import Info\n\n__all__ = ['get', 'Info']\n",
         },
-        {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
+        {"export-shape": [], "facade-signature": [INFO_FIELD]},
     ),
     "a class a handed-out function names, handed out before it": (
         {
-            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
-            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n\n\n"
-            "def get() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/logic.py": INFO_AND_GET,
             f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Info\nfrom {SHOP}.logic import get\n\n__all__ = ['get', 'Info']\n",
         },
-        {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
+        {"export-shape": [], "facade-signature": [INFO_FIELD]},
     ),
     "a field inherited from a pydantic model core defines": (
         {
             "posthog/rows.py": IMPORTS_ORDER + "class CoreRow(BaseModel):\n    order: Order\n",
             f"{SHOP_DIR}/logic.py": "from posthog.rows import CoreRow\n\n\nclass Row(CoreRow):\n    title: str\n",
-            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Row\n\n\ndef get() -> Row:\n    raise ValueError\n",
+            f"{SHOP_DIR}/facade/api.py": returns(f"{SHOP}.logic", "Row"),
         },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
     ),
@@ -635,7 +617,7 @@ SLOT_OWNER_CASES = {
             **CORE_MODELS,
             f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\n\nfrom posthog.models.team.team import Team\n\n\n"
             "@dataclasses.dataclass(frozen=True)\nclass Info:\n    team: Team\n",
-            f"{SHOP_DIR}/routes.py": f"from {SHOP}.facade.contracts import Info\n\n\ndef register() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/routes.py": f"from {CONTRACTS} import Info\n\n\ndef register() -> Info:\n    raise ValueError\n",
         },
         {
             "export-shape": [["posthog.models.team.team.Team", ROUTES, "export-denied(model)"]],
@@ -670,7 +652,7 @@ SLOT_OWNER_CASES = {
             "    def kind(self, default: Kind) -> Kind:\n        raise ValueError\n",
             "Rejected",
         ),
-        {"export-shape": [], "facade-signature": []},
+        CLEAN,
     ),
     "an imported alias in a method of a handed-out exception": (
         {
@@ -689,7 +671,7 @@ SLOT_OWNER_CASES = {
             "    def __init__(self, extra: Payload) -> None:\n        self.extra = extra\n",
             "Rejected",
         ),
-        {"export-shape": [], "facade-signature": []},
+        CLEAN,
     ),
     "an opaque payload alias returned by a method of a handed-out exception": (
         handed_out(
@@ -697,7 +679,7 @@ SLOT_OWNER_CASES = {
             "    def extra(self) -> Payload:\n        return {}\n",
             "Rejected",
         ),
-        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+        ANY_AT_ERRORS,
     ),
     "a TypeVar in a method of a handed-out exception": (
         handed_out(
@@ -718,7 +700,7 @@ SLOT_OWNER_CASES = {
             f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + "Orders = list[Order]\n\n\nclass Rejected(Exception):\n"
             "    def _load(self) -> Orders:\n        raise ValueError\n"
         },
-        {"export-shape": [[ORDER, f"{SHOP}.facade.contracts", "export-denied(model)"]], "facade-signature": []},
+        {"export-shape": [[ORDER, CONTRACTS, "export-denied(model)"]], "facade-signature": []},
     ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),

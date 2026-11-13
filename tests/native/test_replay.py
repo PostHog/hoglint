@@ -93,6 +93,16 @@ def git_pair(root: Path, name: str, files: dict[str, str], edits: Mapping[str, s
     return repo, Pair(name, parent, child)
 
 
+def param_pair(
+    request: pytest.FixtureRequest,
+    factory: pytest.TempPathFactory,
+    files: dict[str, str],
+    edits: Mapping[str, str | None],
+) -> tuple[Path, Pair]:
+    """The pair of a parametrized fixture: its parameter names it, in a directory of its own."""
+    return git_pair(factory.mktemp("replay-pair"), request.param, files, edits)
+
+
 @pytest.fixture(scope="module")
 def pair(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
     return git_pair(tmp_path_factory.mktemp("replay"), "move-import", OWNERS_REPO, CHILD_EDITS)
@@ -225,8 +235,7 @@ RUN_LEVEL_CHANGES: dict[str, tuple[dict[str, str | None], str]] = {
 
 @pytest.fixture(scope="module", params=sorted(RUN_LEVEL_CHANGES))
 def run_level_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
-    edits, _ = RUN_LEVEL_CHANGES[request.param]
-    return git_pair(tmp_path_factory.mktemp("replay-run-level"), request.param, NAMED_REPO, edits)
+    return param_pair(request, tmp_path_factory, NAMED_REPO, RUN_LEVEL_CHANGES[request.param][0])
 
 
 def run_level_rule(pair: tuple[Path, Pair]) -> str:
@@ -301,7 +310,7 @@ APPENDED = "an entry is appended through a splat"
 
 @pytest.fixture(scope="module", params=sorted(APP_CHANGES))
 def app_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
-    return git_pair(tmp_path_factory.mktemp("replay-apps"), request.param, APPS_REPO, APP_CHANGES[request.param])
+    return param_pair(request, tmp_path_factory, APPS_REPO, APP_CHANGES[request.param])
 
 
 # The certificate without the symbol kinds the packs compute from the whole tree, as a predictor
@@ -341,27 +350,27 @@ ALIAS_REPO = {
     "core/deep/again.py": "from core.deep.errors import Rejected\n\n__all__ = ['Rejected']\n",
     "core/door.py": "from core.deep.again import Rejected\n\n__all__ = ['Rejected']\n",
 }
-# Each child changes what an alias another module imports stands for: the importing file's `exposes`
-# rows move while the file stays as it is, so its trace must record the read of the alias.
-ALIAS_CHANGES: dict[str, tuple[dict[str, str | None], str]] = {
-    "a slot of a function": ({"core/types.py": "from core.models import Item\n\nOrders = list[Item]\n"}, "core/use.py"),
-    "an attribute of a class": (
+# Each child moves the `exposes` rows of the files it names. The first changes what an alias stands
+# for in the module that assigns it: the files whose function slot and class attribute import the
+# alias move while they stay as they are, so their traces must record the read of the alias. The
+# second changes a method of a class a re-export chain hands out, in the file that defines it.
+ALIAS_CHANGES: dict[str, tuple[dict[str, str | None], tuple[str, ...]]] = {
+    "an imported alias's value": (
         {"core/types.py": "from core.models import Item\n\nOrders = list[Item]\n"},
-        "core/box.py",
+        ("core/use.py", "core/box.py"),
     ),
     "a method of a class a re-export chain hands out": (
         {
             "core/deep/errors.py": "from core.models import Item\n\n\nclass Rejected(Exception):\n    def items(self) -> Item:\n        return Item()\n"
         },
-        "core/deep/errors.py",
+        ("core/deep/errors.py",),
     ),
 }
 
 
 @pytest.fixture(scope="module", params=sorted(ALIAS_CHANGES))
 def alias_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
-    edits, _ = ALIAS_CHANGES[request.param]
-    return git_pair(tmp_path_factory.mktemp("replay-alias"), request.param, ALIAS_REPO, edits)
+    return param_pair(request, tmp_path_factory, ALIAS_REPO, ALIAS_CHANGES[request.param][0])
 
 
 def test_the_certificate_follows_an_alias_and_a_member_slot_outside_a_surface(
@@ -370,9 +379,9 @@ def test_the_certificate_follows_an_alias_and_a_member_slot_outside_a_surface(
     result = replay(tmp_path, alias_pair, "traces")
     assert result.status() == "HELD", result.line()
     assert result.prediction is not None
-    moved = ALIAS_CHANGES[alias_pair[1].name][1]
-    assert moved in result.prediction.truth
-    assert moved in result.prediction.predicted
+    for moved in ALIAS_CHANGES[alias_pair[1].name][1]:
+        assert moved in result.prediction.truth
+        assert moved in result.prediction.predicted
 
 
 def missed_prediction() -> PredictionScore:
