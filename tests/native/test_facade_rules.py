@@ -435,6 +435,13 @@ UNEXPANDED_NAMES = {
     "a constant": "Ref = 3\n",
 }
 MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n        raise ValueError\n"
+# An allowed class, and an attribute that names a class-body alias of the same spelling.
+KINDS = {
+    f"{SHOP_DIR}/kinds.py": "import dataclasses\n\n\n@dataclasses.dataclass(frozen=True)\nclass Fine:\n    total: int\n"
+}
+FINE_HIDDEN_IN_ATTRIBUTE = (
+    f"from {SHOP}.kinds import Fine\n\n\nclass Rejected(Exception):\n    Fine = Order\n    order: Fine\n"
+)
 # A class-body alias whose name a module-level alias also binds.
 SHADOWED_ALIAS = (
     "Ref = int\n\n\nclass Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n"
@@ -1071,6 +1078,39 @@ SLOT_OWNER_CASES = {
     "a class-body alias in a contract": (
         {f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + SHADOWED_ALIAS.replace("Ref = int\n\n\n", "")},
         {"export-shape": [], "facade-signature": [[CONTRACTS, "Rejected.item", "return", f"{CONTRACTS}.Rejected.Ref"]]},
+    ),
+    # A class-body annotation sees the names of the class body first, then the module.
+    "a class-body alias in an attribute of a handed-out exception, hiding an allowed class": (
+        {**KINDS, **handed_out(FINE_HIDDEN_IN_ATTRIBUTE, "Rejected")},
+        {"export-shape": [[f"{SHOP}.errors.Rejected.Fine", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a class-body alias in an attribute of a contract class, hiding an allowed class": (
+        {**KINDS, f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + FINE_HIDDEN_IN_ATTRIBUTE},
+        {"export-shape": [], "facade-signature": [[CONTRACTS, "Rejected", "attr:order", f"{CONTRACTS}.Rejected.Fine"]]},
+    ),
+    "a class-body alias in a field of a handed-out dataclass, hiding a module-level alias": (
+        handed_out(
+            "Ref = int\n\n\n@dataclasses.dataclass(frozen=True)\nclass Info:\n    Ref = Order\n    order: Ref\n", "Info"
+        ),
+        {"export-shape": [], "facade-signature": [[ERRORS, "Info.__init__", "field:order", f"{SHOP}.errors.Info.Ref"]]},
+    ),
+    "a pydantic contract's field names its nested model": (
+        {
+            f"{SHOP_DIR}/facade/contracts.py": "from pydantic import BaseModel\n\n\n"
+            "class Row(BaseModel):\n    class Part(BaseModel):\n        title: str\n\n    part: Part\n"
+        },
+        CLEAN,
+    ),
+    "a contract dataclass's field names its nested enum": (
+        {
+            f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\nfrom enum import Enum\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Row:\n    class Kind(Enum):\n        A = 'a'\n\n    kind: Kind\n"
+        },
+        CLEAN,
+    ),
+    "a handed-out exception's attribute names its nested exception": (
+        handed_out("class Rejected(Exception):\n    class Inner(Exception):\n        pass\n\n    inner: Inner\n", "Rejected"),
+        CLEAN,
     ),
     # A class core defines is core's contract also when it is a data shape: only its fields are read.
     "a method of a frozen dataclass core defines": (

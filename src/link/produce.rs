@@ -1910,8 +1910,8 @@ impl Producers<'_> {
 
     /// The fields of the generated `__init__`, as the dataclass machinery collects them: from
     /// every dataclass-like class along the MRO, base first, a redefinition replacing the earlier
-    /// field in its place.
-    fn mro_fields(&mut self, lineage: &[(usize, u32)], lookup: SlotLookup) -> Vec<FieldRow> {
+    /// field in its place. A field's names are looked up in its class body first.
+    fn mro_fields(&mut self, lineage: &[(usize, u32)]) -> Vec<FieldRow> {
         let facts = self.core.facts.clone();
         let mut fields: OrderedMap<FieldRow> = OrderedMap::default();
         for position in (0..lineage.len()).rev() {
@@ -1922,14 +1922,10 @@ impl Producers<'_> {
             if position > 0 && !self.is_dataclass_like(owner, idx) {
                 continue;
             }
-            let at_lookup = if position == 0 {
-                lookup
-            } else {
-                SlotLookup {
-                    owner,
-                    scope: node.s,
-                    line: node.l,
-                }
+            let at_lookup = SlotLookup {
+                owner,
+                scope: idx as i32,
+                line: node.l,
             };
             for at in self.class_fields(file, idx) {
                 let V::Chain(name) = &record.assigns[at as usize].targets[0] else {
@@ -1969,7 +1965,7 @@ impl Producers<'_> {
     fn expose_dataclass(&mut self, rows: SlotRows, lookup: SlotLookup, idx: u32) {
         let lineage = self.lineage(lookup.owner, idx);
         self.expose_unresolved_bases(rows, &lineage);
-        let fields = self.mro_fields(&lineage, lookup);
+        let fields = self.mro_fields(&lineage);
         self.expose_fields(rows, &fields, true, Member::Field);
     }
 
@@ -2270,13 +2266,19 @@ impl Producers<'_> {
                 self.expose_signature(rows, lookup, node, in_contract);
                 continue;
             }
+            // A class-body annotation sees the names of the class body first, then the module.
+            let body = SlotLookup {
+                owner,
+                scope: idx as i32,
+                line: node.l,
+            };
             let own: Vec<FieldRow> = self
                 .class_fields(file as u32, idx as u32)
                 .into_iter()
                 .map(|at| FieldRow {
                     file: file as u32,
                     at,
-                    lookup,
+                    lookup: body,
                     own: true,
                 })
                 .collect();

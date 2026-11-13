@@ -1059,19 +1059,17 @@ class DeclarationProducer(Producer):
                 return True
         return self.has_dataclass_base(context, scope, idx)
 
-    def mro_fields(
-        self, context: BuildContext, lineage: list[tuple[FileScope, int]], lookup: SlotLookup
-    ) -> list[Field]:
+    def mro_fields(self, context: BuildContext, lineage: list[tuple[FileScope, int]]) -> list[Field]:
         """The fields of the generated `__init__`, as the dataclass machinery collects them: from
         every dataclass-like class along the MRO, base first, a redefinition replacing the
-        earlier field in its place."""
+        earlier field in its place. A field's names are looked up in its class body first."""
         fields: dict[str, Field] = {}
         for position in range(len(lineage) - 1, -1, -1):
             scope, idx = lineage[position]
             node = scope.defs[idx]
             if position and not self.is_dataclass_like(context, scope, idx):
                 continue
-            where = lookup if not position else SlotLookup(scope, node["s"], node["l"])
+            where = SlotLookup(scope, idx, node["l"])
             for row in self.fields_by_class(scope).get(idx, []):
                 fields[row["t"][0]] = Field(row, where, not position)
         return list(fields.values())
@@ -1109,7 +1107,7 @@ class DeclarationProducer(Producer):
         collects them."""
         lineage = self.lineage(context, lookup.scope, idx)
         self.expose_unresolved_bases(context, graph, rows, lineage)
-        self.expose_fields(context, graph, rows, self.mro_fields(context, lineage, lookup), True)
+        self.expose_fields(context, graph, rows, self.mro_fields(context, lineage), True)
 
     def declare(
         self,
@@ -1201,7 +1199,9 @@ class DeclarationProducer(Producer):
         if not is_class:
             self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
             return
-        own = [Field(row, lookup, True) for row in self.fields_by_class(scope).get(idx, [])]
+        # A class-body annotation sees the names of the class body first, then the module.
+        body = SlotLookup(scope, idx, line)
+        own = [Field(row, body, True) for row in self.fields_by_class(scope).get(idx, [])]
         if not dataclass:
             self.expose_fields(context, graph, SlotRows(site, qualname), own, in_contract, "attr")
             return
