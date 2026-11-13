@@ -108,10 +108,13 @@ fn value_mentions(value: &V, found: &impl Fn(Sid) -> bool) -> bool {
         V::Str(s, parsed) => {
             found(*s) || parsed.as_deref().is_some_and(|p| value_mentions(p, found))
         }
-        V::Call(inner, _, _) | V::Star(inner) => value_mentions(inner, found),
+        V::Call(inner, _, _) | V::Star(inner) | V::Unary(inner) => value_mentions(inner, found),
+        V::Compare(first, rest) => {
+            value_mentions(first, found) || rest.iter().any(|item| value_mentions(item, found))
+        }
         V::Attr(inner, name) => value_mentions(inner, found) || found(*name),
         V::Sub(a, b) | V::Bin(_, a, b) => value_mentions(a, found) || value_mentions(b, found),
-        V::Tuple(items) | V::List(items) | V::Set(items) => {
+        V::Tuple(items) | V::List(items) | V::Set(items) | V::BoolOp(items) => {
             items.iter().any(|item| value_mentions(item, found))
         }
         V::Dict(pairs) => pairs.iter().any(|(key, value)| {

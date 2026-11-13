@@ -364,6 +364,19 @@ impl<'a> Digest<'a> {
             }
             V::Other => self.number(14),
             V::Scalar => self.number(15),
+            V::Unary(inner) => {
+                self.number(16);
+                self.value(inner);
+            }
+            V::BoolOp(items) => {
+                self.number(17);
+                self.values(items);
+            }
+            V::Compare(first, rest) => {
+                self.number(18);
+                self.value(first);
+                self.values(rest);
+            }
         }
     }
 

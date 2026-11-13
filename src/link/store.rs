@@ -139,6 +139,19 @@ impl Enc<'_> {
             }
             V::Other => self.u8(13),
             V::Scalar => self.u8(14),
+            V::Unary(inner) => {
+                self.u8(15);
+                self.v(inner);
+            }
+            V::BoolOp(items) => {
+                self.u8(16);
+                self.values(items);
+            }
+            V::Compare(first, rest) => {
+                self.u8(17);
+                self.v(first);
+                self.values(rest);
+            }
         }
     }
 
@@ -432,6 +445,12 @@ impl<'b> Dec<'b, '_> {
             }
             12 => V::Opaque(self.sid()?),
             14 => V::Scalar,
+            15 => V::Unary(Box::new(self.v()?)),
+            16 => V::BoolOp(self.values()?),
+            17 => {
+                let first = self.v()?;
+                V::Compare(Box::new(first), self.values()?)
+            }
             _ => V::Other,
         })
     }

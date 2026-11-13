@@ -3,7 +3,7 @@
 
 use crate::link::Link;
 use crate::{HitTuple, Pair};
-use hoglint_facts::link::facts::{COPY_CALLEES, V};
+use hoglint_facts::link::facts::{CONSTRUCTORS, COPY_CALLEES, V};
 use hoglint_facts::link::intern::Interner;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyString};
@@ -68,11 +68,11 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
             Some(keywords) => frozen_keyword(&keywords)?,
             None => false,
         };
-        let copy = callee
-            .extract::<String>()
-            .is_ok_and(|name| COPY_CALLEES.contains(&name.as_str()));
+        let name = callee.extract::<String>().unwrap_or_default();
+        let copy = COPY_CALLEES.contains(&name.as_str());
+        let constructor = CONSTRUCTORS.contains(&name.as_str()) && get("kw")?.is_none();
         let sole = match get("args")? {
-            Some(args) if copy && args.len()? == 1 => {
+            Some(args) if (copy || constructor) && args.len()? == 1 => {
                 Some(Box::new(py_value(it, &args.get_item(0)?)?))
             }
             _ => None,
@@ -125,6 +125,23 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
     if let Some(what) = get("o")? {
         let what: String = what.extract().unwrap_or_default();
         return Ok(V::Opaque(it.intern(&what)));
+    }
+    if get("un")?.is_some() {
+        let inner = match get("v")? {
+            Some(inner) => py_value(it, &inner)?,
+            None => V::Null,
+        };
+        return Ok(V::Unary(Box::new(inner)));
+    }
+    if let Some(value) = get("vs")? {
+        return Ok(V::BoolOp(items(it, value)?));
+    }
+    if let Some(first) = get("cmp")? {
+        let rest = match get("cs")? {
+            Some(value) => items(it, value)?,
+            None => Vec::new(),
+        };
+        return Ok(V::Compare(Box::new(py_value(it, &first)?), rest));
     }
     Ok(V::Other)
 }

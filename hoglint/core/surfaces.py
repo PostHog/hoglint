@@ -33,6 +33,7 @@ cannot be read: what the module hands out is then unknown.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
@@ -55,8 +56,12 @@ ALIAS_CLAUSE = "alias"
 LAZY_CLAUSE = "lazy"
 ASSIGNED_CLAUSE = "assigned"
 NO_FUNCTIONS_CLAUSE = "no-functions"
-# The markers of a number the value tree does not spell out, and of a long or odd string.
-LITERAL_MARKERS = frozenset({"int", "float", "complex", "longstr", "badstr"})
+# The markers of a constant the value tree does not spell out: a number, a long or odd string,
+# bytes, `...`, an f-string (its value is a string whatever its parts).
+CONSTANT_MARKERS = frozenset({"int", "float", "complex", "longstr", "badstr", "bytes", "...", "JoinedStr"})
+# The builtin constructors a constant may call, and those of them whose one argument a copy is.
+CONSTRUCTORS = frozenset({"frozenset", "set", "tuple", "list", "dict", "str", "int", "float", "bool", "bytes"})
+COPY_CALLEES = frozenset({"list", "tuple", "set"})
 # The kinds of binding that are a def or an import: an edge or a symbol says what they bind.
 BOUND_KINDS = frozenset({"class", "def", "module", "from"})
 # A call of a method on `__all__` in the module body: `__all__.extend(...)`.
@@ -145,31 +150,85 @@ class ListedNames:
         return frozenset(out)
 
 
-def is_literal(value: object) -> bool:
-    """A number, a string, None, a bool, or a tuple, list, set or dict of those."""
-    if value is None or isinstance(value, (bool, int)):
-        return True
-    if not isinstance(value, dict):
-        return False
-    if set(value) == {"s"}:
-        return True
-    if set(value) == {"o"}:
-        return value["o"] in LITERAL_MARKERS
-    if "dict" in value:
-        return all(key is not None and is_literal(key) and is_literal(item) for key, item in value["dict"])
-    items = sequence_items(value)
-    return items is not None and all(is_literal(item) for item in items)
+class ConstantValues:
+    """Whether a module-level value is a constant expression: built only from literals; unary,
+    binary, comparison and boolean operators; f-strings; tuples, lists, sets and dicts (starred
+    parts too) of constants; a call of a builtin constructor the module does not bind, on one
+    constant; and names of module-level constants by this same rule, followed `MAX_DEPTH` names
+    deep, a cycle stopping. The one reading of a value both engines use (`surface::is_constant`)."""
 
+    MAX_DEPTH = 32
 
-def binds_literal(record: dict, name: str) -> bool:
-    """Whether the last module-level assignment of a bare name binds a literal constant. The
-    record leaves out a value that is None."""
-    rows = [row for row in record.get("assigns", ()) if is_module_assign(row) and name in row["t"]]
-    if not rows:
-        return False
-    if "v" not in rows[-1]:
-        return rows[-1]["op"] == "="
-    return is_literal(rows[-1]["v"])
+    def __init__(self, resolver: Resolver) -> None:
+        self.resolver = resolver
+        self.tables = resolver.tables
+
+    def binds_constant(self, module: str, name: str, depth: int = 0, seen: frozenset[str] = frozenset()) -> bool:
+        """Whether the last module-level assignment of a bare name binds a constant. The record
+        leaves out a value that is None."""
+        record = self.tables.record(module)
+        if record is None:
+            return False
+        rows = [row for row in record.get("assigns", ()) if is_module_assign(row) and name in row["t"]]
+        if not rows:
+            return False
+        if "v" not in rows[-1]:
+            return rows[-1]["op"] == "="
+        return self.is_constant(module, rows[-1]["v"], depth, seen | {f"{module}.{name}"})
+
+    def names_constant(self, module: str, chain: str, depth: int, seen: frozenset[str]) -> bool:
+        """Whether a name resolves, whole, to a first-party module-level constant."""
+        if depth >= self.MAX_DEPTH:
+            return False
+        hit, rest = self.resolver.resolve_chain(module, chain)
+        if hit is None or rest or hit.kind != "variable":
+            return False
+        origin = hit.origin
+        if not origin.symbol or str(origin) in seen or self.tables.index.is_external(origin.module):
+            return False
+        return self.binds_constant(origin.module, origin.symbol, depth + 1, seen)
+
+    def is_constant(self, module: str, value: object, depth: int, seen: frozenset[str]) -> bool:
+        if value is None or isinstance(value, (bool, int)):
+            return True
+        if isinstance(value, str):
+            return self.names_constant(module, value, depth, seen)
+        if not isinstance(value, dict):
+            return False
+
+        def constant(item: object) -> bool:
+            return self.is_constant(module, item, depth, seen)
+
+        if set(value) == {"s"}:
+            return True
+        if set(value) == {"o"}:
+            return value["o"] in CONSTANT_MARKERS
+        if "bin" in value:
+            return constant(value["l"]) and constant(value["r"])
+        if "un" in value:
+            return constant(value["v"])
+        if "bool" in value:
+            return all(constant(item) for item in value["vs"])
+        if "cmp" in value:
+            return constant(value["cmp"]) and all(constant(item) for item in value["cs"])
+        if "star" in value:
+            return constant(value["star"])
+        if "dict" in value:
+            return all((key is None or constant(key)) and constant(item) for key, item in value["dict"])
+        if "call" in value:
+            return self.constructed(module, value, constant)
+        items = sequence_items(value)
+        return items is not None and all(constant(item) for item in items)
+
+    def constructed(self, module: str, call: dict, constant: Callable[[object], bool]) -> bool:
+        """A call of a builtin constructor the module does not bind, on one constant (no keyword,
+        but for the copy callees, whose keywords the native tree does not keep)."""
+        callee, args = call["call"], call.get("args", [])
+        if not isinstance(callee, str) or callee not in CONSTRUCTORS or len(args) != 1:
+            return False
+        if callee not in COPY_CALLEES and call.get("kw"):
+            return False
+        return self.tables.binding(module, callee) is None and constant(args[0])
 
 
 def read_dunder_all(record: dict) -> DunderAll:
@@ -257,6 +316,7 @@ class HandedOut:
         self.resolver = resolver
         self.tables = resolver.tables
         self.table = resolver.tables.get(scope.module)
+        self.constants = ConstantValues(resolver)
         self.no_functions = not any(d["s"] == -1 and d.get("f", 0) == 0 and d["k"] != "class" for d in scope.defs)
         self.dunder_all = read_dunder_all(scope.record)
 
@@ -413,7 +473,7 @@ class HandedOut:
 
     def unknown_values(self, used: frozenset[str]) -> frozenset[str]:
         """The first-party module-level assignments the handed-out names resolve to, as symbols,
-        when the value is no literal constant: a `NewType`, a `TypeVar`, a type alias, a value a
+        when the value is no constant expression: a `NewType`, a `TypeVar`, a type alias, a value a
         call makes. What they hand out is unknown."""
         out: set[str] = set()
         for item in self.names(used):
@@ -423,8 +483,7 @@ class HandedOut:
             origin = hit.origin
             if not origin.symbol or self.tables.index.is_external(origin.module):
                 continue
-            record = self.tables.record(origin.module)
-            if record is not None and binds_literal(record, origin.symbol):
+            if self.constants.binds_constant(origin.module, origin.symbol):
                 continue
             out.add(str(origin))
         return frozenset(out)
@@ -447,13 +506,13 @@ class HandedOut:
 
     def unaccounted(self, handed: frozenset[str]) -> frozenset[str]:
         """The names a readable `__all__` lists that the module binds by no def, no import, no
-        other edge of what it hands out and no literal constant: what they hand out is unknown."""
+        other edge of what it hands out and no constant expression: what they hand out is unknown."""
         out: set[str] = set()
         for name in self.listed() - handed:
             binding = self.table.names.get(name) if self.table is not None else None
             if binding is not None and binding[0] in BOUND_KINDS:
                 continue
-            if binding is not None and binds_literal(self.scope.record, name):
+            if binding is not None and self.constants.binds_constant(self.scope.module, name):
                 continue
             out.add(name)
         return frozenset(out)

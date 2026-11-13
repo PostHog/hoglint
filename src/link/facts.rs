@@ -32,6 +32,12 @@ pub enum V {
     Opaque(Sid),
     /// A number or a bool, written as itself.
     Scalar,
+    /// `{"un": op, "v": ..}`: a unary operation.
+    Unary(Box<V>),
+    /// `{"bool": op, "vs": [..]}`: a boolean operation.
+    BoolOp(Vec<V>),
+    /// `{"cmp": .., "cs": [..], "ops": [..]}`: a comparison, without its operators.
+    Compare(Box<V>, Vec<V>),
     Other,
 }
 
@@ -264,6 +270,20 @@ pub struct FactSet {
 /// The callees whose one positional argument a call value keeps: the copies of a sequence a
 /// module's `__all__` can be made with (`sorted(_NAMES)`), the only reader of that argument.
 pub const COPY_CALLEES: [&str; 4] = ["sorted", "list", "tuple", "set"];
+/// The builtin constructors whose one argument a call keeps when it has no keyword, so a reader
+/// can tell a constant built by one (`frozenset({...})`).
+pub const CONSTRUCTORS: [&str; 10] = [
+    "frozenset",
+    "set",
+    "tuple",
+    "list",
+    "dict",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "bytes",
+];
 
 pub const QUERY_KINDS: [&str; 7] = ["refs", "strs", "calls", "uses", "callees", "names", "tags"];
 
@@ -411,8 +431,10 @@ pub fn value(it: &mut Interner, json: &J) -> V {
             if let Some(callee) = map.get("call") {
                 let copy =
                     matches!(callee, J::String(name) if COPY_CALLEES.contains(&name.as_str()));
+                let constructor = matches!(callee, J::String(name) if CONSTRUCTORS.contains(&name.as_str()))
+                    && map.get("kw").is_none();
                 let sole = match map.get("args") {
-                    Some(J::Array(args)) if copy && args.len() == 1 => {
+                    Some(J::Array(args)) if (copy || constructor) && args.len() == 1 => {
                         Some(Box::new(value(it, &args[0])))
                     }
                     _ => None,
@@ -453,6 +475,20 @@ pub fn value(it: &mut Interner, json: &J) -> V {
             }
             if let Some(inner) = map.get("star") {
                 return V::Star(Box::new(value(it, inner)));
+            }
+            if map.contains_key("un") {
+                let inner = map.get("v").map_or(V::Null, |x| value(it, x));
+                return V::Unary(Box::new(inner));
+            }
+            if let Some(J::Array(items)) = map.get("vs") {
+                return V::BoolOp(items.iter().map(|x| value(it, x)).collect());
+            }
+            if let Some(first) = map.get("cmp") {
+                let rest = match map.get("cs") {
+                    Some(J::Array(items)) => items.iter().map(|x| value(it, x)).collect(),
+                    _ => Vec::new(),
+                };
+                return V::Compare(Box::new(value(it, first)), rest);
             }
             if let Some(op) = map.get("bin") {
                 let l = map.get("l").map_or(V::Null, |x| value(it, x));

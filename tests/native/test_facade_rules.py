@@ -1628,8 +1628,6 @@ LISTED_CASES = {
         {API_FILE: rebinds("models.LIMIT", name="LIMIT")},
         unknown_at_api("LIMIT"),
     ),
-    # A written limit: a negative number is an operation, not a literal.
-    "a negative number": ({API_FILE: "LIMIT = -1\n\n__all__ = ['LIMIT']\n"}, unknown_at_api("LIMIT")),
     "a private function listed": (
         {
             API_FILE: f"from {SHOP}.models import Order\n\n\ndef _get(order: Order) -> None:\n    pass\n\n\n__all__ = ['_get']\n"
@@ -1686,6 +1684,68 @@ def test_a_handed_out_value_is_a_literal_constant_or_unknown(
     files, expected = VALUE_CASES[case]
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
+
+
+CONSTANTS = (
+    "BASE = 'shop'\nDEBUG = False\nBASE_MAP = {'a': 1}\nBASE_LIST = ['a']\nOTHER = 3\n"
+    "HOUR = 60 * 60\nLIMIT = -1\nURL = f'{BASE}/x'\nFLAG = not DEBUG\nBOTH = DEBUG and OTHER\nSAME = OTHER == 3\n"
+    "NAMES = frozenset({'a', 'b'})\nMERGED = {**BASE_MAP, 'b': 2}\nITEMS = [*BASE_LIST, 'c']\nTEXT = str(3)\n"
+    "CHAINED = OTHER\n"
+)
+CONSTANT_NAMES = ["HOUR", "LIMIT", "URL", "FLAG", "BOTH", "SAME", "NAMES", "MERGED", "ITEMS", "TEXT", "CHAINED"]
+# A value built only from constants by operators, f-strings, containers, the builtin constructors and
+# names of other constants is a constant: clean where it is listed or handed out. Anything else is
+# unknown.
+CONSTANT_CASES = {
+    "constant expressions listed in the module": (
+        {API_FILE: CONSTANTS + f"\n__all__ = {CONSTANT_NAMES!r}\n"},
+        CLEAN_AT_API,
+    ),
+    "constant expressions handed out from another module": (
+        {
+            f"{SHOP_DIR}/consts.py": CONSTANTS + "DAY = 24 * HOUR\n",
+            API_FILE: f"from {SHOP}.consts import DAY, HOUR, URL\n\n__all__ = ['DAY', 'HOUR', 'URL']\n",
+        },
+        CLEAN_AT_API,
+    ),
+    "a call of anything else": (
+        {API_FILE: "def make() -> int:\n    return 1\n\n\nPOOL = make()\n\n__all__ = ['POOL']\n"},
+        unknown_at_api("POOL"),
+    ),
+    "a lambda": ({API_FILE: "F = lambda: 1\n\n__all__ = ['F']\n"}, unknown_at_api("F")),
+    "a container with a class": ({API_FILE: rebinds("[models.Order]", name="CLASSES")}, unknown_at_api("CLASSES")),
+    "a constructor the module binds itself": (
+        {API_FILE: "def frozenset(x: int) -> int:\n    return x\n\n\nNAMES = frozenset(1)\n\n__all__ = ['NAMES']\n"},
+        unknown_at_api("NAMES"),
+    ),
+    "two names that read each other": (
+        {API_FILE: "A = B\nB = A\n\n__all__ = ['A']\n"},
+        unknown_at_api("A"),
+    ),
+    # A written limit: the record keeps no parts of a conditional expression.
+    "a conditional expression": (
+        {API_FILE: "DEBUG = False\nTTL = 1 if DEBUG else 2\n\n__all__ = ['TTL']\n"},
+        unknown_at_api("TTL"),
+    ),
+    "a call of anything else, handed out": (
+        {
+            f"{SHOP_DIR}/consts.py": "def make() -> int:\n    return 1\n\n\nPOOL = make()\n",
+            API_FILE: f"from {SHOP}.consts import POOL\n\n__all__ = ['POOL']\n",
+        },
+        {"export-shape": [[f"{SHOP}.consts.POOL", API, "export-unknown"]], "facade-signature": []},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", CONSTANT_CASES)
+def test_a_constant_expression_is_clean_and_any_other_value_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = CONSTANT_CASES[case]
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+        rule: sorted(rows) for rule, rows in expected.items()
+    }
 
 
 @pytest.mark.parametrize("case", LISTED_CASES)

@@ -24,7 +24,7 @@
 //! such as `sorted(_LAZY)`. One built by other code, changed by a method or set under a condition
 //! cannot be read: what the module hands out is then unknown.
 
-use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
+use super::facts::{Assign, CONSTRUCTORS, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
@@ -67,39 +67,129 @@ pub struct HandOut {
     pub unknown_values: FxHashSet<Sid>,
 }
 
-/// The markers of a number the value tree does not spell out, and of a long or odd string.
-const LITERAL_MARKERS: [&str; 5] = ["int", "float", "complex", "longstr", "badstr"];
+/// The markers of a constant the value tree does not spell out: a number, a long or odd string,
+/// bytes, `...`, an f-string (its value is a string whatever its parts).
+const CONSTANT_MARKERS: [&str; 8] = [
+    "int",
+    "float",
+    "complex",
+    "longstr",
+    "badstr",
+    "bytes",
+    "...",
+    "JoinedStr",
+];
+/// How many names deep a constant is followed (`ConstantValues.MAX_DEPTH`).
+const MAX_CONSTANT_DEPTH: usize = 32;
 
-/// Whether the last module-level assignment of a bare name binds a literal constant
-/// (`binds_literal`). The record leaves out a value that is None.
-fn binds_literal(it: &Interner, assigns: &[Assign], name: Sid) -> bool {
-    let last = assigns.iter().rfind(|row| {
+/// Whether the last module-level assignment of a bare name binds a constant expression
+/// (`ConstantValues.binds_constant`). The record leaves out a value that is None. `seen` holds
+/// the names on the way here, so a cycle stops.
+pub fn binds_constant(
+    core: &mut Core,
+    module: Sid,
+    name: Sid,
+    depth: usize,
+    seen: &mut Vec<Sid>,
+) -> bool {
+    let Some(table) = core.table(module) else {
+        return false;
+    };
+    let Some(file) = core.table_at(table).record else {
+        return false;
+    };
+    let facts = core.facts.clone();
+    let last = facts.files[file as usize].assigns.iter().rfind(|row| {
         is_module_assign(row)
             && row
                 .targets
                 .iter()
                 .any(|target| matches!(target, V::Chain(bound) if *bound == name))
     });
-    match last {
-        None => false,
-        Some(row) => match &row.value {
-            None => row.op == Op::Assign,
-            Some(value) => is_literal(it, value),
-        },
-    }
+    let Some(row) = last else {
+        return false;
+    };
+    let Some(value) = &row.value else {
+        return row.op == Op::Assign;
+    };
+    seen.push(core.it.join(module, name));
+    let constant = is_constant(core, module, value, depth, seen);
+    seen.pop();
+    constant
 }
 
-/// A number, a string, None, a bool, or a tuple, list, set or dict of those (`is_literal`).
-fn is_literal(it: &Interner, value: &V) -> bool {
+/// Whether a name resolves, whole, to a first-party module-level constant
+/// (`ConstantValues.names_constant`).
+fn names_constant(
+    core: &mut Core,
+    module: Sid,
+    chain: Sid,
+    depth: usize,
+    seen: &mut Vec<Sid>,
+) -> bool {
+    if depth >= MAX_CONSTANT_DEPTH {
+        return false;
+    }
+    let (hit, used, total) = core.resolve_chain(module, chain);
+    let Some(hit) = hit.filter(|_| used == total) else {
+        return false;
+    };
+    if core.kind(hit) != HitKind::Variable {
+        return false;
+    }
+    let origin = core.origin(hit);
+    if origin.s == EMPTY || core.is_external(origin.m) {
+        return false;
+    }
+    if seen.contains(&core.ent_sid(origin)) {
+        return false;
+    }
+    binds_constant(core, origin.m, origin.s, depth + 1, seen)
+}
+
+/// Whether a module-level value is a constant expression (`ConstantValues.is_constant`): built
+/// only from literals; unary, binary, comparison and boolean operators; f-strings; tuples,
+/// lists, sets and dicts (starred parts too) of constants; a call of a builtin constructor the
+/// module does not bind, on one constant; and names of module-level constants by this same rule.
+pub fn is_constant(
+    core: &mut Core,
+    module: Sid,
+    value: &V,
+    depth: usize,
+    seen: &mut Vec<Sid>,
+) -> bool {
     match value {
         V::Null | V::Scalar | V::Str(_, None) => true,
-        V::Opaque(what) => LITERAL_MARKERS.contains(&it.s(*what)),
-        V::Tuple(items) | V::List(items) | V::Set(items) => {
-            items.iter().all(|item| is_literal(it, item))
+        V::Opaque(what) => CONSTANT_MARKERS.contains(&core.it.s(*what)),
+        V::Chain(chain) => names_constant(core, module, *chain, depth, seen),
+        V::Bin(_, left, right) => {
+            is_constant(core, module, left, depth, seen)
+                && is_constant(core, module, right, depth, seen)
+        }
+        V::Unary(inner) | V::Star(inner) => is_constant(core, module, inner, depth, seen),
+        V::BoolOp(items) | V::Tuple(items) | V::List(items) | V::Set(items) => items
+            .iter()
+            .all(|item| is_constant(core, module, item, depth, seen)),
+        V::Compare(first, rest) => {
+            is_constant(core, module, first, depth, seen)
+                && rest
+                    .iter()
+                    .all(|item| is_constant(core, module, item, depth, seen))
         }
         V::Dict(pairs) => pairs.iter().all(|(key, item)| {
-            key.as_ref().is_some_and(|key| is_literal(it, key)) && is_literal(it, item)
+            key.as_ref()
+                .is_none_or(|key| is_constant(core, module, key, depth, seen))
+                && is_constant(core, module, item, depth, seen)
         }),
+        V::Call(callee, _, Some(sole)) => {
+            let V::Chain(name) = **callee else {
+                return false;
+            };
+            if !CONSTRUCTORS.contains(&core.it.s(name)) || core.binding_of(module, name).is_some() {
+                return false;
+            }
+            is_constant(core, module, sole, depth, seen)
+        }
         _ => false,
     }
 }
@@ -620,7 +710,6 @@ impl HandedOut {
         used: &FxHashSet<Sid>,
     ) -> FxHashSet<Sid> {
         let mut out = FxHashSet::default();
-        let facts = core.facts.clone();
         for item in self.names(core, scope, used) {
             let (hit, rest) = core.resolve_dotted(item.target);
             let Some(hit) = hit.filter(|_| rest.is_empty()) else {
@@ -633,12 +722,7 @@ impl HandedOut {
             if origin.s == EMPTY || core.is_external(origin.m) {
                 continue;
             }
-            let file = core
-                .table(origin.m)
-                .and_then(|table| core.table_at(table).record);
-            if let Some(file) = file
-                && binds_literal(&core.it, &facts.files[file as usize].assigns, origin.s)
-            {
+            if binds_constant(core, origin.m, origin.s, 0, &mut Vec::new()) {
                 continue;
             }
             out.insert(core.ent_sid(origin));
@@ -685,8 +769,6 @@ impl HandedOut {
         let mut out = FxHashSet::default();
         let listed = self.listed();
         let table = core.table(scope.module);
-        let facts = core.facts.clone();
-        let record = &facts.files[scope.file as usize];
         for &name in listed.iter().filter(|name| !handed.contains(name)) {
             let binding = table.and_then(|table| core.table_at(table).names.get(&name).copied());
             let bound = matches!(
@@ -698,7 +780,7 @@ impl HandedOut {
             if bound {
                 continue;
             }
-            if binding.is_some() && binds_literal(&core.it, &record.assigns, name) {
+            if binding.is_some() && binds_constant(core, scope.module, name, 0, &mut Vec::new()) {
                 continue;
             }
             out.insert(name);

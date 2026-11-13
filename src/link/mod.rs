@@ -58,9 +58,10 @@ pub mod heap {
             V::Call(inner, _, sole) => {
                 size_of::<V>() + value(inner) + sole.as_deref().map_or(0, value)
             }
-            V::Attr(inner, _) | V::Star(inner) => size_of::<V>() + value(inner),
+            V::Attr(inner, _) | V::Star(inner) | V::Unary(inner) => size_of::<V>() + value(inner),
+            V::Compare(first, rest) => size_of::<V>() + value(first) + values(rest),
             V::Sub(a, b) | V::Bin(_, a, b) => 2 * size_of::<V>() + value(a) + value(b),
-            V::Tuple(items) | V::List(items) | V::Set(items) => values(items),
+            V::Tuple(items) | V::List(items) | V::Set(items) | V::BoolOp(items) => values(items),
             V::Dict(pairs) => {
                 let mut out = vec(pairs);
                 for (key, val) in pairs {
