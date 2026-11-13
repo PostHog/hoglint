@@ -1544,6 +1544,46 @@ impl Producers<'_> {
         }
     }
 
+    /// The annotated class-body attributes of a class that is no dataclass, as `attr:` slots of
+    /// the class, each at its own line. In a contract an attribute directly in the class body is a
+    /// whole slot; a `ClassVar` is an attribute too, since callers read it.
+    fn expose_attributes(
+        &mut self,
+        rows: SlotRows,
+        lookup: SlotLookup,
+        file: u32,
+        idx: u32,
+        contract: bool,
+    ) {
+        let facts = self.core.facts.clone();
+        for at in self.class_fields(file, idx) {
+            let row = &facts.files[file as usize].assigns[at as usize];
+            let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
+                continue;
+            };
+            let V::Chain(name) = &row.targets[0] else {
+                continue;
+            };
+            let slot = self
+                .core
+                .it
+                .intern(&format!("attr:{}", self.core.it.s(*name)));
+            let line_rows = SlotRows {
+                site: SlotSite {
+                    line: row.l,
+                    ..rows.site
+                },
+                ..rows
+            };
+            let line_lookup = SlotLookup {
+                line: row.l,
+                ..lookup
+            };
+            let in_slot = contract && row.f == CLASS;
+            self.expose(line_rows, line_lookup, Some(annotation), slot, in_slot);
+        }
+    }
+
     /// The candidate dataclass fields of a file, by class; each file is read once.
     fn file_fields(&mut self, file: u32) -> &FxHashMap<i32, Vec<u32>> {
         let core = &self.core;
@@ -1977,7 +2017,7 @@ impl Producers<'_> {
             {
                 dataclass = self.has_dataclass_base(owner, idx as u32);
             }
-            if nested || (node.is_class() && !dataclass) {
+            if nested {
                 continue;
             }
             let site = SlotSite {
@@ -1992,6 +2032,15 @@ impl Producers<'_> {
                 scope: enclosing,
                 line: node.l,
             };
+            if node.is_class() && !dataclass {
+                let rows = SlotRows {
+                    site,
+                    callable: qualname,
+                    handed: EMPTY,
+                };
+                self.expose_attributes(rows, lookup, file as u32, idx as u32, in_contract);
+                continue;
+            }
             if !node.is_class() {
                 let rows = SlotRows {
                     site,

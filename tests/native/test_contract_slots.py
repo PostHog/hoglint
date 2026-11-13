@@ -80,7 +80,8 @@ REPO = {
         "def charge(cls: type, amount: Totals, note) -> dict:\n    return {}\n\n\n"
         "def refund(order_id):\n    pass\n\n\n"
         "@frozen\nclass Receipt:\n    total: int\n    _audit: dict\n    kind: ClassVar[str]\n\n\n"
-        "@frozen\nclass Base:\n    id: int\n"
+        "@frozen\nclass Base:\n    id: int\n\n\n"
+        "class Failure(Exception):\n    receipt: Receipt\n    count: int\n    label: 'Receipt'\n    kind: ClassVar[Receipt]\n"
     ),
     "products/shop/backend/routes.py": "def register(router):\n    pass\n",
     "products/shop/backend/facade/api.py": (
@@ -97,13 +98,16 @@ REPO = {
         "from products.shop.backend.kit import frozen\n"
         "from products.shop.backend.logic import Base, Receipt\n\n\n"
         "@frozen\nclass Order(Base):\n    total: int\n    _audit: dict\n\n\n"
-        "@dataclass\nclass Line:\n    meta: dict\n"
+        "@dataclass\nclass Line:\n    meta: dict\n\n\n"
+        "class Failed(Exception):\n    code: int\n    order: 'Order'\n"
     ),
 }
 
 # (module, callable, slot, type name, annotation, handed): every `exposes` row core writes. A
 # dataclass a surface hands out has its fields at the surface wherever it is defined; `Receipt`
-# imported only to use it in `api.py` is not handed out.
+# imported only to use it in `api.py` is not handed out. An annotated attribute of a class that is
+# no dataclass is a slot of the class, written as a method's slots are: every name in a surface,
+# a name that is no plain builtin elsewhere.
 EXPECTED_SLOTS = [
     ("products.shop.backend.facade.api", "close", "param:order_id", "", "missing", ""),
     ("products.shop.backend.facade.api", "close", "param:flag", "builtins.bool", "", ""),
@@ -124,6 +128,19 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:_audit", "builtins.dict", "", "no-functions"),
     ("products.shop.backend.logic", "charge", "param:amount", "products.shop.backend.logic.Totals", "", ""),
     ("products.shop.backend.logic", "Receipt.__init__", "field:kind", "typing.ClassVar", "", ""),
+    ("products.shop.backend.logic", "Failure", "attr:receipt", "products.shop.backend.logic.Receipt", "", ""),
+    ("products.shop.backend.logic", "Failure", "attr:label", "products.shop.backend.logic.Receipt", "", ""),
+    ("products.shop.backend.logic", "Failure", "attr:kind", "typing.ClassVar", "", ""),
+    ("products.shop.backend.logic", "Failure", "attr:kind", "products.shop.backend.logic.Receipt", "", ""),
+    ("products.shop.backend.facade.contracts", "Failed", "attr:code", "builtins.int", "", ""),
+    (
+        "products.shop.backend.facade.contracts",
+        "Failed",
+        "attr:order",
+        "products.shop.backend.facade.contracts.Order",
+        "",
+        "",
+    ),
 ]
 
 
@@ -609,6 +626,7 @@ INHERITED_FIELD_CASES = {
         [
             ("Base.__init__", "field:id", "builtins.int", "external", ""),
             ("Base.__init__", "field:name", "builtins.str", "external", ""),
+            ("Mixin", "attr:note", "builtins.str", "external", ""),
             *child_fields("Child.__init__", ""),
         ],
     ),

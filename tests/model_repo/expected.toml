@@ -403,6 +403,18 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
+case = "ES06"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOutOfStock", "attr:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "ES06"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "StockHolder", "attr:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
 case = "CM01"
 rule = "facade-signature"
 verdict = "finding"
@@ -1812,20 +1824,6 @@ decision = "unknown is never clean: a class from a top folder outside first_part
 rule = "*"
 verdict = "*"
 match = ["ExternalView", "StockItem"]
-
-[[wanted]]
-case = "ES06"
-decision = "Nov 12: an annotated attribute of a handed-out exception is handed out like a field (members of an allowed class, with ME01)"
-rule = "*"
-verdict = "*"
-match = ["EntryOutOfStock", "StockItem"]
-
-[[wanted]]
-case = "ES06"
-decision = "Nov 12: an annotated attribute of a handed-out Protocol is handed out like a field (members of an allowed class, with ME01)"
-rule = "*"
-verdict = "*"
-match = ["StockHolder", "StockItem"]
 
 [[wanted]]
 case = "HZ13"

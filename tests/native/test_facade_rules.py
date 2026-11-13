@@ -416,6 +416,10 @@ SLOT_OWNER_CASES = {
         ),
         DENIED_AT_ERRORS,
     ),
+    "an attribute of a handed-out exception": (
+        handed_out("class Rejected(Exception):\n    order: Order\n", "Rejected"),
+        DENIED_AT_ERRORS,
+    ),
     "a function handed out from outside": (
         handed_out("def place(order: Order) -> None:\n    pass\n", "place"),
         {"export-shape": [], "facade-signature": [[ERRORS, "place", "param:order", ORDER]]},
@@ -531,7 +535,9 @@ ALLOWED_WITH_A_MODEL = (
     "from products.billing.backend.models import Invoice\n\n\n"
     "class Payload(BaseModel):\n    invoice: Invoice\n\n\n"
     "class BillingError(Exception):\n    def __init__(self, invoice: Invoice) -> None:\n        self.invoice = invoice\n\n\n"
-    "class Chooser(Protocol):\n    def __call__(self, invoice: Invoice) -> None: ...\n"
+    "class Chooser(Protocol):\n    def __call__(self, invoice: Invoice) -> None: ...\n\n\n"
+    "class InvoiceMissing(Exception):\n    invoice: Invoice\n\n\n"
+    "class Holder(Protocol):\n    invoice: Invoice\n"
 )
 
 
@@ -542,6 +548,8 @@ def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: p
     assert findings_of(out["native"], "facade-signature") == [
         [contracts, "BillingError.__init__", "param:invoice", INVOICE],
         [contracts, "Chooser.__call__", "param:invoice", INVOICE],
+        [contracts, "Holder", "attr:invoice", INVOICE],
+        [contracts, "InvoiceMissing", "attr:invoice", INVOICE],
         [contracts, "Payload.__init__", "field:invoice", INVOICE],
     ]
     assert findings_of(out["native"], "export-shape") == []

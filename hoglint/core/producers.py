@@ -868,6 +868,28 @@ class DeclarationProducer(Producer):
             line_lookup = SlotLookup(place.scope, place.at_scope, row["l"])
             self.expose(context, graph, line_rows, line_lookup, row["ann"], f"field:{row['t'][0]}", in_slot)
 
+    def expose_attributes(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        rows: SlotRows,
+        lookup: SlotLookup,
+        idx: int,
+        contract: bool,
+    ) -> None:
+        """The annotated class-body attributes of a class that is no dataclass, as `attr:` slots of
+        the class, each at its own line. In a contract an attribute directly in the class body is a
+        whole slot; a `ClassVar` is an attribute too, since callers read it."""
+        site = rows.site
+        for row in self.fields_by_class(lookup.scope).get(idx, []):
+            if row.get("ann") is None:
+                continue
+            line_site = SlotSite(site.scope, site.at_scope, row["l"], site.column, site.contexts)
+            line_lookup = SlotLookup(lookup.scope, lookup.at_scope, row["l"])
+            in_slot = contract and row.get("f", 0) == CLASS
+            line_rows = SlotRows(line_site, rows.callable_name)
+            self.expose(context, graph, line_rows, line_lookup, row["ann"], f"attr:{row['t'][0]}", in_slot)
+
     def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
         """A class and its ancestors in MRO order, through the link's own class resolution, each
         as its file and def index. An ancestor whose file is not analyzed is left out."""
@@ -1052,10 +1074,13 @@ class DeclarationProducer(Producer):
             and (bool(self.fields_by_class(scope).get(idx)) or in_contract)
         ):
             dataclass = self.has_dataclass_base(context, scope, idx)
-        if nested or (is_class and not dataclass):
+        if nested:
             return
         site = SlotSite(scope, enclosing, line, column, contexts)
         lookup = SlotLookup(scope, enclosing, line)
+        if is_class and not dataclass:
+            self.expose_attributes(context, graph, SlotRows(site, qualname), lookup, idx, in_contract)
+            return
         if not is_class:
             self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
             return
