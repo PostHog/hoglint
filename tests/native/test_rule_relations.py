@@ -25,7 +25,7 @@ from hoglint.rules.engine import Engine, primitive_of
 from hoglint.selectors import And, Bare, Compare, ListLiteral, Literal, Node, Not, Or, Parser, Ref, leaves
 
 from native.require import native_module
-from native.test_evaluator import CONFIG, Tables, Varied, World, rule_table
+from native.test_evaluator import CONFIG, REFS, Tables, Varied, World, rule_table
 
 CONNECTIVES = Path(__file__).parents[1] / "rules" / "connectives.txt"
 
@@ -49,6 +49,9 @@ VARIED = 100
 EXPORTS = 80
 # Per relation, the families whose siblings must give some row, a floor below what the seeds give.
 TELLING = {"R0": 150, "R1": 200, "R2": 40, "R3": 40, "R4": 25, "R5": 150, "R6": 300, "R8": 2}
+
+# Leaf truths R0 must read as unknown on a resolved destination, a floor below what the seeds give.
+UNKNOWN_LEAVES = 500
 
 Key = tuple[int, int]
 Rows = dict[Key, tuple[str, tuple[str, ...]]]
@@ -240,6 +243,8 @@ class Relations:
         # Per rule type, the generated rules judged and those with no row on the fixture.
         self.rules: Counter[str] = Counter()
         self.empty: Counter[str] = Counter()
+        # Leaves R0 reads as unknown on a resolved destination: what makes an unknown testable.
+        self.unknown_leaves = 0
 
     def judge(self, family: Family, rules: dict[str, dict[str, Any]], relation: str) -> Judge | None:
         rules_text = "".join(rule_table(name, table) for name, table in rules.items())
@@ -286,7 +291,9 @@ class Relations:
                     continue
 
                 def leaf(found: Node, key: Key = key) -> str:
-                    return truth_of[outcome(leaf_rows[text(found)], key)]
+                    truth = truth_of[outcome(leaf_rows[text(found)], key)]
+                    self.unknown_leaves += truth == "unknown"
+                    return truth
 
                 expected = judged_of[self.connectives.truth(node, leaf)]
                 if outcome(whole, key) != expected:
@@ -542,12 +549,29 @@ class Relations:
         return out
 
 
+# The fixture's config with a field required on every product that only billing's modules set: an
+# unknown on a resolved endpoint, which the fixture's own fields give on few destinations. Without
+# it, nearly every unknown a relation meets is an unresolved destination, where a selection tells
+# false apart from not false only.
+UNSET = (
+    CONFIG.replace(
+        "[fields]\n", '[fields]\nphase = { type = "enum", values = ["alpha"], required_on = ["products/**"] }\n'
+    )
+    + '\n[[assign]]\nmatch = "products/billing/**"\nset = { phase = "alpha" }\n'
+)
+UNSET_REFS = [*REFS, *["src.phase", "dst.phase"] * 8]
+
+
 def generated_families(world: World) -> Iterable[Family]:
     """Families from the generators of `test_evaluator.py`: tables of each judged rule type over
-    the fixture's config (`Tables`), then over configs that differ outside `[rules]` (`Varied`)."""
+    the fixture's config (`Tables`), over it with a field nothing sets on some products (`UNSET`),
+    then over configs that differ outside `[rules]` (`Varied`)."""
     tables = Tables(random.Random(20261113))
     for mode in JUDGED * ROUNDS:
         yield loaded(world, tables, mode, CONFIG)
+    tables = Tables(random.Random(20261115), UNSET_REFS)
+    for mode in JUDGED * ROUNDS:
+        yield loaded(world, tables, mode, UNSET)
     rng = random.Random(1113)
     made = 0
     while made < VARIED:
@@ -586,6 +610,7 @@ def test_generated_rules_keep_the_relations_between_their_siblings(world: World)
     # A relation over destinations every sibling judges clean proves nothing: each relation must
     # have rows to hold in enough families, and every sibling config must load.
     assert relations.skipped == Counter()
+    assert relations.unknown_leaves >= UNKNOWN_LEAVES
     assert [name for name, floor in TELLING.items() if relations.telling[name] < floor] == [], relations.telling
 
 
