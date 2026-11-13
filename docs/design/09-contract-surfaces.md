@@ -44,6 +44,9 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   Any other listed name is unknown: the export rule reports `export-unknown` for it.
   A def or class with a leading `_` that `__all__` lists is handed out as a public one is: the export rule judges it, and in a contract module its slots get contract-mode rows.
   The signature rule reads public callables only, so the export rule judges such a def's slots in full.
+- A handed-out name whose edge resolves to a first-party module-level assignment is a literal constant (clean) or unknown (`export-unknown` on the assigned name): a `NewType`, a `TypeVar`, a functional `TypedDict`, a value a call or an operation makes, a list of classes (Nov 13).
+  A type alias that names a class is followed to the class.
+  A written limit: a generic or union alias handed out is unknown; its expansion is judged only where a slot names it.
 - What a hand-out by star or by assignment does not read, in plain words:
   1. Star: a source that makes its names by code (`globals().update(...)`, a loop) is read by its table, so those names are not seen; `__all__ = a.__all__ + b.__all__` cannot be read, so it is unknown. A name a source binds under a condition or deletes again is read as bound. In a module with a function and no `__all__` a star hands out nothing, as a named import there hands out nothing (D64). Outside export modules a star import stays one edge.
   2. Assignment: a member past a class (`Account.DoesNotExist`, `Order.objects`, `Status.choices`), a call (`acreate = sync_to_async(create)`), a list of classes, a tuple target (`A, B = X, Y`), two targets (`A = B = X`) and the first of two assignments to one name are not handed out. Not listed, they are not judged anywhere; listed in `__all__`, they are unknown. A generic or union alias (`Thing = list[Order]`) is judged where a slot names it, where the producer expands it.
