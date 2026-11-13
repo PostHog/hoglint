@@ -265,6 +265,18 @@ verdict = "finding"
 identity = ["products.legacy.backend.facade.backfill_command.Command", "products.legacy.backend.facade.backfill_command", "export-denied(command)"]
 
 [[row]]
+case = "ES20"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.bases.EntryHeld", "products.catalog.backend.facade.bases", "export-unknown"]
+
+[[row]]
+case = "ES20"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.bases.EntryLocked", "products.catalog.backend.facade.bases", "export-unknown"]
+
+[[row]]
 case = "FD04"
 rule = "export-shape"
 verdict = "finding"
@@ -1928,6 +1940,13 @@ decision = "F1, proof round 2: a model in a slot of a function routes.py takes i
 rule = "export-shape"
 verdict = "finding"
 match = ["products.legacy.backend.models.Widget", "products.legacy.backend.routes"]
+
+[[wanted]]
+case = "ES21"
+decision = "A written limit (T14, Nov 13): a metaclass given by a call is not read"
+rule = "export-shape"
+verdict = "unknown"
+match = ["products.catalog.backend.facade.bases.EntryStale", "export-unknown"]
 
 # Levels: the products that pass and fail each level.
 
