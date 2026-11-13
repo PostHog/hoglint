@@ -38,6 +38,7 @@ def graph_builder() -> GraphBuilder:
     builder = GraphBuilder().module("app.models", "app.views")
     for name in ("Team", "Base", "Child", "Mystery", "Deep", "Both", "Cell", "AbstractMystery", "MysteryCell"):
         builder.symbol(f"app.models.{name}")
+        builder.edge("declares", "app.models", f"app.models.{name}", attrs=(("decl", "class"),))
     builder.symbol("app.models.Base", abstract="true").symbol("app.models.AbstractMystery", abstract="true")
     builder.symbol("app.views.handle", decl="function").symbol("app.views.plain", decl="function")
     bases = [

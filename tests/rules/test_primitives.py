@@ -470,6 +470,12 @@ def test_export_by_base_class_hands_out_only_the_adapters(tmp_path: Path) -> Non
         .symbol("products.billing.presentation.views.InvoiceViewSet")
         .symbol("products.billing.presentation.views.render", "def")
         .edge(
+            "declares",
+            "products.billing.presentation.mixins",
+            "products.billing.presentation.mixins.BillingMixin",
+            attrs=(("decl", "class"),),
+        )
+        .edge(
             "inherit",
             "products.billing.presentation.views",
             "products.billing.presentation.mixins.BillingMixin",
