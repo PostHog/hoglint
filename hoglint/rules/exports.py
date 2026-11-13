@@ -187,7 +187,7 @@ class ExportPrimitive(RuleType):
         # `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
         self.allowed: dict[tuple[str, str], bool] = {}
         self.walked: dict[tuple[str, str], bool] = {}
-        self.members: dict[tuple[str, bool, str], list[tuple[Edge, str, str]]] = {}
+        self.members: dict[tuple[str, str], list[tuple[Edge, str, str, bool]]] = {}
         self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
@@ -550,27 +550,38 @@ class ExportPrimitive(RuleType):
                 self.made[handle] = edge
         return [self.made[handle] for handle in handles]
 
-    def member_edges(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[Edge, str, str]]:
-        """Exposes edges of a callable, or of a class's fields and methods (and those of the bases
-        the policy walks), each with the module and qualname of the class or callable it belongs to."""
-        key = (symbol, include_bases, policy.name)
+    def member_edges(self, symbol: str, policy: ShapePolicy) -> list[tuple[Edge, str, str, bool]]:
+        """The rows of a callable, or of a class's fields and methods (and those of the bases the
+        policy walks), that are judged: each with the module and qualname of the class or callable
+        it belongs to, and whether the producer expanded an alias in its slot. The marker row of
+        an expanded alias is left out: the rows of its expansion stand for it."""
+        key = (symbol, policy.name)
         found = self.members.get(key)
         if found is None:
-            places = self.member_handles(symbol, include_bases, policy)
+            places = self.member_handles(symbol, policy)
             edges = self.edges([handle for handle, _, _, _ in places])
-            found = self.members[key] = [
+            rows = [
                 (edge, owner, qualname)
                 for edge, (_, owner, qualname, walked) in zip(edges, places)
                 if walked or self.constructor_slot(edge)
             ]
+            expanded = {
+                (row.attr("callable"), row.attr("slot")) for row, _, _ in rows if row.attr("alias") == "expanded"
+            }
+            found = self.members[key] = [
+                (row, owner, qualname, (row.attr("callable"), row.attr("slot")) in expanded)
+                for row, owner, qualname in rows
+                if row.attr("alias") != "expanded"
+            ]
         return found
 
-    def member_handles(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[int, str, str, bool]]:
-        """(handle, module, qualname, walked) of each row of the symbol and of its ancestors. Of an
-        ancestor `walk_where` is false for, only its constructor fields are read: they are slots of
-        the class that inherits them, while its methods and attributes are core's contract."""
+    def member_handles(self, symbol: str, policy: ShapePolicy) -> list[tuple[int, str, str, bool]]:
+        """(handle, module, qualname, walked) of each row of the symbol and, for a class, of its
+        ancestors. Of an ancestor `walk_where` is false for, only its constructor fields are read:
+        they are slots of the class that inherits them, while its methods and attributes are
+        core's contract."""
         lineage = [(symbol, True)]
-        if include_bases:
+        if self.facts.decl(symbol) == "class":
             ancestors, _ = self.facts.ancestors(symbol)
             lineage.extend((ancestor, self.walk_holds(ancestor, policy)) for ancestor in sorted(ancestors))
         out: list[tuple[int, str, str, bool]] = []
@@ -674,12 +685,7 @@ class ExportPrimitive(RuleType):
         class where a signature rule of `leave_slots_to` reads the slot's row; the name the module
         hands the symbol out by, if it does, names the copy of a slot."""
         places = self.copy_places(symbol, module, policy)
-        include_bases = self.facts.decl(symbol) == "class"
-        rows = self.member_edges(symbol, include_bases, policy)
-        expanded = {(row.attr("callable"), row.attr("slot")) for row, _, _ in rows if row.attr("alias") == "expanded"}
-        for row, owner, qualname in rows:
-            if row.attr("alias") == "expanded":
-                continue
+        for row, owner, qualname, has_expansion in self.member_edges(symbol, policy):
             shape_only = self.leaves_slot(row, owner, qualname, places, policy)
             if row.attr("annotation") == "missing":
                 if not shape_only:
@@ -689,7 +695,6 @@ class ExportPrimitive(RuleType):
                 if not shape_only:
                     self.unresolved(row, module)
                 continue
-            has_expansion = (row.attr("callable"), row.attr("slot")) in expanded
             read = SlotRead(left=shape_only, expanded=has_expansion)
             names = [str(target) for target in row.targets] or [row.surface]
             for name in names:

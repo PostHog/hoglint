@@ -783,17 +783,13 @@ impl<'a> Walk<'a> {
             .unwrap_or_default()
     }
 
-    /// `ExportPrimitive.member_handles`: each row with the module (as a place) and the length of
-    /// the qualname of the class or callable it belongs to. Of an ancestor `walk_where` is false
-    /// for, only its constructor fields are read.
-    fn member_edges(
-        &mut self,
-        symbol: &str,
-        include_bases: bool,
-        shape: usize,
-    ) -> Vec<(u32, Place, usize)> {
+    /// `ExportPrimitive.member_edges`: the rows that are judged, each with the module (as a place)
+    /// and the qualname length of the class or callable it belongs to, and whether the producer
+    /// expanded an alias in its slot; the marker row of an expanded alias is left out. Of an
+    /// ancestor `walk_where` is false for, only its constructor fields are read.
+    fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize, bool)> {
         let mut lineage = vec![(symbol.to_string(), true)];
-        if include_bases {
+        if self.cx.rules.symbol_decl(self.cx.link, symbol) == "class" {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
             let mut sorted: Vec<String> = ancestors.into_iter().map(str::to_string).collect();
             sorted.sort();
@@ -818,7 +814,25 @@ impl<'a> Walk<'a> {
                 }
             }
         }
-        out
+        let Keys {
+            callable,
+            slot,
+            alias,
+            ..
+        } = self.keys;
+        let cx = self.cx;
+        let slot_of = |id: u32| (cx.attr(id, callable), cx.attr(id, slot));
+        let expanded: FxHashSet<(&str, &str)> = out
+            .iter()
+            .filter(|(id, _, _)| cx.attr(*id, alias) == "expanded")
+            .map(|(id, _, _)| slot_of(*id))
+            .collect();
+        out.into_iter()
+            .filter(|(id, _, _)| cx.attr(*id, alias) != "expanded")
+            .map(|(id, owner, qualname_len)| {
+                (id, owner, qualname_len, expanded.contains(&slot_of(id)))
+            })
+            .collect()
     }
 
     /// `ExportPrimitive.copies`: a module's exposes rows of a callable's slot.
@@ -1000,24 +1014,10 @@ impl<'a> Walk<'a> {
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let link = self.cx.link;
         let places = self.copy_places(symbol, self.cx.module_named(module), shape);
-        let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let Keys {
-            annotation,
-            slot,
-            alias,
-            callable,
-            ..
+            annotation, slot, ..
         } = self.keys;
-        let rows = self.member_edges(symbol, include_bases, shape);
-        let expanded: FxHashSet<(&str, &str)> = rows
-            .iter()
-            .filter(|(id, _, _)| self.cx.attr(*id, alias) == "expanded")
-            .map(|(id, _, _)| (self.cx.attr(*id, callable), self.cx.attr(*id, slot)))
-            .collect();
-        for (id, owner, qualname_len) in rows {
-            if self.cx.attr(id, alias) == "expanded" {
-                continue;
-            }
+        for (id, owner, qualname_len, has_expansion) in self.member_edges(symbol, shape) {
             let shape_only = self.leaves_slot(id, (owner, qualname_len), &places, shape);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
@@ -1033,8 +1033,6 @@ impl<'a> Walk<'a> {
                 }
                 continue;
             }
-            let has_expansion =
-                expanded.contains(&(self.cx.attr(id, callable), self.cx.attr(id, slot)));
             let targets = edges.targets_of(id);
             let names: Vec<String> = if targets.is_empty() {
                 vec![self.cx.text(edges.surface_of(id)).to_string()]
