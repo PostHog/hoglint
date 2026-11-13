@@ -241,6 +241,18 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "ME06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.team.team.Team", "products.inventory.backend.routes", "export-denied(model)"]
+
+[[row]]
+case = "ME05"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_names", "export-denied(model)"]
+
+[[row]]
 case = "ME03"
 rule = "export-shape"
 verdict = "unknown"
@@ -431,6 +443,24 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 # facade-signature
+
+[[row]]
+case = "ME07"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.named", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "ME05"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.private_names", "lookup", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "ME04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.records", "EntryStockRecord.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 
 [[row]]
 case = "ES06"
