@@ -16,7 +16,7 @@ from hoglint.plugins import ProducerFailure
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
-from rules.support import GraphBuilder, config_from
+from rules.support import GraphBuilder, config_from, native_graph
 
 FIELDS = """
 schema = 1
@@ -57,7 +57,7 @@ def run(
     parsed = None
     if exceptions is not None:
         parsed = ExceptionsFile.parse(tomllib.loads(exceptions), config)
-    return Engine(config, graph, tmp_path, today=datetime.date(2026, 11, 9)).evaluate(ledger, parsed)
+    return Engine(config, native_graph(graph), tmp_path, today=datetime.date(2026, 11, 9)).evaluate(ledger, parsed)
 
 
 def messages(result: RunResult, rule: str) -> list[str]:
@@ -180,7 +180,7 @@ def test_a_kind_marked_expected_that_matches_nothing_makes_its_rules_incomplete(
         'subclass_of = "django.db.models.Model" }', 'subclass_of = "django.db.models.Model", expected = true }'
     )
     config = config_from(tmp_path, expected + USE_SHAPE + EDGE_RULE)
-    result = Engine(config, graph, tmp_path).evaluate()
+    result = Engine(config, native_graph(graph), tmp_path).evaluate()
     assert [item.cause for item in result.runs["model-crossings"].incomplete] == [IncompleteCause.EXTRACTOR]
     assert result.runs["no-product-from-core"].incomplete == []
     assert result.exit_code() == 2
@@ -312,10 +312,11 @@ def test_use_shape_with_flow_keeps_the_graph_edge_and_its_ordinal(tmp_path: Path
             attrs=(("flow_shape", "write(save)"),),
             line=line,
         )
-    graph = builder.graph
+    graph = native_graph(builder.graph)
     findings = run(tmp_path, FLOW_SHAPE, graph).runs["model-sites"].findings
     assert sorted(f.identity[-1] for f in findings) == ["0", "1"]
-    assert all(any(f.witnesses[0] is edge for edge in graph.edges) for f in findings)
+    handles = {edge.handle for edge in graph.edges}
+    assert all(f.witnesses[0].handle in handles and f.witnesses[0].shape == "instance-single" for f in findings)
     assert {f.message.rsplit(" as ", 1)[1] for f in findings} == {"write(save)"}
 
 

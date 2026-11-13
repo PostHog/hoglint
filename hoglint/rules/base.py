@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from hoglint.config.model import Config, RuleSpec
 from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
 from hoglint.labels import BUILTIN_ENTITY_NAMES, Labeler
+from hoglint.ledger.errors import EngineError
 from hoglint.model import (
     Context,
     Edge,
@@ -436,8 +437,12 @@ def subjects_of(src: str | None, dst: str | None) -> tuple[str, ...]:
 
 
 def context_class(index: GraphIndex) -> type[RuleContext]:
-    """The rule context for an index: an index over edges kept outside Python brings its own."""
-    return getattr(index, "context_class", RuleContext)
+    """The rule context for an index: the native graph's, whose evaluator judges every rule. A
+    graph that is not linked natively has none: rules run in the native evaluator only."""
+    found = getattr(index, "context_class", None)
+    if found is None:
+        raise EngineError("rules run in the native evaluator only: link the graph natively first")
+    return found
 
 
 def labeler_class(index: GraphIndex) -> type[Labeler]:

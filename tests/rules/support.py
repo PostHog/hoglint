@@ -107,16 +107,26 @@ class GraphBuilder:
 
 def native_graph(graph: Graph) -> NativeGraph:
     """A hand-built graph loaded into a native link, which the native evaluator judges: an empty
-    file per module, the graph's symbols and edges as a pack writes them."""
+    file per module, the graph's symbols and edges as a pack writes them, its hand-outs and failed
+    producers. A module whose path sits under a directory its name does not hold (`src/`) makes
+    that directory a source root."""
+    if isinstance(graph, NativeGraph):
+        return graph
     records = {path: FileFacts(path).record for path in graph.modules.values()}
-    roots = tuple(sorted({module.split(".")[0] for module in graph.modules}))
-    linked = Linked(records, CoreConfig(source_roots=(".",), first_party=roots))
+    roots = {"."}
+    for module, path in graph.modules.items():
+        for named in (module_path(module), module_path(module, package=True)):
+            if path.endswith("/" + named):
+                roots.add(path.removesuffix("/" + named))
+    first_party = tuple(sorted({module.split(".")[0] for module in graph.modules}))
+    linked = Linked(records, CoreConfig(source_roots=tuple(sorted(roots)), first_party=first_party))
     sink = linked.sink()
     if graph.symbols:
         sink.add_symbols(graph.symbols)
     sink.add_edges("test@1", graph.edges)
     native = linked.graph
     native.hand_outs.update(graph.hand_outs)
+    native.failed_producers.update(graph.failed_producers)
     return native
 
 

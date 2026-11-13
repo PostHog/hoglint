@@ -11,7 +11,7 @@ from hoglint.model import Resolution
 from hoglint.rules.engine import Engine
 from hoglint.selectors import NONE, UNKNOWN, State, Truth, Value
 
-from rules.support import GraphBuilder, config_from
+from rules.support import GraphBuilder, config_from, native_graph
 
 CONFIG = """
 schema = 1
@@ -161,7 +161,7 @@ def test_a_layout_rule_that_pins_kind_reads_only_candidates_but_finds_the_same(
     for conflicting in ("app.models.Both", "app.models.Cell"):
         del graph.symbols[conflicting]
     config = config_from(tmp_path, CONFIG + LAYOUT.format(pinned=pinned, unpinned=unpinned))
-    runs = Engine(config, graph, tmp_path).run_rules()
+    runs = Engine(config, native_graph(graph), tmp_path).run_rules()
 
     def outcome(rule: str) -> tuple[list[tuple[str, ...]], list[tuple[str, str]]]:
         run = runs[rule]

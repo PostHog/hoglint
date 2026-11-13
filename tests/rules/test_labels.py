@@ -11,7 +11,7 @@ from hoglint.model import Resolution
 from hoglint.rules.base import RuleContext, read_endpoint
 from hoglint.rules.engine import Engine
 
-from rules.support import GraphBuilder, config_from, shape_config
+from rules.support import GraphBuilder, config_from, native_graph, shape_config
 
 CONFIG = """
 schema = 1
@@ -179,7 +179,7 @@ def test_conflicting_assignments_are_a_config_error(tmp_path: Path) -> None:
     config = config_from(tmp_path, text, {"CODEOWNERS": CODEOWNERS})
     graph = GraphBuilder().module("posthog.egress.client").graph
     with pytest.raises(ConfigError, match="field 'package' set differently"):
-        Engine(config, graph, tmp_path).evaluate()
+        Engine(config, native_graph(graph), tmp_path).evaluate()
 
 
 UNREAD_CONFLICTS = """
@@ -225,7 +225,7 @@ def test_symbol_conflicts_are_a_config_error_when_no_rule_reads_the_symbol(
         .graph
     )
     with pytest.raises(ConfigError, match=message):
-        Engine(config, graph, tmp_path).evaluate()
+        Engine(config, native_graph(graph), tmp_path).evaluate()
 
 
 def test_explain_names_each_source(labeler: Labeler) -> None:
@@ -296,7 +296,7 @@ def test_the_posthog_preset_gives_every_first_party_file_a_package_or_unknown(
     )
 
     assert render(Labeler(config, graph, tmp_path).field_value(module, None, "package")[0]) == package
-    run = Engine(config, graph, tmp_path).evaluate().runs["public-surface"]
+    run = Engine(config, native_graph(graph), tmp_path).evaluate().runs["public-surface"]
     # A folder no assignment claims is not clean: its edge into a product is incomplete, not passed.
     if package == "unknown":
         assert ([f.identity for f in run.findings], [item.key for item in run.incomplete]) == (

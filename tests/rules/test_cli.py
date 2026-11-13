@@ -15,7 +15,7 @@ from hoglint.plugins import PLUGIN_ROOTS
 from hoglint.source import GraphSource
 from native.require import native_module
 
-from rules.support import GraphBuilder, write_config
+from rules.support import GraphBuilder, native_graph, write_config
 from rules.test_compare import git_in
 
 CONFIG = """
@@ -61,7 +61,7 @@ def commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Commands:
     built = graph()
 
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return built
+        return native_graph(built)
 
     monkeypatch.setattr(GraphSource, "build", build)
     write_config(tmp_path / "repo", CONFIG)
@@ -153,7 +153,7 @@ def test_a_policy_root_apart_from_the_code_asks_about_the_code_roots_declared_pa
     packages = GraphBuilder().package("products.billing", "products.alerts").graph
 
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return packages
+        return native_graph(packages)
 
     monkeypatch.setattr(GraphSource, "build", build)
     policy, code = tmp_path / "policy", tmp_path / "code"
@@ -352,7 +352,7 @@ def test_a_stored_summary_stands_in_for_a_check_of_its_tree_only_when_the_output
     shows: str | None,
 ) -> None:
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return memo_graph(staged)
+        return native_graph(memo_graph(staged))
 
     monkeypatch.setattr(GraphSource, "build", build)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -393,7 +393,7 @@ def test_a_source_the_run_could_not_read_blocks_and_its_summary_is_never_stored(
     reads_fail = [True]
 
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return memo_graph(staged, read_error=bool(reads_fail))
+        return native_graph(memo_graph(staged, read_error=bool(reads_fail)))
 
     monkeypatch.setattr(GraphSource, "build", build)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

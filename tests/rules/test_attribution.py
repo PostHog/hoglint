@@ -184,7 +184,9 @@ def test_a_summary_holds_no_absolute_path_and_no_day(tmp_path: Path) -> None:
     graph = GraphBuilder().module("app.a", "app.b").edge("import", "app.a", "app.b").graph
     entry = {"rule": "flags", "match": {"src.module": "gone"}, "reason": "r", "owners": ["t"], "scope": "prod"}
     exceptions = ExceptionsFile.parse({"schema": 1, "exception": [{**entry, "review_by": "2026-01-01"}]}, config)
-    result = Engine(anchored, graph, code_root, today=datetime.date(2026, 11, 9)).evaluate(None, exceptions)
+    result = Engine(anchored, native_graph(graph), code_root, today=datetime.date(2026, 11, 9)).evaluate(
+        None, exceptions
+    )
     summary = ScanSummary.from_run(result, graph, Envelope(), roots=(policy_root, code_root), exceptions=exceptions)
     assert str(tmp_path) not in json.dumps(summary.to_json())
     shown = [f.shown for f in summary.findings]
@@ -233,7 +235,7 @@ def test_a_stored_summary_keeps_what_check_prints_and_names_other_findings_by_ke
     )
     accepted = ("cross", ("core.a", "products.billing.logic"))
     ledger = LedgerFile(schema=1, policy=config.policy_hash, lines={accepted: 1}, exists=True)
-    result = Engine(config, graph, tmp_path).evaluate(ledger)
+    result = Engine(config, native_graph(graph), tmp_path).evaluate(ledger)
     envelope = Envelope("t" * 40, "engine", "policy", "framework")
     store = SummaryStore(tmp_path / "cache")
     store.put(envelope, ScanSummary.from_run(result, graph, envelope, roots=(tmp_path,)))
@@ -330,7 +332,9 @@ def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
     git_in(repo, "commit", "-qm", "one computed import")
     (repo / "core/loader.py").write_text(SECOND_LOADER)
     git_in(repo, "add", "-A")
-    monkeypatch.setattr(GraphSource, "build", lambda *args, **kwargs: GraphBuilder().module("core.loader").graph)
+    monkeypatch.setattr(
+        GraphSource, "build", lambda *args, **kwargs: native_graph(GraphBuilder().module("core.loader").graph)
+    )
 
     def check(cache: Path) -> int:
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
