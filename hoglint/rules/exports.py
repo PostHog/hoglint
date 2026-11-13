@@ -592,15 +592,17 @@ class ExportPrimitive(RuleType):
             edge for edge in self.edges(handles) if edge.attr("callable") == callable_name and edge.attr("slot") == slot
         ]
 
-    def copy_places(self, symbol: str, module: str, bound: str) -> list[tuple[str, str]]:
-        """(module, name) of each place the producer may hold a copy of the walked symbol's slots:
-        the exporting module under the name it binds, and the module that defines the symbol under
-        its own name (a contract dataclass's fields along its MRO)."""
+    def copy_places(self, symbol: str, module: str, policy: ShapePolicy) -> list[tuple[str, str]]:
+        """(module, name) of each place the producer may hold a copy of the walked symbol's slots,
+        among the surfaces of the walk's shape policy: the exporting module under the name it hands
+        the symbol out by, and the module that defines the symbol under its own name (a contract
+        dataclass's fields along its MRO). The same for every row of one visit."""
+        bound = self.bindings.get(module, {}).get(symbol, "")
         out = [(module, bound)] if bound else []
         owner = self.ctx.labeler.module_of_symbol(symbol)
         if owner is not None and owner != symbol:
             out.append((owner, symbol[len(owner) + 1 :]))
-        return out
+        return [(place, name) for place, name in out if self.under_policy(place, policy)]
 
     def under_policy(self, module: str, policy: ShapePolicy) -> bool:
         """Whether an export of the shape policy covers a module."""
@@ -619,17 +621,19 @@ class ExportPrimitive(RuleType):
         return self.under_policy(module, policy) and self.signature_sees(module, row)
 
     def leaves_slot(
-        self, row: Edge, owner: str, qualname: str, symbol: str, module: str, bound: str, policy: ShapePolicy
+        self, row: Edge, owner: str, qualname: str, places: list[tuple[str, str]], policy: ShapePolicy
     ) -> bool:
         """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
-        reads. The row's own module is one it reads for this walk, or such a module holds the copy
-        of the slot (`copy_places`); "public" is asked of the callable of the row the rule reads."""
+        reads. The row's own module is one it reads for this walk, or one of the visit's `places`
+        holds the copy of the slot; "public" is asked of the callable of the row the rule reads."""
+        if not self.slot_rules:
+            return False
         if not is_private(row.attr("callable")) and self.reads_under(owner, policy, row):
             return True
         rest = row.attr("callable")[len(qualname) :]
-        for place, name in self.copy_places(symbol, module, bound):
+        for place, name in places:
             copy = name + rest
-            if is_private(copy) or not self.under_policy(place, policy):
+            if is_private(copy):
                 continue
             if any(self.signature_sees(place, found) for found in self.copies(place, copy, row.attr("slot"))):
                 return True
@@ -663,14 +667,14 @@ class ExportPrimitive(RuleType):
         """The types in the slots of a member, at any depth. The rule judges only the shape of a
         class where a signature rule of `leave_slots_to` reads the slot's row; the name the module
         hands the symbol out by, if it does, names the copy of a slot."""
-        bound = self.bindings.get(module, {}).get(symbol, "")
+        places = self.copy_places(symbol, module, policy)
         include_bases = self.facts.decl(symbol) == "class"
         rows = self.member_edges(symbol, include_bases, policy)
         expanded = {(row.attr("callable"), row.attr("slot")) for row, _, _ in rows if row.attr("alias") == "expanded"}
         for row, owner, qualname in rows:
             if row.attr("alias") == "expanded":
                 continue
-            shape_only = self.leaves_slot(row, owner, qualname, symbol, module, bound, policy)
+            shape_only = self.leaves_slot(row, owner, qualname, places, policy)
             if row.attr("annotation") == "missing":
                 if not shape_only:
                     self.unknown(symbol, module, policy, trail, row, "no-annotation", row.attr("slot"))

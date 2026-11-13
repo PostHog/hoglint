@@ -829,11 +829,15 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.copy_places`: (module, name) of each place the producer may hold a copy
-    /// of the walked symbol's slots.
-    fn copy_places(&self, symbol: &str, module: &str, bound: &str) -> Vec<(String, String)> {
+    /// of the walked symbol's slots, among the surfaces of the walk's shape policy.
+    fn copy_places(&self, symbol: &str, module: &str, shape: usize) -> Vec<(String, String)> {
         let mut out = Vec::new();
-        if !bound.is_empty() {
-            out.push((module.to_string(), bound.to_string()));
+        if let Some(bound) = self
+            .bindings
+            .get(module)
+            .and_then(|found| found.get(symbol))
+        {
+            out.push((module.to_string(), bound.clone()));
         }
         if let Some((owner, _)) = self.cx.module_of_symbol(symbol) {
             let owner_name = self.cx.text(owner);
@@ -842,6 +846,7 @@ impl<'a> Walk<'a> {
                 out.push((owner_name.to_string(), name));
             }
         }
+        out.retain(|(place, _)| self.under_policy(place, shape));
         out
     }
 
@@ -864,17 +869,17 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
     /// callable's slot whose row that rule reads.
-    #[allow(clippy::too_many_arguments)]
     fn leaves_slot(
         &mut self,
         id: u32,
         owner: Sid,
         qualname: &str,
-        symbol: &str,
-        module: &str,
-        bound: &str,
+        places: &[(String, String)],
         shape: usize,
     ) -> bool {
+        if self.rule.slot_rules.is_empty() {
+            return false;
+        }
         let link = self.cx.link;
         let row_callable = self.cx.attr(id, link.core.it.get("callable"));
         let owner_name = self.cx.text(owner).to_string();
@@ -884,16 +889,16 @@ impl<'a> Walk<'a> {
         // A row with no `callable` attr is indexed by its site scope; Python's slice gives "".
         let rest = row_callable.get(qualname.len()..).unwrap_or("");
         let slot = self.cx.attr(id, link.core.it.get("slot"));
-        for (place, name) in self.copy_places(symbol, module, bound) {
+        for (place, name) in places {
             let copy = format!("{name}{rest}");
-            if is_private(&copy) || !self.under_policy(&place, shape) {
+            if is_private(&copy) {
                 continue;
             }
-            let Some(place_sid) = link.core.it.get(&place) else {
+            let Some(place_sid) = link.core.it.get(place) else {
                 continue;
             };
             for found in self.copies(place_sid, &copy, slot) {
-                if self.signature_sees(&place, found) {
+                if self.signature_sees(place, found) {
                     return true;
                 }
             }
@@ -985,13 +990,7 @@ impl<'a> Walk<'a> {
     /// names the copy of a slot.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let link = self.cx.link;
-        let bound = self
-            .bindings
-            .get(module)
-            .and_then(|found| found.get(symbol))
-            .cloned()
-            .unwrap_or_default();
-        let bound = bound.as_str();
+        let places = self.copy_places(symbol, module, shape);
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let annotation = link.core.it.get("annotation");
         let slot = link.core.it.get("slot");
@@ -1007,7 +1006,7 @@ impl<'a> Walk<'a> {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
-            let shape_only = self.leaves_slot(id, owner, &qualname, symbol, module, bound, shape);
+            let shape_only = self.leaves_slot(id, owner, &qualname, &places, shape);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));
