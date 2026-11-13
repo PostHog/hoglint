@@ -241,6 +241,30 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "ME02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.errors", "export-denied(model)"]
+
+[[row]]
+case = "ME01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.rows", "export-denied(model)"]
+
+[[row]]
+case = "ME01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.sinks", "export-denied(model)"]
+
+[[row]]
+case = "ME02"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.logic.errors.EntryBroken", "products.catalog.backend.facade.errors", "export-unknown"]
+
+[[row]]
 case = "ME01"
 rule = "export-shape"
 verdict = "finding"
@@ -745,7 +769,7 @@ case = "CR03"
 rule = "no-new-package-cycles"
 verdict = "unknown"
 identity = ["catalog", "?"]
-count = 2
+count = 4
 
 [[row]]
 case = "CY01"
@@ -1178,6 +1202,12 @@ verdict = "finding"
 identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
 
 # prod-imports-test
+
+[[row]]
+case = "ME02"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.catalog.backend.logic.errors", "?"]
 
 [[row]]
 case = "CR03"
@@ -1782,27 +1812,6 @@ decision = "registry-slots: members subclass the base (needs its producer)"
 rule = "registry-slots"
 verdict = "finding"
 match = ["products.legacy.backend.webhook_consumers"]
-
-[[wanted]]
-case = "ME01"
-decision = "Nov 12: methods of a handed-out exception are handed out (narrow form)"
-rule = "*"
-verdict = "finding"
-match = ["EntryRejected", "StockItem"]
-
-[[wanted]]
-case = "ME01"
-decision = "Nov 12: methods of a handed-out pydantic model are handed out (narrow form)"
-rule = "*"
-verdict = "finding"
-match = ["EntryRow", "StockItem"]
-
-[[wanted]]
-case = "ME01"
-decision = "Nov 12: methods of a handed-out Protocol are handed out (narrow form)"
-rule = "*"
-verdict = "finding"
-match = ["StockSink", "StockItem"]
 
 [[wanted]]
 case = "CN03"
