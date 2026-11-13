@@ -12,13 +12,12 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from hoglint.core.build import CoreBuild
+from hoglint.core.build import CoreBuild, PackQueries
 from hoglint.core.harness import GraphSink
 from hoglint.core.memo import NULL_TRACER, PackMemo, TracedQuery, digest, edge_form, key_of
 from hoglint.core.records import RecordBodies
 from hoglint.core.sites import FileScope
 from hoglint.model import Edge, EntityId, Graph
-from hoglint.native.queries import PackQueries
 from hoglint.plugins import AttributeUse, EdgeBatch
 
 if TYPE_CHECKING:
