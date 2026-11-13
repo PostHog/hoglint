@@ -444,6 +444,8 @@ FINE_HIDDEN_IN_ATTRIBUTE = (
 )
 # A frozen dataclass with one field and one `ClassVar` that names a model.
 CLASS_VAR_DATACLASS = "@dataclasses.dataclass(frozen=True)\nclass Record:\n    total: int\n    kind: ClassVar[Order]\n"
+# A chain of aliases one deeper than the producer follows.
+TOO_DEEP_ALIASES = "".join(f"A{depth} = A{depth + 1} | None\n" for depth in range(34)) + "A34 = Order\n"
 # Parts of an annotation that are no name, subscript, `|`, tuple, list, string or star.
 UNREAD_FORMS = {
     "an operator other than |": "list[int] | (Order & int)",
@@ -1146,6 +1148,19 @@ SLOT_OWNER_CASES = {
             f"{SHOP_DIR}/facade/api.py": "from posthog.records import CoreRecord\n\n__all__ = ['CoreRecord']\n",
         },
         CLEAN,
+    ),
+    # One name gives one row: an alias left too deep to follow, a name both bare and in an alias.
+    "an alias too deep to follow, in a method of a handed-out exception": (
+        handed_out(TOO_DEEP_ALIASES + returns_in_rejected("A0"), "Rejected"),
+        {"export-shape": [["A32", ERRORS, "unresolved-exposes"]], "facade-signature": []},
+    ),
+    "a NewType bare and through an alias in one slot of a facade function": (
+        {
+            f"{SHOP_DIR}/facade/api.py": IMPORTS_ORDER
+            + UNEXPANDED_NAMES["a NewType"]
+            + "Maybe = Ref | None\n\n\ndef get() -> Maybe | Ref:\n    raise ValueError\n"
+        },
+        {"export-shape": [], "facade-signature": [[API, "get", "return", f"{API}.Ref"]]},
     ),
     # A starred part is read through; a part of another form makes the slot unknown.
     "a starred tuple of a model in a facade function's return": (

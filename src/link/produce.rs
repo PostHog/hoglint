@@ -1505,7 +1505,9 @@ impl Producers<'_> {
     /// one: what an alias stands for is a fact in every file. Outside a contract a name that
     /// resolves to a plain builtin gets no row, in the alias's expansion too. A slot names each
     /// row an alias expands to once, however often its aliases repeat it; rows that differ in an
-    /// attr (such as the generic a name is an argument of) are different rows.
+    /// attr (such as the generic a name is an argument of) are different rows. A name the slot
+    /// holds bare and through an alias is one row, and an alias left too deep to follow is only
+    /// its marker.
     fn expose_mentions(
         &mut self,
         rows: SlotRows,
@@ -1528,11 +1530,13 @@ impl Producers<'_> {
             let k = &self.settings.k;
             let position = if mention.whole { k.whole } else { k.nested };
             if contract || !self.plain_builtin(found, mention.value) {
-                let resolved = self.core.classify_lookup(found);
                 let expanded = expansion.as_ref().is_some_and(|items| !items.is_empty());
                 let marks = self.markers(expanded, named.subscripted, lookup, named.argument_of);
-                let extra = marks.attrs(&self.settings.k);
-                self.push_slot(rows, found.surface, resolved, slot, position, &extra);
+                if written.insert((found.surface, mention.whole, marks)) {
+                    let resolved = self.core.classify_lookup(found);
+                    let extra = marks.attrs(&self.settings.k);
+                    self.push_slot(rows, found.surface, resolved, slot, position, &extra);
+                }
             }
             let Some(expansion) = expansion else {
                 continue;
@@ -1556,6 +1560,13 @@ impl Producers<'_> {
                         let marker = marks.attrs(k);
                         self.push_slot(rows, item.value, UNRESOLVED, slot, position, &marker);
                     }
+                    continue;
+                }
+                let too_deep = Expanded {
+                    too_deep: true,
+                    ..item
+                };
+                if expansion.contains(&too_deep) {
                     continue;
                 }
                 if !contract && self.plain_builtin(inner, item.value) {

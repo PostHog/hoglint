@@ -171,8 +171,8 @@ DEEP = "".join(f"A{at} = list[A{at + 1}]\n" for at in range(40)) + "A40 = int\n"
 
 
 # A type alias whose expansion core wrote is explained by it: the rules judge the names it expands
-# to, never the alias's own name. An alias too deep to follow stays unknown, by its name and by the
-# marker that stops the expansion.
+# to, never the alias's own name. An alias too deep to follow stays unknown, by the marker that
+# stops the expansion: one row for the name.
 def slot_finding(name: str) -> list[object]:
     return ["facade-signature", [API, "charge", "param:amount", name]]
 
@@ -186,7 +186,7 @@ ALIAS_CASES = {
     ),
     "an alias too deep to follow": (
         DEEP + "\n\ndef charge(amount: A0) -> None:\n    pass\n",
-        [slot_finding("A32"), slot_finding(f"{API}.A32")],
+        [slot_finding("A32")],
     ),
 }
 

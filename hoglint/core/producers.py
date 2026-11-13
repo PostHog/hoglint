@@ -927,7 +927,9 @@ class DeclarationProducer(Producer):
         is one: what an alias stands for is a fact in every file. Outside a contract a name that
         resolves to a plain builtin gets no row, in the alias's expansion too. A slot names each
         row an alias expands to once, however often its aliases repeat it; rows that differ in an
-        attr (such as the generic a name is an argument of) are different rows. A part of the
+        attr (such as the generic a name is an argument of) are different rows. A name the slot
+        holds bare and through an alias is one row, and an alias left too deep to follow is only
+        its marker. A part of the
         annotation or of an alias's value that cannot be read gives the slot one `UNREAD` row."""
         written: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
         for value, mentioned, subscripted, argument_of in names:
@@ -935,9 +937,11 @@ class DeclarationProducer(Producer):
             alias = self.alias_of(context, Mention(value, mentioned, lookup), found)
             expansion = self.expansion(context, *alias) if alias is not None else None
             if contract or not self.plain_builtin(found, value):
-                resolved = context.classifier.classify_lookup(found)
                 marker = self.markers(context, bool(expansion), subscripted, lookup, argument_of)
-                graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned, *marker))
+                if (found.surface, mentioned, marker) not in written:
+                    written.add((found.surface, mentioned, marker))
+                    resolved = context.classifier.classify_lookup(found)
+                    graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned, *marker))
             if expansion is None:
                 continue
             for item in expansion:
@@ -950,6 +954,8 @@ class DeclarationProducer(Producer):
                     if (item.value, position, TOO_DEEP) not in written:
                         written.add((item.value, position, TOO_DEEP))
                         graph.edges.append(rows.edge(item.value, UNRESOLVED, slot, position, *TOO_DEEP))
+                    continue
+                if replace(item, too_deep=True) in expansion:
                     continue
                 if not contract and self.plain_builtin(inner, item.value):
                     continue
