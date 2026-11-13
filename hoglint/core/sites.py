@@ -117,14 +117,16 @@ class FileScope:
         return out
 
     def build_members(self) -> dict[tuple[int, str], tuple[str, str]]:
-        """Names defined inside a def or class body: nested defs, and class-level assignments."""
+        """Names defined inside a def or class body: nested defs, and class-level assignments with
+        a value. A bare annotation (`uuid: uuid.UUID`) binds no name, so its own annotation and the
+        names after it still see the module's `uuid`."""
         out: dict[tuple[int, str], tuple[str, str]] = {}
         for idx, d in enumerate(self.defs):
             if d["s"] != -1:
                 out[(d["s"], d["n"])] = ("class" if d["k"] == "class" else "def", self.qualnames[idx])
         for row in self.record.get("assigns", ()):
             owner = row["s"]
-            if owner == -1:
+            if owner == -1 or "v" not in row:
                 continue
             for target in row["t"]:
                 for name in unpacked_names(target):

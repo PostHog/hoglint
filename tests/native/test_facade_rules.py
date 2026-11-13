@@ -1094,6 +1094,13 @@ SLOT_OWNER_CASES = {
         ),
         {"export-shape": [], "facade-signature": [[ERRORS, "Info.__init__", "field:order", f"{SHOP}.errors.Info.Ref"]]},
     ),
+    "a field named like the module its annotation names": (
+        {
+            f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\nimport uuid\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Creator:\n    uuid: uuid.UUID\n"
+        },
+        CLEAN,
+    ),
     "a pydantic contract's field names its nested model": (
         {
             f"{SHOP_DIR}/facade/contracts.py": "from pydantic import BaseModel\n\n\n"

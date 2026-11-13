@@ -187,8 +187,9 @@ impl Core {
                 members.insert((d.s, d.n), (kind, qualnames[i]));
             }
         }
+        // A bare annotation (`uuid: uuid.UUID`) binds no name: only an assignment with a value does.
         for row in &record.assigns {
-            if row.s == -1 {
+            if row.s == -1 || row.value.is_none() {
                 continue;
             }
             for target in &row.targets {
