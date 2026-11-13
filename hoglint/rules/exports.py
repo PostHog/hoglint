@@ -168,7 +168,6 @@ class ExportPrimitive(RuleType):
 
     PRIMITIVE = MODE = "export"
     NATIVE_MODE = "export"
-    CONFIRM = "none"
     READS = frozenset({"exports", "contexts", "from", "leave_slots_to", "on_unknown", "unknown_types", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:

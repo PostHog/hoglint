@@ -240,15 +240,13 @@ class Engine:
         run.incomplete.extend(items)
         ctx.results[rule_id] = run
 
-    def run_rules(self, confirm: bool = False, ctx: RuleContext | None = None) -> dict[str, RuleRun]:
-        """Every rule's run. With `confirm` (a run that writes a ledger), every finding a judge
-        outside its rule's code made is judged again by that code first."""
+    def run_rules(self, ctx: RuleContext | None = None) -> dict[str, RuleRun]:
+        """Every rule's run."""
         ctx = ctx or self.rule_context()
         ctx.find_conflicts()
         self.raise_conflicts(ctx)
         empty = self.empty_expected_kinds()
         ordered = sorted(self.config.rules.values(), key=lambda spec: spec.primitive == "coverage")
-        ran: list[RuleSpec] = []
         for spec in ordered:
             failures = self.failed_producers(spec) + self.missing_kinds(spec, empty)
             if failures:
@@ -259,10 +257,7 @@ class Engine:
                 ctx.results[spec.id] = run
                 continue
             ctx.results[spec.id] = primitive_of(spec)(ctx, spec).evaluate()
-            ran.append(spec)
         self.raise_conflicts(ctx)
-        if confirm:
-            ctx.confirm_findings(ran)
         for name in sorted(self.labeler.providers.failures):
             rule_id = provider_rule(name)
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
@@ -291,7 +286,7 @@ class Engine:
         """One run. With `rewrite_ledger`, findings and levels are judged against the ledger this
         run writes (its own scan), so the next check over the same code finds that ledger equal."""
         ctx = self.rule_context()
-        result = RunResult(self.config, self.labeler, self.run_rules(rewrite_ledger, ctx))
+        result = RunResult(self.config, self.labeler, self.run_rules(ctx))
         if exceptions is not None:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)
@@ -304,8 +299,6 @@ class Engine:
             result.levels[name] = level
             for group in level.passing:
                 result.scan[level_line(name, group)] = 1
-        if rewrite_ledger:
-            ctx.confirm_levels(result.levels, result.runs)
         self.raise_conflicts(ctx)
         if rewrite_ledger and ledger is not None:
             ledger.lines = dict(result.scan)

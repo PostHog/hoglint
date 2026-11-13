@@ -342,6 +342,9 @@ pub enum VerdictPlan {
 #[derive(Deserialize)]
 pub struct ReachPlan {
     pub edges: EdgesPlan,
+    pub identity: Vec<Vec<String>>,
+    /// The judgments whose rows Python words as findings (`JudgePlan::identified`).
+    pub identified: Vec<String>,
     /// Its `from`: which modules it searches from, read of the module alone.
     pub start: Option<NodePlan>,
     pub deny: Option<NodePlan>,
@@ -353,6 +356,9 @@ pub struct ReachPlan {
 #[derive(Deserialize)]
 pub struct CyclePlan {
     pub edges: EdgesPlan,
+    pub identity: Vec<Vec<String>>,
+    /// The judgments whose rows Python words as findings (`JudgePlan::identified`).
+    pub identified: Vec<String>,
     /// The field whose values are the nodes of its graph (`CyclePrimitive.group_field`).
     pub group: String,
 }

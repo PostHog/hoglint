@@ -40,7 +40,6 @@ class EdgePrimitive(EdgeRule):
     PRIMITIVE = MODE = "edge"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "none"
     READS = EDGE_READS
 
 
@@ -58,7 +57,6 @@ class EntrypointPrimitive(EdgeRule):
     PRIMITIVE = MODE = "entrypoint"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "none"
     READS = EDGE_READS | {"uses_at_import"}
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
@@ -118,7 +116,6 @@ class UseShapePrimitive(EdgeRule):
     PRIMITIVE = MODE = "use-shape"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "none"
     READS = frozenset(
         {
             "kinds",
@@ -188,7 +185,6 @@ class SignaturePrimitive(EdgeRule):
     PRIMITIVE = MODE = "signature"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "none"
     READS = frozenset(
         {
             "kinds",

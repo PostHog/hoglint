@@ -143,7 +143,6 @@ class LayoutPrimitive(EntityRule):
 
     PRIMITIVE = MODE = "layout"
     NATIVE_MODE = "entities"
-    CONFIRM = "whole"
     READS = frozenset({"on", "select", "require", "within", "files", "absent", "registry"})
 
     def evaluate(self) -> RuleRun:
@@ -267,7 +266,6 @@ class EntityInventory(EntityRule):
     MODE = "inventory-exactly-one"
     MODE_KEY = "exactly_one"
     NATIVE_MODE = "entities"
-    CONFIRM = "whole"
     READS = frozenset({"on", "select", "exactly_one"})
 
     def message(self, subject: str, count: int) -> str:
@@ -312,7 +310,6 @@ class EdgeInventory(EdgeRule):
     MODE_KEY = "classify"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "whole"
     READS = frozenset({"kinds", "contexts", "from", "select", "classify", "remedy", "on_unresolved"})
 
     def unclassified(self, identity: tuple[str, ...]) -> str:
@@ -376,7 +373,6 @@ class CoveragePrimitive(EntityRule):
 
     PRIMITIVE = MODE = "coverage"
     NATIVE_MODE = "coverage"
-    CONFIRM = "whole"
     READS = frozenset({"covers", "inputs"})
 
     def required(self) -> dict[str, tuple[str, str | None]]:

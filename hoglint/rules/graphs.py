@@ -19,12 +19,14 @@ from hoglint.rules.base import (
     Judgment,
     RuleContext,
     RuleRun,
+    Seen,
+    named_seen,
     project,
     read_endpoint,
     subjects_of,
     unworded,
 )
-from hoglint.rules.plan import selector_tree
+from hoglint.rules.plan import identity_paths, selector_tree
 from hoglint.selectors import UNKNOWN, ClassSelection, Ref, Selector, State, Truth, Value, render_value
 
 
@@ -45,12 +47,12 @@ class Found:
     - "unresolved": a hop from `source` whose destination did not resolve; `path` is the hop;
     - "unknown": a hop the rule cannot tell whether to follow; `path` is the hop;
     - "denied": a denied target, `path` the edges to it from `source`, `verdict` its truth.
-    `dst` is the destination of the path's last hop."""
+    `seen` is what the path's last hop names, seen from `source`."""
 
     what: str
     source: str
     path: tuple[Edge, ...]
-    dst: Endpoint | None
+    seen: Seen | None
     verdict: Truth | None
 
 
@@ -64,7 +66,6 @@ class ReachPrimitive(EdgeRule):
 
     PRIMITIVE = MODE = "reach"
     NATIVE_MODE = "reach"
-    CONFIRM = "whole"
     READS = frozenset(
         {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied", "remedy", "on_unresolved"}
     )
@@ -139,15 +140,15 @@ class ReachPrimitive(EdgeRule):
             reason = f"cannot tell whether {found.source} is selected"
             self.run.incomplete.append(IncompleteItem(self.spec.id, found.source, reason, (found.source,)))
             return
-        assert found.dst is not None
-        env = EdgeEnv(self.ctx, found.path[-1], self.ctx.module_endpoint(found.source), found.dst)
+        seen = found.seen
+        assert seen is not None
         if found.what == "unresolved":
-            self.on_unresolved(self.seen(env, Judgment.UNRESOLVED))
+            self.on_unresolved(seen)
         elif found.what == "unknown":
-            self.incomplete(unworded(env), f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
+            self.incomplete(seen, f"cannot tell whether to follow {seen.edge.kind} {seen.edge.surface!r}")
         else:
             assert found.verdict is not None
-            self.report(env, list(found.path), found.verdict)
+            self.report(seen, list(found.path), found.verdict)
 
     def hop_env(self, hop: Hop, origin: Endpoint) -> EdgeEnv:
         return EdgeEnv(self.ctx, hop.edge, origin, hop.dst)
@@ -207,7 +208,9 @@ class ReachPrimitive(EdgeRule):
                     if target not in reported:
                         reported.add(target)
                         path = [*self.path_to(parents, module), hop]
-                        self.report(self.hop_env(hop, origin), [step.edge for step in path], verdict)
+                        env = self.hop_env(hop, origin)
+                        seen = replace(unworded(env), identity=project(self.spec.identity, env.resolve))
+                        self.report(seen, [step.edge for step in path], verdict)
                 # A denied module is entered only with `through_denied`, never because a second hop names it.
                 if denied and not self.spec.through_denied:
                     continue
@@ -233,19 +236,20 @@ class ReachPrimitive(EdgeRule):
             "id": spec.id,
             "mode": self.NATIVE_MODE,
             "edges": self.edges_plan(),
+            "identity": identity_paths(spec.identity),
+            "identified": sorted(self.identified()),
             "start": selector_tree(spec.from_),
             "deny": selector_tree(spec.deny),
             "unless": selector_tree(spec.unless),
             "through_denied": spec.through_denied,
         }
 
-    def report(self, env: EdgeEnv, path: list[Edge], verdict: Truth) -> None:
-        chain = " -> ".join([env.src.module or "", *(e.surface for e in path)])
-        message = f"{env.src.module} reaches {env.dst.symbol or env.dst.module}: {chain}"
+    def report(self, seen: Seen, path: list[Edge], verdict: Truth) -> None:
+        chain = " -> ".join([seen.src.module or "", *(e.surface for e in path)])
+        message = f"{seen.src.module} reaches {seen.dst.symbol or seen.dst.module}: {chain}"
         if verdict is Truth.UNKNOWN:
             message += " (cannot tell, a value is unassigned)"
         judgment = Judgment.UNKNOWN_VIOLATION if verdict is Truth.UNKNOWN else Judgment.VIOLATION
-        seen = replace(unworded(env), identity=project(self.spec.identity, env.resolve))
         self.emit(seen, judgment, message, witnesses=tuple(path))
 
 
@@ -271,26 +275,36 @@ WITNESSES = 3
 
 @dataclass(frozen=False, slots=True)
 class Pair:
-    """The edges from one group to another: how many, and the first few as witnesses."""
+    """The edges from one group to another: how many, the first few as witnesses, and the first
+    one, which a finding takes its identity, owner and subjects from: what it names (`first`),
+    and its place (`step`, edge and destination), or, in the plain Python engine, its
+    environment (`env`). Its identity is read only for a pair inside a cycle."""
 
     count: int = 0
-    envs: list[EdgeEnv] = field(default_factory=list)
+    witnesses: list[Edge] = field(default_factory=list)
+    first: Seen | None = None
+    step: tuple[int, int] = (0, 0)
+    env: EdgeEnv | None = None
 
-    def add(self, env: EdgeEnv) -> None:
+    def add(self, edge: Edge) -> None:
         self.count += 1
-        if len(self.envs) < WITNESSES:
-            self.envs.append(env)
+        if len(self.witnesses) < WITNESSES:
+            self.witnesses.append(edge)
 
 
 @dataclass(frozen=True, slots=True)
 class CycleRow:
     """One destination a cycle rule cannot leave alone, as a rule context found it
-    (`RuleContext.cycle_rows`): unresolved, with an unknown selection, or one edge of `pair`."""
+    (`RuleContext.cycle_rows`): unresolved, with an unknown selection, or one edge of `pair`.
+    `named` is what the evaluator names of it (`named_seen`): for a row reported alone and for
+    the first row of each pair."""
 
     edge: int
     target: int
     judgment: Judgment
     pair: tuple[str, str] | None
+    src: str
+    named: tuple[Any, ...] | None
 
 
 class CyclePrimitive(EdgeRule):
@@ -298,7 +312,6 @@ class CyclePrimitive(EdgeRule):
 
     PRIMITIVE = MODE = "cycle"
     NATIVE_MODE = "cycle"
-    CONFIRM = "whole"
     READS = frozenset({"kinds", "contexts", "view", "from", "select", "remedy", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
@@ -312,7 +325,14 @@ class CyclePrimitive(EdgeRule):
         return config.roles.group if spec.view == "packages" else "module"
 
     def plan(self) -> dict[str, Any]:
-        return {"id": self.spec.id, "mode": self.NATIVE_MODE, "edges": self.edges_plan(), "group": self.group_field}
+        return {
+            "id": self.spec.id,
+            "mode": self.NATIVE_MODE,
+            "edges": self.edges_plan(),
+            "identity": identity_paths(self.spec.identity),
+            "identified": sorted(self.identified()),
+            "group": self.group_field,
+        }
 
     def group(self, env: EdgeEnv, root: str) -> str | None:
         """The endpoint's group; cached per endpoint unless the edge's own attributes override labels."""
@@ -340,7 +360,10 @@ class CyclePrimitive(EdgeRule):
         src, dst = self.group(env, "src"), self.group(env, "dst")
         if src is None or dst is None or src == dst:
             return
-        pairs.setdefault((src, dst), Pair()).add(env)
+        pair = pairs.setdefault((src, dst), Pair())
+        if pair.first is None:
+            pair.first, pair.env = unworded(env), env
+        pair.add(env.edge)
 
     def pairs_of(self, rows: list[CycleRow]) -> dict[tuple[str, str], Pair]:
         """`consider` over the rows a rule context found: an Edge is made only for a destination
@@ -356,18 +379,36 @@ class CyclePrimitive(EdgeRule):
         edges = dict(zip(wanted, self.ctx.index.edges_at(wanted)))
         pairs: dict[tuple[str, str], Pair] = {}
         for row in rows:
+            words = None
+            if row.named is not None:
+                unresolved = row.judgment is Judgment.UNRESOLVED
+                words = named_seen(edges[row.edge], row.src, row.named, unresolved)
             if row.pair is None:
-                env = self.envs_of(edges[row.edge])[row.target]
+                assert words is not None
                 if row.judgment is Judgment.UNRESOLVED:
-                    self.on_unresolved(self.seen(env, Judgment.UNRESOLVED))
+                    self.on_unresolved(words)
                 else:
-                    self.incomplete(unworded(env), "selection reads an unknown value")
+                    self.incomplete(words, "selection reads an unknown value")
                 continue
             pair = pairs.setdefault(row.pair, Pair())
+            if pair.first is None:
+                pair.first, pair.step = words, (row.edge, row.target)
             pair.count += 1
-            if len(pair.envs) < WITNESSES:
-                pair.envs.append(self.envs_of(edges[row.edge])[row.target])
+            if len(pair.witnesses) < WITNESSES:
+                pair.witnesses.append(edges[row.edge])
         return pairs
+
+    def identities(self, pairs: list[Pair]) -> list[tuple[str, ...]]:
+        """The identity of the first edge of each pair: the evaluator's, or, in the plain Python
+        engine, read of its environment."""
+        found = self.ctx.cycle_identities(self, [pair.step for pair in pairs])
+        if found is not None:
+            return found
+        out = []
+        for pair in pairs:
+            assert pair.env is not None
+            out.append(project(self.spec.identity, pair.env.resolve))
+        return out
 
     def evaluate(self) -> RuleRun:
         rows = self.ctx.cycle_rows(self)
@@ -378,17 +419,22 @@ class CyclePrimitive(EdgeRule):
             for env in self.envs():
                 self.consider(env, pairs)
         components = strongly_connected(sorted(pairs))
-        for (src, dst), pair in sorted(pairs.items()):
-            if components.get(src) is None or components.get(src) != components.get(dst):
-                continue
-            first = pair.envs[0]
+        cyclic = [
+            (key, pair)
+            for key, pair in sorted(pairs.items())
+            if components.get(key[0]) is not None and components.get(key[0]) == components.get(key[1])
+        ]
+        identities = self.identities([pair for _, pair in cyclic])
+        for ((src, dst), pair), identity in zip(cyclic, identities, strict=True):
+            first = pair.first
+            assert first is not None
             finding = self.ctx.finding(
                 self.spec,
-                project(self.spec.identity, first.resolve),
+                identity,
                 f"{src} -> {dst} closes a cycle ({pair.count} edges)",
                 first.src.module,
                 subjects_of(first.src.module, first.dst.module),
-                tuple(env.edge for env in pair.envs),
+                tuple(pair.witnesses),
             )
             self.run.findings.append(finding)
         return self.run

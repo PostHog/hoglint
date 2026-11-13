@@ -15,7 +15,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, TypeVar
 
-from hoglint.config.model import Config, RuleSpec
+from hoglint.config.model import Config
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
@@ -27,19 +27,18 @@ from hoglint.native.plan import RulePlan
 from hoglint.rules.base import (
     EdgeRule,
     Endpoint,
-    IncompleteItem,
     Judgment,
     RuleContext,
     RuleRun,
     RuleType,
     Seen,
+    named_seen,
     subjects_of,
 )
 from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
-from hoglint.rules.levels import LevelEvaluator, LevelResult
 from hoglint.rules.plan import tree
 from hoglint.selectors import Node, Truth
 
@@ -246,17 +245,6 @@ class Worded:
 def distinct_ids(ids: Iterable[int]) -> array[int]:
     """Edge ids, each once, in the order first seen, as the link reads them."""
     return array("I", dict.fromkeys(ids))
-
-
-def confirmed_row(finding: Finding) -> tuple[object, ...]:
-    """What a ledger write holds the evaluator to of a finding: its identity, subjects and flags."""
-    return finding.identity, finding.subjects, finding.ledgerable, finding.unknown
-
-
-def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
-    """What a ledger write holds the evaluator to of a run: each finding (`confirmed_row`) and each
-    incomplete item, in order."""
-    return [*(confirmed_row(finding) for finding in run.findings), *run.incomplete]
 
 
 def u32s(raw: bytes) -> array[int]:
@@ -606,65 +594,27 @@ class NativeRuleContext(RuleContext):
             found = self.owners[module] = super().owner(module)
         return found
 
-    @cached_property
-    def plain(self) -> RuleContext:
-        """A rule context over a plain Python labeler, which reads no label the evaluator
-        computed: what a ledger write confirms the evaluator's rows with (D55)."""
-        labeler = Labeler(self.config, self.graph, self.repo_root, self.index)
-        return RuleContext(self.config, self.graph, labeler, self.repo_root)
-
-    def confirm_findings(self, ran: list[RuleSpec]) -> None:
-        """A rule whose class confirms whole (`RuleType.CONFIRM`) runs whole again in its Python
-        primitive over a plain labeler, the runs before it at hand for a coverage rule, and must
-        give the evaluator's findings and incomplete items, in order (D50, D55). The rules judged
-        per destination and the export rule have no Python judge and are not confirmed."""
-        plain = self.plain
-        plain.results.update(self.results)
-        for spec in ran:
-            if primitive_of(spec).CONFIRM != "whole":
-                continue
-            ours, theirs = (
-                confirmed_rows(self.results[spec.id]),
-                confirmed_rows(primitive_of(spec)(plain, spec).evaluate()),
-            )
-            if ours == theirs:
-                continue
-            at = next(
-                (at for at, (mine, other) in enumerate(zip(ours, theirs)) if mine != other), min(len(ours), len(theirs))
-            )
-            mine = ours[at] if at < len(ours) else "nothing"
-            other = theirs[at] if at < len(theirs) else "nothing"
-            raise EngineError(f"rule {spec.id}: the evaluator gives {mine} as row {at}, the rule's own code {other}")
-
-    def confirm_levels(self, levels: dict[str, LevelResult], runs: dict[str, RuleRun]) -> None:
-        """Every level, as the run judged it, must pass and fail the groups it passes and fails
-        over a plain Python labeler (D55): a ledger writes a line per passing group, and a group's
-        label decides which findings block it."""
-        for name, spec in self.config.levels.items():
-            ours = levels[name]
-            theirs = LevelEvaluator(spec, self.plain.labeler, runs).evaluate()
-            if ours.passing == theirs.passing and set(ours.blocks) == set(theirs.blocks):
-                continue
-            wrong = sorted(set(ours.passing) ^ set(theirs.passing)) or sorted(set(ours.blocks) ^ set(theirs.blocks))
-            raise EngineError(f"level {name}: the evaluator and the Python labeler pass groups apart on {wrong[:3]}")
-
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         rows = self.run_rule(self.evaluator.pairs, rule)
         with engine_errors():
-            return [CycleRow(edge, target, Judgment(name), pair) for edge, target, name, pair in rows]
+            return [CycleRow(edge, target, Judgment(name), *rest) for edge, target, name, *rest in rows]
+
+    def cycle_identities(self, rule: CyclePrimitive, steps: list[tuple[int, int]]) -> list[tuple[str, ...]]:
+        found = self.run_rule(self.evaluator.cycle_identities, rule, steps)
+        return [tuple(identity) for identity in found]
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found]:
         """The evaluator's search of a reach rule, its paths made into Edges."""
         found = self.run_rule(self.evaluator.reach, rule)
         with engine_errors():
-            verdicts = [Truth(verdict) if verdict is not None else None for _, _, _, verdict in found]
-        ids = distinct_ids(edge for _, _, path, _ in found for edge, _ in path)
+            verdicts = [Truth(verdict) if verdict is not None else None for _, _, _, verdict, _ in found]
+        ids = distinct_ids(edge for _, _, path, _, _ in found for edge, _ in path)
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         out = []
-        for (what, source, path, _), verdict in zip(found, verdicts, strict=True):
+        for (what, source, path, _, named), verdict in zip(found, verdicts, strict=True):
             walked = tuple(edges[edge] for edge, _ in path)
-            dst = rule.envs_of(walked[-1])[path[-1][1]].dst if walked else None
-            out.append(Found(what, source, walked, dst, verdict))
+            seen = named_seen(walked[-1], source, named, what == "unresolved") if walked else None
+            out.append(Found(what, source, walked, seen, verdict))
         return out
 
     def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:

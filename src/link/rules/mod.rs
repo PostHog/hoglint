@@ -201,6 +201,67 @@ impl Words {
     }
 }
 
+/// A rule's identity columns, and the judgments whose rows Python words as findings: only their
+/// rows carry the identity, so an identity column is read where a finding needs it.
+pub struct Identity {
+    fields: Vec<Ref>,
+    identified: Vec<Judgment>,
+}
+
+impl Identity {
+    fn new(
+        compiler: &Compiler,
+        fields: &[Vec<String>],
+        identified: &[String],
+    ) -> Result<Identity, String> {
+        Ok(Identity {
+            fields: fields.iter().map(|path| compiler.reference(path)).collect(),
+            identified: identified
+                .iter()
+                .map(|name| Judgment::named(name))
+                .collect::<Result<Vec<_>, String>>()?,
+        })
+    }
+
+    /// The identity of a row of `judgment` in `env`, rendered as `rules.base.project` renders
+    /// it; empty for a judgment Python words as no finding.
+    fn of(&self, judgment: Judgment, env: &Env) -> Vec<String> {
+        if !self.identified.contains(&judgment) {
+            return Vec::new();
+        }
+        self.columns(env)
+    }
+
+    fn columns(&self, env: &Env) -> Vec<String> {
+        self.fields
+            .iter()
+            .map(|field| render(&evaluate_ref(*field, env)))
+            .collect()
+    }
+
+    fn reads_ordinal(&self) -> bool {
+        self.fields.iter().any(|field| is_ordinal(*field))
+    }
+}
+
+/// What a row of a reach or cycle rule names besides its edge and source: its identity, its
+/// destination's module and its words.
+pub struct Named {
+    pub identity: Vec<String>,
+    pub dst_module: Option<Sid>,
+    pub words: Words,
+}
+
+impl Named {
+    fn of(identity: Vec<String>, env: &Env) -> Named {
+        Named {
+            identity,
+            dst_module: env.dst.module,
+            words: Words::of(env, String::new()),
+        }
+    }
+}
+
 /// The refs a message names where a judgment reads them unknown (`EdgeRule.unknown_refs`): per
 /// selector, each ref once in the selector's order, with its dotted text.
 pub struct UnknownRefs {
@@ -292,9 +353,7 @@ pub struct Edges {
 /// A rule judged per edge: edge, entrypoint, signature, use-shape and edge inventory rules.
 pub struct Judged {
     edges: Edges,
-    identity: Vec<Ref>,
-    /// The judgments whose rows carry the identity.
-    identified: Vec<Judgment>,
+    identity: Identity,
     unknown_refs: UnknownRefs,
     unless: Option<Node>,
     /// What a signature rule adds.
@@ -322,6 +381,7 @@ pub enum Verdict {
 /// A reach rule (`ReachPrimitive`).
 pub struct Reach {
     edges: Edges,
+    identity: Identity,
     /// Its `from`.
     start: Option<Node>,
     deny: Option<Node>,
@@ -333,6 +393,7 @@ pub struct Reach {
 /// A cycle rule (`CyclePrimitive`): its group field on each end.
 pub struct Cycle {
     edges: Edges,
+    identity: Identity,
     group: (Ref, Ref),
 }
 
@@ -849,16 +910,7 @@ impl Rules {
         let kind = match &plan.mode {
             ModePlan::Judge(found) => RuleKind::Judge(Judged {
                 edges: edges(&found.edges)?,
-                identity: found
-                    .identity
-                    .iter()
-                    .map(|path| edge.reference(path))
-                    .collect(),
-                identified: found
-                    .identified
-                    .iter()
-                    .map(|name| Judgment::named(name))
-                    .collect::<Result<Vec<_>, String>>()?,
+                identity: Identity::new(edge, &found.identity, &found.identified)?,
                 unknown_refs: UnknownRefs::new(edge, &found.unknown_refs),
                 unless: edge.optional(&found.unless)?,
                 signature: found.signature.as_ref().map(|signature| Signature {
@@ -887,6 +939,7 @@ impl Rules {
             }),
             ModePlan::Reach(found) => RuleKind::Reach(Reach {
                 edges: edges(&found.edges)?,
+                identity: Identity::new(edge, &found.identity, &found.identified)?,
                 start: edge.optional(&found.start)?,
                 deny: edge.optional(&found.deny)?,
                 unless: edge.optional(&found.unless)?,
@@ -896,6 +949,7 @@ impl Rules {
                 let path = |root: &str| [root.to_string(), found.group.clone()];
                 RuleKind::Cycle(Cycle {
                     edges: edges(&found.edges)?,
+                    identity: Identity::new(edge, &found.identity, &found.identified)?,
                     group: (edge.reference(&path("src")), edge.reference(&path("dst"))),
                 })
             }
@@ -1041,6 +1095,14 @@ impl Rules {
         found.into_iter().flatten().collect()
     }
 
+    /// The environment of destination `target` of edge `id`, as `role` reads its destinations.
+    fn env_at<'a>(&'a self, link: &'a Link, role: Role, id: u32, target: u32) -> Env<'a> {
+        let cx = Cx { link, rules: self };
+        let mut dsts = Vec::with_capacity(2);
+        cx.dst_endpoints(id, role, &mut dsts);
+        Env::new(cx, Some(id), cx.src_endpoint(id), dsts[target as usize])
+    }
+
     /// `rows`, which come grouped by edge in id order, with the edges in the order rule `id`
     /// judges them; an edge's rows keep their order.
     fn in_rule_order<T>(
@@ -1086,14 +1148,7 @@ impl Rules {
                 if judgment == Judgment::Clean {
                     continue;
                 }
-                let identity = if rule.identified.contains(&judgment) {
-                    rule.identity
-                        .iter()
-                        .map(|field| render(&evaluate_ref(*field, &env)))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let identity = rule.identity.of(judgment, &env);
                 let unknown = rule.unknown_refs.text(judgment, &env);
                 out.push(Row {
                     edge: id,
@@ -1279,7 +1334,17 @@ impl Rule {
 
     fn reads_ordinal(&self) -> bool {
         self.nodes().into_iter().any(|node| node.reads(is_ordinal))
-            || matches!(&self.kind, RuleKind::Judge(rule) if rule.identity.iter().any(|field| is_ordinal(*field)))
+            || self.identity().is_some_and(Identity::reads_ordinal)
+    }
+
+    /// The identity of a rule whose rows carry one the evaluator renders.
+    fn identity(&self) -> Option<&Identity> {
+        match &self.kind {
+            RuleKind::Judge(rule) => Some(&rule.identity),
+            RuleKind::Reach(rule) => Some(&rule.identity),
+            RuleKind::Cycle(rule) => Some(&rule.identity),
+            _ => None,
+        }
     }
 
     /// Every ref the rule reads: its selectors, identity columns, group field, covers, an
@@ -1289,8 +1354,11 @@ impl Rule {
         for node in self.nodes() {
             node.refs(&mut out);
         }
+        if let Some(identity) = self.identity() {
+            out.extend(&identity.fields);
+        }
         match &self.kind {
-            RuleKind::Judge(rule) => out.extend(&rule.identity),
+            RuleKind::Judge(_) | RuleKind::Reach(_) => {}
             RuleKind::Cycle(rule) => out.extend([rule.group.0, rule.group.1]),
             RuleKind::Coverage(covers) => {
                 for cover in covers {
@@ -1299,7 +1367,6 @@ impl Rule {
             }
             RuleKind::Entities(rule) => rule.refs(&mut out),
             RuleKind::Export(rule) => rule.refs(&mut out),
-            RuleKind::Reach(_) => {}
         }
         out
     }

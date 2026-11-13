@@ -6,7 +6,7 @@
 use super::env::{Cx, Endpoint, Env};
 use super::staged::truth;
 use super::value::Truth;
-use super::{Reach, RuleKind, Rules};
+use super::{Judgment, Named, Reach, RuleKind, Rules};
 use crate::link::Link;
 use crate::link::intern::Sid;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -23,19 +23,29 @@ struct Hop<'a> {
 /// A step of a witness path: an edge and the place of the destination followed.
 pub type Step = (u32, u32);
 
-/// What the search found, in the order the Python search finds it.
+/// What the search found, in the order the Python search finds it. A hop's row holds what its
+/// message names, seen from the start module.
 pub enum Found {
     /// A start module whose `from` is unknown: the rule cannot tell whether to search from it.
     UnknownStart { module: Sid },
     /// A hop whose destination did not resolve.
-    Unresolved { source: Sid, step: Step },
+    Unresolved {
+        source: Sid,
+        step: Step,
+        named: Named,
+    },
     /// A hop the rule cannot tell whether to follow.
-    Unknown { source: Sid, step: Step },
+    Unknown {
+        source: Sid,
+        step: Step,
+        named: Named,
+    },
     /// A denied target, first reached along `path` from the start.
     Denied {
         source: Sid,
         path: Vec<Step>,
         verdict: Truth,
+        named: Named,
     },
 }
 
@@ -168,15 +178,25 @@ impl Rules {
         while let Some(module) = queue.pop_front() {
             for hop in hops.of(module) {
                 let step = (hop.edge, hop.target);
+                let env = Env::new(*cx, Some(hop.edge), origin, hop.dst);
                 if hop.dst.unresolved {
-                    out.push(Found::Unresolved { source, step });
+                    let named = Named::of(rule.identity.of(Judgment::Unresolved, &env), &env);
+                    out.push(Found::Unresolved {
+                        source,
+                        step,
+                        named,
+                    });
                     continue;
                 }
                 if hop.selected == Truth::Unknown {
-                    out.push(Found::Unknown { source, step });
+                    let named = Named::of(Vec::new(), &env);
+                    out.push(Found::Unknown {
+                        source,
+                        step,
+                        named,
+                    });
                     continue;
                 }
-                let env = Env::new(*cx, Some(hop.edge), origin, hop.dst);
                 let verdict = rule
                     .deny
                     .as_ref()
@@ -205,10 +225,16 @@ impl Rules {
                             back = parents.get(&previous).copied().flatten();
                         }
                         path.reverse();
+                        let judgment = if verdict == Truth::Unknown {
+                            Judgment::UnknownViolation
+                        } else {
+                            Judgment::Violation
+                        };
                         out.push(Found::Denied {
                             source,
                             path,
                             verdict,
+                            named: Named::of(rule.identity.of(judgment, &env), &env),
                         });
                     }
                 }

@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
-    from hoglint.rules.levels import LevelResult
 
 from hoglint.rules.findings import FindingTable
 from hoglint.rules.plan import identity_paths, ref_paths, selector_tree, tree
@@ -94,9 +93,6 @@ class RuleType:
     # Whether its selectors and identity read entities (a module, a symbol or a path) rather than
     # an edge's two ends.
     ENTITIES: ClassVar[bool] = False
-    # How a ledger write confirms what the evaluator found: "whole" (the rule runs whole again in
-    # Python) or "none" (no Python code judges the rule in a native run).
-    CONFIRM: ClassVar[str]
     # The config keys the rule's code reads, besides the ones every rule has
     # (`config.schema.EVERY_RULE_READS`).
     READS: ClassVar[frozenset[str]]
@@ -214,18 +210,9 @@ class RuleContext:
         (`Labeler.find_conflicts`)."""
         self.labeler.find_conflicts()
 
-    def confirm_findings(self, ran: list[RuleSpec]) -> None:
-        """Judges again, by each rule's own code, every finding a judge outside that code made
-        for the rules in `ran`; a run that writes a ledger asks for it. The Python engine's rules
-        judge their own edges."""
-
     def met_conflicts(self) -> None:
         """Records the labels set two ways that the run met so far, outside the labeler. The
         labeler records them as it reads them, so there is nothing left to do here."""
-
-    def confirm_levels(self, levels: dict[str, LevelResult], runs: dict[str, RuleRun]) -> None:
-        """Judges every level again with labels its labeler did not compute, for a run that
-        writes a ledger. The Python engine's labeler computes its own."""
 
     def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
         """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""
@@ -297,6 +284,11 @@ class RuleContext:
 
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow] | None:
         """A cycle rule's rows when this context finds them itself, else None."""
+        return None
+
+    def cycle_identities(self, rule: CyclePrimitive, steps: list[tuple[int, int]]) -> list[tuple[str, ...]] | None:
+        """The identity of each (edge, destination) of a cycle rule when this context reads them
+        itself, else None."""
         return None
 
     def judged(self, rule: EdgeRule) -> bool:
@@ -609,7 +601,15 @@ class ModuleEnv:
         return read_endpoint(self.ctx, self.endpoint, ref.path[1], None, "src")
 
 
-@cache
+def named_seen(edge: Edge, src: str, named: tuple[Any, ...], unresolved: bool) -> Seen:
+    """What the evaluator names of a reach or cycle row (`Named`): (identity, destination module,
+    source symbol, destination symbol, label), its edge being `edge` and its source `src`."""
+    identity, dst, src_symbol, dst_symbol, label = named
+    return Seen(
+        edge, Endpoint(src, src_symbol), Endpoint(dst, dst_symbol, unresolved=unresolved), label, "", tuple(identity)
+    )
+
+
 def unworded(env: EdgeEnv) -> Seen:
     """An environment as an incomplete item or an unresolved one names it, with no unknown refs
     and no identity read: reach and cycle rows, until the evaluator words them."""
