@@ -348,34 +348,96 @@ PRIVATE_METHOD = (
     "    def _load(self, order: Order) -> None:\n        pass\n"
 )
 ROUTES = f"{SHOP}.routes"
-# A slot is left to the signature rule only where that rule sees it: in a facade module, in a
-# public callable. A registration surface and a private method are judged by the export rule.
+ERRORS = f"{SHOP}.facade.errors"
+ORDER = f"{SHOP}.models.Order"
+HANDS_OUT_ERRORS = "from products.shop.backend.errors import {names}\n\n__all__ = [{listed}]\n"
+IMPORTS_ORDER = (
+    "import dataclasses\nfrom typing import Protocol\n\nfrom pydantic import BaseModel\n\n"
+    "from products.shop.backend.models import Order\n\n\n"
+)
+
+
+def handed_out(body: str, *names: str) -> dict[str, str]:
+    """Classes or functions defined outside the facade, and a facade module that hands them out."""
+    listed = ", ".join(f"'{name}'" for name in names)
+    return {
+        "errors.py": IMPORTS_ORDER + body,
+        "facade/errors.py": HANDS_OUT_ERRORS.format(names=", ".join(names), listed=listed),
+    }
+
+
+DENIED_AT_ERRORS = {"export-shape": [[ORDER, ERRORS, "export-denied(model)"]], "facade-signature": []}
+# A slot is left to the signature rule only where that rule reads the slot's row: in a facade
+# module, in a public callable, or in the copy a facade holds of a function or a data shape's fields
+# it hands out. A registration surface, a private method and a member of a class handed out from
+# outside the facade are judged by the export rule.
 SLOT_OWNER_CASES = {
-    "a facade function": ("facade/api.py", TAKES_AN_ORDER, []),
+    "a facade function": ({"facade/api.py": TAKES_AN_ORDER}, {"export-shape": []}),
     "a registration function": (
-        "routes.py",
-        TAKES_AN_ORDER,
-        [
-            [f"{SHOP}.models.Order", ROUTES, "export-denied(model)"],
-            [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
-            ["typing.Any", ROUTES, "export-unknown"],
-        ],
+        {"routes.py": TAKES_AN_ORDER},
+        {
+            "export-shape": [
+                [ORDER, ROUTES, "export-denied(model)"],
+                [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
+                ["typing.Any", ROUTES, "export-unknown"],
+            ]
+        },
     ),
     "a private method of a contract": (
-        "facade/contracts.py",
-        PRIVATE_METHOD,
-        [[f"{SHOP}.models.Order", f"{SHOP}.facade.contracts", "export-denied(model)"]],
+        {"facade/contracts.py": PRIVATE_METHOD},
+        {"export-shape": [[ORDER, f"{SHOP}.facade.contracts", "export-denied(model)"]]},
+    ),
+    "a method of a handed-out exception": (
+        handed_out("class Rejected(Exception):\n    def order(self) -> Order:\n        raise ValueError\n", "Rejected"),
+        DENIED_AT_ERRORS,
+    ),
+    "a method of a handed-out pydantic model": (
+        handed_out(
+            "class Row(BaseModel):\n    title: str\n\n    def order(self) -> Order:\n        raise ValueError\n", "Row"
+        ),
+        DENIED_AT_ERRORS,
+    ),
+    "a method of a handed-out Protocol": (
+        handed_out("class Sink(Protocol):\n    def push(self, order: Order) -> None: ...\n", "Sink"),
+        DENIED_AT_ERRORS,
+    ),
+    "an __init__ parameter of a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n    def __init__(self, order: Order) -> None:\n        self.order = order\n",
+            "Rejected",
+        ),
+        DENIED_AT_ERRORS,
+    ),
+    "a property of a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n    @property\n    def order(self) -> Order:\n        raise ValueError\n",
+            "Rejected",
+        ),
+        DENIED_AT_ERRORS,
+    ),
+    "a function handed out from outside": (
+        handed_out("def place(order: Order) -> None:\n    pass\n", "place"),
+        {"export-shape": [], "facade-signature": [[ERRORS, "place", "param:order", ORDER]]},
+    ),
+    "a field of a handed-out dataclass": (
+        handed_out("@dataclasses.dataclass(frozen=True)\nclass Receipt:\n    order: Order\n", "Receipt"),
+        {"export-shape": [], "facade-signature": [[ERRORS, "Receipt.__init__", "field:order", ORDER]]},
+    ),
+    "a method of a handed-out class that is a finding": (
+        handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
+        {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
     ),
 }
 
 
 @pytest.mark.parametrize("case", SLOT_OWNER_CASES)
-def test_export_shape_judges_a_slot_no_signature_rule_sees(
+def test_export_shape_judges_a_slot_no_signature_rule_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    name, text, expected = SLOT_OWNER_CASES[case]
-    out = both_engines(tmp_path, BASE, {f"products/shop/backend/{name}": text}, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == expected
+    texts, expected = SLOT_OWNER_CASES[case]
+    files = {f"products/shop/backend/{name}": text for name, text in texts.items()}
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
 
 
 def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

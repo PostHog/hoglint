@@ -10,11 +10,13 @@ read here: it limits who may use an export, not what the export hands out, so ev
 checked whatever its audience. `from` leaves out the export modules it is false for.
 
 With `slots = "shape"` the rule judges only the shape of a class named in a slot of a member,
-where a signature rule of the config sees that slot: a denied kind, an unknown type, a missing
-annotation or an unresolved name there is the signature rule's to report. A signature rule sees
-the slots of a public callable in a module its `from` and the source-only parts of its `select`
-hold for; the other parts of its selection judge the slot's type. A slot no signature rule sees,
-and every deeper slot (the fields of such a class), is judged in full.
+where a signature rule of the config reads that slot's row: a denied kind, an unknown type, a
+missing annotation or an unresolved name there is the signature rule's to report. A signature rule
+reads the rows of a public callable in a module its `from` and the source-only parts of its
+`select` hold for; the other parts of its selection judge the slot's type. So a slot is left to it
+where the row's own module is such a module, or where the exporting module is one and holds the
+producer's copy of the slot. A slot no signature rule reads, such as a method of a class handed out
+from outside a facade, and every deeper slot (the fields of such a class), is judged in full.
 """
 
 from __future__ import annotations
@@ -164,7 +166,7 @@ class ExportPrimitive(RuleType):
         # `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
         self.allowed: dict[tuple[str, str], bool] = {}
         self.walked: dict[tuple[str, str], bool] = {}
-        self.members: dict[tuple[str, bool], list[Edge]] = {}
+        self.members: dict[tuple[str, bool], list[tuple[Edge, str, str]]] = {}
         self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
@@ -425,10 +427,10 @@ class ExportPrimitive(RuleType):
                 self.finding(symbol, module, "export-shape(class)", trail, edge)
                 return
             if self.walks(symbol, shapes, policy):
-                self.check_members(symbol, module, policy, trail)
+                self.check_members(symbol, module, policy, trail, edge)
             return
         if "function" in shapes:
-            self.check_members(symbol, module, policy, trail)
+            self.check_members(symbol, module, policy, trail, edge)
 
     def exposes_under(self, module: str) -> dict[str, list[int]]:
         """A module's exposes edges, as handles, under every qualname their callable lies in: `A`
@@ -449,48 +451,72 @@ class ExportPrimitive(RuleType):
             self.made[handle] = edge
         return [self.made[handle] for handle in handles]
 
-    def member_edges(self, symbol: str, include_bases: bool) -> list[Edge]:
-        """Exposes edges of a callable, or of a class's fields and methods (and its bases')."""
+    def member_edges(self, symbol: str, include_bases: bool) -> list[tuple[Edge, str, str]]:
+        """Exposes edges of a callable, or of a class's fields and methods (and its bases'), each
+        with the module and qualname of the class or callable it belongs to."""
         key = (symbol, include_bases)
         found = self.members.get(key)
         if found is None:
-            found = self.members[key] = self.edges(self.member_handles(symbol, include_bases))
+            places = self.member_handles(symbol, include_bases)
+            edges = self.edges([handle for handle, _, _ in places])
+            found = self.members[key] = [(edge, owner, qualname) for edge, (_, owner, qualname) in zip(edges, places)]
         return found
 
-    def member_handles(self, symbol: str, include_bases: bool) -> list[int]:
+    def member_handles(self, symbol: str, include_bases: bool) -> list[tuple[int, str, str]]:
         lineage = [symbol]
         if include_bases:
             ancestors, _ = self.facts.ancestors(symbol)
             lineage.extend(sorted(ancestors))
-        out: list[int] = []
+        out: list[tuple[int, str, str]] = []
         for target in lineage:
             owner = self.ctx.labeler.module_of_symbol(target)
             if owner is None or owner == target:
                 continue
-            out.extend(self.exposes_under(owner).get(target[len(owner) + 1 :], ()))
+            qualname = target[len(owner) + 1 :]
+            out.extend((handle, owner, qualname) for handle in self.exposes_under(owner).get(qualname, ()))
         return out
 
-    def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
+    def holds_copy(self, module: str, callable_name: str, slot: str) -> bool:
+        """Whether a module holds an exposes row of a callable's slot: the copy the producer
+        writes where a surface hands out a function or a data shape's fields."""
+        handles = self.exposes_under(module).get(callable_name, [])
+        return any(edge.attr("callable") == callable_name and edge.attr("slot") == slot for edge in self.edges(handles))
+
+    def leaves_slot(self, row: Edge, owner: str, qualname: str, module: str, bound: str) -> bool:
+        """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
+        reads. The row's own module is one it holds for, or the exporting module holds the copy of
+        the slot under the name it binds."""
+        if not SignaturePrimitive.sees_callable(row):
+            return False
+        if self.signature_sees(owner):
+            return True
+        if not bound or not self.signature_sees(module):
+            return False
+        return self.holds_copy(module, bound + row.attr("callable")[len(qualname) :], row.attr("slot"))
+
+    def check_members(
+        self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None
+    ) -> None:
         """The types in the slots of a member. In the slots of an exported symbol itself, a rule
-        with `slots = "shape"` judges only the shape of a class where a signature rule sees the
-        slot."""
-        seen = len(trail) == 1 and bool(self.slot_owners) and self.signature_sees(module)
-        for edge in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
-            if edge.attr("alias") == "expanded":
+        with slot owners judges only the shape of a class where a signature rule reads the slot's
+        row; `edge` is the import the module hands the symbol out by, if any."""
+        bound = edge.attr("binds") if edge is not None and len(trail) == 1 else ""
+        for row, owner, qualname in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
+            if row.attr("alias") == "expanded":
                 continue
-            shape_only = seen and SignaturePrimitive.sees_callable(edge)
-            if edge.attr("annotation") == "missing":
+            shape_only = len(trail) == 1 and self.leaves_slot(row, owner, qualname, module, bound)
+            if row.attr("annotation") == "missing":
                 if not shape_only:
-                    self.unknown(symbol, module, policy, trail, edge, "no-annotation", edge.attr("slot"))
+                    self.unknown(symbol, module, policy, trail, row, "no-annotation", row.attr("slot"))
                 continue
-            if edge.resolution is Resolution.UNRESOLVED:
+            if row.resolution is Resolution.UNRESOLVED:
                 if not shape_only:
-                    self.unresolved(edge, module)
+                    self.unresolved(row, module)
                 continue
-            names = [str(target) for target in edge.targets] or [edge.surface]
+            names = [str(target) for target in row.targets] or [row.surface]
             for name in names:
                 if name and name not in trail:
-                    self.check(name, module, policy, edge, (*trail, name), shape_only)
+                    self.check(name, module, policy, row, (*trail, name), shape_only)
 
     # ── output ──
 

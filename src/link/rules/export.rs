@@ -84,9 +84,9 @@ pub struct ExportRule {
     exports: Vec<usize>,
     /// Its `from`: the export modules it judges, read of the module alone.
     pub start: Option<Node>,
-    /// `slots = "shape"`: where each signature rule sees the slots of an exported symbol, in which
-    /// only a class's shape is judged; None for a rule that sees them in every module. Empty when
-    /// the rule judges every slot in full.
+    /// `slots = "shape"`: the modules whose rows each signature rule reads; a slot whose row one
+    /// of them reads is judged by its class's shape only. None for a rule that reads them in every
+    /// module. Empty when the rule judges every slot in full.
     slot_owners: Vec<Option<Node>>,
     include: u8,
     exclude: u8,
@@ -628,12 +628,12 @@ impl<'a> Walk<'a> {
                 return;
             }
             if self.walks(symbol, &shapes, shape) {
-                self.check_members(symbol, module, shape, trail);
+                self.check_members(symbol, module, shape, trail, edge);
             }
             return;
         }
         if shapes.contains("function") {
-            self.check_members(symbol, module, shape, trail);
+            self.check_members(symbol, module, shape, trail, edge);
         }
     }
 
@@ -660,8 +660,9 @@ impl<'a> Walk<'a> {
             .unwrap_or_default()
     }
 
-    /// `ExportPrimitive.member_handles`.
-    fn member_edges(&mut self, symbol: &str, include_bases: bool) -> Vec<u32> {
+    /// `ExportPrimitive.member_handles`: each row with the module and qualname of the class or
+    /// callable it belongs to.
+    fn member_edges(&mut self, symbol: &str, include_bases: bool) -> Vec<(u32, Sid, String)> {
         let mut lineage = vec![symbol.to_string()];
         if include_bases {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
@@ -679,9 +680,53 @@ impl<'a> Walk<'a> {
                 continue;
             }
             let qualname = target[owner_name.len() + 1..].to_string();
-            out.extend(self.exposes_under(owner, &qualname));
+            for id in self.exposes_under(owner, &qualname) {
+                out.push((id, owner, qualname.clone()));
+            }
         }
         out
+    }
+
+    /// `ExportPrimitive.holds_copy`: whether a module holds an exposes row of a callable's slot.
+    fn holds_copy(&mut self, module: Sid, callable_name: &str, slot: &str) -> bool {
+        let link = self.cx.link;
+        let callable = link.core.it.get("callable");
+        let slot_attr = link.core.it.get("slot");
+        self.exposes_under(module, callable_name)
+            .into_iter()
+            .any(|id| {
+                self.cx.attr(id, callable) == callable_name && self.cx.attr(id, slot_attr) == slot
+            })
+    }
+
+    /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
+    /// callable's slot whose row that rule reads.
+    fn leaves_slot(
+        &mut self,
+        id: u32,
+        owner: Sid,
+        qualname: &str,
+        module: &str,
+        bound: &str,
+    ) -> bool {
+        let link = self.cx.link;
+        let row_callable = self.cx.attr(id, link.core.it.get("callable"));
+        if is_private(row_callable) {
+            return false;
+        }
+        let owner_name = self.cx.text(owner).to_string();
+        if self.signature_sees(&owner_name) {
+            return true;
+        }
+        if bound.is_empty() || !self.signature_sees(module) {
+            return false;
+        }
+        let Some(module_sid) = link.core.it.get(module) else {
+            return false;
+        };
+        let copy = format!("{bound}{}", &row_callable[qualname.len()..]);
+        let slot = self.cx.attr(id, link.core.it.get("slot"));
+        self.holds_copy(module_sid, &copy, slot)
     }
 
     /// `ExportPrimitive.signature_sees`: whether a signature rule sees the slots of a module's
@@ -704,21 +749,31 @@ impl<'a> Walk<'a> {
         seen
     }
 
-    /// `ExportPrimitive.check_members`.
-    fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
-        let seen =
-            trail.len() == 1 && !self.rule.slot_owners.is_empty() && self.signature_sees(module);
+    /// `ExportPrimitive.check_members`; `edge` is the import the module hands the symbol out
+    /// by, if any.
+    fn check_members(
+        &mut self,
+        symbol: &str,
+        module: &str,
+        shape: usize,
+        trail: &[String],
+        edge: Option<u32>,
+    ) {
         let link = self.cx.link;
+        let bound = match edge {
+            Some(id) if trail.len() == 1 => self.cx.attr(id, link.core.it.get("binds")),
+            _ => "",
+        };
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let annotation = link.core.it.get("annotation");
         let slot = link.core.it.get("slot");
         let alias = link.core.it.get("alias");
-        let callable = link.core.it.get("callable");
-        for id in self.member_edges(symbol, include_bases) {
+        for (id, owner, qualname) in self.member_edges(symbol, include_bases) {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
-            let shape_only = seen && !is_private(self.cx.attr(id, callable));
+            let shape_only =
+                trail.len() == 1 && self.leaves_slot(id, owner, &qualname, module, bound);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));
