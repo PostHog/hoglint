@@ -714,3 +714,24 @@ def test_the_slot_rows_of_a_lazy_name_sit_at_the_line_of_its_map(
         if row[0] == "exposes" and row[2] == FACADE and dict(row[-1]).get("handed") == "lazy"
     }
     assert places == {(3, 0)}
+
+
+# Outside any contract surface the producer follows an alias into the module that assigns it, in
+# both engines.
+NO_SURFACE_CONFIG = 'schema = 1\n\n[discovery]\nsource_roots = ["."]\nfirst_party = ["products"]\n'
+
+
+def test_an_imported_alias_is_expanded_where_no_surface_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        "hoglint.toml": NO_SURFACE_CONFIG,
+        "products/shop/backend/models.py": "class Item:\n    pass\n",
+        "products/shop/backend/types.py": "from products.shop.backend.models import Item\n\nItems = list[Item]\n",
+        f"{LOGIC}.py": "from products.shop.backend.types import Items\n\n\ndef items() -> Items:\n    return []\n",
+    }
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert slot_rows(out["native"], "products.shop.backend.logic") == [
+        ("items", "return", "products.shop.backend.models.Item", "resolved", ""),
+        ("items", "return", "products.shop.backend.types.Items", "resolved", ""),
+    ]

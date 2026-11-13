@@ -856,14 +856,13 @@ impl Producers<'_> {
     pub fn run(&mut self) {
         self.each(Self::imports);
         self.each(Self::references);
-        if !self.settings.contract_surfaces.is_empty() {
-            self.owner_of = self
-                .scopes
-                .iter()
-                .enumerate()
-                .map(|(owner, scope)| (scope.file, owner))
-                .collect();
-        }
+        // Every mode follows an alias into the file that assigns it, so every run needs the map.
+        self.owner_of = self
+            .scopes
+            .iter()
+            .enumerate()
+            .map(|(owner, scope)| (scope.file, owner))
+            .collect();
         self.each(Self::declarations);
         self.each(Self::strings);
         self.each(Self::dynamic_imports);
