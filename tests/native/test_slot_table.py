@@ -1267,15 +1267,15 @@ NEIGHBORS: dict[str, tuple[Files, Verdict]] = {
         ES,
     ),
     "a constant, listed": ({f"{D}/facade/api.py": "Thing = 3\n\n__all__ = ['Thing']\n"}, NONE),
-    # A generic alias is judged where a slot names it, not as a handed-out name.
+    # A handed-out type alias is judged by its expansion, as a slot that names it is.
     "a generic alias of a model, listed": (
         {f"{D}/facade/api.py": f"from {S}.models import Order\n\nThing = list[Order]\n\n__all__ = ['Thing']\n"},
-        NONE,
+        FS,
     ),
-    # A member past a class reads as a constant: the written limit.
+    # A member past a class is no hand-out; listed, the name is unknown.
     "a manager past a model, listed": (
         {f"{D}/facade/api.py": IMPORTS_MODELS + "\nThing = models.Order.objects\n\n__all__ = ['Thing']\n"},
-        NONE,
+        ES,
     ),
     "a generic base stays clean": (
         {
