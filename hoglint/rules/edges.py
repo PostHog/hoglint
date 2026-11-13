@@ -6,7 +6,7 @@ from typing import Any
 
 from hoglint.config.model import RuleSpec
 from hoglint.model import Edge, Remedy
-from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext
+from hoglint.rules.base import EdgeEnv, EdgeRule, Endpoint, Judgment, RuleContext, Seen
 from hoglint.selectors import Selector, Truth
 
 EXPORTED = Selector.parse("dst.exported")
@@ -40,7 +40,7 @@ class EdgePrimitive(EdgeRule):
     PRIMITIVE = MODE = "edge"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "row"
+    CONFIRM = "none"
     READS = EDGE_READS
 
 
@@ -58,7 +58,7 @@ class EntrypointPrimitive(EdgeRule):
     PRIMITIVE = MODE = "entrypoint"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "row"
+    CONFIRM = "none"
     READS = EDGE_READS | {"uses_at_import"}
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
@@ -97,8 +97,8 @@ class EntrypointPrimitive(EdgeRule):
     def remedies(self) -> tuple[Remedy, ...]:
         return super().remedies() or (Remedy("needs-public-api"),)
 
-    def describe(self, env: EdgeEnv) -> str:
-        return f"{env.src.module} names {env.edge.surface}, which is not exported to it"
+    def describe(self, seen: Seen) -> str:
+        return f"{seen.src.module} names {seen.edge.surface}, which is not exported to it"
 
     def verdict_plan(self) -> dict[str, Any]:
         return {"kind": "default-allow"} if self.default_allow else super().verdict_plan()
@@ -118,7 +118,7 @@ class UseShapePrimitive(EdgeRule):
     PRIMITIVE = MODE = "use-shape"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "row"
+    CONFIRM = "none"
     READS = frozenset(
         {
             "kinds",
@@ -161,8 +161,8 @@ class UseShapePrimitive(EdgeRule):
             return Truth.TRUE
         return Truth.FALSE
 
-    def describe(self, env: EdgeEnv) -> str:
-        return f"{env.src.module} uses {env.dst.symbol} as {env.label()}"
+    def describe(self, seen: Seen) -> str:
+        return f"{seen.src.module} uses {seen.dst.symbol} as {seen.label}"
 
     def verdict_plan(self) -> dict[str, Any]:
         spec = self.spec
@@ -188,7 +188,7 @@ class SignaturePrimitive(EdgeRule):
     PRIMITIVE = MODE = "signature"
     NATIVE_MODE = "judge"
     FOLDS = False
-    CONFIRM = "row"
+    CONFIRM = "none"
     READS = frozenset(
         {
             "kinds",
@@ -215,13 +215,13 @@ class SignaturePrimitive(EdgeRule):
         return super().sees(edge) and self.sees_callable(edge) and edge.attr("alias") != "expanded"
 
     @staticmethod
-    def subject(env: EdgeEnv) -> str:
+    def subject(seen: Seen) -> str:
         """The callable a slot belongs to: the edge's `callable` in its module. A slot's edge sits
         in the scope around the callable, so the site names no symbol of its own."""
-        callable_name = env.edge.attr("callable")
+        callable_name = seen.edge.attr("callable")
         if callable_name:
-            return f"{env.src.module}.{callable_name}"
-        return env.src.symbol or env.src.module or ""
+            return f"{seen.src.module}.{callable_name}"
+        return seen.src.symbol or seen.src.module or ""
 
     def decide(self, env: EdgeEnv) -> Judgment:
         if self.selection(env) is Truth.FALSE:
@@ -235,15 +235,20 @@ class SignaturePrimitive(EdgeRule):
             return True
         return (env.dst.symbol or "") in self.spec.unknown_types
 
-    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
+    def report(self, seen: Seen, judgment: Judgment, describe: str) -> None:
         if judgment is not Judgment.UNKNOWN_TYPE:
-            super().report(env, judgment, describe)
+            super().report(seen, judgment, describe)
             return
-        message = f"{self.subject(env)}: {env.edge.attr('slot') or 'signature'} has no usable type ({env.edge.surface or 'missing'})"
+        message = f"{self.subject(seen)}: {seen.edge.attr('slot') or 'signature'} has no usable type ({seen.edge.surface or 'missing'})"
         if self.spec.on_unknown == "incomplete":
-            self.incomplete(env, message)
+            self.incomplete(seen, message)
             return
-        self.emit(env, judgment, message)
+        self.emit(seen, judgment, message)
+
+    def identified(self) -> frozenset[Judgment]:
+        if self.spec.on_unknown == "incomplete":
+            return super().identified()
+        return super().identified() | {Judgment.UNKNOWN_TYPE}
 
     def found(self) -> frozenset[Judgment]:
         """A slot of unknown type is a finding too, unless the rule reports it as incomplete."""
@@ -256,9 +261,9 @@ class SignaturePrimitive(EdgeRule):
             return self.spec.on_unknown == "finding", True
         return super().flags(judgment)
 
-    def describe(self, env: EdgeEnv) -> str:
-        slot = env.edge.attr("slot") or "signature"
-        return f"{self.subject(env)} exposes {env.dst.symbol} in {slot}"
+    def describe(self, seen: Seen) -> str:
+        slot = seen.edge.attr("slot") or "signature"
+        return f"{self.subject(seen)} exposes {seen.dst.symbol} in {slot}"
 
     def plan(self) -> dict[str, Any]:
         return {**super().plan(), "signature": {"unknown_types": list(self.spec.unknown_types)}}

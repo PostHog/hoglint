@@ -37,3 +37,10 @@ def selector_tree(selector: Selector | None) -> dict[str, Any] | None:
 
 def identity_paths(identity: tuple[str, ...]) -> list[list[str]]:
     return [column.split(".") for column in identity]
+
+
+def ref_paths(selector: Selector | None) -> list[list[str]]:
+    """The paths of the refs a selector reads, each once, in its order."""
+    if selector is None:
+        return []
+    return [list(ref.path) for ref in dict.fromkeys(selector.refs())]

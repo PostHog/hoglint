@@ -33,8 +33,8 @@ use self::export::{
 };
 use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
-    CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan,
-    check_columns,
+    CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, UnknownRefsPlan,
+    VerdictPlan, check_columns,
 };
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
 use self::signature::Signature;
@@ -133,6 +133,23 @@ pub enum Judgment {
 }
 
 impl Judgment {
+    const ALL: [Judgment; 6] = [
+        Judgment::Clean,
+        Judgment::Unresolved,
+        Judgment::UnknownSelection,
+        Judgment::UnknownViolation,
+        Judgment::Violation,
+        Judgment::UnknownType,
+    ];
+
+    /// The judgment a name in a plan names.
+    fn named(name: &str) -> Result<Judgment, String> {
+        Judgment::ALL
+            .into_iter()
+            .find(|judgment| judgment.name() == name)
+            .ok_or_else(|| format!("a judgment the evaluator does not know: {name}"))
+    }
+
     /// The judgment's name, its value in `rules.base.Judgment`.
     pub fn name(self) -> &'static str {
         match self {
@@ -144,27 +161,100 @@ impl Judgment {
             Judgment::UnknownType => "unknown-type",
         }
     }
-
-    /// Whether a row of this judgment carries the rule's identity: Python reports any other
-    /// judgment with its own code.
-    pub fn has_identity(self) -> bool {
-        matches!(self, Judgment::Violation | Judgment::UnknownType)
-    }
 }
 
-/// One destination of one edge a rule does not judge clean: what Python needs to make its
-/// finding without judging again.
+/// One destination of one edge a rule does not judge clean: what Python words its finding or
+/// incomplete item from, with no judgment of its own.
 pub struct Row {
     pub edge: u32,
     /// The destination's place among the edge's destinations.
     pub target: u32,
     pub judgment: Judgment,
-    /// The identity columns of a violation or an unknown type, rendered as `rules.base.project`
-    /// renders them; empty for any other judgment, which the rule's own code reports.
+    /// The identity columns, rendered as `rules.base.project` renders them, for a judgment the
+    /// rule words as a finding (`Judged::identified`); else empty.
     pub identity: Vec<String>,
     /// The source module (the finding's owner module) and the destination's module.
     pub src_module: Sid,
     pub dst_module: Option<Sid>,
+    pub words: Words,
+}
+
+/// What a message names of one destination besides its edge and modules: the dotted names of
+/// the two ends (`Endpoint.symbol`), the edge's label (`edge.label`), and the refs the judgment
+/// read as unknown, joined as the message names them (empty for any other judgment).
+pub struct Words {
+    pub src_symbol: Option<String>,
+    pub dst_symbol: Option<String>,
+    pub label: String,
+    pub unknown: String,
+}
+
+impl Words {
+    fn of(env: &Env, unknown: String) -> Words {
+        let cx = env.cx;
+        Words {
+            src_symbol: cx.symbol_text(env.src.symbol).map(|name| name.into_owned()),
+            dst_symbol: cx.symbol_text(env.dst.symbol).map(|name| name.into_owned()),
+            label: render(&evaluate_ref(Ref::Edge(EdgeField::Label), env)),
+            unknown,
+        }
+    }
+}
+
+/// The refs a message names where a judgment reads them unknown (`EdgeRule.unknown_refs`): per
+/// selector, each ref once in the selector's order, with its dotted text.
+pub struct UnknownRefs {
+    /// `from`, then `select`: an unknown selection names the first that reads an unknown.
+    selection: Vec<Vec<(Ref, String)>>,
+    /// `deny`, `allow`, `require`: an unknown violation names every one that reads an unknown.
+    verdict: Vec<Vec<(Ref, String)>>,
+}
+
+impl UnknownRefs {
+    fn new(compiler: &Compiler, plan: &UnknownRefsPlan) -> UnknownRefs {
+        let groups = |groups: &[Vec<Vec<String>>]| {
+            groups
+                .iter()
+                .map(|refs| {
+                    refs.iter()
+                        .map(|path| (compiler.reference(path), path.join(".")))
+                        .collect()
+                })
+                .collect()
+        };
+        UnknownRefs {
+            selection: groups(&plan.selection),
+            verdict: groups(&plan.verdict),
+        }
+    }
+
+    fn named(refs: &[(Ref, String)], env: &Env) -> String {
+        refs.iter()
+            .filter(|(field, _)| matches!(evaluate_ref(*field, env), Value::Unknown))
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The text a message of `judgment` names its unknown refs by.
+    fn text(&self, judgment: Judgment, env: &Env) -> String {
+        match judgment {
+            Judgment::UnknownSelection => self
+                .selection
+                .iter()
+                .map(|refs| Self::named(refs, env))
+                .find(|named| !named.is_empty())
+                .unwrap_or_default(),
+            Judgment::UnknownViolation => self
+                .verdict
+                .iter()
+                .map(|refs| Self::named(refs, env))
+                .filter(|named| !named.is_empty())
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => String::new(),
+        }
+    }
 }
 
 /// One compiled rule: its id, and its mode with what that mode reads.
@@ -203,6 +293,9 @@ pub struct Edges {
 pub struct Judged {
     edges: Edges,
     identity: Vec<Ref>,
+    /// The judgments whose rows carry the identity.
+    identified: Vec<Judgment>,
+    unknown_refs: UnknownRefs,
     unless: Option<Node>,
     /// What a signature rule adds.
     signature: Option<Signature>,
@@ -761,6 +854,12 @@ impl Rules {
                     .iter()
                     .map(|path| edge.reference(path))
                     .collect(),
+                identified: found
+                    .identified
+                    .iter()
+                    .map(|name| Judgment::named(name))
+                    .collect::<Result<Vec<_>, String>>()?,
+                unknown_refs: UnknownRefs::new(edge, &found.unknown_refs),
                 unless: edge.optional(&found.unless)?,
                 signature: found.signature.as_ref().map(|signature| Signature {
                     unknown_types: signature.unknown_types.clone(),
@@ -987,7 +1086,7 @@ impl Rules {
                 if judgment == Judgment::Clean {
                     continue;
                 }
-                let identity = if judgment.has_identity() {
+                let identity = if rule.identified.contains(&judgment) {
                     rule.identity
                         .iter()
                         .map(|field| render(&evaluate_ref(*field, &env)))
@@ -995,6 +1094,7 @@ impl Rules {
                 } else {
                     Vec::new()
                 };
+                let unknown = rule.unknown_refs.text(judgment, &env);
                 out.push(Row {
                     edge: id,
                     target: target as u32,
@@ -1002,6 +1102,7 @@ impl Rules {
                     identity,
                     src_module: src.module.unwrap_or_default(),
                     dst_module: dst.module,
+                    words: Words::of(&env, unknown),
                 });
             }
         });
@@ -1396,17 +1497,7 @@ mod tests {
     }
 
     fn judgment_named(name: &str) -> Judgment {
-        [
-            Judgment::Clean,
-            Judgment::Unresolved,
-            Judgment::UnknownSelection,
-            Judgment::UnknownViolation,
-            Judgment::Violation,
-            Judgment::UnknownType,
-        ]
-        .into_iter()
-        .find(|judgment| judgment.name() == name)
-        .unwrap_or_else(|| panic!("not a judgment: {name}"))
+        Judgment::named(name).unwrap()
     }
 
     #[test]

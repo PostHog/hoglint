@@ -14,9 +14,9 @@ use rustc_hash::FxHashMap;
 
 /// The rows of a judged rule as columns, so Python makes no object per row: (edge ids,
 /// destination indexes, judgment names, each row's judgment by place, distinct identities, each
-/// row's identity by place (`Judgment::has_identity`), distinct modules, each row's source module by place, each row's
-/// destination module by place). Per-row columns are little-endian u32s; a row with no identity
-/// or no destination module has `NO_PLACE` there.
+/// row's identity by place, distinct modules, each row's source module by place, each row's
+/// destination module by place, `WordColumns`). Per-row columns are little-endian u32s; a row
+/// with no destination module has `NO_PLACE` there.
 type JudgedColumns<'py> = (
     Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
@@ -25,6 +25,17 @@ type JudgedColumns<'py> = (
     Vec<Vec<String>>,
     Bound<'py, PyBytes>,
     Vec<String>,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+    WordColumns<'py>,
+);
+
+/// What a message names of each row (`Words`): (distinct texts, each row's source symbol,
+/// destination symbol, label and unknown refs by place). A row with no symbol has `NO_PLACE`.
+type WordColumns<'py> = (
+    Vec<String>,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
 );
@@ -131,7 +142,19 @@ impl Rules {
         let mut identity_places = FxHashMap::default();
         let mut modules = Vec::new();
         let mut module_places = FxHashMap::default();
+        let mut texts = Vec::new();
+        let mut text_places = FxHashMap::default();
+        let mut words: [Vec<u32>; 4] = std::array::from_fn(|_| Vec::with_capacity(count));
         for row in rows {
+            let mut text_at = |text: Option<String>| match text {
+                Some(text) => place_of(&mut text_places, &mut texts, text),
+                None => NO_PLACE,
+            };
+            let found = row.words;
+            words[0].push(text_at(found.src_symbol));
+            words[1].push(text_at(found.dst_symbol));
+            words[2].push(text_at(Some(found.label)));
+            words[3].push(text_at(Some(found.unknown)));
             edges.push(row.edge);
             targets.push(row.target);
             judgment_at.push(place_of(
@@ -139,11 +162,11 @@ impl Rules {
                 &mut judgments,
                 row.judgment.name(),
             ));
-            identity_at.push(if row.judgment.has_identity() {
-                place_of(&mut identity_places, &mut identities, row.identity)
-            } else {
-                NO_PLACE
-            });
+            identity_at.push(place_of(
+                &mut identity_places,
+                &mut identities,
+                row.identity,
+            ));
             src_at.push(place_of(&mut module_places, &mut modules, row.src_module));
             dst_at.push(match row.dst_module {
                 Some(module) => place_of(&mut module_places, &mut modules, module),
@@ -163,6 +186,13 @@ impl Rules {
                 .collect(),
             ids_bytes(py, &src_at),
             ids_bytes(py, &dst_at),
+            (
+                texts,
+                ids_bytes(py, &words[0]),
+                ids_bytes(py, &words[1]),
+                ids_bytes(py, &words[2]),
+                ids_bytes(py, &words[3]),
+            ),
         ))
     }
 

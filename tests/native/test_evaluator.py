@@ -338,8 +338,9 @@ class World:
 
 
 def judged_in_python(spec: RuleSpec) -> bool:
-    """Whether the Python rule code judges the rule too: every rule type but the export rule,
-    which only the native evaluator walks (`ExportPrimitive.CONFIRM`)."""
+    """Whether the Python rule code judges the rule too in a native run: the rule types a ledger
+    write confirms whole (`RuleType.CONFIRM`). The export rule and the rules judged per destination
+    have no Python judge."""
     return primitive_of(spec).CONFIRM != "none"
 
 
@@ -374,27 +375,80 @@ def run_rows(run: Any) -> list[tuple[Any, ...]]:
     return [*findings, *incomplete]
 
 
-JudgedRow = tuple[int, int, str, list[str] | None, str, str | None]
-# The judgments whose rows carry the rule's identity (`Judgment::has_identity`).
-IDENTIFIED = (Judgment.VIOLATION.value, Judgment.UNKNOWN_TYPE.value)
+def group_name(name: str) -> str:
+    """A level's group as stored: a group of a set field is named by Python's `str()` of a
+    frozenset, whose order follows the hash seed, so its items are sorted here."""
+    if not name.startswith("frozenset("):
+        return name
+    items = ast.literal_eval(name.removeprefix("frozenset(").removesuffix(")"))
+    return "{" + ", ".join(sorted(items)) + "}"
+
+
+def run_lines(world: World, at: int, base: str, rules: str) -> list[list[Any]]:
+    """A whole run of one config as stored lines: each rule's findings (identity, message, flags,
+    subjects) and incomplete items (key, reason, subjects), the levels, or the config error."""
+    try:
+        result = Engine(world.config(rules, base), world.graph, world.repo).evaluate()
+    except ConfigError as error:
+        # A problem names the config file, which sits in this run's temporary directory.
+        root = str(world.root.resolve())
+        return [["error", at, sorted(problem.replace(root, "<root>") for problem in error.problems)]]
+    out: list[list[Any]] = []
+    for rule, run in result.runs.items():
+        for finding in run.findings:
+            identity, flags = list(finding.identity), [finding.ledgerable, finding.unknown]
+            out.append(["finding", at, rule, identity, finding.message, *flags, list(finding.subjects)])
+        out.extend(["incomplete", at, rule, item.key, item.reason, list(item.subjects)] for item in run.incomplete)
+    for name, level in result.levels.items():
+        passing = sorted(group_name(group) for group in level.passing)
+        failing = {group_name(group): reasons for group, reasons in level.failing.items()}
+        out.append(["level", at, name, passing, dict(sorted(failing.items()))])
+    return out
+
+
+# The whole runs of the hand-written cases that compared the two engines, as `run_lines` gives
+# them, by case: what both engines gave before the Python rule code left the comparison.
+# `HOGLINT_REFRESH_GENERATED=1` rewrites the cases a run meets; review the diff.
+STORED_ROWS = Path(__file__).parent / "stored_rows.json"
+
+
+def assert_stored(world: World, name: str, rules: str, base: str = CONFIG) -> None:
+    """A whole run of `rules` over `base` gives the lines stored for case `name`."""
+    found = json.loads(json.dumps(run_lines(world, 0, base, rules), ensure_ascii=False))
+    stored = json.loads(STORED_ROWS.read_text()) if STORED_ROWS.exists() else {}
+    if os.environ.get("HOGLINT_REFRESH_GENERATED"):
+        stored[name] = found
+        STORED_ROWS.write_text(json.dumps(stored, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
+    assert found == stored.get(name)
+
+
+# (edge id, destination, judgment name, identity, source module, destination module, words): the
+# words are the source symbol, destination symbol, label and unknown refs (`Words`).
+JudgedRow = tuple[int, int, str, list[str], str, str | None, tuple[str | None, str | None, str, str]]
 
 
 def judged_rows(columns: tuple[Any, ...]) -> list[JudgedRow]:
-    """`Rules.judge`'s columns as rows: (edge id, destination, judgment name, identity, source
-    module, destination module)."""
+    """`Rules.judge`'s columns as rows."""
     names: list[str] = columns[2]
     identities: list[list[str]] = columns[4]
     modules: list[str] = columns[6]
+    texts: list[str] = columns[9][0]
     edges, targets, judgment_at, identity_at, src_at, dst_at = (array("I", columns[at]) for at in (0, 1, 3, 5, 7, 8))
+    words = [array("I", column) for column in columns[9][1:]]
     place = native_module().NO_PLACE
+
+    def text(at: int) -> str | None:
+        return texts[at] if at != place else None
+
     return [
         (
             edges[at],
             targets[at],
             names[judgment_at[at]],
-            identities[identity_at[at]] if identity_at[at] != place else [],
+            identities[identity_at[at]],
             modules[src_at[at]],
             modules[dst_at[at]] if dst_at[at] != place else None,
+            (text(words[0][at]), text(words[1][at]), texts[words[2][at]], texts[words[3][at]]),
         )
         for at in range(len(edges))
     ]
@@ -406,21 +460,25 @@ def judged_columns(rows: list[JudgedRow]) -> tuple[Any, ...]:
     names: dict[str, int] = {}
     identities: dict[tuple[str, ...], int] = {}
     modules: dict[str, int] = {}
+    texts: dict[str, int] = {}
 
     def at(found: dict[Any, int], value: Any) -> int:
         return found.setdefault(value, len(found))
 
-    columns = [array("I") for _ in range(6)]
-    for edge, target, name, identity, src, dst in rows:
+    columns = [array("I") for _ in range(10)]
+    for edge, target, name, identity, src, dst, words in rows:
         columns[0].append(edge)
         columns[1].append(target)
         columns[2].append(at(names, name))
-        columns[3].append(at(identities, tuple(identity)) if name in IDENTIFIED and identity is not None else place)
+        columns[3].append(at(identities, tuple(identity)))
         columns[4].append(at(modules, src))
         columns[5].append(at(modules, dst) if dst is not None else place)
-    edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns)
+        for column, word in zip(columns[6:], words):
+            column.append(at(texts, word) if word is not None else place)
+    edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns[:6])
     distinct = [list(identity) for identity in identities]
-    return edges, targets, list(names), judgment_at, distinct, identity_at, list(modules), src_at, dst_at
+    word_columns = (list(texts), *(column.tobytes() for column in columns[6:]))
+    return edges, targets, list(names), judgment_at, distinct, identity_at, list(modules), src_at, dst_at, word_columns
 
 
 def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
@@ -433,11 +491,11 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
         rule = primitive_of(spec)(native, spec)
         index = native.plan.index[spec.id]
         # An inventory's rows keep the first destination of each identity; its run is compared.
-        if mode == "judge" and spec.primitive != "inventory":
+        if mode == "judge" and spec.primitive != "inventory" and judged_in_python(spec):
             assert isinstance(rule, EdgeRule)
             ours = Counter(
                 (edge, target, name, tuple(identity))
-                for edge, target, name, identity, _, _ in judged_rows(native.evaluator.judge(index))
+                for edge, target, name, identity, _, _, _ in judged_rows(native.evaluator.judge(index))
             )
             theirs = python_rows(python, rule)
             if ours != theirs:
@@ -659,6 +717,7 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
         },
     )
     assert differences(world, rules) == []
+    assert_stored(world, "namespace", rules)
     config = world.config(rules)
     native, _ = world.contexts(config)
     found = primitive_of(config.rules["namespace"])(native, config.rules["namespace"]).evaluate()
@@ -673,6 +732,7 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
 @pytest.mark.parametrize("name", sorted(CORNERS))
 def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
     assert differences(world, rule_table(name, CORNERS[name])) == []
+    assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]))
 
 
 # The export rule's corners, as both engines gave them before the Python walk went: per finding its
@@ -925,6 +985,7 @@ TEAM_CYCLE = {"primitive": "cycle", "view": "packages", "identity": ["src.module
 def test_a_cycle_over_a_group_a_provider_sets_finds_its_pairs_natively(world: World) -> None:
     rules = rule_table("teams", TEAM_CYCLE)
     assert differences(world, rules, PROVIDED) == []
+    assert_stored(world, "teams", rules, PROVIDED)
     config = world.config(rules, PROVIDED)
     native, _ = world.contexts(config)
     run = primitive_of(config.rules["teams"])(native, config.rules["teams"]).evaluate()
@@ -956,12 +1017,14 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
 
 def test_a_capture_over_a_directory_that_is_not_ascii_gives_one_zone_in_both_engines(world: World) -> None:
     config = world.config(rule_table("ascii", CORNERS["non-ascii-capture-under-within"]))
+    assert_stored(world, "ascii", rule_table("ascii", CORNERS["non-ascii-capture-under-within"]))
     found = world.rows(config, "ascii")
     assert {identity for identity, *_ in found} == {("products.é.jobs", "models", "é")}
 
 
 def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World) -> None:
     config = world.config(rule_table("text", CORNERS["set-read-as-text"]))
+    assert_stored(world, "text", rule_table("text", CORNERS["set-read-as-text"]))
     found = world.rows(config, "text")
     assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
 
@@ -1009,6 +1072,7 @@ def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
     if "allow" in keys:
         del spec_table["deny"]
     config = world.config(rule_table("uses", spec_table))
+    assert_stored(world, f"uses at import: {case}", rule_table("uses", spec_table))
     found = world.rows(config, "uses")
     identities = {identity for identity, *_ in found}
     assert {(symbol, module) for symbol, module, kind in identities if kind == "reference"} == references
@@ -1043,6 +1107,7 @@ def test_an_export_that_names_its_symbols_holds_them_and_not_their_subclasses_in
     base = CONFIG.replace(ADAPTER, f"{members}\naudience = \"src.tier == 'product'\"")
     assert base != CONFIG
     config = world.config(rule_table("doors", CORNERS["export-by-class-and-audience"]), base)
+    assert_stored(world, f"doors {members}", rule_table("doors", CORNERS["export-by-class-and-audience"]), base)
     found = world.rows(config, "doors")
     presentation = {identity[0] for identity, *_ in found if ".presentation." in identity[0]}
     assert presentation == found_symbols
@@ -1460,10 +1525,10 @@ KEY_ROUNDS, KEY_ROUNDS_MAX = 48, 480
 
 
 class KeysRead:
-    """Per mode, the keys its rule class read in a run of the Python engine (for the export rule,
-    which has no Python judge, in its constructor and plan), and the keys the native plan read to
-    plan it; both among the keys its primitive accepts and some rules do not
-    read (`EVERY_RULE_READS` aside)."""
+    """Per mode, the keys its rule class read in its constructor, its plan and a native run whose
+    every message is read (and, for a rule a ledger write confirms whole, in a run of the Python
+    engine), and the keys the native plan read to plan it; both among the keys its primitive
+    accepts and some rules do not read (`EVERY_RULE_READS` aside)."""
 
     def __init__(self) -> None:
         self.by_class: dict[str, set[str]] = {mode: set() for mode in TYPES}
@@ -1484,9 +1549,12 @@ class KeysRead:
             planned.keys.clear()
             rule.plan()
             self.by_plan[cls.MODE] |= planned.keys & accepted
-            if not judged_in_python(spec):
-                # A rule with no Python judge reads its keys in its constructor and its plan.
-                self.by_class[cls.MODE] |= planned.keys & accepted
+            self.by_class[cls.MODE] |= planned.keys & accepted
+            ran: Any = Recording(spec)
+            run = native.results[spec.id] = cls(native, ran).evaluate()
+            for finding in run.findings:
+                assert finding.message is not None and finding.remedies is not None
+            self.by_class[cls.MODE] |= ran.keys & accepted
 
     def every_key_read(self) -> bool:
         return all(cls.READS <= self.by_class[mode] for mode, cls in TYPES.items())
@@ -1642,33 +1710,6 @@ def outcome(world: World, config: Config) -> list[str]:
     return []
 
 
-def test_a_label_set_two_ways_stops_both_engines_alike(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    rng = random.Random(1110)
-    stopped = judged = 0
-    failures = []
-    while judged < 150:
-        conflicting = Conflicting(rng)
-        text = conflicting.config()
-        try:
-            world.config("", text)
-        except ConfigError:
-            continue
-        text += conflicting.rules(world, text)
-        config = world.config("", text)
-        if not all(judged_in_python(spec) for spec in config.rules.values()):
-            continue
-        judged += 1
-        native = outcome(world, config)
-        with monkeypatch.context() as patched:
-            patched.setattr(engine, "context_class", lambda index: RuleContext)
-            python = outcome(world, config)
-        stopped += bool(python)
-        if native != python:
-            failures.append(f"native {native}\npython {python}\n{text}")
-    assert failures == []
-    assert stopped > judged // 3
-
-
 def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_where_read(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1680,8 +1721,7 @@ def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_wh
     assert outcome(world, world.config("", base)) == []
     native = outcome(world, world.config(reads, base))
     assert [problem.partition(" by ")[0] for problem in native] == ["core.legacy.api: field 'silo' set differently"]
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert outcome(world, world.config(reads, base)) == native
+    assert_stored(world, "silo read", reads, base)
 
 
 def test_an_edge_with_no_destination_reads_its_source_where_python_reads_it(
@@ -1694,8 +1734,7 @@ def test_an_edge_with_no_destination_reads_its_source_where_python_reads_it(
     )
     reads = rule_table("via", {**EDGE, "endpoint": "via", "select": "src.scope startswith src.lead"})
     native = outcome(world, world.config(reads, lead))
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == outcome(world, world.config(reads, lead))
+    assert_stored(world, "via", reads, lead)
     assert len(native) > 1
 
 
@@ -1839,37 +1878,6 @@ def config_digest(base: str, rules: str) -> str:
     return hashlib.blake2b((base + rules).encode(), digest_size=8).hexdigest()
 
 
-def group_name(name: str) -> str:
-    """A level's group as stored: a group of a set field is named by Python's `str()` of a
-    frozenset, whose order follows the hash seed, so its items are sorted here."""
-    if not name.startswith("frozenset("):
-        return name
-    items = ast.literal_eval(name.removeprefix("frozenset(").removesuffix(")"))
-    return "{" + ", ".join(sorted(items)) + "}"
-
-
-def run_lines(world: World, at: int, base: str, rules: str) -> list[list[Any]]:
-    """A whole run of one config as stored lines: each rule's findings (identity, message, flags,
-    subjects) and incomplete items (key, reason, subjects), the levels, or the config error."""
-    try:
-        result = Engine(world.config(rules, base), world.graph, world.repo).evaluate()
-    except ConfigError as error:
-        # A problem names the config file, which sits in this run's temporary directory.
-        root = str(world.root.resolve())
-        return [["error", at, sorted(problem.replace(root, "<root>") for problem in error.problems)]]
-    out: list[list[Any]] = []
-    for rule, run in result.runs.items():
-        for finding in run.findings:
-            identity, flags = list(finding.identity), [finding.ledgerable, finding.unknown]
-            out.append(["finding", at, rule, identity, finding.message, *flags, list(finding.subjects)])
-        out.extend(["incomplete", at, rule, item.key, item.reason, list(item.subjects)] for item in run.incomplete)
-    for name, level in result.levels.items():
-        passing = sorted(group_name(group) for group in level.passing)
-        failing = {group_name(group): reasons for group, reasons in level.failing.items()}
-        out.append(["level", at, name, passing, dict(sorted(failing.items()))])
-    return out
-
-
 def stored_runs() -> dict[int, tuple[str, list[list[Any]]]]:
     """The stored runs by config: its digest and its lines."""
     out: dict[int, tuple[str, list[list[Any]]]] = {}
@@ -1970,6 +1978,7 @@ def test_a_surface_with_a_control_character_is_worded_once_for_both_engines(worl
         },
     )
     assert differences(world, rules) == []
+    assert_stored(world, "unplaced", rules)
     config = world.config(rules)
     native, _ = world.contexts(config)
     run = primitive_of(config.rules["unplaced"])(native, config.rules["unplaced"]).evaluate()
@@ -2002,25 +2011,6 @@ def lie(monkeypatch: pytest.MonkeyPatch, **changes: Any) -> None:
         "evaluator",
         property(lambda ctx: ctx.__dict__.setdefault("lying", Lying(made(ctx), changes))),
     )
-
-
-def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'nowhere'"}))
-    edge = next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
-    row = (edge.handle, 0, Judgment.VIOLATION.value, ["a", "b"], edge.site.module, None)
-    lie(monkeypatch, judge=lambda rows: [*rows, row])
-    assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
-    with pytest.raises(EngineError, match="apart from the evaluator"):
-        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
-
-
-def test_a_found_row_with_no_identity_is_an_engine_error(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}))
-    lie(monkeypatch, judge=lambda rows: [(*rows[0][:3], None, *rows[0][4:]), *rows[1:]])
-    with pytest.raises(EngineError, match="no identity"):
-        Engine(config, world.graph, world.repo).evaluate()
 
 
 @pytest.mark.parametrize(
@@ -2067,10 +2057,6 @@ def an_import(world: World) -> Edge:
     return next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
 
 
-def made_up(text: str) -> str:
-    return "made-up" if text == "billing" else text
-
-
 def swapped(text: str, pair: tuple[str, str] = ("core", "billing")) -> str:
     """Two values of a label column the other way round: a column with the same values, on the
     wrong modules."""
@@ -2081,16 +2067,6 @@ def swapped(text: str, pair: tuple[str, str] = ("core", "billing")) -> str:
 def relabeled(change: Callable[[str], str]) -> Callable[[Any], Any]:
     """A lie of the `values` call: every value of a label column changed by `change`."""
     return lambda found: [[(kind, [change(item) for item in items]) for kind, items in found[0]], found[1]]
-
-
-def made_up_label(changes: dict[str, Any]) -> dict[str, Any]:
-    """A `package` column that says `made-up` where it says `billing`, and judge rows whose
-    identities say the same: labels the evaluator computed, wrong on both sides."""
-    return {
-        **changes,
-        "values": relabeled(made_up),
-        "judge": lambda rows: [(*row[:3], [made_up(item) for item in row[3]], *row[4:]) for row in rows],
-    }
 
 
 COVERED_CORE = rule_table(
@@ -2107,34 +2083,6 @@ COVERED_CORE = rule_table(
 # row with an identity the rule's own `project` does not give, a first row left out, or a made-up
 # row: a label column, a reach path, a cycle pair, a coverage path, a level group.
 LEDGER_LIES: dict[str, tuple[str, Any]] = {
-    "identity": (
-        rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
-        lambda world: {"judge": lambda rows: [(*rows[0][:3], ["made", "up"], *rows[0][4:]), *rows[1:]]},
-    ),
-    "label column on an unresolved row": (
-        rule_table(
-            "lied",
-            {
-                **EDGE,
-                "kinds": ["uses"],
-                "on_unresolved": "finding",
-                "identity": ["src.package", "dst.symbol"],
-                "ledger": True,
-                "growth_key": ["src.package"],
-            },
-        ),
-        lambda world: {"values": relabeled(swapped)},
-    ),
-    "source module": (
-        rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
-        lambda world: {"judge": lambda rows: [(*rows[0][:4], "made.up", *rows[0][5:]), *rows[1:]]},
-    ),
-    "label column": (
-        rule_table(
-            "lied", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package", "identity": ["dst.package"]}
-        ),
-        lambda world: made_up_label({}),
-    ),
     "layout": (rule_table("lied", CORNERS["layout-on-modules"]), lambda world: {"entities": lambda rows: rows[1:]}),
     "entity-inventory": (
         rule_table("lied", CORNERS["inventory-exactly-one"]),
@@ -2189,8 +2137,7 @@ def test_a_level_judges_the_groups_the_python_level_judges(world: World, monkeyp
 
     config = world.config(LEVELS)
     native = levels()
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == levels()
+    assert_stored(world, "levels", LEVELS)
     assert all(passing or failing for passing, failing in native.values())
 
 
@@ -2257,8 +2204,7 @@ def test_a_conflict_only_a_level_meets_stops_both_engines_alike(
     rules = LEVELS.replace('group_by = "zone"', level)
     config = world.config(rules, LEAD_SET_TWO_WAYS)
     native = problems(world, config)
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == problems(world, config)
+    assert_stored(world, f"level conflict {level}", rules, LEAD_SET_TWO_WAYS)
     assert native and all("field 'lead' set differently" in problem for problem in native)
 
 
@@ -2278,10 +2224,7 @@ def test_an_expected_kind_no_symbol_holds_makes_a_rule_incomplete_in_both(
     def reasons() -> list[str]:
         return [item.reason for item in Engine(config, world.graph, world.repo).evaluate().incomplete()]
 
-    native = reasons()
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == reasons()
-    assert native == ["kind ghost matched no symbol, but [kinds] marks it expected"]
+    assert reasons() == ["kind ghost matched no symbol, but [kinds] marks it expected"]
 
 
 # A provider-set field read in each role the evaluator compiles (D54), as (rules, config).
@@ -2339,6 +2282,7 @@ def test_a_provider_field_read_in_each_role_gets_its_column(
         assert level_differences(world, config, monkeypatch) == []
     else:
         assert differences(world, rules, base) == []
+    assert_stored(world, f"column role {role}", rules, base)
 
 
 # An export rule's slot owners are selectors it compiles itself: a provider field one reads gets its
@@ -2358,3 +2302,4 @@ def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monke
     reads = native_module().Rules.reads(native.native.native.link, json.dumps(native.plan.data()))
     assert reads == ["team"]
     assert differences(world, rules, PROVIDED) == []
+    assert_stored(world, "slot owner column", rules, PROVIDED)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from hoglint.config.model import Config, RuleSpec
@@ -21,6 +21,8 @@ from hoglint.rules.base import (
     RuleRun,
     project,
     read_endpoint,
+    subjects_of,
+    unworded,
 )
 from hoglint.rules.plan import selector_tree
 from hoglint.selectors import UNKNOWN, ClassSelection, Ref, Selector, State, Truth, Value, render_value
@@ -140,9 +142,9 @@ class ReachPrimitive(EdgeRule):
         assert found.dst is not None
         env = EdgeEnv(self.ctx, found.path[-1], self.ctx.module_endpoint(found.source), found.dst)
         if found.what == "unresolved":
-            self.on_unresolved(env)
+            self.on_unresolved(self.seen(env, Judgment.UNRESOLVED))
         elif found.what == "unknown":
-            self.incomplete(env, f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
+            self.incomplete(unworded(env), f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
         else:
             assert found.verdict is not None
             self.report(env, list(found.path), found.verdict)
@@ -190,11 +192,13 @@ class ReachPrimitive(EdgeRule):
             for at, hop in enumerate(self.hops(module)):
                 dst = hop.dst
                 if dst.unresolved:
-                    self.on_unresolved(self.hop_env(hop, origin))
+                    self.on_unresolved(self.seen(self.hop_env(hop, origin), Judgment.UNRESOLVED))
                     continue
                 if hop.selected is Truth.UNKNOWN:
                     env = self.hop_env(hop, origin)
-                    self.incomplete(env, f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}")
+                    self.incomplete(
+                        unworded(env), f"cannot tell whether to follow {env.edge.kind} {env.edge.surface!r}"
+                    )
                     continue
                 verdict, excused = self.kept_verdict(module, at, hop, origin)
                 denied = verdict is not Truth.FALSE and not excused
@@ -241,7 +245,8 @@ class ReachPrimitive(EdgeRule):
         if verdict is Truth.UNKNOWN:
             message += " (cannot tell, a value is unassigned)"
         judgment = Judgment.UNKNOWN_VIOLATION if verdict is Truth.UNKNOWN else Judgment.VIOLATION
-        self.emit(env, judgment, message, witnesses=tuple(path))
+        seen = replace(unworded(env), identity=project(self.spec.identity, env.resolve))
+        self.emit(seen, judgment, message, witnesses=tuple(path))
 
 
 class EndpointsEnv:
@@ -327,10 +332,10 @@ class CyclePrimitive(EdgeRule):
         if selected is Truth.FALSE:
             return
         if env.dst.unresolved:
-            self.on_unresolved(env)
+            self.on_unresolved(self.seen(env, Judgment.UNRESOLVED))
             return
         if selected is Truth.UNKNOWN:
-            self.incomplete(env, "selection reads an unknown value")
+            self.incomplete(unworded(env), "selection reads an unknown value")
             return
         src, dst = self.group(env, "src"), self.group(env, "dst")
         if src is None or dst is None or src == dst:
@@ -354,9 +359,9 @@ class CyclePrimitive(EdgeRule):
             if row.pair is None:
                 env = self.envs_of(edges[row.edge])[row.target]
                 if row.judgment is Judgment.UNRESOLVED:
-                    self.on_unresolved(env)
+                    self.on_unresolved(self.seen(env, Judgment.UNRESOLVED))
                 else:
-                    self.incomplete(env, "selection reads an unknown value")
+                    self.incomplete(unworded(env), "selection reads an unknown value")
                 continue
             pair = pairs.setdefault(row.pair, Pair())
             pair.count += 1
@@ -382,7 +387,7 @@ class CyclePrimitive(EdgeRule):
                 project(self.spec.identity, first.resolve),
                 f"{src} -> {dst} closes a cycle ({pair.count} edges)",
                 first.src.module,
-                self.subjects(first),
+                subjects_of(first.src.module, first.dst.module),
                 tuple(env.edge for env in pair.envs),
             )
             self.run.findings.append(finding)

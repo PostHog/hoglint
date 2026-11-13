@@ -13,7 +13,7 @@ from hoglint.config import CONFIG_FILE, load_config
 from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph
-from hoglint.native.rules import Rejudged
+from hoglint.native.rules import Worded
 from hoglint.native.source import NativeGraphSource, batch_mode
 from hoglint.rules.engine import Engine
 from rules.test_attribution import DYNAMIC_CONFIG, LOADER, SECOND_LOADER
@@ -38,16 +38,16 @@ strict = ["core-to-product"]
 
 def summary(repo: Path, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     """The summary of a run whose ledger accepts every finding, and whose strict level they all
-    block. Grouped findings must not be judged again to judge the level or store the summary."""
+    block. Grouped findings must not be worded to judge the level or store the summary."""
     config = load_config(repo, repo / CONFIG_FILE)
     work.mkdir()
     graph = NativeGraphSource(work).build(repo, config)
 
-    def judged_again(_: Rejudged) -> None:
-        raise AssertionError("an accepted grouped finding was judged again for a level or a summary")
+    def worded(_: Worded) -> None:
+        raise AssertionError("an accepted grouped finding was worded for a level or a summary")
 
     with monkeypatch.context() as patched:
-        patched.setattr(Rejudged, "get", judged_again)
+        patched.setattr(Worded, "get", worded)
         result = Engine(config, graph, repo).evaluate(rewrite_ledger=True)
         made = ScanSummary.from_run(result, graph, ENVELOPE, roots=(repo,)).to_json()
     assert {finding.status for finding in result.findings()} == {FindingStatus.ACCEPTED}
@@ -55,7 +55,7 @@ def summary(repo: Path, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     return made
 
 
-def test_levels_and_summaries_of_accepted_grouped_findings_judge_no_edge_again(
+def test_levels_and_summaries_of_accepted_grouped_findings_word_no_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     native_module()

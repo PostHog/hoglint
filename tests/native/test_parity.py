@@ -5,19 +5,13 @@ from __future__ import annotations
 import gc
 import os
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, Graph, WitnessRow, witness_row
+from hoglint.model import Graph
 from hoglint.native.parity import Dump, read_lines
-from hoglint.native.rules import Rejudged
-from hoglint.rules.base import EdgeRule, Judgment, context_class, project
-from hoglint.rules.engine import Engine, primitive_of
-from rules.support import GraphBuilder, config_from
 
 from native.require import native_module
 
@@ -175,45 +169,6 @@ def test_a_source_the_engine_cannot_read_is_an_incomplete_item(tmp_path: Path, m
     out = dump_repo(tmp_path, OWNERS_REPO, monkeypatch, unreadable=("core/a.py",))
     reason = "core/a.py could not be read, so its facts are missing"
     assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out / "incomplete.jsonl")
-
-
-@dataclass(frozen=True, slots=True)
-class Held:
-    """A finding's edge, already made."""
-
-    edge: Edge
-
-    @property
-    def edge_id(self) -> int:
-        return self.edge.handle
-
-    def get(self) -> Edge:
-        return self.edge
-
-    def row(self) -> WitnessRow:
-        return witness_row(self.edge)
-
-
-def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path: Path) -> None:
-    config = config_from(tmp_path, OWNERS_REPO["hoglint.toml"])
-    built = (
-        GraphBuilder()
-        .module("core.a", "products.billing.models")
-        .edge("import", "core.a", "products.billing.models.Invoice")
-        .graph
-    )
-    engine = Engine(config, built, tmp_path)
-    ctx = context_class(engine.labeler.index)(config, built, engine.labeler, tmp_path)
-    spec = config.rules["core-to-product"]
-    rule = primitive_of(spec)(ctx, spec)
-    assert isinstance(rule, EdgeRule)
-    edge = Held(built.edges[0])
-    identity = project(spec.identity, rule.envs_of(built.edges[0])[0].resolve)
-    assert Rejudged(rule, edge, Judgment.VIOLATION, identity).get().message
-    with pytest.raises(EngineError):
-        Rejudged(rule, edge, Judgment.UNKNOWN_VIOLATION, identity).get()
-    with pytest.raises(EngineError, match="the identity"):
-        Rejudged(rule, edge, Judgment.VIOLATION, ("made", "up")).get()
 
 
 def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(

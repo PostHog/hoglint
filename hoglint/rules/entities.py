@@ -19,6 +19,7 @@ from hoglint.rules.base import (
     RuleContext,
     RuleRun,
     RuleType,
+    Seen,
     StagedSelection,
     conjuncts,
     contexts_of,
@@ -333,25 +334,28 @@ class EdgeInventory(EdgeRule):
     def verdict_plan(self) -> dict[str, Any]:
         return {"kind": "inventory"}
 
-    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
+    def report(self, seen: Seen, judgment: Judgment, describe: str) -> None:
         """What a selected edge reports when it cannot be classified: one that did not resolve,
         or whose selection reads an unknown value. A classifiable one is compared with the
         classification file instead."""
         if judgment is Judgment.UNKNOWN_SELECTION:
-            self.incomplete(env, "selection reads an unknown value")
+            self.incomplete(seen, "selection reads an unknown value")
             return
-        super().report(env, judgment, describe)
+        super().report(seen, judgment, describe)
 
     def evaluate(self) -> RuleRun:
         if self.ctx.inventory_judged(self):
             return self.run
-        seen: dict[tuple[str, ...], EdgeEnv] = {}
+        seen: dict[tuple[str, ...], Seen] = {}
         for env in self.envs():
             judgment = self.decide(env)
+            if judgment is Judgment.CLEAN:
+                continue
+            words = self.seen(env, judgment)
             if judgment is Judgment.VIOLATION:
-                seen.setdefault(project(self.spec.identity, env.resolve), env)
-            elif judgment is not Judgment.CLEAN:
-                self.report(env, judgment, self.describe(env))
+                seen.setdefault(words.identity, words)
+            else:
+                self.report(words, judgment, self.describe(words))
         classified = self.classifications()
         for identity in sorted(seen):
             if identity not in classified:

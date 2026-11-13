@@ -10,7 +10,7 @@ Unknown semantics per position:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from hoglint.rules.levels import LevelResult
 
 from hoglint.rules.findings import FindingTable
-from hoglint.rules.plan import identity_paths, selector_tree, tree
+from hoglint.rules.plan import identity_paths, ref_paths, selector_tree, tree
 from hoglint.selectors import (
     EDGE_DEPENDENT_FIELDS,
     NONE,
@@ -94,9 +94,8 @@ class RuleType:
     # Whether its selectors and identity read entities (a module, a symbol or a path) rather than
     # an edge's two ends.
     ENTITIES: ClassVar[bool] = False
-    # How a ledger write confirms what the evaluator found: "row" (the rule's own code judges each
-    # row again), "whole" (the rule runs whole again in Python) or "none" (no Python code judges the
-    # rule: the export rule).
+    # How a ledger write confirms what the evaluator found: "whole" (the rule runs whole again in
+    # Python) or "none" (no Python code judges the rule in a native run).
     CONFIRM: ClassVar[str]
     # The config keys the rule's code reads, besides the ones every rule has
     # (`config.schema.EVERY_RULE_READS`).
@@ -175,6 +174,22 @@ class Endpoint:
             return self.symbol
         head = self.symbol[len(self.module) + 1 :].split(".", 1)[0]
         return f"{self.module}.{head}"
+
+
+@dataclass(frozen=True, slots=True)
+class Seen:
+    """One destination of one edge as a judgment saw it: what its finding or incomplete item is
+    worded from. The native evaluator gives every part but the edge (`Rules.judge`)."""
+
+    edge: Edge
+    src: Endpoint
+    dst: Endpoint
+    # The edge's label (`edge.label`).
+    label: str
+    # The refs the judgment read as unknown, as its message names them; empty for any other judgment.
+    unknown: str
+    # The rule's identity columns; empty for a judgment that `report` words as no finding.
+    identity: tuple[str, ...]
 
 
 class RuleContext:
@@ -595,6 +610,13 @@ class ModuleEnv:
 
 
 @cache
+def unworded(env: EdgeEnv) -> Seen:
+    """An environment as an incomplete item or an unresolved one names it, with no unknown refs
+    and no identity read: reach and cycle rows, until the evaluator words them."""
+    return Seen(env.edge, env.src, env.dst, env.label(), "", ())
+
+
+@cache
 def column_ref(column: str) -> Ref:
     return Ref(tuple(column.split(".")))
 
@@ -800,12 +822,35 @@ class EdgeRule(RuleType):
         names = [str(ref) for ref in selector.refs() if env.resolve(ref).is_unknown]
         return ", ".join(dict.fromkeys(names))
 
-    def incomplete(self, env: EdgeEnv, reason: str) -> None:
-        key = f"{env.src.module}|{env.edge.kind}|{env.edge.surface}"
-        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(env), edge=env.edge))
+    def identified(self) -> frozenset[Judgment]:
+        """The judgments whose rows `report` words as findings: only their rows carry the rule's
+        identity, so an identity column is read where a finding needs it."""
+        out = {Judgment.VIOLATION, Judgment.UNKNOWN_VIOLATION}
+        if self.spec.on_unresolved != "incomplete":
+            out.add(Judgment.UNRESOLVED)
+        return frozenset(out)
 
-    def subjects(self, env: EdgeEnv) -> tuple[str, ...]:
-        return subjects_of(env.src.module, env.dst.module)
+    def seen(self, env: EdgeEnv, judgment: Judgment) -> Seen:
+        """What the Python rule code words `judgment` of one environment from: the plain engine's
+        rows, and reach and cycle rows, which the evaluator does not word yet."""
+        spec = self.spec
+        if judgment is Judgment.UNKNOWN_SELECTION:
+            unknown = self.unknown_refs(spec.from_, env) or self.unknown_refs(spec.select, env)
+        elif judgment is Judgment.UNKNOWN_VIOLATION:
+            unknown = ", ".join(
+                filter(None, (self.unknown_refs(s, env) for s in (spec.deny, spec.allow, spec.require)))
+            )
+        else:
+            unknown = ""
+        identity = project(spec.identity, env.resolve) if judgment in self.identified() else ()
+        return Seen(env.edge, env.src, env.dst, env.label(), unknown, identity)
+
+    def incomplete(self, seen: Seen, reason: str) -> None:
+        key = f"{seen.src.module}|{seen.edge.kind}|{seen.edge.surface}"
+        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(seen), edge=seen.edge))
+
+    def subjects(self, seen: Seen) -> tuple[str, ...]:
+        return subjects_of(seen.src.module, seen.dst.module)
 
     # Whether `report` names the edge as a finding's only witness. Then a finding whose detail is
     # made when read still has its witness and site without making it.
@@ -823,33 +868,33 @@ class EdgeRule(RuleType):
             return self.spec.on_unresolved == "finding", True
         return True, judgment is Judgment.UNKNOWN_VIOLATION
 
-    def finding_of(self, env: EdgeEnv, judgment: Judgment, detail: Shown) -> Finding:
-        """The finding `judgment` makes for one environment. Its identity, owner and subjects name
-        the entity, so they come from the environment; its flags from the judgment."""
+    def finding_of(self, seen: Seen, judgment: Judgment, detail: Shown) -> Finding:
+        """The finding `judgment` makes for one destination. Its identity, owner and subjects name
+        the entity, so they come from what was seen; its flags from the judgment."""
         ledgerable, unknown = self.flags(judgment)
         later = self.witness_is_edge and not isinstance(detail, FindingDetail)
         return Finding(
             rule=self.spec.id,
-            identity=project(self.spec.identity, env.resolve),
+            identity=seen.identity,
             detail=detail,
-            owner=self.ctx.owner(env.src.module),
-            subjects=self.subjects(env),
+            owner=self.ctx.owner(seen.src.module),
+            subjects=self.subjects(seen),
             ledgerable=ledgerable,
             unknown=unknown,
-            witness=env.edge if later else None,
+            witness=seen.edge if later else None,
         )
 
     def emit(
         self,
-        env: EdgeEnv,
+        seen: Seen,
         judgment: Judgment,
         message: str,
         remedies: tuple[Remedy, ...] = (),
         witnesses: tuple[Edge, ...] = (),
     ) -> Finding:
-        shown = witnesses or (env.edge,)
+        shown = witnesses or (seen.edge,)
         detail = FindingDetail(message, shown[0].site, shown, remedies or self.remedies())
-        finding = self.finding_of(env, judgment, detail)
+        finding = self.finding_of(seen, judgment, detail)
         self.run.findings.append(finding)
         return finding
 
@@ -858,53 +903,52 @@ class EdgeRule(RuleType):
             return (Remedy("documented-replacement", self.spec.remedy),)
         return ()
 
-    def on_unresolved(self, env: EdgeEnv) -> None:
-        what = f"{env.edge.kind} {env.edge.surface!r} did not resolve"
+    def on_unresolved(self, seen: Seen) -> None:
+        what = f"{seen.edge.kind} {seen.edge.surface!r} did not resolve"
         if self.spec.on_unresolved == "incomplete":
-            self.incomplete(env, what)
+            self.incomplete(seen, what)
             return
-        self.emit(env, Judgment.UNRESOLVED, what)
+        self.emit(seen, Judgment.UNRESOLVED, what)
 
-    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
-        """The finding or incomplete `judgment` makes for one environment, all of it from the
-        environment's own edge; `describe` is the finding message."""
+    def report(self, seen: Seen, judgment: Judgment, describe: str) -> None:
+        """The finding or incomplete `judgment` makes for one destination, all of it from what was
+        seen of it; `describe` is the finding message."""
         if judgment is Judgment.UNRESOLVED:
-            self.on_unresolved(env)
+            self.on_unresolved(seen)
         elif judgment is Judgment.UNKNOWN_SELECTION:
-            unknown = self.unknown_refs(self.spec.from_, env) or self.unknown_refs(self.spec.select, env)
-            self.incomplete(env, f"selection reads unknown {unknown or 'values'}")
+            self.incomplete(seen, f"selection reads unknown {seen.unknown or 'values'}")
         elif judgment is Judgment.UNKNOWN_VIOLATION:
-            unknown = ", ".join(
-                filter(None, (self.unknown_refs(s, env) for s in (self.spec.deny, self.spec.allow, self.spec.require)))
-            )
-            self.emit(env, judgment, f"{describe}; cannot tell, unassigned: {unknown or 'a value'}")
+            self.emit(seen, judgment, f"{describe}; cannot tell, unassigned: {seen.unknown or 'a value'}")
         elif judgment is Judgment.VIOLATION:
-            self.emit(env, judgment, describe)
+            self.emit(seen, judgment, describe)
 
-    def judge(self, env: EdgeEnv, describe: str) -> None:
-        """The decision for one edge, then what it reports; `describe` is the finding message."""
-        self.report(env, self.decide(env), describe)
+    def judge(self, env: EdgeEnv) -> None:
+        """The decision for one edge in the plain Python engine, then what it reports."""
+        judgment = self.decide(env)
+        if judgment is Judgment.CLEAN:
+            return
+        seen = self.seen(env, judgment)
+        self.report(seen, judgment, self.describe(seen))
 
     def evaluate(self) -> RuleRun:
         if self.ctx.judged(self):
             return self.run
         for edge in self.ctx.judged_edges(self):
             for env in self.edge_envs(edge):
-                self.judge(env, self.describe(env))
+                self.judge(env)
         return self.run
 
-    def recorded(self, envs: Iterable[EdgeEnv]) -> RuleRun:
-        """What judging `envs` makes, kept out of this rule's run."""
+    def worded(self, seen: Seen, judgment: Judgment) -> RuleRun:
+        """What `judgment` reports for `seen`, message included, kept out of this rule's run."""
         saved, self.run = self.run, RuleRun(self.spec)
         try:
-            for env in envs:
-                self.judge(env, self.describe(env))
+            self.report(seen, judgment, self.describe(seen))
             return self.run
         finally:
             self.run = saved
 
-    def describe(self, env: EdgeEnv) -> str:
-        return f"{env.src.module} -> {env.dst.symbol or env.dst.module} ({env.edge.kind})"
+    def describe(self, seen: Seen) -> str:
+        return f"{seen.src.module} -> {seen.dst.symbol or seen.dst.module} ({seen.edge.kind})"
 
     def edges_plan(self) -> dict[str, Any]:
         """Which edges the rule sees, and its selection in the order it applies."""
@@ -935,6 +979,11 @@ class EdgeRule(RuleType):
             "mode": self.NATIVE_MODE,
             "edges": self.edges_plan(),
             "identity": identity_paths(spec.identity),
+            "identified": sorted(self.identified()),
+            "unknown_refs": {
+                "selection": [ref_paths(spec.from_), ref_paths(spec.select)],
+                "verdict": [ref_paths(spec.deny), ref_paths(spec.allow), ref_paths(spec.require)],
+            },
             "unless": selector_tree(spec.unless),
             "signature": None,
             "verdict": self.verdict_plan(),
