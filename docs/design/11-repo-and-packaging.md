@@ -16,7 +16,7 @@
 **What lives where** (D15; "The PostHog pack's home"):
 - The hoglint repo: all Rust (facts, link, evaluator, the PyO3 module), the generic core and the Django pack.
   It ships one abi3 wheel.
-- A consuming monorepo: its preset, its own plugin (for PostHog: `drives`, the owners provider, name lists), the root `hoglint.toml`, the ledger and exceptions files, and the parity and shadow tooling.
+- A consuming monorepo: its preset, its own plugin (for PostHog: `drives`, the owners provider, name lists), the root `hoglint.toml`, and the ledger and exceptions files.
   It pins the wheel.
 
 **Packaging** (a separate crate; owner, Nov 9):

@@ -37,9 +37,9 @@ A change that breaks one is a design change for the owner, not a refactor.
    Django lives in the Django pack, PostHog in its preset and plugin.
    The engine's word for a public surface is `export`, not "facade".
 5. **One graph engine; a change moves no row it does not name.**
-   The native engine builds the graph; the frozen Python graph build is in no gate.
-   The Python rule classes still judge rows again inside every native run, and a difference is an engine error.
-   A change to rows is a named delta against the model repository's expected rows, the slot table test and the real-size compare with a base.
+   The native engine builds the graph.
+   The Python rule classes still judge rows again inside every native run, a second implementation of the rule half: a judgment that differs is an engine error.
+   A change to rows is a named delta against the model repository's stored rows and tables, the slot table test and the real-size compare with a base.
 6. **Every run is exact.**
    Any reuse of a stored answer must equal a full run, and an oracle must prove it.
 7. **The seam rule.**
@@ -67,7 +67,7 @@ bin/prove                                   # all of the above side by side, plu
 ```
 
 - `bin/prove` builds first, runs every check above with a private copy of the native module and a private cache per check, and prints one line per check, with a log file each.
-  With `--real <snapshot> --base <rev>` it also compares the head with the base row by row at real size; `--parity` and `--replay <sample>` add engine parity and the replay sample.
+  With `--real <snapshot> --base <rev>` it also compares the head with the base row by row at real size; `--replay <sample>` adds the replay sample.
   `bin/prove --help` names the options and the environment variables for real-size runs.
 - `cargo test --workspace` cannot link the binding's test binary; test the root package.
 - `clippy` needs `--workspace`, or it never lints the binding crate.
@@ -85,7 +85,7 @@ bin/prove                                   # all of the above side by side, plu
   List every changed row and explain it with your own script, not with the build's own summary.
   Compare row multisets, not identities: one identity can have several rows.
 - **The model repository first.**
-  After a rule or preset change, `bin/model-repo` shows in a second which cases changed verdict (`tests/model_repo/CASES.md`).
+  After a rule or preset change, `bin/model-repo` shows in a second which cases changed verdict (`tests/model_repo/CASES.md`) and which of the ten tables moved (`tests/model_repo/tables.toml`).
   It does not replace the run at real size.
 - **Same-minute pairs for speed.**
   Time base and new alternately, in the same minutes, CPU next to wall.

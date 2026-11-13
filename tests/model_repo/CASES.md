@@ -1,6 +1,6 @@
 # The model repository: cases
 
-`repo/` is a miniature of the PostHog monorepo's layout, checked with the real preset (`presets/posthog.toml`) in both engines by `test_model_repo.py` and `bin/model-repo`.
+`repo/` is a miniature of the PostHog monorepo's layout, checked with the real preset (`presets/posthog.toml`) in the native engine by `test_model_repo.py` and `bin/model-repo`.
 Every name and body in it is invented; only the paths and dotted names that the preset spells out are real.
 `site/` holds stub sources of `django` and `rest_framework`, read as site-packages.
 

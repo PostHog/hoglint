@@ -1,7 +1,7 @@
 # 1. What hoglint is for, and its fixed principles
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 13, 2026.
 
 ## Decided
 
@@ -59,9 +59,10 @@ A cached or reused answer must equal a full run.
 D5 (the whole repo every run) is the current form.
 Any reuse must keep this property and prove it with an oracle (D59 point 3, D61).
 
-**Principle 7: two engines must agree.**
-The Python implementation is frozen as the executable spec.
-The native engine must equal it on ten parity tables, with zero delta or a named delta.
+**Principle 7: one graph engine; every changed row is named.**
+The native engine builds the graph (owner, Nov 13: the Python graph build is retired).
+A change keeps every row of the ten parity tables, or names each row it changes: against the model repository's stored rows and tables, the slot table test, and the real-size compare with a base.
+The Python rule classes still judge rows inside every native run: the rule half has two implementations, and a judgment where they differ is an engine error.
 See `05-engine.md`.
 
 ## Why
@@ -97,7 +98,7 @@ See `05-engine.md`.
 
 ## Open
 
-- Whether the Python engine stays as a shadow oracle after adoption, or a golden corpus replaces it (D7 amended, D42).
+- What replaces the second judgment of the Python rule classes inside a native run, which D42, D50 and D55 rely on.
   See `05-engine.md`.
 
 ## Sources
