@@ -193,9 +193,9 @@ class ExportPrimitive(RuleType):
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(NOT_HANDED_CONTEXTS if spec.contexts_exclude is None else spec.contexts_exclude)
         self.slot_rules = self.named_slot_rules()
-        self.slots_seen: dict[str, tuple[SlotRule, ...]] = {}
-        self.policy_modules: dict[tuple[str, str], bool] = {}
-        self.left_out: dict[int, bool] = {}
+        # The named rules whose source part holds for a module (`holding_rules`), per module.
+        self.holding: dict[str, tuple[SlotRule, ...]] = {}
+        self.slot_policy_answers: dict[int, bool] = {}
         self.copy_index: dict[str, dict[str, list[int]]] = {}
         # A callable's rows by slot, so a class's fields are not scanned once per field.
         self.copy_rows: dict[tuple[str, str], dict[str, list[Edge]]] = {}
@@ -253,10 +253,10 @@ class ExportPrimitive(RuleType):
     def holding_rules(self, module: str) -> tuple[SlotRule, ...]:
         """The signature rules of `leave_slots_to` whose source part holds for a module. A module a
         rule cannot tell about is not held, so its slots are judged here."""
-        found = self.slots_seen.get(module)
+        found = self.holding.get(module)
         if found is None:
             resolve = self.ctx.module_env(module).resolve
-            found = self.slots_seen[module] = tuple(
+            found = self.holding[module] = tuple(
                 rule for rule in self.slot_rules if rule.scope is None or evaluate(rule.scope, resolve) is Truth.TRUE
             )
         return found
@@ -479,7 +479,7 @@ class ExportPrimitive(RuleType):
         if slot is not None and slot.left and (denied or unknown_type):
             return
         judged = slot is not None and not slot.left
-        if judged and edge is not None and not denied and unknown_type and self.policy_leaves_out(edge):
+        if judged and edge is not None and not denied and unknown_type and self.slot_policy_leaves_out(edge):
             return
         self.visited.add(visit)
         if denied:
@@ -630,13 +630,9 @@ class ExportPrimitive(RuleType):
 
     def under_policy(self, module: str, policy: ShapePolicy) -> bool:
         """Whether an export of the shape policy covers a module."""
-        key = (module, policy.name)
-        found = self.policy_modules.get(key)
-        if found is None:
-            path = self.ctx.labeler.path_of(module)
-            names = self.ctx.labeler.path_exports(path) if path is not None else frozenset()
-            found = self.policy_modules[key] = any(self.ctx.config.exports[name].shape == policy.name for name in names)
-        return found
+        path = self.ctx.labeler.path_of(module)
+        names = self.ctx.labeler.path_exports(path) if path is not None else frozenset()
+        return any(self.ctx.config.exports[name].shape == policy.name for name in names)
 
     def reads_under(self, module: str, policy: ShapePolicy, row: Edge) -> bool:
         """Whether a signature rule reads a row in a module for this walk: it reads the row there,
@@ -663,16 +659,16 @@ class ExportPrimitive(RuleType):
                 return True
         return False
 
-    def policy_leaves_out(self, row: Edge) -> bool:
+    def slot_policy_leaves_out(self, row: Edge) -> bool:
         """Whether every named signature rule's slot policy is false for a row: the type it
         mentions is no part of what a slot may not hold (an opaque payload), so it is not judged
         as an unknown type here either. Unknown counts as true. Worked out once per row."""
-        found = self.left_out.get(row.handle)
+        found = self.slot_policy_answers.get(row.handle)
         if found is None:
-            found = self.left_out[row.handle] = self.find_policy_leaves_out(row)
+            found = self.slot_policy_answers[row.handle] = self.find_slot_policy_leaves_out(row)
         return found
 
-    def find_policy_leaves_out(self, row: Edge) -> bool:
+    def find_slot_policy_leaves_out(self, row: Edge) -> bool:
         if not self.slot_rules:
             return False
         src = self.ctx.src_endpoint(row.site)

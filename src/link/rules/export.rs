@@ -331,12 +331,13 @@ pub struct Walk<'a> {
     walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
-    slots_seen: FxHashMap<Sid, Vec<usize>>,
+    /// `ExportPrimitive.holding`: the named rules whose source part holds for a module.
+    holding: FxHashMap<Sid, Vec<usize>>,
     keys: Keys,
     /// `ExportPrimitive.bound`: the name the export module in hand hands each symbol out by.
     bound: FxHashMap<String, String>,
-    /// `ExportPrimitive.left_out`, per row.
-    left_out: FxHashMap<u32, bool>,
+    /// `ExportPrimitive.slot_policy_answers`, per row.
+    slot_policy_answers: FxHashMap<u32, bool>,
     /// `ExportPrimitive.copy_index`: per module, its exposes rows by their exact callable.
     copy_index: FxHashMap<Sid, FxHashMap<Sid, Vec<u32>>>,
 }
@@ -355,7 +356,7 @@ impl<'a> Walk<'a> {
             walked: FxHashMap::default(),
             exposes_by_name: FxHashMap::default(),
             top_level: FxHashMap::default(),
-            slots_seen: FxHashMap::default(),
+            holding: FxHashMap::default(),
             keys: Keys {
                 callable: cx.link.core.it.get("callable"),
                 slot: cx.link.core.it.get("slot"),
@@ -364,7 +365,7 @@ impl<'a> Walk<'a> {
                 binds: cx.link.core.it.get("binds"),
             },
             bound: FxHashMap::default(),
-            left_out: FxHashMap::default(),
+            slot_policy_answers: FxHashMap::default(),
             copy_index: FxHashMap::default(),
         }
     }
@@ -668,7 +669,7 @@ impl<'a> Walk<'a> {
         if let (true, Some(row)) = (judged, edge)
             && denied.is_empty()
             && unknown_type
-            && self.policy_leaves_out(row)
+            && self.slot_policy_leaves_out(row)
         {
             return;
         }
@@ -938,7 +939,7 @@ impl<'a> Walk<'a> {
     /// `ExportPrimitive.holding_rules`: the named rules, by place, whose source part holds for a
     /// module. A module a rule cannot tell about is not held.
     fn holding_rules(&mut self, module: Sid) -> &[usize] {
-        if !self.slots_seen.contains_key(&module) {
+        if !self.holding.contains_key(&module) {
             let env = self.cx.module_env(module);
             let found = (0..self.rule.slot_rules.len())
                 .filter(|&at| match &self.rule.slot_rules[at].scope {
@@ -946,9 +947,9 @@ impl<'a> Walk<'a> {
                     Some(node) => evaluate(node, &env) == Truth::True,
                 })
                 .collect();
-            self.slots_seen.insert(module, found);
+            self.holding.insert(module, found);
         }
-        &self.slots_seen[&module]
+        &self.holding[&module]
     }
 
     /// `ExportPrimitive.signature_sees`: whether a named rule reads row `id` in a module: its
@@ -961,18 +962,18 @@ impl<'a> Walk<'a> {
             .any(|&at| rule.slot_rules[at].reads(link, id))
     }
 
-    /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is
+    /// `ExportPrimitive.slot_policy_leaves_out`: whether every named signature rule's slot policy is
     /// false for row `id`. Unknown counts as true.
-    fn policy_leaves_out(&mut self, id: u32) -> bool {
-        if let Some(&found) = self.left_out.get(&id) {
+    fn slot_policy_leaves_out(&mut self, id: u32) -> bool {
+        if let Some(&found) = self.slot_policy_answers.get(&id) {
             return found;
         }
-        let found = self.find_policy_leaves_out(id);
-        self.left_out.insert(id, found);
+        let found = self.find_slot_policy_leaves_out(id);
+        self.slot_policy_answers.insert(id, found);
         found
     }
 
-    fn find_policy_leaves_out(&self, id: u32) -> bool {
+    fn find_slot_policy_leaves_out(&self, id: u32) -> bool {
         if self.rule.slot_rules.is_empty() {
             return false;
         }
