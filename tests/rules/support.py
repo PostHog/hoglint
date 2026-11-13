@@ -129,13 +129,24 @@ SHAPES = Path(__file__).parent / "shapes"
 PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
 
 
+def without_export_rule(preset: str) -> str:
+    """The preset without its export rule. These tests run the Python rule engine over hand-built
+    graphs, and only the native evaluator walks what an export hands out (its tests are under
+    tests/native), so the rule and the level's requirement of it go."""
+    start = preset.index("[rules.export-shape]\n")
+    end = preset.index("\n[", start + 1) + 1
+    required = '"export-shape", '
+    assert preset.count(required) == 1
+    return (preset[:start] + preset[end:]).replace(required, "")
+
+
 def shape_config(root: Path, name: str, files: dict[str, str] | None = None) -> Config:
     """The config of repo shape `name` (`shapes/<name>.toml`) in a tree that holds the PostHog
     preset where a PostHog checkout keeps it, and `files`."""
     shutil.copy(SHAPES / f"{name}.toml", root / "hoglint.toml")
     preset = root / "tools" / "hoglint" / "presets" / "posthog.toml"
     preset.parent.mkdir(parents=True)
-    shutil.copy(PRESET, preset)
+    preset.write_text(without_export_rule(PRESET.read_text()))
     for path, content in (files or {}).items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(content)

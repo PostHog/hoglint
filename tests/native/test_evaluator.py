@@ -324,12 +324,20 @@ class World:
         return native, RuleContext(config, self.graph, labeler, self.repo)
 
     def rows(self, config: Config, name: str) -> list[tuple[Any, ...]]:
-        """What rule `name` reports, the same in both engines."""
+        """What rule `name` reports, the same in both engines; a rule with no Python judge
+        (the export rule) natively only."""
         native, python = self.contexts(config)
         spec = config.rules[name]
         found = run_rows(primitive_of(spec)(native, spec).evaluate())
-        assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
+        if judged_in_python(spec):
+            assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
         return found
+
+
+def judged_in_python(spec: RuleSpec) -> bool:
+    """Whether the Python rule code judges the rule too: every rule type but the export rule,
+    which only the native evaluator walks (`ExportPrimitive.CONFIRM`)."""
+    return primitive_of(spec).CONFIRM != "none"
 
 
 @pytest.fixture(scope="module")
@@ -432,6 +440,10 @@ def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
             if ours != theirs:
                 out.append(f"{spec.id}: rust only {sorted(ours - theirs)}, python only {sorted(theirs - ours)}")
         native.results[spec.id] = primitive_of(spec)(native, spec).evaluate()
+        if not judged_in_python(spec):
+            # A coverage rule after it reads its run from either context.
+            python.results[spec.id] = native.results[spec.id]
+            continue
         python.results[spec.id] = primitive_of(spec)(python, spec).evaluate()
         if run_rows(native.results[spec.id]) != run_rows(python.results[spec.id]):
             out.append(f"{spec.id}: the {mode} run differs from the Python run")
@@ -658,6 +670,216 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
 @pytest.mark.parametrize("name", sorted(CORNERS))
 def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
     assert differences(world, rule_table(name, CORNERS[name])) == []
+
+
+# The export rule's corners, as both engines gave them before the Python walk went: per finding its
+# identity, message and unknown flag, per incomplete item its key and reason.
+EXPORT_CORNER_ROWS = {
+    "export-shapes": (
+        [
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.nowhere",
+                    "unresolved-import",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.nowhere: unresolved-import",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Desk",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk: export-shape(class)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Draft",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft: export-shape(class)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.models.Invoice",
+                    "export-denied(model)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice: export-denied(model)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Note",
+                    "export-unknown",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Port",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port: export-shape(class)",
+                False,
+            ),
+            (
+                ("products.billing.backend.facade.slots", "typing.Any", "export-unknown", "-", "product", "-"),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> typing.Any: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.models.Loose",
+                    "export-unknown",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> products.billing.backend.models.Loose: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.charge",
+                    "export-unknown",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.presentation.mixins",
+                    "products.billing.backend.presentation.mixins.Mixin",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.presentation.mixins exports products.billing.backend.presentation.mixins.Mixin: export-shape(class)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.presentation.views",
+                    "products.billing.backend.presentation.views.View",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.presentation.views exports products.billing.backend.presentation.views.View: export-shape(class)",
+                False,
+            ),
+        ],
+        [],
+    ),
+    "export-unknowns-as-incomplete": (
+        [
+            (
+                ("products.billing.backend.facade.slots.Desk",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk: export-shape(class)",
+                False,
+            ),
+            (
+                ("products.billing.backend.facade.slots.Draft",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft: export-shape(class)",
+                False,
+            ),
+            (
+                ("products.billing.backend.models.Invoice",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice: export-denied(model)",
+                False,
+            ),
+            (
+                ("products.billing.backend.facade.slots.Port",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port: export-shape(class)",
+                False,
+            ),
+        ],
+        [
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.nowhere",
+                "'products.billing.backend.nowhere' did not resolve",
+            ),
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.facade.slots.Note",
+                "products.billing.backend.facade.slots.Note: param:untyped has no annotation",
+            ),
+            (
+                "products.billing.backend.facade.slots|typing.Any",
+                "products.billing.backend.facade.slots.charge -> typing.Any: a type hoglint reads as unknown",
+            ),
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.models.Loose",
+                "products.billing.backend.facade.slots.charge -> products.billing.backend.models.Loose: its bases did not all resolve",
+            ),
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.facade.slots.charge",
+                "products.billing.backend.facade.slots.charge: param:untyped has no annotation",
+            ),
+        ],
+    ),
+}
+
+
+def export_rows(world: World, name: str, fields: dict[str, Any]) -> tuple[list[tuple[Any, ...]], list[tuple[str, str]]]:
+    config = world.config(rule_table(name, fields))
+    native, _ = world.contexts(config)
+    spec = config.rules[name]
+    run = primitive_of(spec)(native, spec).evaluate()
+    findings = [(tuple(f.identity), f.message, f.unknown) for f in run.findings]
+    return findings, [(item.key, item.reason) for item in run.incomplete]
+
+
+@pytest.mark.parametrize("name", sorted(EXPORT_CORNER_ROWS))
+def test_an_export_corner_gives_its_stored_rows(world: World, name: str) -> None:
+    findings, incomplete = EXPORT_CORNER_ROWS[name]
+    assert export_rows(world, name, CORNERS[name]) == (findings, incomplete)
+
+
+# Relation R7 of the rule-half design: the order of `exports` changes no row, and `on_unknown` and
+# `on_unresolved` change the form of an unknown row (a finding or an incomplete item), not its key.
+def test_an_export_rule_gives_the_same_rows_in_any_export_order_and_report_mode(world: World) -> None:
+    base = {"primitive": "export", "identity": ["src.module", "dst.symbol"], "ledger": False}
+    forward, _ = export_rows(world, "forward", {**base, "exports": ["facade", "adapter"]})
+    backward, _ = export_rows(world, "backward", {**base, "exports": ["adapter", "facade"]})
+    assert sorted(forward) == sorted(backward) and forward
+    incomplete_mode = {**base, "on_unknown": "incomplete", "on_unresolved": "incomplete"}
+    found, items = export_rows(world, "quiet", incomplete_mode)
+    assert [row for row in forward if not row[2]] == found
+    assert sorted("|".join(identity) for identity, _, unknown in forward if unknown) == sorted(key for key, _ in items)
 
 
 CONFLICTS = {
@@ -1165,7 +1387,9 @@ def schema_gaps(drawn: list[tuple[str, frozenset[str], bool]]) -> list[str]:
 
 def level_differences(world: World, config: Config, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Where the two engines differ on a whole evaluation's levels, or on the config error it
-    stops with."""
+    stops with. A config with an export rule has no Python evaluation to compare."""
+    if not all(judged_in_python(spec) for spec in config.rules.values()):
+        return []
 
     def outcome() -> list[str]:
         try:
@@ -1233,8 +1457,9 @@ KEY_ROUNDS, KEY_ROUNDS_MAX = 48, 480
 
 
 class KeysRead:
-    """Per mode, the keys its rule class read in a run of the Python engine, and the keys the
-    native plan read to plan it; both among the keys its primitive accepts and some rules do not
+    """Per mode, the keys its rule class read in a run of the Python engine (for the export rule,
+    which has no Python judge, in its constructor and plan), and the keys the native plan read to
+    plan it; both among the keys its primitive accepts and some rules do not
     read (`EVERY_RULE_READS` aside)."""
 
     def __init__(self) -> None:
@@ -1246,15 +1471,19 @@ class KeysRead:
         for spec in config.rules.values():
             cls = primitive_of(spec)
             accepted = RULE_KEYS[cls.PRIMITIVE] - EVERY_RULE_READS
-            recording: Any = Recording(spec)
-            python.results[spec.id] = cls(python, recording).evaluate()
-            self.by_class[cls.MODE] |= recording.keys & accepted
+            if judged_in_python(spec):
+                recording: Any = Recording(spec)
+                python.results[spec.id] = cls(python, recording).evaluate()
+                self.by_class[cls.MODE] |= recording.keys & accepted
             planned: Any = Recording(spec)
             rule = cls(native, planned)
             self.by_class[cls.MODE] |= planned.keys & accepted
             planned.keys.clear()
             rule.plan()
             self.by_plan[cls.MODE] |= planned.keys & accepted
+            if not judged_in_python(spec):
+                # A rule with no Python judge reads its keys in its constructor and its plan.
+                self.by_class[cls.MODE] |= planned.keys & accepted
 
     def every_key_read(self) -> bool:
         return all(cls.READS <= self.by_class[mode] for mode, cls in TYPES.items())
@@ -1423,6 +1652,8 @@ def test_a_label_set_two_ways_stops_both_engines_alike(world: World, monkeypatch
             continue
         text += conflicting.rules(world, text)
         config = world.config("", text)
+        if not all(judged_in_python(spec) for spec in config.rules.values()):
+            continue
         judged += 1
         native = outcome(world, config)
         with monkeypatch.context() as patched:
@@ -1786,7 +2017,6 @@ LEDGER_LIES: dict[str, tuple[str, Any]] = {
         ),
         lambda world: made_up_label({}),
     ),
-    "export": (rule_table("lied", CORNERS["export-shapes"]), lambda world: {"export": lambda rows: rows[1:]}),
     "layout": (rule_table("lied", CORNERS["layout-on-modules"]), lambda world: {"entities": lambda rows: rows[1:]}),
     "entity-inventory": (
         rule_table("lied", CORNERS["inventory-exactly-one"]),

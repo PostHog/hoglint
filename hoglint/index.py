@@ -4,8 +4,7 @@ so compare's runs under two policies over one snapshot index it once."""
 
 from __future__ import annotations
 
-from bisect import bisect_left
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Generic, TypeVar
@@ -55,44 +54,6 @@ def written_facts(symbols: Mapping[str, Mapping[str, str]]) -> Iterable[tuple[st
     as columns (kind and path only) lists the facts packs added in `added`."""
     added = getattr(symbols, "added", None)
     return added.items() if isinstance(added, dict) else symbols.items()
-
-
-class TopLevel(Mapping[str, list[str]]):
-    """Public top-level symbols per module, sorted. A module's are found on its first read by
-    bisecting the sorted symbols, so a run that asks for few modules reads few symbols."""
-
-    def __init__(self, symbols: list[str], module_of: Callable[[str], str | None]) -> None:
-        self.symbols = symbols
-        self.module_of = module_of
-        self.found: dict[str, list[str]] = {}
-
-    def of(self, module: str) -> list[str]:
-        found = self.found.get(module)
-        if found is not None:
-            return found
-        prefix = f"{module}."
-        found = self.found[module] = []
-        for at in range(bisect_left(self.symbols, prefix), len(self.symbols)):
-            symbol = self.symbols[at]
-            if not symbol.startswith(prefix):
-                break
-            name = symbol[len(prefix) :]
-            if name and "." not in name and not name.startswith("_") and self.module_of(symbol) == module:
-                found.append(symbol)
-        return found
-
-    def __getitem__(self, module: str) -> list[str]:
-        found = self.of(module)
-        if not found:
-            raise KeyError(module)
-        return found
-
-    def __iter__(self) -> Iterator[str]:
-        modules = {self.module_of(symbol) for symbol in self.symbols}
-        return iter(sorted(module for module in modules if module and self.of(module)))
-
-    def __len__(self) -> int:
-        return sum(1 for _ in self)
 
 
 class SymbolFacts:
@@ -308,11 +269,6 @@ class GraphIndex:
         return sorted(self.graph.symbols)
 
     @cached_property
-    def top_level(self) -> TopLevel:
-        """Public top-level symbols per module, sorted."""
-        return TopLevel(self.sorted_symbols, self.module_of_symbol)
-
-    @cached_property
     def module_imports(self) -> dict[str, list[Edge]]:
         """Module-scope import edges per module."""
         out: dict[str, list[Edge]] = {}
@@ -328,23 +284,6 @@ class GraphIndex:
         for edge in self.by_kind.get("rebind", []):
             out.setdefault(edge.site.module, []).append(edge)
         return out
-
-    @cached_property
-    def exposes(self) -> dict[str, list[tuple[str, Edge]]]:
-        """(callable qualname, exposes edge) per module."""
-        out: dict[str, list[tuple[str, Edge]]] = {}
-        for edge in self.by_kind.get("exposes", []):
-            out.setdefault(edge.site.module, []).append((edge.attr("callable") or edge.site.scope, edge))
-        return out
-
-    @cached_property
-    def exposed_handles(self) -> Mapping[str, list[tuple[str, int]]]:
-        """(callable qualname, handle of the exposes edge) per module: what an index that keeps
-        its edges outside Python answers with no Edge made."""
-        return {
-            module: [(callable_name, edge.handle) for callable_name, edge in pairs]
-            for module, pairs in self.exposes.items()
-        }
 
     def edges_at(self, handles: list[int]) -> list[Edge]:
         """The edges at `handles`."""

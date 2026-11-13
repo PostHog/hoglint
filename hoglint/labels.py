@@ -825,14 +825,6 @@ class Labeler:
         """The exports whose `within` and `paths` the path lies inside."""
         return frozenset(spec.name for spec in self.config.exports.values() if spec.files.covers(path))
 
-    def export_reads_symbol(self, path: str) -> bool:
-        """Whether an export that decides by class or by name covers the path. Elsewhere a
-        symbol's export membership is its path's."""
-        return any(
-            self.config.exports[name].subclass_of or self.config.exports[name].symbols
-            for name in self.path_exports(path)
-        )
-
     def export_covers(self, spec: ExportSpec, path: str) -> bool:
         """Whether the path lies inside the export's `within` and `paths`."""
         return spec.name in self.path_exports(path)

@@ -95,7 +95,8 @@ class RuleType:
     # an edge's two ends.
     ENTITIES: ClassVar[bool] = False
     # How a ledger write confirms what the evaluator found: "row" (the rule's own code judges each
-    # row again) or "whole" (the rule runs whole again in Python).
+    # row again), "whole" (the rule runs whole again in Python) or "none" (no Python code judges the
+    # rule: the export rule).
     CONFIRM: ClassVar[str]
     # The config keys the rule's code reads, besides the ones every rule has
     # (`config.schema.EVERY_RULE_READS`).

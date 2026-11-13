@@ -689,9 +689,10 @@ class NativeRuleContext(RuleContext):
         row would become accepted debt (D50, D55).
 
         A rule whose class confirms per row (`RuleType.CONFIRM`) has each row judged again by its
-        rule over the plain context. Every other rule that ran runs whole again in its Python
+        rule over the plain context. A rule that confirms whole runs whole again in its Python
         primitive over the plain context, the runs before it at hand for a coverage rule, and
-        must give the evaluator's findings and incomplete items, in order."""
+        must give the evaluator's findings and incomplete items, in order. The export rule has no
+        Python judge and is not confirmed."""
         plain = self.plain
         for rows in self.judged_rows:
             judge = primitive_of(rows.rule.spec)(plain, rows.rule.spec)
@@ -834,30 +835,6 @@ class NativeGraphIndex(GraphIndex):
     def module_rebinds(self) -> Mapping[str, list[Edge]]:  # type: ignore[override]
         """`rebind` edges per module: the names an export module hands out by assigning them again."""
         return LazyModules(self.modules_of("rebind"), lambda module: self.module_edges("rebind", module))
-
-    @cached_property
-    def exposes(self) -> Mapping[str, list[tuple[str, Edge]]]:  # type: ignore[override]
-        """(callable qualname, exposes edge) per module."""
-
-        def exposes(module: str) -> list[tuple[str, Edge]]:
-            return [(e.attr("callable") or e.site.scope, e) for e in self.module_edges("exposes", module)]
-
-        return LazyModules(self.modules_of("exposes"), exposes)
-
-    @cached_property
-    def exposed_handles(self) -> Mapping[str, list[tuple[str, int]]]:  # type: ignore[override]
-        """(callable qualname, handle of the exposes edge) per module, read off the link's
-        columns."""
-
-        def exposed(module: str) -> list[tuple[str, int]]:
-            ids = self.native.link.ids_from("exposes", module)
-            callables, scopes = self.native.link.columns(ids, ["attr:callable", "scope"])
-            return [
-                (callable_name or scope, handle)
-                for callable_name, scope, handle in zip(callables, scopes, array("I", ids))
-            ]
-
-        return LazyModules(self.modules_of("exposes"), exposed)
 
     def edges_at(self, handles: list[int]) -> list[Edge]:
         return self.native.core.get(array("I", handles))
