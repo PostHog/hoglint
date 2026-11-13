@@ -303,6 +303,8 @@ pub struct Walk<'a> {
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
     slots_seen: FxHashMap<String, bool>,
+    /// `ExportPrimitive.bindings`: per export module, the name it hands each symbol out by.
+    bindings: FxHashMap<String, FxHashMap<String, String>>,
 }
 
 impl<'a> Walk<'a> {
@@ -320,6 +322,7 @@ impl<'a> Walk<'a> {
             exposes_by_name: FxHashMap::default(),
             top_level: FxHashMap::default(),
             slots_seen: FxHashMap::default(),
+            bindings: FxHashMap::default(),
         }
     }
 
@@ -332,7 +335,10 @@ impl<'a> Walk<'a> {
                     continue;
                 }
                 let module_name = self.cx.text(module).to_string();
-                for (symbol, edge) in self.exported_symbols(module) {
+                let exported = self.exported_symbols(module);
+                let bound = self.bound_names(&exported);
+                self.bindings.insert(module_name.clone(), bound);
+                for (symbol, edge) in exported {
                     let member =
                         rules.export_member(self.cx.link, &rules.exports[export], Some(&symbol));
                     match member {
@@ -662,12 +668,12 @@ impl<'a> Walk<'a> {
                 return;
             }
             if self.walks(symbol, &shapes, shape) {
-                self.check_members(symbol, module, shape, trail, edge);
+                self.check_members(symbol, module, shape, trail);
             }
             return;
         }
         if shapes.contains("function") {
-            self.check_members(symbol, module, shape, trail, edge);
+            self.check_members(symbol, module, shape, trail);
         }
     }
 
@@ -840,21 +846,31 @@ impl<'a> Walk<'a> {
         true
     }
 
-    /// `ExportPrimitive.check_members`; `edge` is the import the module hands the symbol out
-    /// by, if any.
-    fn check_members(
-        &mut self,
-        symbol: &str,
-        module: &str,
-        shape: usize,
-        trail: &[String],
-        edge: Option<u32>,
-    ) {
+    /// `ExportPrimitive.bound_names`: the name each handed-out import binds its symbol to, the
+    /// first one where two do.
+    fn bound_names(&self, exported: &[(String, Option<u32>)]) -> FxHashMap<String, String> {
+        let binds = self.cx.link.core.it.get("binds");
+        let mut out = FxHashMap::default();
+        for (symbol, edge) in exported {
+            if let Some(id) = edge {
+                out.entry(symbol.clone())
+                    .or_insert_with(|| self.cx.attr(*id, binds).to_string());
+            }
+        }
+        out
+    }
+
+    /// `ExportPrimitive.check_members`: the name the module hands the symbol out by, if it does,
+    /// names the copy of a slot.
+    fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let link = self.cx.link;
-        let bound = match edge {
-            Some(id) if trail.len() == 1 => self.cx.attr(id, link.core.it.get("binds")),
-            _ => "",
-        };
+        let bound = self
+            .bindings
+            .get(module)
+            .and_then(|found| found.get(symbol))
+            .cloned()
+            .unwrap_or_default();
+        let bound = bound.as_str();
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
         let annotation = link.core.it.get("annotation");
         let slot = link.core.it.get("slot");

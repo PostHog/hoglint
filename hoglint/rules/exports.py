@@ -181,6 +181,9 @@ class ExportPrimitive(RuleType):
         self.slot_owners = self.signature_scopes()
         self.slot_policies = self.signature_policies()
         self.slots_seen: dict[str, bool] = {}
+        # The name each export module hands a symbol out by, read before any of its symbols is
+        # checked, so a class reached in a slot first finds the name a later hand-out gives it.
+        self.bindings: dict[str, dict[str, str]] = {}
 
     @staticmethod
     def message(module: str, trail: Sequence[str], label: str) -> str:
@@ -304,7 +307,9 @@ class ExportPrimitive(RuleType):
             for module, path in covered.get(export.name, []):
                 if not self.judges(module):
                     continue
-                for symbol, edge in self.exported_symbols(module):
+                exported = self.exported_symbols(module)
+                self.bindings[module] = self.bound_names(exported)
+                for symbol, edge in exported:
                     member = labeler.export_member((export.name, path, symbol))
                     if member is Truth.FALSE:
                         continue
@@ -327,6 +332,15 @@ class ExportPrimitive(RuleType):
             for target in edge.targets:
                 if target.symbol:
                     out.append((str(target), edge))
+        return out
+
+    @staticmethod
+    def bound_names(exported: list[tuple[str, Edge | None]]) -> dict[str, str]:
+        """The name each handed-out import binds its symbol to, the first one where two do."""
+        out: dict[str, str] = {}
+        for symbol, edge in exported:
+            if edge is not None:
+                out.setdefault(symbol, edge.attr("binds"))
         return out
 
     # ── shapes ──
@@ -471,10 +485,10 @@ class ExportPrimitive(RuleType):
                 self.finding(symbol, module, "export-shape(class)", trail, edge)
                 return
             if self.walks(symbol, shapes, policy):
-                self.check_members(symbol, module, policy, trail, edge)
+                self.check_members(symbol, module, policy, trail)
             return
         if "function" in shapes:
-            self.check_members(symbol, module, policy, trail, edge)
+            self.check_members(symbol, module, policy, trail)
 
     def exposes_under(self, module: str) -> dict[str, list[int]]:
         """A module's exposes edges, as handles, under every qualname their callable lies in: `A`
@@ -569,13 +583,11 @@ class ExportPrimitive(RuleType):
                     return False
         return True
 
-    def check_members(
-        self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None
-    ) -> None:
+    def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
         """The types in the slots of a member, at any depth. The rule judges only the shape of a
-        class where a signature rule of `leave_slots_to` reads the slot's row; `edge` is the import
-        the module hands the symbol out by, if any, which names the copy of a slot."""
-        bound = edge.attr("binds") if edge is not None and len(trail) == 1 else ""
+        class where a signature rule of `leave_slots_to` reads the slot's row; the name the module
+        hands the symbol out by, if it does, names the copy of a slot."""
+        bound = self.bindings.get(module, {}).get(symbol, "")
         include_bases = self.facts.decl(symbol) == "class"
         for row, owner, qualname in self.member_edges(symbol, include_bases, policy):
             if row.attr("alias") == "expanded":

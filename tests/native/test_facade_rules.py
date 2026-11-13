@@ -585,6 +585,33 @@ SLOT_OWNER_CASES = {
         },
         {"export-shape": [], "facade-signature": [[API, "place", "param:order", ORDER]]},
     ),
+    "a class a facade function names and the module hands out": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Info\n\n__all__ = ['get', 'Info']\n\n\n"
+            "def get() -> Info:\n    raise ValueError\n",
+        },
+        {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
+    ),
+    "a class a handed-out function names, handed out after it": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n\n\n"
+            "def get() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import get\nfrom {SHOP}.logic import Info\n\n__all__ = ['get', 'Info']\n",
+        },
+        {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
+    ),
+    "a class a handed-out function names, handed out before it": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n\n\n"
+            "def get() -> Info:\n    raise ValueError\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Info\nfrom {SHOP}.logic import get\n\n__all__ = ['get', 'Info']\n",
+        },
+        {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
