@@ -442,6 +442,8 @@ KINDS = {
 FINE_HIDDEN_IN_ATTRIBUTE = (
     f"from {SHOP}.kinds import Fine\n\n\nclass Rejected(Exception):\n    Fine = Order\n    order: Fine\n"
 )
+# A frozen dataclass with one field and one `ClassVar` that names a model.
+CLASS_VAR_DATACLASS = "@dataclasses.dataclass(frozen=True)\nclass Record:\n    total: int\n    kind: ClassVar[Order]\n"
 # A class-body alias whose name a module-level alias also binds.
 SHADOWED_ALIAS = (
     "Ref = int\n\n\nclass Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n"
@@ -1128,6 +1130,38 @@ SLOT_OWNER_CASES = {
             f"{SHOP_DIR}/facade/api.py": "from posthog.records import CoreRecord\n\n__all__ = ['CoreRecord']\n",
         },
         CLEAN,
+    ),
+    # A `ClassVar` is no constructor slot: it is an attribute, which `walk_where` decides.
+    "a ClassVar of a frozen dataclass core defines, handed out": (
+        {
+            "posthog/records.py": IMPORTS_ORDER + "from typing import ClassVar\n\n\n" + CLASS_VAR_DATACLASS,
+            f"{SHOP_DIR}/facade/api.py": "from posthog.records import Record\n\n__all__ = ['Record']\n",
+        },
+        CLEAN,
+    ),
+    "a ClassVar of an exception core defines, handed out": (
+        {
+            "posthog/records.py": IMPORTS_ORDER
+            + "from typing import ClassVar\n\n\nclass Record(Exception):\n    kind: ClassVar[Order]\n",
+            f"{SHOP_DIR}/facade/api.py": "from posthog.records import Record\n\n__all__ = ['Record']\n",
+        },
+        CLEAN,
+    ),
+    "a ClassVar a contract dataclass inherits from a frozen dataclass core defines": (
+        {
+            "posthog/records.py": IMPORTS_ORDER + "from typing import ClassVar\n\n\n" + CLASS_VAR_DATACLASS,
+            f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\n\nfrom posthog.records import Record\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Mine(Record):\n    pass\n",
+        },
+        CLEAN,
+    ),
+    "a ClassVar of a frozen dataclass the product defines, handed out": (
+        handed_out("from typing import ClassVar\n\n\n" + CLASS_VAR_DATACLASS, "Record"),
+        DENIED_AT_ERRORS,
+    ),
+    "a ClassVar of a contract dataclass": (
+        {f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + "from typing import ClassVar\n\n\n" + CLASS_VAR_DATACLASS},
+        {"export-shape": [], "facade-signature": [[CONTRACTS, "Record", "attr:kind", ORDER]]},
     ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),

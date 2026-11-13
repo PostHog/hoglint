@@ -982,15 +982,15 @@ class DeclarationProducer(Producer):
         kind: str = "field",
     ) -> None:
         """The annotated class-body rows of a class as slots of `kind`: the fields of a
-        dataclass-like class as `field:` slots of its `__init__`, or the attributes of a class that
-        is no dataclass as `attr:` slots of the class. In a contract only a row directly in a class
-        body is a whole slot, and a `ClassVar` is no field (an attribute it is: callers read it). A
-        row the class itself declares sits at its own line, unless the class is handed out."""
+        dataclass-like class as `field:` slots of its `__init__`, or the attributes of a class (all
+        rows of a class that is no dataclass, the `ClassVar` rows of one) as `attr:` slots of the
+        class. In a contract only a row directly in a class body is a whole slot. A row the class
+        itself declares sits at its own line, unless the class is handed out."""
         for member in fields:
             row = member.row
             if row.get("ann") is None:
                 continue
-            in_slot = contract and row.get("f", 0) == CLASS and (kind == "attr" or not is_class_var(row["ann"]))
+            in_slot = contract and row.get("f", 0) == CLASS
             if rows.handed and not in_slot:
                 continue
             line_rows = rows
@@ -1071,7 +1071,8 @@ class DeclarationProducer(Producer):
                 continue
             where = SlotLookup(scope, idx, node["l"])
             for row in self.fields_by_class(scope).get(idx, []):
-                fields[row["t"][0]] = Field(row, where, not position)
+                if not is_class_var(row.get("ann")):
+                    fields[row["t"][0]] = Field(row, where, not position)
         return list(fields.values())
 
     def expose_unresolved_bases(
@@ -1205,9 +1206,13 @@ class DeclarationProducer(Producer):
         if not dataclass:
             self.expose_fields(context, graph, SlotRows(site, qualname), own, in_contract, "attr")
             return
+        # A `ClassVar` is no field of the generated `__init__`: callers read it as an attribute.
+        class_vars = [member for member in own if is_class_var(member.row.get("ann"))]
+        self.expose_fields(context, graph, SlotRows(site, qualname), class_vars, in_contract, "attr")
         rows = SlotRows(site, f"{qualname}.__init__")
         if not in_contract:
-            self.expose_fields(context, graph, rows, own, False)
+            fields = [member for member in own if not is_class_var(member.row.get("ann"))]
+            self.expose_fields(context, graph, rows, fields, False)
             return
         self.expose_dataclass(context, graph, rows, lookup, idx)
 

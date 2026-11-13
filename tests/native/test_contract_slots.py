@@ -106,8 +106,8 @@ REPO = {
 # (module, callable, slot, type name, annotation, handed): every `exposes` row core writes. A
 # dataclass a surface hands out has its fields at the surface wherever it is defined; `Receipt`
 # imported only to use it in `api.py` is not handed out. An annotated attribute of a class that is
-# no dataclass is a slot of the class, written as a method's slots are: every name in a surface,
-# a name that is no plain builtin elsewhere.
+# no dataclass, and a `ClassVar` of one, is a slot of the class, written as a method's slots are:
+# every name in a surface, a name that is no plain builtin elsewhere.
 EXPECTED_SLOTS = [
     ("products.shop.backend.facade.api", "close", "param:order_id", "", "missing", ""),
     ("products.shop.backend.facade.api", "close", "param:flag", "builtins.bool", "", ""),
@@ -127,7 +127,7 @@ EXPECTED_SLOTS = [
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:total", "builtins.int", "", "no-functions"),
     ("products.shop.backend.facade.contracts", "Receipt.__init__", "field:_audit", "builtins.dict", "", "no-functions"),
     ("products.shop.backend.logic", "charge", "param:amount", "products.shop.backend.logic.Totals", "", ""),
-    ("products.shop.backend.logic", "Receipt.__init__", "field:kind", "typing.ClassVar", "", ""),
+    ("products.shop.backend.logic", "Receipt", "attr:kind", "typing.ClassVar", "", ""),
     ("products.shop.backend.logic", "Failure", "attr:receipt", "products.shop.backend.logic.Receipt", "", ""),
     ("products.shop.backend.logic", "Failure", "attr:label", "products.shop.backend.logic.Receipt", "", ""),
     ("products.shop.backend.logic", "Failure", "attr:kind", "typing.ClassVar", "", ""),

@@ -1596,10 +1596,17 @@ impl Producers<'_> {
         last == self.settings.k.class_var
     }
 
+    /// Whether a class-body row's annotation is `ClassVar[...]`.
+    fn is_class_var_row(&mut self, field: FieldRow) -> bool {
+        let facts = self.core.facts.clone();
+        let row = &facts.files[field.file as usize].assigns[field.at as usize];
+        row.ann.as_ref().is_some_and(|ann| self.is_class_var(ann))
+    }
+
     /// `DeclarationProducer.expose_fields`: the annotated class-body rows of a class as slots of
     /// `kind`, the fields of a dataclass-like class (`field:`, of its `__init__`) or the
-    /// attributes of a class that is no dataclass (`attr:`, of the class). In a contract only a row
-    /// directly in a class body is a whole slot, and a `ClassVar` is no field (an attribute it is).
+    /// attributes of a class (`attr:`, of the class: all rows of a class that is no dataclass, the
+    /// `ClassVar` rows of one). In a contract only a row directly in a class body is a whole slot.
     /// A row the class itself declares sits at its own line, unless the class is handed out.
     fn expose_fields(&mut self, rows: SlotRows, fields: &[FieldRow], contract: bool, kind: Member) {
         let facts = self.core.facts.clone();
@@ -1608,9 +1615,7 @@ impl Producers<'_> {
             let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
                 continue;
             };
-            let in_slot = contract
-                && row.f == CLASS
-                && (kind == Member::Attribute || !self.is_class_var(annotation));
+            let in_slot = contract && row.f == CLASS;
             if rows.handed != EMPTY && !in_slot {
                 continue;
             }
@@ -1928,7 +1933,11 @@ impl Producers<'_> {
                 line: node.l,
             };
             for at in self.class_fields(file, idx) {
-                let V::Chain(name) = &record.assigns[at as usize].targets[0] else {
+                let row = &record.assigns[at as usize];
+                if row.ann.as_ref().is_some_and(|ann| self.is_class_var(ann)) {
+                    continue;
+                }
+                let V::Chain(name) = &row.targets[0] else {
                     continue;
                 };
                 let field = FieldRow {
@@ -2291,13 +2300,22 @@ impl Producers<'_> {
                 self.expose_fields(rows, &own, in_contract, Member::Attribute);
                 continue;
             }
+            // A `ClassVar` is no field of the generated `__init__`: callers read it as an attribute.
+            let (class_vars, fields): (Vec<FieldRow>, Vec<FieldRow>) =
+                own.into_iter().partition(|field| self.is_class_var_row(*field));
+            let rows = SlotRows {
+                site,
+                callable: qualname,
+                handed: EMPTY,
+            };
+            self.expose_fields(rows, &class_vars, in_contract, Member::Attribute);
             let rows = SlotRows {
                 site,
                 callable: self.core.it.join(qualname, self.settings.k.init),
                 handed: EMPTY,
             };
             if !in_contract {
-                self.expose_fields(rows, &own, false, Member::Field);
+                self.expose_fields(rows, &fields, false, Member::Field);
                 continue;
             }
             self.expose_dataclass(rows, lookup, idx as u32);
