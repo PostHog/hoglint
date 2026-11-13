@@ -183,6 +183,9 @@ class ExportPrimitive(RuleType):
         self.slot_contexts = self.signature_contexts()
         self.slots_seen: dict[str, tuple[int, ...]] = {}
         self.policy_modules: dict[tuple[str, str], bool] = {}
+        # By the identity of the row Edge: `edges` makes each one once.
+        self.left_out: dict[int, bool] = {}
+        self.copy_index: dict[str, dict[str, list[int]]] = {}
         # The name each export module hands a symbol out by, read before any of its symbols is
         # checked, so a class reached in a slot first finds the name a later hand-out gives it.
         self.bindings: dict[str, dict[str, str]] = {}
@@ -464,12 +467,13 @@ class ExportPrimitive(RuleType):
         edge: Edge | None,
         trail: tuple[str, ...],
         shape_only: bool = False,
-        left_out: bool = False,
+        judged_row: Edge | None = None,
     ) -> None:
         """Findings are keyed by (symbol, module), so a symbol already checked for this module and
         policy adds nothing the second time. A check of the shape alone (`shape_only`) that finds
         a denied kind or an unknown type marks nothing: a full check may still report it. Nor does
-        an unknown type in a slot every named rule's policy leaves out (`left_out`)."""
+        an unknown type in a member row judged in full (`judged_row`) that every named rule's
+        policy leaves out."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
             return
@@ -480,7 +484,12 @@ class ExportPrimitive(RuleType):
         denied = sorted(shapes & set(policy.deny))
         if shape_only and (denied or symbol in self.spec.unknown_types):
             return
-        if left_out and not denied and symbol in self.spec.unknown_types:
+        if (
+            judged_row is not None
+            and not denied
+            and symbol in self.spec.unknown_types
+            and self.policy_leaves_out(judged_row)
+        ):
             return
         self.visited.add(visit)
         if denied:
@@ -563,7 +572,12 @@ class ExportPrimitive(RuleType):
     def copies(self, module: str, callable_name: str, slot: str) -> list[Edge]:
         """A module's exposes rows of a callable's slot: the copy the producer writes where a
         surface hands out a function or a data shape's fields."""
-        handles = self.exposes_under(module).get(callable_name, [])
+        by_callable = self.copy_index.get(module)
+        if by_callable is None:
+            by_callable = self.copy_index[module] = {}
+            for name, handle in self.exposes.get(module, []):
+                by_callable.setdefault(name, []).append(handle)
+        handles = by_callable.get(callable_name, [])
         return [
             edge for edge in self.edges(handles) if edge.attr("callable") == callable_name and edge.attr("slot") == slot
         ]
@@ -614,7 +628,13 @@ class ExportPrimitive(RuleType):
     def policy_leaves_out(self, row: Edge) -> bool:
         """Whether every named signature rule's slot policy is false for a row: the type it
         mentions is no part of what a slot may not hold (an opaque payload), so it is not judged
-        as an unknown type here either. Unknown counts as true."""
+        as an unknown type here either. Unknown counts as true. Worked out once per row."""
+        found = self.left_out.get(id(row))
+        if found is None:
+            found = self.left_out[id(row)] = self.find_policy_leaves_out(row)
+        return found
+
+    def find_policy_leaves_out(self, row: Edge) -> bool:
         if not self.slot_policies:
             return False
         src = self.ctx.src_endpoint(row.site)
@@ -647,11 +667,11 @@ class ExportPrimitive(RuleType):
                 if not shape_only:
                     self.unresolved(row, module)
                 continue
-            left_out = not shape_only and self.policy_leaves_out(row)
+            judged_row = None if shape_only else row
             names = [str(target) for target in row.targets] or [row.surface]
             for name in names:
                 if name and name not in trail:
-                    self.check(name, module, policy, row, (*trail, name), shape_only, left_out)
+                    self.check(name, module, policy, row, (*trail, name), shape_only, judged_row)
 
     # ── output ──
 

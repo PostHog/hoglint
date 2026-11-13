@@ -319,6 +319,10 @@ pub struct Walk<'a> {
     slots_seen: FxHashMap<String, Vec<usize>>,
     /// `ExportPrimitive.bindings`: per export module, the name it hands each symbol out by.
     bindings: FxHashMap<String, FxHashMap<String, String>>,
+    /// `ExportPrimitive.left_out`, per row.
+    left_out: FxHashMap<u32, bool>,
+    /// `ExportPrimitive.copy_index`: per module, its exposes rows by their exact callable.
+    copy_index: FxHashMap<Sid, FxHashMap<Sid, Vec<u32>>>,
 }
 
 impl<'a> Walk<'a> {
@@ -337,6 +341,8 @@ impl<'a> Walk<'a> {
             top_level: FxHashMap::default(),
             slots_seen: FxHashMap::default(),
             bindings: FxHashMap::default(),
+            left_out: FxHashMap::default(),
+            copy_index: FxHashMap::default(),
         }
     }
 
@@ -365,7 +371,7 @@ impl<'a> Walk<'a> {
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
-                            self.check(&symbol, &module_name, shape, edge, &trail, (false, false));
+                            self.check(&symbol, &module_name, shape, edge, &trail, (false, None));
                         }
                     }
                 }
@@ -603,7 +609,8 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.check`. A check of the shape alone (`shape_only`) that finds a denied kind
     /// or an unknown type marks nothing: a full check may still report it. Nor does an unknown
-    /// type in a slot every named rule's policy leaves out (`left_out`).
+    /// type in a member row judged in full (`judged_row`) that every named rule's policy leaves
+    /// out.
     fn check(
         &mut self,
         symbol: &str,
@@ -611,7 +618,7 @@ impl<'a> Walk<'a> {
         shape: usize,
         edge: Option<u32>,
         trail: &[String],
-        (shape_only, left_out): (bool, bool),
+        (shape_only, judged_row): (bool, Option<u32>),
     ) {
         let visit = (module.to_string(), shape, symbol.to_string());
         if self.visited.contains(&visit) {
@@ -634,7 +641,11 @@ impl<'a> Walk<'a> {
         if shape_only && (!denied.is_empty() || unknown_type) {
             return;
         }
-        if left_out && denied.is_empty() && unknown_type {
+        let left_out = match judged_row {
+            Some(row) if denied.is_empty() && unknown_type => self.policy_leaves_out(row),
+            _ => false,
+        };
+        if left_out {
             return;
         }
         self.visited.insert(visit);
@@ -755,8 +766,22 @@ impl<'a> Walk<'a> {
         let link = self.cx.link;
         let callable = link.core.it.get("callable");
         let slot_attr = link.core.it.get("slot");
-        self.exposes_under(module, callable_name)
-            .into_iter()
+        let inputs = self.inputs;
+        let by_callable = self.copy_index.entry(module).or_insert_with(|| {
+            let mut found: FxHashMap<Sid, Vec<u32>> = FxHashMap::default();
+            for &(name, id) in inputs.exposes.get(&module).map_or(&[][..], Vec::as_slice) {
+                found.entry(name).or_default().push(id);
+            }
+            found
+        });
+        let ids = link
+            .core
+            .it
+            .get(callable_name)
+            .and_then(|name| by_callable.get(&name))
+            .cloned()
+            .unwrap_or_default();
+        ids.into_iter()
             .filter(|&id| {
                 self.cx.attr(id, callable) == callable_name && self.cx.attr(id, slot_attr) == slot
             })
@@ -869,7 +894,16 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is
     /// false for row `id`. Unknown counts as true.
-    fn policy_leaves_out(&self, id: u32) -> bool {
+    fn policy_leaves_out(&mut self, id: u32) -> bool {
+        if let Some(&found) = self.left_out.get(&id) {
+            return found;
+        }
+        let found = self.find_policy_leaves_out(id);
+        self.left_out.insert(id, found);
+        found
+    }
+
+    fn find_policy_leaves_out(&self, id: u32) -> bool {
         if self.rule.slot_policies.is_empty() {
             return false;
         }
@@ -941,7 +975,7 @@ impl<'a> Walk<'a> {
                 }
                 continue;
             }
-            let left_out = !shape_only && self.policy_leaves_out(id);
+            let judged_row = if shape_only { None } else { Some(id) };
             let targets = edges.targets_of(id);
             let names: Vec<String> = if targets.is_empty() {
                 vec![self.cx.text(edges.surface_of(id)).to_string()]
@@ -964,7 +998,7 @@ impl<'a> Walk<'a> {
                         shape,
                         Some(id),
                         &deeper,
-                        (shape_only, left_out),
+                        (shape_only, judged_row),
                     );
                 }
             }
