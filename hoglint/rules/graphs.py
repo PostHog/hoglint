@@ -235,6 +235,7 @@ class ReachPrimitive(EdgeRule):
         return {
             "id": spec.id,
             "mode": self.NATIVE_MODE,
+            "selectors": self.selectors_plan(),
             "edges": self.edges_plan(),
             "identity": identity_paths(spec.identity),
             "identified": sorted(self.identified()),
@@ -328,6 +329,7 @@ class CyclePrimitive(EdgeRule):
         return {
             "id": self.spec.id,
             "mode": self.NATIVE_MODE,
+            "selectors": self.selectors_plan(),
             "edges": self.edges_plan(),
             "identity": identity_paths(self.spec.identity),
             "identified": sorted(self.identified()),

@@ -247,6 +247,9 @@ pub struct RulePlan {
     pub id: String,
     #[serde(flatten)]
     pub mode: ModePlan,
+    /// A rule over edges: its selectors by config key, as `explain edge:` names them.
+    #[serde(default)]
+    pub selectors: Vec<(String, NodePlan)>,
 }
 
 /// How the evaluator treats a rule, as the rule's Python class states it (`RuleType.NATIVE_MODE`).

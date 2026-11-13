@@ -6,10 +6,13 @@ import shutil
 import textwrap
 from pathlib import Path
 
+from core.support import FileFacts, Linked
 from hoglint.config import Config, load_config
 from hoglint.config.loader import PACKS_DIR
+from hoglint.core.config import CoreConfig
 from hoglint.labels import NamespaceDirectories
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Graph, Resolution, Site
+from hoglint.native.graph import NativeGraph
 
 DJANGO_PACK_STUB = """
 schema = 1
@@ -100,6 +103,21 @@ class GraphBuilder:
                 return EntityId(LANGUAGE_PYTHON, head, dotted[len(head) + 1 :])
         module, _, name = dotted.rpartition(".")
         return EntityId(LANGUAGE_PYTHON, module, name)
+
+
+def native_graph(graph: Graph) -> NativeGraph:
+    """A hand-built graph loaded into a native link, which the native evaluator judges: an empty
+    file per module, the graph's symbols and edges as a pack writes them."""
+    records = {path: FileFacts(path).record for path in graph.modules.values()}
+    roots = tuple(sorted({module.split(".")[0] for module in graph.modules}))
+    linked = Linked(records, CoreConfig(source_roots=(".",), first_party=roots))
+    sink = linked.sink()
+    if graph.symbols:
+        sink.add_symbols(graph.symbols)
+    sink.add_edges("test@1", graph.edges)
+    native = linked.graph
+    native.hand_outs.update(graph.hand_outs)
+    return native
 
 
 def write_config(root: Path, text: str, extra: dict[str, str] | None = None) -> Path:

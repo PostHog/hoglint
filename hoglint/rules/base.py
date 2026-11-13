@@ -72,6 +72,8 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "export": ("import", "exposes", "inherit", "decorate"),
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
+# The selectors of a rule over edges that `explain edge:` shows, by `RuleSpec` key, in order.
+EXPLAINED_SELECTORS = ("from_", "select", "deny", "allow", "require", "unless")
 
 
 class RuleType:
@@ -970,6 +972,16 @@ class EdgeRule(RuleType):
             "require": selector_tree(spec.require),
         }
 
+    def selectors_plan(self) -> list[tuple[str, dict[str, Any]]]:
+        """Each selector of the rule by its `RuleSpec` key, as `explain edge:` reads them."""
+        spec = self.spec
+        out = []
+        for name in EXPLAINED_SELECTORS:
+            selector: Selector | None = getattr(spec, name)
+            if selector is not None:
+                out.append((name, tree(selector.node)))
+        return out
+
     def plan(self) -> dict[str, Any]:
         """A rule judged per edge. A signature rule adds its part, an entrypoint rule its
         `uses_at_import`."""
@@ -977,6 +989,7 @@ class EdgeRule(RuleType):
         return {
             "id": spec.id,
             "mode": self.NATIVE_MODE,
+            "selectors": self.selectors_plan(),
             "edges": self.edges_plan(),
             "identity": identity_paths(spec.identity),
             "identified": sorted(self.identified()),

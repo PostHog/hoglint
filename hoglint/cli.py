@@ -61,11 +61,13 @@ from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
+from hoglint.native.bridge import engine_errors
+from hoglint.native.labels import NativeLabeler
 from hoglint.native.source import NativeGraphSource, batch_mode
-from hoglint.rules.base import EdgeRule, RuleContext
+from hoglint.rules.base import EdgeRule
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
-from hoglint.selectors import Selector, State
+from hoglint.selectors import State
 from hoglint.source import GraphSource
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -880,8 +882,13 @@ class Commands:
         return 0
 
     def explain_edge(self, run: Run, run_id: str) -> int:
-        ctx = RuleContext(run.config, run.graph, run.result.labeler, run.root)
-        edge = next((e for e in run.graph.edges if e.run_id(ctx.ordinal(e)) == run_id), None)
+        """Each rule over edges that sees the edge, and per destination the truth of each of its
+        selectors, as the evaluator reads them."""
+        labeler = run.result.labeler
+        if not isinstance(labeler, NativeLabeler) or labeler.evaluator is None:
+            raise EngineError("explain edge: needs a run of the native evaluator")
+        ordinals = labeler.index.ordinals
+        edge = next((e for e in run.graph.edges if e.run_id(ordinals.get(e.handle, 0)) == run_id), None)
         if edge is None:
             sys.stderr.write(f"no edge with id {run_id}\n")
             return 2
@@ -891,20 +898,14 @@ class Commands:
         sys.stdout.write(
             f"         resolution={edge.resolution.value} contexts={sorted(c.value for c in edge.contexts)}\n"
         )
-        for spec in run.config.rules.values():
-            primitive = primitive_of(spec)
-            if not issubclass(primitive, EdgeRule):
+        for at, spec in enumerate(run.config.rules.values()):
+            if not issubclass(primitive_of(spec), EdgeRule):
                 continue
-            rule = primitive(ctx, spec)
-            if not rule.sees(edge):
-                continue
-            for env in rule.envs_of(edge):
-                parts = []
-                for name in ("from_", "select", "deny", "allow", "require", "unless"):
-                    selector: Selector | None = getattr(spec, name)
-                    if selector is not None:
-                        parts.append(f"{name.rstrip('_')}: {selector.source} -> {selector.evaluate(env.resolve).value}")
-                sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {env.dst.symbol or env.dst.module})\n")
+            with engine_errors():
+                found = labeler.evaluator.explain_edge(at, edge.handle)
+            for dst_symbol, dst_module, truths in found or ():
+                parts = [f"{name.rstrip('_')}: {getattr(spec, name).source} -> {truth}" for name, truth in truths]
+                sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {dst_symbol or dst_module})\n")
                 sys.stdout.write("".join(f"           {part}\n" for part in parts))
         for finding in run.result.findings():
             if edge in finding.witnesses:

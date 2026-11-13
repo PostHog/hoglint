@@ -12,6 +12,7 @@ pub mod cycle;
 pub mod edges;
 pub mod entities;
 pub mod env;
+pub mod explain;
 pub mod export;
 pub mod glob;
 pub mod labels;
@@ -322,6 +323,8 @@ impl UnknownRefs {
 pub struct Rule {
     pub id: String,
     pub kind: RuleKind,
+    /// A rule over edges: its selectors by config key, read one by one by `explain edge:`.
+    pub selectors: Vec<(String, Node)>,
 }
 
 /// A rule's mode (`RuleType.NATIVE_MODE`) and what it reads.
@@ -990,6 +993,11 @@ impl Rules {
         Ok(Rule {
             id: plan.id.clone(),
             kind,
+            selectors: plan
+                .selectors
+                .iter()
+                .map(|(name, node)| Ok((name.clone(), edge.node(node)?)))
+                .collect::<Result<Vec<_>, String>>()?,
         })
     }
 

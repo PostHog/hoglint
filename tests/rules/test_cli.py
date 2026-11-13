@@ -12,9 +12,8 @@ from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
 from hoglint.plugins import PLUGIN_ROOTS
-from hoglint.rules.base import RuleContext
-from hoglint.rules.engine import Engine
 from hoglint.source import GraphSource
+from native.require import native_module
 
 from rules.support import GraphBuilder, write_config
 from rules.test_compare import git_in
@@ -174,14 +173,30 @@ def test_a_policy_root_apart_from_the_code_asks_about_the_code_roots_declared_pa
         PLUGIN_ROOTS.holds(run.files_root, "products/billing/notes.txt")
 
 
-def test_explain_edge_lists_rules_that_read_every_edge_kind(
-    commands: Commands, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run = commands.runner.run(commands.repo)
-    ctx = RuleContext(run.config, run.graph, Engine(run.config, run.graph).labeler)
-    edge = run.graph.edges[0]
-    assert commands.explain(f"edge:{edge.run_id(ctx.ordinal(edge))}") == 0
-    assert "rule     unresolved-anything" in capsys.readouterr().out
+def test_explain_edge_lists_rules_that_read_every_edge_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    native_module()
+    repo = tmp_path / "repo"
+    write_config(repo, CONFIG)
+    for path, text in {
+        "products/__init__.py": "",
+        "products/billing/__init__.py": "",
+        "products/billing/logic.py": "def total():\n    return 1\n",
+        "products/alerts/__init__.py": "",
+        "products/alerts/logic.py": "from products.billing.logic import total\n",
+    }.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", ".")
+    (tmp_path / "work").mkdir()
+    commands = Commands(repo, tmp_path / "work", memo=False)
+    run = commands.runner.run(repo)
+    ordinals = run.result.labeler.index.ordinals
+    edge = next(edge for edge in run.graph.edges if edge.kind == "import")
+    assert commands.explain(f"edge:{edge.run_id(ordinals.get(edge.handle, 0))}") == 0
+    out = capsys.readouterr().out
+    assert "rule     unresolved-anything" in out
+    assert "select: edge.resolution == 'unresolved' -> false" in out
 
 
 MEMO_CONFIG = """

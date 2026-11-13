@@ -6,6 +6,7 @@ use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::export::ExportRow;
 use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
+use hoglint_facts::link::rules::value::Value;
 use hoglint_facts::link::rules::{NO_PLACE, Named, Rules as CoreRules, place_of};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -39,6 +40,10 @@ type WordColumns<'py> = (
     Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
 );
+
+/// One destination as `explain edge:` shows it: (symbol or None, module or None, [(selector
+/// key, truth name)]).
+type ExplainedTuple = (Option<String>, Option<String>, Vec<(String, &'static str)>);
 
 /// A cycle row: (edge id, destination index, judgment name, the pair's groups or None, source
 /// module, `NamedTuple` or None). A row has its words when Python words it alone, and for the
@@ -269,6 +274,58 @@ impl Rules {
         self.inner
             .cycle_identities(&bound.inner, rule, &steps)
             .map_err(PyValueError::new_err)
+    }
+
+    /// `explain edge:` of edge `edge` under rule `rule`, a rule over edges: per destination
+    /// (symbol or None, module or None, [(selector key, truth name)]); None when the rule does not
+    /// see the edge.
+    fn explain_edge(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+        edge: u32,
+    ) -> PyResult<Option<Vec<ExplainedTuple>>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        let found = self
+            .inner
+            .explain_edge(&mut bound.inner, rule, edge)
+            .map_err(PyValueError::new_err)?;
+        Ok(found.map(|rows| {
+            rows.into_iter()
+                .map(|(symbol, module, truths)| {
+                    let named = truths
+                        .into_iter()
+                        .map(|(name, truth)| (name, truth.name()))
+                        .collect();
+                    (symbol, module, named)
+                })
+                .collect()
+        }))
+    }
+
+    /// The rendered values of `columns` (paths of edge refs) per destination of each edge of
+    /// `edges` rule `rule` sees; None for an edge it does not see.
+    fn edge_values(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+        edges: Vec<u32>,
+        columns: Vec<Vec<String>>,
+    ) -> PyResult<Vec<Option<Vec<Vec<String>>>>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        self.inner
+            .edge_values(&mut bound.inner, rule, &edges, &columns)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// The zones `module` hands out names from, as (type, items): "set", "unknown" or "none".
+    fn handed_zones(&self, py: Python<'_>, module: &str) -> (&'static str, Vec<String>) {
+        let bound = self.link.bind(py).borrow();
+        match self.inner.handed_zones(&bound.inner, module) {
+            Value::Unknown => ("unknown", Vec::new()),
+            Value::Set(items) => ("set", items.iter().map(|item| item.to_string()).collect()),
+            _ => ("none", Vec::new()),
+        }
     }
 
     /// The search of reach rule `rule`, from every start module its `from` selects, in the order

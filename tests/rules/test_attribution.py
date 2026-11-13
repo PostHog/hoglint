@@ -47,7 +47,7 @@ from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.source import GraphSource
 from native.require import native_required
 
-from rules.support import GraphBuilder, config_from
+from rules.support import GraphBuilder, config_from, native_graph
 from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, needs_extractor, write_files
 
 DYNAMIC = ("dynamic-imports", "app.loader|dynamic-import|", "dynamic-import '' did not resolve")
@@ -491,6 +491,7 @@ def test_couplings_carry_the_shape_the_rule_judges(tmp_path: Path) -> None:
         .edge("reference", "products.beta.other", widget, shape="annotation")
         .graph
     )
+    graph = native_graph(graph)
     result = Engine(config_from(tmp_path, USE_SHAPE), graph, tmp_path).evaluate()
     couplings = CouplingScan(result, graph, frozenset({"products.beta.old_name"}))
     assert couplings.counts() == {

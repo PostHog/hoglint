@@ -11,10 +11,14 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+from typing import Any
 
+from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.file import LineKey
 from hoglint.model import Edge, Graph
-from hoglint.rules.base import EdgeRule, RuleContext, project, rule_kinds
+from hoglint.native.bridge import engine_errors
+from hoglint.native.labels import NativeLabeler
+from hoglint.rules.base import EdgeRule, rule_kinds
 from hoglint.rules.engine import RunResult, primitive_of
 
 Coupling = tuple[str, str, str, str, tuple[str, ...]]  # (rule, src module, dst, edge kind, edge columns)
@@ -46,25 +50,33 @@ class CouplingScan:
             return {}
         config = self.result.config
         edges = [edge for edge in self.graph.edges if self.touches(edge)]
-        ctx = RuleContext(config, self.graph, self.result.labeler)
+        ids = [edge.handle for edge in edges]
         out: Counter[Coupling] = Counter()
-        for spec in config.rules.values():
+        for at, spec in enumerate(config.rules.values()):
             if not spec.ledger:
                 continue
             columns = edge_columns(spec.identity)
             primitive = primitive_of(spec)
             if issubclass(primitive, EdgeRule):
-                rule = primitive(ctx, spec)
-                for edge in edges:
-                    if rule.sees(edge):
-                        values = {project(columns, env.resolve) for env in rule.envs_of(edge)}
-                        out.update(self.couplings(spec.id, edge, values))
+                paths = [column.split(".") for column in columns]
+                with engine_errors():
+                    found = self.evaluator().edge_values(at, ids, paths)
+                for edge, values in zip(edges, found, strict=True):
+                    if values is not None:
+                        out.update(self.couplings(spec.id, edge, {tuple(value) for value in values}))
             elif not columns:
                 kinds = set(rule_kinds(spec, config.views))
                 for edge in edges:
                     if not kinds or edge.kind in kinds:
                         out.update(self.couplings(spec.id, edge, {()}))
         return dict(out)
+
+    def evaluator(self) -> Any:
+        """The run's native evaluator, which judges which edges a rule sees and their columns."""
+        labeler = self.result.labeler
+        if not isinstance(labeler, NativeLabeler) or labeler.evaluator is None:
+            raise EngineError("the couplings scan needs a run of the native evaluator")
+        return labeler.evaluator
 
     @staticmethod
     def couplings(rule: str, edge: Edge, values: Iterable[tuple[str, ...]]) -> list[Coupling]:
