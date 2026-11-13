@@ -74,7 +74,11 @@ The reasoning matches D63: where something is defined must not change the verdic
 
 **One fact, one place:** a handed-out definition is reported once, at its own surface module (N3b review item 8: -75 findings).
 This holds for a class a facade module defines.
-A known double: a class defined outside the facade that one facade module hands out and another facade module names in a slot is reported at both modules, one row by each rule.
+It holds too for a class defined outside the facade that one facade module hands out and another facade module names in a slot: the copy at the first module is the signature rule's, and the export rule leaves the slot to it.
+Written limits:
+- A class another product's facade hands out stays reported by both rules, one row per product: a product passes or fails by its own files only.
+- A module that binds one name to two classes can leave a slot to the copy of the other class, because the copy is found by its name.
+- A member that has no copy (a method of a handed-out exception) stays one `export-shape` row per module that names the class.
 
 **Which models may cross a contract surface is preset policy** (owner, D65, Nov 11).
 The owner decided that a preset holds a named list of future-proof core models that may cross.
@@ -104,6 +108,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   The named rule's selection must split into conditions that read only `src.*` fields (where it reads rows) and conditions that read none (which slots it judges), joined by `and`; a condition that mixes the two is a config error.
   A row is left to the rule only where its contexts take the row's, as the rule itself reads it.
   The export rule leaves a slot to a named rule only where that rule reads the slot's row for this walk: the row's own module is one the rule's source selection holds for, or such a module holds the producer's copy of the slot (a handed-out function, a data shape's fields, a contract dataclass's inherited fields), under the name it is handed out or defined by.
+  The copy is looked for in every file of the same export and the same captured root as the module in hand (the same product's facade), under each public name such a file hands the class out by, and in the module that defines the class; one index of these hand-outs is built before the walk.
+  A private name holds no copy the rule reads, and a file of another export or another root is not asked.
   That module must also be a surface of the shape policy the walk runs under: a registration surface that returns a contract class judges that class's fields by its own policy, in full.
   There it judges only the shape of a class in the slot; a model, an unknown type, a missing annotation or an unresolved name is the signature rule's finding, under its own identity.
   Every other slot it judges in full, as it judges a private method.
