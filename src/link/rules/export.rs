@@ -13,6 +13,7 @@ use crate::link::intern::{EMPTY, Sid};
 use crate::link::scope::Res;
 use crate::link::surface::HandOut;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::rc::Rc;
 
 /// A `[shapes]` policy (`ShapePolicy`).
 pub struct Shape {
@@ -316,6 +317,9 @@ struct Keys {
 /// Shape names of a symbol, and whether the facts were enough to be sure.
 type Shapes = (FxHashSet<String>, bool);
 
+/// (module, public name) of each hand-out of a symbol by the files of one export and root.
+type Handing = FxHashMap<String, Vec<(Place, String)>>;
+
 /// One run of an export rule (`ExportPrimitive.evaluate`).
 pub struct Walk<'a> {
     cx: Cx<'a>,
@@ -333,8 +337,9 @@ pub struct Walk<'a> {
     /// `ExportPrimitive.holding`: the named rules whose source part holds for a module.
     holding: FxHashMap<Sid, Vec<usize>>,
     keys: Keys,
-    /// `ExportPrimitive.bound`: the names the export module in hand hands each symbol out by.
-    bound: FxHashMap<String, Vec<String>>,
+    /// `ExportPrimitive.handing`: (module, public name) of every hand-out of a symbol by the files
+    /// of the export and root of the module in hand.
+    handing: Rc<Handing>,
     /// `ExportPrimitive.slot_policy_answers`, per row.
     slot_policy_answers: FxHashMap<u32, bool>,
     /// `ExportPrimitive.copy_index`: per module, its exposes rows by their exact callable.
@@ -363,7 +368,7 @@ impl<'a> Walk<'a> {
                 annotation: cx.link.core.it.get("annotation"),
                 binds: cx.link.core.it.get("binds"),
             },
-            bound: FxHashMap::default(),
+            handing: Rc::default(),
             slot_policy_answers: FxHashMap::default(),
             copy_index: FxHashMap::default(),
         }
@@ -373,13 +378,15 @@ impl<'a> Walk<'a> {
         let rules = self.cx.rules;
         for &export in &self.rule.exports {
             let shape = rules.export_shapes[export];
-            for &(module, _) in &self.inputs.covered[export] {
+            let handed_by_root = self.hand_out_index(export);
+            for &(module, at) in &self.inputs.covered[export] {
                 if !self.judges(module) {
                     continue;
                 }
+                let root = self.covered_root(export, at);
+                self.handing = handed_by_root.get(&root).cloned().unwrap_or_default();
                 let module_name = self.cx.text(module).to_string();
                 let exported = self.exported_symbols(module);
-                self.bound = self.bound_names(&exported);
                 for (symbol, edge) in exported {
                     let member =
                         rules.export_member(self.cx.link, &rules.exports[export], Some(&symbol));
@@ -443,6 +450,58 @@ impl<'a> Walk<'a> {
             return false;
         };
         found.unread || binds_handed(link, found, id)
+    }
+
+    /// The directory an export's `within` names for the covered module at place `at`.
+    fn covered_root(&self, export: usize, at: u32) -> String {
+        let rules = self.cx.rules;
+        let path = rules.module_path(self.cx.link, at);
+        rules.exports[export].covered_root(path).unwrap_or_default()
+    }
+
+    /// `ExportPrimitive.hand_out_index`: per captured root of an export, (module, name) of every
+    /// public name a file of that root binds a handed-out import's symbol to, in module order.
+    /// Every file counts, also one the rule does not judge.
+    fn hand_out_index(&self, export: usize) -> FxHashMap<String, Rc<Handing>> {
+        let edges = &self.cx.link.edges;
+        let mut out: FxHashMap<String, Handing> = FxHashMap::default();
+        for &(module, at) in &self.inputs.covered[export] {
+            let by_symbol = out.entry(self.covered_root(export, at)).or_default();
+            let imports = self
+                .inputs
+                .imports
+                .get(&module)
+                .map_or(&[][..], Vec::as_slice);
+            for &id in imports {
+                if !self.hands_out(module, id) {
+                    continue;
+                }
+                let name = self.cx.attr(id, self.keys.binds);
+                if name.is_empty()
+                    || is_private(name)
+                    || !edges.context_ok(id, self.rule.include, self.rule.exclude)
+                {
+                    continue;
+                }
+                if edges.res_of(id) == Res::Unresolved {
+                    continue;
+                }
+                for target in edges.targets_of(id) {
+                    if target.s == EMPTY {
+                        continue;
+                    }
+                    let symbol = format!("{}.{}", self.cx.text(target.m), self.cx.text(target.s));
+                    let places = by_symbol.entry(symbol).or_default();
+                    let place = ((module, at), name.to_string());
+                    if !places.contains(&place) {
+                        places.push(place);
+                    }
+                }
+            }
+        }
+        out.into_iter()
+            .map(|(root, handing)| (root, Rc::new(handing)))
+            .collect()
     }
 
     /// `ExportPrimitive.exported_symbols`: top-level symbols, then the imports the module hands
@@ -848,20 +907,11 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.copy_places`: (module, name) of each place the producer may hold a copy
-    /// of the walked symbol's slots, among the surfaces of the walk's shape policy. `module` is
-    /// the exporting module.
-    fn copy_places(
-        &self,
-        symbol: &str,
-        module: Option<Place>,
-        shape: usize,
-    ) -> Vec<(Place, String)> {
-        let mut out = Vec::new();
-        if let (Some(here), Some(names)) = (module, self.bound.get(symbol)) {
-            for bound in names.iter().filter(|bound| !bound.is_empty()) {
-                out.push((here, bound.clone()));
-            }
-        }
+    /// of the walked symbol's slots, among the surfaces of the walk's shape policy: each file of
+    /// the export and root of the module in hand under each public name it hands the symbol out
+    /// by, and the module that defines the symbol under its own name.
+    fn copy_places(&self, symbol: &str, shape: usize) -> Vec<(Place, String)> {
+        let mut out = self.handing.get(symbol).cloned().unwrap_or_default();
         if let Some((owner, qualname)) = self.place_of(symbol) {
             out.push((owner, qualname.to_string()));
         }
@@ -979,29 +1029,11 @@ impl<'a> Walk<'a> {
         true
     }
 
-    /// `ExportPrimitive.bound_names`: every name the handed-out imports bind each symbol to, in
-    /// the module's order.
-    fn bound_names(&self, exported: &[(String, Option<u32>)]) -> FxHashMap<String, Vec<String>> {
-        let binds = self.keys.binds;
-        let mut out: FxHashMap<String, Vec<String>> = FxHashMap::default();
-        for (symbol, edge) in exported {
-            let Some(id) = edge else {
-                continue;
-            };
-            let name = self.cx.attr(*id, binds);
-            let names = out.entry(symbol.clone()).or_default();
-            if !names.iter().any(|known| known == name) {
-                names.push(name.to_string());
-            }
-        }
-        out
-    }
-
-    /// `ExportPrimitive.check_members`: the name the module hands the symbol out by, if it does,
-    /// names the copy of a slot.
+    /// `ExportPrimitive.check_members`: a name a file of the same export and root hands the
+    /// symbol out by names the copy of a slot.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let link = self.cx.link;
-        let places = self.copy_places(symbol, self.cx.module_named(module), shape);
+        let places = self.copy_places(symbol, shape);
         let Keys {
             annotation, slot, ..
         } = self.keys;

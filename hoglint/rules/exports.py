@@ -198,9 +198,9 @@ class ExportPrimitive(RuleType):
         self.copy_index: dict[str, dict[str, list[int]]] = {}
         # A callable's rows by slot, so a class's fields are not scanned once per field.
         self.copy_rows: dict[tuple[str, str], dict[str, list[Edge]]] = {}
-        # The names the export module in hand hands a symbol out by, read before any of its symbols
-        # is checked, so a class reached in a slot first finds the names a later hand-out gives it.
-        self.bound: dict[str, list[str]] = {}
+        # (module, public name) of every hand-out of a symbol by the files of the export and root of
+        # the module in hand, read before the walk, so a slot finds a copy any of them holds.
+        self.handing: dict[str, list[tuple[str, str]]] = {}
 
     @staticmethod
     def message(module: str, trail: Sequence[str], label: str) -> str:
@@ -319,11 +319,13 @@ class ExportPrimitive(RuleType):
         covered = self.covered_modules()
         for export in self.selected_exports():
             policy = self.ctx.config.shapes[export.shape]
-            for module, path in covered.get(export.name, []):
+            modules = covered.get(export.name, [])
+            handed_by_root = self.hand_out_index(export, modules)
+            for module, path in modules:
                 if not self.judges(module):
                     continue
+                self.handing = handed_by_root.get(export.files.covered_root(path) or "", {})
                 exported = self.exported_symbols(module)
-                self.bound = self.bound_names(exported)
                 for symbol, edge in exported:
                     member = labeler.export_member((export.name, path, symbol))
                     if member is Truth.FALSE:
@@ -349,16 +351,27 @@ class ExportPrimitive(RuleType):
                     out.append((str(target), edge))
         return out
 
-    @staticmethod
-    def bound_names(exported: list[tuple[str, Edge | None]]) -> dict[str, list[str]]:
-        """Every name the handed-out imports bind each symbol to, in the module's order."""
-        out: dict[str, list[str]] = {}
-        for symbol, edge in exported:
-            if edge is None:
-                continue
-            names = out.setdefault(symbol, [])
-            if edge.attr("binds") not in names:
-                names.append(edge.attr("binds"))
+    def hand_out_index(
+        self, export: ExportSpec, modules: list[tuple[str, str]]
+    ) -> dict[str, dict[str, list[tuple[str, str]]]]:
+        """Per captured root of an export, (module, name) of every public name a file of that root
+        binds a handed-out import's symbol to, in module order: the places the producer may hold a
+        copy of the symbol's slots. Every file counts, also one the rule does not judge."""
+        out: dict[str, dict[str, list[tuple[str, str]]]] = {}
+        for module, path in modules:
+            by_symbol = out.setdefault(export.files.covered_root(path) or "", {})
+            for edge in self.ctx.labeler.handed_imports(module):
+                name = edge.attr("binds")
+                if not name or is_private(name) or not context_ok(edge, self.include, self.exclude):
+                    continue
+                if edge.resolution is Resolution.UNRESOLVED:
+                    continue
+                for target in edge.targets:
+                    if not target.symbol:
+                        continue
+                    places = by_symbol.setdefault(str(target), [])
+                    if (module, name) not in places:
+                        places.append((module, name))
         return out
 
     # ── shapes ──
@@ -608,12 +621,13 @@ class ExportPrimitive(RuleType):
                     by_slot.setdefault(edge.attr("slot"), []).append(edge)
         return by_slot.get(slot, [])
 
-    def copy_places(self, symbol: str, module: str, policy: ShapePolicy) -> list[tuple[str, str]]:
+    def copy_places(self, symbol: str, policy: ShapePolicy) -> list[tuple[str, str]]:
         """(module, name) of each place the producer may hold a copy of the walked symbol's slots,
-        among the surfaces of the walk's shape policy: the exporting module under each name it
-        hands the symbol out by, and the module that defines the symbol under its own name (a contract
-        dataclass's fields along its MRO). The same for every row of one visit."""
-        out = [(module, bound) for bound in self.bound.get(symbol, []) if bound]
+        among the surfaces of the walk's shape policy: each file of the export and root of the
+        module in hand under each public name it hands the symbol out by, and the module that
+        defines the symbol under its own name (a contract dataclass's fields along its MRO). The
+        same for every row of one visit."""
+        out = list(self.handing.get(symbol, []))
         place = self.place_of(symbol)
         if place is not None:
             out.append(place)
@@ -676,9 +690,9 @@ class ExportPrimitive(RuleType):
 
     def check_members(self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...]) -> None:
         """The types in the slots of a member, at any depth. The rule judges only the shape of a
-        class where a signature rule of `leave_slots_to` reads the slot's row; the name the module
-        hands the symbol out by, if it does, names the copy of a slot."""
-        places = self.copy_places(symbol, module, policy)
+        class where a signature rule of `leave_slots_to` reads the slot's row; a name a file of the
+        same export and root hands the symbol out by names the copy of a slot."""
+        places = self.copy_places(symbol, policy)
         for row, owner, qualname in self.member_edges(symbol, policy):
             shape_only = self.leaves_slot(row, owner, qualname, places, policy)
             if row.attr("annotation") == "missing":

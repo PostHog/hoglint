@@ -344,6 +344,11 @@ impl Export {
         })
     }
 
+    /// The directory the export's `within` names for a path it covers (`ExportPaths.covered_root`).
+    pub fn covered_root(&self, path: &str) -> Option<String> {
+        self.paths.covered_root(path)
+    }
+
     /// Whether the path lies inside the export's `within` and `paths` (`Labeler.export_covers`).
     fn covers(&self, path: &str) -> bool {
         self.paths.covers(path)

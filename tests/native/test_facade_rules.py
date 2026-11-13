@@ -443,6 +443,14 @@ def returns(module: str, name: str) -> str:
     return f"from {module} import {name}\n\n\ndef get() -> {name}:\n    raise ValueError\n"
 
 
+# A contract dataclass of the product's logic, handed out by one file and returned by another.
+INFO_IN_LOGIC = {f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Info")}
+HANDS_OUT_INFO = f"from {SHOP}.logic import Info\n\n__all__ = ['Info']\n"
+RETURNS_INFO = returns(f"{SHOP}.logic", "Info")
+INFO_AT_CONTRACTS_ONLY = {"export-shape": [], "facade-signature": [INFO_FIELD_AT_CONTRACTS]}
+INFO_DENIED_AT_API = {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []}
+
+
 # A slot is left to the signature rule only where that rule reads the slot's row: in a facade
 # module, in a public callable, or in the copy a facade holds of a function or a data shape's fields
 # it hands out. A registration surface, a private method and a member of a class handed out from
@@ -877,6 +885,121 @@ SLOT_OWNER_CASES = {
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
+    ),
+    # One facade file hands a class out, another names it in a slot: the copy is the signature
+    # rule's when a file of the same export and root holds it under a public name.
+    "a class one facade file hands out and another returns": (
+        {**INFO_IN_LOGIC, f"{SHOP_DIR}/facade/contracts.py": HANDS_OUT_INFO, f"{SHOP_DIR}/facade/api.py": RETURNS_INFO},
+        INFO_AT_CONTRACTS_ONLY,
+    ),
+    "a class one facade file hands out and another imports from it and returns": (
+        {
+            **INFO_IN_LOGIC,
+            f"{SHOP_DIR}/facade/contracts.py": HANDS_OUT_INFO,
+            f"{SHOP_DIR}/facade/api.py": returns(CONTRACTS, "Info"),
+        },
+        INFO_AT_CONTRACTS_ONLY,
+    ),
+    "a class one facade file hands out under another name and another returns": (
+        {
+            **INFO_IN_LOGIC,
+            f"{SHOP_DIR}/facade/contracts.py": f"from {SHOP}.logic import Info as Details\n\n__all__ = ['Details']\n",
+            f"{SHOP_DIR}/facade/api.py": RETURNS_INFO,
+        },
+        {"export-shape": [], "facade-signature": [[CONTRACTS, "Details.__init__", "field:order", ORDER]]},
+    ),
+    "a class one facade file hands out by an import it keeps public, next to a function": (
+        {
+            **INFO_IN_LOGIC,
+            f"{SHOP_DIR}/facade/contracts.py": f"from {SHOP}.logic import Info as Info\n\n\n"
+            "def noop() -> None:\n    pass\n",
+            f"{SHOP_DIR}/facade/api.py": RETURNS_INFO,
+        },
+        INFO_AT_CONTRACTS_ONLY,
+    ),
+    "a class one facade file hands out, in a field of a class another returns": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + ORDER_DATACLASS.format(name="Info")
+            + "\n\n@dataclasses.dataclass(frozen=True)\nclass Outer:\n    info: Info\n",
+            f"{SHOP_DIR}/facade/contracts.py": HANDS_OUT_INFO,
+            f"{SHOP_DIR}/facade/api.py": returns(f"{SHOP}.logic", "Outer"),
+        },
+        INFO_AT_CONTRACTS_ONLY,
+    ),
+    "a class two facade files hand out and a third returns": (
+        {
+            **INFO_IN_LOGIC,
+            f"{SHOP_DIR}/facade/contracts.py": HANDS_OUT_INFO,
+            f"{SHOP_DIR}/facade/__init__.py": f"from {CONTRACTS} import Info\n\n__all__ = ['Info']\n",
+            f"{SHOP_DIR}/facade/api.py": RETURNS_INFO,
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [[f"{SHOP}.facade", "Info.__init__", "field:order", ORDER], INFO_FIELD_AT_CONTRACTS],
+        },
+    ),
+    "a class one facade file hands out with a bare dict field and another returns": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    extra: dict\n    order: Order\n",
+            f"{SHOP_DIR}/facade/contracts.py": HANDS_OUT_INFO,
+            f"{SHOP_DIR}/facade/api.py": RETURNS_INFO,
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [[CONTRACTS, "Info.__init__", "field:extra", "builtins.dict"], INFO_FIELD_AT_CONTRACTS],
+        },
+    ),
+    # The copy the signature rule does not read, or that no file of the same export and root
+    # holds, leaves the slot to the export rule.
+    "a class one facade file hands out under a private name and another returns": (
+        {
+            **INFO_IN_LOGIC,
+            f"{SHOP_DIR}/facade/contracts.py": f"from {SHOP}.logic import Info as _Info\n\n__all__ = ['_Info']\n",
+            f"{SHOP_DIR}/facade/api.py": RETURNS_INFO,
+        },
+        {
+            "export-shape": [[ORDER, API, "export-denied(model)"], [ORDER, CONTRACTS, "export-denied(model)"]],
+            "facade-signature": [],
+        },
+    ),
+    "a class the facade's fixture file hands out and a facade file returns": (
+        {**INFO_IN_LOGIC, f"{SHOP_DIR}/facade/testing.py": HANDS_OUT_INFO, f"{SHOP_DIR}/facade/api.py": RETURNS_INFO},
+        INFO_DENIED_AT_API,
+    ),
+    "a class another product's facade hands out and this product's facade returns": (
+        {
+            **INFO_IN_LOGIC,
+            "products/other/__init__.py": "",
+            "products/other/backend/__init__.py": "",
+            "products/other/backend/facade/__init__.py": "",
+            "products/other/backend/facade/contracts.py": HANDS_OUT_INFO,
+            f"{SHOP_DIR}/facade/api.py": RETURNS_INFO,
+        },
+        {
+            "export-shape": [[ORDER, API, "export-denied(model)"]],
+            "facade-signature": [["products.other.backend.facade.contracts", "Info.__init__", "field:order", ORDER]],
+        },
+    ),
+    "a class a registration file hands out and a facade file returns": (
+        {**INFO_IN_LOGIC, f"{SHOP_DIR}/routes.py": HANDS_OUT_INFO, f"{SHOP_DIR}/facade/api.py": RETURNS_INFO},
+        {
+            "export-shape": [[ORDER, API, "export-denied(model)"], [ORDER, ROUTES, "export-denied(model)"]],
+            "facade-signature": [],
+        },
+    ),
+    "an exception one facade file hands out and another names": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + "class Rejected(Exception):\n    def item(self) -> Order:\n"
+            "        raise ValueError\n",
+            f"{SHOP_DIR}/facade/errors.py": f"from {SHOP}.logic import Rejected\n\n__all__ = ['Rejected']\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Rejected\n\n\ndef get(e: Rejected) -> None:\n    pass\n",
+        },
+        {
+            "export-shape": [[ORDER, API, "export-denied(model)"], [ORDER, ERRORS, "export-denied(model)"]],
+            "facade-signature": [],
+        },
     ),
 }
 
