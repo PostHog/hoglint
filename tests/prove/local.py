@@ -76,7 +76,7 @@ class Suite(Check):
         argv += ["--basetemp", str(context.scratch / "pytest")]
         code = context.run(log, argv, context.env("pytest"))
         text = log.read_text()
-        failed = re.findall(r"^(?:FAILED|ERROR) (\S+)", text, flags=re.MULTILINE)
+        failed = re.findall(r"^(?:FAILED|ERROR) (.+?)(?: - .*)?$", text, flags=re.MULTILINE)
         known = [test for test in failed if test.split("[")[0] in KNOWN_FAILURES]
         unknown = [test for test in failed if test not in known]
         summary = [line.strip("= ") for line in text.splitlines() if re.search(r"\d+ (passed|failed)", line)]
@@ -84,7 +84,7 @@ class Suite(Check):
         if known:
             line += f"; known: {len(known)} ({'; '.join(sorted({KNOWN_FAILURES[t.split('[')[0]] for t in known}))})"
         if unknown:
-            line += f"; NEW: {', '.join(unknown)}"
+            line += f"; {len(unknown)} new, first: {'; '.join(unknown[:3])}"
         return [Outcome(self.name, code in (0, 1) and not unknown and bool(summary), line)]
 
 
