@@ -834,6 +834,36 @@ SLOT_OWNER_CASES = {
         handed_out("type Json = str | dict[str, Json]\n" + returns_in_rejected("Json"), "Rejected"),
         CLEAN,
     ),
+    # An alias in a class body: the producer does not expand it, so its target is unknown.
+    "a class-body alias returned by a method of a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Rejected.Ref", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a class-body generic alias returned by a method of a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n    Refs = list[Order]\n\n    def items(self) -> Refs:\n        raise ValueError\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Rejected.Refs", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a class-body alias in a parameter of a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n    Ref = Order\n\n    def take(self, item: Ref) -> None:\n        pass\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Rejected.Ref", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a class-body alias in a nested class of a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n    class Inner:\n        Ref = Order\n\n"
+            "        def item(self) -> Ref:\n            raise ValueError\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Rejected.Inner.Ref", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

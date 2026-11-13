@@ -734,8 +734,8 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// `ExportPrimitive.unexpanded_assignment`: whether a slot judged here names a module-level
-    /// assignment the producer did not expand.
+    /// `ExportPrimitive.unexpanded_assignment`: whether a slot judged here names an assignment the
+    /// producer did not expand, at the top of a module or in a class body.
     fn unexpanded_assignment(
         &self,
         symbol: &str,
@@ -751,14 +751,7 @@ impl<'a> Walk<'a> {
         if self.cx.rules.has_symbol(self.cx.link, symbol) {
             return shapes.contains("constant");
         }
-        self.module_level_name(symbol)
-    }
-
-    /// `ExportPrimitive.module_level_name`: whether a symbol with no facts is a name bound at the
-    /// top of a graph module.
-    fn module_level_name(&self, symbol: &str) -> bool {
-        self.place_of(symbol)
-            .is_some_and(|(_, qualname)| !qualname.contains('.'))
+        self.place_of(symbol).is_some()
     }
 
     /// `ExportPrimitive.place_of`: the graph module a symbol lies in and its qualname there; None

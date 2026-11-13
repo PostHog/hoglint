@@ -139,7 +139,7 @@ UNKNOWN_WHY = {
     "no-facts": "no facts for this symbol",
     "bases": "its bases did not all resolve",
     "no-annotation": "{detail} has no annotation",
-    "alias": "a module-level name hoglint does not expand into types",
+    "alias": "a name hoglint does not expand into types",
 }
 
 
@@ -468,8 +468,8 @@ class ExportPrimitive(RuleType):
         policy adds nothing the second time. A check of a slot left to a named rule marks only a
         class or a function, whose walk a check of a slot judged here would repeat: a later full
         check may still report anything else. Nor does an unknown type in a slot judged here
-        (`edge` is its row) that every named rule's policy leaves out mark it. A module-level
-        assignment there that the producer did not expand is unknown."""
+        (`edge` is its row) that every named rule's policy leaves out mark it. An assignment there
+        that the producer did not expand is unknown."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
             return
@@ -519,13 +519,14 @@ class ExportPrimitive(RuleType):
             self.unknown(symbol, module, policy, trail, edge, "alias")
 
     def unexpanded_assignment(self, symbol: str, shapes: frozenset[str], slot: SlotRead | None) -> bool:
-        """Whether a slot judged here names a module-level assignment the producer did not expand:
-        a symbol a pack reads as a constant, or one with no facts bound at the top of a module."""
+        """Whether a slot judged here names an assignment the producer did not expand: a symbol a
+        pack reads as a constant, or a name with no facts (no class, no def) that the producer
+        resolved in a graph module, at its top or in a class body."""
         if slot is None or slot.left:
             return False
         if self.facts.has(symbol):
             return "constant" in shapes
-        return self.module_level_name(symbol)
+        return self.place_of(symbol) is not None
 
     def place_of(self, symbol: str) -> tuple[str, str] | None:
         """The graph module a symbol lies in and its qualname there; None for a module itself or a
@@ -534,12 +535,6 @@ class ExportPrimitive(RuleType):
         if owner is None or owner == symbol:
             return None
         return owner, symbol[len(owner) + 1 :]
-
-    def module_level_name(self, symbol: str) -> bool:
-        """Whether a symbol with no facts is a name bound at the top of a graph module: no class
-        and no def, so a module-level assignment such as a type alias."""
-        place = self.place_of(symbol)
-        return place is not None and "." not in place[1]
 
     def exposes_under(self, module: str) -> dict[str, list[int]]:
         """A module's exposes edges, as handles, under every qualname their callable lies in: `A`
