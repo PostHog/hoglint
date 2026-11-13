@@ -1004,7 +1004,6 @@ CLASS_BODY_CASES: dict[str, tuple[Files, Verdict]] = {
 # runs as an expected failure until the change lands; the reason says what is missing. ──
 STAR_REASON = "a star import in an export module is not one hand-out per name it binds yet"
 ASSIGNED_REASON = "a top-level assignment that names a class or a function is not a hand-out yet"
-BASE_REASON = "a base given by a call, or by a name that is no class, still reads as a known class"
 PLACE = "def place(order: Order) -> None:\n    pass\n"
 EVERYTHING = ORDER_DC + "\n\n" + EXC_METHOD + "\n\n" + PLACE + "\n\nclass Loose:\n    pass\n"
 ALL_FIVE = "\n\n__all__ = ['Order', 'Receipt', 'Rejected', 'place', 'Loose']\n"
@@ -1131,7 +1130,10 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
         ES,
         ASSIGNED_REASON,
     ),
-    # A base that is no class makes the lineage unknown; the members of the known lineage are still judged.
+}
+
+# A base that is no class makes the lineage unknown; the members of the known lineage are still judged.
+BASE_CASES: dict[str, tuple[Files, Verdict]] = {
     "a call base, handed out": (
         {
             f"{D}/errors.py": src(
@@ -1140,7 +1142,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": hand("errors", "Rejected"),
         },
         ES,
-        BASE_REASON,
     ),
     "a call base in the facade": (
         {
@@ -1149,7 +1150,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             )
         },
         ES,
-        BASE_REASON,
     ),
     "a frozen dataclass with a call base, handed out": (
         {
@@ -1157,7 +1157,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": hand("errors", "Info"),
         },
         BOTH,
-        BASE_REASON,
     ),
     "a call base that hides a class with a model method": (
         {
@@ -1168,7 +1167,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": hand("errors", "Rejected"),
         },
         ES,
-        BASE_REASON,
     ),
     "an ancestor with a call base": (
         {
@@ -1178,7 +1176,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": hand("errors", "Rejected"),
         },
         ES,
-        BASE_REASON,
     ),
     "a facade function slot names a class with a call base": (
         {
@@ -1186,7 +1183,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": f"from {S}.errors import Rejected\n\n\ndef get(x: Rejected) -> None:\n    pass\n",
         },
         BOTH,
-        BASE_REASON,
     ),
     "a subscript base that is no generic": (
         {
@@ -1194,7 +1190,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": hand("errors", "Rejected"),
         },
         ES,
-        BASE_REASON,
     ),
     "a base bound to a variable by a call": (
         {
@@ -1202,7 +1197,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": hand("errors", "Rejected"),
         },
         ES,
-        BASE_REASON,
     ),
 }
 
@@ -1332,7 +1326,7 @@ NEIGHBORS: dict[str, tuple[Files, Verdict]] = {
     ),
 }
 
-CASES = {**table_cases(), **ATTACKS, **member_cases(), **CLASS_BODY_CASES, **COPY_CASES, **NEIGHBORS}
+CASES = {**table_cases(), **ATTACKS, **member_cases(), **CLASS_BODY_CASES, **BASE_CASES, **COPY_CASES, **NEIGHBORS}
 
 
 def case_params() -> list[object]:
