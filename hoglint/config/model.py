@@ -216,7 +216,7 @@ class RuleSpec:
     uses_at_import: bool = False  # entrypoint: a later use of an imported name is judged at its import
     through_denied: bool = False  # reach: the search goes on through a denied target and reports what lies past it
 
-    slots: str = "all"  # export: "shape" leaves a slot's kinds and unknown types to a signature rule
+    leave_slots_to: tuple[str, ...] = ()  # export: the signature rules it leaves a slot to where they read its row
     producer_options: tuple[tuple[str, Any], ...] = ()
     source: str = ""
 

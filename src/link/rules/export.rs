@@ -84,9 +84,9 @@ pub struct ExportRule {
     exports: Vec<usize>,
     /// Its `from`: the export modules it judges, read of the module alone.
     pub start: Option<Node>,
-    /// `slots = "shape"`: the modules whose rows each signature rule reads; a slot whose row one
-    /// of them reads is judged by its class's shape only. None for a rule that reads them in every
-    /// module. Empty when the rule judges every slot in full.
+    /// `leave_slots_to`: the modules whose rows each named signature rule reads; a slot whose row
+    /// one of them reads is judged by its class's shape only. None for a rule that reads them in
+    /// every module. Empty when the rule judges every slot in full.
     slot_owners: Vec<Option<Node>>,
     include: u8,
     exclude: u8,

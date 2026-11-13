@@ -367,6 +367,16 @@ def handed_out(body: str, *names: str) -> dict[str, str]:
     }
 
 
+# A signature rule the export rule does not name in `leave_slots_to` takes no slot from it.
+UNNAMED_SIGNATURE_RULE = """
+[rules.routes-signature]
+primitive  = "signature"
+select     = "src.module == 'products.shop.backend.routes'"
+deny       = "dst.kind == 'model'"
+on_unknown = "finding"
+identity   = "facade-slot"
+ledger     = false
+"""
 DENIED_AT_ERRORS = {"export-shape": [[ORDER, ERRORS, "export-denied(model)"]], "facade-signature": []}
 # A slot is left to the signature rule only where that rule reads the slot's row: in a facade
 # module, in a public callable, or in the copy a facade holds of a function or a data shape's fields
@@ -382,6 +392,24 @@ SLOT_OWNER_CASES = {
                 [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
                 ["typing.Any", ROUTES, "export-unknown"],
             ]
+        },
+    ),
+    "a registration function an unnamed signature rule reads": (
+        {
+            "hoglint.toml": ROOT_CONFIG + UNNAMED_SIGNATURE_RULE,
+            f"{SHOP_DIR}/routes.py": TAKES_AN_ORDER,
+        },
+        {
+            "export-shape": [
+                [ORDER, ROUTES, "export-denied(model)"],
+                [f"{SHOP}.nowhere.Missing", ROUTES, "unresolved-exposes"],
+                ["typing.Any", ROUTES, "export-unknown"],
+            ],
+            "routes-signature": [
+                [ROUTES, "place", "param:extra", "typing.Any"],
+                [ROUTES, "place", "param:order", ORDER],
+                [ROUTES, "place", "param:other", f"{SHOP}.nowhere.Missing"],
+            ],
         },
     ),
     "a private method of a contract": (

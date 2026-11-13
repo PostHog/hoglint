@@ -433,8 +433,8 @@ growth_key    = ["dst.symbol", "edge.kind", "src.package"]
 [rules.export-shape]
 primitive  = "export"
 from       = "src.zone != 'fixtures'"
-slots      = "shape"
-doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a base or a re-export. A model or an unknown type in a slot that facade-signature sees (a public callable of a facade module) is facade-signature's to report; every other slot is judged here."
+leave_slots_to = ["facade-signature"]
+doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a base or a re-export. A model or an unknown type in a slot whose row facade-signature reads (a public callable of a facade module, or the copy a facade holds of a function or a data shape's fields it hands out) is facade-signature's to report; every other slot is judged here, also a member of a class handed out from outside the facade."
 identity   = "module-symbol"
 growth_key = ["dst.symbol", "edge.label", "src.package"]
 

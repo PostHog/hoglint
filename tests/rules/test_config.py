@@ -117,6 +117,15 @@ ledger = false
             "needs a shape policy",
         ),
         ("[levels.isolated]\ngroup_by = 'package'\nrequires = ['crosss']\n", "requires unknown rule 'crosss'"),
+        # an export rule leaves a slot only to a signature rule it names
+        (
+            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['crosss']\nledger = false\n",
+            "names unknown rule 'crosss'",
+        ),
+        (
+            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['cross']\nledger = false\n",
+            "'cross' is no signature rule",
+        ),
         # limits of the config, which both engines judge alike
         (
             "[shapes.c]\nallow = ['class']\n"

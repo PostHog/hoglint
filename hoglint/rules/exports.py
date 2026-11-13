@@ -9,8 +9,8 @@ Membership is the labeler's: an export's paths, narrowed by `subclass_of`. The a
 read here: it limits who may use an export, not what the export hands out, so every member is
 checked whatever its audience. `from` leaves out the export modules it is false for.
 
-With `slots = "shape"` the rule judges only the shape of a class named in a slot of a member,
-where a signature rule of the config reads that slot's row: a denied kind, an unknown type, a
+The rule judges only the shape of a class named in a slot of a member where a signature rule
+it names in `leave_slots_to` reads that slot's row: a denied kind, an unknown type, a
 missing annotation or an unresolved name there is the signature rule's to report. A signature rule
 reads the rows of a public callable in a module its `from` and the source-only parts of its
 `select` hold for; the other parts of its selection judge the slot's type. So a slot is left to it
@@ -151,7 +151,7 @@ class ExportPrimitive(RuleType):
     PRIMITIVE = MODE = "export"
     NATIVE_MODE = "export"
     CONFIRM = "whole"
-    READS = frozenset({"exports", "contexts", "from", "slots", "on_unknown", "unknown_types", "on_unresolved"})
+    READS = frozenset({"exports", "contexts", "from", "leave_slots_to", "on_unknown", "unknown_types", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
@@ -171,7 +171,7 @@ class ExportPrimitive(RuleType):
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(NOT_HANDED_CONTEXTS if spec.contexts_exclude is None else spec.contexts_exclude)
-        self.slot_owners = self.signature_scopes() if spec.slots == "shape" else []
+        self.slot_owners = self.signature_scopes()
         self.slots_seen: dict[str, bool] = {}
 
     @staticmethod
@@ -208,11 +208,12 @@ class ExportPrimitive(RuleType):
         return [self.ctx.config.exports[name] for name in names]
 
     def signature_scopes(self) -> list[Node | None]:
-        """Where each signature rule of the config sees slots: its `from` and the parts of its
-        `select` that read only the source, None when it sees them in every module."""
+        """Where each signature rule of `leave_slots_to` reads rows: its `from` and the parts of
+        its `select` that read only the source, None when it reads them in every module."""
         out: list[Node | None] = []
-        for rule in self.ctx.config.rules.values():
-            if rule.primitive != "signature":
+        for name in self.spec.leave_slots_to:
+            rule = self.ctx.config.rules.get(name)
+            if rule is None or rule.primitive != "signature":
                 continue
             if "exposes" not in rule_kinds(rule, self.ctx.config.views):
                 continue
@@ -510,9 +511,9 @@ class ExportPrimitive(RuleType):
     def check_members(
         self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None
     ) -> None:
-        """The types in the slots of a member. In the slots of an exported symbol itself, a rule
-        with slot owners judges only the shape of a class where a signature rule reads the slot's
-        row; `edge` is the import the module hands the symbol out by, if any."""
+        """The types in the slots of a member. In the slots of an exported symbol itself, the rule
+        judges only the shape of a class where a signature rule of `leave_slots_to` reads the
+        slot's row; `edge` is the import the module hands the symbol out by, if any."""
         bound = edge.attr("binds") if edge is not None and len(trail) == 1 else ""
         include_bases = self.facts.decl(symbol) == "class"
         for row, owner, qualname in self.member_edges(symbol, include_bases, policy):

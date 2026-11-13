@@ -135,7 +135,7 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "use-shape": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"allow_shapes", "deny_shapes", "flow"},
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
-    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots", "on_unknown", "unknown_types"},
+    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "leave_slots_to", "on_unknown", "unknown_types"},
     "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
@@ -146,8 +146,6 @@ RULE_KEYS: dict[str, frozenset[str]] = {
 # call resolution with `resolve_calls`. They go when the preset drops them.
 UNREAD_ACCEPTED: dict[str, frozenset[str]] = {"edge": frozenset(PRODUCER_OPTION_KEYS)}
 DEFAULT_UNKNOWN_TYPES = ("typing.Any", "builtins.dict", "typing.Dict", "builtins.object")
-# What an export rule judges in the slots of a member: everything, or only a class's shape.
-EXPORT_SLOTS = ("all", "shape")
 
 FIELD_KEYS = frozenset({"type", "values", "single", "on", "required_on", "doc"})
 ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_paths", "symbols", "doc", "__source__"})
@@ -843,6 +841,19 @@ class SchemaBuilder:
             out.append(CoverSpec(text, selector=selector, endpoint=endpoint))
         return tuple(out)
 
+    def read_slot_owners(self, key: str, raw: Any) -> tuple[str, ...]:
+        """`leave_slots_to`: the signature rules an export rule leaves a slot to where they read
+        its row. Each must be a signature rule of the config."""
+        names = as_tuple(raw)
+        rules = self.raw.get("rules", {})
+        for name in names:
+            table = rules.get(name)
+            if not isinstance(table, dict):
+                self.fail(key, f"names unknown rule {name!r}{suggest(name, rules)}")
+            elif table.get("primitive") != "signature":
+                self.fail(key, f"{name!r} is no signature rule")
+        return names
+
     def read_inputs(self, key: str, inputs: Any) -> dict[str, Any]:
         if not isinstance(inputs, dict):
             self.fail(key, "inputs must be a table with an `adapter`")
@@ -985,7 +996,7 @@ class SchemaBuilder:
             unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
             uses_at_import=self.check_bool(f"{key}.uses_at_import", table.get("uses_at_import", False)),
             through_denied=self.check_bool(f"{key}.through_denied", table.get("through_denied", False)),
-            slots=self.check_enum(f"{key}.slots", table.get("slots", "all"), EXPORT_SLOTS),
+            leave_slots_to=self.read_slot_owners(f"{key}.leave_slots_to", table.get("leave_slots_to")),
             producer_options=tuple(producer_options),
             source=self.source(key),
         )

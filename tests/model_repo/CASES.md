@@ -55,7 +55,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `SY01` | `products/legacy/backend/api/widgets.py` | A viewset under `backend/api/` uses an access-control mixin | clean | The mixins are exported by name to zone `api` (exports `symbols`, Nov 12) |
 | `SY02` | `products/legacy/backend/api/widgets.py` | The same module imports another product's viewset that inherits the mixin | public-surface finding | By name: a subclass gets no door |
 | `ES01` | `products/catalog/backend/facade/models.py` | A facade module that only re-exports a model | export-shape finding | |
-| `ES02` | `products/catalog/backend/facade/api.py` | A model, queryset and manager in facade signatures | clean for export-shape (see `FS01`-`FS03`) | One rule per slot (`slots = "shape"`) |
+| `ES02` | `products/catalog/backend/facade/api.py` | A model, queryset and manager in facade signatures | clean for export-shape (see `FS01`-`FS03`) | One rule per slot (`leave_slots_to`) |
 | `ES03` | `products/catalog/backend/facade/api.py`, `products/catalog/backend/facade/shapes.py` | The five core models in signatures and fields | clean | `crosses` (D98) |
 | `ES06` | `products/inventory/backend/facade/contracts.py`, `products/catalog/backend/facade/shapes.py` | An exception handed out; one with a class attribute typed as another product's model; a Protocol with such an attribute | clean for all | Exceptions and Protocols are allowed (Nov 12); an annotated attribute is handed out like a field and judged (Nov 12; wanted, with `ME01`) |
 | `ES07` | `products/catalog/backend/facade/shapes.py` | A pydantic model; one with a field typed as another product's model | clean; facade-signature finding for the field | pydantic fields are slots (`dataclass_bases`); allowed shapes are walked (D63) |
@@ -227,7 +227,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks | `WW07`, `SN01` | config:stale-name incomplete |
 | Rule covers of a coverage rule | What the covered rule cannot tell (an advisory rule's own items never reach a check's output) | `WW06`, `WW08` | wiring-watched incomplete |
 | `uses_at_import` | A use whose import the rule does not report | `PS03` | the use is a finding of its own; with this preset no import is reported clean while its use is not, so no stronger case can be built (`tests/native/test_evaluator.py` holds it) |
-| `slots = "shape"` | A module the signature rule cannot tell about | none | A file's zone is never unknown in this preset (the zone field has no domain); `tests/native/test_facade_rules.py` holds it |
+| `leave_slots_to` | A module the signature rule cannot tell about | none | A file's zone is never unknown in this preset (the zone field has no domain); `tests/native/test_facade_rules.py` holds it |
 | Namespace-directory labels | A directory whose files disagree on zone | none | Zones come from globs only here, so a directory reads one answer; a provider-set zone would be needed |
 
 ## Kinds from the findings triage

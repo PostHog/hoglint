@@ -1075,7 +1075,7 @@ class Tables:
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
-            "slots": lambda: rng.choice(["all", "shape"]),
+            "leave_slots_to": lambda: [named] if named else [],
             "exports": lambda: rng.sample(["facade", "adapter"], rng.randint(1, 2)),
             "on": lambda: rng.choice(["module", "symbol"]),
             "within": lambda: "products/{product}",
@@ -1135,6 +1135,9 @@ class Tables:
         if mode == "coverage" and rng.random() < 0.7:
             named = f"{name}-named"
             out += rule_table(named, {**self.table(rng.choice(NAMED_MODES)), "ledger": False})
+        if mode == "export" and rng.random() < 0.7:
+            named = f"{name}-owner"
+            out += rule_table(named, {**self.table("signature"), "ledger": False})
         out += rule_table(name, self.table(mode, named))
         if rng.random() < 0.3:
             out += self.level(name)
@@ -1995,7 +1998,11 @@ def test_a_provider_field_read_in_each_role_gets_its_column(
 def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     owner = Selector.parse("src.team == '@team-billing'").node
     monkeypatch.setattr(ExportPrimitive, "signature_scopes", lambda self: [owner])
-    export = {"primitive": "export", "slots": "shape", "identity": ["src.module", "dst.symbol", "edge.label"]}
+    export = {
+        "primitive": "export",
+        "leave_slots_to": ["seer"],
+        "identity": ["src.module", "dst.symbol", "edge.label"],
+    }
     rules = rule_table("read", {**export, "ledger": False}) + rule_table("seer", SIGNATURE)
     config = world.config(rules, PROVIDED)
     native, _ = world.contexts(config)

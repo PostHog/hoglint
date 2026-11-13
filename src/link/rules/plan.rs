@@ -173,7 +173,7 @@ pub struct ExportRulePlan {
     pub on_unresolved: String,
     /// Its `from`: which export modules it judges, read of the module alone.
     pub start: Option<NodePlan>,
-    /// With `slots = "shape"`, where each signature rule sees a member's slots (None: in every
+    /// Where each signature rule of `leave_slots_to` reads a member's rows (None: in every
     /// module); there only a class's shape is judged. Empty: every slot is judged in full.
     pub slot_owners: Vec<Option<NodePlan>>,
 }
