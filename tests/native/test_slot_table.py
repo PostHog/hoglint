@@ -1233,6 +1233,57 @@ COPY_CASES: dict[str, tuple[Files, Verdict]] = {
     ),
 }
 
+# A field of a class core defines, the class named in a facade function's slot: only a denied kind
+# is reported at the product. The walk goes on into a product class the field names.
+CORE_FIELD_CLASSES = {
+    "a core frozen dataclass": "@dataclasses.dataclass(frozen=True)\nclass CoreThing{P}:\n    x: {T}\n",
+    "a core pydantic model": "class CoreThing{P}(BaseModel):\n    x: {T}\n",
+}
+# (the field's type, the type parameters of the class, what the core module adds, the verdict).
+CORE_FIELD_TYPES: dict[str, tuple[str, str, str, Verdict]] = {
+    "Any": ("Any", "", "", NONE),
+    "a name that does not resolve": ("Missing", "", MISSING, NONE),
+    "a type parameter": ("list[T]", "[T]", "", NONE),
+    "a call": ("conint(ge=0)", "", "from pydantic import conint\n", NONE),
+    "a core class of no allowed shape": ("CoreLoose", "", "", NONE),
+    "a model": ("Order", "", "", ES),
+    "a product frozen dataclass with a model field": ("Receipt", "", f"from {S}.errors import Receipt\n", ES),
+    "a product class of no allowed shape": ("Plain", "", "", ES),
+}
+CORE_LOOSE = "\n\nclass CoreLoose:\n    pass\n"
+GET_CORE_THING = "from posthog.corefields import CoreThing\n\n\ndef get() -> CoreThing:\n    raise ValueError\n"
+
+
+def core_field_cases() -> dict[str, tuple[Files, Verdict]]:
+    cases: dict[str, tuple[Files, Verdict]] = {}
+    for kind, template in CORE_FIELD_CLASSES.items():
+        for name, (annotation, params, extra, verdict) in CORE_FIELD_TYPES.items():
+            body = template.replace("{P}", params).replace("{T}", annotation)
+            if annotation == "CoreLoose":
+                body += CORE_LOOSE
+            files = {
+                "posthog/corefields.py": src(body, extra=extra),
+                f"{D}/errors.py": src(ORDER_DC),
+                f"{D}/facade/api.py": GET_CORE_THING,
+            }
+            cases[f"{name} in a field of {kind} a facade function returns"] = (files, verdict)
+        # The same class as an ancestor: its fields are the product class's constructor slots.
+        child = (
+            "@dataclasses.dataclass(frozen=True)\nclass Row(CoreThing):\n    title: str = ''\n"
+            if "dataclass" in kind
+            else "class Row(CoreThing):\n    title: str\n"
+        )
+        cases[f"Any in a field of {kind} a product class inherits, the class returned by a facade function"] = (
+            {
+                "posthog/corefields.py": src(template.replace("{P}", "").replace("{T}", "Any")),
+                f"{D}/errors.py": src(child, extra="from posthog.corefields import CoreThing\n"),
+                f"{D}/facade/api.py": get_returns("errors", "Row"),
+            },
+            ES,
+        )
+    return cases
+
+
 # The neighbors of the holes that give their verdict today and keep it after the change.
 NEIGHBORS: dict[str, tuple[Files, Verdict]] = {
     "a star import in a module with a function and no __all__ hands out nothing": (
@@ -1321,6 +1372,7 @@ CASES = {
     **ASSIGNED_CASES,
     **BASE_CASES,
     **COPY_CASES,
+    **core_field_cases(),
     **NEIGHBORS,
 }
 

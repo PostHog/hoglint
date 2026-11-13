@@ -13,7 +13,8 @@ The invariant, on the native engine's tables (`clean_dump`):
 
 A wrapper the design page reads as unknown (a `NewType`, a `TypeVar`, a functional `TypedDict`, a
 class-body alias) gives one finding that names the wrapper, with every probe. A member of a class
-core defines gives no finding: it is core's contract.
+core defines gives no finding: it is core's contract. A field of a class core defines that a slot
+names gives a finding for a denied kind only: the model, where the wrapper lets it be read.
 
 A tree that does not meet the invariant today is a row of `LIMITS`: the test asserts it still gives
 exactly what that row says. When a fix lands, its rows fail and must be removed.
@@ -173,6 +174,8 @@ class Placement:
     copied: bool = False
     # A member of a class core defines is core's contract: no finding with any probe.
     cores_contract: bool = False
+    # A field of a class core defines: a finding for a denied kind only.
+    core_field: bool = False
 
 
 TYPING_NAMES = ("TYPE_CHECKING", "Annotated", "NewType", "Protocol", "TypeVar", "TypedDict")
@@ -406,7 +409,12 @@ def core_named_in_a_slot(kind: str, in_facade: bool) -> Placement:
 
     where = "a facade function" if in_facade else "a function handed out from another module"
     return Placement(
-        f"a field of {kind} the return of {where} names", build, in_class=True, in_facade=in_facade, owner=EXPORT
+        f"a field of {kind} the return of {where} names",
+        build,
+        in_class=True,
+        in_facade=in_facade,
+        owner=EXPORT,
+        core_field=True,
     )
 
 
@@ -678,6 +686,8 @@ def wanted(tree: Tree, probe: Probe) -> tuple[int, str, str]:
     rule = EXPORT if private else placement.owner
     opaque = rf"\b{tree.wrapper.opaque}\b" if tree.wrapper.opaque else ""
     if placement.cores_contract:
+        return 0, rule, ""
+    if placement.core_field and (probe is not MODEL_PROBE or opaque):
         return 0, rule, ""
     if probe is CLEAN_PROBE:
         return (1, rule, opaque) if opaque else (0, rule, "")
