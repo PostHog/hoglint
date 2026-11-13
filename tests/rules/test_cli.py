@@ -107,6 +107,13 @@ def test_a_crash_is_an_internal_error_with_exit_2_never_1(
     assert printed.startswith("internal error:\nTraceback") and "KeyError: 'boom'" in printed
 
 
+def test_the_python_engine_is_refused_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exited:
+        main(["--repo", str(tmp_path), "--engine", "python", "explain-config"])
+    assert exited.value.code == 2
+    assert "the python engine is gone" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "git_dir, error",
     [

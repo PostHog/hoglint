@@ -192,7 +192,7 @@ class ModelRepoDumps:
     def dump(self, label: str, cache: Path, extra: dict[str, str]) -> Path:
         out = self.work / label
         argv = [str(self.context.python), "-m", "model_repo.dump", "dump", "--repo", str(self.repo)]
-        argv += ["--engine", "native", "--out", str(out), "--work", str(self.work / f"work-{label}")]
+        argv += ["--out", str(out), "--work", str(self.work / f"work-{label}")]
         env = self.context.env(self.name, {"PYTHONPATH": self.pythonpath, **extra, "XDG_CACHE_HOME": str(cache)})
         if self.context.run(self.log, argv, env) != 0:
             raise RuntimeError(f"the {label} dump failed: {self.log}")

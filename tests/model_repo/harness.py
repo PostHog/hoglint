@@ -127,11 +127,11 @@ def copy_tree(repo: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
 
 
-def dump_tree(repo: Path, engine: str, out: Path, work: Path) -> None:
+def dump_tree(repo: Path, out: Path, work: Path) -> None:
     """The ten parity tables of a copy of the tree, with the stub site-packages."""
     with stub_site():
         try:
-            Dump(repo, engine, out, work).run()
+            Dump(repo, out, work).run()
         finally:
             gc.enable()
 
@@ -150,7 +150,7 @@ class Dumps:
         scratch = self.work / "work-native"
         scratch.mkdir()
         started = time.perf_counter()
-        dump_tree(self.repo, "native", self.out, scratch)
+        dump_tree(self.repo, self.out, scratch)
         self.seconds = round(time.perf_counter() - started, 2)
 
     def result(self) -> Result:

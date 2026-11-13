@@ -14,7 +14,7 @@ from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph
 from hoglint.native.rules import Rejudged
-from hoglint.native.source import batch_mode, graph_source
+from hoglint.native.source import NativeGraphSource, batch_mode
 from hoglint.rules.engine import Engine
 from rules.test_attribution import DYNAMIC_CONFIG, LOADER, SECOND_LOADER
 from rules.test_compare import git_in, write_files
@@ -41,7 +41,7 @@ def summary(repo: Path, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     block. Grouped findings must not be judged again to judge the level or store the summary."""
     config = load_config(repo, repo / CONFIG_FILE)
     work.mkdir()
-    graph = graph_source("native", work).build(repo, config)
+    graph = NativeGraphSource(work).build(repo, config)
 
     def judged_again(_: Rejudged) -> None:
         raise AssertionError("an accepted grouped finding was judged again for a level or a summary")
@@ -94,8 +94,8 @@ def test_an_inline_baseline_frees_its_graph_before_the_staged_run(
 
     monkeypatch.setattr(Runner, "run", keep_a_weak_reference)
     (tmp_path / "work").mkdir()
-    commands = Commands(repo, tmp_path / "work", "native")
-    batch_mode("native")
+    commands = Commands(repo, tmp_path / "work")
+    batch_mode()
     try:
         tree = commands.snapshots.write_tree()
         baseline = commands.baselines.prepare(commands.snapshots.policy_of(tree), tree, staged=True)

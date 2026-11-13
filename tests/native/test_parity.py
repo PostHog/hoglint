@@ -151,7 +151,7 @@ def dump_repo(
     work = tmp_path / "work-native"
     work.mkdir()
     try:
-        Dump(repo, "native", out, work).run()
+        Dump(repo, out, work).run()
     finally:
         gc.enable()
         for path in unreadable:
@@ -587,7 +587,7 @@ def checked_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[s
     write_repo(root, {"hoglint.toml": HANDED_CONFIG, **SHOP, **files})
     (tmp_path / "work").mkdir()
     try:
-        graph, _, _, _ = Dump(root, "native", tmp_path / "out", tmp_path / "work").check()
+        graph, _, _, _ = Dump(root, tmp_path / "out", tmp_path / "work").check()
     finally:
         gc.enable()
     return graph

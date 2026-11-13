@@ -44,9 +44,8 @@ from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
 PROTOCOL = 4
+# The engine's name: the prefix of every engine id, and what `--engine` accepts.
 ENGINE_NATIVE = "native"
-# The frozen Python engine: it still runs with `--engine python`, outside every gate.
-ENGINE_PYTHON = "python"
 ENGINE_SOURCES = "engine-sources.txt"
 PROTOCOL_LINE = "protocol "
 # The sections of engine-sources.txt, each adding files to the one before it.

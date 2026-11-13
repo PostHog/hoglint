@@ -33,7 +33,7 @@ table was compared.
 
 Usage:
   python -m hoglint.native.replay pairs --repo <git repo> --pairs <tsv> [--pairs <tsv>] --work <dir>
-      [--engine native] [--mode today|planted-miss|traces|pack-memo-miss] [--only <name,...>]
+      [--mode today|planted-miss|traces|pack-memo-miss] [--only <name,...>]
       [--damage all|<name,...>] [--lay <path in tree>=<local file> ...]
       `--lay` replaces that path of both trees of every pair by the local file's bytes (new trees
       in the repo), so a sample whose trees carry an old preset is checked with the current one
@@ -110,7 +110,7 @@ from hoglint.native.parity import (
     stored_summary,
 )
 from hoglint.native.predict import PairPrediction, Prediction, write_trace_dump
-from hoglint.native.source import ENGINES, batch_mode
+from hoglint.native.source import batch_mode
 from hoglint.rules.base import IncompleteItem
 
 # The tables a check writes besides the parity tables, and the ones every check writes.
@@ -245,9 +245,9 @@ class RecordingCommands(Commands):
     and the state of its stores."""
 
     def __init__(
-        self, repo: Path, work_dir: Path, engine: str, today: datetime.date, tree: str, head: str, memo: bool = True
+        self, repo: Path, work_dir: Path, today: datetime.date, tree: str, head: str, memo: bool = True
     ) -> None:
-        super().__init__(repo, work_dir, engine, today, memo)
+        super().__init__(repo, work_dir, today, memo)
         self.snapshots = FixedSnapshots(repo, work_dir, tree, head)
         self.counting = CountingSummaryStore(self.stores)
         self.summaries = self.baselines.store = self.counting
@@ -309,10 +309,9 @@ class TreeCheck:
     never takes a stored summary in place of the run."""
 
     def __init__(
-        self, repo: Path, engine: str, today: datetime.date, tree: str, head: str, out: Path, tables: bool, live: bool
+        self, repo: Path, today: datetime.date, tree: str, head: str, out: Path, tables: bool, live: bool
     ) -> None:
         self.repo = repo
-        self.engine = engine
         self.today = today
         self.tree = tree
         self.head = head
@@ -321,8 +320,8 @@ class TreeCheck:
         self.live = live
 
     def run(self, work: Path) -> None:
-        batch_mode(self.engine)
-        commands = RecordingCommands(self.repo, work, self.engine, self.today, self.tree, self.head, not self.live)
+        batch_mode()
+        commands = RecordingCommands(self.repo, work, self.today, self.tree, self.head, not self.live)
         wall, cpu = time.perf_counter(), self.cpu()
         printed = io.StringIO()
         try:
@@ -1121,9 +1120,8 @@ class Running:
 class Checker:
     """Starts checks, each in its own process, with its side's state directory as its cache root."""
 
-    def __init__(self, repo: Path, engine: str, mode: Mode, work: Path, today: datetime.date) -> None:
+    def __init__(self, repo: Path, mode: Mode, work: Path, today: datetime.date) -> None:
         self.repo = repo
-        self.engine = engine
         self.mode = mode
         self.work = work
         self.today = today
@@ -1131,7 +1129,7 @@ class Checker:
 
     def command(self, tree: str, head: str, out: Path, tables: bool, live: bool) -> list[str]:
         command = [sys.executable, "-m", "hoglint.native.replay", "check", "--repo", str(self.repo)]
-        command += ["--engine", self.engine, "--today", self.today.isoformat(), "--tree", tree, "--head", head]
+        command += ["--today", self.today.isoformat(), "--tree", tree, "--head", head]
         return [*command, "--out", str(out), *(["--tables"] if tables else []), *(["--live"] if live else [])]
 
     def start(self, side: Side, tree: str, head: str, label: str, tables: bool = True) -> Running:
@@ -1733,7 +1731,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=("pairs", "determinism", "check"))
     parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--engine", choices=ENGINES, default="native")
     parser.add_argument("--work", type=Path)
     parser.add_argument("--pairs", type=Path, action="append", default=[])
     parser.add_argument("--only", default="")
@@ -1757,7 +1754,7 @@ def main() -> None:
         work.mkdir(parents=True, exist_ok=True)
         try:
             head = args.head or args.tree[0]
-            TreeCheck(repo, args.engine, today, args.tree[0], head, out, args.tables, args.live).run(work)
+            TreeCheck(repo, today, args.tree[0], head, out, args.tables, args.live).run(work)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         return
@@ -1765,7 +1762,7 @@ def main() -> None:
         raise SystemExit("--work is required")
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    checker = Checker(repo, args.engine, MODES[args.mode](), work, today)
+    checker = Checker(repo, MODES[args.mode](), work, today)
     if args.command == "determinism":
         results = [Determinism(checker).run(tree) for tree in args.tree]
         ok = bool(results) and all(results)

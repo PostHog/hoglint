@@ -25,7 +25,7 @@ from hoglint.ledger.errors import EngineError
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution, Site
 from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
-from hoglint.native.source import graph_source
+from hoglint.native.source import NativeGraphSource
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules import engine
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project, subjects_of
@@ -308,7 +308,7 @@ class World:
         self.repo = repo
         work = root / "work"
         work.mkdir()
-        self.graph: Graph = graph_source("native", work).build(repo, load_config(repo, repo / CONFIG_FILE))
+        self.graph: Graph = NativeGraphSource(work).build(repo, load_config(repo, repo / CONFIG_FILE))
         gc.enable()
 
     def config(self, rules: str, base: str = CONFIG) -> Config:

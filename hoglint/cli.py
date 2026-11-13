@@ -61,7 +61,7 @@ from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
-from hoglint.native.source import ENGINES, batch_mode, graph_source
+from hoglint.native.source import NativeGraphSource, batch_mode
 from hoglint.rules.base import EdgeRule, RuleContext
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
@@ -473,10 +473,8 @@ class CheckReport:
 class LocalEngine:
     """The engine this process runs: its id, its extractor, and the envelope of one of its runs."""
 
-    def __init__(
-        self, name: str = ENGINE_NATIVE, digests: InputDigests | None = None, stores: RunStores | None = None
-    ) -> None:
-        self.name = name
+    def __init__(self, digests: InputDigests | None = None, stores: RunStores | None = None) -> None:
+        self.name = ENGINE_NATIVE
         self.frameworks: dict[tuple[str, ...], str] = {}
         self.digests = digests or InputDigests(cache_root(), stores)
 
@@ -693,7 +691,7 @@ class Baselines:
         except subprocess.CalledProcessError:
             ledger = LedgerFile(source=ABSENT)
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
-        runner = Runner(graph_source(self.engine.name, work, self.store.stores))
+        runner = Runner(NativeGraphSource(work, self.store.stores))
         run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
@@ -768,17 +766,16 @@ class Commands:
         self,
         repo: Path,
         work_dir: Path,
-        engine: str = ENGINE_NATIVE,
         today: datetime.date | None = None,
         memo: bool = True,
     ) -> None:
         self.repo = repo
         self.work_dir = work_dir
         self.stores = RunStores.of_environment()
-        self.source: GraphSource = graph_source(engine, work_dir, self.stores)
+        self.source: GraphSource = NativeGraphSource(work_dir, self.stores)
         self.runner = Runner(self.source, today)
         self.snapshots = Snapshots(repo, work_dir)
-        self.engine = LocalEngine(engine, stores=self.stores)
+        self.engine = LocalEngine(stores=self.stores)
         self.summaries = SummaryStore(stores=self.stores)
         self.baselines = Baselines(self.snapshots, self.engine, self.summaries)
         self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore(stores=self.stores))
@@ -1130,6 +1127,14 @@ class Commands:
         return summary
 
 
+def engine_name(value: str) -> str:
+    """`--engine native` is the one engine: a newer `compare` passes it to an older base's scan.
+    Any other name is refused."""
+    if value != ENGINE_NATIVE:
+        raise argparse.ArgumentTypeError(f"there is one engine, native; the {value} engine is gone")
+    return value
+
+
 def parser() -> argparse.ArgumentParser:
     """Each subcommand sets `handler`, a function of (Commands, parsed args) that returns the exit code."""
     main = argparse.ArgumentParser(
@@ -1137,7 +1142,7 @@ def parser() -> argparse.ArgumentParser:
     )
     main.add_argument("--repo", type=Path, default=Path.cwd(), help="repo root that holds hoglint.toml")
     main.add_argument(
-        "--engine", choices=ENGINES, default=ENGINE_NATIVE, help="native (the Rust link), or the frozen python engine"
+        "--engine", type=engine_name, default=ENGINE_NATIVE, help="native, the one engine; a base scan is passed it"
     )
     sub = main.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="run every rule; exit 0 clean, 1 violations, 2 blocking incomplete")
@@ -1179,9 +1184,9 @@ def parser() -> argparse.ArgumentParser:
 def command(argv: list[str] | None) -> int:
     args = parser().parse_args(argv)
     repo = args.repo.resolve()
-    batch_mode(args.engine)
+    batch_mode()
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
-        commands = Commands(repo, Path(work), args.engine)
+        commands = Commands(repo, Path(work))
         try:
             check_root(repo)
             with commands.stores.as_current():

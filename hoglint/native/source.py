@@ -1,4 +1,4 @@
-"""GraphSource for `--engine native`: the same packs and config, the graph from the Rust link."""
+"""The graph source of a run: the packs and config of `GraphSource`, the graph from the Rust link."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from hoglint.config import Config
 from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.memo import OFF, TRACE, PackMemo, digest
 from hoglint.core.reader import BuildReader
-from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.listing import Listing
 from hoglint.model import Graph
@@ -24,8 +23,6 @@ from hoglint.native.memo_store import MemoStore, engine_id
 from hoglint.native.queries import NativePackQueries
 from hoglint.plugins import Pack
 from hoglint.source import GraphSource, PackRoot, active_packs, run_packs
-
-ENGINES = ("python", "native")
 
 
 class StepReleasingSink(NativeSink):
@@ -117,13 +114,8 @@ class NativeGraphSource(GraphSource):
         return PackMemo(store, policy, self.stores.memo_stats(), self.stores.memo_drop())
 
 
-def batch_mode(engine: str) -> None:
-    """A native run is one batch: it builds millions of short-lived objects (decoded facts, edges)
-    and frees them at exit. The cyclic collector would rescan them over and over, about 40% of a
-    native run, so it stays off; nothing the run keeps forms reference cycles worth collecting."""
-    if engine == "native":
-        gc.disable()
-
-
-def graph_source(engine: str, work_dir: Path, stores: RunStores | None = None) -> GraphSource:
-    return NativeGraphSource(work_dir, stores) if engine == "native" else GraphSource(work_dir, stores)
+def batch_mode() -> None:
+    """A run is one batch: it builds millions of short-lived objects (decoded facts, edges) and
+    frees them at exit. The cyclic collector would rescan them over and over, about 40% of a run,
+    so it stays off; nothing the run keeps forms reference cycles worth collecting."""
+    gc.disable()
