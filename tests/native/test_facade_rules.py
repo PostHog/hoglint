@@ -436,6 +436,30 @@ UNEXPANDED_NAMES = {
 }
 MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n        raise ValueError\n"
 REF_UNKNOWN_AT_ERRORS = {"export-shape": [[f"{SHOP}.errors.Ref", ERRORS, "export-unknown"]], "facade-signature": []}
+# A type alias bound once per branch stands for every binding's types; one binding that is no
+# type alias leaves the name unknown.
+BRANCH_ALIASES = {
+    "under TYPE_CHECKING, int otherwise": (
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    Ref = Order\nelse:\n    Ref = int\n",
+        DENIED_AT_ERRORS,
+    ),
+    "in the arms of a try": ("try:\n    Ref = Order\nexcept ImportError:\n    Ref = int\n", DENIED_AT_ERRORS),
+    "under TYPE_CHECKING only": (
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    Ref = Order\n",
+        DENIED_AT_ERRORS,
+    ),
+    "under TYPE_CHECKING, Any otherwise": (
+        "from typing import TYPE_CHECKING, Any\n\nif TYPE_CHECKING:\n    Ref = Order\nelse:\n    Ref = Any\n",
+        {
+            "export-shape": [[ORDER, ERRORS, "export-denied(model)"], ["typing.Any", ERRORS, "export-unknown"]],
+            "facade-signature": [],
+        },
+    ),
+    "under TYPE_CHECKING, a NewType otherwise": (
+        "from typing import TYPE_CHECKING, NewType\n\nif TYPE_CHECKING:\n    Ref = Order\nelse:\n    Ref = NewType('Ref', int)\n",
+        REF_UNKNOWN_AT_ERRORS,
+    ),
+}
 
 
 MAKES_A_BASE = "def make() -> type:\n    return object\n\n\n"
@@ -908,6 +932,21 @@ SLOT_OWNER_CASES = {
                 [API, "Receipt.__init__", "field:order", ORDER],
             ],
         },
+    ),
+    **{
+        f"a model alias bound {case}, in a method of a handed-out exception": (
+            handed_out(body + MEMBER_TAKES_REF, "Rejected"),
+            expected,
+        )
+        for case, (body, expected) in BRANCH_ALIASES.items()
+    },
+    "a model alias bound under TYPE_CHECKING, int otherwise, in a facade function": (
+        {
+            f"{SHOP_DIR}/facade/api.py": IMPORTS_ORDER
+            + BRANCH_ALIASES["under TYPE_CHECKING, int otherwise"][0]
+            + "\n\ndef get() -> Ref:\n    raise ValueError\n"
+        },
+        {"export-shape": [], "facade-signature": [[API, "get", "return", ORDER]]},
     ),
     # A name the producer does not expand, named by a facade function's slot and by a member slot.
     **{

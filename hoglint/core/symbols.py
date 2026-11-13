@@ -184,9 +184,10 @@ class ModuleTable:
     lazy_entries: list[LazyEntry] = field(default_factory=list)
     values: dict[str, object] = field(default_factory=dict)  # name -> V value of its last module-level assign
     stub_names: set[str] = field(default_factory=set)  # names only the `.pyi` beside the module binds
-    # name -> every module-level binding of the `.py` in source order: (flags, binding, assigned
-    # value). Lookups never read it; a base bound once per branch is read through it.
-    bindings: dict[str, list[tuple[int, Binding, object]]] = field(default_factory=dict)
+    # name -> every module-level binding of the `.py` in source order: (flags, binding, the
+    # assigns row that binds it). Lookups never read it; a base or a type alias bound once per
+    # branch is read through it.
+    bindings: dict[str, list[tuple[int, Binding, dict | None]]] = field(default_factory=dict)
 
     def classes(self) -> dict[str, int]:
         """Classes the module's own source defines at module level: name -> def index."""
@@ -213,7 +214,7 @@ class Tables:
         """Later bindings win, except that a conditional def or assignment never replaces an
         import: `except ImportError: Bar = None` and `else: Foo = Any` are fallbacks."""
         module = table.name
-        events: list[tuple[int, int, int, int, Binding | None, str, object]] = []
+        events: list[tuple[int, int, int, int, Binding | None, str, Any]] = []
         for i, d in enumerate(record.get("defs", ())):
             flags = d.get("f", 0)
             if module_level(d["s"], flags, MODULE_LEVEL_FLAGS):
@@ -237,7 +238,7 @@ class Tables:
             for target in row["t"]:
                 if isinstance(target, str) and "." not in target:
                     assigned: Binding = ("alias", value) if isinstance(value, str) else ("variable",)
-                    events.append((row["l"], row["c"], 2, flags, assigned, target, value))
+                    events.append((row["l"], row["c"], 2, flags, assigned, target, row))
                     continue
                 for name in unpacked_names(target):
                     events.append((row["l"], row["c"], 2, flags, ("variable",), name, None))
@@ -250,7 +251,9 @@ class Tables:
                     table.star_imports.append(str(source))
                 continue
             if marker == "":
-                table.bindings.setdefault(name, []).append((flags, binding, source))
+                table.bindings.setdefault(name, []).append(
+                    (flags, binding, source if isinstance(source, dict) else None)
+                )
             current = table.names.get(name)
             is_import = binding[0] in ("module", "from")
             if not is_import and flags & CONDITIONAL_FLAGS and current is not None and current[0] in ("module", "from"):

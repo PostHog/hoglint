@@ -147,6 +147,12 @@ def frozen_keyword(call: dict) -> bool:
     return any(pair == ["frozen", True] for pair in call.get("kw", ()))
 
 
+def alias_value(value: object) -> bool:
+    """Whether an assigned value reads as a type alias: a name, an attribute, a subscript or a
+    union (`a | b`)."""
+    return isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value))
+
+
 def called_base(base: object) -> bool:
     """Whether a class base is a call, also under a subscript: `make()`, `make()[T]`."""
     while isinstance(base, dict) and "sub" in base:
@@ -239,7 +245,7 @@ class BuildContext:
         return resolved.resolution in (Resolution.RESOLVED, Resolution.EXTERNAL) and self.branch_bound(hit) is not None
 
     def binding_classes(
-        self, module: str, name: str, binding: Binding, value: object, seen: frozenset[tuple[str, str]]
+        self, module: str, name: str, binding: Binding, row: dict | None, seen: frozenset[tuple[str, str]]
     ) -> list[str] | None:
         """The classes one module-level binding of `name` stands for; None when it is no class."""
         kind = binding[0]
@@ -248,8 +254,9 @@ class BuildContext:
         if kind in ("module", "from"):
             surface = binding[1] if kind == "module" else f"{binding[1]}.{binding[2]}"
             return self.hit_classes(surface, self.resolver.resolve_binding(module, binding), seen)
-        if kind not in ("alias", "variable"):
+        if kind not in ("alias", "variable") or row is None:
             return None
+        value = row.get("v")
         while isinstance(value, dict) and "sub" in value:
             value = value["sub"]
         if not isinstance(value, str):
@@ -269,8 +276,8 @@ class BuildContext:
         if not bindings:
             return None
         found: set[str] = set()
-        for _, binding, value in bindings:
-            classes = self.binding_classes(module, name, binding, value, seen | {key})
+        for _, binding, row in bindings:
+            classes = self.binding_classes(module, name, binding, row, seen | {key})
             if classes is None:
                 return None
             found.update(classes)
@@ -351,19 +358,34 @@ class BuildContext:
         self.assigned_by_module[module] = found
         return found
 
+    def alias_rows(self, module: str, name: str) -> list[dict] | None:
+        """Every module-level assignment of a name the module binds more than once (once per
+        branch, say), in source order, when each one assigns a type alias; [] for a name bound
+        once; None when one binding is no type alias."""
+        table = self.resolver.tables.get(module)
+        bindings = table.bindings.get(name, []) if table is not None else []
+        if len(bindings) < 2:
+            return []
+        rows = []
+        for _, binding, row in bindings:
+            if row is None or binding[0] not in ("alias", "variable") or not alias_value(row.get("v")):
+                return None
+            rows.append(row)
+        return rows
+
     def alias(self, module: str, name: str) -> tuple[FileScope | None, dict] | None:
         """A module-level type alias the bare name binds (`X = dict[str, Any]`): the file and
-        row of the assignment, as `assigned` gives them; else None."""
+        row of the last assignment, as `assigned` gives them; else None. A name bound more than
+        once is an alias only when every binding assigns one."""
         if "." in name:
             return None
         binding = self.resolver.tables.binding(module, name)
         if binding is None or binding[0] not in ("alias", "variable"):
             return None
         found = self.assigned(module).get(name)
-        value = found[1]["v"] if found is not None else None
-        if isinstance(value, str) or (isinstance(value, dict) and ("a" in value or "sub" in value or "bin" in value)):
-            return found
-        return None
+        if found is None or not alias_value(found[1].get("v")) or self.alias_rows(module, name) is None:
+            return None
+        return found
 
     def resolve_dotted(self, dotted: str) -> tuple[Resolved, str] | None:
         """A dotted path in a string. None unless its head names repo code."""
@@ -780,6 +802,26 @@ class DeclarationProducer(Producer):
             return None
         return (origin.module, origin.symbol), row["v"], SlotLookup(scope, -1, row["l"])
 
+    def expand_alias(
+        self,
+        context: BuildContext,
+        key: tuple[str, str],
+        value: object,
+        where: SlotLookup,
+        top: bool,
+        expansion: Expansion,
+    ) -> None:
+        """An alias's value into an expansion. A name bound more than once expands every
+        binding's value, in source order, each looked up where it is assigned: it stands for the
+        union."""
+        rows = context.alias_rows(*key) or []
+        scope = context.binding_scope(*key) if len(rows) > 1 else None
+        if scope is None:
+            self.expand_into(context, value, where, top, expansion)
+            return
+        for row in rows:
+            self.expand_into(context, row["v"], SlotLookup(scope, -1, row["l"]), top, expansion)
+
     def expand_into(
         self,
         context: BuildContext,
@@ -803,7 +845,7 @@ class DeclarationProducer(Producer):
                 expansion.write(replace(item, too_deep=True))
                 continue
             expansion.stack.append(alias[0])
-            self.expand_into(context, alias[1], alias[2], item.top, expansion)
+            self.expand_alias(context, alias[0], alias[1], alias[2], item.top, expansion)
             expansion.stack.pop()
 
     def expanded_in(self, context: BuildContext, expansion: list[Expanded], item: Expanded, found: Lookup) -> bool:
@@ -822,7 +864,7 @@ class DeclarationProducer(Producer):
         found = self.expansions.get((key, where))
         if found is None:
             expansion = Expansion([key])
-            self.expand_into(context, value, where, True, expansion)
+            self.expand_alias(context, key, value, where, True, expansion)
             found = self.expansions[(key, where)] = expansion.out
         return found
 

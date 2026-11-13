@@ -683,6 +683,12 @@ fn named_in(wanted: &[Sid], surface: Sid, target: Option<Sid>) -> bool {
     wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
 }
 
+/// `alias_value`: whether an assigned value reads as a type alias: a name, an attribute, a
+/// subscript or a union (`a | b`).
+fn alias_value(value: &V) -> bool {
+    matches!(value, V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..))
+}
+
 /// Whether a class base is a call, also under a subscript: `make()`, `make()[T]`.
 fn called_base(base: &V) -> bool {
     match base {
@@ -708,6 +714,7 @@ type AliasKey = (Sid, Sid);
 
 /// A type alias a mention names: its key, the (file, assign row) of its value, and where its
 /// names are looked up.
+#[derive(Clone, Copy)]
 struct Alias {
     key: AliasKey,
     row: (u32, u32),
@@ -1171,10 +1178,42 @@ impl Producers<'_> {
         let value = self.core.facts.files[file as usize].assigns[at as usize]
             .value
             .as_ref()?;
-        match value {
-            V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..) => Some((file, at)),
-            _ => None,
+        if !alias_value(value) {
+            return None;
         }
+        self.alias_rows(module, name)?;
+        Some((file, at))
+    }
+
+    /// `BuildContext.alias_rows`: every module-level assignment (file, row) of a name the module
+    /// binds more than once (once per branch, say), in source order, when each one assigns a
+    /// type alias; empty for a name bound once; None when one binding is no type alias.
+    fn alias_rows(&mut self, module: Sid, name: Sid) -> Option<Vec<(u32, u32)>> {
+        let Some(table) = self.core.table(module) else {
+            return Some(Vec::new());
+        };
+        let table = self.core.table_at(table);
+        let bindings = table.bindings.get(&name).cloned().unwrap_or_default();
+        if bindings.len() < 2 {
+            return Some(Vec::new());
+        }
+        let file = table.record?;
+        let facts = self.core.facts.clone();
+        let mut rows = Vec::new();
+        for (_, binding, assign) in bindings {
+            let at = assign?;
+            if !matches!(binding, Binding::Alias(_) | Binding::Variable) {
+                return None;
+            }
+            let value = facts.files[file as usize].assigns[at as usize]
+                .value
+                .as_ref()?;
+            if !alias_value(value) {
+                return None;
+            }
+            rows.push((file, at));
+        }
+        Some(rows)
     }
 
     /// The type alias a mention names, as (module, name), the (file, row) of its value, and where
@@ -1280,6 +1319,42 @@ impl Producers<'_> {
         }
     }
 
+    /// `DeclarationProducer.expand_alias`: an alias's value into an expansion. A name bound more
+    /// than once expands every binding's value, in source order, each looked up where it is
+    /// assigned: it stands for the union.
+    fn expand_alias(&mut self, alias: Alias, top: bool, expansion: &mut Expansion) {
+        let facts = self.core.facts.clone();
+        let rows = self
+            .alias_rows(alias.key.0, alias.key.1)
+            .unwrap_or_default();
+        let owner = rows
+            .first()
+            .filter(|_| rows.len() > 1)
+            .and_then(|(file, _)| self.scope_of_file.get(file).copied());
+        let Some(owner) = owner else {
+            let (file, at) = alias.row;
+            if let Some(value) = facts.files[file as usize].assigns[at as usize]
+                .value
+                .as_ref()
+            {
+                self.expand_into(value, alias.lookup, top, expansion);
+            }
+            return;
+        };
+        for (file, at) in rows {
+            let row = &facts.files[file as usize].assigns[at as usize];
+            let Some(value) = row.value.as_ref() else {
+                continue;
+            };
+            let lookup = SlotLookup {
+                owner: owner as usize,
+                scope: -1,
+                line: row.l,
+            };
+            self.expand_into(value, lookup, top, expansion);
+        }
+    }
+
     /// Depth first, the names in an alias's value, each alias in it followed once per place (top
     /// or nested). A cycle stops at the alias that closes it; an alias deeper than
     /// MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown.
@@ -1302,14 +1377,10 @@ impl Producers<'_> {
                 whole: named.whole,
                 lookup: at,
             };
-            let Some(Alias {
-                key,
-                row,
-                lookup: inner_at,
-            }) = self.alias_of(mention, found)
-            else {
+            let Some(alias) = self.alias_of(mention, found) else {
                 continue;
             };
+            let key = alias.key;
             if expansion.stack.contains(&key) || !expansion.followed.insert((key, item.top)) {
                 continue;
             }
@@ -1320,15 +1391,8 @@ impl Producers<'_> {
                 });
                 continue;
             }
-            let facts = self.core.facts.clone();
-            let Some(inner) = facts.files[row.0 as usize].assigns[row.1 as usize]
-                .value
-                .as_ref()
-            else {
-                continue;
-            };
             expansion.stack.push(key);
-            self.expand_into(inner, inner_at, item.top, expansion);
+            self.expand_alias(alias, item.top, expansion);
             expansion.stack.pop();
         }
     }
@@ -1356,9 +1420,7 @@ impl Producers<'_> {
     /// looked up: the alias decides them, never the slot that names it.
     fn expansion(&mut self, alias: Alias) -> Rc<[Expanded]> {
         let Alias {
-            key,
-            row,
-            lookup: at,
+            key, lookup: at, ..
         } = alias;
         let memo = Memo::Expansion(key.0, key.1, at.owner as u32, at.scope, at.line);
         if let Some(found) = self.expansions.get(&(key, at)) {
@@ -1366,20 +1428,13 @@ impl Producers<'_> {
             return found.clone();
         }
         let start = self.core.rec.mark();
-        let facts = self.core.facts.clone();
-        let Some(value) = facts.files[row.0 as usize].assigns[row.1 as usize]
-            .value
-            .as_ref()
-        else {
-            return Rc::from([]);
-        };
         let mut expansion = Expansion {
             stack: vec![key],
             followed: FxHashSet::default(),
             seen: FxHashSet::default(),
             out: Vec::new(),
         };
-        self.expand_into(value, at, true, &mut expansion);
+        self.expand_alias(alias, true, &mut expansion);
         let found: Rc<[Expanded]> = Rc::from(expansion.out);
         self.expansions.insert((key, at), found.clone());
         self.core.rec.remember(memo, start);
