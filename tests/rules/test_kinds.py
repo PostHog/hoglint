@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from hoglint.config.model import KindSpec
-from hoglint.index import SymbolFacts
+from hoglint.index import GraphIndex, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.model import Resolution
 from hoglint.rules.engine import Engine
@@ -169,3 +169,15 @@ def test_a_layout_rule_that_pins_kind_reads_only_candidates_but_finds_the_same(
 
     assert outcome("pinned") == outcome("unpinned")
     assert outcome("pinned") != ([], [])
+
+
+def test_a_base_class_declared_in_a_function_body_is_a_class() -> None:
+    graph = (
+        GraphBuilder()
+        .module("app.models")
+        .symbol("app.models.build.Inner")
+        .symbol("app.models.build.Outer")
+        .edge("inherit", "app.models", "app.models.build.Inner", attrs=(("class", "build.Outer"),))
+        .graph
+    )
+    assert GraphIndex(graph).facts.ancestors("app.models.build.Outer") == (frozenset({"app.models.build.Inner"}), True)

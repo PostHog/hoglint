@@ -161,8 +161,9 @@ class SymbolFacts:
         return [name if self.declared_class(name) else f"?{name}" for name in names]
 
     def declared_class(self, symbol: str) -> bool:
-        """Whether the core declared the symbol a class: a pack may give a class another kind."""
-        return symbol in self.classes
+        """Whether the core declared the symbol a class: a pack may give a class another kind. A
+        class in a function body has no `declares` edge; its own `kind` fact says it."""
+        return symbol in self.classes or self.get(symbol, "kind") == "class"
 
     def has(self, symbol: str) -> bool:
         return symbol in self.symbols
