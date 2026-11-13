@@ -523,6 +523,12 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
+case = "HO03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.alias_listed", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
 case = "HO01"
 rule = "facade-signature"
 verdict = "finding"
