@@ -20,7 +20,7 @@ KNOWN_FAILURES = {
     ),
 }
 # The diagnostics `ty check` reports on main. A change adds none; lower it when one is fixed.
-TY_BASELINE = 37
+TY_BASELINE = 28
 
 
 def build(root: Path, log: Path, env: dict[str, str]) -> Path | None:
