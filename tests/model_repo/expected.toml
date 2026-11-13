@@ -241,12 +241,6 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "FC02"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_tracking", "export-denied(model)"]
-
-[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -275,6 +269,12 @@ case = "ES20"
 rule = "export-shape"
 verdict = "unknown"
 identity = ["products.catalog.backend.facade.bases.EntryLocked", "products.catalog.backend.facade.bases", "export-unknown"]
+
+[[row]]
+case = "FC02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_tracking", "export-denied(model)"]
 
 [[row]]
 case = "FD04"
@@ -469,12 +469,6 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
-case = "FC01"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.shipments", "ShipmentView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-
-[[row]]
 case = "CM01"
 rule = "facade-signature"
 verdict = "finding"
@@ -521,6 +515,12 @@ case = "ES07"
 rule = "facade-signature"
 verdict = "finding"
 identity = ["products.catalog.backend.facade.shapes", "EntryStockView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "FC01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shipments", "ShipmentView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 
 [[row]]
 case = "FS01"
