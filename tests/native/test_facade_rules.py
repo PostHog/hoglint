@@ -657,6 +657,13 @@ SLOT_OWNER_CASES = {
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
     ),
+    "a type alias in a method of a handed-out exception": (
+        handed_out(
+            "Orders = list[Order]\n\n\nclass Rejected(Exception):\n    def orders(self) -> Orders:\n        raise ValueError\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Orders", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

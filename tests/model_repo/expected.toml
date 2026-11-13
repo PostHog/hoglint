@@ -241,6 +241,12 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "ME08"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.logic.errors.StockItems", "products.catalog.backend.facade.errors", "export-unknown"]
+
+[[row]]
 case = "ME06"
 rule = "export-shape"
 verdict = "finding"
@@ -761,6 +767,12 @@ verdict = "finding"
 identity = ["legacy.0001_initial", "posthog.0001_initial"]
 
 # model-crossings
+
+[[row]]
+case = "ME08"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
 
 [[row]]
 case = "MC01"

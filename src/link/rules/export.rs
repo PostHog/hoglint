@@ -371,7 +371,14 @@ impl<'a> Walk<'a> {
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
-                            self.check(&symbol, &module_name, shape, edge, &trail, (false, None));
+                            self.check(
+                                &symbol,
+                                &module_name,
+                                shape,
+                                edge,
+                                &trail,
+                                (false, None, false),
+                            );
                         }
                     }
                 }
@@ -618,7 +625,7 @@ impl<'a> Walk<'a> {
         shape: usize,
         edge: Option<u32>,
         trail: &[String],
-        (shape_only, judged_row): (bool, Option<u32>),
+        (shape_only, judged_row, expanded): (bool, Option<u32>, bool),
     ) {
         let visit = (module.to_string(), shape, symbol.to_string());
         if self.visited.contains(&visit) {
@@ -661,6 +668,8 @@ impl<'a> Walk<'a> {
         if !rules.has_symbol(self.cx.link, symbol) {
             if !complete {
                 self.unknown(symbol, module, shape, trail, edge, ("no-facts", ""));
+            } else if judged_row.is_some() && !expanded && self.module_level_name(symbol) {
+                self.unknown(symbol, module, shape, trail, edge, ("alias", ""));
             }
             return;
         }
@@ -697,7 +706,21 @@ impl<'a> Walk<'a> {
         }
         if shapes.contains("function") {
             self.check_members(symbol, module, shape, trail);
+            return;
         }
+        if shapes.contains("constant") && judged_row.is_some() && !expanded {
+            self.unknown(symbol, module, shape, trail, edge, ("alias", ""));
+        }
+    }
+
+    /// `ExportPrimitive.module_level_name`: whether a symbol with no facts is a name bound at the
+    /// top of a graph module.
+    fn module_level_name(&self, symbol: &str) -> bool {
+        let Some((owner, _)) = self.cx.module_of_symbol(symbol) else {
+            return false;
+        };
+        let owner_name = self.cx.text(owner);
+        owner_name != symbol && !symbol[owner_name.len() + 1..].contains('.')
     }
 
     /// `ExportPrimitive.exposes_under`.
@@ -956,7 +979,14 @@ impl<'a> Walk<'a> {
         let annotation = link.core.it.get("annotation");
         let slot = link.core.it.get("slot");
         let alias = link.core.it.get("alias");
-        for (id, owner, qualname) in self.member_edges(symbol, include_bases, shape) {
+        let callable = link.core.it.get("callable");
+        let rows = self.member_edges(symbol, include_bases, shape);
+        let expanded: FxHashSet<(&str, &str)> = rows
+            .iter()
+            .filter(|(id, _, _)| self.cx.attr(*id, alias) == "expanded")
+            .map(|(id, _, _)| (self.cx.attr(*id, callable), self.cx.attr(*id, slot)))
+            .collect();
+        for (id, owner, qualname) in rows {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
@@ -976,6 +1006,8 @@ impl<'a> Walk<'a> {
                 continue;
             }
             let judged_row = if shape_only { None } else { Some(id) };
+            let has_expansion =
+                expanded.contains(&(self.cx.attr(id, callable), self.cx.attr(id, slot)));
             let targets = edges.targets_of(id);
             let names: Vec<String> = if targets.is_empty() {
                 vec![self.cx.text(edges.surface_of(id)).to_string()]
@@ -998,7 +1030,7 @@ impl<'a> Walk<'a> {
                         shape,
                         Some(id),
                         &deeper,
-                        (shape_only, judged_row),
+                        (shape_only, judged_row, has_expansion),
                     );
                 }
             }

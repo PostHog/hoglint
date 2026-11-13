@@ -60,3 +60,11 @@ class EntryPayloadRejected(Exception):
 class EntryPayloadDetail(Exception):
     def detail(self) -> dict[str, Any]:
         return {}
+
+
+StockItems = list[StockItem]
+
+
+class EntryBatchRejected(Exception):
+    def items(self) -> StockItems:
+        raise NotImplementedError

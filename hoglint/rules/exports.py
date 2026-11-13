@@ -151,6 +151,7 @@ UNKNOWN_WHY = {
     "no-facts": "no facts for this symbol",
     "bases": "its bases did not all resolve",
     "no-annotation": "{detail} has no annotation",
+    "alias": "an alias that is not expanded here",
 }
 
 
@@ -468,12 +469,14 @@ class ExportPrimitive(RuleType):
         trail: tuple[str, ...],
         shape_only: bool = False,
         judged_row: Edge | None = None,
+        expanded: bool = False,
     ) -> None:
         """Findings are keyed by (symbol, module), so a symbol already checked for this module and
         policy adds nothing the second time. A check of the shape alone (`shape_only`) that finds
         a denied kind or an unknown type marks nothing: a full check may still report it. Nor does
         an unknown type in a member row judged in full (`judged_row`) that every named rule's
-        policy leaves out."""
+        policy leaves out. A module-level assignment in such a row is an alias the producer did
+        not expand there (`expanded` says it did), so what it stands for is unknown."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
             return
@@ -501,6 +504,8 @@ class ExportPrimitive(RuleType):
         if not self.facts.has(symbol):
             if not complete:
                 self.unknown(symbol, module, policy, trail, edge, "no-facts")
+            elif judged_row is not None and not expanded and self.module_level_name(symbol):
+                self.unknown(symbol, module, policy, trail, edge, "alias")
             return
         if "class" in shapes:
             allowed = bool(shapes & {*policy.data, *policy.allow}) or self.behavior_ok(symbol, policy)
@@ -517,6 +522,15 @@ class ExportPrimitive(RuleType):
             return
         if "function" in shapes:
             self.check_members(symbol, module, policy, trail)
+            return
+        if "constant" in shapes and judged_row is not None and not expanded:
+            self.unknown(symbol, module, policy, trail, edge, "alias")
+
+    def module_level_name(self, symbol: str) -> bool:
+        """Whether a symbol with no facts is a name bound at the top of a graph module: no class
+        and no def, so a module-level assignment such as a type alias."""
+        owner = self.ctx.labeler.module_of_symbol(symbol)
+        return owner is not None and owner != symbol and "." not in symbol[len(owner) + 1 :]
 
     def exposes_under(self, module: str) -> dict[str, list[int]]:
         """A module's exposes edges, as handles, under every qualname their callable lies in: `A`
@@ -655,7 +669,9 @@ class ExportPrimitive(RuleType):
         hands the symbol out by, if it does, names the copy of a slot."""
         bound = self.bindings.get(module, {}).get(symbol, "")
         include_bases = self.facts.decl(symbol) == "class"
-        for row, owner, qualname in self.member_edges(symbol, include_bases, policy):
+        rows = self.member_edges(symbol, include_bases, policy)
+        expanded = {(row.attr("callable"), row.attr("slot")) for row, _, _ in rows if row.attr("alias") == "expanded"}
+        for row, owner, qualname in rows:
             if row.attr("alias") == "expanded":
                 continue
             shape_only = self.leaves_slot(row, owner, qualname, symbol, module, bound, policy)
@@ -671,7 +687,8 @@ class ExportPrimitive(RuleType):
             names = [str(target) for target in row.targets] or [row.surface]
             for name in names:
                 if name and name not in trail:
-                    self.check(name, module, policy, row, (*trail, name), shape_only, judged_row)
+                    has_expansion = (row.attr("callable"), row.attr("slot")) in expanded
+                    self.check(name, module, policy, row, (*trail, name), shape_only, judged_row, has_expansion)
 
     # ── output ──
 

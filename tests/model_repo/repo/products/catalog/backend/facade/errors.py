@@ -1,4 +1,5 @@
 from products.catalog.backend.logic.errors import (
+    EntryBatchRejected,
     EntryBroken,
     EntryExpired,
     EntryFlagMissing,
@@ -6,4 +7,4 @@ from products.catalog.backend.logic.errors import (
     EntryRejected,
 )
 
-__all__ = ["EntryBroken", "EntryExpired", "EntryFlagMissing", "EntryPayloadRejected", "EntryRejected"]
+__all__ = ["EntryBatchRejected", "EntryBroken", "EntryExpired", "EntryFlagMissing", "EntryPayloadRejected", "EntryRejected"]

@@ -118,6 +118,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 
   For example, a facade module hands out `OrderRejected`, an exception its product defines in a logic module, and `OrderRejected.order()` returns another product's model: `export-shape` reports the model at the facade module, with `OrderRejected -> Order` in the message.
 - **A written limit** (Nov 13): a parameter with no annotation, or one typed only with plain builtins, on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.
+  Outside a surface file the producer does not expand a type alias either: in a slot the export rule judges in full, a name bound at the top of a module with no class or def behind it (`Orders = list[Order]`) is unknown, never clean; a plain `X = Model` resolves to the class and is judged as it.
   Rows outside a surface file are written only for a name that is no plain builtin: a bare `dict` and a bare `object` have no row there; a bare `Any` (`typing.Any`) is no builtin, so it has a row and is judged.
 - A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 
