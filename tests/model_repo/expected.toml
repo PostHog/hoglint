@@ -243,8 +243,8 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 [[row]]
 case = "ME08"
 rule = "export-shape"
-verdict = "unknown"
-identity = ["products.catalog.backend.logic.errors.StockItems", "products.catalog.backend.facade.errors", "export-unknown"]
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.batches", "export-denied(model)"]
 
 [[row]]
 case = "ME06"

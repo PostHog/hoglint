@@ -1360,6 +1360,16 @@ impl Producers<'_> {
     /// alias it is, when it is one. A slot names each row an alias expands to once, however
     /// often its aliases repeat it; rows that differ in an attr (such as the generic a name is an
     /// argument of) are different rows.
+    /// `DeclarationProducer.plain_builtin`: whether a name resolves to a plain builtin; outside a
+    /// contract it gets no row.
+    fn plain_builtin(&mut self, found: Lookup, name: Sid) -> bool {
+        let core = &mut *self.core;
+        found.hit.is_none() && {
+            let head = core.it.head(name);
+            found.surface == core.it.join(self.settings.names.builtins_module, head)
+        }
+    }
+
     fn expose_mentions(
         &mut self,
         rows: SlotRows,
@@ -1376,21 +1386,12 @@ impl Producers<'_> {
                 lookup,
             };
             let found = self.lookup_at(mention.lookup, mention.value);
-            let alias = if contract {
-                self.alias_of(mention, found)
-            } else {
-                None
-            };
+            let alias = self.alias_of(mention, found);
             let expansion = alias.map(|alias| self.expansion(alias));
-            let core = &mut *self.core;
             let k = &self.settings.k;
             let position = if mention.whole { k.whole } else { k.nested };
-            let builtin = !contract && found.hit.is_none() && {
-                let head = core.it.head(mention.value);
-                found.surface == core.it.join(self.settings.names.builtins_module, head)
-            };
-            if !builtin {
-                let resolved = core.classify_lookup(found);
+            if contract || !self.plain_builtin(found, mention.value) {
+                let resolved = self.core.classify_lookup(found);
                 let expanded = expansion.as_ref().is_some_and(|items| !items.is_empty());
                 let marks = self.markers(expanded, named.subscripted, lookup, named.argument_of);
                 let extra = marks.attrs(&self.settings.k);
@@ -1414,6 +1415,9 @@ impl Producers<'_> {
                         let marker = marks.attrs(k);
                         self.push_slot(rows, item.value, UNRESOLVED, slot, position, &marker);
                     }
+                    continue;
+                }
+                if !contract && self.plain_builtin(inner, item.value) {
                     continue;
                 }
                 let expanded = self.expanded_in(&expansion, item, inner);

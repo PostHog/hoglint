@@ -1,4 +1,4 @@
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -63,8 +63,12 @@ class EntryPayloadDetail(Exception):
 
 
 StockItems = list[StockItem]
+BatchState = Literal["open", "closed"]
 
 
 class EntryBatchRejected(Exception):
     def items(self) -> StockItems:
+        raise NotImplementedError
+
+    def state(self) -> BatchState:
         raise NotImplementedError

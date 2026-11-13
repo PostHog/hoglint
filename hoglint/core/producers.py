@@ -745,6 +745,11 @@ class DeclarationProducer(Producer):
             found = self.expansions[(key, where)] = expansion.out
         return found
 
+    @staticmethod
+    def plain_builtin(found: Lookup, name: str) -> bool:
+        """Whether a name resolves to a plain builtin: outside a contract it gets no row."""
+        return found.hit is None and found.surface == f"builtins.{name.split('.')[0]}"
+
     def expose_mentions(
         self,
         context: BuildContext,
@@ -755,17 +760,17 @@ class DeclarationProducer(Producer):
         lookup: SlotLookup,
         names: list[tuple[str, str, bool, str]],
     ) -> None:
-        """One row per mention, each followed (in a contract only) by a row per name of the type
-        alias it is, when it is one. A slot names each row an alias expands to once, however
-        often its aliases repeat it; rows that differ in an attr (such as the generic a name is an
-        argument of) are different rows."""
+        """One row per mention, each followed by a row per name of the type alias it is, when it
+        is one: what an alias stands for is a fact in every file. Outside a contract a name that
+        resolves to a plain builtin gets no row, in the alias's expansion too. A slot names each
+        row an alias expands to once, however often its aliases repeat it; rows that differ in an
+        attr (such as the generic a name is an argument of) are different rows."""
         written: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
         for value, mentioned, subscripted, argument_of in names:
-            head = value.split(".")[0]
             found = self.lookup_at(context, lookup, value)
-            alias = self.alias_of(context, Mention(value, mentioned, lookup), found) if contract else None
+            alias = self.alias_of(context, Mention(value, mentioned, lookup), found)
             expansion = self.expansion(context, *alias) if alias is not None else None
-            if contract or found.hit is not None or found.surface != f"builtins.{head}":
+            if contract or not self.plain_builtin(found, value):
                 resolved = context.classifier.classify_lookup(found)
                 marker = self.markers(context, bool(expansion), subscripted, lookup, argument_of)
                 graph.edges.append(rows.edge(found.surface, resolved, slot, mentioned, *marker))
@@ -778,6 +783,8 @@ class DeclarationProducer(Producer):
                     if (item.value, position, TOO_DEEP) not in written:
                         written.add((item.value, position, TOO_DEEP))
                         graph.edges.append(rows.edge(item.value, UNRESOLVED, slot, position, *TOO_DEEP))
+                    continue
+                if not contract and self.plain_builtin(inner, item.value):
                     continue
                 expanded = self.expanded_in(context, expansion, item, inner)
                 marker = self.markers(context, expanded, item.subscripted, item.lookup, item.argument_of)

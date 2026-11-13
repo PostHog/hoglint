@@ -662,7 +662,63 @@ SLOT_OWNER_CASES = {
             "Orders = list[Order]\n\n\nclass Rejected(Exception):\n    def orders(self) -> Orders:\n        raise ValueError\n",
             "Rejected",
         ),
-        {"export-shape": [[f"{SHOP}.errors.Orders", ERRORS, "export-unknown"]], "facade-signature": []},
+        DENIED_AT_ERRORS,
+    ),
+    "a union-of-literals alias in a method of a handed-out exception": (
+        handed_out(
+            "from typing import Literal\n\nKind = Literal['open', 'closed']\n\n\nclass Rejected(Exception):\n"
+            "    def kind(self, default: Kind) -> Kind:\n        raise ValueError\n",
+            "Rejected",
+        ),
+        {"export-shape": [], "facade-signature": []},
+    ),
+    "an imported alias in a method of a handed-out exception": (
+        {
+            f"{SHOP_DIR}/types.py": IMPORTS_ORDER + "Orders = list[Order]\n",
+            **handed_out(
+                f"from {SHOP}.types import Orders\n\n\nclass Rejected(Exception):\n"
+                "    def orders(self) -> Orders:\n        raise ValueError\n",
+                "Rejected",
+            ),
+        },
+        DENIED_AT_ERRORS,
+    ),
+    "an opaque payload alias in a parameter of a handed-out exception": (
+        handed_out(
+            "from typing import Any\n\nPayload = dict[str, Any]\n\n\nclass Rejected(Exception):\n"
+            "    def __init__(self, extra: Payload) -> None:\n        self.extra = extra\n",
+            "Rejected",
+        ),
+        {"export-shape": [], "facade-signature": []},
+    ),
+    "an opaque payload alias returned by a method of a handed-out exception": (
+        handed_out(
+            "from typing import Any\n\nPayload = dict[str, Any]\n\n\nclass Rejected(Exception):\n"
+            "    def extra(self) -> Payload:\n        return {}\n",
+            "Rejected",
+        ),
+        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a TypeVar in a method of a handed-out exception": (
+        handed_out(
+            "from typing import TypeVar\n\nT = TypeVar('T')\n\n\nclass Rejected(Exception):\n"
+            "    def take(self, value: T) -> None:\n        pass\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.T", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a TypeVar in a facade function": (
+        {
+            f"{SHOP_DIR}/facade/api.py": "from typing import TypeVar\n\nT = TypeVar('T')\n\n\ndef take(value: T) -> None:\n    pass\n"
+        },
+        {"export-shape": [], "facade-signature": [[API, "take", "param:value", f"{API}.T"]]},
+    ),
+    "an alias in a private method of a contract class": (
+        {
+            f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + "Orders = list[Order]\n\n\nclass Rejected(Exception):\n"
+            "    def _load(self) -> Orders:\n        raise ValueError\n"
+        },
+        {"export-shape": [[ORDER, f"{SHOP}.facade.contracts", "export-denied(model)"]], "facade-signature": []},
     ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),

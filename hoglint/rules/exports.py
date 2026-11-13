@@ -151,7 +151,7 @@ UNKNOWN_WHY = {
     "no-facts": "no facts for this symbol",
     "bases": "its bases did not all resolve",
     "no-annotation": "{detail} has no annotation",
-    "alias": "an alias that is not expanded here",
+    "alias": "a module-level name hoglint does not expand into types",
 }
 
 

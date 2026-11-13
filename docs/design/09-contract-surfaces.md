@@ -64,6 +64,8 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   This added 1,742 rows and 94 new findings in 18 products.
 
 **Aliases** (N3b review item 3): an alias is expanded wherever it is defined, imported aliases included (depth 32, stop on a cycle).
+What an alias stands for is a fact in every file (Nov 13): the producer expands an alias in a slot outside a surface file too, where its expansion's rows follow that mode's filter (a name that resolves to a plain builtin gets no row).
+A module-level name in a slot the export rule judges in full that is no alias the producer can expand (a `TypeVar`, a value built by a call) is unknown, as the signature rule reads the same name in a facade function.
 The reasoning matches D63: where something is defined must not change the verdict.
 **An alias whose expansion is known is not a finding** (D70, Nov 11; reverses D62 C3).
 
@@ -118,7 +120,6 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 
   For example, a facade module hands out `OrderRejected`, an exception its product defines in a logic module, and `OrderRejected.order()` returns another product's model: `export-shape` reports the model at the facade module, with `OrderRejected -> Order` in the message.
 - **A written limit** (Nov 13): a parameter with no annotation, or one typed only with plain builtins, on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.
-  Outside a surface file the producer does not expand a type alias either: in a slot the export rule judges in full, a name bound at the top of a module with no class or def behind it (`Orders = list[Order]`) is unknown, never clean; a plain `X = Model` resolves to the class and is judged as it.
   Rows outside a surface file are written only for a name that is no plain builtin: a bare `dict` and a bare `object` have no row there; a bare `Any` (`typing.Any`) is no builtin, so it has a row and is judged.
 - A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 
