@@ -241,70 +241,10 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "ME08"
+case = "FC02"
 rule = "export-shape"
 verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.batches", "export-denied(model)"]
-
-[[row]]
-case = "ME06"
-rule = "export-shape"
-verdict = "finding"
-identity = ["posthog.models.team.team.Team", "products.inventory.backend.routes", "export-denied(model)"]
-
-[[row]]
-case = "ME05"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_names", "export-denied(model)"]
-
-[[row]]
-case = "ME03"
-rule = "export-shape"
-verdict = "unknown"
-identity = ["typing.Any", "products.catalog.backend.facade.rows", "export-unknown"]
-
-[[row]]
-case = "ME02"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.errors", "export-denied(model)"]
-
-[[row]]
-case = "ME01"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.rows", "export-denied(model)"]
-
-[[row]]
-case = "ME01"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.sinks", "export-denied(model)"]
-
-[[row]]
-case = "ME02"
-rule = "export-shape"
-verdict = "unknown"
-identity = ["products.catalog.backend.logic.errors.EntryBroken", "products.catalog.backend.facade.errors", "export-unknown"]
-
-[[row]]
-case = "ME01"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.errors", "export-denied(model)"]
-
-[[row]]
-case = "WK04"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.handout", "export-denied(model)"]
-
-[[row]]
-case = "RG02"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.inventory.backend.routes", "export-denied(model)"]
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_tracking", "export-denied(model)"]
 
 [[row]]
 case = "ES01"
@@ -347,6 +287,72 @@ case = "HZ10"
 rule = "export-shape"
 verdict = "unknown"
 identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
+
+[[row]]
+case = "ME01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.errors", "export-denied(model)"]
+
+[[row]]
+case = "ME01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.rows", "export-denied(model)"]
+
+[[row]]
+case = "ME01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.sinks", "export-denied(model)"]
+
+[[row]]
+case = "ME02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.errors", "export-denied(model)"]
+
+[[row]]
+case = "ME02"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.logic.errors.EntryBroken", "products.catalog.backend.facade.errors", "export-unknown"]
+
+[[row]]
+case = "ME03"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["typing.Any", "products.catalog.backend.facade.rows", "export-unknown"]
+
+[[row]]
+case = "ME05"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_names", "export-denied(model)"]
+
+[[row]]
+case = "ME06"
+rule = "export-shape"
+verdict = "finding"
+identity = ["posthog.models.team.team.Team", "products.inventory.backend.routes", "export-denied(model)"]
+
+[[row]]
+case = "ME08"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.batches", "export-denied(model)"]
+
+[[row]]
+case = "RG02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.inventory.backend.routes", "export-denied(model)"]
+
+[[row]]
+case = "WK04"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.handout", "export-denied(model)"]
 
 # facade-logic
 
@@ -451,34 +457,10 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
-case = "ME07"
+case = "FC01"
 rule = "facade-signature"
 verdict = "finding"
-identity = ["products.catalog.backend.facade.named", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "ME05"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.private_names", "lookup", "param:entry", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "ME04"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.records", "EntryStockRecord.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "ES06"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.shapes", "EntryOutOfStock", "attr:item", "products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "ES06"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.shapes", "StockHolder", "attr:item", "products.inventory.backend.models.StockItem"]
+identity = ["products.catalog.backend.facade.shipments", "ShipmentView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 
 [[row]]
 case = "CM01"
@@ -509,6 +491,18 @@ case = "CR03"
 rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.catalog.backend.facade.api", "for_ghost", "param:ghost", "posthog.models.ghost.Ghost"]
+
+[[row]]
+case = "ES06"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "EntryOutOfStock", "attr:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "ES06"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.shapes", "StockHolder", "attr:item", "products.inventory.backend.models.StockItem"]
 
 [[row]]
 case = "ES07"
@@ -611,6 +605,24 @@ case = "HZ10"
 rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "run_gone", "signature", "products.legacy.backend.temporal.gone.run_gone"]
+
+[[row]]
+case = "ME04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.records", "EntryStockRecord.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+
+[[row]]
+case = "ME05"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.private_names", "lookup", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "ME07"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.named", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 
 [[row]]
 case = "TM01"
@@ -769,16 +781,16 @@ identity = ["legacy.0001_initial", "posthog.0001_initial"]
 # model-crossings
 
 [[row]]
-case = "ME08"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
-
-[[row]]
 case = "MC01"
 rule = "model-crossings"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
+
+[[row]]
+case = "ME08"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
 
 [[row]]
 case = "PS08"
@@ -1202,18 +1214,6 @@ identity = ["products.reports.backend.models.ReportRun"]
 # presentation-uses-facade
 
 [[row]]
-case = "RG02"
-rule = "presentation-uses-facade"
-verdict = "finding"
-identity = ["products.inventory.backend.routes", "products.inventory.backend.route_helpers"]
-
-[[row]]
-case = "RG01"
-rule = "presentation-uses-facade"
-verdict = "finding"
-identity = ["products.legacy.backend.routes", "products.legacy.backend.route_helpers"]
-
-[[row]]
 case = "PF02"
 rule = "presentation-uses-facade"
 verdict = "finding"
@@ -1249,13 +1249,19 @@ rule = "presentation-uses-facade"
 verdict = "finding"
 identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
 
-# prod-imports-test
+[[row]]
+case = "RG01"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.routes", "products.legacy.backend.route_helpers"]
 
 [[row]]
-case = "ME02"
-rule = "prod-imports-test"
-verdict = "unknown"
-identity = ["products.catalog.backend.logic.errors", "?"]
+case = "RG02"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.inventory.backend.routes", "products.inventory.backend.route_helpers"]
+
+# prod-imports-test
 
 [[row]]
 case = "CR03"
@@ -1274,6 +1280,12 @@ case = "HZ10"
 rule = "prod-imports-test"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
+
+[[row]]
+case = "ME02"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.catalog.backend.logic.errors", "?"]
 
 [[row]]
 case = "PF07"
@@ -1910,15 +1922,15 @@ rule = "*"
 verdict = "unknown"
 match = ["products.catalog.backend.facade.outlines"]
 
-# Levels: the products that pass and fail each level.
-
-[levels.isolated]
-passing = ["ai_observability", "visual_review"]
-failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]
-
 [[wanted]]
 case = "RG01"
 decision = "F1, proof round 2: a model in a slot of a function routes.py takes in by import is reported by no rule (measured, open)"
 rule = "export-shape"
 verdict = "finding"
 match = ["products.legacy.backend.models.Widget", "products.legacy.backend.routes"]
+
+# Levels: the products that pass and fail each level.
+
+[levels.isolated]
+passing = ["ai_observability", "visual_review"]
+failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]

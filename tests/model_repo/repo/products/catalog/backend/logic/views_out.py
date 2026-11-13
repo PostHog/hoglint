@@ -10,6 +10,14 @@ class InternalView(BaseModel):
     item: StockItem
 
 
+class ShipmentView(BaseModel):
+    item: StockItem
+
+
+class PrivateView(BaseModel):
+    item: StockItem
+
+
 @frozen
 class StockBase:
     item: StockItem
