@@ -166,7 +166,7 @@ class ExportPrimitive(RuleType):
         # `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
         self.allowed: dict[tuple[str, str], bool] = {}
         self.walked: dict[tuple[str, str], bool] = {}
-        self.members: dict[tuple[str, bool], list[tuple[Edge, str, str]]] = {}
+        self.members: dict[tuple[str, bool, str], list[tuple[Edge, str, str]]] = {}
         self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
@@ -360,6 +360,10 @@ class ExportPrimitive(RuleType):
             return True
         if not (policy.signatures or dataclass_like):
             return False
+        return self.walk_holds(symbol, policy)
+
+    def walk_holds(self, symbol: str, policy: ShapePolicy) -> bool:
+        """Whether `walk_where` holds for a class, or cannot be told."""
         if policy.walk_where is None:
             return True
         key = (policy.name, symbol)
@@ -367,6 +371,15 @@ class ExportPrimitive(RuleType):
         if found is None:
             found = self.walked[key] = self.symbol_truth(policy.walk_where, symbol) is not Truth.FALSE
         return found
+
+    def ancestor_walked(self, ancestor: str, policy: ShapePolicy) -> bool:
+        """Whether the member rows of an ancestor of a walked class are read: always the fields of
+        a data shape, else where `walk_where` holds for the ancestor, so what a product class
+        inherits from a class core defines is core's contract."""
+        shapes, _ = self.recognize(ancestor)
+        if shapes & {"dataclass", "frozen-dataclass"} and shapes & set(policy.data):
+            return True
+        return self.walk_holds(ancestor, policy)
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
@@ -451,22 +464,22 @@ class ExportPrimitive(RuleType):
             self.made[handle] = edge
         return [self.made[handle] for handle in handles]
 
-    def member_edges(self, symbol: str, include_bases: bool) -> list[tuple[Edge, str, str]]:
-        """Exposes edges of a callable, or of a class's fields and methods (and its bases'), each
-        with the module and qualname of the class or callable it belongs to."""
-        key = (symbol, include_bases)
+    def member_edges(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[Edge, str, str]]:
+        """Exposes edges of a callable, or of a class's fields and methods (and those of the bases
+        the policy walks), each with the module and qualname of the class or callable it belongs to."""
+        key = (symbol, include_bases, policy.name)
         found = self.members.get(key)
         if found is None:
-            places = self.member_handles(symbol, include_bases)
+            places = self.member_handles(symbol, include_bases, policy)
             edges = self.edges([handle for handle, _, _ in places])
             found = self.members[key] = [(edge, owner, qualname) for edge, (_, owner, qualname) in zip(edges, places)]
         return found
 
-    def member_handles(self, symbol: str, include_bases: bool) -> list[tuple[int, str, str]]:
+    def member_handles(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[int, str, str]]:
         lineage = [symbol]
         if include_bases:
             ancestors, _ = self.facts.ancestors(symbol)
-            lineage.extend(sorted(ancestors))
+            lineage.extend(ancestor for ancestor in sorted(ancestors) if self.ancestor_walked(ancestor, policy))
         out: list[tuple[int, str, str]] = []
         for target in lineage:
             owner = self.ctx.labeler.module_of_symbol(target)
@@ -501,7 +514,8 @@ class ExportPrimitive(RuleType):
         with slot owners judges only the shape of a class where a signature rule reads the slot's
         row; `edge` is the import the module hands the symbol out by, if any."""
         bound = edge.attr("binds") if edge is not None and len(trail) == 1 else ""
-        for row, owner, qualname in self.member_edges(symbol, include_bases=self.facts.decl(symbol) == "class"):
+        include_bases = self.facts.decl(symbol) == "class"
+        for row, owner, qualname in self.member_edges(symbol, include_bases, policy):
             if row.attr("alias") == "expanded":
                 continue
             shape_only = len(trail) == 1 and self.leaves_slot(row, owner, qualname, module, bound)

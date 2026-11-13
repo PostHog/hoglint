@@ -348,6 +348,7 @@ PRIVATE_METHOD = (
     "    def _load(self, order: Order) -> None:\n        pass\n"
 )
 ROUTES = f"{SHOP}.routes"
+SHOP_DIR = "products/shop/backend"
 ERRORS = f"{SHOP}.facade.errors"
 ORDER = f"{SHOP}.models.Order"
 HANDS_OUT_ERRORS = "from products.shop.backend.errors import {names}\n\n__all__ = [{listed}]\n"
@@ -361,8 +362,8 @@ def handed_out(body: str, *names: str) -> dict[str, str]:
     """Classes or functions defined outside the facade, and a facade module that hands them out."""
     listed = ", ".join(f"'{name}'" for name in names)
     return {
-        "errors.py": IMPORTS_ORDER + body,
-        "facade/errors.py": HANDS_OUT_ERRORS.format(names=", ".join(names), listed=listed),
+        f"{SHOP_DIR}/errors.py": IMPORTS_ORDER + body,
+        f"{SHOP_DIR}/facade/errors.py": HANDS_OUT_ERRORS.format(names=", ".join(names), listed=listed),
     }
 
 
@@ -372,9 +373,9 @@ DENIED_AT_ERRORS = {"export-shape": [[ORDER, ERRORS, "export-denied(model)"]], "
 # it hands out. A registration surface, a private method and a member of a class handed out from
 # outside the facade are judged by the export rule.
 SLOT_OWNER_CASES = {
-    "a facade function": ({"facade/api.py": TAKES_AN_ORDER}, {"export-shape": []}),
+    "a facade function": ({f"{SHOP_DIR}/facade/api.py": TAKES_AN_ORDER}, {"export-shape": []}),
     "a registration function": (
-        {"routes.py": TAKES_AN_ORDER},
+        {f"{SHOP_DIR}/routes.py": TAKES_AN_ORDER},
         {
             "export-shape": [
                 [ORDER, ROUTES, "export-denied(model)"],
@@ -384,7 +385,7 @@ SLOT_OWNER_CASES = {
         },
     ),
     "a private method of a contract": (
-        {"facade/contracts.py": PRIVATE_METHOD},
+        {f"{SHOP_DIR}/facade/contracts.py": PRIVATE_METHOD},
         {"export-shape": [[ORDER, f"{SHOP}.facade.contracts", "export-denied(model)"]]},
     ),
     "a method of a handed-out exception": (
@@ -423,6 +424,31 @@ SLOT_OWNER_CASES = {
         handed_out("@dataclasses.dataclass(frozen=True)\nclass Receipt:\n    order: Order\n", "Receipt"),
         {"export-shape": [], "facade-signature": [[ERRORS, "Receipt.__init__", "field:order", ORDER]]},
     ),
+    "a method inherited from a class core defines": (
+        {
+            "posthog/errors.py": IMPORTS_ORDER
+            + "class CoreError(Exception):\n    def order(self) -> Order:\n        raise ValueError\n",
+            **handed_out(
+                "from posthog.errors import CoreError\n\n\nclass Rejected(CoreError):\n    pass\n", "Rejected"
+            ),
+        },
+        {"export-shape": [], "facade-signature": []},
+    ),
+    "a method inherited from a base in the same product": (
+        {
+            f"{SHOP_DIR}/bases.py": IMPORTS_ORDER
+            + "class ShopError(Exception):\n    def order(self) -> Order:\n        raise ValueError\n",
+            **handed_out(f"from {SHOP}.bases import ShopError\n\n\nclass Rejected(ShopError):\n    pass\n", "Rejected"),
+        },
+        DENIED_AT_ERRORS,
+    ),
+    "a base that does not resolve": (
+        handed_out(
+            f"from {SHOP}.nowhere import Missing\n\n\nclass Rejected(Missing):\n    def order(self) -> Order:\n        raise ValueError\n",
+            "Rejected",
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
@@ -434,8 +460,7 @@ SLOT_OWNER_CASES = {
 def test_export_shape_judges_a_slot_no_signature_rule_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    texts, expected = SLOT_OWNER_CASES[case]
-    files = {f"products/shop/backend/{name}": text for name, text in texts.items()}
+    files, expected = SLOT_OWNER_CASES[case]
     out = both_engines(tmp_path, BASE, files, monkeypatch)
     assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
 
