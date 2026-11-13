@@ -6,13 +6,12 @@ attribute, argument, ...), and packs give it framework meaning.
 
 from __future__ import annotations
 
-import re
 import builtins
 from dataclasses import dataclass, field, replace
 
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex
-from hoglint.core.records import is_class_var
+from hoglint.core.records import ESCAPE_WRAPPERS, chain_tokens, is_class_var, leading_attrs
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut, StarNames
 from hoglint.core.symbols import CLASS, FUNC, Binding, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
@@ -26,9 +25,6 @@ LAZY_ATTR = ("lazy", "1")
 # The attr of an import edge for one name a star import binds in an export module.
 STAR_ATTR = ("star", "1")
 BUILTIN_NAMES = frozenset(dir(builtins))
-CHAIN_TOKEN = re.compile(r"\.\w+|\(\)|\[\]")
-# Escape steps that pass a value through unchanged, as the extractor's local derivation reads them.
-ESCAPE_WRAPPERS = ("await", "ifexp:body", "ifexp:else", "star")
 WRAPPER_STEPS = (*ESCAPE_WRAPPERS, "bool:and", "bool:or", "walrus:")
 
 # Fact kinds every producer needs, because the resolver builds module tables from them.
@@ -100,21 +96,6 @@ TARGET_STEPS = ("assign-target", "annassign-target", "augassign-target", "for-ta
 
 def producer_id(kind: str) -> str:
     return f"core-{kind}@{PRODUCER_VERSION}"
-
-
-def chain_tokens(chain: str) -> list[str]:
-    """`.a.b()[]` -> ['.a', '.b', '()', '[]']."""
-    return CHAIN_TOKEN.findall(chain)
-
-
-def leading_attrs(tokens: list[str]) -> list[str]:
-    """Attribute names before the first call or subscript, without their dots."""
-    out = []
-    for token in tokens:
-        if not token.startswith("."):
-            break
-        out.append(token[1:])
-    return out
 
 
 def up_position(up: str) -> str:

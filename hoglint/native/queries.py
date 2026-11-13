@@ -20,8 +20,7 @@ from typing import Any
 import orjson
 
 from hoglint.core.build import CoreBuild
-from hoglint.core.producers import chain_tokens, leading_attrs
-from hoglint.core.records import last_name
+from hoglint.core.records import chain_tokens, last_name, leading_attrs
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Graph

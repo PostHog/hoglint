@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import re
 import json
 
 from hoglint.core.symbols import CLASS, FUNC
 
 NO_CONST = object()  # const_of() of a value that is not a plain constant
 CONST_MARKERS = frozenset({"float", "complex", "bytes", "...", "int", "longstr", "badstr"})
+CHAIN_TOKEN = re.compile(r"\.\w+|\(\)|\[\]")
+# Escape steps that pass a value through unchanged, as the extractor's local derivation reads them.
+ESCAPE_WRAPPERS = ("await", "ifexp:body", "ifexp:else", "star")
+
+
+def chain_tokens(chain: str) -> list[str]:
+    """`.a.b()[]` -> ['.a', '.b', '()', '[]']."""
+    return CHAIN_TOKEN.findall(chain)
+
+
+def leading_attrs(tokens: list[str]) -> list[str]:
+    """Attribute names before the first call or subscript, without their dots."""
+    out = []
+    for token in tokens:
+        if not token.startswith("."):
+            break
+        out.append(token[1:])
+    return out
 
 
 def const_of(value: object) -> object:

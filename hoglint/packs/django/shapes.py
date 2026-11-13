@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hoglint.core.producers import ESCAPE_WRAPPERS, chain_tokens
-from hoglint.core.records import last_name
+from hoglint.core.records import ESCAPE_WRAPPERS, chain_tokens, last_name
 
 MANAGERS = frozenset(
     {
