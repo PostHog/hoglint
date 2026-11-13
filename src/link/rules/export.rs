@@ -299,6 +299,14 @@ impl ExportInputs {
     }
 }
 
+/// `SlotRead`: how a member's slot reached a symbol, left to a named rule or judged here, with
+/// whether the producer expanded an alias in the slot. An exported symbol is reached by none.
+#[derive(Clone, Copy)]
+struct SlotRead {
+    left: bool,
+    expanded: bool,
+}
+
 /// Shape names of a symbol, and whether the facts were enough to be sure.
 type Shapes = (FxHashSet<String>, bool);
 
@@ -371,14 +379,7 @@ impl<'a> Walk<'a> {
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
-                            self.check(
-                                &symbol,
-                                &module_name,
-                                shape,
-                                edge,
-                                &trail,
-                                (false, None, false),
-                            );
+                            self.check(&symbol, &module_name, shape, edge, &trail, None);
                         }
                     }
                 }
@@ -614,10 +615,9 @@ impl<'a> Walk<'a> {
         false
     }
 
-    /// `ExportPrimitive.check`. A check of the shape alone (`shape_only`) that finds a denied kind
-    /// or an unknown type marks nothing: a full check may still report it. Nor does an unknown
-    /// type in a member row judged in full (`judged_row`) that every named rule's policy leaves
-    /// out.
+    /// `ExportPrimitive.check`. A check of a slot left to a named rule that finds a denied kind or
+    /// an unknown type marks nothing: a full check may still report it. Nor does an unknown type
+    /// in a slot judged here (`edge` is its row) that every named rule's policy leaves out.
     fn check(
         &mut self,
         symbol: &str,
@@ -625,7 +625,7 @@ impl<'a> Walk<'a> {
         shape: usize,
         edge: Option<u32>,
         trail: &[String],
-        (shape_only, judged_row, expanded): (bool, Option<u32>, bool),
+        slot: Option<SlotRead>,
     ) {
         let visit = (module.to_string(), shape, symbol.to_string());
         if self.visited.contains(&visit) {
@@ -645,14 +645,15 @@ impl<'a> Walk<'a> {
             .collect();
         denied.sort();
         let unknown_type = self.rule.unknown_types.iter().any(|name| name == symbol);
-        if shape_only && (!denied.is_empty() || unknown_type) {
+        if slot.is_some_and(|read| read.left) && (!denied.is_empty() || unknown_type) {
             return;
         }
-        let left_out = match judged_row {
-            Some(row) if denied.is_empty() && unknown_type => self.policy_leaves_out(row),
-            _ => false,
-        };
-        if left_out {
+        let judged = slot.is_some_and(|read| !read.left);
+        if let (true, Some(row)) = (judged, edge)
+            && denied.is_empty()
+            && unknown_type
+            && self.policy_leaves_out(row)
+        {
             return;
         }
         self.visited.insert(visit);
@@ -665,10 +666,11 @@ impl<'a> Walk<'a> {
             self.unknown(symbol, module, shape, trail, edge, ("unknown-type", ""));
             return;
         }
+        let unexpanded = self.unexpanded_assignment(symbol, &shapes, slot);
         if !rules.has_symbol(self.cx.link, symbol) {
             if !complete {
                 self.unknown(symbol, module, shape, trail, edge, ("no-facts", ""));
-            } else if judged_row.is_some() && !expanded && self.module_level_name(symbol) {
+            } else if unexpanded {
                 self.unknown(symbol, module, shape, trail, edge, ("alias", ""));
             }
             return;
@@ -708,9 +710,29 @@ impl<'a> Walk<'a> {
             self.check_members(symbol, module, shape, trail);
             return;
         }
-        if shapes.contains("constant") && judged_row.is_some() && !expanded {
+        if unexpanded {
             self.unknown(symbol, module, shape, trail, edge, ("alias", ""));
         }
+    }
+
+    /// `ExportPrimitive.unexpanded_assignment`: whether a slot judged here names a module-level
+    /// assignment the producer did not expand.
+    fn unexpanded_assignment(
+        &self,
+        symbol: &str,
+        shapes: &FxHashSet<String>,
+        slot: Option<SlotRead>,
+    ) -> bool {
+        let Some(read) = slot else {
+            return false;
+        };
+        if read.left || read.expanded {
+            return false;
+        }
+        if self.cx.rules.has_symbol(self.cx.link, symbol) {
+            return shapes.contains("constant");
+        }
+        self.module_level_name(symbol)
     }
 
     /// `ExportPrimitive.module_level_name`: whether a symbol with no facts is a name bound at the
@@ -1005,7 +1027,6 @@ impl<'a> Walk<'a> {
                 }
                 continue;
             }
-            let judged_row = if shape_only { None } else { Some(id) };
             let has_expansion =
                 expanded.contains(&(self.cx.attr(id, callable), self.cx.attr(id, slot)));
             let targets = edges.targets_of(id);
@@ -1030,7 +1051,10 @@ impl<'a> Walk<'a> {
                         shape,
                         Some(id),
                         &deeper,
-                        (shape_only, judged_row, has_expansion),
+                        Some(SlotRead {
+                            left: shape_only,
+                            expanded: has_expansion,
+                        }),
                     );
                 }
             }

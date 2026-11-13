@@ -25,6 +25,7 @@ rule's selection leaves out (an opaque payload) is not judged as unknown here ei
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from hoglint.config.model import ExportSpec, RuleSpec, ShapePolicy
@@ -153,6 +154,16 @@ UNKNOWN_WHY = {
     "no-annotation": "{detail} has no annotation",
     "alias": "a module-level name hoglint does not expand into types",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class SlotRead:
+    """How a member's slot reached a symbol: left to a named rule, which judges it (only the
+    class's shape is judged here), or judged here, with whether the producer expanded an alias in
+    the slot. An exported symbol itself is reached by no slot (None)."""
+
+    left: bool
+    expanded: bool = False
 
 
 class ExportPrimitive(RuleType):
@@ -467,16 +478,13 @@ class ExportPrimitive(RuleType):
         policy: ShapePolicy,
         edge: Edge | None,
         trail: tuple[str, ...],
-        shape_only: bool = False,
-        judged_row: Edge | None = None,
-        expanded: bool = False,
+        slot: SlotRead | None = None,
     ) -> None:
         """Findings are keyed by (symbol, module), so a symbol already checked for this module and
-        policy adds nothing the second time. A check of the shape alone (`shape_only`) that finds
-        a denied kind or an unknown type marks nothing: a full check may still report it. Nor does
-        an unknown type in a member row judged in full (`judged_row`) that every named rule's
-        policy leaves out. A module-level assignment in such a row is an alias the producer did
-        not expand there (`expanded` says it did), so what it stands for is unknown."""
+        policy adds nothing the second time. A check of a slot left to a named rule that finds a
+        denied kind or an unknown type marks nothing: a full check may still report it. Nor does
+        an unknown type in a slot judged here (`edge` is its row) that every named rule's policy
+        leaves out. A module-level assignment there that the producer did not expand is unknown."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
             return
@@ -485,26 +493,24 @@ class ExportPrimitive(RuleType):
             return
         shapes, complete = self.recognize(symbol)
         denied = sorted(shapes & set(policy.deny))
-        if shape_only and (denied or symbol in self.spec.unknown_types):
+        unknown_type = symbol in self.spec.unknown_types
+        if slot is not None and slot.left and (denied or unknown_type):
             return
-        if (
-            judged_row is not None
-            and not denied
-            and symbol in self.spec.unknown_types
-            and self.policy_leaves_out(judged_row)
-        ):
+        judged = slot is not None and not slot.left
+        if judged and edge is not None and not denied and unknown_type and self.policy_leaves_out(edge):
             return
         self.visited.add(visit)
         if denied:
             self.finding(symbol, module, f"export-denied({denied[0]})", trail, edge)
             return
-        if symbol in self.spec.unknown_types:
+        if unknown_type:
             self.unknown(symbol, module, policy, trail, edge, "unknown-type")
             return
+        unexpanded = self.unexpanded_assignment(symbol, shapes, slot)
         if not self.facts.has(symbol):
             if not complete:
                 self.unknown(symbol, module, policy, trail, edge, "no-facts")
-            elif judged_row is not None and not expanded and self.module_level_name(symbol):
+            elif unexpanded:
                 self.unknown(symbol, module, policy, trail, edge, "alias")
             return
         if "class" in shapes:
@@ -523,8 +529,17 @@ class ExportPrimitive(RuleType):
         if "function" in shapes:
             self.check_members(symbol, module, policy, trail)
             return
-        if "constant" in shapes and judged_row is not None and not expanded:
+        if unexpanded:
             self.unknown(symbol, module, policy, trail, edge, "alias")
+
+    def unexpanded_assignment(self, symbol: str, shapes: frozenset[str], slot: SlotRead | None) -> bool:
+        """Whether a slot judged here names a module-level assignment the producer did not expand:
+        a symbol a pack reads as a constant, or one with no facts bound at the top of a module."""
+        if slot is None or slot.left or slot.expanded:
+            return False
+        if self.facts.has(symbol):
+            return "constant" in shapes
+        return self.module_level_name(symbol)
 
     def module_level_name(self, symbol: str) -> bool:
         """Whether a symbol with no facts is a name bound at the top of a graph module: no class
@@ -683,12 +698,12 @@ class ExportPrimitive(RuleType):
                 if not shape_only:
                     self.unresolved(row, module)
                 continue
-            judged_row = None if shape_only else row
+            has_expansion = (row.attr("callable"), row.attr("slot")) in expanded
+            read = SlotRead(left=shape_only, expanded=has_expansion)
             names = [str(target) for target in row.targets] or [row.surface]
             for name in names:
                 if name and name not in trail:
-                    has_expansion = (row.attr("callable"), row.attr("slot")) in expanded
-                    self.check(name, module, policy, row, (*trail, name), shape_only, judged_row, has_expansion)
+                    self.check(name, module, policy, row, (*trail, name), read)
 
     # ── output ──
 
