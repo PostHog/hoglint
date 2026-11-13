@@ -384,6 +384,66 @@ def test_the_certificate_follows_an_alias_and_a_member_slot_outside_a_surface(
         assert moved in result.prediction.predicted
 
 
+BASES_REPO = {
+    "hoglint.toml": """
+schema = 1
+
+[discovery]
+source_roots = ["."]
+first_party = ["core"]
+
+[shapes.contract]
+data = ["frozen-dataclass"]
+unknown = "error"
+
+[exports.facade]
+within = "core"
+paths = ["facade/**"]
+shape = "contract"
+
+[rules.export-shape]
+primitive = "export"
+identity = "module-symbol"
+ledger = false
+""",
+    "core/__init__.py": "",
+    "core/mid.py": "class Mid:\n    pass\n",
+    "core/thing.py": "import dataclasses\n\nfrom core.mid import Mid\n\n\n"
+    "@dataclasses.dataclass(frozen=True)\nclass Plain(Mid):\n    total: int\n",
+    "core/data.py": "import dataclasses\n\n\n@dataclasses.dataclass(frozen=True)\nclass Info:\n    total: int\n",
+    "core/facade/__init__.py": "",
+    "core/facade/api.py": "from core.thing import Plain\n\n__all__ = ['Plain']\n",
+    "core/facade/info.py": "from core.data import Info\n\n__all__ = ['Info']\n",
+}
+# Each child edits a module the facade does not import: the facade's `export-shape` row comes, so
+# the facade file must be predicted from what it read of the class it hands out.
+BASE_CHANGES: dict[str, tuple[dict[str, str | None], str]] = {
+    "a base in another module turns from a class into a function": (
+        {"core/mid.py": "def Mid() -> type:\n    return object\n"},
+        "core/facade/api.py",
+    ),
+    "a handed-out dataclass in another module loses frozen": (
+        {"core/data.py": "import dataclasses\n\n\n@dataclasses.dataclass(frozen=False)\nclass Info:\n    total: int\n"},
+        "core/facade/info.py",
+    ),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(BASE_CHANGES))
+def base_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    return param_pair(request, tmp_path_factory, BASES_REPO, BASE_CHANGES[request.param][0])
+
+
+def test_the_certificate_holds_when_a_class_a_facade_hands_out_changes_in_another_module(
+    tmp_path: Path, base_pair: tuple[Path, Pair]
+) -> None:
+    result = replay(tmp_path, base_pair, "traces")
+    assert result.prediction is not None
+    moved = BASE_CHANGES[base_pair[1].name][1]
+    assert moved in result.prediction.truth, "the case must move the facade's rows"
+    assert result.status() == "HELD", result.line()
+
+
 def missed_prediction() -> PredictionScore:
     item = TruthItem("edges", "imports", "core/t.py", frozenset({"core/t.py"}))
     return PredictionScore(frozenset({"core/t.py"}), frozenset(), (item,), (item,))
