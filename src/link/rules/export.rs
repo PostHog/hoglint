@@ -320,8 +320,8 @@ pub struct Walk<'a> {
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
     slots_seen: FxHashMap<String, Vec<usize>>,
-    /// `ExportPrimitive.bindings`: per export module, the name it hands each symbol out by.
-    bindings: FxHashMap<String, FxHashMap<String, String>>,
+    /// `ExportPrimitive.bound`: the name the export module in hand hands each symbol out by.
+    bound: FxHashMap<String, String>,
     /// `ExportPrimitive.left_out`, per row.
     left_out: FxHashMap<u32, bool>,
     /// `ExportPrimitive.copy_index`: per module, its exposes rows by their exact callable.
@@ -343,7 +343,7 @@ impl<'a> Walk<'a> {
             exposes_by_name: FxHashMap::default(),
             top_level: FxHashMap::default(),
             slots_seen: FxHashMap::default(),
-            bindings: FxHashMap::default(),
+            bound: FxHashMap::default(),
             left_out: FxHashMap::default(),
             copy_index: FxHashMap::default(),
         }
@@ -359,8 +359,7 @@ impl<'a> Walk<'a> {
                 }
                 let module_name = self.cx.text(module).to_string();
                 let exported = self.exported_symbols(module);
-                let bound = self.bound_names(&exported);
-                self.bindings.insert(module_name.clone(), bound);
+                self.bound = self.bound_names(&exported);
                 for (symbol, edge) in exported {
                     let member =
                         rules.export_member(self.cx.link, &rules.exports[export], Some(&symbol));
@@ -832,11 +831,7 @@ impl<'a> Walk<'a> {
     /// of the walked symbol's slots, among the surfaces of the walk's shape policy.
     fn copy_places(&self, symbol: &str, module: &str, shape: usize) -> Vec<(String, String)> {
         let mut out = Vec::new();
-        if let Some(bound) = self
-            .bindings
-            .get(module)
-            .and_then(|found| found.get(symbol))
-        {
+        if let Some(bound) = self.bound.get(symbol) {
             out.push((module.to_string(), bound.clone()));
         }
         if let Some((owner, _)) = self.cx.module_of_symbol(symbol) {
