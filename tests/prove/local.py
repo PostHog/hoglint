@@ -51,7 +51,7 @@ class Build(Check):
 
 
 class ModelRepo(Check):
-    """The model repository in the native engine: every row as reviewed."""
+    """The model repository in the native engine: every row as reviewed, every table as stored."""
 
     name = "model repository"
 
@@ -61,7 +61,8 @@ class ModelRepo(Check):
         code = context.run(log, [str(context.python), "-m", "model_repo.check"], env)
         text = log.read_text()
         rows = "every row as expected" if "every row as expected" in text else "ROWS CHANGED"
-        return [Outcome(self.name, code == 0, rows)]
+        tables = "every table as stored" if "every table as stored" in text else "TABLES CHANGED"
+        return [Outcome(self.name, code == 0, f"{rows}; {tables}")]
 
 
 class Suite(Check):

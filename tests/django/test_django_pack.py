@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -16,11 +13,9 @@ from core.support import (
 )
 from django_facts import FIRST_PARTY, FactRepo
 from hoglint.core.config import CoreConfig
-from hoglint.core.reader import BuildReader
 from hoglint.core.symbols import FUNC
 from hoglint.ledger.cache import RunStores
-from hoglint.model import Graph, Resolution
-from hoglint.native.queries import PackQueries
+from hoglint.model import Resolution
 from hoglint.packs.django.apps import AppReader
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
 from hoglint.packs.django.migrations import AliasProjection, MigrationReader, SummaryCache
@@ -323,13 +318,6 @@ def test_a_failed_migration_read_fails_the_symbols_that_carry_its_databases() ->
     assert failed["django.symbols@1"].kinds == MODEL_KINDS
 
 
-class DigestQueries(PackQueries):
-    """The Python engine's queries with a digest of each record's facts, as the native engine has."""
-
-    def fact_digest(self, record: Any, kinds: Iterable[str]) -> str | None:
-        return hashlib.blake2b(orjson.dumps([record.get(kind) for kind in kinds])).hexdigest()
-
-
 def migration_parents(settings_value: str, cache: SummaryCache) -> list[str]:
     swappable = {"call": "swappable_dependency", "args": ["settings.AUTH_USER_MODEL"]}
     migrations = {
@@ -347,9 +335,8 @@ def migration_parents(settings_value: str, cache: SummaryCache) -> list[str]:
         "billing/migrations/__init__.py": {},
         "billing/migrations/0001_initial.py": {"defs": [class_def("Migration", [], 1)]},
     }
-    build = FactRepo(migrations).build(CoreConfig(first_party=FIRST_PARTY))
+    snapshot = FactRepo(migrations).link(CoreConfig(first_party=FIRST_PARTY)).reader()
     config = DjangoPackConfig(settings_modules=("proj.settings",))
-    snapshot = BuildReader(build, DigestQueries(build, Graph()))
     reader = MigrationReader(snapshot, AppReader(snapshot).read(config), config, cache)
     graph = reader.read(AliasProjection(Path("."), None))
     edges = [f"{child[0]}.{child[1]} -> {parent[0]}.{parent[1]}" for child, parent in graph.graph.edges()]

@@ -10,7 +10,18 @@ import pytest
 
 from native.require import native_module
 
-from model_repo.harness import UNTIED, Comparison, Dumps, Expected, WantedRow, case_ids, catalog_rows
+from model_repo.harness import (
+    UNTIED,
+    Comparison,
+    Dumps,
+    Expected,
+    WantedRow,
+    case_ids,
+    catalog_rows,
+    changed_tables,
+    dumped_tables,
+    read_tables,
+)
 
 EXPECTED = Expected.read()
 
@@ -36,6 +47,10 @@ def test_every_expected_row_is_tied_to_a_case_of_the_catalog() -> None:
 def test_the_result_equals_the_reviewed_expected_file(checked: Dumps) -> None:
     comparison = Comparison(EXPECTED, checked.result())
     assert comparison.equal(), "\n" + comparison.render()
+
+
+def test_every_table_is_the_stored_one(checked: Dumps) -> None:
+    assert changed_tables(read_tables(), dumped_tables(checked.out)) == []
 
 
 def wanted_case(wanted: WantedRow) -> object:

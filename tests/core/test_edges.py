@@ -1,19 +1,14 @@
-from __future__ import annotations
+"""Core edges of hand-written records, linked by the native engine."""
 
-import itertools
+from __future__ import annotations
 
 import pytest
 
-from hoglint.core.build import CoreBuild
-from hoglint.core.config import CoreConfig
-from hoglint.core.producers import BuildContext, Producer, use_position
 from hoglint.core.symbols import FUNC, TC_ELSE, TRY, TYPE_ONLY
-from hoglint.facts import FactStore
-from hoglint.model import Context, Graph, Resolution
+from hoglint.model import Context, Resolution
 from hoglint.outputs.tach_map import TachMap
-from hoglint.plugins import ProducerFailure
 
-from core.support import CYCLE_KEYS, FileFacts, build, cycle_answers, edges_of
+from core.support import FileFacts, build, edges_of
 
 VIEWS = "web/views.py"
 
@@ -142,23 +137,28 @@ def test_contexts_come_from_syntax_and_path(path: str, flags: int, expected: set
 
 
 @pytest.mark.parametrize(
-    "next_token, up, position",
+    "chain, up, position",
     [
         ("()", "expr", "call"),
         ("[]", "return", "subscript"),
-        ("objects", "assign:x", "attribute"),
-        (None, "arg:1:isinstance if-test", "argument"),
-        (None, "await return", "return"),
-        (None, "assign:x", "store"),
-        (None, "param-ann:x", "annotation"),
-        (None, "returns", "annotation"),
-        (None, "base:0", "base"),
-        (None, "for-iter", "iterate"),
-        (None, "assign-target", "target"),
+        (".objects", "assign:x", "attribute"),
+        ("", "arg:1:isinstance if-test", "argument"),
+        ("", "await return", "return"),
+        ("", "assign:x", "store"),
+        ("", "param-ann:x", "annotation"),
+        ("", "returns", "annotation"),
+        ("", "base:0", "base"),
+        ("", "for-iter", "iterate"),
+        ("", "assign-target", "target"),
     ],
 )
-def test_use_positions_are_neutral(next_token: str | None, up: str, position: str) -> None:
-    assert use_position(next_token, up) == position
+def test_use_positions_are_neutral(chain: str, up: str, position: str) -> None:
+    files = [
+        FileFacts("checkout/logic.py").define("charge"),
+        FileFacts(VIEWS).import_from("checkout.logic", "charge").ref("charge", chain=chain, up=up),
+    ]
+    [edge] = edges_of(build(files), "reference", VIEWS)
+    assert edge.use == position
 
 
 @pytest.mark.parametrize("kind", ["reference", "dotted-path", "dynamic-import"])
@@ -208,30 +208,6 @@ def test_tach_map_skips_imports_in_either_type_checking_branch(facts: FileFacts,
     graph = build(files)
     mapping = TachMap(graph, [f.record["path"] for f in files]).dependents()
     assert mapping == ({"checkout/logic.py": [VIEWS]} if counted else {})
-
-
-class PartialProducer(Producer):
-    """Records what a producer may record besides edges: a module and a partial failure."""
-
-    kind = "partial"
-    failure = ProducerFailure("one file unread", frozenset({"partial"}))
-
-    def run(self, context: BuildContext, graph: Graph) -> None:
-        graph.modules["generated.mod"] = "generated/mod.py"
-        graph.failed_producers["partial@1"] = self.failure
-
-
-def test_a_core_producer_keeps_the_modules_and_failures_it_records() -> None:
-    graph = CoreBuild(CoreConfig(), FactStore()).graph((PartialProducer,))
-
-    assert graph.modules["generated.mod"] == "generated/mod.py"
-    assert graph.failed_producers == {"partial@1": PartialProducer.failure}
-
-
-def test_names_that_meet_a_re_export_cycle_answer_the_same_in_every_order() -> None:
-    answers = [cycle_answers(order) for order in itertools.permutations(CYCLE_KEYS)]
-    assert all(found == answers[0] for found in answers)
-    assert answers[0][("app.pkg", "sub")] == ("module", ("app.pkg.sub", "app.pkg.sub"))
 
 
 def test_a_decorator_call_passing_frozen_true_marks_its_decorate_edge_frozen() -> None:

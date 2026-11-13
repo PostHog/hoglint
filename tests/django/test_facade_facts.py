@@ -3,8 +3,6 @@ from __future__ import annotations
 from core.support import func_def
 from django_facts import FactRepo
 from hoglint.core.config import CoreConfig
-from hoglint.core.reader import python_pack_io
-from hoglint.model import Graph
 from hoglint.presets_py.posthog.facade import FacadeFacts
 
 FACADE = {
@@ -15,8 +13,7 @@ FACADE = {
 
 
 def test_a_null_return_is_no_untyped_slot_but_an_untyped_parameter_is() -> None:
-    build = FactRepo(FACADE).build(CoreConfig(first_party=("products",)))
-    edges = FacadeFacts(python_pack_io(build, Graph())[0]).produce()
+    edges = FacadeFacts(FactRepo(FACADE).link(CoreConfig(first_party=("products",))).reader()).produce()
 
     slots = sorted(
         (e.site.scope, e.attr("slot"), e.surface, e.attr("annotation")) for e in edges if e.kind == "exposes"
