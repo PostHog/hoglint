@@ -322,6 +322,8 @@ struct Keys {
     body: Sid,
     decorated: Sid,
     called: Sid,
+    classes: Sid,
+    unknown_base: Sid,
     frozen: Sid,
     class: Sid,
     index: Sid,
@@ -401,6 +403,8 @@ impl Producing {
             body: it.intern("body"),
             decorated: it.intern("decorated"),
             called: it.intern("called"),
+            classes: it.intern("classes"),
+            unknown_base: it.intern("?"),
             frozen: it.intern("frozen"),
             class: it.intern("class"),
             index: it.intern("index"),
@@ -1602,6 +1606,162 @@ impl Producers<'_> {
             .is_some_and(|found| !found.is_empty())
     }
 
+    /// `BuildContext.branch_bound`: the first step of a hit's chain whose module binds the name
+    /// more than once (once per branch, say): such a name stands for every one of its bindings.
+    fn branch_bound(&mut self, hit: HitId) -> Option<Ent> {
+        let chain = self.core.chain(hit).to_vec();
+        for step in chain {
+            if step.s == EMPTY {
+                continue;
+            }
+            let Some(table) = self.core.table(step.m) else {
+                continue;
+            };
+            let bound = self.core.table_at(table).bindings.get(&step.s);
+            if bound.is_some_and(|found| found.len() > 1) {
+                return Some(step);
+            }
+        }
+        None
+    }
+
+    /// `BuildContext.followed_base`: whether a base's bindings are followed: it resolves to a
+    /// first-party name that is no class, or through a name bound more than once.
+    fn followed_base(&mut self, hit: HitId, resolved: Resolved) -> bool {
+        if resolved.res == Res::Resolved && self.core.kind(hit) == HitKind::Variable {
+            return true;
+        }
+        matches!(resolved.res, Res::Resolved | Res::External) && self.branch_bound(hit).is_some()
+    }
+
+    /// `BuildContext.hit_classes`: the classes a resolved name stands for, as a base: a class, a
+    /// third-party name (read as a class, as a third-party base is), or a name bound more than
+    /// once or to no class whose bindings all name classes. None for anything else.
+    fn hit_classes(
+        &mut self,
+        surface: Sid,
+        hit: Option<HitId>,
+        seen: &mut Vec<(Sid, Sid)>,
+    ) -> Option<Vec<String>> {
+        if hit.is_none() && self.settings.names.builtins.contains(&surface) {
+            return Some(vec![format!("builtins.{}", self.core.it.s(surface))]);
+        }
+        if let Some(step) = hit.and_then(|hit| self.branch_bound(hit)) {
+            return self.bound_classes(step.m, step.s, seen);
+        }
+        let resolved = self.core.classify(surface, hit);
+        if resolved.res == Res::External {
+            return Some(
+                resolved
+                    .target
+                    .map(|target| self.core.ent_text(target))
+                    .into_iter()
+                    .collect(),
+            );
+        }
+        let hit = hit?;
+        if resolved.res != Res::Resolved {
+            return None;
+        }
+        let origin = self.core.origin(hit);
+        match self.core.kind(hit) {
+            HitKind::Class => Some(vec![self.core.ent_text(origin)]),
+            HitKind::Variable => self.bound_classes(origin.m, origin.s, seen),
+            _ => None,
+        }
+    }
+
+    /// `BuildContext.binding_classes`: the classes one module-level binding of `name` stands
+    /// for; None when it is no class.
+    fn binding_classes(
+        &mut self,
+        module: Sid,
+        name: Sid,
+        binding: Binding,
+        value: Option<&V>,
+        seen: &mut Vec<(Sid, Sid)>,
+    ) -> Option<Vec<String>> {
+        match binding {
+            Binding::Class(_, _) => Some(vec![format!(
+                "{}.{}",
+                self.core.it.s(module),
+                self.core.it.s(name)
+            )]),
+            Binding::Module(dotted) => {
+                let hit = self.core.resolve_binding(module, binding);
+                self.hit_classes(dotted, hit, seen)
+            }
+            Binding::From(source, attr) => {
+                let surface = self.core.it.join(source, attr);
+                let hit = self.core.resolve_binding(module, binding);
+                self.hit_classes(surface, hit, seen)
+            }
+            Binding::Alias(_) | Binding::Variable => {
+                let mut value = value?;
+                while let V::Sub(inner, _) = value {
+                    value = inner;
+                }
+                let V::Chain(chain) = value else {
+                    return None;
+                };
+                let (hit, used, total) = self.core.resolve_chain(module, *chain);
+                if used != total {
+                    return None;
+                }
+                self.hit_classes(*chain, hit, seen)
+            }
+            Binding::Def(_, _) => None,
+        }
+    }
+
+    /// `BuildContext.bound_classes`: the classes a module-level name stands for, as a base:
+    /// every binding of it names a class, or a subscript of one (a name bound once per branch
+    /// takes the union). Sorted; None when one binding is no class, on a cycle, or past the alias
+    /// depth.
+    fn bound_classes(
+        &mut self,
+        module: Sid,
+        name: Sid,
+        seen: &mut Vec<(Sid, Sid)>,
+    ) -> Option<Vec<String>> {
+        if seen.contains(&(module, name)) || seen.len() >= MAX_ALIAS_DEPTH {
+            return None;
+        }
+        self.core.rec.read(Kind::Alias, module, name);
+        let table = self.core.table(module)?;
+        let table = self.core.table_at(table);
+        let bindings = table.bindings.get(&name).cloned().unwrap_or_default();
+        let record = table.record;
+        if bindings.is_empty() {
+            return None;
+        }
+        let facts = self.core.facts.clone();
+        seen.push((module, name));
+        let mut found: Vec<String> = Vec::new();
+        let mut known = true;
+        for (_, binding, assign) in bindings {
+            let value = record.zip(assign).and_then(|(file, at)| {
+                facts.files[file as usize].assigns[at as usize]
+                    .value
+                    .as_ref()
+            });
+            match self.binding_classes(module, name, binding, value, seen) {
+                Some(classes) => found.extend(classes),
+                None => {
+                    known = false;
+                    break;
+                }
+            }
+        }
+        seen.pop();
+        if !known {
+            return None;
+        }
+        found.sort();
+        found.dedup();
+        Some(found)
+    }
+
     /// The analyzed file's scope and def index of the def or class (`kind`) a module table binds
     /// a name to.
     fn def_of(&mut self, module: Sid, name: Sid, kind: HitKind) -> Option<(usize, u32)> {
@@ -1994,8 +2154,22 @@ impl Producers<'_> {
                     let k = &self.settings.k;
                     let index = self.core.it.intern(&position.to_string());
                     let mut attrs = vec![(k.class, qualname), (k.index, index)];
-                    if called_base(base) {
+                    let called = called_base(base);
+                    if called {
                         attrs.push((k.called, k.one));
+                    }
+                    let followed = resolved
+                        .via
+                        .filter(|&hit| self.followed_base(hit, resolved));
+                    if let Some(hit) = followed
+                        && !called
+                    {
+                        let classes = self.hit_classes(surface, Some(hit), &mut Vec::new());
+                        let value = match classes {
+                            Some(found) => self.core.it.intern(&found.join(",")),
+                            None => self.settings.k.unknown_base,
+                        };
+                        attrs.push((self.settings.k.classes, value));
                     }
                     let use_ = k.use_base;
                     self.push(

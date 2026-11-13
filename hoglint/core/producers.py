@@ -15,9 +15,9 @@ from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import is_class_var
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
-from hoglint.core.symbols import CLASS, FUNC, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
+from hoglint.core.symbols import CLASS, FUNC, Binding, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
 from hoglint.facts import FactStore
-from hoglint.model import Context, Edge, Graph, Resolution
+from hoglint.model import Context, Edge, EntityId, Graph, Resolution
 
 PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
@@ -201,6 +201,80 @@ class BuildContext:
 
     def is_builtin(self, name: str) -> bool:
         return name in BUILTIN_NAMES
+
+    def branch_bound(self, hit: Hit) -> EntityId | None:
+        """The first step of a hit's chain whose module binds the name more than once (once per
+        branch, say): such a name stands for every one of its bindings."""
+        for step in hit.chain:
+            table = self.resolver.tables.get(step.module) if step.symbol else None
+            if table is not None and len(table.bindings.get(step.symbol, ())) > 1:
+                return step
+        return None
+
+    def hit_classes(self, surface: str, hit: Hit | None, seen: frozenset[tuple[str, str]]) -> list[str] | None:
+        """The classes a resolved name stands for, as a base: a class, a third-party name (read as
+        a class, as a third-party base is), or a name bound more than once or to no class whose
+        bindings all name classes. None for anything else."""
+        if hit is None and surface in BUILTIN_NAMES:
+            return [f"builtins.{surface}"]
+        step = self.branch_bound(hit) if hit is not None else None
+        if step is not None:
+            return self.bound_classes(step.module, step.symbol, seen)
+        resolved = self.classifier.classify(surface, hit)
+        if resolved.resolution is Resolution.EXTERNAL:
+            return [str(target) for target in resolved.targets]
+        if hit is None or resolved.resolution is not Resolution.RESOLVED:
+            return None
+        if hit.kind == "class":
+            return [str(hit.origin)]
+        if hit.kind == "variable":
+            return self.bound_classes(hit.origin.module, hit.origin.symbol, seen)
+        return None
+
+    def followed_base(self, hit: Hit, resolved: Resolved) -> bool:
+        """Whether a base's bindings are followed: it resolves to a first-party name that is no
+        class, or through a name bound more than once."""
+        if resolved.resolution is Resolution.RESOLVED and hit.kind == "variable":
+            return True
+        return resolved.resolution in (Resolution.RESOLVED, Resolution.EXTERNAL) and self.branch_bound(hit) is not None
+
+    def binding_classes(
+        self, module: str, name: str, binding: Binding, value: object, seen: frozenset[tuple[str, str]]
+    ) -> list[str] | None:
+        """The classes one module-level binding of `name` stands for; None when it is no class."""
+        kind = binding[0]
+        if kind == "class":
+            return [str(entity(module, name))]
+        if kind in ("module", "from"):
+            surface = binding[1] if kind == "module" else f"{binding[1]}.{binding[2]}"
+            return self.hit_classes(surface, self.resolver.resolve_binding(module, binding), seen)
+        if kind not in ("alias", "variable"):
+            return None
+        while isinstance(value, dict) and "sub" in value:
+            value = value["sub"]
+        if not isinstance(value, str):
+            return None
+        hit, rest = self.resolver.resolve_chain(module, value)
+        return self.hit_classes(value, hit, seen) if not rest else None
+
+    def bound_classes(self, module: str, name: str, seen: frozenset[tuple[str, str]] = frozenset()) -> list[str] | None:
+        """The classes a module-level name stands for, as a base: every binding of it names a
+        class, or a subscript of one (a name bound once per branch takes the union). Sorted;
+        None when one binding is no class, on a cycle, or past the alias depth."""
+        key = (module, name)
+        if key in seen or len(seen) >= MAX_ALIAS_DEPTH:
+            return None
+        table = self.resolver.tables.get(module)
+        bindings = table.bindings.get(name, []) if table is not None else []
+        if not bindings:
+            return None
+        found: set[str] = set()
+        for _, binding, value in bindings:
+            classes = self.binding_classes(module, name, binding, value, seen | {key})
+            if classes is None:
+                return None
+            found.update(classes)
+        return sorted(found)
 
     def name_lookup(self, scope: FileScope, name: str, at_scope: int, line: int) -> Lookup:
         """A bare name; unbound names are builtins or missing module globals."""
@@ -1058,6 +1132,9 @@ class DeclarationProducer(Producer):
                 attrs = (("class", qualname), ("index", str(position)))
                 if called_base(base):
                     attrs = (*attrs, ("called", "1"))
+                elif found is not None and found.hit is not None and context.followed_base(found.hit, resolved):
+                    classes = context.hit_classes(surface, found.hit, frozenset())
+                    attrs = (*attrs, ("classes", ",".join(classes) if classes is not None else "?"))
                 graph.edges.append(
                     self.edge(
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs

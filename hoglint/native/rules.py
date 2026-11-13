@@ -128,9 +128,9 @@ class NativeSymbolFacts(SymbolFacts):
         super().__init__(graph, [], [])
         symbols: Any = graph.symbols
         self.columns: NativeSymbols = symbols
-        for owner, surface, names, _, called, resolved in graph.link.class_facts("inherit", "class"):
-            self.add_base(owner, self.base_names(surface, names, called, resolved))
-        for owner, surface, names, frozen, _, _ in graph.link.class_facts("decorate", "decorated"):
+        for owner, surface, names, _, called, resolved, classes in graph.link.class_facts("inherit", "class"):
+            self.add_base(owner, self.base_names(surface, names, called, resolved, classes))
+        for owner, surface, names, frozen, _, _, _ in graph.link.class_facts("decorate", "decorated"):
             self.add_decorator(owner, surface, names, frozen)
 
     def declared_class(self, symbol: str) -> bool:

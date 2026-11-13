@@ -461,6 +461,47 @@ UNKNOWN_BASES = {
     ),
 }
 REJECTED_UNKNOWN = {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []}
+SHOP_ERRORS = (
+    "from typing import TYPE_CHECKING, Generic, TypeVar\n\nT = TypeVar('T')\n\n\n"
+    "class ShopError(Exception, Generic[T]):\n    def order(self) -> Order:\n        raise ValueError\n\n\n"
+    "class Mixin:\n    pass\n\n\n"
+)
+# A base bound to a name: the name stands for every class its bindings name (a subscript read
+# through), and is unknown when one binding names no class.
+BOUND_BASES = {
+    "a base bound to a class under TYPE_CHECKING and to object otherwise": (
+        "if TYPE_CHECKING:\n    _Base = Mixin\nelse:\n    _Base = object\n\n\n"
+        "class Rejected(Exception, _Base):\n    pass\n",
+        CLEAN,
+    ),
+    "a base bound to two classes of different shapes": (
+        "if TYPE_CHECKING:\n    _Base = ShopError\nelse:\n    _Base = Mixin\n\n\nclass Rejected(_Base):\n    pass\n",
+        DENIED_AT_ERRORS,
+    ),
+    "a base bound to a class in one branch and to a call in the other": (
+        "def make() -> type:\n    return Mixin\n\n\n"
+        "if TYPE_CHECKING:\n    _Base = Mixin\nelse:\n    _Base = make()\n\n\n"
+        "class Rejected(Exception, _Base):\n    pass\n",
+        REJECTED_UNKNOWN,
+    ),
+    "a base bound to a subscript of a class": (
+        "Bound = ShopError[int]\n\n\nclass Rejected(Bound):\n    pass\n",
+        DENIED_AT_ERRORS,
+    ),
+    "a base bound to a name bound to a subscript of a class": (
+        "Inner = ShopError[int]\nBound = Inner\n\n\nclass Rejected(Bound):\n    pass\n",
+        DENIED_AT_ERRORS,
+    ),
+    "a base bound in a cycle": (
+        "First = Second\nSecond = First\n\n\nclass Rejected(Exception, First):\n    pass\n",
+        REJECTED_UNKNOWN,
+    ),
+    "a base bound to a class in each arm of a try": (
+        "try:\n    _Base = Mixin\nexcept ImportError:\n    _Base = object\n\n\n"
+        "class Rejected(Exception, _Base):\n    pass\n",
+        CLEAN,
+    ),
+}
 
 
 def returns(module: str, name: str) -> str:
@@ -695,6 +736,7 @@ SLOT_OWNER_CASES = {
         {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
     ),
     **{case: (handed_out(MAKES_A_BASE + body, "Rejected"), REJECTED_UNKNOWN) for case, body in UNKNOWN_BASES.items()},
+    **{case: (handed_out(SHOP_ERRORS + body, "Rejected"), expected) for case, (body, expected) in BOUND_BASES.items()},
     "an allowed class with a base that names a first-party class through an alias": (
         handed_out(
             "class ShopError(Exception):\n    pass\n\n\nBase = ShopError\n\n\nclass Rejected(Base):\n    pass\n",

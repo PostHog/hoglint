@@ -130,7 +130,7 @@ class SymbolFacts:
         for edge in inherits:
             if edge.attr("class"):
                 called, resolved = edge.attr("called") == "1", edge.resolution is Resolution.RESOLVED
-                names = self.base_names(edge.surface, self.names(edge), called, resolved)
+                names = self.base_names(edge.surface, self.names(edge), called, resolved, edge.attr("classes"))
                 self.add_base(f"{edge.site.module}.{edge.attr('class')}", names)
         for edge in decorates:
             if not edge.attr("decorated"):
@@ -146,11 +146,16 @@ class SymbolFacts:
             return [str(target) for target in edge.targets]
         return [edge.surface] if edge.surface else []
 
-    def base_names(self, surface: str, names: list[str], called: bool, resolved: bool) -> list[str]:
-        """`names` of an inherit edge as ancestry reads them: a call's result, and a first-party
-        name that is no declared class, are unknown bases (`?`)."""
+    def base_names(self, surface: str, names: list[str], called: bool, resolved: bool, classes: str) -> list[str]:
+        """`names` of an inherit edge as ancestry reads them: a call's result is an unknown base
+        (`?`); a first-party name the producer followed is the classes it wrote (`classes`), or
+        unknown; any other first-party name that is no declared class is unknown."""
         if called:
             return [f"?{surface}()"]
+        if classes == "?":
+            return [f"?{name}" for name in names]
+        if classes:
+            return classes.split(",")
         if not resolved:
             return names
         return [name if self.declared_class(name) else f"?{name}" for name in names]

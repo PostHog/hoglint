@@ -234,8 +234,8 @@ impl Timings {
 }
 
 /// One inherit or decorate fact for `SymbolFacts`: (owner symbol, surface, names, frozen,
-/// called, resolved).
-pub type ClassFact = (String, String, Vec<String>, bool, bool, bool);
+/// called, resolved, classes).
+pub type ClassFact = (String, String, Vec<String>, bool, bool, bool, String);
 
 /// A pack edge to add (`Link::add_pack`), its strings interned and its record found.
 pub struct NewPackRow {
@@ -610,7 +610,8 @@ impl Link {
     /// (owner symbol, surface, names, frozen, called, resolved) where the owner is "module.<class
     /// or decorated attr>", the names are the targets, `?<surface>` when unresolved, else the
     /// surface, frozen says a decorator call passed `frozen=True`, called says the edge has the
-    /// attr `called=1` and resolved says the edge resolved to first-party code.
+    /// attr `called=1`, resolved says the edge resolved to first-party code and classes is the
+    /// edge's `classes` attr ("" when it has none).
     pub fn class_facts(&mut self, kind: Sid, owner_attr: &str) -> Vec<ClassFact> {
         let Some(owner_key) = self.core.it.get(owner_attr) else {
             return Vec::new();
@@ -618,6 +619,7 @@ impl Link {
         let one = self.core.it.get("1");
         let frozen = (self.core.it.get("frozen"), one);
         let called = (self.core.it.get("called"), one);
+        let classes_key = self.core.it.get("classes");
         let ids = self.index.of_kind(&self.edges, kind).to_vec();
         let core = &self.core;
         let edges = &self.edges;
@@ -655,6 +657,9 @@ impl Link {
                 has_pair(frozen),
                 has_pair(called),
                 edges.res_of(id) == scope::Res::Resolved,
+                classes_key
+                    .and_then(|key| edges.attrs_with(id).find(|(k, _)| *k == key))
+                    .map_or(String::new(), |&(_, value)| core.it.s(value).to_string()),
             ));
         }
         out

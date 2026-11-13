@@ -182,11 +182,24 @@ pub struct ModuleTable {
     pub stub_record: Option<u32>,
     /// Names only the `.pyi` beside the module binds.
     pub stub_names: FxHashSet<Sid>,
+    /// Every module-level binding of each name in the `.py`, in source order: (flags, binding,
+    /// index of the assigns row that binds it). Lookups never read it; a base bound once per
+    /// branch is read through it.
+    pub bindings: FxHashMap<Sid, Vec<(u32, Binding, Option<u32>)>>,
 }
 
 /// One module-level binding in source order: (line, column, order, flags, binding or None for
-/// a star import, bound name, star source).
-type BindingEvent = (u32, u32, u8, u32, Option<Binding>, Sid, Option<Sid>);
+/// a star import, bound name, star source, assigns row).
+type BindingEvent = (
+    u32,
+    u32,
+    u8,
+    u32,
+    Option<Binding>,
+    Sid,
+    Option<Sid>,
+    Option<u32>,
+);
 
 /// What the core shares between producers and pack queries for one snapshot.
 pub struct Core {
@@ -406,6 +419,8 @@ impl Core {
                     + t.lazy.heap()
                     + heap::vec(&t.lazy_entries)
                     + heap::set(&t.stub_names)
+                    + heap::map(&t.bindings)
+                    + t.bindings.values().map(heap::vec).sum::<usize>()
             })
             .sum();
         let mut resolver =
@@ -504,7 +519,16 @@ impl Core {
         let mut events: Vec<BindingEvent> = Vec::new();
         for (i, d) in record.defs.iter().enumerate() {
             if module_level(d.s, d.f, MODULE_LEVEL_FLAGS) {
-                events.push((d.l, d.c, 0, d.f, Some(def_binding(i, d, stub)), d.n, None));
+                events.push((
+                    d.l,
+                    d.c,
+                    0,
+                    d.f,
+                    Some(def_binding(i, d, stub)),
+                    d.n,
+                    None,
+                    None,
+                ));
             }
         }
         for row in &record.imports {
@@ -514,16 +538,25 @@ impl Core {
             if row.name == Some(star) {
                 let source =
                     absolute_import(&mut self.it, module, is_package, row.target, row.level);
-                events.push((row.line, row.col, 1, row.flags, None, star, source));
+                events.push((row.line, row.col, 1, row.flags, None, star, source, None));
                 continue;
             }
             if let Some((name, binding)) =
                 import_binding(&mut self.it, star, module, is_package, row)
             {
-                events.push((row.line, row.col, 1, row.flags, Some(binding), name, None));
+                events.push((
+                    row.line,
+                    row.col,
+                    1,
+                    row.flags,
+                    Some(binding),
+                    name,
+                    None,
+                    None,
+                ));
             }
         }
-        for row in &record.assigns {
+        for (at, row) in record.assigns.iter().enumerate() {
             if !is_module_assign(row) {
                 continue;
             }
@@ -535,24 +568,49 @@ impl Core {
                         Some(V::Chain(chain)) => Binding::Alias(*chain),
                         _ => Binding::Variable,
                     };
-                    events.push((row.l, row.c, 2, row.f, Some(binding), *name, None));
+                    events.push((
+                        row.l,
+                        row.c,
+                        2,
+                        row.f,
+                        Some(binding),
+                        *name,
+                        None,
+                        Some(at as u32),
+                    ));
                     continue;
                 }
                 let mut names = Vec::new();
                 unpacked_names(&self.it, target, &mut names);
                 for name in names {
-                    events.push((row.l, row.c, 2, row.f, Some(Binding::Variable), name, None));
+                    events.push((
+                        row.l,
+                        row.c,
+                        2,
+                        row.f,
+                        Some(Binding::Variable),
+                        name,
+                        None,
+                        None,
+                    ));
                 }
             }
         }
         events.sort_by_key(|e| (e.0, e.1, e.2));
-        for (_, _, _, flags, binding, name, source) in events {
+        for (_, _, _, flags, binding, name, source, assign) in events {
             let Some(binding) = binding else {
                 if let Some(source) = source.filter(|&s| s != EMPTY) {
                     table.star_imports.push(source);
                 }
                 continue;
             };
+            if !stub {
+                table
+                    .bindings
+                    .entry(name)
+                    .or_default()
+                    .push((flags, binding, assign));
+            }
             if !binding.is_import()
                 && flags & CONDITIONAL_FLAGS != 0
                 && let Some(current) = table.names.get(&name)
@@ -699,6 +757,7 @@ impl Core {
             record: None,
             stub_record: None,
             stub_names: FxHashSet::default(),
+            bindings: FxHashMap::default(),
         };
         if let Some(&file) = self.index.path_of.get(&module) {
             table.record = Some(file);
@@ -723,6 +782,7 @@ impl Core {
                     record: None,
                     stub_record: None,
                     stub_names: FxHashSet::default(),
+                    bindings: FxHashMap::default(),
                 };
                 self.collect(&mut stub_table, stub, true);
                 for (name, binding) in stub_table.names.iter() {

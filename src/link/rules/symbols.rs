@@ -40,14 +40,17 @@ impl SymbolFacts {
         let mut bases: FxHashMap<String, Vec<String>> = FxHashMap::default();
         let mut decorators: FxHashMap<String, Vec<String>> = FxHashMap::default();
         if let Some(inherit) = link.kind_sid("inherit") {
-            for (owner, surface, names, _, called, resolved) in link.class_facts(inherit, "class") {
-                let names = Self::base_names(link, &surface, names, called, resolved);
+            for (owner, surface, names, _, called, resolved, classes) in
+                link.class_facts(inherit, "class")
+            {
+                let names = Self::base_names(link, &surface, names, called, resolved, &classes);
                 bases.entry(owner).or_default().extend(names);
             }
         }
         let mut frozen_by: FxHashMap<String, Vec<String>> = FxHashMap::default();
         if let Some(decorate) = link.kind_sid("decorate") {
-            for (owner, surface, names, is_frozen, _, _) in link.class_facts(decorate, "decorated")
+            for (owner, surface, names, is_frozen, _, _, _) in
+                link.class_facts(decorate, "decorated")
             {
                 if is_frozen {
                     let found = frozen_by.entry(owner.clone()).or_default();
@@ -91,17 +94,25 @@ impl SymbolFacts {
         }
     }
 
-    /// The names of an inherit edge as ancestry reads them: a call's result, and a first-party
-    /// name that is no declared class, are unknown bases (`SymbolFacts.base_names`).
+    /// The names of an inherit edge as ancestry reads them: a call's result is an unknown base;
+    /// a first-party name the producer followed is the classes it wrote, or unknown; any other
+    /// first-party name that is no declared class is unknown (`SymbolFacts.base_names`).
     fn base_names(
         link: &Link,
         surface: &str,
         names: Vec<String>,
         called: bool,
         resolved: bool,
+        classes: &str,
     ) -> Vec<String> {
         if called {
             return vec![format!("?{surface}()")];
+        }
+        if classes == "?" {
+            return names.into_iter().map(|name| format!("?{name}")).collect();
+        }
+        if !classes.is_empty() {
+            return classes.split(',').map(str::to_string).collect();
         }
         if !resolved {
             return names;

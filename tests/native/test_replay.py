@@ -414,6 +414,11 @@ ledger = false
     "core/facade/__init__.py": "",
     "core/facade/api.py": "from core.thing import Plain\n\n__all__ = ['Plain']\n",
     "core/facade/info.py": "from core.data import Info\n\n__all__ = ['Info']\n",
+    "core/branch.py": "from typing import TYPE_CHECKING\n\nfrom core.mid import Mid\n\n"
+    "if TYPE_CHECKING:\n    Base = Mid\nelse:\n    Base = object\n",
+    "core/held.py": "import dataclasses\n\nfrom core.branch import Base\n\n\n"
+    "@dataclasses.dataclass(frozen=True)\nclass Held(Base):\n    total: int\n",
+    "core/facade/held.py": "from core.held import Held\n\n__all__ = ['Held']\n",
 }
 # Each child edits a module the facade does not import: the facade's `export-shape` row comes, so
 # the facade file must be predicted from what it read of the class it hands out.
@@ -421,6 +426,14 @@ BASE_CHANGES: dict[str, tuple[dict[str, str | None], str]] = {
     "a base in another module turns from a class into a function": (
         {"core/mid.py": "def Mid() -> type:\n    return object\n"},
         "core/facade/api.py",
+    ),
+    "the else branch of a branch-bound base in another module turns into a call": (
+        {
+            "core/branch.py": "from typing import TYPE_CHECKING\n\nfrom core.mid import Mid\n\n\n"
+            "def make() -> type:\n    return object\n\n\n"
+            "if TYPE_CHECKING:\n    Base = Mid\nelse:\n    Base = make()\n"
+        },
+        "core/facade/held.py",
     ),
     "a handed-out dataclass in another module loses frozen": (
         {"core/data.py": "import dataclasses\n\n\n@dataclasses.dataclass(frozen=False)\nclass Info:\n    total: int\n"},

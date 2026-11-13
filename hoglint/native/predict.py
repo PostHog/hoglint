@@ -396,7 +396,14 @@ class TreeTables:
             out.edges[path].append(json.dumps(without_place(row)))
             owner = attrs.get("class") if kind == "inherit" else attrs.get("decorated") if kind == "decorate" else None
             if owner:
-                found = [kind, row[SURFACE], row[TARGETS], row[RESOLUTION], attrs.get("called", "")]
+                found = [
+                    kind,
+                    row[SURFACE],
+                    row[TARGETS],
+                    row[RESOLUTION],
+                    attrs.get("called", ""),
+                    attrs.get("classes", ""),
+                ]
                 out.classes.setdefault(f"{row[MODULE]}.{owner}", []).append(found)
         for module, path, rows in read_rows(dump / "labels.jsonl"):
             if label_modules is None or module in label_modules or path in files:
