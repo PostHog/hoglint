@@ -47,12 +47,16 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
 - `[shapes.<name>] signatures = true` says signatures are part of the contract.
   The PostHog preset sets it on `contract`, not on `registration`.
 - In such a surface, core exposes every slot with every type name, builtins included (`builtins.dict`, `typing.Any`), and `annotation=missing` for an unannotated parameter.
+  A starred part (`tuple[int, *tuple[Order, ...]]`, `*args: *tuple[Order, int]`) is read through.
+  A part that is no type expression (an operator other than `|`, a conditional expression, a call, `or`, a display, a string that does not parse) gives the slot one row with `annotation=unread`, in every file and in an alias's value too, so the slot is unknown where a rule judges it (Nov 13).
+  `Annotated[X, ...]` is read as `X`: its metadata is no type and is not read; so are a `Literal`'s values and `...`.
 - The identity names the callable.
   The old producer's identity had `-` there in 1,673 of 2,738 ledger lines.
 - Receivers (`self`, `cls`) are left out by position in a method, not by name.
 - An annotated class-body attribute of a class that is no dataclass is a slot `attr:<name>` of the class, written where the class is defined (Nov 13).
   It is written as a method's slots are: every type name in a surface file, only a name that is no plain builtin elsewhere.
-  A `ClassVar` is an attribute too: callers read it.
+  Its names, and a field's, are looked up as a method's are: in the class body first, then the module, as Python does; a bare annotation (`uuid: uuid.UUID`) binds no name.
+  A `ClassVar` is an attribute too, of a dataclass-like class as well: it is no field of `__init__`, callers read it.
 
 **Dataclass fields** (D62 C1 and C4, D63, N3b review item 7):
 - `dataclass_decorators` is a global `[discovery]` setting.
@@ -68,7 +72,9 @@ The producer expands an alias in every file (Nov 13): in a slot outside a surfac
 An alias the module binds more than once (`if TYPE_CHECKING: Ref = Order` / `else: Ref = int`, or the arms of a `try`) stands for every binding: its expansion is the union of every binding's expansion, in source order, each binding's names looked up where it is assigned.
 When one of the bindings is no type alias (a call, a class, an import), the name is no alias and is unknown, as a single such binding is.
 A name in a slot the export rule judges in full that is no class, no function and no alias the producer expanded is unknown, as the signature rule reads the same name in a facade function.
-That holds for a name at the top of a module (a `NewType`, a `TypeVar`, a functional `TypedDict`, a value built by a call) and for a name assigned in a class body (`Ref = Order` in a class, then `-> Ref` in its method): the producer does not expand a class-body alias, so it is unknown, not clean.
+That holds whatever else the module does with the name: a module that hands the name out itself does not make its slot clean.
+That holds for a name at the top of a module (a `NewType`, a `TypeVar`, a functional `TypedDict`, a value built by a call) and for a name assigned in a class body (`Ref = Order` in a class, then `-> Ref` in its method or as the type of its attribute or field): the producer does not expand a class-body alias, so it is unknown, not clean, also next to a module-level name of the same spelling.
+An alias nested deeper than the producer follows is one unknown row, its marker.
 The test is made for each name of the slot: an expanded alias marks only itself, so a name next to it in the slot, or inside its value, is still asked (`Maybe = Ref | None` with `Ref` a `NewType` is unknown).
 A name that one slot leaves to a signature rule is still judged where another slot reaches it and the export rule judges that slot.
 The reasoning matches D63: where something is defined must not change the verdict.
@@ -99,9 +105,10 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
   A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
-  One rule decides which members of a class are read (Nov 13): `walk_where` decides the methods and attributes of a class, the handed-out class and each ancestor alike.
+  One rule decides which members of a class are read (Nov 13): `walk_where` decides the methods and attributes of a class, the handed-out class and each ancestor alike, a `ClassVar` included.
   So the methods of a frozen dataclass core defines, handed out by a product's facade, are core's contract and are not judged, as the methods a product class inherits from a class core defines are not.
-  The fields of a dataclass-like class (a dataclass or a pydantic model) are always read: they are constructor slots of the class, and of a class that inherits them.
+  The fields of a frozen dataclass and of a pydantic model are always read, wherever a slot names the class and whoever defines it: they are constructor slots of the class, and of a class that inherits them.
+  A dataclass core defines that is no data shape (its query syntax tree) is core's contract as a whole: `walk_where` decides its fields too.
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
@@ -123,8 +130,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   | A function or a data shape's fields handed out from outside the facade (the copy at the facade) | `facade-signature` |
   | A public method, `__init__`, property or attribute of an allowed class handed out from outside the facade | `export-shape`: one row per type and module, the trail in the message |
   | A private method of a walked class | `export-shape` |
-  | A method or attribute of a class core defines, handed out or inherited | none: core's contract |
-  | A field of a dataclass-like class core defines, handed out or inherited | as a field of the handed-out class |
+  | A method or attribute (a `ClassVar` too) of a class core defines, handed out or inherited | none: core's contract |
+  | A field of a frozen dataclass or a pydantic model core defines, handed out, inherited or named in a slot | as a field of the handed-out class |
   | A member of a class named in a slot (one level deeper) | as the rows above, by where its row is read |
   | Every slot above, at every depth | judged by one slot policy: the named rule's selection |
 
@@ -137,7 +144,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   Rows outside a surface file are written only for a name that is no plain builtin; a bare `Any` (`typing.Any`) is no builtin, so it has a row and is judged.
   A class nested in a class of a surface file is read in plain mode, so the same holds there.
   The model repository keeps both as wanted cases (`ME09`, `ME10`).
-- A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
+- A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field, also when core defines the pydantic model and a slot names it.
 - **A base that is no class makes the lineage unknown** (Nov 13).
   The producer marks an inherit edge whose base is a call (`class Rejected(Exception, make())`, also `make()[T]`) with `called = "1"`; the edge stays resolved to the callee, because the class statement does call it.
   Ancestry reads such a base as unknown, and so a base that resolves to first-party code that is not declared as a class, such as a function.
