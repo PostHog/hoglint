@@ -416,6 +416,28 @@ INHERITED_FIELD = {
 }
 
 
+def two_names(module: str, name: str, *bound: str) -> str:
+    """A facade file that hands one symbol of `module` out under each name of `bound`, in order."""
+    imports = "".join(f"from {module} import {name} as {each}\n" for each in bound)
+    return imports + f"\n__all__ = {list(bound)!r}\n"
+
+
+def returns_in_rejected(annotation: str) -> str:
+    """An exception whose one method returns `annotation`."""
+    return f"\n\nclass Rejected(Exception):\n    def item(self) -> {annotation}:\n        raise ValueError\n"
+
+
+# Names bound at the top of a module that the producer does not expand into types, each as `Ref`.
+UNEXPANDED_NAMES = {
+    "a NewType": "from typing import NewType\n\nRef = NewType('Ref', Order)\n",
+    "a TypeVar": "from typing import TypeVar\n\nRef = TypeVar('Ref')\n",
+    "a functional TypedDict": "from typing import TypedDict\n\nRef = TypedDict('Ref', {'order': Order})\n",
+    "a constant": "Ref = 3\n",
+}
+MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n        raise ValueError\n"
+REF_UNKNOWN_AT_ERRORS = {"export-shape": [[f"{SHOP}.errors.Ref", ERRORS, "export-unknown"]], "facade-signature": []}
+
+
 def returns(module: str, name: str) -> str:
     """A facade file whose one function returns a class it imports from `module`."""
     return f"from {module} import {name}\n\n\ndef get() -> {name}:\n    raise ValueError\n"
@@ -701,6 +723,61 @@ SLOT_OWNER_CASES = {
             "    def _load(self) -> Orders:\n        raise ValueError\n"
         },
         {"export-shape": [[ORDER, CONTRACTS, "export-denied(model)"]], "facade-signature": []},
+    ),
+    # A symbol handed out under two names: the public copy is the signature rule's, in any order.
+    "a dataclass handed out under a private name, then a public one": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Receipt"),
+            f"{SHOP_DIR}/facade/api.py": two_names(f"{SHOP}.logic", "Receipt", "_Receipt", "Receipt"),
+        },
+        {"export-shape": [], "facade-signature": [[API, "Receipt.__init__", "field:order", ORDER]]},
+    ),
+    "a dataclass handed out under a public name, then a private one": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Receipt"),
+            f"{SHOP_DIR}/facade/api.py": two_names(f"{SHOP}.logic", "Receipt", "Receipt", "_Receipt"),
+        },
+        {"export-shape": [], "facade-signature": [[API, "Receipt.__init__", "field:order", ORDER]]},
+    ),
+    "a function handed out under a private name, then a public one": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + "def place(order: Order) -> None:\n    pass\n",
+            f"{SHOP_DIR}/facade/api.py": two_names(f"{SHOP}.logic", "place", "_place", "place"),
+        },
+        {"export-shape": [], "facade-signature": [[API, "place", "param:order", ORDER]]},
+    ),
+    "a function handed out under a public name, then a private one": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + "def place(order: Order) -> None:\n    pass\n",
+            f"{SHOP_DIR}/facade/api.py": two_names(f"{SHOP}.logic", "place", "place", "_place"),
+        },
+        {"export-shape": [], "facade-signature": [[API, "place", "param:order", ORDER]]},
+    ),
+    "a dataclass handed out under three names": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Receipt"),
+            f"{SHOP_DIR}/facade/api.py": two_names(f"{SHOP}.logic", "Receipt", "_Receipt", "Bill", "Receipt"),
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [
+                [API, "Bill.__init__", "field:order", ORDER],
+                [API, "Receipt.__init__", "field:order", ORDER],
+            ],
+        },
+    ),
+    "a dataclass handed out under two public names": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Receipt"),
+            f"{SHOP_DIR}/facade/api.py": two_names(f"{SHOP}.logic", "Receipt", "Bill", "Receipt"),
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [
+                [API, "Bill.__init__", "field:order", ORDER],
+                [API, "Receipt.__init__", "field:order", ORDER],
+            ],
+        },
     ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),

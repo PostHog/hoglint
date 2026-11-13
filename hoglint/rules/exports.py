@@ -199,9 +199,9 @@ class ExportPrimitive(RuleType):
         self.copy_index: dict[str, dict[str, list[int]]] = {}
         # A callable's rows by slot, so a class's fields are not scanned once per field.
         self.copy_rows: dict[tuple[str, str], dict[str, list[Edge]]] = {}
-        # The name the export module in hand hands a symbol out by, read before any of its symbols
-        # is checked, so a class reached in a slot first finds the name a later hand-out gives it.
-        self.bound: dict[str, str] = {}
+        # The names the export module in hand hands a symbol out by, read before any of its symbols
+        # is checked, so a class reached in a slot first finds the names a later hand-out gives it.
+        self.bound: dict[str, list[str]] = {}
 
     @staticmethod
     def message(module: str, trail: Sequence[str], label: str) -> str:
@@ -351,12 +351,15 @@ class ExportPrimitive(RuleType):
         return out
 
     @staticmethod
-    def bound_names(exported: list[tuple[str, Edge | None]]) -> dict[str, str]:
-        """The name each handed-out import binds its symbol to, the first one where two do."""
-        out: dict[str, str] = {}
+    def bound_names(exported: list[tuple[str, Edge | None]]) -> dict[str, list[str]]:
+        """Every name the handed-out imports bind each symbol to, in the module's order."""
+        out: dict[str, list[str]] = {}
         for symbol, edge in exported:
-            if edge is not None:
-                out.setdefault(symbol, edge.attr("binds"))
+            if edge is None:
+                continue
+            names = out.setdefault(symbol, [])
+            if edge.attr("binds") not in names:
+                names.append(edge.attr("binds"))
         return out
 
     # ── shapes ──
@@ -618,11 +621,10 @@ class ExportPrimitive(RuleType):
 
     def copy_places(self, symbol: str, module: str, policy: ShapePolicy) -> list[tuple[str, str]]:
         """(module, name) of each place the producer may hold a copy of the walked symbol's slots,
-        among the surfaces of the walk's shape policy: the exporting module under the name it hands
-        the symbol out by, and the module that defines the symbol under its own name (a contract
+        among the surfaces of the walk's shape policy: the exporting module under each name it
+        hands the symbol out by, and the module that defines the symbol under its own name (a contract
         dataclass's fields along its MRO). The same for every row of one visit."""
-        bound = self.bound.get(symbol, "")
-        out = [(module, bound)] if bound else []
+        out = [(module, bound) for bound in self.bound.get(symbol, []) if bound]
         place = self.place_of(symbol)
         if place is not None:
             out.append(place)

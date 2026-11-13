@@ -334,8 +334,8 @@ pub struct Walk<'a> {
     /// `ExportPrimitive.holding`: the named rules whose source part holds for a module.
     holding: FxHashMap<Sid, Vec<usize>>,
     keys: Keys,
-    /// `ExportPrimitive.bound`: the name the export module in hand hands each symbol out by.
-    bound: FxHashMap<String, String>,
+    /// `ExportPrimitive.bound`: the names the export module in hand hands each symbol out by.
+    bound: FxHashMap<String, Vec<String>>,
     /// `ExportPrimitive.slot_policy_answers`, per row.
     slot_policy_answers: FxHashMap<u32, bool>,
     /// `ExportPrimitive.copy_index`: per module, its exposes rows by their exact callable.
@@ -877,8 +877,10 @@ impl<'a> Walk<'a> {
         shape: usize,
     ) -> Vec<(Place, String)> {
         let mut out = Vec::new();
-        if let (Some(here), Some(bound)) = (module, self.bound.get(symbol)) {
-            out.push((here, bound.clone()));
+        if let (Some(here), Some(names)) = (module, self.bound.get(symbol)) {
+            for bound in names.iter().filter(|bound| !bound.is_empty()) {
+                out.push((here, bound.clone()));
+            }
         }
         if let Some((owner, qualname)) = self.place_of(symbol) {
             out.push((owner, qualname.to_string()));
@@ -997,15 +999,19 @@ impl<'a> Walk<'a> {
         true
     }
 
-    /// `ExportPrimitive.bound_names`: the name each handed-out import binds its symbol to, the
-    /// first one where two do.
-    fn bound_names(&self, exported: &[(String, Option<u32>)]) -> FxHashMap<String, String> {
+    /// `ExportPrimitive.bound_names`: every name the handed-out imports bind each symbol to, in
+    /// the module's order.
+    fn bound_names(&self, exported: &[(String, Option<u32>)]) -> FxHashMap<String, Vec<String>> {
         let binds = self.keys.binds;
-        let mut out = FxHashMap::default();
+        let mut out: FxHashMap<String, Vec<String>> = FxHashMap::default();
         for (symbol, edge) in exported {
-            if let Some(id) = edge {
-                out.entry(symbol.clone())
-                    .or_insert_with(|| self.cx.attr(*id, binds).to_string());
+            let Some(id) = edge else {
+                continue;
+            };
+            let name = self.cx.attr(*id, binds);
+            let names = out.entry(symbol.clone()).or_default();
+            if !names.iter().any(|known| known == name) {
+                names.push(name.to_string());
             }
         }
         out
