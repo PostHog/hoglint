@@ -779,6 +779,35 @@ SLOT_OWNER_CASES = {
             ],
         },
     ),
+    # A name the producer does not expand, named by a facade function's slot and by a member slot.
+    **{
+        f"{kind} a facade function names first": (
+            {
+                f"{SHOP_DIR}/errors.py": IMPORTS_ORDER + UNEXPANDED_NAMES[kind] + MEMBER_TAKES_REF,
+                f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.errors import Ref, Rejected\n\n__all__ = ['get', 'Rejected']\n\n\n"
+                "def get(x: Ref) -> None:\n    pass\n",
+            },
+            {
+                "export-shape": [[f"{SHOP}.errors.Ref", API, "export-unknown"]],
+                "facade-signature": [[API, "get", "param:x", f"{SHOP}.errors.Ref"]],
+            },
+        )
+        for kind in UNEXPANDED_NAMES
+    },
+    "a NewType a handed-out function names second": (
+        {
+            f"{SHOP_DIR}/errors.py": IMPORTS_ORDER
+            + UNEXPANDED_NAMES["a NewType"]
+            + MEMBER_TAKES_REF
+            + "\n\ndef get(x: Ref) -> None:\n    pass\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.errors import Rejected\nfrom {SHOP}.errors import get\n\n"
+            "__all__ = ['Rejected', 'get']\n",
+        },
+        {
+            "export-shape": [[f"{SHOP}.errors.Ref", API, "export-unknown"]],
+            "facade-signature": [[API, "get", "param:x", f"{SHOP}.errors.Ref"]],
+        },
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

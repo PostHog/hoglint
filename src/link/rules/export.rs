@@ -632,9 +632,10 @@ impl<'a> Walk<'a> {
         false
     }
 
-    /// `ExportPrimitive.check`. A check of a slot left to a named rule that finds a denied kind or
-    /// an unknown type marks nothing: a full check may still report it. Nor does an unknown type
-    /// in a slot judged here (`edge` is its row) that every named rule's policy leaves out.
+    /// `ExportPrimitive.check`. A check of a slot left to a named rule marks only a class or a
+    /// function, whose walk a full check would repeat: a later full check may still report
+    /// anything else. Nor does an unknown type in a slot judged here (`edge` is its row) that every
+    /// named rule's policy leaves out mark it.
     fn check(
         &mut self,
         symbol: &str,
@@ -673,7 +674,9 @@ impl<'a> Walk<'a> {
         {
             return;
         }
-        self.visited.insert(visit);
+        if judged || slot.is_none() || shapes.contains("class") || shapes.contains("function") {
+            self.visited.insert(visit);
+        }
         if let Some(first) = denied.first() {
             let label = format!("export-denied({first})");
             self.finding(symbol, module, &label, trail, edge, true, false);
