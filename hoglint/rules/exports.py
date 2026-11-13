@@ -502,6 +502,8 @@ class ExportPrimitive(RuleType):
                 self.finding(symbol, module, "export-shape(class)", trail, edge)
                 return
             if self.walks(symbol, shapes, policy):
+                if not complete:
+                    self.unknown(symbol, module, policy, trail, edge, "bases")
                 self.check_members(symbol, module, policy, trail)
             return
         if "function" in shapes:

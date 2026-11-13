@@ -651,6 +651,12 @@ SLOT_OWNER_CASES = {
         },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "test-signature": []},
     ),
+    "an allowed class with a base that does not resolve": (
+        handed_out(
+            f"from {SHOP}.nowhere import Missing\n\n\nclass Rejected(Exception, Missing):\n    pass\n", "Rejected"
+        ),
+        {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

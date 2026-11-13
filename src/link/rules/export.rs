@@ -677,6 +677,9 @@ impl<'a> Walk<'a> {
                 return;
             }
             if self.walks(symbol, &shapes, shape) {
+                if !complete {
+                    self.unknown(symbol, module, shape, trail, edge, ("bases", ""));
+                }
                 self.check_members(symbol, module, shape, trail);
             }
             return;
