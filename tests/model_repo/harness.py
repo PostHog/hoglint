@@ -28,6 +28,7 @@ TREE = HERE / "repo"
 SITE = HERE / "site"
 EXPECTED = HERE / "expected.toml"
 TABLES = HERE / "tables.toml"
+MESSAGES = HERE / "messages.toml"
 CASES = HERE / "CASES.md"
 PRESET = HERE.parents[1] / "presets" / "posthog.toml"
 # Where the tree's root config finds the preset, as in the monorepo.
@@ -58,6 +59,12 @@ TABLES_HEADER = """\
 # row count and a digest of its bytes. A change that moves any row of any table changes a digest.
 # `bin/model-repo --refresh` rewrites it with expected.toml; `bin/model-repo --keep` keeps the dump
 # to read the rows. See docs/design/12-how-work-is-done.md, "The model repository".
+"""
+MESSAGES_HEADER = """\
+# The words of the model repository's result, in the order the native engine dumps them: per
+# finding its rule, identity and message, per incomplete item its rule, key and reason. One engine
+# words them; this file is what holds the wording still. `bin/model-repo --refresh` rewrites it with
+# expected.toml; review the diff of every message that moved.
 """
 
 
@@ -211,6 +218,59 @@ def changed_tables(stored: dict[str, Table], found: dict[str, Table]) -> list[st
         lines.append(
             f"table {name}: {rows}, digest {before.digest if before else '-'} -> {after.digest if after else '-'}"
         )
+    return lines
+
+
+@dataclass(frozen=True)
+class Message:
+    """The words of one result row: a finding's message by its identity, or an incomplete item's
+    reason by its key."""
+
+    rule: str
+    verdict: str
+    identity: tuple[str, ...]
+    text: str
+
+    def render(self) -> str:
+        return (
+            f"[[{self.verdict}]]\nrule = {quoted(self.rule)}\nidentity = {quoted_list(self.identity)}\n"
+            f"text = {quoted(self.text)}\n"
+        )
+
+    def line(self) -> str:
+        return f"{self.rule} {self.verdict} {' | '.join(self.identity)}: {self.text}"
+
+
+def dumped_messages(out: Path) -> list[Message]:
+    """Every finding's message and every incomplete item's reason of a dump, in its order."""
+    messages = [
+        Message(finding[0], "finding", tuple(finding[1]), finding[2]) for finding in read_lines(out / "findings.jsonl")
+    ]
+    messages.extend(
+        Message(item[0], "incomplete", (item[1],), item[2]) for item in read_lines(out / "incomplete.jsonl")
+    )
+    return messages
+
+
+def read_messages(path: Path = MESSAGES) -> list[Message]:
+    data = tomllib.loads(path.read_text())
+    return [
+        Message(entry["rule"], verdict, tuple(entry["identity"]), entry["text"])
+        for verdict in ("finding", "incomplete")
+        for entry in data.get(verdict, [])
+    ]
+
+
+def render_messages(messages: list[Message]) -> str:
+    return MESSAGES_HEADER + "".join("\n" + message.render() for message in messages)
+
+
+def changed_messages(stored: list[Message], found: list[Message]) -> list[str]:
+    """One line per message the dump does not give as stored, and per one it gives that is not stored."""
+    lines = [f"message gone: {message.line()}" for message in stored if message not in found]
+    lines.extend(f"message new: {message.line()}" for message in found if message not in stored)
+    if not lines and stored != found:
+        lines.append("messages in another order")
     return lines
 
 

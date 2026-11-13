@@ -4,13 +4,16 @@ hand-written rules for the corners where the meaning is irregular, and seeded ge
 from __future__ import annotations
 
 import gc
+import os
+import ast
 import json
 import random
+import hashlib
 import subprocess
 import dataclasses
 from array import array
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -1785,6 +1788,121 @@ def test_generated_configs_are_judged_the_same_in_both(world: World, monkeypatch
             failures.extend(f"{found}\n{base[len(CONFIG) :]}{rules}" for found in found)
     assert failures == []
     assert levels > 5
+
+
+# The runs of the generated configs as both engines gave them, stored: one JSON list per line, a
+# config's line (a digest of its base config and rules) before its rows. One engine judges and
+# words them now; this file holds their verdicts and words still. Rewrite it with
+# `HOGLINT_REFRESH_GENERATED=1` after a change of the generators, and review the diff.
+GENERATED_RUNS = Path(__file__).parent / "generated_runs.jsonl"
+
+
+def generated_configs(world: World) -> Iterator[tuple[str, str]]:
+    """(base config, rules) of every config the generated tests draw: the generated rules over the
+    fixture's config, configs that differ outside `[rules]`, and configs that set a label two ways."""
+    tables = Tables(random.Random(20261111))
+    for mode in list(MODES) * 24:
+        while True:
+            rules = tables.rules("generated", mode)
+            try:
+                world.config(rules)
+            except ConfigError:
+                continue
+            break
+        yield CONFIG, rules
+    rng = random.Random(1111)
+    judged = 0
+    while judged < 60:
+        varied = Varied(rng)
+        base = varied.config()
+        try:
+            world.config("", base)
+        except ConfigError:
+            continue
+        judged += 1
+        yield base, varied.rules(world, base)
+    rng = random.Random(1110)
+    judged = 0
+    while judged < 150:
+        conflicting = Conflicting(rng)
+        text = conflicting.config()
+        try:
+            world.config("", text)
+        except ConfigError:
+            continue
+        text += conflicting.rules(world, text)
+        judged += 1
+        yield text, ""
+
+
+def config_digest(base: str, rules: str) -> str:
+    return hashlib.blake2b((base + rules).encode(), digest_size=8).hexdigest()
+
+
+def group_name(name: str) -> str:
+    """A level's group as stored: a group of a set field is named by Python's `str()` of a
+    frozenset, whose order follows the hash seed, so its items are sorted here."""
+    if not name.startswith("frozenset("):
+        return name
+    items = ast.literal_eval(name.removeprefix("frozenset(").removesuffix(")"))
+    return "{" + ", ".join(sorted(items)) + "}"
+
+
+def run_lines(world: World, at: int, base: str, rules: str) -> list[list[Any]]:
+    """A whole run of one config as stored lines: each rule's findings (identity, message, flags,
+    subjects) and incomplete items (key, reason, subjects), the levels, or the config error."""
+    try:
+        result = Engine(world.config(rules, base), world.graph, world.repo).evaluate()
+    except ConfigError as error:
+        # A problem names the config file, which sits in this run's temporary directory.
+        root = str(world.root.resolve())
+        return [["error", at, sorted(problem.replace(root, "<root>") for problem in error.problems)]]
+    out: list[list[Any]] = []
+    for rule, run in result.runs.items():
+        for finding in run.findings:
+            identity, flags = list(finding.identity), [finding.ledgerable, finding.unknown]
+            out.append(["finding", at, rule, identity, finding.message, *flags, list(finding.subjects)])
+        out.extend(["incomplete", at, rule, item.key, item.reason, list(item.subjects)] for item in run.incomplete)
+    for name, level in result.levels.items():
+        passing = sorted(group_name(group) for group in level.passing)
+        failing = {group_name(group): reasons for group, reasons in level.failing.items()}
+        out.append(["level", at, name, passing, dict(sorted(failing.items()))])
+    return out
+
+
+def stored_runs() -> dict[int, tuple[str, list[list[Any]]]]:
+    """The stored runs by config: its digest and its lines."""
+    out: dict[int, tuple[str, list[list[Any]]]] = {}
+    for text in GENERATED_RUNS.read_text().splitlines():
+        line = json.loads(text)
+        if line[0] == "config":
+            out[line[1]] = (line[2], [])
+        else:
+            out[line[1]][1].append(line)
+    return out
+
+
+def test_a_generated_config_gives_its_stored_run(world: World) -> None:
+    configs = list(generated_configs(world))
+    if os.environ.get("HOGLINT_REFRESH_GENERATED"):
+        lines: list[list[Any]] = []
+        for at, (base, rules) in enumerate(configs):
+            lines.append(["config", at, config_digest(base, rules)])
+            lines.extend(run_lines(world, at, base, rules))
+        GENERATED_RUNS.write_text("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines))
+    stored = stored_runs()
+    assert len(stored) == len(configs) == 24 * len(MODES) + 60 + 150
+    moved = []
+    for at, (base, rules) in enumerate(configs):
+        digest, lines = stored[at]
+        if digest != config_digest(base, rules):
+            moved.append(f"config {at} is not the stored one: the generators changed")
+            continue
+        found = json.loads(json.dumps(run_lines(world, at, base, rules), ensure_ascii=False))
+        if found != lines:
+            first = next((a, b) for a, b in zip([*found, None], [*lines, None]) if a != b)
+            moved.append(f"config {at}: given {first[0]}, stored {first[1]}")
+    assert moved == []
 
 
 # A field whose domain reads a provider field that a provider and an assignment set apart on

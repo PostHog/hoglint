@@ -18,8 +18,11 @@ from model_repo.harness import (
     WantedRow,
     case_ids,
     catalog_rows,
+    changed_messages,
     changed_tables,
+    dumped_messages,
     dumped_tables,
+    read_messages,
     read_tables,
 )
 
@@ -51,6 +54,10 @@ def test_the_result_equals_the_reviewed_expected_file(checked: Dumps) -> None:
 
 def test_every_table_is_the_stored_one(checked: Dumps) -> None:
     assert changed_tables(read_tables(), dumped_tables(checked.out)) == []
+
+
+def test_every_message_is_the_stored_one(checked: Dumps) -> None:
+    assert changed_messages(read_messages(), dumped_messages(checked.out)) == []
 
 
 def wanted_case(wanted: WantedRow) -> object:
