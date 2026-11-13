@@ -105,10 +105,15 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   | A private method of a walked class | `export-shape` |
   | A member inherited from a class core defines | none: core's contract |
   | A member of a class named in a slot (one level deeper) | as the rows above, by where its row is read |
+  | Every slot above, at every depth | judged by one slot policy: the named rule's selection |
+
+  A slot has one policy, the named rule's, at every depth and whoever reports it: where the export rule judges a slot row in full, it first reads that row with the parts of each named rule's selection that do not read only the source. Where every named rule's selection is false for the row, the type the row names is not judged as unknown there either.
+  So an opaque payload (`Any` as a mapping's argument) in a parameter or a field is clean in a member of a class handed out from outside, as it is in a facade function, and a finding in a return value.
+  A model, a class of no allowed shape, an unresolved name and a missing annotation are judged as before.
 
   For example, a facade module hands out `OrderRejected`, an exception its product defines in a logic module, and `OrderRejected.order()` returns another product's model: `export-shape` reports the model at the facade module, with `OrderRejected -> Order` in the message.
-- **A written limit** (Nov 13): a parameter with no annotation, or one typed only with a plain builtin (a bare `dict` or `object` included), on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.
-  Rows outside a surface file are written only for a name that is no plain builtin.
+- **A written limit** (Nov 13): a parameter with no annotation, or one typed only with plain builtins, on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.
+  Rows outside a surface file are written only for a name that is no plain builtin: a bare `dict` and a bare `object` have no row there; a bare `Any` (`typing.Any`) is no builtin, so it has a row and is judged.
 - A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 
 **The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).

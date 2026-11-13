@@ -176,6 +176,16 @@ pub struct ExportRulePlan {
     /// Where each signature rule of `leave_slots_to` reads a member's rows (None: in every
     /// module); there only a class's shape is judged. Empty: every slot is judged in full.
     pub slot_owners: Vec<Option<NodePlan>>,
+    /// The slot policy of each signature rule of `leave_slots_to`, in the same order.
+    pub slot_policies: Vec<SlotPolicyPlan>,
+}
+
+/// The parts of a signature rule's selection that do not read only the source, joined (None
+/// when there are none), and the endpoint it reads a row's destination by.
+#[derive(Deserialize)]
+pub struct SlotPolicyPlan {
+    pub rest: Option<NodePlan>,
+    pub endpoint: String,
 }
 
 /// One thing a coverage rule needs covered (`CoverSpec`).

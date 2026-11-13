@@ -804,12 +804,18 @@ impl Rules {
                     .iter()
                     .map(|owner| edge.optional(owner))
                     .collect::<Result<Vec<_>, _>>()?;
+                let slot_policies = found
+                    .export
+                    .slot_policies
+                    .iter()
+                    .map(|policy| Ok((edge.optional(&policy.rest)?, role_of(&policy.endpoint)?)))
+                    .collect::<Result<Vec<_>, String>>()?;
                 RuleKind::Export(ExportRule::new(
                     &found.export,
                     &found.identity,
                     entity,
                     start,
-                    slot_owners,
+                    (slot_owners, slot_policies),
                 ))
             }
             ModePlan::Coverage(found) => RuleKind::Coverage(

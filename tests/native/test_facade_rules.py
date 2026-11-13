@@ -481,6 +481,59 @@ SLOT_OWNER_CASES = {
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
     ),
+    "an opaque payload parameter of a handed-out exception": (
+        handed_out(
+            "from typing import Any\n\n\nclass Rejected(Exception):\n"
+            "    def __init__(self, extra: dict[str, Any]) -> None:\n        self.extra = extra\n",
+            "Rejected",
+        ),
+        {"export-shape": [], "facade-signature": []},
+    ),
+    "an opaque payload returned by a method of a handed-out exception": (
+        handed_out(
+            "from typing import Any\n\n\nclass Rejected(Exception):\n"
+            "    def extra(self) -> dict[str, Any]:\n        return {}\n",
+            "Rejected",
+        ),
+        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a bare Any parameter of a handed-out exception": (
+        handed_out(
+            "from typing import Any\n\n\nclass Rejected(Exception):\n"
+            "    def __init__(self, extra: Any) -> None:\n        self.extra = extra\n",
+            "Rejected",
+        ),
+        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a model as a mapping's argument on a handed-out exception": (
+        handed_out(
+            "class Rejected(Exception):\n"
+            "    def __init__(self, orders: dict[str, Order]) -> None:\n        self.orders = orders\n",
+            "Rejected",
+        ),
+        DENIED_AT_ERRORS,
+    ),
+    "an opaque payload field of a class defined outside a surface": (
+        {
+            f"{SHOP_DIR}/logic.py": "import dataclasses\nfrom typing import Any\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Info:\n    payload: dict[str, Any]\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Info\n\n\ndef get() -> Info:\n    raise ValueError\n",
+        },
+        {"export-shape": [], "facade-signature": []},
+    ),
+    "an opaque payload only one of two named rules leaves out": (
+        {
+            "hoglint.toml": ROOT_CONFIG
+            + UNNAMED_SIGNATURE_RULE
+            + '\n[rules.export-shape]\nleave_slots_to = { add = ["routes-signature"] }\n',
+            **handed_out(
+                "from typing import Any\n\n\nclass Rejected(Exception):\n"
+                "    def __init__(self, extra: dict[str, Any]) -> None:\n        self.extra = extra\n",
+                "Rejected",
+            ),
+        },
+        {"export-shape": [["typing.Any", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
     "a field of a contract class a facade function returns": (
         {
             f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER

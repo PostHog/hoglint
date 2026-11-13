@@ -241,6 +241,12 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "ME03"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["typing.Any", "products.catalog.backend.facade.rows", "export-unknown"]
+
+[[row]]
 case = "ME02"
 rule = "export-shape"
 verdict = "finding"

@@ -17,7 +17,9 @@ reads the rows of a public callable in a module its `from` and the source-only p
 where the row's own module is such a module, or where the exporting module is one and holds the
 producer's copy of the slot. This holds at every depth: the fields of a class a slot names are left
 to the signature rule where it reads their rows. A slot no signature rule reads, such as a method of
-a class handed out from outside a facade, is judged in full.
+a class handed out from outside a facade, is judged in full, with one slot policy: the parts of the
+named rules' selections that do not read only the source. A type the row names that every named
+rule's selection leaves out (an opaque payload) is not judged as unknown here either.
 """
 
 from __future__ import annotations
@@ -31,11 +33,15 @@ from hoglint.labels import NOT_HANDED_CONTEXTS
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.model import Edge, Resolution, context_bits
 from hoglint.rules.base import (
+    EdgeEnv,
     IncompleteItem,
     RuleContext,
     RuleRun,
     RuleType,
+    conjuncts,
     context_ok,
+    endpoint_only,
+    joined,
     project,
     rule_kinds,
     source_part,
@@ -173,6 +179,7 @@ class ExportPrimitive(RuleType):
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(NOT_HANDED_CONTEXTS if spec.contexts_exclude is None else spec.contexts_exclude)
         self.slot_owners = self.signature_scopes()
+        self.slot_policies = self.signature_policies()
         self.slots_seen: dict[str, bool] = {}
 
     @staticmethod
@@ -208,17 +215,31 @@ class ExportPrimitive(RuleType):
         names = self.spec.exports or tuple(self.ctx.config.exports)
         return [self.ctx.config.exports[name] for name in names]
 
-    def signature_scopes(self) -> list[Node | None]:
-        """Where each signature rule of `leave_slots_to` reads rows: its `from` and the parts of
-        its `select` that read only the source, None when it reads them in every module."""
-        out: list[Node | None] = []
+    def slot_rules(self) -> list[RuleSpec]:
+        """The signature rules of `leave_slots_to` that read exposes rows."""
+        out: list[RuleSpec] = []
         for name in self.spec.leave_slots_to:
             rule = self.ctx.config.rules.get(name)
             if rule is None or rule.primitive != "signature":
                 continue
             if "exposes" not in rule_kinds(rule, self.ctx.config.views):
                 continue
-            out.append(source_part((rule.from_, rule.select)))
+            out.append(rule)
+        return out
+
+    def signature_scopes(self) -> list[Node | None]:
+        """Where each signature rule of `leave_slots_to` reads rows: its `from` and the parts of
+        its `select` that read only the source, None when it reads them in every module."""
+        return [source_part((rule.from_, rule.select)) for rule in self.slot_rules()]
+
+    def signature_policies(self) -> list[tuple[Node | None, str]]:
+        """The slot policy of each signature rule of `leave_slots_to`: the parts of its selection
+        that do not read only the source, joined (None when there are none), and the endpoint it
+        reads a row's destination by."""
+        out: list[tuple[Node | None, str]] = []
+        for rule in self.slot_rules():
+            parts = [part for part in conjuncts((rule.from_, rule.select)) if endpoint_only(part) != "src"]
+            out.append((joined(parts), rule.endpoint))
         return out
 
     def signature_sees(self, module: str) -> bool:
@@ -245,6 +266,10 @@ class ExportPrimitive(RuleType):
             "on_unresolved": spec.on_unresolved,
             "start": selector_tree(spec.from_),
             "slot_owners": [None if node is None else tree(node) for node in self.slot_owners],
+            "slot_policies": [
+                {"rest": None if node is None else tree(node), "endpoint": endpoint}
+                for node, endpoint in self.slot_policies
+            ],
         }
         return {"id": spec.id, "mode": self.NATIVE_MODE, "identity": identity_paths(spec.identity), "export": checked}
 
@@ -408,10 +433,12 @@ class ExportPrimitive(RuleType):
         edge: Edge | None,
         trail: tuple[str, ...],
         shape_only: bool = False,
+        left_out: bool = False,
     ) -> None:
         """Findings are keyed by (symbol, module), so a symbol already checked for this module and
         policy adds nothing the second time. A check of the shape alone (`shape_only`) that finds
-        a denied kind or an unknown type marks nothing: a full check may still report it."""
+        a denied kind or an unknown type marks nothing: a full check may still report it. Nor does
+        an unknown type in a slot every named rule's policy leaves out (`left_out`)."""
         visit = (module, policy.name, symbol)
         if visit in self.visited:
             return
@@ -421,6 +448,8 @@ class ExportPrimitive(RuleType):
         shapes, complete = self.recognize(symbol)
         denied = sorted(shapes & set(policy.deny))
         if shape_only and (denied or symbol in self.spec.unknown_types):
+            return
+        if left_out and not denied and symbol in self.spec.unknown_types:
             return
         self.visited.add(visit)
         if denied:
@@ -509,6 +538,24 @@ class ExportPrimitive(RuleType):
             return False
         return self.holds_copy(module, bound + row.attr("callable")[len(qualname) :], row.attr("slot"))
 
+    def policy_leaves_out(self, row: Edge) -> bool:
+        """Whether every named signature rule's slot policy is false for a row: the type it
+        mentions is no part of what a slot may not hold (an opaque payload), so it is not judged
+        as an unknown type here either. Unknown counts as true."""
+        if not self.slot_policies:
+            return False
+        src = self.ctx.src_endpoint(row.site)
+        for rest, endpoint in self.slot_policies:
+            if rest is None:
+                return False
+            dsts = self.ctx.dst_endpoints(row, endpoint)
+            if not dsts:
+                return False
+            for dst in dsts:
+                if evaluate(rest, EdgeEnv(self.ctx, row, src, dst).resolve) is not Truth.FALSE:
+                    return False
+        return True
+
     def check_members(
         self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None
     ) -> None:
@@ -529,10 +576,11 @@ class ExportPrimitive(RuleType):
                 if not shape_only:
                     self.unresolved(row, module)
                 continue
+            left_out = not shape_only and self.policy_leaves_out(row)
             names = [str(target) for target in row.targets] or [row.surface]
             for name in names:
                 if name and name not in trail:
-                    self.check(name, module, policy, row, (*trail, name), shape_only)
+                    self.check(name, module, policy, row, (*trail, name), shape_only, left_out)
 
     # ── output ──
 

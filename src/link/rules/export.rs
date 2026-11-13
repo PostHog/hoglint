@@ -3,7 +3,7 @@
 //! signatures, fields and bases name, in the order the Python primitive checks them.
 
 use super::Rules;
-use super::env::{Cx, EntityEnv};
+use super::env::{Cx, EntityEnv, Env, Role};
 use super::plan::{ExportRulePlan, ShapePlan};
 use super::selector::{Compiler, EntityField, Node, Ref, evaluate};
 use super::signature::{callable_of, is_private};
@@ -88,6 +88,9 @@ pub struct ExportRule {
     /// one of them reads is judged by its class's shape only. None for a rule that reads them in
     /// every module. Empty when the rule judges every slot in full.
     slot_owners: Vec<Option<Node>>,
+    /// `leave_slots_to`: each named rule's slot policy, the parts of its selection that do not
+    /// read only the source (None: none), and the endpoint it reads a row's destination by.
+    slot_policies: Vec<(Option<Node>, Role)>,
     include: u8,
     exclude: u8,
     unknown_types: Vec<String>,
@@ -102,7 +105,7 @@ impl ExportRule {
         identity: &[Vec<String>],
         entity: &Compiler,
         start: Option<Node>,
-        slot_owners: Vec<Option<Node>>,
+        (slot_owners, slot_policies): (Vec<Option<Node>>, Vec<(Option<Node>, Role)>),
     ) -> ExportRule {
         let field = |name: &str| match entity.reference(&[name.to_string()]) {
             Ref::Entity(found) => found,
@@ -132,6 +135,7 @@ impl ExportRule {
             exports: plan.exports.clone(),
             start,
             slot_owners,
+            slot_policies,
             include: plan.include,
             exclude: plan.exclude,
             unknown_types: plan.unknown_types.clone(),
@@ -141,11 +145,16 @@ impl ExportRule {
         }
     }
 
-    /// The selectors it compiles: its `from` and its slot owners.
+    /// The selectors it compiles: its `from`, its slot owners and their slot policies.
     pub fn nodes(&self) -> Vec<&Node> {
+        let policies = self
+            .slot_policies
+            .iter()
+            .filter_map(|(rest, _)| rest.as_ref());
         self.start
             .iter()
             .chain(self.slot_owners.iter().flatten())
+            .chain(policies)
             .collect()
     }
 
@@ -332,7 +341,7 @@ impl<'a> Walk<'a> {
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
-                            self.check(&symbol, &module_name, shape, edge, &trail, false);
+                            self.check(&symbol, &module_name, shape, edge, &trail, (false, false));
                         }
                     }
                 }
@@ -574,7 +583,8 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.check`. A check of the shape alone (`shape_only`) that finds a denied kind
-    /// or an unknown type marks nothing: a full check may still report it.
+    /// or an unknown type marks nothing: a full check may still report it. Nor does an unknown
+    /// type in a slot every named rule's policy leaves out (`left_out`).
     fn check(
         &mut self,
         symbol: &str,
@@ -582,7 +592,7 @@ impl<'a> Walk<'a> {
         shape: usize,
         edge: Option<u32>,
         trail: &[String],
-        shape_only: bool,
+        (shape_only, left_out): (bool, bool),
     ) {
         let visit = (module.to_string(), shape, symbol.to_string());
         if self.visited.contains(&visit) {
@@ -603,6 +613,9 @@ impl<'a> Walk<'a> {
         denied.sort();
         let unknown_type = self.rule.unknown_types.iter().any(|name| name == symbol);
         if shape_only && (!denied.is_empty() || unknown_type) {
+            return;
+        }
+        if left_out && denied.is_empty() && unknown_type {
             return;
         }
         self.visited.insert(visit);
@@ -775,6 +788,32 @@ impl<'a> Walk<'a> {
         seen
     }
 
+    /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is
+    /// false for row `id`. Unknown counts as true.
+    fn policy_leaves_out(&self, id: u32) -> bool {
+        if self.rule.slot_policies.is_empty() {
+            return false;
+        }
+        let cx = self.cx;
+        let src = cx.src_endpoint(id);
+        let mut dsts = Vec::new();
+        for (rest, role) in &self.rule.slot_policies {
+            let Some(rest) = rest else {
+                return false;
+            };
+            cx.dst_endpoints(id, *role, &mut dsts);
+            if dsts.is_empty() {
+                return false;
+            }
+            for dst in &dsts {
+                if evaluate(rest, &Env::new(cx, Some(id), src, *dst)) != Truth::False {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// `ExportPrimitive.check_members`; `edge` is the import the module hands the symbol out
     /// by, if any.
     fn check_members(
@@ -813,6 +852,7 @@ impl<'a> Walk<'a> {
                 }
                 continue;
             }
+            let left_out = !shape_only && self.policy_leaves_out(id);
             let targets = edges.targets_of(id);
             let names: Vec<String> = if targets.is_empty() {
                 vec![self.cx.text(edges.surface_of(id)).to_string()]
@@ -829,7 +869,14 @@ impl<'a> Walk<'a> {
                 if !name.is_empty() && !trail.contains(&name) {
                     let mut deeper = trail.to_vec();
                     deeper.push(name.clone());
-                    self.check(&name, module, shape, Some(id), &deeper, shape_only);
+                    self.check(
+                        &name,
+                        module,
+                        shape,
+                        Some(id),
+                        &deeper,
+                        (shape_only, left_out),
+                    );
                 }
             }
         }

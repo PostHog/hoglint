@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -50,3 +50,13 @@ class EntryFlagMissing(CoreLookupError):
 
 class EntryBroken(MissingFailure):
     pass
+
+
+class EntryPayloadRejected(Exception):
+    def __init__(self, extra: dict[str, Any]) -> None:
+        self.extra = extra
+
+
+class EntryPayloadDetail(Exception):
+    def detail(self) -> dict[str, Any]:
+        return {}
