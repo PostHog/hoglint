@@ -138,12 +138,16 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 - A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 - **A base that is no class makes the lineage unknown** (Nov 13).
   The producer marks an inherit edge whose base is a call (`class Rejected(Exception, make())`, also `make()[T]`) with `called = "1"`; the edge stays resolved to the callee, because the class statement does call it.
-  Ancestry reads such a base as unknown, and so a base that resolves to first-party code that is not declared as a class: a function, a module-level name bound by a call (`Base = make()`), or a name bound once per branch of an `if` (`_Base = Real` under `TYPE_CHECKING`, `_Base = object` otherwise).
+  Ancestry reads such a base as unknown, and so a base that resolves to first-party code that is not declared as a class, such as a function.
+  A base that resolves to a first-party name that is no class, or through a name the module binds more than once, is followed by the producer through every module-level binding of that name, which the module table keeps beside the binding a lookup reads.
+  A binding is known when its value is a name or an attribute chain that resolves to a class (a third-party name counts as a class, as a third-party base does), or a subscript of one (`X = Base[A, B]` stands for `Base`); a name bound once per branch (`if TYPE_CHECKING: X = Real` / `else: X = object`, or the arms of a `try`) is known when every binding is, and stands for every class its bindings name.
+  The producer writes the result on the inherit edge as `classes` (the classes, sorted, or `?`); the edge's target stays the lookup's.
+  Anything else is unknown: a name bound by a call (`Base = make()`), a binding with another value, a name with one known and one unknown binding, a cycle, a chain deeper than the alias depth.
   A class keeps its declaration when a pack gives it another kind: a model's abstract model base is a class.
   A subscript is read through to its head, so a generic base (`Generic[T]`, `Source[Config]`) stays a class.
   An unknown base gives the class an incomplete lineage: the export rule reports a handed-out class with one as `export-unknown`, and a contract dataclass with a call base gets an unresolved `fields` row for the fields that base may add.
   Written limits: a third-party base written as a plain name cannot be told from a third-party function (`from lib import make_base as Base`); a metaclass given by a call and a class decorator that returns another class are not read; a subscript of a third-party name is read as a generic class.
-  The model repository has the call base and the base bound by a call as `ES20`, and the metaclass as a wanted case (`ES21`).
+  The model repository has the call base, the base bound by a call and a branch-bound base as `ES20`, and the metaclass as a wanted case (`ES21`).
 
 **The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).
 Other packages import it, so it stays in the export and its audience holds; but the contract rules (`export-shape` by its `from`, `facade-signature`, `facade-logic`, `facade-no-drf`) do not judge it: its helpers take and return models on purpose.

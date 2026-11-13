@@ -1,4 +1,4 @@
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -13,12 +13,21 @@ def _error_meta() -> type:
 
 _EntryBase = _error_base()
 
+if TYPE_CHECKING:
+    _EntryRoot = KeyError
+else:
+    _EntryRoot = Exception
+
 
 class EntryHeld(_error_base()):
     pass
 
 
 class EntryLocked(Exception, _EntryBase):
+    pass
+
+
+class EntryClosed(_EntryRoot):
     pass
 
 
