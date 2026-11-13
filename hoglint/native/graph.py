@@ -182,6 +182,11 @@ class NativeSymbols(Mapping[str, Mapping[str, str]]):
             return self.paths[self.files[at]]
         return ""
 
+    def core_kind(self, name: str) -> str:
+        """The kind the core declared the symbol with, whatever facts a pack wrote; "" for none."""
+        at = self.at.get(name)
+        return SYMBOL_KINDS[self.kinds[at]] if at is not None else ""
+
     def core_with_kinds(self, kinds: Collection[str]) -> list[str]:
         """The core's symbols whose kind is one of `kinds` and whose facts no pack replaced, in
         insertion order, found in the kind column."""

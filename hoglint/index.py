@@ -104,11 +104,16 @@ class SymbolFacts:
     `frozen_by` holds the names of each class's decorators that a call passes `frozen=True`.
     """
 
-    def __init__(self, graph: Graph, inherits: list[Edge], decorates: list[Edge]) -> None:
+    def __init__(
+        self, graph: Graph, inherits: list[Edge], decorates: list[Edge], declares: list[Edge] | None = None
+    ) -> None:
         self.symbols = graph.symbols
         self.base_map: dict[str, list[str]] = {}
         self.decorator_map: dict[str, list[str]] = {}
         self.frozen_by: dict[str, list[str]] = {}
+        self.classes = {
+            str(target) for edge in declares or () if edge.attr("decl") == "class" for target in edge.targets
+        }
         self.add_edges(inherits, decorates)
         self.ancestors = Memo(self.walk_ancestors)
         self.any_decl = Memo(self.find_decl)
@@ -148,7 +153,11 @@ class SymbolFacts:
             return [f"?{surface}()"]
         if not resolved:
             return names
-        return [name if self.decl(name) == "class" else f"?{name}" for name in names]
+        return [name if self.declared_class(name) else f"?{name}" for name in names]
+
+    def declared_class(self, symbol: str) -> bool:
+        """Whether the core declared the symbol a class: a pack may give a class another kind."""
+        return symbol in self.classes
 
     def has(self, symbol: str) -> bool:
         return symbol in self.symbols
@@ -253,7 +262,9 @@ class GraphIndex:
                 group.irregular.append(edge)
         self.by_kind: Mapping[str, list[Edge]] = by_kind
         self.groups: Mapping[str, Mapping[str, EdgeGroup]] = groups
-        self.facts = SymbolFacts(graph, by_kind.get("inherit", []), by_kind.get("decorate", []))
+        self.facts = SymbolFacts(
+            graph, by_kind.get("inherit", []), by_kind.get("decorate", []), by_kind.get("declares", [])
+        )
         self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_of_symbol = Memo(self.find_module)
 

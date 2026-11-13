@@ -109,13 +109,25 @@ impl SymbolFacts {
         names
             .into_iter()
             .map(|name| {
-                if Self::decl(link, &name) == "class" {
+                if Self::declared_class(link, &name) {
                     name
                 } else {
                     format!("?{name}")
                 }
             })
             .collect()
+    }
+
+    /// Whether the core declared the name a class: a pack may give a class another kind
+    /// (`SymbolFacts.declared_class`).
+    fn declared_class(link: &Link, name: &str) -> bool {
+        let Some(sid) = link.core.it.get(name) else {
+            return false;
+        };
+        link.symbols
+            .at
+            .get(&sid)
+            .is_some_and(|&at| SYMBOL_KINDS[link.symbols.order[at].1 as usize] == "class")
     }
 
     /// Whether `graph.symbols` holds the name.

@@ -702,6 +702,14 @@ SLOT_OWNER_CASES = {
         ),
         CLEAN,
     ),
+    "a model whose base is an abstract model the product defines": (
+        {
+            f"{SHOP_DIR}/models.py": "from django.db import models\n\n\nclass Stamped(models.Model):\n"
+            "    class Meta:\n        abstract = True\n\n\nclass Order(Stamped):\n    pass\n",
+            f"{SHOP_DIR}/facade/errors.py": f"from {SHOP}.models import Order\n\n__all__ = ['Order']\n",
+        },
+        DENIED_AT_ERRORS,
+    ),
     "an allowed class with a generic base": (
         handed_out(
             "from typing import Generic, TypeVar\n\nT = TypeVar('T')\n\n\nclass Rejected(Exception, Generic[T]):\n    pass\n",
