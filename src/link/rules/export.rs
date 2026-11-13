@@ -773,23 +773,21 @@ impl<'a> Walk<'a> {
     ) -> bool {
         let link = self.cx.link;
         let row_callable = self.cx.attr(id, link.core.it.get("callable"));
-        if is_private(row_callable) {
-            return false;
-        }
         let owner_name = self.cx.text(owner).to_string();
-        if self.signature_sees(&owner_name) {
+        if !is_private(row_callable) && self.signature_sees(&owner_name) {
             return true;
         }
         let rest = &row_callable[qualname.len()..];
         let slot = self.cx.attr(id, link.core.it.get("slot"));
         for (place, name) in self.copy_places(symbol, module, bound) {
-            if !self.signature_sees(&place) {
+            let copy = format!("{name}{rest}");
+            if is_private(&copy) || !self.signature_sees(&place) {
                 continue;
             }
             let Some(place_sid) = link.core.it.get(&place) else {
                 continue;
             };
-            if self.holds_copy(place_sid, &format!("{name}{rest}"), slot) {
+            if self.holds_copy(place_sid, &copy, slot) {
                 return true;
             }
         }

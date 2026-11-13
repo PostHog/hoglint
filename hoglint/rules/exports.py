@@ -46,7 +46,7 @@ from hoglint.rules.base import (
     rule_kinds,
     source_part,
 )
-from hoglint.rules.edges import SignaturePrimitive
+from hoglint.rules.edges import SignaturePrimitive, is_private
 from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import NONE, Node, Ref, Resolver, Selector, State, Truth, Value, evaluate
 
@@ -539,14 +539,15 @@ class ExportPrimitive(RuleType):
     def leaves_slot(self, row: Edge, owner: str, qualname: str, symbol: str, module: str, bound: str) -> bool:
         """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
         reads. The row's own module is one it holds for, or a module it holds for holds the copy of
-        the slot (`copy_places`)."""
-        if not SignaturePrimitive.sees_callable(row):
-            return False
-        if self.signature_sees(owner):
+        the slot (`copy_places`); "public" is asked of the callable of the row the rule reads."""
+        if SignaturePrimitive.sees_callable(row) and self.signature_sees(owner):
             return True
         rest = row.attr("callable")[len(qualname) :]
         for place, name in self.copy_places(symbol, module, bound):
-            if self.signature_sees(place) and self.holds_copy(place, name + rest, row.attr("slot")):
+            copy = name + rest
+            if is_private(copy) or not self.signature_sees(place):
+                continue
+            if self.holds_copy(place, copy, row.attr("slot")):
                 return True
         return False
 

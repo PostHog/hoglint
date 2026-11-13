@@ -570,6 +570,21 @@ SLOT_OWNER_CASES = {
             "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
         },
     ),
+    "a dataclass handed out under a private name": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Receipt:\n    order: Order\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Receipt as _Receipt\n\n__all__ = ['_Receipt']\n",
+        },
+        {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
+    ),
+    "a private function handed out under a public name": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER + "def _place(order: Order) -> None:\n    pass\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import _place as place\n\n__all__ = ['place']\n",
+        },
+        {"export-shape": [], "facade-signature": [[API, "place", "param:order", ORDER]]},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
