@@ -328,13 +328,15 @@ class HandOut:
     names it hands out, the names it keeps to itself, whether its `__all__` cannot be read, and the
     names a readable `__all__` lists that the module binds by no def, no hand-out edge and no
     literal constant (`unknown`), and the names with a leading `_` it lists and defines
-    (`listed_private`), handed out as public defs are."""
+    (`listed_private`), handed out as public defs are, and the first-party assignments of no
+    literal constant that its handed-out names resolve to (`unknown_values`)."""
 
     handed: frozenset[str]
     kept: frozenset[str]
     unread: bool
     unknown: frozenset[str] = frozenset()
     listed_private: frozenset[str] = frozenset()
+    unknown_values: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=False, slots=True)

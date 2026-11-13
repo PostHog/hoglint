@@ -142,6 +142,7 @@ UNKNOWN_WHY = {
     "unread-annotation": "{detail} has a part of its annotation hoglint cannot read",
     "alias": "a name hoglint does not expand into types",
     "listed": "__all__ lists it, but hoglint cannot tell what it binds",
+    "value": "a module-level value that is no literal constant",
 }
 
 
@@ -336,6 +337,9 @@ class ExportPrimitive(RuleType):
                     if member is Truth.UNKNOWN:
                         self.unknown(symbol, module, policy, (symbol,), edge, "not-member", export.name)
                         continue
+                    if edge is not None and symbol in self.unknown_values(module):
+                        self.unknown(symbol, module, policy, (symbol,), edge, "value")
+                        continue
                     self.check(symbol, module, policy, edge, (symbol,))
                 for symbol in self.listed_unknown(module):
                     member = labeler.export_member((export.name, path, symbol))
@@ -344,6 +348,12 @@ class ExportPrimitive(RuleType):
                     why = "not-member" if member is Truth.UNKNOWN else "listed"
                     self.unknown(symbol, module, policy, (symbol,), None, why, export.name)
         return self.run
+
+    def unknown_values(self, module: str) -> frozenset[str]:
+        """The assignments of no literal constant the module's handed-out names resolve to
+        (`HandOut.unknown_values`)."""
+        hand_out = self.ctx.labeler.graph.hand_outs.get(module)
+        return hand_out.unknown_values if hand_out is not None else frozenset()
 
     def listed_unknown(self, module: str) -> list[str]:
         """The names `__all__` lists that the module binds by nothing the engine can tell

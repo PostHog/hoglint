@@ -402,7 +402,32 @@ class HandedOut:
             found = StarNames(self.tables).of(source) if source is not None else None
             bound.update(found or ())
         unread = not self.no_functions and self.dunder_all.unread is not None
-        return HandOut(handed, frozenset(bound - handed), unread, self.unaccounted(handed), self.listed_private())
+        return HandOut(
+            handed,
+            frozenset(bound - handed),
+            unread,
+            self.unaccounted(handed),
+            self.listed_private(),
+            self.unknown_values(used),
+        )
+
+    def unknown_values(self, used: frozenset[str]) -> frozenset[str]:
+        """The first-party module-level assignments the handed-out names resolve to, as symbols,
+        when the value is no literal constant: a `NewType`, a `TypeVar`, a type alias, a value a
+        call makes. What they hand out is unknown."""
+        out: set[str] = set()
+        for item in self.names(used):
+            hit, rest = self.resolver.resolve_dotted(item.target)
+            if hit is None or rest or hit.kind != "variable":
+                continue
+            origin = hit.origin
+            if not origin.symbol or self.tables.index.is_external(origin.module):
+                continue
+            record = self.tables.record(origin.module)
+            if record is not None and binds_literal(record, origin.symbol):
+                continue
+            out.add(str(origin))
+        return frozenset(out)
 
     def listed(self) -> frozenset[str]:
         """The names a readable `__all__` lists; none when it cannot be read or is not there."""

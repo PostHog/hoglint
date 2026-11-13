@@ -56,13 +56,15 @@ pub struct Handed {
 /// `HandOut`): the names it hands out, the names it keeps to itself, whether its `__all__`
 /// cannot be read, and the names a readable `__all__` lists that the module binds by no def, no
 /// hand-out edge and no literal constant (`unknown`), and the names with a leading `_` it lists
-/// and defines (`listed_private`), handed out as public defs are.
+/// and defines (`listed_private`), handed out as public defs are, and the first-party assignments
+/// of no literal constant that its handed-out names resolve to (`unknown_values`).
 pub struct HandOut {
     pub handed: FxHashSet<Sid>,
     pub kept: FxHashSet<Sid>,
     pub unread: bool,
     pub unknown: FxHashSet<Sid>,
     pub listed_private: FxHashSet<Sid>,
+    pub unknown_values: FxHashSet<Sid>,
 }
 
 /// The markers of a number the value tree does not spell out, and of a long or odd string.
@@ -597,13 +599,51 @@ impl HandedOut {
             .collect();
         let unknown = self.unaccounted(core, scope, &handed);
         let listed_private = self.listed_private(core, scope);
+        let unknown_values = self.unknown_values(core, scope, used);
         HandOut {
             handed,
             kept,
             unread: !self.no_functions && self.dunder_all.unread.is_some(),
             unknown,
             listed_private,
+            unknown_values,
         }
+    }
+
+    /// The first-party module-level assignments the handed-out names resolve to, as symbols, when
+    /// the value is no literal constant (`HandedOut.unknown_values`): a `NewType`, a `TypeVar`, a
+    /// type alias, a value a call makes. What they hand out is unknown.
+    fn unknown_values(
+        &self,
+        core: &mut Core,
+        scope: &Scope,
+        used: &FxHashSet<Sid>,
+    ) -> FxHashSet<Sid> {
+        let mut out = FxHashSet::default();
+        let facts = core.facts.clone();
+        for item in self.names(core, scope, used) {
+            let (hit, rest) = core.resolve_dotted(item.target);
+            let Some(hit) = hit.filter(|_| rest.is_empty()) else {
+                continue;
+            };
+            if core.kind(hit) != HitKind::Variable {
+                continue;
+            }
+            let origin = core.origin(hit);
+            if origin.s == EMPTY || core.is_external(origin.m) {
+                continue;
+            }
+            let file = core
+                .table(origin.m)
+                .and_then(|table| core.table_at(table).record);
+            if let Some(file) = file
+                && binds_literal(&core.it, &facts.files[file as usize].assigns, origin.s)
+            {
+                continue;
+            }
+            out.insert(core.ent_sid(origin));
+        }
+        out
     }
 
     /// The names a readable `__all__` lists (`HandedOut.listed`); none when it cannot be read or

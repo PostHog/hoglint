@@ -406,6 +406,17 @@ impl<'a> Walk<'a> {
                         }
                         Truth::True => {
                             let trail = vec![symbol.clone()];
+                            if edge.is_some() && self.is_unknown_value(module, &symbol) {
+                                self.unknown(
+                                    &symbol,
+                                    &module_name,
+                                    shape,
+                                    &trail,
+                                    edge,
+                                    ("value", ""),
+                                );
+                                continue;
+                            }
                             self.check(&symbol, &module_name, shape, edge, &trail, None);
                         }
                     }
@@ -425,6 +436,19 @@ impl<'a> Walk<'a> {
             }
         }
         self.rows
+    }
+
+    /// Whether a handed-out name resolves to an assignment of no literal constant
+    /// (`HandOut.unknown_values`).
+    fn is_unknown_value(&self, module: Sid, symbol: &str) -> bool {
+        let link = self.cx.link;
+        let Some(found) = link.hand_outs.get(&module) else {
+            return false;
+        };
+        link.core
+            .it
+            .get(symbol)
+            .is_some_and(|sid| found.unknown_values.contains(&sid))
     }
 
     /// `ExportPrimitive.listed_unknown`: the names `__all__` lists that the module binds by

@@ -1661,6 +1661,32 @@ LISTED_CASES = {
     ),
 }
 
+REF_VALUE_AT_ERRORS = {"export-shape": [[f"{SHOP}.errors.Ref", ERRORS, "export-unknown"]], "facade-signature": []}
+# A handed-out name that resolves to a module-level assignment is a literal constant, or unknown.
+VALUE_CASES = {
+    **{
+        name: (handed_out(body, "Ref"), CLEAN if name == "a constant" else REF_VALUE_AT_ERRORS)
+        for name, body in UNEXPANDED_NAMES.items()
+    },
+    "a string constant": (handed_out("Ref = 'order'\n", "Ref"), CLEAN),
+    "None": (handed_out("Ref = None\n", "Ref"), CLEAN),
+    # A written limit: the expansion of a handed-out type alias is not judged, so it is unknown.
+    "a generic alias": (handed_out("Ref = list[Order]\n", "Ref"), REF_VALUE_AT_ERRORS),
+    "a value and a class whose method returns it": (
+        handed_out("from typing import NewType\n\nRef = NewType('Ref', Order)\n" + MEMBER_TAKES_REF, "Ref", "Rejected"),
+        REF_VALUE_AT_ERRORS,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", VALUE_CASES)
+def test_a_handed_out_value_is_a_literal_constant_or_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = VALUE_CASES[case]
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
+
 
 @pytest.mark.parametrize("case", LISTED_CASES)
 def test_every_name_a_readable_dunder_all_lists_is_accounted_for(

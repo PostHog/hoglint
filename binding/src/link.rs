@@ -408,11 +408,30 @@ impl Link {
 
     /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
     /// kept names, whether its `__all__` cannot be read, listed names it binds by nothing the
-    /// engine can tell, private names it lists and defines), in module name order.
+    /// engine can tell, private names it lists and defines, the assignments of no literal constant
+    /// its handed-out names resolve to), in module name order.
     #[allow(clippy::type_complexity)]
-    fn hand_outs(&self) -> Vec<(&str, Vec<&str>, Vec<&str>, bool, Vec<&str>, Vec<&str>)> {
+    fn hand_outs(
+        &self,
+    ) -> Vec<(
+        &str,
+        Vec<&str>,
+        Vec<&str>,
+        bool,
+        Vec<&str>,
+        Vec<&str>,
+        Vec<&str>,
+    )> {
         let it = &self.inner.core.it;
-        let mut out: Vec<(&str, Vec<&str>, Vec<&str>, bool, Vec<&str>, Vec<&str>)> = self
+        let mut out: Vec<(
+            &str,
+            Vec<&str>,
+            Vec<&str>,
+            bool,
+            Vec<&str>,
+            Vec<&str>,
+            Vec<&str>,
+        )> = self
             .inner
             .hand_outs
             .iter()
@@ -424,6 +443,7 @@ impl Link {
                     found.unread,
                     sorted_names(it, &found.unknown),
                     sorted_names(it, &found.listed_private),
+                    sorted_names(it, &found.unknown_values),
                 )
             })
             .collect();
