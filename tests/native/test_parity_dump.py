@@ -34,7 +34,7 @@ def test_a_dump_fails_when_its_stored_summary_cannot_be_built(tmp_path: Path, mo
     work.mkdir()
     try:
         with pytest.raises(TypeError):
-            Dump(repo, "native", out, work).run()
+            Dump(repo, out, work).run()
     finally:
         gc.enable()
     assert not (out / "stored-summary.jsonl").exists()
