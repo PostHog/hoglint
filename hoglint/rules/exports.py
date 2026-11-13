@@ -198,6 +198,8 @@ class ExportPrimitive(RuleType):
         # By the identity of the row Edge: `edges` makes each one once.
         self.left_out: dict[int, bool] = {}
         self.copy_index: dict[str, dict[str, list[int]]] = {}
+        # A callable's rows by slot, so a class's fields are not scanned once per field.
+        self.copy_rows: dict[tuple[str, str], dict[str, list[Edge]]] = {}
         # The name the export module in hand hands a symbol out by, read before any of its symbols
         # is checked, so a class reached in a slot first finds the name a later hand-out gives it.
         self.bound: dict[str, str] = {}
@@ -543,8 +545,9 @@ class ExportPrimitive(RuleType):
     def edges(self, handles: list[int]) -> list[Edge]:
         """The edges at `handles`, each made once: only member edges a check reads become Edges."""
         missing = list(dict.fromkeys(handle for handle in handles if handle not in self.made))
-        for handle, edge in zip(missing, self.index.edges_at(missing)):
-            self.made[handle] = edge
+        if missing:
+            for handle, edge in zip(missing, self.index.edges_at(missing)):
+                self.made[handle] = edge
         return [self.made[handle] for handle in handles]
 
     def member_edges(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[Edge, str, str]]:
@@ -582,15 +585,18 @@ class ExportPrimitive(RuleType):
     def copies(self, module: str, callable_name: str, slot: str) -> list[Edge]:
         """A module's exposes rows of a callable's slot: the copy the producer writes where a
         surface hands out a function or a data shape's fields."""
-        by_callable = self.copy_index.get(module)
-        if by_callable is None:
-            by_callable = self.copy_index[module] = {}
-            for name, handle in self.exposes.get(module, []):
-                by_callable.setdefault(name, []).append(handle)
-        handles = by_callable.get(callable_name, [])
-        return [
-            edge for edge in self.edges(handles) if edge.attr("callable") == callable_name and edge.attr("slot") == slot
-        ]
+        by_slot = self.copy_rows.get((module, callable_name))
+        if by_slot is None:
+            by_callable = self.copy_index.get(module)
+            if by_callable is None:
+                by_callable = self.copy_index[module] = {}
+                for name, handle in self.exposes.get(module, []):
+                    by_callable.setdefault(name, []).append(handle)
+            by_slot = self.copy_rows[(module, callable_name)] = {}
+            for edge in self.edges(by_callable.get(callable_name, [])):
+                if edge.attr("callable") == callable_name:
+                    by_slot.setdefault(edge.attr("slot"), []).append(edge)
+        return by_slot.get(slot, [])
 
     def copy_places(self, symbol: str, module: str, policy: ShapePolicy) -> list[tuple[str, str]]:
         """(module, name) of each place the producer may hold a copy of the walked symbol's slots,

@@ -3,7 +3,7 @@
 //! signatures, fields and bases name, in the order the Python primitive checks them.
 
 use super::Rules;
-use super::env::{Cx, EntityEnv, Env, Role};
+use super::env::{Cx, EntityEnv, Env, Role, attr_sid};
 use super::plan::{ExportRulePlan, ShapePlan};
 use super::selector::{Compiler, EntityField, Node, Ref, evaluate};
 use super::signature::{callable_of, is_private};
@@ -801,10 +801,13 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.copies`: a module's exposes rows of a callable's slot.
-    fn copies(&mut self, module: Sid, callable_name: &str, slot: &str) -> Vec<u32> {
+    fn copies(&mut self, module: Sid, callable_name: &str, slot: Option<Sid>) -> Vec<u32> {
         let link = self.cx.link;
         let callable = link.core.it.get("callable");
         let slot_attr = link.core.it.get("slot");
+        let Some(name) = link.core.it.get(callable_name) else {
+            return Vec::new();
+        };
         let inputs = self.inputs;
         let by_callable = self.copy_index.entry(module).or_insert_with(|| {
             let mut found: FxHashMap<Sid, Vec<u32>> = FxHashMap::default();
@@ -813,16 +816,13 @@ impl<'a> Walk<'a> {
             }
             found
         });
-        let ids = link
-            .core
-            .it
-            .get(callable_name)
-            .and_then(|name| by_callable.get(&name))
-            .cloned()
-            .unwrap_or_default();
-        ids.into_iter()
+        by_callable
+            .get(&name)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .copied()
             .filter(|&id| {
-                self.cx.attr(id, callable) == callable_name && self.cx.attr(id, slot_attr) == slot
+                attr_sid(link, id, callable) == Some(name) && attr_sid(link, id, slot_attr) == slot
             })
             .collect()
     }
@@ -883,7 +883,7 @@ impl<'a> Walk<'a> {
         }
         // A row with no `callable` attr is indexed by its site scope; Python's slice gives "".
         let rest = row_callable.get(qualname.len()..).unwrap_or("");
-        let slot = self.cx.attr(id, link.core.it.get("slot"));
+        let slot = attr_sid(link, id, link.core.it.get("slot"));
         for (place, name) in places {
             let copy = format!("{name}{rest}");
             if is_private(&copy) {
