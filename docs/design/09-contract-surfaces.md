@@ -64,7 +64,9 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   This added 1,742 rows and 94 new findings in 18 products.
 
 **Aliases** (N3b review item 3): an alias is expanded wherever it is defined, imported aliases included (depth 32, stop on a cycle).
-What an alias stands for is a fact in every file (Nov 13): the producer expands an alias in a slot outside a surface file too, where its expansion's rows follow that mode's filter (a name that resolves to a plain builtin gets no row).
+The producer expands an alias in every file (Nov 13): in a slot outside a surface file too, where its expansion's rows follow that mode's filter (a name that resolves to a plain builtin gets no row).
+An alias the module binds more than once (`if TYPE_CHECKING: Ref = Order` / `else: Ref = int`, or the arms of a `try`) stands for every binding: its expansion is the union of every binding's expansion, in source order, each binding's names looked up where it is assigned.
+When one of the bindings is no type alias (a call, a class, an import), the name is no alias and is unknown, as a single such binding is.
 A name in a slot the export rule judges in full that is no class, no function and no alias the producer expanded is unknown, as the signature rule reads the same name in a facade function.
 That holds for a name at the top of a module (a `NewType`, a `TypeVar`, a functional `TypedDict`, a value built by a call) and for a name assigned in a class body (`Ref = Order` in a class, then `-> Ref` in its method): the producer does not expand a class-body alias, so it is unknown, not clean.
 The test is made for each name of the slot: an expanded alias marks only itself, so a name next to it in the slot, or inside its value, is still asked (`Maybe = Ref | None` with `Ref` a `NewType` is unknown).
