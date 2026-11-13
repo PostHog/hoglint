@@ -2210,7 +2210,7 @@ impl Producers<'_> {
                 .enumerate()
                 .filter(|(_, node)| node.s == idx as i32 && node.n == attr)
                 .map(|(at, _)| at)
-                .last();
+                .next_back();
             let Some(nested) = nested.filter(|&at| defs[at].is_class()) else {
                 return Some(Followed::Unfollowed);
             };

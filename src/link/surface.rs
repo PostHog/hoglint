@@ -473,7 +473,7 @@ impl HandedOut {
                 .enumerate()
                 .filter(|(_, node)| node.s == at as i32 && node.n == attr)
                 .map(|(i, _)| i)
-                .last()?;
+                .next_back()?;
             if !defs[found].is_class() {
                 return None;
             }

@@ -1416,7 +1416,7 @@ FIVE_ROWS = {
 UNREAD_STAR = f"{SHOP}.errors.*"
 # A star import hands out what the same names, imported by name, hand out: each name it binds is an
 # import edge of its own. A star the engine cannot read is an unresolved import.
-STAR_CASES = {
+STAR_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] = {
     "a star import of a source with __all__": (
         {f"{SHOP_DIR}/errors.py": STAR_SOURCE + LISTS_FIVE, f"{SHOP_DIR}/facade/errors.py": STAR},
         FIVE_ROWS,
