@@ -1279,24 +1279,12 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
 /// `EdgeRule.decide` for one environment, and `SignaturePrimitive.decide` for a signature rule.
 /// `deny`, `allow` and `require` are all judged, as `EdgeRule.violation` judges them.
 pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
-    let selected = rule.edges.staged.truth(env);
-    if selected == Truth::False {
-        return Judgment::Clean;
-    }
-    if let (Some(signature), Some(id)) = (&rule.signature, env.edge)
-        && !env.dst.unresolved
-        && signature.unknown_type(&env.cx, id, &env.dst)
-    {
-        return Judgment::UnknownType;
-    }
-    if env.dst.unresolved {
-        return Judgment::Unresolved;
-    }
-    if selected == Truth::Unknown {
-        return Judgment::UnknownSelection;
-    }
-    let verdict = match &rule.verdict {
-        Verdict::Inventory => return Judgment::Violation,
+    let unknown_type = || match (&rule.signature, env.edge) {
+        (Some(signature), Some(id)) => signature.unknown_type(&env.cx, id, &env.dst),
+        _ => false,
+    };
+    let verdict = || match &rule.verdict {
+        Verdict::Inventory => Truth::True,
         Verdict::DefaultAllow => truth(&EXPORTED, env).negate(),
         Verdict::UseShape(use_shape) => use_shape.violation(env),
         Verdict::Predicates {
@@ -1321,12 +1309,43 @@ pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
             }
         }
     };
+    let unless = || rule.unless.as_ref().map(|unless| truth(unless, env));
+    judgment(
+        rule.edges.staged.truth(env),
+        env.dst.unresolved,
+        unknown_type,
+        verdict,
+        unless,
+    )
+}
+
+/// The judgment of one destination from what a rule reads of it; `tests/rules/judgment.txt`
+/// holds it. An input after `unresolved` is read only where the judgment depends on it, as the
+/// Python engine read it: a label set two ways is met only where a judgment reads it.
+pub fn judgment(
+    selected: Truth,
+    unresolved: bool,
+    unknown_type: impl FnOnce() -> bool,
+    verdict: impl FnOnce() -> Truth,
+    unless: impl FnOnce() -> Option<Truth>,
+) -> Judgment {
+    if selected == Truth::False {
+        return Judgment::Clean;
+    }
+    if !unresolved && unknown_type() {
+        return Judgment::UnknownType;
+    }
+    if unresolved {
+        return Judgment::Unresolved;
+    }
+    if selected == Truth::Unknown {
+        return Judgment::UnknownSelection;
+    }
+    let verdict = verdict();
     if verdict == Truth::False {
         return Judgment::Clean;
     }
-    if let Some(unless) = &rule.unless
-        && truth(unless, env) == Truth::True
-    {
+    if unless() == Some(Truth::True) {
         return Judgment::Clean;
     }
     if verdict == Truth::Unknown {
@@ -1356,4 +1375,92 @@ fn ordinals(link: &Link, repeats: &[(u32, u32)]) -> Vec<u32> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Judgment, judgment};
+    use crate::link::rules::value::Truth;
+    use std::cell::Cell;
+
+    /// The table of `judgment` (`tests/rules/judgment.txt`).
+    const JUDGMENT: &str = include_str!("../../../tests/rules/judgment.txt");
+
+    fn truth(name: &str) -> Truth {
+        match name {
+            "true" => Truth::True,
+            "false" => Truth::False,
+            "unknown" => Truth::Unknown,
+            other => panic!("not a truth: {other}"),
+        }
+    }
+
+    fn judgment_named(name: &str) -> Judgment {
+        [
+            Judgment::Clean,
+            Judgment::Unresolved,
+            Judgment::UnknownSelection,
+            Judgment::UnknownViolation,
+            Judgment::Violation,
+            Judgment::UnknownType,
+        ]
+        .into_iter()
+        .find(|judgment| judgment.name() == name)
+        .unwrap_or_else(|| panic!("not a judgment: {name}"))
+    }
+
+    #[test]
+    fn a_judgment_follows_its_table_and_reads_only_the_inputs_it_needs() {
+        let mut rows = 0;
+        for line in JUDGMENT.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let [
+                selected,
+                unresolved,
+                unknown_type,
+                verdict,
+                unless,
+                expected,
+            ] = line.split_whitespace().collect::<Vec<_>>()[..]
+            else {
+                panic!("a row needs six columns: {line}");
+            };
+            // An input the row marks `-` must not be read: `read` names each one that was.
+            let read: Cell<Vec<&str>> = Cell::new(Vec::new());
+            let note = |name: &'static str| {
+                let mut seen = read.take();
+                seen.push(name);
+                read.set(seen);
+            };
+            let found = judgment(
+                truth(selected),
+                unresolved == "yes",
+                || {
+                    note("unknown_type");
+                    unknown_type == "yes"
+                },
+                || {
+                    note("verdict");
+                    truth(verdict)
+                },
+                || {
+                    note("unless");
+                    (unless != "none").then(|| truth(unless))
+                },
+            );
+            assert_eq!(found, judgment_named(expected), "{line}");
+            let read = read.take();
+            for (name, column) in [
+                ("unknown_type", unknown_type),
+                ("verdict", verdict),
+                ("unless", unless),
+            ] {
+                assert_eq!(read.contains(&name), column != "-", "{name} read: {line}");
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 16, "the table has {rows} rows");
+    }
 }
