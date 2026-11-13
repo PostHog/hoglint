@@ -760,7 +760,7 @@ class Labeler:
 
     def find_handed_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
-        import (`Graph.hand_outs`): none for a module that is no export or when no field is a
+        import or by assigning a name again (`Graph.hand_outs`): none for a module that is no export or when no field is a
         zone, unknown when its `__all__` cannot be read, a handed import did not resolve or a
         handed module's zone cannot be told. A namespace directory has the zone its files read.
         A third-party name has no zone; a first-party name no module answers for is unknown."""
@@ -771,7 +771,7 @@ class Labeler:
             return UNKNOWN
         names: set[str] = set()
         for edge in self.handed_imports(module):
-            if edge.kind != "import" or edge.contexts & NOT_HANDED_CONTEXTS:
+            if edge.contexts & NOT_HANDED_CONTEXTS:
                 continue
             if edge.resolution is Resolution.UNRESOLVED:
                 return UNKNOWN

@@ -624,8 +624,8 @@ impl Rules {
             .collect()
     }
 
-    /// What each export module hands out by import, read once (`Labeler.handed_zones`): the
-    /// modules its run-time imports of handed names come from. A type-only or test import hands
+    /// What each export module hands out, read once (`Labeler.handed_zones`): the modules its
+    /// run-time imports of handed names and its `rebind` edges come from. A type-only or test import hands
     /// nothing out, and a third-party name has no zone.
     fn handed(
         link: &mut Link,
@@ -660,10 +660,14 @@ impl Rules {
         labels: &Labels,
         module: Sid,
     ) -> Handed {
-        let ids = match link.kind_sid("import") {
-            Some(kind) => module_scope_imports(link, kind, module),
-            None => Vec::new(),
-        };
+        let kinds: Vec<Sid> = ["import", "rebind"]
+            .iter()
+            .filter_map(|kind| link.kind_sid(kind))
+            .collect();
+        let ids: Vec<u32> = kinds
+            .iter()
+            .flat_map(|&kind| module_scope_imports(link, kind, module))
+            .collect();
         let found = &link.hand_outs[&module];
         let edges = &link.edges;
         // Each target's name, and whether its import is third party.

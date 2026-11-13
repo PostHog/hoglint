@@ -79,6 +79,7 @@ BODIES = (
 )
 HANDS_OUT_WIRING = "from products.shop.backend.temporal.workflows import run_charge\n\n__all__ = ['run_charge']\n\n\n"
 HANDS_OUT_LOGIC = "from products.shop.backend.logic import charge\n\n__all__ = ['charge']\n\n\n"
+HANDS_OUT_A_MODEL = "from products.shop.backend import models\n\nThing = models.Order\n\n__all__ = ['Thing']\n\n\n"
 
 
 def bodies_of(module: str) -> list[list[str]]:
@@ -92,6 +93,11 @@ LOGIC_CASES = {
     "a doctrine stem below the top": ("jobs/tasks.py", BODIES, []),
     "a module that hands out wiring": ("hooks.py", HANDS_OUT_WIRING + BODIES, bodies_of(f"{SHOP}.facade.hooks")),
     "a module that hands out logic": ("hooks.py", HANDS_OUT_LOGIC + BODIES, []),
+    "a module that hands out a model by assigning it again": (
+        "hooks.py",
+        HANDS_OUT_A_MODEL + BODIES,
+        bodies_of(f"{SHOP}.facade.hooks"),
+    ),
     "api that hands out wiring": ("api_jobs.py", HANDS_OUT_WIRING + BODIES, []),
     "testing that hands out wiring": ("testing.py", HANDS_OUT_WIRING + BODIES, []),
     "a nested api that hands out wiring": (
