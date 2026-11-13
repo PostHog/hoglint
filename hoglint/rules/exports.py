@@ -139,6 +139,7 @@ UNKNOWN_WHY = {
     "no-facts": "no facts for this symbol",
     "bases": "its bases did not all resolve",
     "no-annotation": "{detail} has no annotation",
+    "unread-annotation": "{detail} has a part of its annotation hoglint cannot read",
     "alias": "a name hoglint does not expand into types",
 }
 
@@ -214,7 +215,7 @@ class ExportPrimitive(RuleType):
     ) -> IncompleteItem:
         """What a symbol the rule cannot tell about leaves incomplete; `why` is a code of
         `UNKNOWN_WHY`, and an annotation's `detail` is its slot."""
-        if why == "no-annotation":
+        if why in ("no-annotation", "unread-annotation"):
             detail = detail or "a slot"
         reason = UNKNOWN_WHY[why].format(detail=detail)
         return IncompleteItem(rule, f"{module}|{symbol}", f"{' -> '.join(trail)}: {reason}", (module,))
@@ -702,9 +703,11 @@ class ExportPrimitive(RuleType):
         places = self.copy_places(symbol, policy)
         for row, owner, qualname in self.member_edges(symbol, policy):
             shape_only = self.leaves_slot(row, owner, qualname, places, policy)
-            if row.attr("annotation") == "missing":
+            annotation = row.attr("annotation")
+            if annotation in ("missing", "unread"):
                 if not shape_only:
-                    self.unknown(symbol, module, policy, trail, row, "no-annotation", row.attr("slot"))
+                    why = "no-annotation" if annotation == "missing" else "unread-annotation"
+                    self.unknown(symbol, module, policy, trail, row, why, row.attr("slot"))
                 continue
             if row.resolution is Resolution.UNRESOLVED:
                 if not shape_only:

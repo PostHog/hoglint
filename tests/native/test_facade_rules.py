@@ -444,6 +444,20 @@ FINE_HIDDEN_IN_ATTRIBUTE = (
 )
 # A frozen dataclass with one field and one `ClassVar` that names a model.
 CLASS_VAR_DATACLASS = "@dataclasses.dataclass(frozen=True)\nclass Record:\n    total: int\n    kind: ClassVar[Order]\n"
+# Parts of an annotation that are no name, subscript, `|`, tuple, list, string or star.
+UNREAD_FORMS = {
+    "an operator other than |": "list[int] | (Order & int)",
+    "a conditional expression": "(Order if TYPE_CHECKING else int)",
+    "a call": "list[type(Order)]",
+    "a boolean operator": "Order or None",
+}
+
+
+def facade_function(signature: str, imports: str = "from typing import TYPE_CHECKING\n") -> str:
+    """A facade module whose one function `get` has `signature`."""
+    return f"{imports}\nfrom {SHOP}.models import Order\n\n\ndef get{signature}:\n    raise ValueError\n"
+
+
 # A pydantic model core defines whose field is a model.
 CORE_MODEL_ROW = "class Record(BaseModel):\n    order: Order\n"
 # A class-body alias whose name a module-level alias also binds.
@@ -1130,6 +1144,43 @@ SLOT_OWNER_CASES = {
             + "@dataclasses.dataclass(frozen=True)\nclass CoreRecord:\n    count: int\n\n"
             "    def load(self) -> Order:\n        raise ValueError\n",
             f"{SHOP_DIR}/facade/api.py": "from posthog.records import CoreRecord\n\n__all__ = ['CoreRecord']\n",
+        },
+        CLEAN,
+    ),
+    # A starred part is read through; a part of another form makes the slot unknown.
+    "a starred tuple of a model in a facade function's return": (
+        {f"{SHOP_DIR}/facade/api.py": facade_function("() -> tuple[int, *tuple[Order, ...]]")},
+        {"export-shape": [], "facade-signature": [[API, "get", "return", ORDER]]},
+    ),
+    "a starred tuple of a model typing *args of a facade function": (
+        {f"{SHOP_DIR}/facade/api.py": facade_function("(*args: *tuple[Order, int]) -> None")},
+        {"export-shape": [], "facade-signature": [[API, "get", "param:args", ORDER]]},
+    ),
+    **{
+        f"{form} in a facade function's return": (
+            {f"{SHOP_DIR}/facade/api.py": facade_function(f"() -> {annotation}")},
+            {"export-shape": [], "facade-signature": [[API, "get", "return", "?"]]},
+        )
+        for form, annotation in UNREAD_FORMS.items()
+    },
+    **{
+        f"{form} in a method of a handed-out exception": (
+            handed_out("from typing import TYPE_CHECKING\n" + returns_in_rejected(annotation), "Rejected"),
+            {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
+        )
+        for form, annotation in UNREAD_FORMS.items()
+    },
+    "an alias whose value has an operator other than |, in a method of a handed-out exception": (
+        handed_out("Odd = list[Order & int]\n" + returns_in_rejected("Odd"), "Rejected"),
+        {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "the metadata of Annotated, an ellipsis and a Literal's values are no types": (
+        {
+            f"{SHOP_DIR}/facade/api.py": facade_function(
+                "(a: Annotated[int, Field(gt=0)], b: tuple[int, ...], c: Callable[..., int]) -> Literal['x', 1]",
+                "from collections.abc import Callable\nfrom typing import Annotated, Literal\n\n"
+                "from pydantic import Field\n",
+            )
         },
         CLEAN,
     ),

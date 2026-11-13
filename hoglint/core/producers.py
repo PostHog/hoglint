@@ -86,6 +86,8 @@ EXPANDED = ("alias", "expanded")
 SUBSCRIPTED = ("subscripted", "1")
 # The attrs of a slot row for an alias nested deeper than MAX_ALIAS_DEPTH: left unread, so unknown.
 TOO_DEEP = (("alias", "too-deep"),)
+# The attr of the one row of a slot whose annotation has a part hoglint cannot read as types.
+UNREAD = ("annotation", "unread")
 # The attr of a slot row that is a type argument: the generic it is given to (`builtins.dict` for
 # the `Any` of `dict[str, Any]`).
 ARGUMENT_OF = "argument_of"
@@ -611,7 +613,8 @@ class Expanded:
     """A name a type alias expands to: whether it sits at the top of the expansion (the whole
     annotation, when the alias is), where it is looked up, whether the expansion stopped at it
     because the alias it names is too deep to follow, whether it is given arguments, and the
-    generic it is an argument of, as written ("" for none)."""
+    generic it is an argument of, as written ("" for none). An item with `unread` stands for a
+    part of the alias's value hoglint cannot read as types, and names nothing."""
 
     value: str
     top: bool
@@ -619,6 +622,7 @@ class Expanded:
     too_deep: bool = False
     subscripted: bool = False
     argument_of: str = ""
+    unread: bool = False
 
 
 @dataclass(frozen=False, slots=True)
@@ -756,7 +760,38 @@ class DeclarationProducer(Producer):
         for key in ("tuple", "list"):
             if key in value:
                 return [m for item in value[key] for m in self.mentions(item, "nested", argument_of)]
+        if "star" in value:
+            return self.mentions(value["star"], position, argument_of)
         return []
+
+    @classmethod
+    def unread(cls, value: object) -> bool:
+        """Whether a type expression has a part `mentions` cannot read as types: an operator other
+        than `|`, a conditional expression, a call, a boolean operator, a display, a string that
+        does not parse. A `Literal`'s values, the metadata of `Annotated` and `...` are no types."""
+        if isinstance(value, str):
+            return False
+        if not isinstance(value, dict):
+            return True
+        if "sub" in value:
+            container = value["sub"] if isinstance(value["sub"], str) else ""
+            last = container.rpartition(".")[2]
+            if last == "Literal":
+                return False
+            index = value.get("i")
+            if last == "Annotated" and isinstance(index, dict) and "tuple" in index and index["tuple"]:
+                return cls.unread(index["tuple"][0])
+            return cls.unread(value["sub"]) or cls.unread(index)
+        if "s" in value:
+            return cls.unread(value.get("sa"))
+        if "bin" in value:
+            return value["bin"] != "|" or cls.unread(value["l"]) or cls.unread(value["r"])
+        for key in ("tuple", "list"):
+            if key in value:
+                return any(cls.unread(item) for item in value[key])
+        if "star" in value:
+            return cls.unread(value["star"])
+        return "call" in value or value.get("o") != "..."
 
     def argument_marker(
         self, context: BuildContext, lookup: SlotLookup, argument_of: str
@@ -833,7 +868,10 @@ class DeclarationProducer(Producer):
     ) -> None:
         """Depth first, the names in an alias's value, each alias in it followed once per place
         (top or nested). A cycle stops at the alias that closes it; an alias deeper than
-        MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown."""
+        MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown. So is a part of the
+        value `mentions` cannot read."""
+        if self.unread(value):
+            expansion.write(Expanded("", top, where, unread=True))
         for name, position, subscripted, argument_of in self.mentions(value, "whole"):
             item = Expanded(name, top and position == "whole", where, subscripted=subscripted, argument_of=argument_of)
             expansion.write(item)
@@ -883,12 +921,14 @@ class DeclarationProducer(Producer):
         contract: bool,
         lookup: SlotLookup,
         names: list[tuple[str, str, bool, str]],
+        unread: bool = False,
     ) -> None:
         """One row per mention, each followed by a row per name of the type alias it is, when it
         is one: what an alias stands for is a fact in every file. Outside a contract a name that
         resolves to a plain builtin gets no row, in the alias's expansion too. A slot names each
         row an alias expands to once, however often its aliases repeat it; rows that differ in an
-        attr (such as the generic a name is an argument of) are different rows."""
+        attr (such as the generic a name is an argument of) are different rows. A part of the
+        annotation or of an alias's value that cannot be read gives the slot one `UNREAD` row."""
         written: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
         for value, mentioned, subscripted, argument_of in names:
             found = self.lookup_at(context, lookup, value)
@@ -901,6 +941,9 @@ class DeclarationProducer(Producer):
             if expansion is None:
                 continue
             for item in expansion:
+                if item.unread:
+                    unread = True
+                    continue
                 position = "whole" if mentioned == "whole" and item.top else "nested"
                 inner = self.lookup_at(context, item.lookup, item.value)
                 if item.too_deep:
@@ -917,6 +960,8 @@ class DeclarationProducer(Producer):
                 written.add((inner.surface, position, marker))
                 resolved = context.classifier.classify_lookup(inner)
                 graph.edges.append(rows.edge(inner.surface, resolved, slot, position, *marker))
+        if unread:
+            graph.edges.append(rows.unresolved("", slot, UNREAD))
 
     def expose(
         self,
@@ -933,7 +978,8 @@ class DeclarationProducer(Producer):
         if annotation is None:
             graph.edges.append(rows.unresolved("", slot, ("annotation", "missing")))
             return
-        self.expose_mentions(context, graph, rows, slot, contract, lookup, self.mentions(annotation, "whole"))
+        names = self.mentions(annotation, "whole")
+        self.expose_mentions(context, graph, rows, slot, contract, lookup, names, self.unread(annotation))
 
     @staticmethod
     def has_receiver(context: BuildContext, lookup: SlotLookup, node: dict) -> bool:

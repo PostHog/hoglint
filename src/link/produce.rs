@@ -354,6 +354,7 @@ struct Keys {
     init: Sid,
     annotation: Sid,
     missing: Sid,
+    unread: Sid,
     handed: Sid,
     ret: Sid,
     alias: Sid,
@@ -435,6 +436,7 @@ impl Producing {
             init: it.intern("__init__"),
             annotation: it.intern("annotation"),
             missing: it.intern("missing"),
+            unread: it.intern("unread"),
             handed: it.intern("handed"),
             ret: it.intern("return"),
             alias: it.intern("alias"),
@@ -667,7 +669,8 @@ struct Mention {
 /// A name a type alias expands to: whether it sits at the top of the expansion (the whole
 /// annotation, when the alias is), where it is looked up, whether the expansion stopped at it
 /// because the alias it names is too deep to follow, whether it is given arguments, and the
-/// generic it is an argument of, as written (EMPTY for none).
+/// generic it is an argument of, as written (EMPTY for none). An item with `unread` stands for a
+/// part of the alias's value hoglint cannot read as types, and names nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Expanded {
     value: Sid,
@@ -676,6 +679,7 @@ pub struct Expanded {
     too_deep: bool,
     subscripted: bool,
     argument_of: Sid,
+    unread: bool,
 }
 
 /// Whether a name is one `wanted` holds, by its spelling or by its target.
@@ -1091,7 +1095,39 @@ impl Producers<'_> {
                     self.mentions(item, false, argument_of, out);
                 }
             }
+            V::Star(inner) => self.mentions(inner, whole, argument_of, out),
             _ => {}
+        }
+    }
+
+    /// `DeclarationProducer.unread`: whether a type expression has a part `mentions` cannot read
+    /// as types. A `Literal`'s values, the metadata of `Annotated` and `...` are no types.
+    fn unread(&mut self, value: &V) -> bool {
+        let k = &self.settings.k;
+        match value {
+            V::Chain(_) => false,
+            V::Sub(inner, index) => {
+                let last = match &**inner {
+                    V::Chain(chain) => self.core.it.last(*chain),
+                    _ => EMPTY,
+                };
+                if last == k.literal_name {
+                    return false;
+                }
+                if last == k.annotated_name
+                    && let V::Tuple(items) = &**index
+                    && let Some(first) = items.first()
+                {
+                    return self.unread(first);
+                }
+                self.unread(inner) || self.unread(index)
+            }
+            V::Str(_, Some(parsed)) => self.unread(parsed),
+            V::Bin(true, l, r) => self.unread(l) || self.unread(r),
+            V::Tuple(items) | V::List(items) => items.iter().any(|item| self.unread(item)),
+            V::Star(inner) => self.unread(inner),
+            V::Opaque(what) => self.core.it.s(*what) != "...",
+            _ => true,
         }
     }
 
@@ -1361,6 +1397,17 @@ impl Producers<'_> {
     /// or nested). A cycle stops at the alias that closes it; an alias deeper than
     /// MAX_ALIAS_DEPTH stays a marker, because a type left unread is unknown.
     fn expand_into(&mut self, value: &V, at: SlotLookup, top: bool, expansion: &mut Expansion) {
+        if self.unread(value) {
+            expansion.write(Expanded {
+                value: EMPTY,
+                top,
+                lookup: at,
+                too_deep: false,
+                subscripted: false,
+                argument_of: EMPTY,
+                unread: true,
+            });
+        }
         let mut names = Vec::new();
         self.mentions(value, true, EMPTY, &mut names);
         for named in names {
@@ -1371,6 +1418,7 @@ impl Producers<'_> {
                 too_deep: false,
                 subscripted: named.subscripted,
                 argument_of: named.argument_of,
+                unread: false,
             };
             expansion.write(item);
             let found = self.lookup_at(at, named.name);
@@ -1465,6 +1513,7 @@ impl Producers<'_> {
         contract: bool,
         lookup: SlotLookup,
         names: Vec<Named>,
+        mut unread: bool,
     ) {
         let mut written: FxHashSet<AliasRow> = FxHashSet::default();
         for named in names {
@@ -1489,6 +1538,10 @@ impl Producers<'_> {
                 continue;
             };
             for &item in expansion.iter() {
+                if item.unread {
+                    unread = true;
+                    continue;
+                }
                 let whole = mention.whole && item.top;
                 let inner = self.lookup_at(item.lookup, item.value);
                 let k = &self.settings.k;
@@ -1518,6 +1571,11 @@ impl Producers<'_> {
                 self.push_slot(rows, inner.surface, resolved, slot, position, &extra);
             }
         }
+        if unread {
+            let k = &self.settings.k;
+            let marker = Some((k.annotation, k.unread));
+            self.push_unresolved(rows, EMPTY, slot, marker);
+        }
     }
 
     /// One `exposes` edge per type name in a slot. Builtin types count only in a contract, and
@@ -1539,7 +1597,8 @@ impl Producers<'_> {
         };
         let mut names = Vec::new();
         self.mentions(annotation, true, EMPTY, &mut names);
-        self.expose_mentions(rows, slot, contract, lookup, names);
+        let unread = self.unread(annotation);
+        self.expose_mentions(rows, slot, contract, lookup, names, unread);
     }
 
     /// Whether a def's first parameter is bound by the call, whatever its name: a method's first

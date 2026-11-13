@@ -1047,9 +1047,15 @@ impl<'a> Walk<'a> {
         } = self.keys;
         for (id, owner, qualname_len) in self.member_edges(symbol, shape) {
             let shape_only = self.leaves_slot(id, (owner, qualname_len), &places, shape);
-            if self.cx.attr(id, annotation) == "missing" {
+            let written = self.cx.attr(id, annotation);
+            if written == "missing" || written == "unread" {
                 if !shape_only {
-                    let why = ("no-annotation", self.cx.attr(id, slot));
+                    let code = if written == "missing" {
+                        "no-annotation"
+                    } else {
+                        "unread-annotation"
+                    };
+                    let why = (code, self.cx.attr(id, slot));
                     self.unknown(symbol, module, shape, trail, Some(id), why);
                 }
                 continue;
