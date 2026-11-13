@@ -526,17 +526,29 @@ class ExportPrimitive(RuleType):
         handles = self.exposes_under(module).get(callable_name, [])
         return any(edge.attr("callable") == callable_name and edge.attr("slot") == slot for edge in self.edges(handles))
 
-    def leaves_slot(self, row: Edge, owner: str, qualname: str, module: str, bound: str) -> bool:
+    def copy_places(self, symbol: str, module: str, bound: str) -> list[tuple[str, str]]:
+        """(module, name) of each place the producer may hold a copy of the walked symbol's slots:
+        the exporting module under the name it binds, and the module that defines the symbol under
+        its own name (a contract dataclass's fields along its MRO)."""
+        out = [(module, bound)] if bound else []
+        owner = self.ctx.labeler.module_of_symbol(symbol)
+        if owner is not None and owner != symbol:
+            out.append((owner, symbol[len(owner) + 1 :]))
+        return out
+
+    def leaves_slot(self, row: Edge, owner: str, qualname: str, symbol: str, module: str, bound: str) -> bool:
         """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
-        reads. The row's own module is one it holds for, or the exporting module holds the copy of
-        the slot under the name it binds."""
+        reads. The row's own module is one it holds for, or a module it holds for holds the copy of
+        the slot (`copy_places`)."""
         if not SignaturePrimitive.sees_callable(row):
             return False
         if self.signature_sees(owner):
             return True
-        if not bound or not self.signature_sees(module):
-            return False
-        return self.holds_copy(module, bound + row.attr("callable")[len(qualname) :], row.attr("slot"))
+        rest = row.attr("callable")[len(qualname) :]
+        for place, name in self.copy_places(symbol, module, bound):
+            if self.signature_sees(place) and self.holds_copy(place, name + rest, row.attr("slot")):
+                return True
+        return False
 
     def policy_leaves_out(self, row: Edge) -> bool:
         """Whether every named signature rule's slot policy is false for a row: the type it
@@ -567,7 +579,7 @@ class ExportPrimitive(RuleType):
         for row, owner, qualname in self.member_edges(symbol, include_bases, policy):
             if row.attr("alias") == "expanded":
                 continue
-            shape_only = self.leaves_slot(row, owner, qualname, module, bound)
+            shape_only = self.leaves_slot(row, owner, qualname, symbol, module, bound)
             if row.attr("annotation") == "missing":
                 if not shape_only:
                     self.unknown(symbol, module, policy, trail, row, "no-annotation", row.attr("slot"))

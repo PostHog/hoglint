@@ -545,6 +545,31 @@ SLOT_OWNER_CASES = {
             "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
         },
     ),
+    "an inherited field of a contract dataclass the facade defines": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Base:\n    order: Order\n",
+            f"{SHOP_DIR}/facade/contracts.py": f"import dataclasses\n\nfrom {SHOP}.logic import Base\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Info(Base):\n    pass\n",
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
+        },
+    ),
+    "an inherited field of a contract dataclass the facade package hands out": (
+        {
+            f"{SHOP_DIR}/logic.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Base:\n    order: Order\n",
+            f"{SHOP_DIR}/facade/contracts.py": f"import dataclasses\n\nfrom {SHOP}.logic import Base\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Info(Base):\n    pass\n",
+            f"{SHOP_DIR}/facade/__init__.py": f"from {SHOP}.facade.contracts import Info\n\n__all__ = ['Info']\n",
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
+        },
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

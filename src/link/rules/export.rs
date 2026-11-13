@@ -742,13 +742,32 @@ impl<'a> Walk<'a> {
             })
     }
 
+    /// `ExportPrimitive.copy_places`: (module, name) of each place the producer may hold a copy
+    /// of the walked symbol's slots.
+    fn copy_places(&self, symbol: &str, module: &str, bound: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if !bound.is_empty() {
+            out.push((module.to_string(), bound.to_string()));
+        }
+        if let Some((owner, _)) = self.cx.module_of_symbol(symbol) {
+            let owner_name = self.cx.text(owner);
+            if owner_name != symbol {
+                let name = symbol[owner_name.len() + 1..].to_string();
+                out.push((owner_name.to_string(), name));
+            }
+        }
+        out
+    }
+
     /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
     /// callable's slot whose row that rule reads.
+    #[allow(clippy::too_many_arguments)]
     fn leaves_slot(
         &mut self,
         id: u32,
         owner: Sid,
         qualname: &str,
+        symbol: &str,
         module: &str,
         bound: &str,
     ) -> bool {
@@ -761,15 +780,20 @@ impl<'a> Walk<'a> {
         if self.signature_sees(&owner_name) {
             return true;
         }
-        if bound.is_empty() || !self.signature_sees(module) {
-            return false;
-        }
-        let Some(module_sid) = link.core.it.get(module) else {
-            return false;
-        };
-        let copy = format!("{bound}{}", &row_callable[qualname.len()..]);
+        let rest = &row_callable[qualname.len()..];
         let slot = self.cx.attr(id, link.core.it.get("slot"));
-        self.holds_copy(module_sid, &copy, slot)
+        for (place, name) in self.copy_places(symbol, module, bound) {
+            if !self.signature_sees(&place) {
+                continue;
+            }
+            let Some(place_sid) = link.core.it.get(&place) else {
+                continue;
+            };
+            if self.holds_copy(place_sid, &format!("{name}{rest}"), slot) {
+                return true;
+            }
+        }
+        false
     }
 
     /// `ExportPrimitive.signature_sees`: whether a signature rule sees the slots of a module's
@@ -841,7 +865,7 @@ impl<'a> Walk<'a> {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
-            let shape_only = self.leaves_slot(id, owner, &qualname, module, bound);
+            let shape_only = self.leaves_slot(id, owner, &qualname, symbol, module, bound);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));
