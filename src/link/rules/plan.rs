@@ -250,6 +250,8 @@ pub struct RulePlan {
 }
 
 /// How the evaluator treats a rule, as the rule's Python class states it (`RuleType.NATIVE_MODE`).
+// Decoded once per rule: the size of the largest variant costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ModePlan {
