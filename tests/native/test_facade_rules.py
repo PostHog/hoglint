@@ -1495,6 +1495,113 @@ STAR_CASES = {
 }
 
 
+API_FILE = f"{SHOP_DIR}/facade/api.py"
+IMPORTS_MODELS = f"from {SHOP} import models\n\n"
+NOOP = "\n\ndef noop() -> None:\n    pass\n"
+LOOSE_AT_API = {"export-shape": [[f"{SHOP}.errors.Loose", API, "export-shape(class)"]], "facade-signature": []}
+DENIED_AT_API = {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []}
+CLEAN_AT_API = {"export-shape": [], "facade-signature": []}
+
+
+def rebinds(value: str, *, imports: str = IMPORTS_MODELS, name: str = "Thing", tail: str = "") -> str:
+    """A facade module that binds `name` again to `value` and lists it in `__all__`."""
+    return f"{imports}{name} = {value}\n{tail}\n__all__ = ['{name}']\n"
+
+
+# A public name a top-level assignment binds to a class or a function is handed out as the import
+# of that name would be, listed in `__all__` or not; a private one only when `__all__` lists it.
+ASSIGNED_CASES = {
+    "a model by its attribute chain": ({API_FILE: rebinds("models.Order")}, DENIED_AT_API),
+    "a model by its name": (
+        {API_FILE: rebinds("Order", imports=f"from {SHOP}.models import Order\n\n")},
+        DENIED_AT_API,
+    ),
+    "a model imported under the name (control)": (
+        {API_FILE: f"from {SHOP}.models import Order as Thing\n\n__all__ = ['Thing']\n"},
+        DENIED_AT_API,
+    ),
+    "a plain class": (
+        {
+            f"{SHOP_DIR}/errors.py": "class Loose:\n    pass\n",
+            API_FILE: rebinds("Loose", imports=f"from {SHOP}.errors import Loose\n\n"),
+        },
+        LOOSE_AT_API,
+    ),
+    "an exception whose method returns a model": (
+        {
+            f"{SHOP_DIR}/errors.py": IMPORTS_ORDER
+            + "class Rejected(Exception):\n    def item(self) -> Order:\n        raise ValueError\n",
+            API_FILE: rebinds("Rejected", imports=f"from {SHOP}.errors import Rejected\n\n"),
+        },
+        DENIED_AT_API,
+    ),
+    "a function": (
+        {
+            f"{SHOP_DIR}/errors.py": IMPORTS_ORDER + "def place(order: Order) -> None:\n    pass\n",
+            API_FILE: rebinds("place", imports=f"from {SHOP}.errors import place\n\n"),
+        },
+        {"export-shape": [], "facade-signature": [[API, "Thing", "param:order", ORDER]]},
+    ),
+    "a frozen dataclass": (
+        {
+            f"{SHOP_DIR}/errors.py": IMPORTS_ORDER + ORDER_DATACLASS.format(name="Receipt"),
+            API_FILE: rebinds("Receipt", imports=f"from {SHOP}.errors import Receipt\n\n"),
+        },
+        {"export-shape": [], "facade-signature": [[API, "Thing.__init__", "field:order", ORDER]]},
+    ),
+    "a class nested in a class": (
+        {
+            f"{SHOP_DIR}/errors.py": "class Holder:\n    class Inner:\n        pass\n",
+            API_FILE: rebinds("Holder.Inner", imports=f"from {SHOP}.errors import Holder\n\n"),
+        },
+        {"export-shape": [[f"{SHOP}.errors.Holder.Inner", API, "export-shape(class)"]], "facade-signature": []},
+    ),
+    "an alias of an alias in a logic module": (
+        {
+            f"{SHOP_DIR}/errors.py": IMPORTS_ORDER + "Ref = Order\n",
+            API_FILE: rebinds("Ref", imports=f"from {SHOP}.errors import Ref\n\n"),
+        },
+        DENIED_AT_API,
+    ),
+    "no __all__ in a module with no function": ({API_FILE: IMPORTS_MODELS + "Thing = models.Order\n"}, DENIED_AT_API),
+    "a public name not listed in a module with a function": (
+        {API_FILE: IMPORTS_MODELS + "Thing = models.Order\n" + NOOP + "\n\n__all__ = ['noop']\n"},
+        DENIED_AT_API,
+    ),
+    "a private name not listed in a module with a function": (
+        {API_FILE: IMPORTS_MODELS + "_Thing = models.Order\n" + NOOP + "\n\n__all__ = ['noop']\n"},
+        CLEAN_AT_API,
+    ),
+    "a private name listed": ({API_FILE: rebinds("models.Order", name="_Thing")}, DENIED_AT_API),
+    "the last of two assignments": ({API_FILE: rebinds("3", tail="Thing = models.Order\n")}, DENIED_AT_API),
+    "a registration surface": (
+        {f"{SHOP_DIR}/routes.py": rebinds("models.Order")},
+        {"export-shape": [[ORDER, ROUTES, "export-denied(model)"]]},
+    ),
+    # Written limits: none of these is judged as a name handed out.
+    "a member past a class": ({API_FILE: rebinds("models.Order.objects")}, CLEAN_AT_API),
+    "a call": ({API_FILE: rebinds("models.Order()")}, CLEAN_AT_API),
+    "two targets": ({API_FILE: IMPORTS_MODELS + "A = B = models.Order\n\n__all__ = ['A', 'B']\n"}, CLEAN_AT_API),
+    "a tuple target": (
+        {API_FILE: IMPORTS_MODELS + "A, B = models.Order, models.Order\n\n__all__ = ['A', 'B']\n"},
+        CLEAN_AT_API,
+    ),
+    "the first of two assignments": ({API_FILE: rebinds("models.Order", tail="Thing = 3\n")}, CLEAN_AT_API),
+    "a generic alias": ({API_FILE: rebinds("list[models.Order]")}, CLEAN_AT_API),
+}
+
+
+@pytest.mark.parametrize("case", ASSIGNED_CASES)
+def test_a_name_assigned_again_is_handed_out_as_its_import_would_be(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = ASSIGNED_CASES[case]
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+        rule: sorted(rows) for rule, rows in expected.items()
+    }
+
+
 @pytest.mark.parametrize("case", STAR_CASES)
 def test_a_star_import_hands_out_what_its_names_imported_by_name_do(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str

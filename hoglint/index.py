@@ -322,6 +322,14 @@ class GraphIndex:
         return out
 
     @cached_property
+    def module_rebinds(self) -> dict[str, list[Edge]]:
+        """`rebind` edges per module: the names an export module hands out by assigning them again."""
+        out: dict[str, list[Edge]] = {}
+        for edge in self.by_kind.get("rebind", []):
+            out.setdefault(edge.site.module, []).append(edge)
+        return out
+
+    @cached_property
     def exposes(self) -> dict[str, list[tuple[str, Edge]]]:
         """(callable qualname, exposes edge) per module."""
         out: dict[str, list[tuple[str, Edge]]] = {}

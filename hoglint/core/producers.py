@@ -341,14 +341,23 @@ class BuildContext:
         if not self.first_party.contains(target):
             return None
         hit, rest = self.resolver.resolve_dotted(target)
-        if hit is None or rest:
+        if hit is None or (rest and hit.kind != "class"):
             return UNFOLLOWED
         if hit.kind in ("variable", "module"):
             return None
         if hit.kind not in ("def", "class") or not self.first_party_chain(hit):
             return UNFOLLOWED
         found = self.def_of(hit.origin.module, hit.origin.symbol, hit.kind)
-        return Followed(*found) if found is not None else UNFOLLOWED
+        if found is None:
+            return UNFOLLOWED
+        scope, idx = found
+        # A class an assignment hands out can sit in another class's body.
+        for attr in rest:
+            nested = [at for at, node in enumerate(scope.defs) if node["s"] == idx and node["n"] == attr]
+            if not nested or scope.defs[nested[-1]]["k"] != "class":
+                return UNFOLLOWED
+            idx = nested[-1]
+        return Followed(scope, idx)
 
     def assigned(self, module: str) -> dict[str, tuple[FileScope | None, dict]]:
         """name -> (file, row) of the last module-level assignment of each name, read once per
@@ -703,7 +712,7 @@ class DeclarationProducer(Producer):
     """
 
     kind = "declaration"
-    kinds = ("inherit", "decorate", "exposes", "declares")
+    kinds = ("inherit", "decorate", "exposes", "declares", "rebind")
     # `callees`: a call on `__all__` makes a contract's hand-out unknown. `refs` and `uses`: the
     # names a contract module refers to itself.
     contract_reads = frozenset({"callees", "refs", "uses"})
@@ -1322,7 +1331,7 @@ class DeclarationProducer(Producer):
         cannot follow to a def. A def in a file of the same export and root (the same product's
         facade) gets no rows here: that file reports it."""
         roots = self.contract_roots(context, scope)
-        handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
+        handed = HandedOut(scope, context.resolver)
         unread = handed.dunder_all.unread
         if not handed.no_functions and unread is not None:
             line, column = unread
@@ -1350,12 +1359,27 @@ class DeclarationProducer(Producer):
             init = SlotRows(rows.site, f"{item.bound}.__init__", item.clause)
             self.expose_dataclass(context, graph, init, lookup, idx)
 
+    def rebind(self, context: BuildContext, graph: Graph, scope: FileScope, handed: HandedOut) -> None:
+        """A `rebind` edge per name the module hands out by assigning it again, read as `from
+        module import name`: what the module hands out is always an edge that binds the name. It
+        is a kind of its own, so no rule that reads imports sees a second edge for one name."""
+        rows = module_assigns(scope.record)
+        for item, hit in handed.assigned():
+            surface = f"{scope.module}.{item.bound}"
+            resolved = context.classifier.classify(surface, hit)
+            contexts = scope.contexts(rows[item.bound].get("f", 0), -1)
+            attrs = (("binds", item.bound),)
+            graph.edges.append(
+                self.edge("rebind", scope, -1, item.line, item.column, surface, resolved, contexts, attrs=attrs)
+            )
+
     def record_hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
-        """What an export module hands out by import, for every rule that asks what it exports.
-        A test file hands nothing out."""
+        """What an export module hands out by import or by assigning a name again, for every rule
+        that asks what it exports. A test file hands nothing out."""
         if not context.is_export_module(scope):
             return
-        handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
+        handed = HandedOut(scope, context.resolver)
+        self.rebind(context, graph, scope, handed)
         used = self.used_names(scope) if handed.no_functions else frozenset()
         graph.hand_outs[scope.module] = handed.hand_out(used)
 

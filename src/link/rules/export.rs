@@ -233,7 +233,7 @@ pub fn binds_handed(link: &Link, found: &HandOut, id: u32) -> bool {
 pub struct ExportInputs {
     /// (module, path) of every graph module an export covers, per export, in module name order.
     covered: Vec<Vec<(Sid, u32)>>,
-    /// Module-scope import edges per covered module.
+    /// Module-scope import edges, then `rebind` edges, per covered module.
     imports: FxHashMap<Sid, Vec<u32>>,
     /// (callable, edge) of every `exposes` edge, per module.
     exposes: FxHashMap<Sid, Vec<(Sid, u32)>>,
@@ -258,14 +258,20 @@ impl ExportInputs {
                 }
             }
         }
-        let mut imports = FxHashMap::default();
-        if let Some(kind) = link.kind_sid("import") {
-            for module in covered.iter().flatten().map(|(module, _)| *module) {
-                if imports.contains_key(&module) {
-                    continue;
-                }
-                imports.insert(module, module_scope_imports(link, kind, module));
+        let mut imports: FxHashMap<Sid, Vec<u32>> = FxHashMap::default();
+        let kinds: Vec<Sid> = ["import", "rebind"]
+            .iter()
+            .filter_map(|kind| link.kind_sid(kind))
+            .collect();
+        for module in covered.iter().flatten().map(|(module, _)| *module) {
+            if imports.contains_key(&module) {
+                continue;
             }
+            let ids = kinds
+                .iter()
+                .flat_map(|&kind| module_scope_imports(link, kind, module))
+                .collect();
+            imports.insert(module, ids);
         }
         let mut exposes = FxHashMap::default();
         if let Some(kind) = link.kind_sid("exposes") {

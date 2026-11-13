@@ -424,6 +424,8 @@ def test_a_module_with_no_function_hands_out_only_the_imports_it_does_not_use(
             ("ping_target", "return", "builtins.None", "external", "alias"),
             ("untouched", "param:y", "builtins.bytes", "external", "no-functions"),
             ("untouched", "return", "builtins.None", "external", "no-functions"),
+            ("other", "param:z", "builtins.int", "external", "assigned"),
+            ("other", "return", "builtins.None", "external", "assigned"),
         ]
     )
 

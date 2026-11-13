@@ -619,7 +619,7 @@ def test_the_hand_out_set_holds_every_name_a_handed_import_binds(
 
 
 # The edge kinds that bind a name an export module hands out.
-HAND_OUT_KINDS = ("import",)
+HAND_OUT_KINDS = ("import", "rebind")
 # (files, the names the facade module hands out): every name an export module hands out has a
 # module-scope edge that binds it, so each reader of what it hands out reads the same edges.
 HAND_OUT_EDGE_CASES = {
@@ -647,6 +647,10 @@ HAND_OUT_EDGE_CASES = {
             JOBS: "from .again import *\n\n" + RUN,
         },
         ["LIMIT", "run"],
+    ),
+    "a function assigned to a new name": (
+        {HOOKS: "from ..temporal import jobs\n\nstart = jobs.run\n", JOBS: RUN},
+        ["start"],
     ),
 }
 

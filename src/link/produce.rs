@@ -14,7 +14,7 @@ use super::trace::{Kind, Memo};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::rc::Rc;
 
-pub const KIND_NAMES: [&str; 9] = [
+pub const KIND_NAMES: [&str; 10] = [
     "import",
     "reference",
     "declares",
@@ -24,6 +24,7 @@ pub const KIND_NAMES: [&str; 9] = [
     "dotted-path",
     "dynamic-import",
     "unparsed",
+    "rebind",
 ];
 pub const IMPORT: u8 = 0;
 pub const REFERENCE: u8 = 1;
@@ -34,6 +35,7 @@ pub const EXPOSES: u8 = 5;
 pub const DOTTED: u8 = 6;
 pub const DYNAMIC: u8 = 7;
 pub const UNPARSED: u8 = 8;
+pub const REBIND: u8 = 9;
 
 /// One core edge. Strings are interned; `via` and `attrs` are ranges into the store's arenas.
 #[derive(Clone, Copy)]
@@ -2180,7 +2182,8 @@ impl Producers<'_> {
             return None;
         }
         let (hit, rest) = core.resolve_dotted(target);
-        let Some(hit) = hit.filter(|_| rest.is_empty()) else {
+        let Some(hit) = hit.filter(|&hit| rest.is_empty() || core.kind(hit) == HitKind::Class)
+        else {
             return Some(Followed::Unfollowed);
         };
         let kind = core.kind(hit);
@@ -2194,10 +2197,25 @@ impl Producers<'_> {
             return Some(Followed::Unfollowed);
         }
         let origin = self.core.origin(hit);
-        match self.def_of(origin.m, origin.s, kind) {
-            Some((owner, idx)) => Some(Followed::Def(owner, idx)),
-            None => Some(Followed::Unfollowed),
+        let Some((owner, mut idx)) = self.def_of(origin.m, origin.s, kind) else {
+            return Some(Followed::Unfollowed);
+        };
+        // A class an assignment hands out can sit in another class's body.
+        let facts = self.core.facts.clone();
+        let defs = &facts.files[self.scopes[owner].file as usize].defs;
+        for attr in rest {
+            let nested = defs
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.s == idx as i32 && node.n == attr)
+                .map(|(at, _)| at)
+                .last();
+            let Some(nested) = nested.filter(|&at| defs[at].is_class()) else {
+                return Some(Followed::Unfollowed);
+            };
+            idx = nested as u32;
         }
+        Some(Followed::Def(owner, idx))
     }
 
     /// The slots of the functions and dataclass fields a contract surface hands out from other
@@ -2435,13 +2453,34 @@ impl Producers<'_> {
         self.record_hand_out(owner);
     }
 
-    /// What an export module hands out by import, for every rule that asks what it exports. A
-    /// test file hands nothing out.
+    /// A `rebind` edge per name the module hands out by assigning it again, read as `from module
+    /// import name`: what the module hands out is always an edge that binds the name. It is a
+    /// kind of its own, so no rule that reads imports sees a second edge for one name.
+    fn rebind(&mut self, owner: usize, handed: &HandedOut) {
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[owner].file as usize];
+        let rows = module_assigns(&self.core.it, record);
+        let module = self.scopes[owner].module;
+        for (item, hit) in handed.assigned(self.core, &self.scopes[owner]) {
+            let surface = self.core.it.join(module, item.bound);
+            let resolved = self.core.classify(surface, Some(hit));
+            let flags = record.assigns[rows[&item.bound] as usize].f;
+            let ctx = self.core.contexts(&mut self.scopes[owner], flags, -1);
+            let attrs = [(self.settings.k.binds, item.bound)];
+            self.push(
+                REBIND, owner, -1, item.line, item.col, ctx, surface, resolved, EMPTY, &attrs,
+            );
+        }
+    }
+
+    /// What an export module hands out by import or by assigning a name again, for every rule
+    /// that asks what it exports. A test file hands nothing out.
     fn record_hand_out(&mut self, owner: usize) {
         if !self.is_export_module(owner) {
             return;
         }
         let handed = HandedOut::new(self.core, &self.scopes[owner]);
+        self.rebind(owner, &handed);
         let used = if handed.no_functions {
             self.used_names(owner)
         } else {

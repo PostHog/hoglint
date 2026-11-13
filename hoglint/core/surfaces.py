@@ -37,12 +37,22 @@ from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import RUN_TIME_MODULE_FLAGS, ModuleTable, Tables, import_surface, module_level
-from hoglint.model import HandOut
+from hoglint.core.symbols import (
+    RUN_TIME_MODULE_FLAGS,
+    Hit,
+    Resolver,
+    Tables,
+    entity,
+    import_surface,
+    module_assigns,
+    module_level,
+)
+from hoglint.model import EntityId, HandOut
 
 ALL_CLAUSE = "all"
 ALIAS_CLAUSE = "alias"
 LAZY_CLAUSE = "lazy"
+ASSIGNED_CLAUSE = "assigned"
 NO_FUNCTIONS_CLAUSE = "no-functions"
 # A call of a method on `__all__` in the module body: `__all__.extend(...)`.
 METHOD_CALL = re.compile(r"__all__\.\w+")
@@ -204,15 +214,17 @@ def binds_at_run_time(scope: int, flags: int) -> bool:
 
 
 class HandedOut:
-    """The names one module hands out, in import order and then lazy-name order.
+    """The names one module hands out, in import order, then lazy-name order, then the order of
+    the assignments that bind a name again.
 
     `no_functions`: the module body defines no function outside any block, so it hands out every
     import it does not use itself, whatever `__all__` says."""
 
-    def __init__(self, scope: FileScope, table: ModuleTable | None, tables: Tables) -> None:
+    def __init__(self, scope: FileScope, resolver: Resolver) -> None:
         self.scope = scope
-        self.table = table
-        self.tables = tables
+        self.resolver = resolver
+        self.tables = resolver.tables
+        self.table = resolver.tables.get(scope.module)
         self.no_functions = not any(d["s"] == -1 and d.get("f", 0) == 0 and d["k"] != "class" for d in scope.defs)
         self.dunder_all = read_dunder_all(scope.record)
 
@@ -281,7 +293,65 @@ class HandedOut:
             if key not in seen:
                 seen.add(key)
                 out.append(Handed(entry.name, key[1], LAZY_CLAUSE, entry.line, entry.column))
+        out.extend(item for item, _ in self.assigned())
         return out
+
+    def nested_class(self, outer: EntityId, attrs: list[str]) -> EntityId | None:
+        """The class `attrs` name inside the body of a top-level class, one level per name, the
+        last def of a name winning; None when a name is no class declared directly in the class
+        above it."""
+        binding = self.tables.binding(outer.module, outer.symbol)
+        path = self.tables.binding_path(outer.module, outer.symbol)
+        if binding is None or binding[0] != "class" or path is None:
+            return None
+        record = self.tables.store.records.get(path)
+        if record is None:
+            return None
+        defs = record.get("defs", ())
+        at: int = binding[1]
+        symbol = outer.symbol
+        for attr in attrs:
+            found = [i for i, node in enumerate(defs) if node["s"] == at and node["n"] == attr]
+            if not found or defs[found[-1]]["k"] != "class":
+                return None
+            at = found[-1]
+            symbol = f"{symbol}.{attr}"
+        return entity(outer.module, symbol)
+
+    def assigned_hit(self, name: str, chain: str) -> Hit | None:
+        """What `name = chain` binds, when the chain resolves, whole, to a class or a function: a
+        class nested in a class counts, a member past a class does not."""
+        hit, rest = self.resolver.resolve_chain(self.scope.module, chain)
+        if hit is None or hit.kind not in ("class", "def") or (rest and hit.kind != "class"):
+            return None
+        if rest:
+            nested = self.nested_class(hit.origin, rest)
+            if nested is None:
+                return None
+            hit = Hit((*hit.chain[:-1], nested), "class")
+        return hit.behind(entity(self.scope.module, name))
+
+    def assigned(self) -> list[tuple[Handed, Hit]]:
+        """The names the module binds again by a top-level assignment of one bare name to a name
+        or an attribute chain that resolves, whole, to a class or a function, each with what it
+        binds: handed out by the clause of a definition, when the name is public or `__all__`
+        lists it. Only the last assignment of a name counts, as the module table reads it."""
+        if self.table is None:
+            return []
+        listed = self.dunder_all.names or frozenset()
+        out: list[tuple[Handed, Hit]] = []
+        for name, row in module_assigns(self.scope.record).items():
+            value = row["v"]
+            if len(row["t"]) != 1 or not isinstance(value, str):
+                continue
+            if self.table.names.get(name) != ("alias", value):
+                continue
+            if name.startswith("_") and name not in listed:
+                continue
+            hit = self.assigned_hit(name, value)
+            if hit is not None:
+                out.append((Handed(name, str(hit.origin), ASSIGNED_CLAUSE, row["l"], row["c"]), hit))
+        return sorted(out, key=lambda pair: (pair[0].line, pair[0].column, pair[0].bound))
 
     def hand_out(self, used: frozenset[str]) -> HandOut:
         """The names the module hands out and the ones it binds by import and keeps to itself.

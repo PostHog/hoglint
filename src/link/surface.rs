@@ -27,7 +27,10 @@
 use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
-use super::resolve::{Binding, Core, RUN_TIME_MODULE_FLAGS, import_surface, module_level};
+use super::resolve::{
+    Binding, Core, Ent, HitId, HitKind, RUN_TIME_MODULE_FLAGS, import_surface, module_assigns,
+    module_level,
+};
 use super::scope::Scope;
 use super::trace::Kind;
 use rustc_hash::FxHashSet;
@@ -35,6 +38,7 @@ use rustc_hash::FxHashSet;
 pub const ALL_CLAUSE: &str = "all";
 pub const ALIAS_CLAUSE: &str = "alias";
 pub const LAZY_CLAUSE: &str = "lazy";
+pub const ASSIGNED_CLAUSE: &str = "assigned";
 pub const NO_FUNCTIONS_CLAUSE: &str = "no-functions";
 /// The module whose names a star import never hands on.
 const FUTURE: &str = "__future__";
@@ -257,7 +261,8 @@ fn binds_at_run_time(row: &Import) -> bool {
     module_level(row.scope, row.flags, RUN_TIME_MODULE_FLAGS)
 }
 
-/// The names one module hands out, in import order and then lazy-name order.
+/// The names one module hands out, in import order, then lazy-name order, then the order of the
+/// assignments that bind a name again.
 ///
 /// `no_functions`: the module body defines no function outside any block, so it hands out every
 /// import it does not use itself, whatever `__all__` says.
@@ -407,6 +412,112 @@ impl HandedOut {
                 });
             }
         }
+        out.extend(self.assigned(core, scope).into_iter().map(|(item, _)| item));
+        out
+    }
+
+    /// The class `attrs` name inside the body of a top-level class, one level per name, the last
+    /// def of a name winning (`HandedOut.nested_class`); None when a name is no class declared
+    /// directly in the class above it.
+    fn nested_class(core: &mut Core, outer: Ent, attrs: &[Sid]) -> Option<Ent> {
+        let (file, mut at) = core.located(outer)?;
+        let facts = core.facts.clone();
+        let defs = &facts.files[file as usize].defs;
+        let mut symbol = outer.s;
+        for &attr in attrs {
+            let found = defs
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.s == at as i32 && node.n == attr)
+                .map(|(i, _)| i)
+                .last()?;
+            if !defs[found].is_class() {
+                return None;
+            }
+            at = found as u32;
+            symbol = core.it.join(symbol, attr);
+        }
+        Some(Ent {
+            m: outer.m,
+            s: symbol,
+        })
+    }
+
+    /// What `name = chain` binds, when the chain resolves, whole, to a class or a function
+    /// (`HandedOut.assigned_hit`): a class nested in a class counts, a member past a class does
+    /// not.
+    fn assigned_hit(core: &mut Core, scope: &Scope, name: Sid, chain: Sid) -> Option<HitId> {
+        let (hit, used, total) = core.resolve_chain(scope.module, chain);
+        let hit = hit?;
+        let kind = core.kind(hit);
+        let rest: Vec<Sid> = core.it.segs(chain)[used..total].to_vec();
+        if !matches!(kind, HitKind::Class | HitKind::Def)
+            || (!rest.is_empty() && kind != HitKind::Class)
+        {
+            return None;
+        }
+        let mut hit = hit;
+        if !rest.is_empty() {
+            let nested = Self::nested_class(core, core.origin(hit), &rest)?;
+            let mut chain = core.chain(hit).to_vec();
+            chain.pop();
+            chain.push(nested);
+            hit = core.make_hit(&chain, HitKind::Class);
+        }
+        let step = Ent {
+            m: scope.module,
+            s: name,
+        };
+        Some(core.behind(hit, step))
+    }
+
+    /// The names the module binds again by a top-level assignment of one bare name to a name or
+    /// an attribute chain that resolves, whole, to a class or a function, each with what it binds
+    /// (`HandedOut.assigned`): handed out by the clause of a definition, when the name is public
+    /// or `__all__` lists it. Only the last assignment of a name counts, as the module table
+    /// reads it.
+    pub fn assigned(&self, core: &mut Core, scope: &Scope) -> Vec<(Handed, HitId)> {
+        let Some(table) = core.table(scope.module) else {
+            return Vec::new();
+        };
+        let facts = core.facts.clone();
+        let record = &facts.files[scope.file as usize];
+        let mut out = Vec::new();
+        for (name, at) in module_assigns(&core.it, record) {
+            let row = &record.assigns[at as usize];
+            let Some(V::Chain(value)) = row.value else {
+                continue;
+            };
+            if row.targets.len() != 1 {
+                continue;
+            }
+            if core.table_at(table).names.get(&name).copied() != Some(Binding::Alias(value)) {
+                continue;
+            }
+            let listed = self
+                .dunder_all
+                .names
+                .as_ref()
+                .is_some_and(|names| names.contains(&name));
+            if core.it.s(name).starts_with('_') && !listed {
+                continue;
+            }
+            let Some(hit) = Self::assigned_hit(core, scope, name, value) else {
+                continue;
+            };
+            let origin = core.origin(hit);
+            let item = Handed {
+                bound: name,
+                target: core.ent_sid(origin),
+                clause: ASSIGNED_CLAUSE,
+                line: row.l,
+                col: row.c,
+            };
+            out.push((item, hit));
+        }
+        out.sort_by(|(a, _), (b, _)| {
+            (a.line, a.col, core.it.s(a.bound)).cmp(&(b.line, b.col, core.it.s(b.bound)))
+        });
         out
     }
 

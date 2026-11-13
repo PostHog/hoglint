@@ -730,13 +730,15 @@ class Labeler:
         return Value.known(lifecycle) if lifecycle else NONE
 
     def handed_imports(self, module: str) -> list[Edge]:
-        """The module-scope imports of the names a module hands out (`Graph.hand_outs`): every
-        one when its `__all__` cannot be read, none when the module is no export."""
+        """The module-scope imports of the names a module hands out (`Graph.hand_outs`), then its
+        `rebind` edges: every import when its `__all__` cannot be read, none when the module is no
+        export."""
         hand_out = self.graph.hand_outs.get(module)
         if hand_out is None:
             return []
         imports = self.index.module_imports.get(module, [])
-        return [edge for edge in imports if hand_out.unread or edge.attr("binds") in hand_out.handed]
+        handed = [edge for edge in imports if hand_out.unread or edge.attr("binds") in hand_out.handed]
+        return handed + self.index.module_rebinds.get(module, [])
 
     def name_owner(self, name: str) -> str | None:
         """The longest dotted prefix of a first-party name that is a graph module or a directory
@@ -769,7 +771,7 @@ class Labeler:
             return UNKNOWN
         names: set[str] = set()
         for edge in self.handed_imports(module):
-            if edge.contexts & NOT_HANDED_CONTEXTS:
+            if edge.kind != "import" or edge.contexts & NOT_HANDED_CONTEXTS:
                 continue
             if edge.resolution is Resolution.UNRESOLVED:
                 return UNKNOWN

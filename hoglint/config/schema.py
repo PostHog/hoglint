@@ -70,6 +70,7 @@ CORE_EDGE_KINDS = (
     "registers",
     "generates",
     "dynamic-import",
+    "rebind",
 )
 CORE_USES = (
     "call",

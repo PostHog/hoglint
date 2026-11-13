@@ -831,6 +831,11 @@ class NativeGraphIndex(GraphIndex):
         return LazyModules(self.modules_of("import"), imports)
 
     @cached_property
+    def module_rebinds(self) -> Mapping[str, list[Edge]]:  # type: ignore[override]
+        """`rebind` edges per module: the names an export module hands out by assigning them again."""
+        return LazyModules(self.modules_of("rebind"), lambda module: self.module_edges("rebind", module))
+
+    @cached_property
     def exposes(self) -> Mapping[str, list[tuple[str, Edge]]]:  # type: ignore[override]
         """(callable qualname, exposes edge) per module."""
 
