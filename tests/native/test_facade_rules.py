@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from hoglint import facts
-from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
 from hoglint.rules import exports
@@ -65,7 +64,7 @@ def site_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for path, text in SITE_PACKAGES.items():
         (site / path).parent.mkdir(parents=True, exist_ok=True)
         (site / path).write_text(text)
-    for module in (facts, core_analysis, native_analysis):
+    for module in (facts, native_analysis):
         monkeypatch.setattr(module, "site_packages", lambda: site)
 
 

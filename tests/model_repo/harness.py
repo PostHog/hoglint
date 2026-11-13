@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hoglint import facts
-from hoglint.core import analysis as core_analysis
 from hoglint.ledger.envelope import Framework
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import LIST_OUTPUTS, VALUE_OUTPUTS, Dump, read_lines
@@ -73,7 +72,6 @@ def stub_site() -> Iterator[None]:
     where it holds the function."""
     patches: list[tuple[object, str, object]] = [
         (facts, "site_packages", stub_site_packages),
-        (core_analysis, "site_packages", stub_site_packages),
         (native_analysis, "site_packages", stub_site_packages),
         (Framework, "site", staticmethod(stub_site_packages)),
     ]
