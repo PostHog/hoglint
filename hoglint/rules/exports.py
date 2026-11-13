@@ -413,14 +413,12 @@ class ExportPrimitive(RuleType):
             found = self.walked[key] = self.symbol_truth(policy.walk_where, symbol) is not Truth.FALSE
         return found
 
-    def ancestor_walked(self, ancestor: str, policy: ShapePolicy) -> bool:
-        """Whether the member rows of an ancestor of a walked class are read: always the fields of
-        a data shape, else where `walk_where` holds for the ancestor, so what a product class
-        inherits from a class core defines is core's contract."""
-        shapes, _ = self.recognize(ancestor)
-        if shapes & {"dataclass", "frozen-dataclass"} and shapes & set(policy.data):
-            return True
-        return self.walk_holds(ancestor, policy)
+    @staticmethod
+    def constructor_slot(row: Edge) -> bool:
+        """Whether a row is a field of a dataclass-like class's generated `__init__`, or the marker
+        of a base whose fields are unknown: the producer writes them only for such a class."""
+        slot = row.attr("slot")
+        return slot.startswith("field:") or slot == "fields"
 
     def behavior_ok(self, symbol: str, policy: ShapePolicy) -> bool:
         behavior = policy.behavior
@@ -516,22 +514,29 @@ class ExportPrimitive(RuleType):
         found = self.members.get(key)
         if found is None:
             places = self.member_handles(symbol, include_bases, policy)
-            edges = self.edges([handle for handle, _, _ in places])
-            found = self.members[key] = [(edge, owner, qualname) for edge, (_, owner, qualname) in zip(edges, places)]
+            edges = self.edges([handle for handle, _, _, _ in places])
+            found = self.members[key] = [
+                (edge, owner, qualname)
+                for edge, (_, owner, qualname, walked) in zip(edges, places)
+                if walked or self.constructor_slot(edge)
+            ]
         return found
 
-    def member_handles(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[int, str, str]]:
-        lineage = [symbol]
+    def member_handles(self, symbol: str, include_bases: bool, policy: ShapePolicy) -> list[tuple[int, str, str, bool]]:
+        """(handle, module, qualname, walked) of each row of the symbol and of its ancestors. Of an
+        ancestor `walk_where` is false for, only its constructor fields are read: they are slots of
+        the class that inherits them, while its methods and attributes are core's contract."""
+        lineage = [(symbol, True)]
         if include_bases:
             ancestors, _ = self.facts.ancestors(symbol)
-            lineage.extend(ancestor for ancestor in sorted(ancestors) if self.ancestor_walked(ancestor, policy))
-        out: list[tuple[int, str, str]] = []
-        for target in lineage:
+            lineage.extend((ancestor, self.walk_holds(ancestor, policy)) for ancestor in sorted(ancestors))
+        out: list[tuple[int, str, str, bool]] = []
+        for target, walked in lineage:
             owner = self.ctx.labeler.module_of_symbol(target)
             if owner is None or owner == target:
                 continue
             qualname = target[len(owner) + 1 :]
-            out.extend((handle, owner, qualname) for handle in self.exposes_under(owner).get(qualname, ()))
+            out.extend((handle, owner, qualname, walked) for handle in self.exposes_under(owner).get(qualname, ()))
         return out
 
     def holds_copy(self, module: str, callable_name: str, slot: str) -> bool:

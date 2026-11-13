@@ -540,16 +540,11 @@ impl<'a> Walk<'a> {
         found
     }
 
-    /// `ExportPrimitive.ancestor_walked`: whether the member rows of an ancestor of a walked
-    /// class are read: always the fields of a data shape, else where `walk_where` holds for it.
-    fn ancestor_walked(&mut self, ancestor: &str, shape: usize) -> bool {
-        let (shapes, _) = self.recognize(ancestor);
-        let policy = &self.cx.rules.shapes[shape];
-        let dataclass_like = shapes.contains("dataclass") || shapes.contains("frozen-dataclass");
-        if dataclass_like && policy.data.iter().any(|name| shapes.contains(name)) {
-            return true;
-        }
-        self.walk_holds(ancestor, shape)
+    /// `ExportPrimitive.constructor_slot`: whether a row is a field of a dataclass-like class's
+    /// generated `__init__`, or the marker of a base whose fields are unknown.
+    fn constructor_slot(&self, id: u32) -> bool {
+        let slot = self.cx.attr(id, self.cx.link.core.it.get("slot"));
+        slot.starts_with("field:") || slot == "fields"
     }
 
     /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.
@@ -701,26 +696,26 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.member_handles`: each row with the module and qualname of the class or
-    /// callable it belongs to; of the ancestors only those the policy walks.
+    /// callable it belongs to. Of an ancestor `walk_where` is false for, only its constructor
+    /// fields are read.
     fn member_edges(
         &mut self,
         symbol: &str,
         include_bases: bool,
         shape: usize,
     ) -> Vec<(u32, Sid, String)> {
-        let mut lineage = vec![symbol.to_string()];
+        let mut lineage = vec![(symbol.to_string(), true)];
         if include_bases {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
             let mut sorted: Vec<String> = ancestors.into_iter().map(str::to_string).collect();
             sorted.sort();
             for ancestor in sorted {
-                if self.ancestor_walked(&ancestor, shape) {
-                    lineage.push(ancestor);
-                }
+                let walked = self.walk_holds(&ancestor, shape);
+                lineage.push((ancestor, walked));
             }
         }
         let mut out = Vec::new();
-        for target in lineage {
+        for (target, walked) in lineage {
             let Some((owner, _)) = self.cx.module_of_symbol(&target) else {
                 continue;
             };
@@ -730,7 +725,9 @@ impl<'a> Walk<'a> {
             }
             let qualname = target[owner_name.len() + 1..].to_string();
             for id in self.exposes_under(owner, &qualname) {
-                out.push((id, owner, qualname.clone()));
+                if walked || self.constructor_slot(id) {
+                    out.push((id, owner, qualname.clone()));
+                }
             }
         }
         out

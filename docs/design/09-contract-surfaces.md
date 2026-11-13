@@ -86,7 +86,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
   A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
-  `walk_where` is read for each ancestor too, so what a product class inherits from a class core defines is core's contract as well (Nov 13).
+  `walk_where` is read for each ancestor too, so the methods and attributes a product class inherits from a class core defines are core's contract as well (Nov 13).
+  The fields of a dataclass-like ancestor (a dataclass or a pydantic model) are always read: they are constructor slots of the class that inherits them.
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
@@ -103,7 +104,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   | A function or a data shape's fields handed out from outside the facade (the copy at the facade) | `facade-signature` |
   | A public method, `__init__`, property or attribute of an allowed class handed out from outside the facade | `export-shape`: one row per type and module, the trail in the message |
   | A private method of a walked class | `export-shape` |
-  | A member inherited from a class core defines | none: core's contract |
+  | A method or attribute inherited from a class core defines | none: core's contract |
+  | A field inherited from a dataclass-like class core defines | as a field of the class that inherits it |
   | A member of a class named in a slot (one level deeper) | as the rows above, by where its row is read |
   | Every slot above, at every depth | judged by one slot policy: the named rule's selection |
 

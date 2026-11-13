@@ -612,6 +612,14 @@ SLOT_OWNER_CASES = {
         },
         {"export-shape": [], "facade-signature": [[API, "Info.__init__", "field:order", ORDER]]},
     ),
+    "a field inherited from a pydantic model core defines": (
+        {
+            "posthog/rows.py": IMPORTS_ORDER + "class CoreRow(BaseModel):\n    order: Order\n",
+            f"{SHOP_DIR}/logic.py": "from posthog.rows import CoreRow\n\n\nclass Row(CoreRow):\n    title: str\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.logic import Row\n\n\ndef get() -> Row:\n    raise ValueError\n",
+        },
+        {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
