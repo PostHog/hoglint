@@ -783,9 +783,10 @@ class DeclarationProducer(Producer):
         """The type alias a mention names, as (module, name), its value, and where its names are
         looked up: assigned in the module that uses it, or followed through imports to the
         first-party module that assigns it. A module holds `Handler = Callable[[Order], None]` to
-        shorten a signature, not to hide its types."""
+        shorten a signature, not to hide its types. A name that resolves elsewhere, such as in a
+        class body, is no module-level alias of the same spelling."""
         module = mention.lookup.scope.module
-        local = context.alias(module, mention.value)
+        local = context.alias(module, mention.value) if found.surface == f"{module}.{mention.value}" else None
         if local is not None:
             return (module, mention.value), local[1]["v"], mention.lookup
         hit = found.hit

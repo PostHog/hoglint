@@ -435,6 +435,10 @@ UNEXPANDED_NAMES = {
     "a constant": "Ref = 3\n",
 }
 MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n        raise ValueError\n"
+# A class-body alias whose name a module-level alias also binds.
+SHADOWED_ALIAS = (
+    "Ref = int\n\n\nclass Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n"
+)
 REF_UNKNOWN_AT_ERRORS = {"export-shape": [[f"{SHOP}.errors.Ref", ERRORS, "export-unknown"]], "facade-signature": []}
 # A type alias bound once per branch stands for every binding's types; one binding that is no
 # type alias leaves the name unknown.
@@ -1054,6 +1058,19 @@ SLOT_OWNER_CASES = {
             "Rejected",
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected.Inner.Ref", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    # A module-level alias of the same name does not stand for the class-body alias.
+    "a class-body alias next to a module-level alias of the same name, handed out": (
+        handed_out(SHADOWED_ALIAS, "Rejected"),
+        {"export-shape": [[f"{SHOP}.errors.Rejected.Ref", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a class-body alias next to a module-level alias of the same name, in a contract": (
+        {f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + SHADOWED_ALIAS},
+        {"export-shape": [], "facade-signature": [[CONTRACTS, "Rejected.item", "return", f"{CONTRACTS}.Rejected.Ref"]]},
+    ),
+    "a class-body alias in a contract": (
+        {f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER + SHADOWED_ALIAS.replace("Ref = int\n\n\n", "")},
+        {"export-shape": [], "facade-signature": [[CONTRACTS, "Rejected.item", "return", f"{CONTRACTS}.Rejected.Ref"]]},
     ),
     # A class core defines is core's contract also when it is a data shape: only its fields are read.
     "a method of a frozen dataclass core defines": (
