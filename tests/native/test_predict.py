@@ -169,6 +169,41 @@ CASES = [
         ("found", "alias", "target", "spelled"),
     ),
     Case(
+        "a source's __all__ gains a name behind a star",
+        {
+            "app/lib.py": "def other():\n    pass\n\n\n__all__ = ['other']\n",
+            "app/facade/__init__.py": "",
+            "app/facade/api.py": "from app.lib import *\n",
+        },
+        {"app/lib.py": "def other():\n    pass\n\n\ndef thing():\n    pass\n\n\n__all__ = ['other', 'thing']\n"},
+        "app/facade/api.py",
+        ("names",),
+    ),
+    Case(
+        "a source's __all__ gains a name behind two stars",
+        {
+            "app/lib.py": "def other():\n    pass\n\n\n__all__ = ['other']\n",
+            "app/mid.py": "from app.lib import *\n",
+            "app/facade/__init__.py": "",
+            "app/facade/api.py": "from app.mid import *\n",
+        },
+        {"app/lib.py": "def other():\n    pass\n\n\ndef thing():\n    pass\n\n\n__all__ = ['other', 'thing']\n"},
+        "app/facade/api.py",
+        ("names",),
+    ),
+    Case(
+        "the class a name is assigned again to turns into a constant in another module",
+        {
+            "app/logic.py": "class Box:\n    pass\n",
+            "app/mid.py": "from app.logic import Box\n",
+            "app/facade/__init__.py": "",
+            "app/facade/api.py": "from app import mid\n\nAlias = mid.Box\n",
+        },
+        {"app/mid.py": "Box = 3\n"},
+        "app/facade/api.py",
+        ("found", "target", "spelled"),
+    ),
+    Case(
         "a file is added and deleted so that a module becomes a package",
         {"app/pkg.py": "x = 1\n", "app/use.py": "from app.pkg import helper\n"},
         {"app/pkg.py": None, "app/pkg/__init__.py": "", "app/pkg/helper.py": "def run():\n    pass\n"},
