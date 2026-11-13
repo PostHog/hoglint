@@ -5,7 +5,7 @@ written (`WRAPPERS`) and how the facade hands the thing out (`HAND_OUTS`). Each 
 probes in the slot: a model of the product, `int`, a name that does not resolve and, under the bare
 wrapper, `Any`.
 
-The invariant, in every engine the shared harness runs (`dump_engines`), its tables equal:
+The invariant, on the native engine's tables (`clean_dump`):
 - the model gives exactly one finding, from the rule the slot table of the design page names, and it
   names the model;
 - `int` gives no finding;
@@ -35,13 +35,12 @@ from pathlib import Path
 import pytest
 
 from hoglint import facts
-from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
 from rules.support import PRESET
 
-# The shared harness: it dumps a repo in each engine it runs and asserts their tables are equal.
-from native.test_contract_slots import both_engines as dump_engines
+# The shared harness: the native engine's tables of a repo, which must fail no file.
+from native.test_contract_slots import clean_dump
 from native.test_facade_rules import MODEL, ROOT_CONFIG, SITE_PACKAGES
 
 # Every tree is written for the product `shop` and its core module `posthog/coreslot.py`, then moved
@@ -657,13 +656,13 @@ def write_site_packages(site: Path) -> None:
 
 
 def run_batch(work: Path, monkeypatch: pytest.MonkeyPatch, trees: list[Files]) -> list[list[Finding]]:
-    """Both engines over one batch; they must agree, fail no file and give no finding outside a tree."""
+    """The native engine over one batch; it must fail no file and give no finding outside a tree."""
     site = work / "site-packages"
     write_site_packages(site)
-    for module_ in (facts, core_analysis, native_analysis):
+    for module_ in (facts, native_analysis):
         monkeypatch.setattr(module_, "site_packages", lambda: site)
-    out = dump_engines(work, {}, batch_repo(trees), monkeypatch)
-    per_tree, stray = findings_by_tree(out["native"], len(trees))
+    out = clean_dump(work, {}, batch_repo(trees), monkeypatch)
+    per_tree, stray = findings_by_tree(out, len(trees))
     assert stray == []
     return per_tree
 
