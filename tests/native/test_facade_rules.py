@@ -620,6 +620,18 @@ SLOT_OWNER_CASES = {
         },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
     ),
+    "a contract class a registration function returns, with a core model on the list": (
+        {
+            **CORE_MODELS,
+            f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\n\nfrom posthog.models.team.team import Team\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Info:\n    team: Team\n",
+            f"{SHOP_DIR}/routes.py": f"from {SHOP}.facade.contracts import Info\n\n\ndef register() -> Info:\n    raise ValueError\n",
+        },
+        {
+            "export-shape": [["posthog.models.team.team.Team", ROUTES, "export-denied(model)"]],
+            "facade-signature": [],
+        },
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

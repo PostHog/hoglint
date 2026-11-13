@@ -181,6 +181,7 @@ class ExportPrimitive(RuleType):
         self.slot_owners = self.signature_scopes()
         self.slot_policies = self.signature_policies()
         self.slots_seen: dict[str, bool] = {}
+        self.policy_modules: dict[tuple[str, str], bool] = {}
         # The name each export module hands a symbol out by, read before any of its symbols is
         # checked, so a class reached in a slot first finds the name a later hand-out gives it.
         self.bindings: dict[str, dict[str, str]] = {}
@@ -555,16 +556,34 @@ class ExportPrimitive(RuleType):
             out.append((owner, symbol[len(owner) + 1 :]))
         return out
 
-    def leaves_slot(self, row: Edge, owner: str, qualname: str, symbol: str, module: str, bound: str) -> bool:
+    def under_policy(self, module: str, policy: ShapePolicy) -> bool:
+        """Whether an export of the shape policy covers a module."""
+        key = (module, policy.name)
+        found = self.policy_modules.get(key)
+        if found is None:
+            path = self.ctx.labeler.path_of(module)
+            names = self.ctx.labeler.path_exports(path) if path is not None else frozenset()
+            found = self.policy_modules[key] = any(self.ctx.config.exports[name].shape == policy.name for name in names)
+        return found
+
+    def reads_under(self, module: str, policy: ShapePolicy) -> bool:
+        """Whether a signature rule reads a module's rows for this walk: it holds for the module,
+        and the module is a surface of the shape policy the walk runs under, so the rule judges
+        the slot as this policy would."""
+        return self.signature_sees(module) and self.under_policy(module, policy)
+
+    def leaves_slot(
+        self, row: Edge, owner: str, qualname: str, symbol: str, module: str, bound: str, policy: ShapePolicy
+    ) -> bool:
         """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
-        reads. The row's own module is one it holds for, or a module it holds for holds the copy of
-        the slot (`copy_places`); "public" is asked of the callable of the row the rule reads."""
-        if SignaturePrimitive.sees_callable(row) and self.signature_sees(owner):
+        reads. The row's own module is one it reads for this walk, or such a module holds the copy
+        of the slot (`copy_places`); "public" is asked of the callable of the row the rule reads."""
+        if SignaturePrimitive.sees_callable(row) and self.reads_under(owner, policy):
             return True
         rest = row.attr("callable")[len(qualname) :]
         for place, name in self.copy_places(symbol, module, bound):
             copy = name + rest
-            if is_private(copy) or not self.signature_sees(place):
+            if is_private(copy) or not self.reads_under(place, policy):
                 continue
             if self.holds_copy(place, copy, row.attr("slot")):
                 return True
@@ -597,7 +616,7 @@ class ExportPrimitive(RuleType):
         for row, owner, qualname in self.member_edges(symbol, include_bases, policy):
             if row.attr("alias") == "expanded":
                 continue
-            shape_only = self.leaves_slot(row, owner, qualname, symbol, module, bound)
+            shape_only = self.leaves_slot(row, owner, qualname, symbol, module, bound, policy)
             if row.attr("annotation") == "missing":
                 if not shape_only:
                     self.unknown(symbol, module, policy, trail, row, "no-annotation", row.attr("slot"))

@@ -762,6 +762,23 @@ impl<'a> Walk<'a> {
         out
     }
 
+    /// `ExportPrimitive.under_policy`: whether an export of shape policy `shape` covers a module.
+    fn under_policy(&self, module: &str, shape: usize) -> bool {
+        let rules = self.cx.rules;
+        let Some((_, at)) = self.cx.module_named(module) else {
+            return false;
+        };
+        let bits = rules.labels.exports_of[at as usize];
+        (0..rules.exports.len())
+            .any(|export| bits & (1 << export) != 0 && rules.export_shapes[export] == shape)
+    }
+
+    /// `ExportPrimitive.reads_under`: whether a signature rule reads a module's rows for this
+    /// walk: it holds for the module, which is a surface of the walk's shape policy.
+    fn reads_under(&mut self, module: &str, shape: usize) -> bool {
+        self.signature_sees(module) && self.under_policy(module, shape)
+    }
+
     /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
     /// callable's slot whose row that rule reads.
     #[allow(clippy::too_many_arguments)]
@@ -773,18 +790,19 @@ impl<'a> Walk<'a> {
         symbol: &str,
         module: &str,
         bound: &str,
+        shape: usize,
     ) -> bool {
         let link = self.cx.link;
         let row_callable = self.cx.attr(id, link.core.it.get("callable"));
         let owner_name = self.cx.text(owner).to_string();
-        if !is_private(row_callable) && self.signature_sees(&owner_name) {
+        if !is_private(row_callable) && self.reads_under(&owner_name, shape) {
             return true;
         }
         let rest = &row_callable[qualname.len()..];
         let slot = self.cx.attr(id, link.core.it.get("slot"));
         for (place, name) in self.copy_places(symbol, module, bound) {
             let copy = format!("{name}{rest}");
-            if is_private(&copy) || !self.signature_sees(&place) {
+            if is_private(&copy) || !self.reads_under(&place, shape) {
                 continue;
             }
             let Some(place_sid) = link.core.it.get(&place) else {
@@ -876,7 +894,7 @@ impl<'a> Walk<'a> {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
-            let shape_only = self.leaves_slot(id, owner, &qualname, symbol, module, bound);
+            let shape_only = self.leaves_slot(id, owner, &qualname, symbol, module, bound, shape);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));
