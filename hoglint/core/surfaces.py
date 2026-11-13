@@ -37,11 +37,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from hoglint.core.records import sequence_items, str_literal
-from hoglint.core.sites import FileScope
+from hoglint.core.resolver import RecordFileScope, Resolver
 from hoglint.core.symbols import (
     RUN_TIME_MODULE_FLAGS,
     Hit,
-    Resolver,
     Tables,
     entity,
     import_surface,
@@ -311,7 +310,7 @@ class HandedOut:
     `no_functions`: the module body defines no function outside any block, so it hands out every
     import it does not use itself, whatever `__all__` says."""
 
-    def __init__(self, scope: FileScope, resolver: Resolver) -> None:
+    def __init__(self, scope: RecordFileScope, resolver: Resolver) -> None:
         self.scope = scope
         self.resolver = resolver
         self.tables = resolver.tables

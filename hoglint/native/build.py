@@ -189,7 +189,7 @@ class NativeTables(Tables):
     from the record, because the link keeps no assigned values."""
 
     def __init__(self, link: Any, store: NativeStore, index: ModuleIndex) -> None:
-        super().__init__(store, index)  # type: ignore[arg-type]
+        super().__init__(store, index)
         self.link = link
         self.table_read = TracedQuery(NULL_TRACER, "table", super().get, table_form, plain=True)
 

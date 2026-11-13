@@ -11,8 +11,8 @@ from hoglint.core.harness import GraphSink, ProducerPlan, ProducerStep
 from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
 from hoglint.core.producers import PRODUCERS, BuildContext, Producer
 from hoglint.core.records import RecordBodies, chain_tokens, last_name, leading_attrs
-from hoglint.core.sites import FileScope
-from hoglint.core.symbols import ClassIndex, Resolver, Tables, absolute_import
+from hoglint.core.resolver import ClassIndex, RecordFileScope, RecordTables, Resolver
+from hoglint.core.symbols import absolute_import
 from hoglint.facts import FactStore
 from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Graph
 from hoglint.native.queries import CALLEE_FIELD, NativePackQueries, Words, batch_of, first_party_roots
@@ -39,7 +39,7 @@ class CoreBuild:
         self.namer = ModuleNamer(config.source_roots, self.external)
         self.index = ModuleIndex(list(store.records), self.namer, config.first_party)
         self.first_party = FirstParty(config.first_party or self.index.repo_heads)
-        self.tables = Tables(store, self.index)
+        self.tables = RecordTables(store, self.index)
         self.resolver = Resolver(self.tables)
         self.classes = ClassIndex(self.resolver)
         paths = analyzed if analyzed is not None else sorted(p for p in store.records if p not in self.external)
@@ -50,9 +50,9 @@ class CoreBuild:
         )
         self.bodies_cache: dict[str, RecordBodies] = {}
 
-    def file_scope(self, path: str) -> FileScope:
+    def file_scope(self, path: str) -> RecordFileScope:
         module, is_package = self.namer.module_of(path)
-        return FileScope(path, module, is_package, self.store.records[path], self.config)
+        return RecordFileScope(path, module, is_package, self.store.records[path], self.config)
 
     def bodies(self, record: dict) -> RecordBodies:
         """Direct body statements of each def of a record, indexed once per file."""
@@ -90,23 +90,23 @@ class PackQueries:
         self.build = build
         self.graph = graph
         # imported name -> (file, row index, file scope, row) of the rows that import it
-        self.imports_by_name: dict[str, list[tuple[int, int, FileScope, list]]] | None = None
+        self.imports_by_name: dict[str, list[tuple[int, int, RecordFileScope, list]]] | None = None
 
     @staticmethod
     def of(build: CoreBuild, graph: Graph) -> PackQueries:
         link = getattr(build, "link", None)
         return NativePackQueries(build, graph, link) if link is not None else PackQueries(build, graph)
 
-    def may_mention(self, scope: FileScope, kinds: Iterable[str], words: Words) -> bool:
+    def may_mention(self, scope: RecordFileScope, kinds: Iterable[str], words: Words) -> bool:
         """False only when no row of `kinds` in the file can hold one of `words`."""
         return any(scope.record.get(kind) for kind in kinds)
 
-    def has_rows(self, scope: FileScope, kind: str) -> bool:
+    def has_rows(self, scope: RecordFileScope, kind: str) -> bool:
         return bool(scope.record.get(kind))
 
     def calls_named(
-        self, scopes: Iterable[FileScope], kind: str, names: Collection[str]
-    ) -> Iterator[tuple[FileScope, list[list]]]:
+        self, scopes: Iterable[RecordFileScope], kind: str, names: Collection[str]
+    ) -> Iterator[tuple[RecordFileScope, list[list]]]:
         """Rows of a call kind (`calls`, `callees`) whose callee's last dotted name is one of
         `names`, resolved or not, by file in order. Files with no such row are left out."""
         position = CALLEE_FIELD[kind]
@@ -116,8 +116,8 @@ class PackQueries:
                 yield scope, rows
 
     def uses_to(
-        self, scopes: Iterable[FileScope], targets: Collection[EntityId]
-    ) -> Iterator[tuple[FileScope, list[AttributeUse]]]:
+        self, scopes: Iterable[RecordFileScope], targets: Collection[EntityId]
+    ) -> Iterator[tuple[RecordFileScope, list[AttributeUse]]]:
         """`import a.b` then `a.b.Model.objects`: the `uses` rows with attributes whose root a
         first-party import binds, and whose chain resolves to a class among `targets` with at
         least one attribute resolved past the root. By file in order; files with none are left out."""
@@ -140,7 +140,7 @@ class PackQueries:
             if found:
                 yield scope, found
 
-    def importing(self, names: Collection[str]) -> list[tuple[FileScope, Sequence[Any]]]:
+    def importing(self, names: Collection[str]) -> list[tuple[RecordFileScope, Sequence[Any]]]:
         """`from x import name` rows of the analyzed files that import one of `names`, by file in
         order, then row order: [scope, line, column, flags, module, level, name, asname]."""
         if self.imports_by_name is None:
@@ -152,12 +152,12 @@ class PackQueries:
         found = sorted(entry for name in set(names) for entry in self.imports_by_name.get(name, ()))
         return [(scope, row) for _, _, scope, row in found]
 
-    def rows(self, scope: FileScope, kind: str) -> list[Any]:
+    def rows(self, scope: RecordFileScope, kind: str) -> list[Any]:
         """One file's rows of `kind`, for a pack that reads the kind of a file once: the native
         engine decodes them for this read and keeps nothing."""
         return scope.record.get(kind, [])
 
-    def imported_modules(self, scope: FileScope) -> list[str]:
+    def imported_modules(self, scope: RecordFileScope) -> list[str]:
         """The module each import of a file names, in row order: `import a.b` names a.b, `from a
         import b` names a.b. A relative import that climbs out of the repo names nothing."""
         out = []

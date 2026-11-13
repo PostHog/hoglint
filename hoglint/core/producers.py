@@ -12,9 +12,10 @@ from dataclasses import dataclass, field, replace
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import ESCAPE_WRAPPERS, chain_tokens, is_class_var, leading_attrs
-from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
+from hoglint.core.resolver import Classifier, ClassIndex, NameLookup, RecordFileScope, Resolved, Resolver
+from hoglint.core.sites import Lookup
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut, StarNames
-from hoglint.core.symbols import CLASS, FUNC, Binding, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
+from hoglint.core.symbols import CLASS, FUNC, Binding, Hit, entity, import_surface, module_assigns
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, EntityId, Graph, HandOut, Resolution
 
@@ -150,7 +151,7 @@ class Followed:
     """Where a handed-out name leads: a def in an analyzed file, or (scope None) nowhere the
     engine can follow."""
 
-    scope: FileScope | None
+    scope: RecordFileScope | None
     idx: int
 
 
@@ -165,23 +166,23 @@ class BuildContext:
     store: FactStore
     index: ModuleIndex
     resolver: Resolver
-    files: list[FileScope]
+    files: list[RecordFileScope]
     first_party: FirstParty
-    scope_of_path: dict[str, FileScope]
+    scope_of_path: dict[str, RecordFileScope]
     classes: ClassIndex
 
     def __post_init__(self) -> None:
         self.classifier = Classifier(self.index)
         self.names = NameLookup(self.resolver)
-        self.assigned_by_module: dict[str, dict[str, tuple[FileScope | None, dict]]] = {}
+        self.assigned_by_module: dict[str, dict[str, tuple[RecordFileScope | None, dict]]] = {}
 
-    def binding_scope(self, module: str, name: str) -> FileScope | None:
+    def binding_scope(self, module: str, name: str) -> RecordFileScope | None:
         """The analyzed file a module table reads a name's binding from (never a stub twin or a
         package of the same name)."""
         path = self.resolver.tables.binding_path(module, name)
         return self.scope_of_path.get(path) if path is not None else None
 
-    def def_of(self, module: str, name: str, kind: str) -> tuple[FileScope, int] | None:
+    def def_of(self, module: str, name: str, kind: str) -> tuple[RecordFileScope, int] | None:
         """The analyzed file and def index of the def or class (`kind`) a module table binds a
         name to."""
         binding = self.resolver.tables.binding(module, name)
@@ -268,12 +269,12 @@ class BuildContext:
             found.update(classes)
         return sorted(found)
 
-    def is_export_module(self, scope: FileScope) -> bool:
+    def is_export_module(self, scope: RecordFileScope) -> bool:
         """Whether an `[exports]` entry covers a file that is no test: a module whose hand-outs
         core records."""
         return Context.TEST not in scope.base_contexts and self.config.in_export(scope.path)
 
-    def name_lookup(self, scope: FileScope, name: str, at_scope: int, line: int) -> Lookup:
+    def name_lookup(self, scope: RecordFileScope, name: str, at_scope: int, line: int) -> Lookup:
         """A bare name; unbound names are builtins or missing module globals."""
         found = self.names.lookup(scope, name, at_scope, line)
         if found is not None:
@@ -284,11 +285,11 @@ class BuildContext:
             return Lookup(name, None, local=True)
         return Lookup(f"{scope.module}.{name}", None)
 
-    def chain_lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> tuple[Lookup, list[str]]:
+    def chain_lookup(self, scope: RecordFileScope, chain: str, at_scope: int, line: int) -> tuple[Lookup, list[str]]:
         head, *attrs = chain.split(".")
         return self.names.descend(self.name_lookup(scope, head, at_scope, line), attrs)
 
-    def dotted_lookup(self, scope: FileScope, dotted: str, at_scope: int, line: int) -> Lookup:
+    def dotted_lookup(self, scope: RecordFileScope, dotted: str, at_scope: int, line: int) -> Lookup:
         """A dotted name; attributes past what resolves make a member of the deepest hit."""
         found, rest = self.chain_lookup(scope, dotted, at_scope, line)
         if not rest:
@@ -300,7 +301,7 @@ class BuildContext:
         member = entity(origin.module, ".".join([origin.symbol, *rest]) if origin.symbol else ".".join(rest))
         return Lookup(surface, Hit((*found.hit.chain, member), "member"))
 
-    def value_lookup(self, scope: FileScope, value: object, at_scope: int, line: int) -> Lookup | None:
+    def value_lookup(self, scope: RecordFileScope, value: object, at_scope: int, line: int) -> Lookup | None:
         """A name-like value tree: a chain, a subscript's value, a call's callee, a string annotation."""
         if isinstance(value, str):
             return self.dotted_lookup(scope, value, at_scope, line)
@@ -340,7 +341,7 @@ class BuildContext:
             idx = nested[-1]
         return Followed(scope, idx)
 
-    def assigned(self, module: str) -> dict[str, tuple[FileScope | None, dict]]:
+    def assigned(self, module: str) -> dict[str, tuple[RecordFileScope | None, dict]]:
         """name -> (file, row) of the last module-level assignment of each name, read once per
         module from the file the module table reads the name from: the `.py`, or the stub for a
         name only the stub binds. The file is None when it is not analyzed."""
@@ -372,7 +373,7 @@ class BuildContext:
             rows.append(row)
         return rows
 
-    def alias(self, module: str, name: str) -> tuple[FileScope | None, dict] | None:
+    def alias(self, module: str, name: str) -> tuple[RecordFileScope | None, dict] | None:
         """A module-level type alias the bare name binds (`X = dict[str, Any]`): the file and
         row of the last assignment, as `assigned` gives them; else None. A name bound more than
         once is an alias only when every binding assigns one."""
@@ -420,7 +421,7 @@ class Producer:
     @staticmethod
     def edge(
         kind: str,
-        scope: FileScope,
+        scope: RecordFileScope,
         at_scope: int,
         line: int,
         column: int,
@@ -474,7 +475,7 @@ class ImportProducer(Producer):
             attrs.append(("module", loaded))
         return attrs
 
-    def lazy_imports(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
+    def lazy_imports(self, context: BuildContext, graph: Graph, scope: RecordFileScope) -> None:
         table = context.resolver.tables.get(scope.module)
         if table is None or not table.lazy_entries or table.path != scope.path:
             return
@@ -493,7 +494,7 @@ class ImportProducer(Producer):
         self,
         context: BuildContext,
         graph: Graph,
-        scope: FileScope,
+        scope: RecordFileScope,
         row: list,
         source: str,
         contexts: frozenset[Context],
@@ -577,14 +578,14 @@ class ReferenceProducer(Producer):
 class SlotSite:
     """Where an `exposes` edge is written."""
 
-    scope: FileScope
+    scope: RecordFileScope
     at_scope: int
     line: int
     column: int
     contexts: frozenset[Context]
 
     @staticmethod
-    def module_level(scope: FileScope, line: int, column: int) -> SlotSite:
+    def module_level(scope: RecordFileScope, line: int, column: int) -> SlotSite:
         return SlotSite(scope, -1, line, column, scope.base_contexts)
 
     def edge(self, surface: str, resolved: Resolved, attrs: tuple[tuple[str, str], ...]) -> Edge:
@@ -606,7 +607,7 @@ class SlotSite:
 class SlotLookup:
     """Where the names of a slot's annotation are looked up: the def's file, scope and line."""
 
-    scope: FileScope
+    scope: RecordFileScope
     at_scope: int
     line: int
 
@@ -713,7 +714,7 @@ class DeclarationProducer(Producer):
     def edge_kinds(self) -> frozenset[str]:
         return frozenset(self.kinds)
 
-    def fields_by_class(self, scope: FileScope) -> dict[int, list[dict]]:
+    def fields_by_class(self, scope: RecordFileScope) -> dict[int, list[dict]]:
         """Annotated single-name assignments by the def they sit in, read once per file: the
         candidate dataclass fields."""
         found = self.fields.get(scope.path)
@@ -726,7 +727,7 @@ class DeclarationProducer(Producer):
         self.fields[scope.path] = out
         return out
 
-    def contract_roots(self, context: BuildContext, scope: FileScope) -> frozenset[tuple[int, str]]:
+    def contract_roots(self, context: BuildContext, scope: RecordFileScope) -> frozenset[tuple[int, str]]:
         """(export, root) of every contract surface that covers a file, read once per file; none
         for a test file, which hands nothing out. A file is a contract surface when one covers
         it, and two files that share one belong to the same export of the same captured root."""
@@ -739,7 +740,7 @@ class DeclarationProducer(Producer):
         return found
 
     @staticmethod
-    def in_contract(scope: FileScope, idx: int, listed: frozenset[str]) -> bool:
+    def in_contract(scope: RecordFileScope, idx: int, listed: frozenset[str]) -> bool:
         """Whether a def is a public callable of the module's contract: a top-level function or
         class with no leading `_` or one `__all__` lists (`listed`), or a method directly in such a
         class with no leading `_` (`__init__` kept)."""
@@ -1078,7 +1079,7 @@ class DeclarationProducer(Producer):
             line_lookup = SlotLookup(place.scope, place.at_scope, row["l"])
             self.expose(context, graph, line_rows, line_lookup, row["ann"], f"{kind}:{row['t'][0]}", in_slot)
 
-    def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
+    def lineage(self, context: BuildContext, scope: RecordFileScope, idx: int) -> list[tuple[RecordFileScope, int]]:
         """A class and its ancestors in MRO order, through the link's own class resolution, each
         as its file and def index. An ancestor whose file is not analyzed is left out."""
         classes = context.classes
@@ -1100,7 +1101,7 @@ class DeclarationProducer(Producer):
         """Whether a decorator is one `dataclass_decorators` names, by spelling or target."""
         return cls.named_in(context.config.dataclass_decorators, surface, resolved)
 
-    def has_dataclass_base(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
+    def has_dataclass_base(self, context: BuildContext, scope: RecordFileScope, idx: int) -> bool:
         """Whether a class or one of its ancestors names a base of `dataclass_bases`, by spelling
         or target: a model library's base makes annotated class attributes `__init__` fields.
         Worked out once per class."""
@@ -1112,7 +1113,7 @@ class DeclarationProducer(Producer):
             found = self.dataclass_bases[key] = self.find_dataclass_base(context, scope, idx)
         return found
 
-    def find_dataclass_base(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
+    def find_dataclass_base(self, context: BuildContext, scope: RecordFileScope, idx: int) -> bool:
         wanted = context.config.dataclass_bases
         for owner, at in self.lineage(context, scope, idx):
             node = owner.defs[at]
@@ -1124,7 +1125,7 @@ class DeclarationProducer(Producer):
                     return True
         return False
 
-    def is_dataclass_like(self, context: BuildContext, scope: FileScope, idx: int) -> bool:
+    def is_dataclass_like(self, context: BuildContext, scope: RecordFileScope, idx: int) -> bool:
         """Whether a class takes a decorator that makes it a dataclass, or has a dataclass base."""
         node = scope.defs[idx]
         for dec in node.get("dec", ()):
@@ -1135,7 +1136,7 @@ class DeclarationProducer(Producer):
                 return True
         return self.has_dataclass_base(context, scope, idx)
 
-    def mro_fields(self, context: BuildContext, lineage: list[tuple[FileScope, int]]) -> list[Field]:
+    def mro_fields(self, context: BuildContext, lineage: list[tuple[RecordFileScope, int]]) -> list[Field]:
         """The fields of the generated `__init__`, as the dataclass machinery collects them: from
         every dataclass-like class along the MRO, base first, a redefinition replacing the
         earlier field in its place. A field's names are looked up in its class body first."""
@@ -1156,7 +1157,7 @@ class DeclarationProducer(Producer):
         context: BuildContext,
         graph: Graph,
         rows: SlotRows,
-        lineage: list[tuple[FileScope, int]],
+        lineage: list[tuple[RecordFileScope, int]],
     ) -> None:
         """One unresolved row per base along the MRO that does not resolve or is a call: the
         fields it adds to the generated `__init__` are unknown."""
@@ -1190,7 +1191,7 @@ class DeclarationProducer(Producer):
         self,
         context: BuildContext,
         graph: Graph,
-        scope: FileScope,
+        scope: RecordFileScope,
         idx: int,
         node: dict,
         contract: bool,
@@ -1294,7 +1295,7 @@ class DeclarationProducer(Producer):
             return
         self.expose_dataclass(context, graph, rows, lookup, idx)
 
-    def used_names(self, scope: FileScope) -> frozenset[str]:
+    def used_names(self, scope: RecordFileScope) -> frozenset[str]:
         """The import-bound names a module's own code refers to: every `refs` and `uses` row, in
         any scope, and the type names of its annotations, which also reads string annotations."""
         names = {row[5] for row in scope.record.get("refs", ())}
@@ -1308,7 +1309,7 @@ class DeclarationProducer(Producer):
                 names.update(value.split(".")[0] for value, _, _, _ in self.mentions(annotation, "whole"))
         return frozenset(names)
 
-    def hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
+    def hand_out(self, context: BuildContext, graph: Graph, scope: RecordFileScope) -> None:
         """The slots of the functions and dataclass fields a contract surface hands out from other
         modules, at the import that hands each one out. An `__all__` it cannot read is one
         unresolved row: what the module hands out is unknown. So is a handed-out name the engine
@@ -1343,7 +1344,7 @@ class DeclarationProducer(Producer):
             init = SlotRows(rows.site, f"{item.bound}.__init__", item.clause)
             self.expose_dataclass(context, graph, init, lookup, idx)
 
-    def rebind(self, context: BuildContext, graph: Graph, scope: FileScope, handed: HandedOut) -> None:
+    def rebind(self, context: BuildContext, graph: Graph, scope: RecordFileScope, handed: HandedOut) -> None:
         """A `rebind` edge per name the module hands out by assigning it again, read as `from
         module import name`: what the module hands out is always an edge that binds the name. It
         is a kind of its own, so no rule that reads imports sees a second edge for one name."""
@@ -1357,7 +1358,7 @@ class DeclarationProducer(Producer):
                 self.edge("rebind", scope, -1, item.line, item.column, surface, resolved, contexts, attrs=attrs)
             )
 
-    def record_hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
+    def record_hand_out(self, context: BuildContext, graph: Graph, scope: RecordFileScope) -> None:
         """What an export module hands out by import or by assigning a name again, for every rule
         that asks what it exports. A test file hands nothing out."""
         if not context.is_export_module(scope):
@@ -1367,7 +1368,7 @@ class DeclarationProducer(Producer):
         used = self.used_names(scope) if handed.no_functions else frozenset()
         graph.hand_outs[scope.module] = self.expose_aliases(context, graph, scope, handed, handed.hand_out(used), used)
 
-    def type_alias(self, context: BuildContext, module: str, name: str) -> tuple[FileScope, dict] | None:
+    def type_alias(self, context: BuildContext, module: str, name: str) -> tuple[RecordFileScope, dict] | None:
         """The file and row of a module-level value the producer expands as a type alias: a
         subscript, a `|` union, or the bare name of a builtin type. Another name or attribute chain
         is left out, so a member past a class stays unknown."""
@@ -1386,7 +1387,14 @@ class DeclarationProducer(Producer):
         return (scope, row) if self.plain_builtin(looked, value) else None
 
     def expose_alias(
-        self, context: BuildContext, graph: Graph, scope: FileScope, bound: str, clause: str, line: int, column: int
+        self,
+        context: BuildContext,
+        graph: Graph,
+        scope: RecordFileScope,
+        bound: str,
+        clause: str,
+        line: int,
+        column: int,
     ) -> None:
         """The rows a handed-out type alias expands to, as a slot `alias` of the name it is handed
         out by, at the line that hands it out: the export rule judges them as any slot."""
@@ -1397,7 +1405,7 @@ class DeclarationProducer(Producer):
         self,
         context: BuildContext,
         graph: Graph,
-        scope: FileScope,
+        scope: RecordFileScope,
         handed: HandedOut,
         hand_out: HandOut,
         used: frozenset[str],
