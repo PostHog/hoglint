@@ -198,9 +198,9 @@ class ExportPrimitive(RuleType):
         # By the identity of the row Edge: `edges` makes each one once.
         self.left_out: dict[int, bool] = {}
         self.copy_index: dict[str, dict[str, list[int]]] = {}
-        # The name each export module hands a symbol out by, read before any of its symbols is
-        # checked, so a class reached in a slot first finds the name a later hand-out gives it.
-        self.bindings: dict[str, dict[str, str]] = {}
+        # The name the export module in hand hands a symbol out by, read before any of its symbols
+        # is checked, so a class reached in a slot first finds the name a later hand-out gives it.
+        self.bound: dict[str, str] = {}
 
     @staticmethod
     def message(module: str, trail: Sequence[str], label: str) -> str:
@@ -323,7 +323,7 @@ class ExportPrimitive(RuleType):
                 if not self.judges(module):
                     continue
                 exported = self.exported_symbols(module)
-                self.bindings[module] = self.bound_names(exported)
+                self.bound = self.bound_names(exported)
                 for symbol, edge in exported:
                     member = labeler.export_member((export.name, path, symbol))
                     if member is Truth.FALSE:
@@ -597,7 +597,7 @@ class ExportPrimitive(RuleType):
         among the surfaces of the walk's shape policy: the exporting module under the name it hands
         the symbol out by, and the module that defines the symbol under its own name (a contract
         dataclass's fields along its MRO). The same for every row of one visit."""
-        bound = self.bindings.get(module, {}).get(symbol, "")
+        bound = self.bound.get(symbol, "")
         out = [(module, bound)] if bound else []
         owner = self.ctx.labeler.module_of_symbol(symbol)
         if owner is not None and owner != symbol:
