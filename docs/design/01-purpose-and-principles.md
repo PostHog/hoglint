@@ -59,10 +59,10 @@ A cached or reused answer must equal a full run.
 D5 (the whole repo every run) is the current form.
 Any reuse must keep this property and prove it with an oracle (D59 point 3, D61).
 
-**Principle 7: one graph engine; every changed row is named.**
-The native engine builds the graph (owner, Nov 13: the Python graph build is retired).
-A change keeps every row of the ten parity tables, or names each row it changes: against the model repository's stored rows and tables, the slot table test, and the real-size compare with a base.
-The Python rule classes still judge rows inside every native run: the rule half has two implementations, and a judgment where they differ is an engine error.
+**Principle 7: one engine; every changed row is named.**
+The native engine builds the graph and judges every rule (owner, Nov 13: the Python engine is retired, the graph build first, then the rule judgment).
+Python words what the engine judged and holds the rule metadata.
+A change keeps every row of the ten parity tables and every stored message, or names each one it changes: against the model repository's stored rows, tables and messages, the stored runs of the generated and hand-written rule configs, the slot table test, and the real-size compare with a base.
 See `05-engine.md`.
 
 ## Why
@@ -96,10 +96,6 @@ See `05-engine.md`.
 - A second repo that uses hoglint with no `products/` folder tests principle 5.
   Configs for Sentry, Saleor and Zulip exist in `docs/research/generality.md`.
 
-## Open
-
-- What replaces the second judgment of the Python rule classes inside a native run, which D42, D50 and D55 rely on.
-  See `05-engine.md`.
 
 ## Sources
 

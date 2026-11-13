@@ -36,10 +36,10 @@ A change that breaks one is a design change for the owner, not a refactor.
 4. **Core holds no framework or company name.**
    Django lives in the Django pack, PostHog in its preset and plugin.
    The engine's word for a public surface is `export`, not "facade".
-5. **One graph engine; a change moves no row it does not name.**
-   The native engine builds the graph.
-   The Python rule classes still judge rows again inside every native run, a second implementation of the rule half: a judgment that differs is an engine error.
-   A change to rows is a named delta against the model repository's stored rows and tables, the slot table test and the real-size compare with a base.
+5. **One engine; a change moves no row it does not name.**
+   The native engine builds the graph and judges every rule; Python words its rows and holds the rule metadata and the steps with no Rust twin.
+   A rule, label or selector change is written once, in Rust.
+   A change to rows or words is a named delta against the model repository's stored rows, tables and messages, the stored rule runs (`tests/native/generated_runs.jsonl`, `stored_rows.json`), the slot table test and the real-size compare with a base.
 6. **Every run is exact.**
    Any reuse of a stored answer must equal a full run, and an oracle must prove it.
 7. **The seam rule.**
@@ -85,7 +85,7 @@ bin/prove                                   # all of the above side by side, plu
   List every changed row and explain it with your own script, not with the build's own summary.
   Compare row multisets, not identities: one identity can have several rows.
 - **The model repository first.**
-  After a rule or preset change, `bin/model-repo` shows in a second which cases changed verdict (`tests/model_repo/CASES.md`) and which of the ten tables moved (`tests/model_repo/tables.toml`).
+  After a rule or preset change, `bin/model-repo` shows in a second which cases changed verdict (`tests/model_repo/CASES.md`) which of the ten tables moved (`tests/model_repo/tables.toml`), and which messages moved (`tests/model_repo/messages.toml`).
   It does not replace the run at real size.
 - **Same-minute pairs for speed.**
   Time base and new alternately, in the same minutes, CPU next to wall.

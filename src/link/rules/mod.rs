@@ -1,10 +1,13 @@
-//! Rule evaluation over the link (D39, phase N1): labels, kinds and exports of the run, and
-//! `EdgeRule.decide` for every candidate edge and each of its destinations, with no grouping.
+//! Rule evaluation over the link (D39, phase N1): labels, kinds and exports of the run, and the
+//! judgment of every candidate edge and each of its destinations, with no grouping.
 //!
 //! Python hands over a plan (`plan.rs`): the config as data. The evaluator reads the graph's
 //! modules, symbols and edges from the link, computes every module's labels once, and judges
-//! edges in parallel chunks; the output is the same at any thread count. The Python engine stays
-//! the meaning: each function here names the Python code it follows.
+//! edges in parallel chunks; the output is the same at any thread count. It is the only judge:
+//! Python words the rows it gives. A comment that names Python code or "the Python engine"
+//! names the code this one was ported from, which is retired; the reading it describes is held by
+//! the stored runs and tables (`tests/native/generated_runs.jsonl`, `tests/model_repo/`) and by
+//! `tests/rules/judgment.txt`.
 
 pub mod conflicts;
 pub mod coverage;
