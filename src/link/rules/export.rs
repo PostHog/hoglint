@@ -302,6 +302,19 @@ struct SlotRead {
     expanded: bool,
 }
 
+/// A graph module as `Cx::module_of_symbol` gives it: its name and its place.
+type Place = (Sid, u32);
+
+/// The attr names the walk reads of a row, interned once.
+#[derive(Clone, Copy)]
+struct Keys {
+    callable: Option<Sid>,
+    slot: Option<Sid>,
+    alias: Option<Sid>,
+    annotation: Option<Sid>,
+    binds: Option<Sid>,
+}
+
 /// Shape names of a symbol, and whether the facts were enough to be sure.
 type Shapes = (FxHashSet<String>, bool);
 
@@ -319,7 +332,8 @@ pub struct Walk<'a> {
     walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
-    slots_seen: FxHashMap<String, Vec<usize>>,
+    slots_seen: FxHashMap<Sid, Vec<usize>>,
+    keys: Keys,
     /// `ExportPrimitive.bound`: the name the export module in hand hands each symbol out by.
     bound: FxHashMap<String, String>,
     /// `ExportPrimitive.left_out`, per row.
@@ -343,6 +357,13 @@ impl<'a> Walk<'a> {
             exposes_by_name: FxHashMap::default(),
             top_level: FxHashMap::default(),
             slots_seen: FxHashMap::default(),
+            keys: Keys {
+                callable: cx.link.core.it.get("callable"),
+                slot: cx.link.core.it.get("slot"),
+                alias: cx.link.core.it.get("alias"),
+                annotation: cx.link.core.it.get("annotation"),
+                binds: cx.link.core.it.get("binds"),
+            },
             bound: FxHashMap::default(),
             left_out: FxHashMap::default(),
             copy_index: FxHashMap::default(),
@@ -565,7 +586,7 @@ impl<'a> Walk<'a> {
     /// `ExportPrimitive.constructor_slot`: whether a row is a field of a dataclass-like class's
     /// generated `__init__`, or the marker of a base whose fields are unknown.
     fn constructor_slot(&self, id: u32) -> bool {
-        let slot = self.cx.attr(id, self.cx.link.core.it.get("slot"));
+        let slot = self.cx.attr(id, self.keys.slot);
         slot.starts_with("field:") || slot == "fields"
     }
 
@@ -762,15 +783,15 @@ impl<'a> Walk<'a> {
             .unwrap_or_default()
     }
 
-    /// `ExportPrimitive.member_handles`: each row with the module and qualname of the class or
-    /// callable it belongs to. Of an ancestor `walk_where` is false for, only its constructor
-    /// fields are read.
+    /// `ExportPrimitive.member_handles`: each row with the module (as a place) and the length of
+    /// the qualname of the class or callable it belongs to. Of an ancestor `walk_where` is false
+    /// for, only its constructor fields are read.
     fn member_edges(
         &mut self,
         symbol: &str,
         include_bases: bool,
         shape: usize,
-    ) -> Vec<(u32, Sid, String)> {
+    ) -> Vec<(u32, Place, usize)> {
         let mut lineage = vec![(symbol.to_string(), true)];
         if include_bases {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
@@ -783,17 +804,17 @@ impl<'a> Walk<'a> {
         }
         let mut out = Vec::new();
         for (target, walked) in lineage {
-            let Some((owner, _)) = self.cx.module_of_symbol(&target) else {
+            let Some(owner) = self.cx.module_of_symbol(&target) else {
                 continue;
             };
-            let owner_name = self.cx.text(owner);
+            let owner_name = self.cx.text(owner.0);
             if owner_name == target {
                 continue;
             }
-            let qualname = target[owner_name.len() + 1..].to_string();
-            for id in self.exposes_under(owner, &qualname) {
+            let qualname = &target[owner_name.len() + 1..];
+            for id in self.exposes_under(owner.0, qualname) {
                 if walked || self.constructor_slot(id) {
-                    out.push((id, owner, qualname.clone()));
+                    out.push((id, owner, qualname.len()));
                 }
             }
         }
@@ -803,8 +824,7 @@ impl<'a> Walk<'a> {
     /// `ExportPrimitive.copies`: a module's exposes rows of a callable's slot.
     fn copies(&mut self, module: Sid, callable_name: &str, slot: Option<Sid>) -> Vec<u32> {
         let link = self.cx.link;
-        let callable = link.core.it.get("callable");
-        let slot_attr = link.core.it.get("slot");
+        let keys = self.keys;
         let Some(name) = link.core.it.get(callable_name) else {
             return Vec::new();
         };
@@ -822,35 +842,39 @@ impl<'a> Walk<'a> {
             .iter()
             .copied()
             .filter(|&id| {
-                attr_sid(link, id, callable) == Some(name) && attr_sid(link, id, slot_attr) == slot
+                attr_sid(link, id, keys.callable) == Some(name)
+                    && attr_sid(link, id, keys.slot) == slot
             })
             .collect()
     }
 
     /// `ExportPrimitive.copy_places`: (module, name) of each place the producer may hold a copy
-    /// of the walked symbol's slots, among the surfaces of the walk's shape policy.
-    fn copy_places(&self, symbol: &str, module: &str, shape: usize) -> Vec<(String, String)> {
+    /// of the walked symbol's slots, among the surfaces of the walk's shape policy. `module` is
+    /// the exporting module.
+    fn copy_places(
+        &self,
+        symbol: &str,
+        module: Option<Place>,
+        shape: usize,
+    ) -> Vec<(Place, String)> {
         let mut out = Vec::new();
-        if let Some(bound) = self.bound.get(symbol) {
-            out.push((module.to_string(), bound.clone()));
+        if let (Some(here), Some(bound)) = (module, self.bound.get(symbol)) {
+            out.push((here, bound.clone()));
         }
-        if let Some((owner, _)) = self.cx.module_of_symbol(symbol) {
-            let owner_name = self.cx.text(owner);
+        if let Some(owner) = self.cx.module_of_symbol(symbol) {
+            let owner_name = self.cx.text(owner.0);
             if owner_name != symbol {
-                let name = symbol[owner_name.len() + 1..].to_string();
-                out.push((owner_name.to_string(), name));
+                out.push((owner, symbol[owner_name.len() + 1..].to_string()));
             }
         }
-        out.retain(|(place, _)| self.under_policy(place, shape));
+        out.retain(|(place, _)| self.under_policy(place.1, shape));
         out
     }
 
-    /// `ExportPrimitive.under_policy`: whether an export of shape policy `shape` covers a module.
-    fn under_policy(&self, module: &str, shape: usize) -> bool {
+    /// `ExportPrimitive.under_policy`: whether an export of shape policy `shape` covers the module
+    /// at place `at`.
+    fn under_policy(&self, at: u32, shape: usize) -> bool {
         let rules = self.cx.rules;
-        let Some((_, at)) = self.cx.module_named(module) else {
-            return false;
-        };
         let bits = rules.labels.exports_of[at as usize];
         (0..rules.exports.len())
             .any(|export| bits & (1 << export) != 0 && rules.export_shapes[export] == shape)
@@ -858,8 +882,8 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.reads_under`: whether a signature rule reads a module's rows for this
     /// walk: it holds for the module, which is a surface of the walk's shape policy.
-    fn reads_under(&mut self, module: &str, shape: usize, id: u32) -> bool {
-        self.under_policy(module, shape) && self.signature_sees(module, id)
+    fn reads_under(&mut self, module: Place, shape: usize, id: u32) -> bool {
+        self.under_policy(module.1, shape) && self.signature_sees(module.0, id)
     }
 
     /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
@@ -867,33 +891,28 @@ impl<'a> Walk<'a> {
     fn leaves_slot(
         &mut self,
         id: u32,
-        owner: Sid,
-        qualname: &str,
-        places: &[(String, String)],
+        (owner, qualname_len): (Place, usize),
+        places: &[(Place, String)],
         shape: usize,
     ) -> bool {
         if self.rule.slot_rules.is_empty() {
             return false;
         }
         let link = self.cx.link;
-        let row_callable = self.cx.attr(id, link.core.it.get("callable"));
-        let owner_name = self.cx.text(owner).to_string();
-        if !is_private(row_callable) && self.reads_under(&owner_name, shape, id) {
+        let row_callable = self.cx.attr(id, self.keys.callable);
+        if !is_private(row_callable) && self.reads_under(owner, shape, id) {
             return true;
         }
         // A row with no `callable` attr is indexed by its site scope; Python's slice gives "".
-        let rest = row_callable.get(qualname.len()..).unwrap_or("");
-        let slot = attr_sid(link, id, link.core.it.get("slot"));
+        let rest = row_callable.get(qualname_len..).unwrap_or("");
+        let slot = attr_sid(link, id, self.keys.slot);
         for (place, name) in places {
             let copy = format!("{name}{rest}");
             if is_private(&copy) {
                 continue;
             }
-            let Some(place_sid) = link.core.it.get(place) else {
-                continue;
-            };
-            for found in self.copies(place_sid, &copy, slot) {
-                if self.signature_sees(place, found) {
+            for found in self.copies(place.0, &copy, slot) {
+                if self.signature_sees(place.0, found) {
                     return true;
                 }
             }
@@ -903,33 +922,28 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.holding_rules`: the named rules, by place, whose source part holds for a
     /// module. A module a rule cannot tell about is not held.
-    fn holding_rules(&mut self, module: &str) -> Vec<usize> {
-        if let Some(found) = self.slots_seen.get(module) {
-            return found.clone();
+    fn holding_rules(&mut self, module: Sid) -> &[usize] {
+        if !self.slots_seen.contains_key(&module) {
+            let env = self.cx.module_env(module);
+            let found = (0..self.rule.slot_rules.len())
+                .filter(|&at| match &self.rule.slot_rules[at].scope {
+                    None => true,
+                    Some(node) => evaluate(node, &env) == Truth::True,
+                })
+                .collect();
+            self.slots_seen.insert(module, found);
         }
-        let found = match self.cx.link.core.it.get(module) {
-            None => Vec::new(),
-            Some(sid) => {
-                let env = self.cx.module_env(sid);
-                (0..self.rule.slot_rules.len())
-                    .filter(|&at| match &self.rule.slot_rules[at].scope {
-                        None => true,
-                        Some(node) => evaluate(node, &env) == Truth::True,
-                    })
-                    .collect()
-            }
-        };
-        self.slots_seen.insert(module.to_string(), found.clone());
-        found
+        &self.slots_seen[&module]
     }
 
     /// `ExportPrimitive.signature_sees`: whether a named rule reads row `id` in a module: its
     /// source part holds for the module and its contexts take the row's.
-    fn signature_sees(&mut self, module: &str, id: u32) -> bool {
+    fn signature_sees(&mut self, module: Sid, id: u32) -> bool {
         let cx = self.cx;
+        let rule = self.rule;
         self.holding_rules(module)
-            .into_iter()
-            .any(|at| self.rule.slot_rules[at].reads(&cx, id))
+            .iter()
+            .any(|&at| rule.slot_rules[at].reads(&cx, id))
     }
 
     /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is
@@ -970,7 +984,7 @@ impl<'a> Walk<'a> {
     /// `ExportPrimitive.bound_names`: the name each handed-out import binds its symbol to, the
     /// first one where two do.
     fn bound_names(&self, exported: &[(String, Option<u32>)]) -> FxHashMap<String, String> {
-        let binds = self.cx.link.core.it.get("binds");
+        let binds = self.keys.binds;
         let mut out = FxHashMap::default();
         for (symbol, edge) in exported {
             if let Some(id) = edge {
@@ -985,23 +999,26 @@ impl<'a> Walk<'a> {
     /// names the copy of a slot.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let link = self.cx.link;
-        let places = self.copy_places(symbol, module, shape);
+        let places = self.copy_places(symbol, self.cx.module_named(module), shape);
         let include_bases = self.cx.rules.symbol_decl(link, symbol) == "class";
-        let annotation = link.core.it.get("annotation");
-        let slot = link.core.it.get("slot");
-        let alias = link.core.it.get("alias");
-        let callable = link.core.it.get("callable");
+        let Keys {
+            annotation,
+            slot,
+            alias,
+            callable,
+            ..
+        } = self.keys;
         let rows = self.member_edges(symbol, include_bases, shape);
         let expanded: FxHashSet<(&str, &str)> = rows
             .iter()
             .filter(|(id, _, _)| self.cx.attr(*id, alias) == "expanded")
             .map(|(id, _, _)| (self.cx.attr(*id, callable), self.cx.attr(*id, slot)))
             .collect();
-        for (id, owner, qualname) in rows {
+        for (id, owner, qualname_len) in rows {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
-            let shape_only = self.leaves_slot(id, owner, &qualname, &places, shape);
+            let shape_only = self.leaves_slot(id, (owner, qualname_len), &places, shape);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));
