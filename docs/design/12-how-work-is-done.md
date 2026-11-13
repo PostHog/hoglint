@@ -44,6 +44,18 @@ The architect reruns repros, writes its own delta scripts, and does not take a b
   Twice on Nov 12 a change passed every small test and failed on the snapshot.
 - **Its own rule:** every row kind that a real-size run shows and no case predicts becomes a new case.
 
+**The slot table test** (architect, Nov 13).
+`tests/native/test_slot_table.py` holds the small trees of the proofs of the export rule: per case, who reports a type slot (`export-shape`, `facade-signature`) and how many times, with both engines equal on the ten tables.
+A hole a proof finds becomes a case there.
+A hole whose fix is decided and not built is a strict expected failure with its reason, so the change that builds it turns the case green.
+
+**`bin/prove`** (architect, Nov 13).
+One command runs the mechanical checks side by side and prints one verdict table: per check, passed or failed, one line, its seconds, and a log file.
+- **Always:** the build; the model repository in both engines; pytest with the native engine required (the known failures named); `cargo test`; clippy; `cargo fmt`; ruff check and format; `ty` against its baseline count; determinism on the model repository (three hash seeds times one and four threads); the store modes on the model repository (memo off, answers off, trace on, fill, warm), each against a cold dump.
+- **At real size, by argument:** `--real <snapshot>` (repeatable) with `--base <rev>` builds the base into its own target directory, dumps both in the native engine on a copy of each snapshot laid with each side's preset, and prints per rule the findings and incomplete items that came and went, edges by kind, and the products that gain or lose a level; the moved rows go to files. `--parity` adds a Python-engine dump of the head. `--replay <sample>` runs the replay sample in today mode and as the certificate.
+- **Private by construction:** each run has its own work directory, a private copy of the native module, and a private cache per check. Snapshots and samples are copied, never changed. Paths of snapshots, the sample, the Python for real-size runs and the base's target directory come by argument or environment variable.
+- **What it is not:** real size is a measurement read by the architect, not a correctness proof; correctness lives in the small trees.
+
 **Checkpoints:** a phase stops in its first third if its cheapest steps do not show the gain in pairs.
 N2's bar was 0.45 s; it met it with 1.1-1.4 s.
 

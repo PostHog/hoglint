@@ -62,8 +62,12 @@ cargo fmt --all --check
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 .venv/bin/ty check --output-format concise  # some diagnostics exist on main; compare, and add none
+bin/prove                                   # all of the above side by side, plus the model repository, determinism and store modes
 ```
 
+- `bin/prove` builds first, runs every check above with a private copy of the native module and a private cache per check, and prints one line per check, with a log file each.
+  With `--real <snapshot> --base <rev>` it also compares the head with the base row by row at real size; `--parity` and `--replay <sample>` add engine parity and the replay sample.
+  `bin/prove --help` names the options and the environment variables for real-size runs.
 - `cargo test --workspace` cannot link the binding's test binary; test the root package.
 - `clippy` needs `--workspace`, or it never lints the binding crate.
 - The PostHog owners provider imports a package that only the PostHog monorepo has, so two of its tests fail in this repo's environment until that provider moves out.

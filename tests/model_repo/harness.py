@@ -108,6 +108,26 @@ class Result:
     levels: dict[str, dict[str, list[str]]]
 
 
+def copy_tree(repo: Path) -> None:
+    """A copy of the tree at `repo`, with the real preset where the tree's root config finds it,
+    staged in a new git repo."""
+    shutil.copytree(TREE, repo)
+    preset = repo / PRESET_IN_TREE
+    preset.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(PRESET, preset)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+
+
+def dump_tree(repo: Path, engine: str, out: Path, work: Path) -> None:
+    """One engine's ten parity tables of a copy of the tree, with the stub site-packages."""
+    with stub_site():
+        try:
+            Dump(repo, engine, out, work).run()
+        finally:
+            gc.enable()
+
+
 class Dumps:
     """One check of a copy of the tree per engine, dumped as the ten parity tables."""
 
@@ -116,29 +136,17 @@ class Dumps:
         self.repo = work / "repo"
         self.seconds: dict[str, float] = {}
 
-    def copy_tree(self) -> None:
-        shutil.copytree(TREE, self.repo)
-        preset = self.repo / PRESET_IN_TREE
-        preset.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(PRESET, preset)
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
-
     def out(self, engine: str) -> Path:
         return self.work / engine
 
     def run(self, engines: tuple[str, ...] = ENGINES) -> None:
-        self.copy_tree()
-        with stub_site():
-            for engine in engines:
-                scratch = self.work / f"work-{engine}"
-                scratch.mkdir()
-                started = time.perf_counter()
-                try:
-                    Dump(self.repo, engine, self.out(engine), scratch).run()
-                finally:
-                    gc.enable()
-                self.seconds[engine] = round(time.perf_counter() - started, 2)
+        copy_tree(self.repo)
+        for engine in engines:
+            scratch = self.work / f"work-{engine}"
+            scratch.mkdir()
+            started = time.perf_counter()
+            dump_tree(self.repo, engine, self.out(engine), scratch)
+            self.seconds[engine] = round(time.perf_counter() - started, 2)
 
     def differences(self) -> list[RowDiff]:
         """The parity tables in which the two engines differ."""
