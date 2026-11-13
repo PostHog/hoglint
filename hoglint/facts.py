@@ -167,6 +167,22 @@ class SitePackagesFiles:
         return files
 
 
+def find_binary() -> Path:
+    """The hoglint-facts binary: HOGLINT_FACTS_BIN, else the release build in the cargo target
+    directory, else one on PATH."""
+    override = os.environ.get("HOGLINT_FACTS_BIN")
+    if override:
+        return Path(override)
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or DEFAULT_TARGET_DIR)
+    built = target_dir / "release" / BINARY_NAME
+    if built.exists():
+        return built
+    on_path = shutil.which(BINARY_NAME)
+    if on_path:
+        return Path(on_path)
+    raise FileNotFoundError(f"{BINARY_NAME} not found; build it with bin/build or set HOGLINT_FACTS_BIN")
+
+
 @dataclass(frozen=True)
 class ExtractRequest:
     """One extractor run over an explicit file list. `root` may be a temp tree of staged blobs.
@@ -186,22 +202,8 @@ class ExtractRequest:
 class Extractor:
     """Runs the hoglint-facts binary. The binary only reads files; it never imports them."""
 
-    @staticmethod
-    def find_binary() -> Path:
-        override = os.environ.get("HOGLINT_FACTS_BIN")
-        if override:
-            return Path(override)
-        target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or DEFAULT_TARGET_DIR)
-        built = target_dir / "release" / BINARY_NAME
-        if built.exists():
-            return built
-        on_path = shutil.which(BINARY_NAME)
-        if on_path:
-            return Path(on_path)
-        raise FileNotFoundError(f"{BINARY_NAME} not found; build it with bin/build or set HOGLINT_FACTS_BIN")
-
     def __init__(self, binary: Path | None = None) -> None:
-        self.binary = binary or self.find_binary()
+        self.binary = binary or find_binary()
 
     @staticmethod
     def write_list(path: Path, files: tuple[str, ...]) -> Path:

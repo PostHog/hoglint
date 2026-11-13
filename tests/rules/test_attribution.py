@@ -14,7 +14,7 @@ import pytest
 
 from core.support import set_modified
 from hoglint.cli import WAY_OUT, Commands, Snapshots
-from hoglint.facts import Extractor
+from hoglint.facts import find_binary
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
 from hoglint.ledger.cache import RunStores
@@ -445,7 +445,7 @@ def test_the_extractor_reports_the_ids_of_its_sources(section: str) -> None:
     assert sources is not None
     if not has_extractor() and not native_required():
         pytest.skip("no extractor binary is built")
-    reported = BinaryIds.of(Extractor.find_binary(), section)
+    reported = BinaryIds.of(find_binary(), section)
     if reported != sources.digest(section) and not native_required():
         pytest.skip(f"the extractor binary was built from other [{section}] sources: rebuild it")
     assert reported == sources.digest(section)

@@ -32,7 +32,7 @@ from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.loader import PACK_PREFIX
 from hoglint.config.schema import as_tuple
-from hoglint.facts import Extractor
+from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.cache import RunStores
@@ -483,7 +483,7 @@ class LocalEngine:
     @cached_property
     def binary(self) -> Path:
         try:
-            return Extractor.find_binary()
+            return find_binary()
         except FileNotFoundError as error:
             raise EngineError(str(error)) from error
 

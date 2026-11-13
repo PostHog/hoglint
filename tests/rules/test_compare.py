@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from hoglint.compare import Comparer, RawPolicy, Scans
-from hoglint.facts import Extractor
+from hoglint.facts import find_binary
 from hoglint.ledger.envelope import NATIVE, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
@@ -170,7 +170,7 @@ def test_compare_pairs_swaps_and_labels_policy_changes() -> None:
 
 def has_extractor() -> bool:
     try:
-        Extractor.find_binary()
+        find_binary()
     except FileNotFoundError:
         return False
     return shutil.which("git") is not None
