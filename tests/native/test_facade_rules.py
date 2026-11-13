@@ -463,9 +463,7 @@ def facade_function(signature: str, imports: str = "from typing import TYPE_CHEC
 # A pydantic model core defines whose field is a model.
 CORE_MODEL_ROW = "class Record(BaseModel):\n    order: Order\n"
 # A class-body alias whose name a module-level alias also binds.
-SHADOWED_ALIAS = (
-    "Ref = int\n\n\nclass Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n"
-)
+SHADOWED_ALIAS = "Ref = int\n\n\nclass Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n"
 REF_UNKNOWN_AT_ERRORS = {"export-shape": [[f"{SHOP}.errors.Ref", ERRORS, "export-unknown"]], "facade-signature": []}
 # A type alias bound once per branch stands for every binding's types; one binding that is no
 # type alias leaves the name unknown.
@@ -576,7 +574,7 @@ INFO_DENIED_AT_API = {"export-shape": [[ORDER, API, "export-denied(model)"]], "f
 # module, in a public callable, or in the copy a facade holds of a function or a data shape's fields
 # it hands out. A registration surface, a private method and a member of a class handed out from
 # outside the facade are judged by the export rule.
-SLOT_OWNER_CASES = {
+SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] = {
     "a facade function": ({f"{SHOP_DIR}/facade/api.py": TAKES_AN_ORDER}, {"export-shape": []}),
     "a registration function": ({f"{SHOP_DIR}/routes.py": TAKES_AN_ORDER}, {"export-shape": JUDGED_AT_ROUTES}),
     "a registration function an unnamed signature rule reads": (
@@ -1136,7 +1134,9 @@ SLOT_OWNER_CASES = {
         CLEAN,
     ),
     "a handed-out exception's attribute names its nested exception": (
-        handed_out("class Rejected(Exception):\n    class Inner(Exception):\n        pass\n\n    inner: Inner\n", "Rejected"),
+        handed_out(
+            "class Rejected(Exception):\n    class Inner(Exception):\n        pass\n\n    inner: Inner\n", "Rejected"
+        ),
         CLEAN,
     ),
     # A class core defines is core's contract also when it is a data shape: only its fields are read.
@@ -1201,7 +1201,10 @@ SLOT_OWNER_CASES = {
     ),
     # The fields of a dataclass-like class core defines are read where a slot names it; its methods are not.
     "a field of a pydantic model core defines, returned by a facade function": (
-        {"posthog/records.py": IMPORTS_ORDER + CORE_MODEL_ROW, f"{SHOP_DIR}/facade/api.py": returns("posthog.records", "Record")},
+        {
+            "posthog/records.py": IMPORTS_ORDER + CORE_MODEL_ROW,
+            f"{SHOP_DIR}/facade/api.py": returns("posthog.records", "Record"),
+        },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
     ),
     "a field of a pydantic model core defines, returned by a method of a handed-out exception": (

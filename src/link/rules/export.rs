@@ -627,7 +627,10 @@ impl<'a> Walk<'a> {
         let link = self.cx.link;
         let (ancestors, _) = self.cx.rules.facts.ancestors(link, symbol);
         let bases = &link.settings.dataclass_bases;
-        if bases.iter().any(|&base| ancestors.contains(self.cx.text(base))) {
+        if bases
+            .iter()
+            .any(|&base| ancestors.contains(self.cx.text(base)))
+        {
             return true;
         }
         if !(policy.signatures || dataclass_like) {

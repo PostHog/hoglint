@@ -2371,8 +2371,9 @@ impl Producers<'_> {
                 continue;
             }
             // A `ClassVar` is no field of the generated `__init__`: callers read it as an attribute.
-            let (class_vars, fields): (Vec<FieldRow>, Vec<FieldRow>) =
-                own.into_iter().partition(|field| self.is_class_var_row(*field));
+            let (class_vars, fields): (Vec<FieldRow>, Vec<FieldRow>) = own
+                .into_iter()
+                .partition(|field| self.is_class_var_row(*field));
             let rows = SlotRows {
                 site,
                 callable: qualname,
