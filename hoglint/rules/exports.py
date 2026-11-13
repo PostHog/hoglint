@@ -347,6 +347,7 @@ class ExportPrimitive(RuleType):
                         continue
                     why = "not-member" if member is Truth.UNKNOWN else "listed"
                     self.unknown(symbol, module, policy, (symbol,), None, why, export.name)
+                self.check_alias_rows(export, module, path, policy)
         return self.run
 
     def unknown_values(self, module: str) -> frozenset[str]:
@@ -734,22 +735,45 @@ class ExportPrimitive(RuleType):
         same export and root hands the symbol out by names the copy of a slot."""
         places = self.copy_places(symbol, policy)
         for row, owner, qualname in self.member_edges(symbol, policy):
-            shape_only = self.leaves_slot(row, owner, qualname, places, policy)
-            annotation = row.attr("annotation")
-            if annotation in ("missing", "unread"):
-                if not shape_only:
-                    why = "no-annotation" if annotation == "missing" else "unread-annotation"
-                    self.unknown(symbol, module, policy, trail, row, why, row.attr("slot"))
+            self.judge_row(symbol, module, policy, trail, row, self.leaves_slot(row, owner, qualname, places, policy))
+
+    def judge_row(
+        self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], row: Edge, shape_only: bool
+    ) -> None:
+        """The types one slot row names, judged in full or, where a signature rule reads the row,
+        by their shape only."""
+        annotation = row.attr("annotation")
+        if annotation in ("missing", "unread"):
+            if not shape_only:
+                why = "no-annotation" if annotation == "missing" else "unread-annotation"
+                self.unknown(symbol, module, policy, trail, row, why, row.attr("slot"))
+            return
+        if row.resolution is Resolution.UNRESOLVED:
+            if not shape_only:
+                self.unresolved(row, module)
+            return
+        read = SlotRead(left=shape_only)
+        names = [str(target) for target in row.targets] or [row.surface]
+        for name in names:
+            if name and name not in trail:
+                self.check(name, module, policy, row, (*trail, name), read)
+
+    def check_alias_rows(self, export: ExportSpec, module: str, path: str, policy: ShapePolicy) -> None:
+        """The rows of the type aliases a module hands out (slot `alias`), each judged as a slot of
+        the name it is handed out by; the marker row of the alias itself is left out."""
+        handles = [handle for _, handle in self.exposes.get(module, [])]
+        for row in self.edges(handles):
+            if row.attr("slot") != "alias" or row.attr("alias") == "expanded":
                 continue
-            if row.resolution is Resolution.UNRESOLVED:
-                if not shape_only:
-                    self.unresolved(row, module)
+            symbol = f"{module}.{row.attr('callable')}"
+            member = self.ctx.labeler.export_member((export.name, path, symbol))
+            if member is Truth.FALSE:
                 continue
-            read = SlotRead(left=shape_only)
-            names = [str(target) for target in row.targets] or [row.surface]
-            for name in names:
-                if name and name not in trail:
-                    self.check(name, module, policy, row, (*trail, name), read)
+            if member is Truth.UNKNOWN:
+                self.unknown(symbol, module, policy, (symbol,), row, "not-member", export.name)
+                continue
+            shape_only = self.leaves_slot(row, module, row.attr("callable"), [], policy)
+            self.judge_row(symbol, module, policy, (symbol,), row, shape_only)
 
     # ── output ──
 

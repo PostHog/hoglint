@@ -433,6 +433,7 @@ impl<'a> Walk<'a> {
                     let why = (code, rules.export_names[export].as_str());
                     self.unknown(&symbol, &module_name, shape, &trail, None, why);
                 }
+                self.check_alias_rows(export, (module, at), &module_name, shape);
             }
         }
         self.rows
@@ -1134,62 +1135,110 @@ impl<'a> Walk<'a> {
         true
     }
 
-    /// `ExportPrimitive.check_members`: a name a file of the same export and root hands the
-    /// symbol out by names the copy of a slot.
-    fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
+    /// `ExportPrimitive.judge_row`: the types one slot row names, judged in full or, where a
+    /// signature rule reads the row, by their shape only.
+    fn judge_row(
+        &mut self,
+        symbol: &str,
+        module: &str,
+        shape: usize,
+        trail: &[String],
+        id: u32,
+        shape_only: bool,
+    ) {
         let link = self.cx.link;
-        let places = self.copy_places(symbol, shape);
         let Keys {
             annotation, slot, ..
         } = self.keys;
+        let written = self.cx.attr(id, annotation);
+        if written == "missing" || written == "unread" {
+            if !shape_only {
+                let code = if written == "missing" {
+                    "no-annotation"
+                } else {
+                    "unread-annotation"
+                };
+                let why = (code, self.cx.attr(id, slot));
+                self.unknown(symbol, module, shape, trail, Some(id), why);
+            }
+            return;
+        }
+        let edges = &link.edges;
+        if edges.res_of(id) == Res::Unresolved {
+            if !shape_only {
+                self.unresolved(id, module);
+            }
+            return;
+        }
+        let targets = edges.targets_of(id);
+        let names: Vec<String> = if targets.is_empty() {
+            vec![self.cx.text(edges.surface_of(id)).to_string()]
+        } else {
+            targets
+                .iter()
+                .map(|target| match target.s {
+                    EMPTY => self.cx.text(target.m).to_string(),
+                    name => format!("{}.{}", self.cx.text(target.m), self.cx.text(name)),
+                })
+                .collect()
+        };
+        for name in names {
+            if !name.is_empty() && !trail.contains(&name) {
+                let mut deeper = trail.to_vec();
+                deeper.push(name.clone());
+                self.check(
+                    &name,
+                    module,
+                    shape,
+                    Some(id),
+                    &deeper,
+                    Some(SlotRead { left: shape_only }),
+                );
+            }
+        }
+    }
+
+    /// `ExportPrimitive.check_members`: a name a file of the same export and root hands the
+    /// symbol out by names the copy of a slot.
+    fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
+        let places = self.copy_places(symbol, shape);
         for (id, owner, qualname_len) in self.member_edges(symbol, shape) {
             let shape_only = self.leaves_slot(id, (owner, qualname_len), &places, shape);
-            let written = self.cx.attr(id, annotation);
-            if written == "missing" || written == "unread" {
-                if !shape_only {
-                    let code = if written == "missing" {
-                        "no-annotation"
-                    } else {
-                        "unread-annotation"
-                    };
-                    let why = (code, self.cx.attr(id, slot));
-                    self.unknown(symbol, module, shape, trail, Some(id), why);
-                }
+            self.judge_row(symbol, module, shape, trail, id, shape_only);
+        }
+    }
+
+    /// `ExportPrimitive.check_alias_rows`: the rows of the type aliases a module hands out (slot
+    /// `alias`), each judged as a slot of the name it is handed out by; the marker row of the
+    /// alias itself is left out.
+    fn check_alias_rows(&mut self, export: usize, place: Place, module: &str, shape: usize) {
+        let rules = self.cx.rules;
+        let ids: Vec<u32> = self
+            .inputs
+            .exposes
+            .get(&place.0)
+            .map(|rows| rows.iter().map(|&(_, id)| id).collect())
+            .unwrap_or_default();
+        for id in ids {
+            if self.cx.attr(id, self.keys.slot) != "alias"
+                || self.cx.attr(id, self.keys.alias) == "expanded"
+            {
                 continue;
             }
-            let edges = &link.edges;
-            if edges.res_of(id) == Res::Unresolved {
-                if !shape_only {
-                    self.unresolved(id, module);
+            let callable = self.cx.attr(id, self.keys.callable).to_string();
+            let symbol = format!("{module}.{callable}");
+            let trail = vec![symbol.clone()];
+            match rules.export_member(self.cx.link, &rules.exports[export], Some(&symbol)) {
+                Truth::False => continue,
+                Truth::Unknown => {
+                    let why = ("not-member", rules.export_names[export].as_str());
+                    self.unknown(&symbol, module, shape, &trail, Some(id), why);
+                    continue;
                 }
-                continue;
+                Truth::True => {}
             }
-            let targets = edges.targets_of(id);
-            let names: Vec<String> = if targets.is_empty() {
-                vec![self.cx.text(edges.surface_of(id)).to_string()]
-            } else {
-                targets
-                    .iter()
-                    .map(|target| match target.s {
-                        EMPTY => self.cx.text(target.m).to_string(),
-                        name => format!("{}.{}", self.cx.text(target.m), self.cx.text(name)),
-                    })
-                    .collect()
-            };
-            for name in names {
-                if !name.is_empty() && !trail.contains(&name) {
-                    let mut deeper = trail.to_vec();
-                    deeper.push(name.clone());
-                    self.check(
-                        &name,
-                        module,
-                        shape,
-                        Some(id),
-                        &deeper,
-                        Some(SlotRead { left: shape_only }),
-                    );
-                }
-            }
+            let shape_only = self.leaves_slot(id, (place, callable.len()), &[], shape);
+            self.judge_row(&symbol, module, shape, &trail, id, shape_only);
         }
     }
 

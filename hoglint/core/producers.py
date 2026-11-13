@@ -17,7 +17,7 @@ from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolv
 from hoglint.core.surfaces import ALL_CLAUSE, HandedOut, StarNames
 from hoglint.core.symbols import CLASS, FUNC, Binding, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
 from hoglint.facts import FactStore
-from hoglint.model import Context, Edge, EntityId, Graph, Resolution
+from hoglint.model import Context, Edge, EntityId, Graph, HandOut, Resolution
 
 PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
@@ -1384,7 +1384,59 @@ class DeclarationProducer(Producer):
         handed = HandedOut(scope, context.resolver)
         self.rebind(context, graph, scope, handed)
         used = self.used_names(scope) if handed.no_functions else frozenset()
-        graph.hand_outs[scope.module] = handed.hand_out(used)
+        graph.hand_outs[scope.module] = self.expose_aliases(context, graph, scope, handed, handed.hand_out(used), used)
+
+    def type_alias(self, context: BuildContext, module: str, name: str) -> tuple[FileScope, dict] | None:
+        """The file and row of a module-level value the producer expands as a type alias: a
+        subscript, a `|` union, or the bare name of a builtin type. Another name or attribute chain
+        is left out, so a member past a class stays unknown."""
+        found = context.alias(module, name)
+        if found is None or found[0] is None:
+            return None
+        scope, row = found
+        value = row["v"]
+        if isinstance(value, dict):
+            return found if "sub" in value or value.get("bin") == "|" else None
+        if "." in value:
+            return None
+        looked = self.lookup_at(context, SlotLookup(scope, -1, row["l"]), value)
+        return found if self.plain_builtin(looked, value) else None
+
+    def expose_alias(
+        self, context: BuildContext, graph: Graph, scope: FileScope, bound: str, clause: str, line: int, column: int
+    ) -> None:
+        """The rows a handed-out type alias expands to, as a slot `alias` of the name it is handed
+        out by, at the line that hands it out: the export rule judges them as any slot."""
+        rows = SlotRows(SlotSite.module_level(scope, line, column), bound, clause)
+        self.expose(context, graph, rows, SlotLookup(scope, -1, line), bound, "alias", True)
+
+    def expose_aliases(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        scope: FileScope,
+        handed: HandedOut,
+        hand_out: HandOut,
+        used: frozenset[str],
+    ) -> HandOut:
+        """Writes the rows of every listed or handed-out value that is a type alias, and takes those
+        values out of what the hand-out record leaves unknown."""
+        unknown = set(hand_out.unknown)
+        for name in sorted(hand_out.unknown):
+            found = self.type_alias(context, scope.module, name)
+            if found is not None:
+                self.expose_alias(context, graph, scope, name, ALL_CLAUSE, found[1]["l"], found[1]["c"])
+                unknown.discard(name)
+        values = set(hand_out.unknown_values)
+        for item in handed.names(used):
+            hit, rest = context.resolver.resolve_dotted(item.target)
+            if hit is None or rest or str(hit.origin) not in hand_out.unknown_values:
+                continue
+            if self.type_alias(context, hit.origin.module, hit.origin.symbol) is None:
+                continue
+            self.expose_alias(context, graph, scope, item.bound, item.clause, item.line, item.column)
+            values.discard(str(hit.origin))
+        return replace(hand_out, unknown=frozenset(unknown), unknown_values=frozenset(values))
 
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:

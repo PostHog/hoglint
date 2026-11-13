@@ -1601,7 +1601,10 @@ ASSIGNED_CASES = {
         unknown_at_api("A", "B"),
     ),
     "the first of two assignments": ({API_FILE: rebinds("models.Order", tail="Thing = 3\n")}, CLEAN_AT_API),
-    "a generic alias": ({API_FILE: rebinds("list[models.Order]")}, unknown_at_api("Thing")),
+    "a generic alias": (
+        {API_FILE: rebinds("list[models.Order]")},
+        {"export-shape": [], "facade-signature": [[API, "Thing", "alias", ORDER]]},
+    ),
     "a public name not listed, bound by a call": (
         {API_FILE: IMPORTS_MODELS + "Thing = models.Order()\n" + NOOP + "\n\n__all__ = ['noop']\n"},
         CLEAN_AT_API,
@@ -1668,8 +1671,10 @@ VALUE_CASES = {
     },
     "a string constant": (handed_out("Ref = 'order'\n", "Ref"), CLEAN),
     "None": (handed_out("Ref = None\n", "Ref"), CLEAN),
-    # A written limit: the expansion of a handed-out type alias is not judged, so it is unknown.
-    "a generic alias": (handed_out("Ref = list[Order]\n", "Ref"), REF_VALUE_AT_ERRORS),
+    "a generic alias": (
+        handed_out("Ref = list[Order]\n", "Ref"),
+        {"export-shape": [], "facade-signature": [[ERRORS, "Ref", "alias", ORDER]]},
+    ),
     "a value and a class whose method returns it": (
         handed_out("from typing import NewType\n\nRef = NewType('Ref', Order)\n" + MEMBER_TAKES_REF, "Ref", "Rejected"),
         REF_VALUE_AT_ERRORS,
@@ -1735,6 +1740,45 @@ CONSTANT_CASES = {
         {"export-shape": [[f"{SHOP}.consts.POOL", API, "export-unknown"]], "facade-signature": []},
     ),
 }
+
+# A listed or handed-out name whose value is a type alias the producer expands is judged by what it
+# expands to, as a slot of its own (`alias`) at the module that hands it out.
+ALIAS_CASES = {
+    "a builtin type": ({API_FILE: "SourceKey = str\n\n__all__ = ['SourceKey']\n"}, CLEAN_AT_API),
+    "a Literal": (
+        {API_FILE: "from typing import Literal\n\nKind = Literal['a', 'b']\n\n__all__ = ['Kind']\n"},
+        CLEAN_AT_API,
+    ),
+    "a typed mapping": ({API_FILE: "Payload = dict[str, int]\n\n__all__ = ['Payload']\n"}, CLEAN_AT_API),
+    "a union with a model": (
+        {API_FILE: f"from {SHOP}.models import Order\n\nMaybe = Order | None\n\n__all__ = ['Maybe']\n"},
+        {"export-shape": [], "facade-signature": [[API, "Maybe", "alias", ORDER]]},
+    ),
+    "a union with a model in a registration surface": (
+        {f"{SHOP_DIR}/routes.py": f"from {SHOP}.models import Order\n\nMaybe = Order | None\n\n__all__ = ['Maybe']\n"},
+        {"export-shape": [[ORDER, ROUTES, "export-denied(model)"]]},
+    ),
+    "a union with a class of no allowed shape, handed out": (
+        handed_out("class Loose:\n    pass\n\n\nMaybe = Loose | None\n", "Maybe"),
+        {"export-shape": [[f"{SHOP}.errors.Loose", ERRORS, "export-shape(class)"]], "facade-signature": []},
+    ),
+    "None is a constant": ({API_FILE: "Nothing = None\n\n__all__ = ['Nothing']\n"}, CLEAN_AT_API),
+    "an attribute chain past a class": (
+        {API_FILE: rebinds("models.Order.objects", name="CHOICES")},
+        unknown_at_api("CHOICES"),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", ALIAS_CASES)
+def test_a_handed_out_type_alias_is_judged_by_its_expansion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = ALIAS_CASES[case]
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+        rule: sorted(rows) for rule, rows in expected.items()
+    }
 
 
 @pytest.mark.parametrize("case", CONSTANT_CASES)

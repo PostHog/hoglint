@@ -2493,8 +2493,86 @@ impl Producers<'_> {
         } else {
             FxHashSet::default()
         };
-        let found = handed.hand_out(self.core, &self.scopes[owner], &used);
+        let mut found = handed.hand_out(self.core, &self.scopes[owner], &used);
+        self.expose_aliases(owner, &handed, &used, &mut found);
         self.hand_outs.insert(self.scopes[owner].module, found);
+    }
+
+    /// The line and column of a module-level value the producer expands as a type alias
+    /// (`DeclarationProducer.type_alias`): a subscript, a `|` union, or the bare name of a
+    /// builtin type. Another name or attribute chain is left out, so a member past a class stays
+    /// unknown.
+    fn type_alias(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
+        let (file, at) = self.alias(module, name)?;
+        let owner = *self.scope_of_file.get(&file)? as usize;
+        let facts = self.core.facts.clone();
+        let row = &facts.files[file as usize].assigns[at as usize];
+        match row.value.as_ref()? {
+            V::Sub(..) | V::Bin(true, ..) => Some((row.l, row.c)),
+            V::Chain(chain) if !self.core.it.s(*chain).contains('.') => {
+                let lookup = SlotLookup {
+                    owner,
+                    scope: -1,
+                    line: row.l,
+                };
+                let found = self.lookup_at(lookup, *chain);
+                self.plain_builtin(found, *chain).then_some((row.l, row.c))
+            }
+            _ => None,
+        }
+    }
+
+    /// The rows a handed-out type alias expands to, as a slot `alias` of the name it is handed
+    /// out by, at the line that hands it out (`DeclarationProducer.expose_alias`).
+    fn expose_alias(&mut self, owner: usize, bound: Sid, clause: Sid, line: u32, col: u32) {
+        let rows = SlotRows {
+            site: self.module_site(owner, line, col),
+            callable: bound,
+            handed: clause,
+        };
+        let lookup = SlotLookup {
+            owner,
+            scope: -1,
+            line,
+        };
+        let slot = self.settings.k.alias;
+        self.expose(rows, lookup, Some(&V::Chain(bound)), slot, true);
+    }
+
+    /// Writes the rows of every listed or handed-out value that is a type alias, and takes those
+    /// values out of what the hand-out record leaves unknown (`DeclarationProducer.expose_aliases`).
+    fn expose_aliases(
+        &mut self,
+        owner: usize,
+        handed: &HandedOut,
+        used: &FxHashSet<Sid>,
+        found: &mut HandOut,
+    ) {
+        let module = self.scopes[owner].module;
+        let mut names: Vec<Sid> = found.unknown.iter().copied().collect();
+        names.sort_by(|a, b| self.core.it.s(*a).cmp(self.core.it.s(*b)));
+        let all = self.core.it.intern(ALL_CLAUSE);
+        for name in names {
+            if let Some((line, col)) = self.type_alias(module, name) {
+                self.expose_alias(owner, name, all, line, col);
+                found.unknown.remove(&name);
+            }
+        }
+        let values = found.unknown_values.clone();
+        for item in handed.names(self.core, &self.scopes[owner], used) {
+            let (hit, rest) = self.core.resolve_dotted(item.target);
+            let Some(hit) = hit.filter(|_| rest.is_empty()) else {
+                continue;
+            };
+            let origin = self.core.origin(hit);
+            let symbol = self.core.ent_sid(origin);
+            if !values.contains(&symbol) || self.type_alias(origin.m, origin.s).is_none() {
+                continue;
+            }
+            let clause = self.core.it.intern(item.clause);
+            self.expose_alias(owner, item.bound, clause, item.line, item.col);
+            found.unknown_values.remove(&symbol);
+        }
     }
 
     fn strings(&mut self, owner: usize) {
