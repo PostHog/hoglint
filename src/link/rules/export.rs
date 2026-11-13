@@ -753,11 +753,19 @@ impl<'a> Walk<'a> {
     /// `ExportPrimitive.module_level_name`: whether a symbol with no facts is a name bound at the
     /// top of a graph module.
     fn module_level_name(&self, symbol: &str) -> bool {
-        let Some((owner, _)) = self.cx.module_of_symbol(symbol) else {
-            return false;
-        };
-        let owner_name = self.cx.text(owner);
-        owner_name != symbol && !symbol[owner_name.len() + 1..].contains('.')
+        self.place_of(symbol)
+            .is_some_and(|(_, qualname)| !qualname.contains('.'))
+    }
+
+    /// `ExportPrimitive.place_of`: the graph module a symbol lies in and its qualname there; None
+    /// for a module itself or a name no graph module holds.
+    fn place_of<'s>(&self, symbol: &'s str) -> Option<(Place, &'s str)> {
+        let owner = self.cx.module_of_symbol(symbol)?;
+        let owner_name = self.cx.text(owner.0);
+        if owner_name == symbol {
+            return None;
+        }
+        Some((owner, &symbol[owner_name.len() + 1..]))
     }
 
     /// `ExportPrimitive.exposes_under`.
@@ -800,14 +808,9 @@ impl<'a> Walk<'a> {
         }
         let mut out = Vec::new();
         for (target, walked) in lineage {
-            let Some(owner) = self.cx.module_of_symbol(&target) else {
+            let Some((owner, qualname)) = self.place_of(&target) else {
                 continue;
             };
-            let owner_name = self.cx.text(owner.0);
-            if owner_name == target {
-                continue;
-            }
-            let qualname = &target[owner_name.len() + 1..];
             for id in self.exposes_under(owner.0, qualname) {
                 if walked || self.constructor_slot(id) {
                     out.push((id, owner, qualname.len()));
@@ -875,11 +878,8 @@ impl<'a> Walk<'a> {
         if let (Some(here), Some(bound)) = (module, self.bound.get(symbol)) {
             out.push((here, bound.clone()));
         }
-        if let Some(owner) = self.cx.module_of_symbol(symbol) {
-            let owner_name = self.cx.text(owner.0);
-            if owner_name != symbol {
-                out.push((owner, symbol[owner_name.len() + 1..].to_string()));
-            }
+        if let Some((owner, qualname)) = self.place_of(symbol) {
+            out.push((owner, qualname.to_string()));
         }
         out.retain(|(place, _)| self.under_policy(place.1, shape));
         out

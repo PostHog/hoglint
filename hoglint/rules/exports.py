@@ -523,11 +523,19 @@ class ExportPrimitive(RuleType):
             return "constant" in shapes
         return self.module_level_name(symbol)
 
+    def place_of(self, symbol: str) -> tuple[str, str] | None:
+        """The graph module a symbol lies in and its qualname there; None for a module itself or a
+        name no graph module holds."""
+        owner = self.ctx.labeler.module_of_symbol(symbol)
+        if owner is None or owner == symbol:
+            return None
+        return owner, symbol[len(owner) + 1 :]
+
     def module_level_name(self, symbol: str) -> bool:
         """Whether a symbol with no facts is a name bound at the top of a graph module: no class
         and no def, so a module-level assignment such as a type alias."""
-        owner = self.ctx.labeler.module_of_symbol(symbol)
-        return owner is not None and owner != symbol and "." not in symbol[len(owner) + 1 :]
+        place = self.place_of(symbol)
+        return place is not None and "." not in place[1]
 
     def exposes_under(self, module: str) -> dict[str, list[int]]:
         """A module's exposes edges, as handles, under every qualname their callable lies in: `A`
@@ -585,10 +593,10 @@ class ExportPrimitive(RuleType):
             lineage.extend((ancestor, self.walk_holds(ancestor, policy)) for ancestor in sorted(ancestors))
         out: list[tuple[int, str, str, bool]] = []
         for target, walked in lineage:
-            owner = self.ctx.labeler.module_of_symbol(target)
-            if owner is None or owner == target:
+            place = self.place_of(target)
+            if place is None:
                 continue
-            qualname = target[len(owner) + 1 :]
+            owner, qualname = place
             out.extend((handle, owner, qualname, walked) for handle in self.exposes_under(owner).get(qualname, ()))
         return out
 
@@ -615,9 +623,9 @@ class ExportPrimitive(RuleType):
         dataclass's fields along its MRO). The same for every row of one visit."""
         bound = self.bound.get(symbol, "")
         out = [(module, bound)] if bound else []
-        owner = self.ctx.labeler.module_of_symbol(symbol)
-        if owner is not None and owner != symbol:
-            out.append((owner, symbol[len(owner) + 1 :]))
+        place = self.place_of(symbol)
+        if place is not None:
+            out.append(place)
         return [(place, name) for place, name in out if self.under_policy(place, policy)]
 
     def under_policy(self, module: str, policy: ShapePolicy) -> bool:
