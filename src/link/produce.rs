@@ -200,6 +200,13 @@ impl EdgeStore {
         }
     }
 
+    /// Whether edge `id`'s contexts meet `include` (any, when it is empty) and avoid `exclude`
+    /// (`rules.base.context_ok`).
+    pub fn context_ok(&self, id: u32, include: u8, exclude: u8) -> bool {
+        let ctx = self.seen_ctx(id);
+        (include == 0 || ctx & include != 0) && ctx & exclude == 0
+    }
+
     pub fn use_of(&self, id: u32) -> Sid {
         self.pack_row(id)
             .map_or_else(|| self.rows[id as usize].use_, |pack| pack.use_)

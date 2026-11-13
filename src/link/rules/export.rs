@@ -93,9 +93,8 @@ pub struct SlotRule {
 
 impl SlotRule {
     /// Whether the rule's contexts take edge `id`'s (`context_ok`).
-    fn reads(&self, cx: &Cx, id: u32) -> bool {
-        let ctx = cx.link.edges.seen_ctx(id);
-        !((self.include != 0 && ctx & self.include == 0) || ctx & self.exclude != 0)
+    fn reads(&self, link: &Link, id: u32) -> bool {
+        link.edges.context_ok(id, self.include, self.exclude)
     }
 }
 
@@ -462,10 +461,12 @@ impl<'a> Walk<'a> {
             .cloned()
             .unwrap_or_default();
         for id in imports {
-            let edges = &self.cx.link.edges;
-            let ctx = edges.seen_ctx(id);
-            let include = self.rule.include;
-            if (include != 0 && ctx & include == 0) || ctx & self.rule.exclude != 0 {
+            if !self
+                .cx
+                .link
+                .edges
+                .context_ok(id, self.rule.include, self.rule.exclude)
+            {
                 continue;
             }
             if !self.hands_out(module, id) {
@@ -953,11 +954,11 @@ impl<'a> Walk<'a> {
     /// `ExportPrimitive.signature_sees`: whether a named rule reads row `id` in a module: its
     /// source part holds for the module and its contexts take the row's.
     fn signature_sees(&mut self, module: Sid, id: u32) -> bool {
-        let cx = self.cx;
+        let link = self.cx.link;
         let rule = self.rule;
         self.holding_rules(module)
             .iter()
-            .any(|&at| rule.slot_rules[at].reads(&cx, id))
+            .any(|&at| rule.slot_rules[at].reads(link, id))
     }
 
     /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is

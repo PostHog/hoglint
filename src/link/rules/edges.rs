@@ -23,10 +23,7 @@ impl Link {
             .into_iter()
             .flatten()
             .filter(|&id| {
-                let ctx = edges.seen_ctx(id);
-                edges.res_of(id) != Res::NotApplicable
-                    && (include == 0 || ctx & include != 0)
-                    && ctx & exclude == 0
+                edges.res_of(id) != Res::NotApplicable && edges.context_ok(id, include, exclude)
             })
             .collect();
         out.sort_unstable();
