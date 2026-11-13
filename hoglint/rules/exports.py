@@ -575,11 +575,12 @@ class ExportPrimitive(RuleType):
 
     def member_handles(self, symbol: str, policy: ShapePolicy) -> list[tuple[int, str, str, bool]]:
         """(handle, module, qualname, walked) of each row of the symbol and, for a class, of its
-        ancestors. Of an ancestor `walk_where` is false for, only its constructor fields are read:
-        they are slots of the class that inherits them, while its methods and attributes are
-        core's contract."""
-        lineage = [(symbol, True)]
-        if self.facts.decl(symbol) == "class":
+        ancestors. Of a class `walk_where` is false for, the handed-out class or an ancestor, only
+        the constructor fields are read: they are slots of the class, while its methods and
+        attributes are core's contract."""
+        is_class = self.facts.decl(symbol) == "class"
+        lineage = [(symbol, not is_class or self.walk_holds(symbol, policy))]
+        if is_class:
             ancestors, _ = self.facts.ancestors(symbol)
             lineage.extend((ancestor, self.walk_holds(ancestor, policy)) for ancestor in sorted(ancestors))
         out: list[tuple[int, str, str, bool]] = []

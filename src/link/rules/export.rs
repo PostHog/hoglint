@@ -790,11 +790,13 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.member_edges`: the rows that are judged, each with the module (as a place)
     /// and the qualname length of the class or callable it belongs to; the marker row of an
-    /// expanded alias is left out. Of an ancestor `walk_where` is false for, only its constructor
-    /// fields are read.
+    /// expanded alias is left out. Of a class `walk_where` is false for, the handed-out class or
+    /// an ancestor, only the constructor fields are read.
     fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize)> {
-        let mut lineage = vec![(symbol.to_string(), true)];
-        if self.cx.rules.symbol_decl(self.cx.link, symbol) == "class" {
+        let is_class = self.cx.rules.symbol_decl(self.cx.link, symbol) == "class";
+        let walked = !is_class || self.walk_holds(symbol, shape);
+        let mut lineage = vec![(symbol.to_string(), walked)];
+        if is_class {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
             let mut sorted: Vec<String> = ancestors.into_iter().map(str::to_string).collect();
             sorted.sort();

@@ -864,6 +864,16 @@ SLOT_OWNER_CASES = {
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected.Inner.Ref", ERRORS, "export-unknown"]], "facade-signature": []},
     ),
+    # A class core defines is core's contract also when it is a data shape: only its fields are read.
+    "a method of a frozen dataclass core defines": (
+        {
+            "posthog/records.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass CoreRecord:\n    count: int\n\n"
+            "    def load(self) -> Order:\n        raise ValueError\n",
+            f"{SHOP_DIR}/facade/api.py": "from posthog.records import CoreRecord\n\n__all__ = ['CoreRecord']\n",
+        },
+        CLEAN,
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
