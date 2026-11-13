@@ -293,12 +293,11 @@ impl ExportInputs {
     }
 }
 
-/// `SlotRead`: how a member's slot reached a symbol, left to a named rule or judged here, with
-/// whether the producer expanded an alias in the slot. An exported symbol is reached by none.
+/// `SlotRead`: how a member's slot reached a symbol, left to a named rule or judged here. An
+/// exported symbol is reached by none.
 #[derive(Clone, Copy)]
 struct SlotRead {
     left: bool,
-    expanded: bool,
 }
 
 /// A graph module as `Cx::module_of_symbol` gives it: its name and its place.
@@ -746,7 +745,7 @@ impl<'a> Walk<'a> {
         let Some(read) = slot else {
             return false;
         };
-        if read.left || read.expanded {
+        if read.left {
             return false;
         }
         if self.cx.rules.has_symbol(self.cx.link, symbol) {
@@ -797,10 +796,10 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.member_edges`: the rows that are judged, each with the module (as a place)
-    /// and the qualname length of the class or callable it belongs to, and whether the producer
-    /// expanded an alias in its slot; the marker row of an expanded alias is left out. Of an
-    /// ancestor `walk_where` is false for, only its constructor fields are read.
-    fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize, bool)> {
+    /// and the qualname length of the class or callable it belongs to; the marker row of an
+    /// expanded alias is left out. Of an ancestor `walk_where` is false for, only its constructor
+    /// fields are read.
+    fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize)> {
         let mut lineage = vec![(symbol.to_string(), true)];
         if self.cx.rules.symbol_decl(self.cx.link, symbol) == "class" {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
@@ -817,30 +816,13 @@ impl<'a> Walk<'a> {
                 continue;
             };
             for id in self.exposes_under(owner.0, qualname) {
-                if walked || self.constructor_slot(id) {
+                let read = walked || self.constructor_slot(id);
+                if read && self.cx.attr(id, self.keys.alias) != "expanded" {
                     out.push((id, owner, qualname.len()));
                 }
             }
         }
-        let Keys {
-            callable,
-            slot,
-            alias,
-            ..
-        } = self.keys;
-        let cx = self.cx;
-        let slot_of = |id: u32| (cx.attr(id, callable), cx.attr(id, slot));
-        let expanded: FxHashSet<(&str, &str)> = out
-            .iter()
-            .filter(|(id, _, _)| cx.attr(*id, alias) == "expanded")
-            .map(|(id, _, _)| slot_of(*id))
-            .collect();
-        out.into_iter()
-            .filter(|(id, _, _)| cx.attr(*id, alias) != "expanded")
-            .map(|(id, owner, qualname_len)| {
-                (id, owner, qualname_len, expanded.contains(&slot_of(id)))
-            })
-            .collect()
+        out
     }
 
     /// `ExportPrimitive.copies`: a module's exposes rows of a callable's slot.
@@ -1028,7 +1010,7 @@ impl<'a> Walk<'a> {
         let Keys {
             annotation, slot, ..
         } = self.keys;
-        for (id, owner, qualname_len, has_expansion) in self.member_edges(symbol, shape) {
+        for (id, owner, qualname_len) in self.member_edges(symbol, shape) {
             let shape_only = self.leaves_slot(id, (owner, qualname_len), &places, shape);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
@@ -1066,10 +1048,7 @@ impl<'a> Walk<'a> {
                         shape,
                         Some(id),
                         &deeper,
-                        Some(SlotRead {
-                            left: shape_only,
-                            expanded: has_expansion,
-                        }),
+                        Some(SlotRead { left: shape_only }),
                     );
                 }
             }

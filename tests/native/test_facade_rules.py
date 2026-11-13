@@ -808,6 +808,32 @@ SLOT_OWNER_CASES = {
             "facade-signature": [[API, "get", "param:x", f"{SHOP}.errors.Ref"]],
         },
     ),
+    # A name the producer does not expand, next to or inside an alias it does expand.
+    "a NewType inside an alias's value": (
+        handed_out(UNEXPANDED_NAMES["a NewType"] + "Maybe = Ref | None\n" + returns_in_rejected("Maybe"), "Rejected"),
+        REF_UNKNOWN_AT_ERRORS,
+    ),
+    "a NewType next to an alias in one slot": (
+        handed_out(UNEXPANDED_NAMES["a NewType"] + "Ids = list[int]\n" + returns_in_rejected("Ids | Ref"), "Rejected"),
+        REF_UNKNOWN_AT_ERRORS,
+    ),
+    "a functional TypedDict inside an alias's value": (
+        handed_out(
+            UNEXPANDED_NAMES["a functional TypedDict"] + "Many = list[Ref]\n" + returns_in_rejected("Many"), "Rejected"
+        ),
+        REF_UNKNOWN_AT_ERRORS,
+    ),
+    "a TypeVar inside an alias of an alias": (
+        handed_out(
+            UNEXPANDED_NAMES["a TypeVar"] + "Inner = list[Ref]\nOuter = Inner | None\n" + returns_in_rejected("Outer"),
+            "Rejected",
+        ),
+        REF_UNKNOWN_AT_ERRORS,
+    ),
+    "a recursive alias": (
+        handed_out("type Json = str | dict[str, Json]\n" + returns_in_rejected("Json"), "Rejected"),
+        CLEAN,
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},

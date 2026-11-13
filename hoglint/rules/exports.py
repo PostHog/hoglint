@@ -146,11 +146,10 @@ UNKNOWN_WHY = {
 @dataclass(frozen=True, slots=True)
 class SlotRead:
     """How a member's slot reached a symbol: left to a named rule, which judges it (only the
-    class's shape is judged here), or judged here, with whether the producer expanded an alias in
-    the slot. An exported symbol itself is reached by no slot (None)."""
+    class's shape is judged here), or judged here. An exported symbol itself is reached by no slot
+    (None)."""
 
     left: bool
-    expanded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +186,7 @@ class ExportPrimitive(RuleType):
         # `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
         self.allowed: dict[tuple[str, str], bool] = {}
         self.walked: dict[tuple[str, str], bool] = {}
-        self.members: dict[tuple[str, str], list[tuple[Edge, str, str, bool]]] = {}
+        self.members: dict[tuple[str, str], list[tuple[Edge, str, str]]] = {}
         self.exposes_by_name: dict[str, dict[str, list[int]]] = {}
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
@@ -522,7 +521,7 @@ class ExportPrimitive(RuleType):
     def unexpanded_assignment(self, symbol: str, shapes: frozenset[str], slot: SlotRead | None) -> bool:
         """Whether a slot judged here names a module-level assignment the producer did not expand:
         a symbol a pack reads as a constant, or one with no facts bound at the top of a module."""
-        if slot is None or slot.left or slot.expanded:
+        if slot is None or slot.left:
             return False
         if self.facts.has(symbol):
             return "constant" in shapes
@@ -562,28 +561,20 @@ class ExportPrimitive(RuleType):
                 self.made[handle] = edge
         return [self.made[handle] for handle in handles]
 
-    def member_edges(self, symbol: str, policy: ShapePolicy) -> list[tuple[Edge, str, str, bool]]:
+    def member_edges(self, symbol: str, policy: ShapePolicy) -> list[tuple[Edge, str, str]]:
         """The rows of a callable, or of a class's fields and methods (and those of the bases the
         policy walks), that are judged: each with the module and qualname of the class or callable
-        it belongs to, and whether the producer expanded an alias in its slot. The marker row of
-        an expanded alias is left out: the rows of its expansion stand for it."""
+        it belongs to. The marker row of an expanded alias is left out: the rows of its expansion
+        stand for it, and each of them is judged by its own target."""
         key = (symbol, policy.name)
         found = self.members.get(key)
         if found is None:
             places = self.member_handles(symbol, policy)
             edges = self.edges([handle for handle, _, _, _ in places])
-            rows = [
+            found = self.members[key] = [
                 (edge, owner, qualname)
                 for edge, (_, owner, qualname, walked) in zip(edges, places)
-                if walked or self.constructor_slot(edge)
-            ]
-            expanded = {
-                (row.attr("callable"), row.attr("slot")) for row, _, _ in rows if row.attr("alias") == "expanded"
-            }
-            found = self.members[key] = [
-                (row, owner, qualname, (row.attr("callable"), row.attr("slot")) in expanded)
-                for row, owner, qualname in rows
-                if row.attr("alias") != "expanded"
+                if (walked or self.constructor_slot(edge)) and edge.attr("alias") != "expanded"
             ]
         return found
 
@@ -692,7 +683,7 @@ class ExportPrimitive(RuleType):
         class where a signature rule of `leave_slots_to` reads the slot's row; the name the module
         hands the symbol out by, if it does, names the copy of a slot."""
         places = self.copy_places(symbol, module, policy)
-        for row, owner, qualname, has_expansion in self.member_edges(symbol, policy):
+        for row, owner, qualname in self.member_edges(symbol, policy):
             shape_only = self.leaves_slot(row, owner, qualname, places, policy)
             if row.attr("annotation") == "missing":
                 if not shape_only:
@@ -702,7 +693,7 @@ class ExportPrimitive(RuleType):
                 if not shape_only:
                     self.unresolved(row, module)
                 continue
-            read = SlotRead(left=shape_only, expanded=has_expansion)
+            read = SlotRead(left=shape_only)
             names = [str(target) for target in row.targets] or [row.surface]
             for name in names:
                 if name and name not in trail:
