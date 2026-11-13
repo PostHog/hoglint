@@ -1,7 +1,7 @@
 # 9. Contract surfaces: what an export hands out
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 13, 2026.
 
 A PostHog facade (`products/<name>/backend/facade/`) is one export in hoglint's terms.
 The engine's word is `export`; "facade" is a name in the PostHog preset (D48).
@@ -50,6 +50,9 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
 - The identity names the callable.
   The old producer's identity had `-` there in 1,673 of 2,738 ledger lines.
 - Receivers (`self`, `cls`) are left out by position in a method, not by name.
+- An annotated class-body attribute of a class that is no dataclass is a slot `attr:<name>` of the class, written where the class is defined (Nov 13).
+  It is written as a method's slots are: every type name in a surface file, only a name that is no plain builtin elsewhere.
+  A `ClassVar` is an attribute too: callers read it.
 
 **Dataclass fields** (D62 C1 and C4, D63, N3b review item 7):
 - `dataclass_decorators` is a global `[discovery]` setting.
@@ -83,10 +86,29 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
   A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
+  `walk_where` is read for each ancestor too, so what a product class inherits from a class core defines is core's contract as well (Nov 13).
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
-- One slot, one rule: with `slots = "shape"` the export rule judges only a class's shape in a slot of what it hands out. A model, an unknown type, a missing annotation or an unresolved name there is the signature rule's finding, under its own identity. The fields of a class found in a slot are still judged in full by the export rule.
+- One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `leave_slots_to = ["facade-signature"]` in the preset.
+  Each name must be a signature rule of the config; any other name is a config error.
+  The export rule leaves a slot to a named rule only where that rule reads the slot's row: the row's own module is one the rule's source selection holds for, or the exporting module holds the producer's copy of the slot (a handed-out function, a data shape's fields).
+  There it judges only the shape of a class in the slot; a model, an unknown type, a missing annotation or an unresolved name is the signature rule's finding, under its own identity.
+  Every other slot it judges in full, as it judges a private method.
+  The fields of a class found in a slot are still judged in full by the export rule.
+
+  | Slot | Reported by |
+  |---|---|
+  | A public function, method or attribute of a class the facade defines | `facade-signature` |
+  | A function or a data shape's fields handed out from outside the facade (the copy at the facade) | `facade-signature` |
+  | A public method, `__init__`, property or attribute of an allowed class handed out from outside the facade | `export-shape`: one row per type and module, the trail in the message |
+  | A private method of a walked class | `export-shape` |
+  | A member inherited from a class core defines | none: core's contract |
+  | A member of a class named in a slot (one level deeper) | `export-shape`, in full |
+
+  For example, a facade module hands out `OrderRejected`, an exception its product defines in a logic module, and `OrderRejected.order()` returns another product's model: `export-shape` reports the model at the facade module, with `OrderRejected -> Order` in the message.
+- **A written limit** (Nov 13): a parameter with no annotation, or one typed only with a plain builtin (a bare `dict` or `object` included), on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.
+  Rows outside a surface file are written only for a name that is no plain builtin.
 - A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 
 **The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).
