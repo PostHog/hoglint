@@ -30,7 +30,7 @@ from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules import engine
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project, subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
-from hoglint.rules.exports import ExportPrimitive
+from hoglint.rules.exports import ExportPrimitive, SlotRule
 from hoglint.selectors import Selector
 
 from native.require import native_module
@@ -1997,7 +1997,8 @@ def test_a_provider_field_read_in_each_role_gets_its_column(
 # column even where no signature rule reads that field in its own selection.
 def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     owner = Selector.parse("src.team == '@team-billing'").node
-    monkeypatch.setattr(ExportPrimitive, "signature_scopes", lambda self: [owner])
+    named = SlotRule("seer", owner, None, "origin", frozenset(), frozenset())
+    monkeypatch.setattr(ExportPrimitive, "named_slot_rules", lambda self: [named])
     export = {
         "primitive": "export",
         "leave_slots_to": ["seer"],

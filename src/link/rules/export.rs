@@ -79,17 +79,19 @@ enum Column {
     Src(EntityField),
 }
 
-/// A named signature rule's slot policy: the parts of its selection that do not read only the
-/// source (None: none), the endpoint it reads a row's destination by, and the contexts it reads
-/// and leaves out.
-pub struct SlotPolicy {
+/// `SlotRule`, a signature rule of `leave_slots_to`: where it reads rows (the parts of its
+/// selection that read only the source; None for every module), which slots it judges (the other
+/// parts; None for every slot), the endpoint it reads a row's destination by, and the contexts it
+/// reads and leaves out.
+pub struct SlotRule {
+    pub scope: Option<Node>,
     pub rest: Option<Node>,
     pub role: Role,
     pub include: u8,
     pub exclude: u8,
 }
 
-impl SlotPolicy {
+impl SlotRule {
     /// Whether the rule's contexts take edge `id`'s (`context_ok`).
     fn reads(&self, cx: &Cx, id: u32) -> bool {
         let ctx = cx.link.edges.seen_ctx(id);
@@ -102,13 +104,9 @@ pub struct ExportRule {
     exports: Vec<usize>,
     /// Its `from`: the export modules it judges, read of the module alone.
     pub start: Option<Node>,
-    /// `leave_slots_to`: the modules whose rows each named signature rule reads; a slot whose row
-    /// one of them reads is judged by its class's shape only. None for a rule that reads them in
-    /// every module. Empty when the rule judges every slot in full.
-    slot_owners: Vec<Option<Node>>,
-    /// `leave_slots_to`: each named rule's slot policy, the parts of its selection that do not
-    /// read only the source (None: none), and the endpoint it reads a row's destination by.
-    slot_policies: Vec<SlotPolicy>,
+    /// `leave_slots_to`: the named signature rules; a slot whose row one of them reads is judged by
+    /// its class's shape only. Empty when the rule judges every slot in full.
+    slot_rules: Vec<SlotRule>,
     include: u8,
     exclude: u8,
     unknown_types: Vec<String>,
@@ -123,7 +121,7 @@ impl ExportRule {
         identity: &[Vec<String>],
         entity: &Compiler,
         start: Option<Node>,
-        (slot_owners, slot_policies): (Vec<Option<Node>>, Vec<SlotPolicy>),
+        slot_rules: Vec<SlotRule>,
     ) -> ExportRule {
         let field = |name: &str| match entity.reference(&[name.to_string()]) {
             Ref::Entity(found) => found,
@@ -152,8 +150,7 @@ impl ExportRule {
         ExportRule {
             exports: plan.exports.clone(),
             start,
-            slot_owners,
-            slot_policies,
+            slot_rules,
             include: plan.include,
             exclude: plan.exclude,
             unknown_types: plan.unknown_types.clone(),
@@ -163,17 +160,15 @@ impl ExportRule {
         }
     }
 
-    /// The selectors it compiles: its `from`, its slot owners and their slot policies.
+    /// The selectors it compiles: its `from`, then the named rules' source parts and slot
+    /// policies.
     pub fn nodes(&self) -> Vec<&Node> {
-        let policies = self
-            .slot_policies
+        let scopes = self
+            .slot_rules
             .iter()
-            .filter_map(|policy| policy.rest.as_ref());
-        self.start
-            .iter()
-            .chain(self.slot_owners.iter().flatten())
-            .chain(policies)
-            .collect()
+            .filter_map(|rule| rule.scope.as_ref());
+        let rests = self.slot_rules.iter().filter_map(|rule| rule.rest.as_ref());
+        self.start.iter().chain(scopes).chain(rests).collect()
     }
 
     /// The fields its identity columns read of a module or a symbol.
@@ -916,8 +911,8 @@ impl<'a> Walk<'a> {
             None => Vec::new(),
             Some(sid) => {
                 let env = self.cx.module_env(sid);
-                (0..self.rule.slot_owners.len())
-                    .filter(|&at| match &self.rule.slot_owners[at] {
+                (0..self.rule.slot_rules.len())
+                    .filter(|&at| match &self.rule.slot_rules[at].scope {
                         None => true,
                         Some(node) => evaluate(node, &env) == Truth::True,
                     })
@@ -934,7 +929,7 @@ impl<'a> Walk<'a> {
         let cx = self.cx;
         self.holding_rules(module)
             .into_iter()
-            .any(|at| self.rule.slot_policies[at].reads(&cx, id))
+            .any(|at| self.rule.slot_rules[at].reads(&cx, id))
     }
 
     /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is
@@ -949,13 +944,13 @@ impl<'a> Walk<'a> {
     }
 
     fn find_policy_leaves_out(&self, id: u32) -> bool {
-        if self.rule.slot_policies.is_empty() {
+        if self.rule.slot_rules.is_empty() {
             return false;
         }
         let cx = self.cx;
         let src = cx.src_endpoint(id);
         let mut dsts = Vec::new();
-        for policy in &self.rule.slot_policies {
+        for policy in &self.rule.slot_rules {
             let Some(rest) = &policy.rest else {
                 return false;
             };

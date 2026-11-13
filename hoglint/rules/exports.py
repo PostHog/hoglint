@@ -45,9 +45,8 @@ from hoglint.rules.base import (
     joined,
     project,
     rule_kinds,
-    source_part,
 )
-from hoglint.rules.edges import SignaturePrimitive, is_private
+from hoglint.rules.edges import is_private
 from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import NONE, Node, Ref, Resolver, Selector, State, Truth, Value, evaluate
 
@@ -166,6 +165,21 @@ class SlotRead:
     expanded: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class SlotRule:
+    """A signature rule of `leave_slots_to`: where it reads rows (the parts of its selection that
+    read only the source; None for every module), which slots it judges (the other parts; None for
+    every slot), the endpoint it reads a row's destination by, and the contexts it reads and
+    leaves out."""
+
+    name: str
+    scope: Node | None
+    rest: Node | None
+    endpoint: str
+    include: frozenset[str]
+    exclude: frozenset[str]
+
+
 class ExportPrimitive(RuleType):
     PRIMITIVE = MODE = "export"
     NATIVE_MODE = "export"
@@ -190,10 +204,8 @@ class ExportPrimitive(RuleType):
         self.made: dict[int, Edge] = {}
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(NOT_HANDED_CONTEXTS if spec.contexts_exclude is None else spec.contexts_exclude)
-        self.slot_owners = self.signature_scopes()
-        self.slot_policies = self.signature_policies()
-        self.slot_contexts = self.signature_contexts()
-        self.slots_seen: dict[str, tuple[int, ...]] = {}
+        self.slot_rules = self.named_slot_rules()
+        self.slots_seen: dict[str, tuple[SlotRule, ...]] = {}
         self.policy_modules: dict[tuple[str, str], bool] = {}
         # By the identity of the row Edge: `edges` makes each one once.
         self.left_out: dict[int, bool] = {}
@@ -235,54 +247,36 @@ class ExportPrimitive(RuleType):
         names = self.spec.exports or tuple(self.ctx.config.exports)
         return [self.ctx.config.exports[name] for name in names]
 
-    def slot_rules(self) -> list[RuleSpec]:
-        """The signature rules of `leave_slots_to` that read exposes rows."""
-        out: list[RuleSpec] = []
+    def named_slot_rules(self) -> list[SlotRule]:
+        """The signature rules of `leave_slots_to` that read exposes rows, each with its selection
+        split once. The config check refuses a name that is no signature rule."""
+        out: list[SlotRule] = []
         for name in self.spec.leave_slots_to:
-            rule = self.ctx.config.rules.get(name)
-            if rule is None or rule.primitive != "signature":
-                continue
+            rule = self.ctx.config.rules[name]
             if "exposes" not in rule_kinds(rule, self.ctx.config.views):
                 continue
-            out.append(rule)
+            parts = conjuncts((rule.from_, rule.select))
+            scope = joined([part for part in parts if endpoint_only(part) == "src"])
+            rest = joined([part for part in parts if endpoint_only(part) != "src"])
+            include, exclude = frozenset(rule.contexts_include), frozenset(rule.contexts_exclude or ())
+            out.append(SlotRule(name, scope, rest, rule.endpoint, include, exclude))
         return out
 
-    def signature_scopes(self) -> list[Node | None]:
-        """Where each signature rule of `leave_slots_to` reads rows: its `from` and the parts of
-        its `select` that read only the source, None when it reads them in every module."""
-        return [source_part((rule.from_, rule.select)) for rule in self.slot_rules()]
-
-    def signature_policies(self) -> list[tuple[Node | None, str]]:
-        """The slot policy of each signature rule of `leave_slots_to`: the parts of its selection
-        that do not read only the source, joined (None when there are none), and the endpoint it
-        reads a row's destination by."""
-        out: list[tuple[Node | None, str]] = []
-        for rule in self.slot_rules():
-            parts = [part for part in conjuncts((rule.from_, rule.select)) if endpoint_only(part) != "src"]
-            out.append((joined(parts), rule.endpoint))
-        return out
-
-    def signature_contexts(self) -> list[tuple[frozenset[str], frozenset[str]]]:
-        """The contexts each signature rule of `leave_slots_to` reads and leaves out."""
-        return [
-            (frozenset(rule.contexts_include), frozenset(rule.contexts_exclude or ())) for rule in self.slot_rules()
-        ]
-
-    def holding_rules(self, module: str) -> tuple[int, ...]:
-        """The signature rules of `leave_slots_to`, by place, whose source part holds for a module.
-        A module a rule cannot tell about is not held, so its slots are judged here."""
+    def holding_rules(self, module: str) -> tuple[SlotRule, ...]:
+        """The signature rules of `leave_slots_to` whose source part holds for a module. A module a
+        rule cannot tell about is not held, so its slots are judged here."""
         found = self.slots_seen.get(module)
         if found is None:
             resolve = self.ctx.module_env(module).resolve
             found = self.slots_seen[module] = tuple(
-                at for at, node in enumerate(self.slot_owners) if node is None or evaluate(node, resolve) is Truth.TRUE
+                rule for rule in self.slot_rules if rule.scope is None or evaluate(rule.scope, resolve) is Truth.TRUE
             )
         return found
 
     def signature_sees(self, module: str, row: Edge) -> bool:
         """Whether a signature rule reads a row in a module: its source part holds for the module
         and its contexts take the row's."""
-        return any(context_ok(row, *self.slot_contexts[at]) for at in self.holding_rules(module))
+        return any(context_ok(row, rule.include, rule.exclude) for rule in self.holding_rules(module))
 
     def plan(self) -> dict[str, Any]:
         """The exports it checks by place, the contexts it reads and leaves out, and how it
@@ -297,15 +291,15 @@ class ExportPrimitive(RuleType):
             "on_unknown": spec.on_unknown,
             "on_unresolved": spec.on_unresolved,
             "start": selector_tree(spec.from_),
-            "slot_owners": [None if node is None else tree(node) for node in self.slot_owners],
+            "slot_owners": [None if rule.scope is None else tree(rule.scope) for rule in self.slot_rules],
             "slot_policies": [
                 {
-                    "rest": None if node is None else tree(node),
-                    "endpoint": endpoint,
-                    "include": context_bits(include),
-                    "exclude": context_bits(exclude),
+                    "rest": None if rule.rest is None else tree(rule.rest),
+                    "endpoint": rule.endpoint,
+                    "include": context_bits(rule.include),
+                    "exclude": context_bits(rule.exclude),
                 }
-                for (node, endpoint), (include, exclude) in zip(self.slot_policies, self.slot_contexts)
+                for rule in self.slot_rules
             ],
         }
         return {"id": spec.id, "mode": self.NATIVE_MODE, "identity": identity_paths(spec.identity), "export": checked}
@@ -643,7 +637,7 @@ class ExportPrimitive(RuleType):
         """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
         reads. The row's own module is one it reads for this walk, or such a module holds the copy
         of the slot (`copy_places`); "public" is asked of the callable of the row the rule reads."""
-        if SignaturePrimitive.sees_callable(row) and self.reads_under(owner, policy, row):
+        if not is_private(row.attr("callable")) and self.reads_under(owner, policy, row):
             return True
         rest = row.attr("callable")[len(qualname) :]
         for place, name in self.copy_places(symbol, module, bound):
@@ -664,17 +658,17 @@ class ExportPrimitive(RuleType):
         return found
 
     def find_policy_leaves_out(self, row: Edge) -> bool:
-        if not self.slot_policies:
+        if not self.slot_rules:
             return False
         src = self.ctx.src_endpoint(row.site)
-        for rest, endpoint in self.slot_policies:
-            if rest is None:
+        for rule in self.slot_rules:
+            if rule.rest is None:
                 return False
-            dsts = self.ctx.dst_endpoints(row, endpoint)
+            dsts = self.ctx.dst_endpoints(row, rule.endpoint)
             if not dsts:
                 return False
             for dst in dsts:
-                if evaluate(rest, EdgeEnv(self.ctx, row, src, dst).resolve) is not Truth.FALSE:
+                if evaluate(rule.rest, EdgeEnv(self.ctx, row, src, dst).resolve) is not Truth.FALSE:
                     return False
         return True
 

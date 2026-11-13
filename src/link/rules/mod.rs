@@ -29,8 +29,7 @@ use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
 use self::entities::EntityRule;
 use self::env::{Cx, Endpoint, Env, Role, UNKNOWN_ATTRS};
 use self::export::{
-    ExportInputs, ExportRow, ExportRule, Shape, SlotPolicy, Walk, binds_handed,
-    module_scope_imports,
+    ExportInputs, ExportRow, ExportRule, Shape, SlotRule, Walk, binds_handed, module_scope_imports,
 };
 use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
@@ -799,18 +798,14 @@ impl Rules {
             }
             ModePlan::Export(found) => {
                 let start = edge.optional(&found.export.start)?;
-                let slot_owners = found
+                let slot_rules = found
                     .export
                     .slot_owners
                     .iter()
-                    .map(|owner| edge.optional(owner))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let slot_policies = found
-                    .export
-                    .slot_policies
-                    .iter()
-                    .map(|policy| {
-                        Ok(SlotPolicy {
+                    .zip(&found.export.slot_policies)
+                    .map(|(owner, policy)| {
+                        Ok(SlotRule {
+                            scope: edge.optional(owner)?,
                             rest: edge.optional(&policy.rest)?,
                             role: role_of(&policy.endpoint)?,
                             include: policy.include,
@@ -823,7 +818,7 @@ impl Rules {
                     &found.identity,
                     entity,
                     start,
-                    (slot_owners, slot_policies),
+                    slot_rules,
                 ))
             }
             ModePlan::Coverage(found) => RuleKind::Coverage(
