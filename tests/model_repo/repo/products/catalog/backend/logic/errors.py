@@ -72,3 +72,8 @@ class EntryBatchRejected(Exception):
 
     def state(self) -> BatchState:
         raise NotImplementedError
+
+
+class EntryNoteRejected(Exception):
+    def note(self, payload: dict, extra: object, raw) -> None:
+        raise NotImplementedError

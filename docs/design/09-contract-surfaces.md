@@ -65,11 +65,16 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
 
 **Aliases** (N3b review item 3): an alias is expanded wherever it is defined, imported aliases included (depth 32, stop on a cycle).
 What an alias stands for is a fact in every file (Nov 13): the producer expands an alias in a slot outside a surface file too, where its expansion's rows follow that mode's filter (a name that resolves to a plain builtin gets no row).
-A module-level name in a slot the export rule judges in full that is no alias the producer can expand (a `TypeVar`, a value built by a call) is unknown, as the signature rule reads the same name in a facade function.
+A name in a slot the export rule judges in full that is no class, no function and no alias the producer expanded is unknown, as the signature rule reads the same name in a facade function.
+That holds for a name at the top of a module (a `NewType`, a `TypeVar`, a functional `TypedDict`, a value built by a call) and for a name assigned in a class body (`Ref = Order` in a class, then `-> Ref` in its method): the producer does not expand a class-body alias, so it is unknown, not clean.
+The test is made for each name of the slot: an expanded alias marks only itself, so a name next to it in the slot, or inside its value, is still asked (`Maybe = Ref | None` with `Ref` a `NewType` is unknown).
+A name that one slot leaves to a signature rule is still judged where another slot reaches it and the export rule judges that slot.
 The reasoning matches D63: where something is defined must not change the verdict.
 **An alias whose expansion is known is not a finding** (D70, Nov 11; reverses D62 C3).
 
 **One fact, one place:** a handed-out definition is reported once, at its own surface module (N3b review item 8: -75 findings).
+This holds for a class a facade module defines.
+A known double: a class defined outside the facade that one facade module hands out and another facade module names in a slot is reported at both modules, one row by each rule.
 
 **Which models may cross a contract surface is preset policy** (owner, D65, Nov 11).
 The owner decided that a preset holds a named list of future-proof core models that may cross.
@@ -88,8 +93,9 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
   A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
-  `walk_where` is read for each ancestor too, so the methods and attributes a product class inherits from a class core defines are core's contract as well (Nov 13).
-  The fields of a dataclass-like ancestor (a dataclass or a pydantic model) are always read: they are constructor slots of the class that inherits them.
+  One rule decides which members of a class are read (Nov 13): `walk_where` decides the methods and attributes of a class, the handed-out class and each ancestor alike.
+  So the methods of a frozen dataclass core defines, handed out by a product's facade, are core's contract and are not judged, as the methods a product class inherits from a class core defines are not.
+  The fields of a dataclass-like class (a dataclass or a pydantic model) are always read: they are constructor slots of the class, and of a class that inherits them.
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
@@ -101,7 +107,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   That module must also be a surface of the shape policy the walk runs under: a registration surface that returns a contract class judges that class's fields by its own policy, in full.
   There it judges only the shape of a class in the slot; a model, an unknown type, a missing annotation or an unresolved name is the signature rule's finding, under its own identity.
   Every other slot it judges in full, as it judges a private method.
-  The same test holds at every depth: a field of a class found in a slot is left to the signature rule where it reads that field's row, so a contract class in one facade module that another facade module's function returns is reported once, where the class is defined.
+  The same test holds at every depth: a field of a class found in a slot is left to the signature rule where it reads that field's row, so a contract class that one facade module defines and another facade module's function returns is reported once, where the class is defined.
 
   | Slot | Reported by |
   |---|---|
@@ -109,8 +115,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   | A function or a data shape's fields handed out from outside the facade (the copy at the facade) | `facade-signature` |
   | A public method, `__init__`, property or attribute of an allowed class handed out from outside the facade | `export-shape`: one row per type and module, the trail in the message |
   | A private method of a walked class | `export-shape` |
-  | A method or attribute inherited from a class core defines | none: core's contract |
-  | A field inherited from a dataclass-like class core defines | as a field of the class that inherits it |
+  | A method or attribute of a class core defines, handed out or inherited | none: core's contract |
+  | A field of a dataclass-like class core defines, handed out or inherited | as a field of the handed-out class |
   | A member of a class named in a slot (one level deeper) | as the rows above, by where its row is read |
   | Every slot above, at every depth | judged by one slot policy: the named rule's selection |
 
@@ -119,8 +125,10 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   A model, a class of no allowed shape, an unresolved name and a missing annotation are judged as before.
 
   For example, a facade module hands out `OrderRejected`, an exception its product defines in a logic module, and `OrderRejected.order()` returns another product's model: `export-shape` reports the model at the facade module, with `OrderRejected -> Order` in the message.
-- **A written limit** (Nov 13): a parameter with no annotation, or one typed only with plain builtins, on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.
-  Rows outside a surface file are written only for a name that is no plain builtin: a bare `dict` and a bare `object` have no row there; a bare `Any` (`typing.Any`) is no builtin, so it has a row and is judged.
+- **A written limit** (Nov 13): outside a surface file, a bare `dict`, a bare `object` and a missing annotation in a method of a handed-out class have no row, so no rule judges them.
+  Rows outside a surface file are written only for a name that is no plain builtin; a bare `Any` (`typing.Any`) is no builtin, so it has a row and is judged.
+  A class nested in a class of a surface file is read in plain mode, so the same holds there.
+  The model repository keeps both as wanted cases (`ME09`, `ME10`).
 - A pydantic model's annotated class attributes are its fields (`[discovery] dataclass_bases`), so a model typed there is a finding like one in a dataclass field.
 
 **The fixture module is outside the contract** (the doctrine names `facade/testing.py` as the place for fixture-only seeding).

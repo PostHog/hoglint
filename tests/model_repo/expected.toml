@@ -1896,6 +1896,20 @@ rule = "*"
 verdict = "*"
 match = ["products.legacy.backend.facade.colonlazy"]
 
+[[wanted]]
+case = "ME09"
+decision = "A written limit (Nov 13): outside a surface file a bare dict, a bare object and a missing annotation have no row"
+rule = "*"
+verdict = "unknown"
+match = ["products.catalog.backend.facade.notes"]
+
+[[wanted]]
+case = "ME10"
+decision = "A written limit (Nov 13): a nested class in a surface file's class is read in plain mode"
+rule = "*"
+verdict = "unknown"
+match = ["products.catalog.backend.facade.outlines"]
+
 # Levels: the products that pass and fail each level.
 
 [levels.isolated]
