@@ -768,6 +768,24 @@ impl Marks {
 /// An alias expansion row of a slot, as written once: (surface, whole position, marks).
 type AliasRow = (Sid, bool, Marks);
 
+/// What a class-body row of a class is a slot of (`DeclarationProducer.expose_fields`'s `kind`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Member {
+    /// A field of a dataclass-like class's `__init__`.
+    Field,
+    /// An attribute of a class that is no dataclass.
+    Attribute,
+}
+
+impl Member {
+    fn prefix(self) -> &'static str {
+        match self {
+            Member::Field => "field",
+            Member::Attribute => "attr",
+        }
+    }
+}
+
 /// A field of a dataclass's generated `__init__`: its assign row (file and index), where its
 /// names are looked up, and whether the class itself declares it (else a base does).
 #[derive(Clone, Copy)]
@@ -790,8 +808,8 @@ pub struct Producers<'p> {
     /// Per module: name -> (file, assign row) of the value each module-level name is assigned,
     /// read from the file the module table reads the name from.
     pub aliases: FxHashMap<Sid, FxHashMap<Sid, (u32, u32)>>,
-    /// The scope of each analyzed file, by file.
-    pub owner_of: FxHashMap<u32, usize>,
+    /// The scope of each analyzed file, by file (`Link.scope_of_file`).
+    pub scope_of_file: &'p FxHashMap<u32, u32>,
     /// What each type alias expands to, by alias and the place its names are looked up.
     pub expansions: FxHashMap<(AliasKey, SlotLookup), Rc<[Expanded]>>,
     /// The candidate dataclass fields of each file, by file (`fields_by_class`).
@@ -856,13 +874,6 @@ impl Producers<'_> {
     pub fn run(&mut self) {
         self.each(Self::imports);
         self.each(Self::references);
-        // Every mode follows an alias into the file that assigns it, so every run needs the map.
-        self.owner_of = self
-            .scopes
-            .iter()
-            .enumerate()
-            .map(|(owner, scope)| (scope.file, owner))
-            .collect();
         self.each(Self::declarations);
         self.each(Self::strings);
         self.each(Self::dynamic_imports);
@@ -1168,7 +1179,7 @@ impl Producers<'_> {
         }
         let origin = self.core.origin(hit);
         let (file, at) = self.alias(origin.m, origin.s)?;
-        let owner = *self.owner_of.get(&file)?;
+        let owner = *self.scope_of_file.get(&file)? as usize;
         let lookup = SlotLookup {
             owner,
             scope: -1,
@@ -1355,10 +1366,6 @@ impl Producers<'_> {
         found
     }
 
-    /// One row per mention, each followed (in a contract only) by a row per name of the type
-    /// alias it is, when it is one. A slot names each row an alias expands to once, however
-    /// often its aliases repeat it; rows that differ in an attr (such as the generic a name is an
-    /// argument of) are different rows.
     /// `DeclarationProducer.plain_builtin`: whether a name resolves to a plain builtin; outside a
     /// contract it gets no row.
     fn plain_builtin(&mut self, found: Lookup, name: Sid) -> bool {
@@ -1369,6 +1376,11 @@ impl Producers<'_> {
         }
     }
 
+    /// One row per mention, each followed by a row per name of the type alias it is, when it is
+    /// one: what an alias stands for is a fact in every file. Outside a contract a name that
+    /// resolves to a plain builtin gets no row, in the alias's expansion too. A slot names each
+    /// row an alias expands to once, however often its aliases repeat it; rows that differ in an
+    /// attr (such as the generic a name is an argument of) are different rows.
     fn expose_mentions(
         &mut self,
         rows: SlotRows,
@@ -1507,17 +1519,21 @@ impl Producers<'_> {
         last == self.settings.k.class_var
     }
 
-    /// The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
-    /// only fields directly in a class body count, and a `ClassVar` is no field. A field the class
-    /// itself declares sits at its own line, unless the class is handed out.
-    fn expose_fields(&mut self, rows: SlotRows, fields: &[FieldRow], contract: bool) {
+    /// `DeclarationProducer.expose_fields`: the annotated class-body rows of a class as slots of
+    /// `kind`, the fields of a dataclass-like class (`field:`, of its `__init__`) or the
+    /// attributes of a class that is no dataclass (`attr:`, of the class). In a contract only a row
+    /// directly in a class body is a whole slot, and a `ClassVar` is no field (an attribute it is).
+    /// A row the class itself declares sits at its own line, unless the class is handed out.
+    fn expose_fields(&mut self, rows: SlotRows, fields: &[FieldRow], contract: bool, kind: Member) {
         let facts = self.core.facts.clone();
         for field in fields {
             let row = &facts.files[field.file as usize].assigns[field.at as usize];
             let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
                 continue;
             };
-            let in_slot = contract && row.f == CLASS && !self.is_class_var(annotation);
+            let in_slot = contract
+                && row.f == CLASS
+                && (kind == Member::Attribute || !self.is_class_var(annotation));
             if rows.handed != EMPTY && !in_slot {
                 continue;
             }
@@ -1527,7 +1543,7 @@ impl Producers<'_> {
             let slot = self
                 .core
                 .it
-                .intern(&format!("field:{}", self.core.it.s(*name)));
+                .intern(&format!("{}:{}", kind.prefix(), self.core.it.s(*name)));
             let line_rows = if field.own && rows.handed == EMPTY {
                 SlotRows {
                     site: SlotSite {
@@ -1543,46 +1559,6 @@ impl Producers<'_> {
                 line: row.l,
                 ..field.lookup
             };
-            self.expose(line_rows, line_lookup, Some(annotation), slot, in_slot);
-        }
-    }
-
-    /// The annotated class-body attributes of a class that is no dataclass, as `attr:` slots of
-    /// the class, each at its own line. In a contract an attribute directly in the class body is a
-    /// whole slot; a `ClassVar` is an attribute too, since callers read it.
-    fn expose_attributes(
-        &mut self,
-        rows: SlotRows,
-        lookup: SlotLookup,
-        file: u32,
-        idx: u32,
-        contract: bool,
-    ) {
-        let facts = self.core.facts.clone();
-        for at in self.class_fields(file, idx) {
-            let row = &facts.files[file as usize].assigns[at as usize];
-            let Some(annotation) = row.ann.as_ref().filter(|ann| !ann.is_null()) else {
-                continue;
-            };
-            let V::Chain(name) = &row.targets[0] else {
-                continue;
-            };
-            let slot = self
-                .core
-                .it
-                .intern(&format!("attr:{}", self.core.it.s(*name)));
-            let line_rows = SlotRows {
-                site: SlotSite {
-                    line: row.l,
-                    ..rows.site
-                },
-                ..rows
-            };
-            let line_lookup = SlotLookup {
-                line: row.l,
-                ..lookup
-            };
-            let in_slot = contract && row.f == CLASS;
             self.expose(line_rows, line_lookup, Some(annotation), slot, in_slot);
         }
     }
@@ -1620,7 +1596,7 @@ impl Producers<'_> {
         };
         self.core.rec.read(read, module, name);
         let (file, idx) = self.core.located_def(module, name, kind)?;
-        Some((*self.owner_of.get(&file)?, idx))
+        Some((*self.scope_of_file.get(&file)? as usize, idx))
     }
 
     /// A class and its ancestors in MRO order, through the link's own class resolution, each as
@@ -1761,7 +1737,7 @@ impl Producers<'_> {
         let lineage = self.lineage(lookup.owner, idx);
         self.expose_unresolved_bases(rows, &lineage);
         let fields = self.mro_fields(&lineage, lookup);
-        self.expose_fields(rows, &fields, true);
+        self.expose_fields(rows, &fields, true, Member::Field);
     }
 
     fn lookup_value(&mut self, owner: usize, value: &V, at: i32, line: u32) -> (Sid, Resolved) {
@@ -2035,15 +2011,6 @@ impl Producers<'_> {
                 scope: enclosing,
                 line: node.l,
             };
-            if node.is_class() && !dataclass {
-                let rows = SlotRows {
-                    site,
-                    callable: qualname,
-                    handed: EMPTY,
-                };
-                self.expose_attributes(rows, lookup, file as u32, idx as u32, in_contract);
-                continue;
-            }
             if !node.is_class() {
                 let rows = SlotRows {
                     site,
@@ -2053,23 +2020,32 @@ impl Producers<'_> {
                 self.expose_signature(rows, lookup, node, in_contract);
                 continue;
             }
+            let own: Vec<FieldRow> = self
+                .class_fields(file as u32, idx as u32)
+                .into_iter()
+                .map(|at| FieldRow {
+                    file: file as u32,
+                    at,
+                    lookup,
+                    own: true,
+                })
+                .collect();
+            if !dataclass {
+                let rows = SlotRows {
+                    site,
+                    callable: qualname,
+                    handed: EMPTY,
+                };
+                self.expose_fields(rows, &own, in_contract, Member::Attribute);
+                continue;
+            }
             let rows = SlotRows {
                 site,
                 callable: self.core.it.join(qualname, self.settings.k.init),
                 handed: EMPTY,
             };
             if !in_contract {
-                let own: Vec<FieldRow> = self
-                    .class_fields(file as u32, idx as u32)
-                    .into_iter()
-                    .map(|at| FieldRow {
-                        file: file as u32,
-                        at,
-                        lookup,
-                        own: true,
-                    })
-                    .collect();
-                self.expose_fields(rows, &own, false);
+                self.expose_fields(rows, &own, false, Member::Field);
                 continue;
             }
             self.expose_dataclass(rows, lookup, idx as u32);

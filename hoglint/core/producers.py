@@ -855,15 +855,18 @@ class DeclarationProducer(Producer):
         rows: SlotRows,
         fields: list[Field],
         contract: bool,
+        kind: str = "field",
     ) -> None:
-        """The fields of a dataclass-like class, as `field:` slots of its `__init__`. In a contract
-        only fields directly in a class body count, and a `ClassVar` is no field. A field the
-        class itself declares sits at its own line, unless the class is handed out."""
+        """The annotated class-body rows of a class as slots of `kind`: the fields of a
+        dataclass-like class as `field:` slots of its `__init__`, or the attributes of a class that
+        is no dataclass as `attr:` slots of the class. In a contract only a row directly in a class
+        body is a whole slot, and a `ClassVar` is no field (an attribute it is: callers read it). A
+        row the class itself declares sits at its own line, unless the class is handed out."""
         for member in fields:
             row = member.row
             if row.get("ann") is None:
                 continue
-            in_slot = contract and row.get("f", 0) == CLASS and not is_class_var(row["ann"])
+            in_slot = contract and row.get("f", 0) == CLASS and (kind == "attr" or not is_class_var(row["ann"]))
             if rows.handed and not in_slot:
                 continue
             line_rows = rows
@@ -873,29 +876,7 @@ class DeclarationProducer(Producer):
                 line_rows = SlotRows(line_site, rows.callable_name)
             place = member.lookup
             line_lookup = SlotLookup(place.scope, place.at_scope, row["l"])
-            self.expose(context, graph, line_rows, line_lookup, row["ann"], f"field:{row['t'][0]}", in_slot)
-
-    def expose_attributes(
-        self,
-        context: BuildContext,
-        graph: Graph,
-        rows: SlotRows,
-        lookup: SlotLookup,
-        idx: int,
-        contract: bool,
-    ) -> None:
-        """The annotated class-body attributes of a class that is no dataclass, as `attr:` slots of
-        the class, each at its own line. In a contract an attribute directly in the class body is a
-        whole slot; a `ClassVar` is an attribute too, since callers read it."""
-        site = rows.site
-        for row in self.fields_by_class(lookup.scope).get(idx, []):
-            if row.get("ann") is None:
-                continue
-            line_site = SlotSite(site.scope, site.at_scope, row["l"], site.column, site.contexts)
-            line_lookup = SlotLookup(lookup.scope, lookup.at_scope, row["l"])
-            in_slot = contract and row.get("f", 0) == CLASS
-            line_rows = SlotRows(line_site, rows.callable_name)
-            self.expose(context, graph, line_rows, line_lookup, row["ann"], f"attr:{row['t'][0]}", in_slot)
+            self.expose(context, graph, line_rows, line_lookup, row["ann"], f"{kind}:{row['t'][0]}", in_slot)
 
     def lineage(self, context: BuildContext, scope: FileScope, idx: int) -> list[tuple[FileScope, int]]:
         """A class and its ancestors in MRO order, through the link's own class resolution, each
@@ -1085,15 +1066,15 @@ class DeclarationProducer(Producer):
             return
         site = SlotSite(scope, enclosing, line, column, contexts)
         lookup = SlotLookup(scope, enclosing, line)
-        if is_class and not dataclass:
-            self.expose_attributes(context, graph, SlotRows(site, qualname), lookup, idx, in_contract)
-            return
         if not is_class:
             self.expose_signature(context, graph, SlotRows(site, qualname), lookup, node, in_contract)
             return
+        own = [Field(row, lookup, True) for row in self.fields_by_class(scope).get(idx, [])]
+        if not dataclass:
+            self.expose_fields(context, graph, SlotRows(site, qualname), own, in_contract, "attr")
+            return
         rows = SlotRows(site, f"{qualname}.__init__")
         if not in_contract:
-            own = [Field(row, lookup, True) for row in self.fields_by_class(scope).get(idx, [])]
             self.expose_fields(context, graph, rows, own, False)
             return
         self.expose_dataclass(context, graph, rows, lookup, idx)

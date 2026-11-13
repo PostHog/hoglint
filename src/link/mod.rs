@@ -366,7 +366,7 @@ impl Link {
             .iter()
             .map(|&(file, base)| core.new_scope(file, base))
             .collect();
-        let scope_of_file = scopes
+        let scope_of_file: FxHashMap<u32, u32> = scopes
             .iter()
             .enumerate()
             .map(|(i, s)| (s.file, i as u32))
@@ -380,7 +380,7 @@ impl Link {
             edges: EdgeStore::default(),
             symbols: Symbols::default(),
             aliases: FxHashMap::default(),
-            owner_of: FxHashMap::default(),
+            scope_of_file: &scope_of_file,
             expansions: FxHashMap::default(),
             fields: FxHashMap::default(),
             roots: FxHashMap::default(),
