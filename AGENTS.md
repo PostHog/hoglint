@@ -2,7 +2,7 @@
 
 hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
 It extracts facts from every Python file, links them into one graph of couplings, and judges that graph against rules written in TOML, with existing debt carried in a generated ledger.
-A Rust engine does the per-row work behind a thin Python shell (PyO3), and a frozen Python engine stays as the executable spec.
+A Rust engine does the per-row work behind a thin Python shell (PyO3); it alone builds the graph.
 
 ## Read before you change the design
 
@@ -36,9 +36,10 @@ A change that breaks one is a design change for the owner, not a refactor.
 4. **Core holds no framework or company name.**
    Django lives in the Django pack, PostHog in its preset and plugin.
    The engine's word for a public surface is `export`, not "facade".
-5. **Two engines must agree.**
-   The Python engine is the spec.
-   The native engine equals it on the ten parity tables, with zero delta or a named delta.
+5. **One graph engine; a change moves no row it does not name.**
+   The native engine builds the graph; the frozen Python graph build is in no gate.
+   The Python rule classes still judge rows again inside every native run, and a difference is an engine error.
+   A change to rows is a named delta against the model repository's expected rows, the slot table test and the real-size compare with a base.
 6. **Every run is exact.**
    Any reuse of a stored answer must equal a full run, and an oracle must prove it.
 7. **The seam rule.**
@@ -77,8 +78,8 @@ bin/prove                                   # all of the above side by side, plu
 
 ## How a change is verified
 
-- **Both engines equal.**
-  Run both engines over the same snapshot and compare the ten parity tables.
+- **Zero delta against the base.**
+  Run `bin/prove`, and `bin/prove --real <snapshot> --base <rev>` for a change that can move rows: the ten parity tables of the head against the base's.
   Zero delta is the default.
 - **A named delta when results are meant to change.**
   List every changed row and explain it with your own script, not with the build's own summary.

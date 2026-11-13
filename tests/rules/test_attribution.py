@@ -820,8 +820,7 @@ def stored_manifests(cache: Path) -> list[str]:
 
 
 @needs_extractor
-@pytest.mark.parametrize("engine", ["python", "native"])
-def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored(tmp_path: Path, engine: str) -> None:
+def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(
         repo, {**FILES, "hoglint.toml": GONE, ".gitignore": "__pycache__/\n", "products/billing/legacy/a.py": ""}
@@ -841,15 +840,15 @@ def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored
     reports = []
     for args in (("check",), ("check", "--index")):
         shutil.rmtree(cache, ignore_errors=True)
-        done = hoglint(repo, "--engine", engine, *args)
+        done = hoglint(repo, *args)
         reports.append((done.returncode, done.stdout.replace("this run", "HEAD"), stored_manifests(cache)))
     shutil.rmtree(cache, ignore_errors=True)
-    hoglint(repo, "--engine", engine, "summary", "export", "--file", str(tmp_path / "summary"))
+    hoglint(repo, "summary", "export", "--file", str(tmp_path / "summary"))
     assert reports[0] == reports[1], reports
     assert stored_manifests(cache) == reports[0][2] and len(reports[0][2]) == 1
     assert "violations (1)" in reports[0][1] and "core.api" not in reports[0][1]
     (repo / "products/alerts/new.py").write_text("X = 1\n")
-    dirty = hoglint(repo, "--engine", engine, "check")
+    dirty = hoglint(repo, "check")
     assert "violations (1)" in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
     # A failed check names the allowed way past a new finding, never a ledger rewrite.
     assert WAY_OUT in dirty.stdout and "write-ledger" not in dirty.stdout
@@ -867,8 +866,7 @@ LINKS = {
 
 
 @needs_extractor
-@pytest.mark.parametrize("engine", ["python", "native"])
-def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside(tmp_path: Path, engine: str) -> None:
+def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     config = OWNED_CONFIG.replace('file = "CODEOWNERS"', 'file = ".github/CODEOWNERS"')
     write_files(repo, {**FILES, "hoglint.toml": config, "CODEOWNERS": "*.py @team-a\n"})
@@ -882,11 +880,11 @@ def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside
     git_in(repo, "init", "-q")
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "links")
-    outputs = [hoglint(repo, "--engine", engine, *args).stdout for args in (("check",), ("check", "--index"))]
+    outputs = [hoglint(repo, *args).stdout for args in (("check",), ("check", "--index"))]
     assert outputs[0] == outputs[1]
     # An untracked file makes `check` read the working tree, which follows the same links.
     (repo / "core/notes.py").write_text("")
-    outputs.append(hoglint(repo, "--engine", engine, "check").stdout)
+    outputs.append(hoglint(repo, "check").stdout)
     for printed in outputs:
         assert "products.billing.logic.charge core.link import" in printed, printed
         assert "core/impl.py:1  [@team-a]" in printed

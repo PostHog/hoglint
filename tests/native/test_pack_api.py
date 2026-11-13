@@ -1,4 +1,4 @@
-"""The pack API (D22) in both engines: refinements by handle, conflicts, failures, and grouped
+"""The pack API (D22): refinements by handle, conflicts, failures, and grouped
 judgments over members that differ in what their group does not hold."""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from hoglint.native.parity import read_lines
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 
 from native.test_contract_slots import findings_of
-from native.test_parity import dumps, same_in_both_engines
+from native.test_parity import dump_repo
 
 SECTION = "refiner"
 PRODUCER = "refiner.{}@1"
@@ -113,16 +113,15 @@ ledger = false
 """
 
 
-def failed(out: dict[str, Path]) -> dict[str, str]:
-    return {row[0]: row[1] for row in read_lines(out["native"] / "failed.jsonl")}
+def failed(out: Path) -> dict[str, str]:
+    return {row[0]: row[1] for row in read_lines(out / "failed.jsonl")}
 
 
 def test_a_refined_field_read_only_by_an_identity_is_the_refined_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    out = dumps(tmp_path, repo('steps = [{ name = "a", shape = "write" }]', SHAPE_IDENTITY), monkeypatch)
-    same_in_both_engines(out)
-    assert findings_of(out["native"], "uses") == [
+    out = dump_repo(tmp_path, repo('steps = [{ name = "a", shape = "write" }]', SHAPE_IDENTITY), monkeypatch)
+    assert findings_of(out, "uses") == [
         ["core.a", "write", "core-reference@1"],
         ["core.b", "write", "core-reference@1"],
     ]
@@ -132,9 +131,8 @@ def test_an_edge_at_the_site_of_a_refined_edge_stays_its_own_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps = 'steps = [{ name = "a", shape = "write" }, { name = "twin", twin = true }]'
-    out = dumps(tmp_path, repo(steps, SHAPE_IDENTITY), monkeypatch)
-    same_in_both_engines(out)
-    assert findings_of(out["native"], "uses") == [
+    out = dump_repo(tmp_path, repo(steps, SHAPE_IDENTITY), monkeypatch)
+    assert findings_of(out, "uses") == [
         ["core.a", "-", "refiner.twin@1"],
         ["core.a", "write", "core-reference@1"],
         ["core.b", "-", "refiner.twin@1"],
@@ -149,23 +147,21 @@ def test_two_refiners_agree_or_the_second_fails_and_sets_nothing(
         'steps = [{ name = "a", shape = "write", attrs = { by = "a" } }, '
         '{ name = "same", shape = "write", attrs = { also = "same" } }, { name = "other", shape = "lock" }]'
     )
-    out = dumps(tmp_path, repo(steps, SHAPE_IDENTITY), monkeypatch)
-    same_in_both_engines(out)
+    out = dump_repo(tmp_path, repo(steps, SHAPE_IDENTITY), monkeypatch)
     assert list(failed(out)) == ["refiner.other@1"]
-    refined = [row for row in read_lines(out["native"] / "edges.jsonl") if row[13]]
+    refined = [row for row in read_lines(out / "edges.jsonl") if row[13]]
     assert [(row[13], row[15][-2:]) for row in refined] == [("write", [["by", "a"], ["also", "same"]])] * 2
 
 
 def test_a_failed_refining_producer_sets_nothing_and_leaves_its_rules_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    out = dumps(
+    out = dump_repo(
         tmp_path, repo('steps = [{ name = "broken", shape = "write", fail = true }]', SHAPE_IDENTITY), monkeypatch
     )
-    same_in_both_engines(out)
     assert list(failed(out)) == ["refiner.broken@1"]
-    assert not [row for row in read_lines(out["native"] / "edges.jsonl") if row[13]]
-    assert {row[0] for row in read_lines(out["native"] / "incomplete.jsonl")} == {"uses"}
+    assert not [row for row in read_lines(out / "edges.jsonl") if row[13]]
+    assert {row[0] for row in read_lines(out / "incomplete.jsonl")} == {"uses"}
 
 
 SURFACE_IDENTITY = """
@@ -184,9 +180,8 @@ def test_grouped_members_that_differ_outside_their_group_key_judge_alike(
 ) -> None:
     sources = repo('steps = [{ name = "a", shape = "write" }]', SURFACE_IDENTITY)
     sources["core/b.py"] = "from products.billing import models\n\n\ndef g():\n    models.Invoice.objects.update()\n"
-    out = dumps(tmp_path, sources, monkeypatch)
-    same_in_both_engines(out)
-    assert findings_of(out["native"], "surfaces") == [
+    out = dump_repo(tmp_path, sources, monkeypatch)
+    assert findings_of(out, "surfaces") == [
         ["core.a", "products.billing.models.Invoice", "write"],
         ["core.b", "products.billing.models.Invoice", "write"],
     ]
@@ -212,9 +207,8 @@ def test_a_decision_on_the_label_keeps_two_labels_of_one_kind_apart(
         "    Other.objects.all()\n    Invoice.objects.update()\n"
     )
     sources["products/billing/models.py"] = "class Invoice:\n    pass\n\n\nclass Other:\n    pass\n"
-    out = dumps(tmp_path, sources, monkeypatch)
-    same_in_both_engines(out)
-    assert findings_of(out["native"], "labels") == [
+    out = dump_repo(tmp_path, sources, monkeypatch)
+    assert findings_of(out, "labels") == [
         ["core.a", "products.billing.models.Invoice"],
         ["core.b", "products.billing.models.Invoice"],
     ]

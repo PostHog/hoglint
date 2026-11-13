@@ -44,6 +44,8 @@ from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
 PROTOCOL = 4
+ENGINE_NATIVE = "native"
+# The frozen Python engine: it still runs with `--engine python`, outside every gate.
 ENGINE_PYTHON = "python"
 ENGINE_SOURCES = "engine-sources.txt"
 PROTOCOL_LINE = "protocol "
@@ -220,7 +222,7 @@ class EngineId:
         return sources.digest(ENGINE)
 
     @staticmethod
-    def of(crate: Path, name: str = ENGINE_PYTHON) -> str:
+    def of(crate: Path, name: str = ENGINE_NATIVE) -> str:
         return f"{name}-{EngineId.digest(crate)}"
 
     @staticmethod
@@ -231,7 +233,7 @@ class EngineId:
         return EngineId.digest(crate)
 
     @staticmethod
-    def of_running(crate: Path, name: str = ENGINE_PYTHON) -> str:
+    def of_running(crate: Path, name: str = ENGINE_NATIVE) -> str:
         """`of` for the crate of the running code."""
         return f"{name}-{EngineId.running_digest(crate)}"
 

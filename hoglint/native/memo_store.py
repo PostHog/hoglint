@@ -38,13 +38,12 @@ from typing import Any, ClassVar
 
 from hoglint.core.memo import Written, decode_body, encode_body
 from hoglint.ledger.cache import MEMO, MEMO_STORE, RunStores
-from hoglint.ledger.envelope import EngineId, EngineSources
+from hoglint.ledger.envelope import ENGINE_NATIVE, EngineId, EngineSources
 from hoglint.native import bridge
 from hoglint.native.factdb import EPOCH, FactDatabase, is_corrupt
 
 CRATE = bridge.CRATE
 PACKAGE = CRATE / "hoglint"
-ENGINE_NATIVE = "native"
 LAYOUT = 4
 # States of a step past the newest few are not read again and go.
 STATES_KEPT = 4

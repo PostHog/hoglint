@@ -5,7 +5,7 @@ only when every check passed.
 Usage: bin/prove [--jobs N] [--work DIR] [--keep] [--skip-local]
                  [--real SNAPSHOT ...] [--base REV] [--parity] [--replay SAMPLE] [--replay-counts FILE]
 
-Always: the build, the model repository in both engines, pytest with the native engine required,
+Always: the build, the model repository in the native engine, pytest with the native engine required,
 cargo test, clippy, cargo fmt, ruff check and format, ty against its baseline, determinism (three
 hash seeds times one and four threads) and the store modes on the model repository.
 

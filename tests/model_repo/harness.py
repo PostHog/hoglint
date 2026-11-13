@@ -1,5 +1,5 @@
-"""Checks the model repository with the real preset in both engines and compares the result with
-the reviewed expected file. `test_model_repo.py` and `bin/model-repo` use it."""
+"""Checks the model repository with the real preset in the native engine and compares the result
+with the reviewed expected file. `test_model_repo.py` and `bin/model-repo` use it."""
 
 from __future__ import annotations
 
@@ -20,8 +20,7 @@ from hoglint import facts
 from hoglint.core import analysis as core_analysis
 from hoglint.ledger.envelope import Framework
 from hoglint.native import analysis as native_analysis
-from hoglint.native.parity import Dump, RowDiff, compare_dumps, read_lines
-from hoglint.native.source import ENGINES
+from hoglint.native.parity import Dump, read_lines
 
 HERE = Path(__file__).resolve().parent
 TREE = HERE / "repo"
@@ -60,7 +59,7 @@ def stub_site_packages() -> Path:
 
 @contextmanager
 def stub_site() -> Iterator[None]:
-    """Both engines read the stub `django` and `rest_framework` sources as site-packages, so the
+    """The engine reads the stub `django` and `rest_framework` sources as site-packages, so the
     model repository needs neither installed. Each module that looks site-packages up is patched
     where it holds the function."""
     patches: list[tuple[object, str, object]] = [
@@ -102,7 +101,7 @@ class Row:
 
 @dataclass(frozen=True)
 class Result:
-    """What one engine gave: every row with its count, and per level its passing and failing products."""
+    """What the engine gave: every row with its count, and per level its passing and failing products."""
 
     rows: Counter[Row]
     levels: dict[str, dict[str, list[str]]]
@@ -120,7 +119,7 @@ def copy_tree(repo: Path) -> None:
 
 
 def dump_tree(repo: Path, engine: str, out: Path, work: Path) -> None:
-    """One engine's ten parity tables of a copy of the tree, with the stub site-packages."""
+    """The ten parity tables of a copy of the tree, with the stub site-packages."""
     with stub_site():
         try:
             Dump(repo, engine, out, work).run()
@@ -129,32 +128,24 @@ def dump_tree(repo: Path, engine: str, out: Path, work: Path) -> None:
 
 
 class Dumps:
-    """One check of a copy of the tree per engine, dumped as the ten parity tables."""
+    """One check of a copy of the tree in the native engine, dumped as the ten parity tables."""
 
     def __init__(self, work: Path) -> None:
         self.work = work
         self.repo = work / "repo"
-        self.seconds: dict[str, float] = {}
+        self.out = work / "native"
+        self.seconds = 0.0
 
-    def out(self, engine: str) -> Path:
-        return self.work / engine
-
-    def run(self, engines: tuple[str, ...] = ENGINES) -> None:
+    def run(self) -> None:
         copy_tree(self.repo)
-        for engine in engines:
-            scratch = self.work / f"work-{engine}"
-            scratch.mkdir()
-            started = time.perf_counter()
-            dump_tree(self.repo, engine, self.out(engine), scratch)
-            self.seconds[engine] = round(time.perf_counter() - started, 2)
+        scratch = self.work / "work-native"
+        scratch.mkdir()
+        started = time.perf_counter()
+        dump_tree(self.repo, "native", self.out, scratch)
+        self.seconds = round(time.perf_counter() - started, 2)
 
-    def differences(self) -> list[RowDiff]:
-        """The parity tables in which the two engines differ."""
-        diffs = compare_dumps(self.out("python"), self.out("native"))
-        return [diff for diff in diffs if not diff.equal]
-
-    def result(self, engine: str) -> Result:
-        out = self.out(engine)
+    def result(self) -> Result:
+        out = self.out
         rows: Counter[Row] = Counter()
         for finding in read_lines(out / "findings.jsonl"):
             verdict = "unknown" if finding[UNKNOWN_COLUMN] else "finding"

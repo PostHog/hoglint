@@ -51,7 +51,7 @@ class Build(Check):
 
 
 class ModelRepo(Check):
-    """The model repository in both engines: the engines equal, every row as reviewed."""
+    """The model repository in the native engine: every row as reviewed."""
 
     name = "model repository"
 
@@ -60,9 +60,8 @@ class ModelRepo(Check):
         env = context.env("model-repo", {"PYTHONPATH": f"{context.root}:{context.root / 'tests'}"})
         code = context.run(log, [str(context.python), "-m", "model_repo.check"], env)
         text = log.read_text()
-        engines = "engines equal" if "both engines give the same ten tables" in text else "ENGINES DIFFER"
         rows = "every row as expected" if "every row as expected" in text else "ROWS CHANGED"
-        return [Outcome(self.name, code == 0, f"{engines}; {rows}")]
+        return [Outcome(self.name, code == 0, rows)]
 
 
 class Suite(Check):

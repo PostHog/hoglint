@@ -1,4 +1,4 @@
-"""The preset's request path on small trees, in both engines: every way a settings module can put a
+"""The preset's request path on small trees: every way a settings module can put a
 product class into a setting ends with the product file required to be watched, or with an
 incomplete item, never clean. Only a key on the exclude list is not followed."""
 
@@ -19,7 +19,7 @@ from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER
 
 from native.test_contract_slots import findings_of
 from native.test_evaluator import rule_table
-from native.test_parity import dumps, same_in_both_engines
+from native.test_parity import dump_repo
 
 MODEL_PRODUCERS = {
     MODELS_PRODUCER,
@@ -150,9 +150,7 @@ def request_path_rule() -> str:
 def watched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[str, str]) -> tuple[list[str], list[str]]:
     """The files wiring-watched requires, and the keys of its incomplete items."""
     tree = {**PRODUCT, **files, "hoglint.toml": CONFIG + request_path_rule()}
-    dumped = dumps(tmp_path, tree, monkeypatch)
-    same_in_both_engines(dumped)
-    out = dumped["native"]
+    out = dump_repo(tmp_path, tree, monkeypatch)
     # The tree holds no model, so only the model producers fail.
     assert {row[0] for row in read_lines(out / "failed.jsonl")} <= MODEL_PRODUCERS
     required = [row[0] for row in findings_of(out, "wiring-watched")]

@@ -38,7 +38,7 @@ from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import (
     ENGINE,
-    ENGINE_PYTHON,
+    ENGINE_NATIVE,
     ENGINE_SOURCES,
     NATIVE,
     PROTOCOL,
@@ -474,7 +474,7 @@ class LocalEngine:
     """The engine this process runs: its id, its extractor, and the envelope of one of its runs."""
 
     def __init__(
-        self, name: str = ENGINE_PYTHON, digests: InputDigests | None = None, stores: RunStores | None = None
+        self, name: str = ENGINE_NATIVE, digests: InputDigests | None = None, stores: RunStores | None = None
     ) -> None:
         self.name = name
         self.frameworks: dict[tuple[str, ...], str] = {}
@@ -768,7 +768,7 @@ class Commands:
         self,
         repo: Path,
         work_dir: Path,
-        engine: str = ENGINE_PYTHON,
+        engine: str = ENGINE_NATIVE,
         today: datetime.date | None = None,
         memo: bool = True,
     ) -> None:
@@ -1136,7 +1136,9 @@ def parser() -> argparse.ArgumentParser:
         prog="hoglint", description="Boundary linter: facts, edges, rules and a generated ledger."
     )
     main.add_argument("--repo", type=Path, default=Path.cwd(), help="repo root that holds hoglint.toml")
-    main.add_argument("--engine", choices=ENGINES, default=ENGINE_PYTHON, help="python, or the Rust link (native)")
+    main.add_argument(
+        "--engine", choices=ENGINES, default=ENGINE_NATIVE, help="native (the Rust link), or the frozen python engine"
+    )
     sub = main.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="run every rule; exit 0 clean, 1 violations, 2 blocking incomplete")
     check.add_argument("--index", action="store_true", help="check the staged snapshot (git index), config included")

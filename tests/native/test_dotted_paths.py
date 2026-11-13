@@ -1,4 +1,4 @@
-"""dotted-path edges from string literals, in both engines: a string that resolves is a path edge
+"""dotted-path edges from string literals: a string that resolves is a path edge
 anywhere; one that resolves to nothing is an edge only where the code holds a path."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import pytest
 
 from hoglint.native.parity import read_lines
 
-from native.test_parity import dumps, same_in_both_engines
+from native.test_parity import dump_repo
 
 CONFIG = """
 schema = 1
@@ -59,11 +59,10 @@ def test_a_string_that_names_nothing_is_a_path_only_where_the_code_holds_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     statement, expected = CASES[case]
-    out = dumps(tmp_path, {**BASE, "products/shop/backend/jobs.py": statement}, monkeypatch)
-    same_in_both_engines(out)
+    out = dump_repo(tmp_path, {**BASE, "products/shop/backend/jobs.py": statement}, monkeypatch)
     edges = [
         (row[6], row[8])
-        for row in read_lines(out["native"] / "edges.jsonl")
+        for row in read_lines(out / "edges.jsonl")
         if row[0] == "dotted-path" and row[1] == "products/shop/backend/jobs.py"
     ]
     assert edges == ([expected] if expected else [])
@@ -119,6 +118,5 @@ def test_a_patch_target_is_watched_where_the_string_points(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str, unwatched: list[list[str]]
 ) -> None:
     files = {**PATCHED, "hoglint.toml": COVERAGE_CONFIG.replace("ENDPOINT", endpoint)}
-    out = dumps(tmp_path, files, monkeypatch)
-    same_in_both_engines(out)
-    assert [row[1] for row in read_lines(out["native"] / "findings.jsonl")] == unwatched
+    out = dump_repo(tmp_path, files, monkeypatch)
+    assert [row[1] for row in read_lines(out / "findings.jsonl")] == unwatched

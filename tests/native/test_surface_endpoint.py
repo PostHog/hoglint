@@ -1,6 +1,5 @@
-"""The `surface` endpoint of a name that is a directory without `__init__.py`, in both engines: it
-reads the labels the directory's files give it, as a destination does, never those of the graph
-module above it. Where the files directly inside disagree, it cannot tell."""
+"""The `surface` endpoint of a name that is a directory without `__init__.py`: it reads the labels
+the directory's files give it, as a destination does, never those of the graph module above it. Where the files directly inside disagree, it cannot tell."""
 
 from __future__ import annotations
 
@@ -10,7 +9,7 @@ import pytest
 
 from hoglint.native.parity import read_lines
 
-from native.test_contract_slots import both_engines
+from native.test_contract_slots import clean_dump
 
 CONFIG = """
 schema = 1
@@ -66,5 +65,5 @@ def test_a_surface_that_names_a_directory_without_init_reads_the_directory_label
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     line, findings = CASES[case]
-    out = both_engines(tmp_path, TREE, {VIEWS: f"{line}\n"}, monkeypatch)
-    assert [(row[1], row[-1]) for row in read_lines(out["native"] / "findings.jsonl")] == findings
+    out = clean_dump(tmp_path, TREE, {VIEWS: f"{line}\n"}, monkeypatch)
+    assert [(row[1], row[-1]) for row in read_lines(out / "findings.jsonl")] == findings

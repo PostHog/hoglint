@@ -14,7 +14,7 @@ from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph
 from hoglint.native.rules import Rejudged
-from hoglint.native.source import ENGINES, batch_mode, graph_source
+from hoglint.native.source import batch_mode, graph_source
 from hoglint.rules.engine import Engine
 from rules.test_attribution import DYNAMIC_CONFIG, LOADER, SECOND_LOADER
 from rules.test_compare import git_in, write_files
@@ -36,12 +36,12 @@ strict = ["core-to-product"]
 }
 
 
-def summary(repo: Path, engine: str, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+def summary(repo: Path, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     """The summary of a run whose ledger accepts every finding, and whose strict level they all
     block. Grouped findings must not be judged again to judge the level or store the summary."""
     config = load_config(repo, repo / CONFIG_FILE)
     work.mkdir()
-    graph = graph_source(engine, work).build(repo, config)
+    graph = graph_source("native", work).build(repo, config)
 
     def judged_again(_: Rejudged) -> None:
         raise AssertionError("an accepted grouped finding was judged again for a level or a summary")
@@ -67,10 +67,9 @@ def test_levels_and_summaries_of_accepted_grouped_findings_judge_no_edge_again(
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     try:
-        made = {engine: summary(repo, engine, tmp_path / f"work-{engine}", monkeypatch) for engine in ENGINES}
+        summary(repo, tmp_path / "work", monkeypatch)
     finally:
         gc.enable()
-    assert made["native"] == made["python"]
 
 
 def test_an_inline_baseline_frees_its_graph_before_the_staged_run(

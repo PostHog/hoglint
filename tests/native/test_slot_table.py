@@ -1,9 +1,8 @@
-"""Who reports a type slot of a contract surface, and how many times, on small product trees, in
-both engines.
+"""Who reports a type slot of a contract surface, and how many times, on small product trees.
 
 Each case is a tree (a base plus a few files) and a verdict: how many findings each rule gives,
 `export-shape` (ES) and `facade-signature` (FS), and a third signature rule where a case adds one.
-Both engines must give the same ten tables in every case. The first part is the slot table of
+No case may fail a producer. The first part is the slot table of
 docs/design/09-contract-surfaces.md, cell by cell; the second part is the forms that attack it;
 the third part is the decided verdicts of holes that are not built yet, run as expected failures.
 """
@@ -23,7 +22,7 @@ from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
 from rules.support import PRESET
 
-from native.test_contract_slots import both_engines
+from native.test_contract_slots import clean_dump
 from native.test_facade_rules import MODEL, ROOT_CONFIG, SITE_PACKAGES
 
 D = "products/shop/backend"
@@ -1002,7 +1001,6 @@ CLASS_BODY_CASES: dict[str, tuple[Files, Verdict]] = {
 
 # ── Part 3: holes whose verdict is decided and not built. Each case asserts the decided verdict and
 # runs as an expected failure until the change lands; the reason says what is missing. ──
-STAR_REASON = "the engine reads a third-party star source and hands its names out, not one unresolved import"
 PLACE = "def place(order: Order) -> None:\n    pass\n"
 EVERYTHING = ORDER_DC + "\n\n" + EXC_METHOD + "\n\n" + PLACE + "\n\nclass Loose:\n    pass\n"
 ALL_FIVE = "\n\n__all__ = ['Order', 'Receipt', 'Rejected', 'place', 'Loose']\n"
@@ -1013,18 +1011,16 @@ GET_FROM_LOGIC = get_returns("errors")
 # The named import of the five names: the rows a star import of them must give.
 NAMED_FIVE: Verdict = {EXPORT: 2, SIGNATURE: 2}
 
-HOLES: dict[str, tuple[Files, Verdict, str]] = {
-    # A third-party star import: the decided verdict is one unresolved import. The engine reads the
-    # module's source in site-packages and hands its names out as a named import would (clean).
-    "a star import of a third-party module": (
-        {f"{D}/facade/errors.py": "from rest_framework.serializers import *\n"},
-        ES,
-        STAR_REASON,
-    ),
-}
+HOLES: dict[str, tuple[Files, Verdict, str]] = {}
 
 # A star import: the same rows as the named import of each name it binds.
 STAR_CASES: dict[str, tuple[Files, Verdict]] = {
+    # The engine reads the installed distribution's source, so the star hands out the names a named
+    # import would. Where the distribution is not installed, the star is an unresolved import.
+    "a star import of a third-party module": (
+        {f"{D}/facade/errors.py": "from rest_framework.serializers import *\n"},
+        NONE,
+    ),
     "a star import of five kinds, the facade without a function": (
         {f"{D}/errors.py": src(EVERYTHING + ALL_FIVE), f"{D}/facade/errors.py": STAR},
         NAMED_FIVE,
@@ -1347,5 +1343,5 @@ def reported(out: Path) -> Verdict:
 def test_who_reports_a_slot_and_how_many_times(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: Files, verdict: Verdict
 ) -> None:
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert reported(out["native"]) == verdict
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert reported(out) == verdict

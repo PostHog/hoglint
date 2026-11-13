@@ -261,7 +261,7 @@ def both_packs(tmp_path: Path, engine: str, memo: PackMemo | None) -> Graph:
     return graph
 
 
-@pytest.mark.parametrize("engine, memo", [("python", False), ("native", False), ("native", True)])
+@pytest.mark.parametrize("engine, memo", [("native", False), ("native", True)])
 def test_the_packs_leave_no_reference_cycle_behind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, memo: bool
 ) -> None:

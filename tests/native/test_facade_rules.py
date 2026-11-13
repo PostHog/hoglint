@@ -1,4 +1,4 @@
-"""The PostHog preset's facade and contract rules on small product trees, in both engines."""
+"""The PostHog preset's facade and contract rules on small product trees."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from hoglint.native.parity import read_lines
 from hoglint.rules import exports
 from rules.support import PRESET
 
-from native.test_contract_slots import both_engines, findings_of
+from native.test_contract_slots import clean_dump, findings_of
 
 ROOT_CONFIG = """
 schema = 1
@@ -117,8 +117,8 @@ def test_facade_logic_names_each_body_of_a_capability_submodule(
     files = {f"products/shop/backend/facade/{name}": body}
     if "/" in name:
         files[f"products/shop/backend/facade/{name.split('/')[0]}/__init__.py"] = ""
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "facade-logic") == sorted(expected)
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "facade-logic") == sorted(expected)
 
 
 HANDS_OUT_QUERIES = "from products.shop.backend import hogql_queries\n\n__all__ = ['hogql_queries']\n\n\n"
@@ -148,9 +148,9 @@ def test_facade_logic_reads_the_zone_of_a_handed_namespace_directory(
 ) -> None:
     directory, expected, incomplete = NAMESPACE_CASES[case]
     files = {"products/shop/backend/facade/hooks.py": HANDS_OUT_QUERIES + BODIES, **directory}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "facade-logic") == sorted(expected)
-    rows = read_lines(out["native"] / "incomplete.jsonl")
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "facade-logic") == sorted(expected)
+    rows = read_lines(out / "incomplete.jsonl")
     assert sorted(row[1] for row in rows if row[0] == "facade-logic") == incomplete
 
 
@@ -183,8 +183,8 @@ def test_facade_signature_lets_the_named_core_models_cross(tmp_path: Path, monke
         "def place(order: Order) -> int:\n    return 1\n"
     )
     files = {**CORE_MODELS, "products/shop/backend/facade/api.py": api}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "facade-signature") == [
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "facade-signature") == [
         [API, "logged", "param:entry", "posthog.models.activity.ActivityLog"],
         [API, "place", "param:order", f"{SHOP}.models.Order"],
     ]
@@ -220,9 +220,9 @@ def test_facade_signature_reads_typed_mappings_and_payloads(tmp_path: Path, monk
         for name, case in callables.items()
     )
     api = f"from collections.abc import Callable, Mapping\nfrom typing import Any, Optional\n\n{ALIASES}{functions}"
-    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/api.py": api}, monkeypatch)
+    out = clean_dump(tmp_path, BASE, {"products/shop/backend/facade/api.py": api}, monkeypatch)
     found: dict[str, list[str]] = {case: [] for case in UNKNOWN_CASES}
-    for row in findings_of(out["native"], "facade-signature"):
+    for row in findings_of(out, "facade-signature"):
         found[callables[row[1]]].append(row[3])
     assert found == {case: expected for case, (_, _, expected) in UNKNOWN_CASES.items()}
 
@@ -232,8 +232,8 @@ def test_a_payload_field_of_a_contract_is_typed(tmp_path: Path, monkeypatch: pyt
         "import dataclasses\nfrom typing import Any\n\n\n"
         "@dataclasses.dataclass(frozen=True)\nclass Event:\n    properties: dict[str, Any]\n    extra: Any\n"
     )
-    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
-    assert findings_of(out["native"], "facade-signature") == [
+    out = clean_dump(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
+    assert findings_of(out, "facade-signature") == [
         [f"{SHOP}.facade.contracts", "Event.__init__", "field:extra", "typing.Any"],
     ]
 
@@ -256,8 +256,8 @@ def test_a_contract_hands_out_protocols_and_core_syntax_trees(tmp_path: Path, mo
         "def where(expr: Expr) -> Expr:\n    return expr\n"
     )
     files = {**HOGQL, "products/shop/backend/facade/contracts.py": contracts}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == []
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "export-shape") == []
 
 
 def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,8 +268,8 @@ def test_export_shape_allows_errors_and_pydantic_contracts(tmp_path: Path, monke
         "class Payload(BaseModel):\n    name: str\n\n\n"
         "class Loose:\n    pass\n"
     )
-    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == [
+    out = clean_dump(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
+    assert findings_of(out, "export-shape") == [
         [f"{SHOP}.facade.contracts.Loose", f"{SHOP}.facade.contracts", "export-shape(class)"],
     ]
 
@@ -289,12 +289,12 @@ def test_export_shape_leaves_a_slot_to_the_signature_rule(tmp_path: Path, monkey
         "def wrap(wrapper: Wrapper) -> int:\n    return 1\n"
     )
     files = {"products/shop/backend/logic.py": logic, "products/shop/backend/facade/api.py": api}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == [
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "export-shape") == [
         [f"{SHOP}.logic.Spec", API, "export-shape(class)"],
         [f"{SHOP}.models.Order", API, "export-denied(model)"],
     ]
-    assert [row[1:3] for row in findings_of(out["native"], "facade-signature")] == [
+    assert [row[1:3] for row in findings_of(out, "facade-signature")] == [
         ["place", "param:extra"],
         ["place", "param:order"],
     ]
@@ -339,8 +339,8 @@ def test_a_command_class_in_a_facade_slot_is_one_rules_finding(
 ) -> None:
     body, expected = COMMAND_SLOT_CASES[case]
     files = {**COMMAND_FILES, "products/shop/backend/facade/api.py": IMPORTS_COMMAND + body}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == expected
 
 
 TAKES_AN_ORDER = (
@@ -1395,8 +1395,8 @@ def test_export_shape_judges_a_slot_no_signature_rule_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = SLOT_OWNER_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == expected
 
 
 # A model, a frozen dataclass, an exception whose method returns the model, a function and a plain
@@ -1687,8 +1687,8 @@ def test_a_handed_out_value_is_a_literal_constant_or_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = VALUE_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == expected
 
 
 CONSTANTS = (
@@ -1775,8 +1775,8 @@ def test_a_handed_out_type_alias_is_judged_by_its_expansion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = ALIAS_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == {
         rule: sorted(rows) for rule, rows in expected.items()
     }
 
@@ -1786,8 +1786,8 @@ def test_a_constant_expression_is_clean_and_any_other_value_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = CONSTANT_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == {
         rule: sorted(rows) for rule, rows in expected.items()
     }
 
@@ -1797,8 +1797,8 @@ def test_every_name_a_readable_dunder_all_lists_is_accounted_for(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = LISTED_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == {
         rule: sorted(rows) for rule, rows in expected.items()
     }
 
@@ -1808,8 +1808,8 @@ def test_a_name_assigned_again_is_handed_out_as_its_import_would_be(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = ASSIGNED_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == {
         rule: sorted(rows) for rule, rows in expected.items()
     }
 
@@ -1819,8 +1819,8 @@ def test_a_star_import_hands_out_what_its_names_imported_by_name_do(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = STAR_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out, rule) for rule in expected} == {
         rule: sorted(rows) for rule, rows in expected.items()
     }
 
@@ -1832,9 +1832,9 @@ def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkey
         "def make_order(**fields: Any) -> Order:\n    return Order(**fields)\n\n\n"
         "class OrderFactory:\n    def build(self) -> Order:\n        return Order()\n"
     )
-    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/testing.py": testing}, monkeypatch)
+    out = clean_dump(tmp_path, BASE, {"products/shop/backend/facade/testing.py": testing}, monkeypatch)
     for rule in ("export-shape", "facade-signature", "facade-logic", "facade-no-drf"):
-        assert findings_of(out["native"], rule) == [], rule
+        assert findings_of(out, rule) == [], rule
 
 
 # Importing a contract module must run no Django: a module-level import, direct or through other
@@ -1861,8 +1861,8 @@ def test_contracts_no_django_reads_what_runs_on_import(
         "products/shop/backend/helpers.py": LOGIC_IMPORTING_DJANGO,
         "products/shop/backend/facade/contracts.py": body,
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "contracts-no-django") == [[f"{SHOP}.facade.contracts", dst] for dst in reached]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "contracts-no-django") == [[f"{SHOP}.facade.contracts", dst] for dst in reached]
 
 
 # The core models on the list may cross a contract at any depth: in a slot of a facade function
@@ -1880,9 +1880,9 @@ def test_the_core_model_list_holds_at_any_depth(tmp_path: Path, monkeypatch: pyt
         "def for_team(team: Team, scope: Scope) -> int:\n    return 1\n"
     )
     files = {**CORE_MODELS, "products/shop/backend/logic.py": logic, "products/shop/backend/facade/api.py": api}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == [[f"{SHOP}.models.Order", API, "export-denied(model)"]]
-    assert findings_of(out["native"], "facade-signature") == []
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "export-shape") == [[f"{SHOP}.models.Order", API, "export-denied(model)"]]
+    assert findings_of(out, "facade-signature") == []
 
 
 # An allowed contract type is allowed as a class; what its fields and methods name is still judged.
@@ -1899,16 +1899,16 @@ ALLOWED_WITH_A_MODEL = (
 
 def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     files = {**BILLING, "products/shop/backend/facade/contracts.py": ALLOWED_WITH_A_MODEL}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
     contracts = f"{SHOP}.facade.contracts"
-    assert findings_of(out["native"], "facade-signature") == [
+    assert findings_of(out, "facade-signature") == [
         [contracts, "BillingError.__init__", "param:invoice", INVOICE],
         [contracts, "Chooser.__call__", "param:invoice", INVOICE],
         [contracts, "Holder", "attr:invoice", INVOICE],
         [contracts, "InvoiceMissing", "attr:invoice", INVOICE],
         [contracts, "Payload.__init__", "field:invoice", INVOICE],
     ]
-    assert findings_of(out["native"], "export-shape") == []
+    assert findings_of(out, "export-shape") == []
 
 
 # An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_where`
@@ -1937,14 +1937,14 @@ def test_an_allowed_class_whose_walk_cannot_be_told_is_walked(
         path: kit,
         "products/shop/backend/facade/api.py": f"from {module} import Payload\n\n\ndef get() -> Payload:\n    return Payload()\n",
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == [[INVOICE, API, "export-denied(model)"]]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "export-shape") == [[INVOICE, API, "export-denied(model)"]]
 
 
 # The core shapes' base classes have one list, in Python: the native engine reads it from the plan.
-# A class that inherits a base the list leaves out is a plain class in both engines.
+# A class that inherits a base the list leaves out is a plain class.
 @pytest.mark.parametrize("shape", ["exception", "protocol"])
-def test_both_engines_read_one_list_of_core_shape_bases(
+def test_the_engine_reads_the_one_list_of_core_shape_bases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
 ) -> None:
     monkeypatch.setitem(exports.SHAPE_BASES, shape, frozenset())
@@ -1953,7 +1953,7 @@ def test_both_engines_read_one_list_of_core_shape_bases(
         "class ShopError(Exception):\n    pass\n\n\n"
         "class Chooser(Protocol):\n    def __call__(self, name: str) -> str: ...\n"
     )
-    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
+    out = clean_dump(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": contracts}, monkeypatch)
     left_out = "ShopError" if shape == "exception" else "Chooser"
     module = f"{SHOP}.facade.contracts"
-    assert findings_of(out["native"], "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]
+    assert findings_of(out, "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]

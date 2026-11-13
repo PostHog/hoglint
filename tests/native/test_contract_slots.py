@@ -1,18 +1,15 @@
 """The signature slots core exposes in a contract surface, and what the signature and export rules
-read from them, in both engines."""
+read from them."""
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from hoglint.core.producers import DeclarationProducer
 from hoglint.native.parity import read_lines
 
-from native.test_parity import dumps, same_in_both_engines
+from native.test_parity import dump_repo
 
 CONFIG = """
 schema = 1
@@ -145,19 +142,14 @@ EXPECTED_SLOTS = [
 
 
 @pytest.fixture(scope="module")
-def out(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+def out(tmp_path_factory: pytest.TempPathFactory) -> Path:
     with pytest.MonkeyPatch.context() as monkeypatch:
-        return dumps(tmp_path_factory.mktemp("contract"), REPO, monkeypatch)
+        return dump_repo(tmp_path_factory.mktemp("contract"), REPO, monkeypatch)
 
 
-def test_both_engines_agree_on_a_contract_surface(out: dict[str, Path]) -> None:
-    same_in_both_engines(out)
-
-
-@pytest.mark.parametrize("engine", ["python", "native"])
-def test_a_contract_exposes_every_slot_of_what_it_hands_out(out: dict[str, Path], engine: str) -> None:
+def test_a_contract_exposes_every_slot_of_what_it_hands_out(out: Path) -> None:
     slots = []
-    for row in read_lines(out[engine] / "edges.jsonl"):
+    for row in read_lines(out / "edges.jsonl"):
         if row[0] != "exposes":
             continue
         attrs = dict(row[-1])
@@ -180,10 +172,8 @@ def test_a_contract_exposes_every_slot_of_what_it_hands_out(out: dict[str, Path]
         ("export-shape", ["builtins.dict", "products.shop.backend.facade.contracts", "export-unknown"]),
     ],
 )
-def test_the_rules_read_an_unannotated_slot_and_a_builtin_as_unknown(
-    out: dict[str, Path], rule: str, identity: list[str]
-) -> None:
-    findings = [[row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl")]
+def test_the_rules_read_an_unannotated_slot_and_a_builtin_as_unknown(out: Path, rule: str, identity: list[str]) -> None:
+    findings = [[row[0], row[1]] for row in read_lines(out / "findings.jsonl")]
     assert [rule, identity] in findings
 
 
@@ -203,13 +193,10 @@ def slot_rows(out: Path, module: str) -> list[tuple[str, str, str, str, str]]:
     return sorted(rows)
 
 
-def both_engines(
-    tmp_path: Path, base: dict[str, str], files: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> dict[str, Path]:
-    """The dumps of both engines over `base` and `files`, which must agree and fail no file."""
-    out = dumps(tmp_path, {**base, **files}, monkeypatch)
-    same_in_both_engines(out)
-    assert read_lines(out["native"] / "failed.jsonl") == []
+def clean_dump(tmp_path: Path, base: dict[str, str], files: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The native engine's tables of `base` and `files`, which must fail no file."""
+    out = dump_repo(tmp_path, {**base, **files}, monkeypatch)
+    assert read_lines(out / "failed.jsonl") == []
     return out
 
 
@@ -241,8 +228,8 @@ def test_a_handed_out_def_is_read_from_the_file_the_module_table_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files = {**TWIN_CASES[case], "products/shop/backend/facade/api.py": HANDS_OUT_CHARGE}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    handed = [row for row in slot_rows(out, FACADE) if row[4]]
     assert handed == [
         ("charge", "param:amount", "builtins.int", "external", "alias"),
         ("charge", "return", "builtins.str", "external", "alias"),
@@ -266,8 +253,8 @@ def test_an_alias_chain_deeper_than_the_limit_leaves_an_unresolved_row(
         "products/shop/backend/types.py": chain + "OrderMap = A0\n",
         "products/shop/backend/facade/api.py": ORDERS_USES_ORDER_MAP,
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    rows = slot_rows(out["native"], FACADE)
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    rows = slot_rows(out, FACADE)
     assert [row for row in rows if row[3] == "unresolved"] == [("orders", "return", "A32", "unresolved", "")]
     assert ("orders", "return", "products.shop.backend.types.A31", "resolved", "") in rows
     assert ("orders", "return", "products.shop.backend.types.A33", "resolved", "") not in rows
@@ -322,9 +309,9 @@ def test_every_readable_dunder_all_hands_out_and_an_unreadable_one_is_unknown(
 ) -> None:
     dunder_all, expected = DUNDER_ALL_CASES[case]
     files = {**CHARGE_LOGIC, "products/shop/backend/facade/api.py": IMPORTS_CHARGE + dunder_all}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(PING + expected)
-    findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "facade-signature"]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert slot_rows(out, FACADE) == sorted(PING + expected)
+    findings = [row[1] for row in read_lines(out / "findings.jsonl") if row[0] == "facade-signature"]
     assert ([FACADE, "__all__", "names", "__all__"] in findings) == (expected == ALL_UNKNOWN)
 
 
@@ -342,8 +329,8 @@ def test_only_a_method_leaves_out_its_first_parameter_whatever_its_name(
             "    @staticmethod\n    def make(self: int) -> None:\n        pass\n"
         ),
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert slot_rows(out, FACADE) == sorted(
         [
             ("frozen", "param:cls", "builtins.type", "external", "alias"),
             ("frozen", "return", "builtins.type", "external", "alias"),
@@ -371,10 +358,10 @@ def test_a_surface_hands_out_nothing_its_own_export_already_reports(
         "products/other/backend/facade/__init__.py": "",
         "products/other/backend/facade/contracts.py": "from products.shop.backend.facade.api import charge\n",
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert slot_rows(out["native"], "products.shop.backend.facade") == []
-    assert slot_rows(out["native"], FACADE) == charge_by("")
-    assert slot_rows(out["native"], "products.other.backend.facade.contracts") == charge_by("no-functions")
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert slot_rows(out, "products.shop.backend.facade") == []
+    assert slot_rows(out, FACADE) == charge_by("")
+    assert slot_rows(out, "products.other.backend.facade.contracts") == charge_by("no-functions")
 
 
 @pytest.mark.parametrize("depth", [4, 30])
@@ -386,8 +373,8 @@ def test_an_alias_chain_that_doubles_at_every_step_gives_each_type_name_once(
         "products/shop/backend/types.py": chain,
         "products/shop/backend/facade/api.py": "from ..types import A0\n\n\ndef orders(x: list[A0]) -> None:\n    pass\n",
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    names = [row[2] for row in slot_rows(out["native"], FACADE) if row[1] == "param:x"]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    names = [row[2] for row in slot_rows(out, FACADE) if row[1] == "param:x"]
     chained = [f"products.shop.backend.types.A{at}" for at in range(depth + 1)]
     assert sorted(names) == sorted(["builtins.list", "builtins.tuple", "builtins.int", *chained])
 
@@ -415,8 +402,8 @@ def test_a_module_with_no_function_hands_out_only_the_imports_it_does_not_use(
             "    def total(self) -> None:\n        charge(1)\n        refund(2)\n        ping_target()\n"
         ),
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    handed = [row for row in slot_rows(out["native"], FACADE) if row[4]]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    handed = [row for row in slot_rows(out, FACADE) if row[4]]
     assert handed == sorted(
         [
             ("refund", "param:x", "builtins.float", "external", "all"),
@@ -661,47 +648,8 @@ def test_a_facade_exposes_the_rows_each_case_expects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, expected = SLOT_CASES[case]
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert slot_rows(out["native"], FACADE) == sorted(expected)
-
-
-# Each class's dataclass base is worked out once: a plain base class that many classes, plain and
-# dataclass-like, inherit is not walked again for each of them. A class with no field of its own,
-# outside a contract, has no slot the answer could add, so its lineage is not walked for it.
-BASE_CLASSES = (
-    "class Model:\n    pass\n\n\n"
-    "class Plain:\n    note: str\n\n\n"
-    "class Payload(Plain, Model):\n    total: int\n\n\n"
-    "class Other(Plain):\n    pass\n"
-)
-
-
-def test_each_class_walks_its_lineage_for_a_dataclass_base_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    walked: list[tuple[int, str, int]] = []
-    find = DeclarationProducer.find_dataclass_base
-
-    def counted(self: DeclarationProducer, context: Any, scope: Any, idx: int) -> bool:
-        walked.append((id(self), scope.path, idx))
-        return find(self, context, scope, idx)
-
-    monkeypatch.setattr(DeclarationProducer, "find_dataclass_base", counted)
-    config = CONFIG.replace(
-        "dataclass_decorators =", 'dataclass_bases = ["products.shop.backend.logic.Model"]\ndataclass_decorators ='
-    )
-    files = {
-        "hoglint.toml": config,
-        "products/shop/backend/logic.py": BASE_CLASSES,
-        "products/shop/backend/facade/api.py": "from ..logic import Payload\n",
-    }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert ("Payload.__init__", "field:total", "builtins.int", "external", "no-functions") in slot_rows(
-        out["native"], FACADE
-    )
-    assert walked and max(Counter(walked).values()) == 1
-    other = BASE_CLASSES.split("\n\n\n").index("class Other(Plain):\n    pass\n")
-    assert ("products/shop/backend/logic.py", other) not in {(path, idx) for _, path, idx in walked}
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert slot_rows(out, FACADE) == sorted(expected)
 
 
 def test_the_slot_rows_of_a_lazy_name_sit_at_the_line_of_its_map(
@@ -709,17 +657,16 @@ def test_the_slot_rows_of_a_lazy_name_sit_at_the_line_of_its_map(
 ) -> None:
     lazy = '"""Lazy names."""\n\n_LAZY = {"charge": "products.shop.backend.logic"}\n\n\ndef __getattr__(name):\n    raise AttributeError(name)\n'
     files = {f"{LOGIC}.py": CHARGE, "products/shop/backend/facade/api.py": lazy}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
     places = {
         (row[4], row[5])
-        for row in read_lines(out["native"] / "edges.jsonl")
+        for row in read_lines(out / "edges.jsonl")
         if row[0] == "exposes" and row[2] == FACADE and dict(row[-1]).get("handed") == "lazy"
     }
     assert places == {(3, 0)}
 
 
-# Outside any contract surface the producer follows an alias into the module that assigns it, in
-# both engines.
+# Outside any contract surface the producer follows an alias into the module that assigns it.
 NO_SURFACE_CONFIG = 'schema = 1\n\n[discovery]\nsource_roots = ["."]\nfirst_party = ["products"]\n'
 
 
@@ -732,8 +679,8 @@ def test_an_imported_alias_is_expanded_where_no_surface_is_configured(
         "products/shop/backend/types.py": "from products.shop.backend.models import Item\n\nItems = list[Item]\n",
         f"{LOGIC}.py": "from products.shop.backend.types import Items\n\n\ndef items() -> Items:\n    return []\n",
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert slot_rows(out["native"], "products.shop.backend.logic") == [
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert slot_rows(out, "products.shop.backend.logic") == [
         ("items", "return", "products.shop.backend.models.Item", "resolved", ""),
         ("items", "return", "products.shop.backend.types.Items", "resolved", ""),
     ]
