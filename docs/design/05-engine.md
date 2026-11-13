@@ -21,6 +21,7 @@ The Python graph build that did the same is retired; `--engine native` is still 
   Inside every native run the Python rule classes judge again every row that is no plain violation and every finding whose message is read, word every finding (D51), write the plan (D53), and confirm a ledger write (D50, D55).
   A judgment that differs from the evaluator's is an engine error.
   So a rule, label or selector change is still written twice.
+  The export rule is out of it (Nov 13): only the native evaluator walks what an export hands out, a ledger write does not confirm it, and Python keeps its metadata, its plan and the wording of its rows. Its nets are the slot table test, the generated exactly-once test and the model repository's stored tables.
 - **What replaced the comparison of the two graph builds:**
   - the model repository's stored result: its reviewed rows (`tests/model_repo/expected.toml`) and the row count and digest of each of the ten tables (`tests/model_repo/tables.toml`), checked by `bin/model-repo` and the suite;
   - the slot table test, and the producer and pack tests, which link hand-written records in the native engine and assert stored edges;
