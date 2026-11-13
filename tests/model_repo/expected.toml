@@ -241,60 +241,6 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "HO01"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.starred", "export-denied(model)"]
-
-[[row]]
-case = "HO01"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.starred", "export-shape(class)"]
-
-[[row]]
-case = "HO01"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.logic.handouts.HandoutHolder", "products.catalog.backend.facade.starred", "export-shape(class)"]
-
-[[row]]
-case = "HO02"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.aliases", "export-denied(model)"]
-
-[[row]]
-case = "HO03"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
-
-[[row]]
-case = "HO03"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.logic.handouts.HandoutHolder.Kind", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
-
-[[row]]
-case = "HO03"
-rule = "export-shape"
-verdict = "unknown"
-identity = ["products.catalog.backend.facade.alias_listed.made", "products.catalog.backend.facade.alias_listed", "export-unknown"]
-
-[[row]]
-case = "HZ13"
-rule = "export-shape"
-verdict = "unknown"
-identity = ["products.legacy.backend.facade.barelazy.run_job", "products.legacy.backend.facade.barelazy", "export-unknown"]
-
-[[row]]
-case = "HZ14"
-rule = "export-shape"
-verdict = "unknown"
-identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
-
-[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -343,6 +289,48 @@ verdict = "finding"
 identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.serializers", "export-shape(class)"]
 
 [[row]]
+case = "HO01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.starred", "export-shape(class)"]
+
+[[row]]
+case = "HO01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutHolder", "products.catalog.backend.facade.starred", "export-shape(class)"]
+
+[[row]]
+case = "HO01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.starred", "export-denied(model)"]
+
+[[row]]
+case = "HO02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.aliases", "export-denied(model)"]
+
+[[row]]
+case = "HO03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
+
+[[row]]
+case = "HO03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutHolder.Kind", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
+
+[[row]]
+case = "HO03"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.alias_listed.made", "products.catalog.backend.facade.alias_listed", "export-unknown"]
+
+[[row]]
 case = "HZ06"
 rule = "export-shape"
 verdict = "unknown"
@@ -353,6 +341,18 @@ case = "HZ10"
 rule = "export-shape"
 verdict = "unknown"
 identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
+
+[[row]]
+case = "HZ13"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.barelazy.run_job", "products.legacy.backend.facade.barelazy", "export-unknown"]
+
+[[row]]
+case = "HZ14"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
 
 [[row]]
 case = "ME01"
@@ -523,24 +523,6 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
-case = "HO03"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.alias_listed", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "HO01"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.starred", "place_entry", "param:entry", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "HO03"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.alias_listed", "place", "param:entry", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
 case = "CM01"
 rule = "facade-signature"
 verdict = "finding"
@@ -683,6 +665,24 @@ case = "FS10"
 rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
+
+[[row]]
+case = "HO01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.starred", "place_entry", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "HO03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.alias_listed", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "HO03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.alias_listed", "place", "param:entry", "products.catalog.backend.models.CatalogEntry"]
 
 [[row]]
 case = "HZ10"
