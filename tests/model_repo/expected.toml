@@ -241,6 +241,48 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "HO01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.starred", "export-denied(model)"]
+
+[[row]]
+case = "HO01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.starred", "export-shape(class)"]
+
+[[row]]
+case = "HO01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutHolder", "products.catalog.backend.facade.starred", "export-shape(class)"]
+
+[[row]]
+case = "HO02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.aliases", "export-denied(model)"]
+
+[[row]]
+case = "HO03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
+
+[[row]]
+case = "HO03"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.handouts.HandoutHolder.Kind", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
+
+[[row]]
+case = "HO03"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.alias_listed.made", "products.catalog.backend.facade.alias_listed", "export-unknown"]
+
+[[row]]
 case = "HZ13"
 rule = "export-shape"
 verdict = "unknown"
@@ -479,6 +521,18 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 # facade-signature
+
+[[row]]
+case = "HO01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.starred", "place_entry", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "HO03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.alias_listed", "place", "param:entry", "products.catalog.backend.models.CatalogEntry"]
 
 [[row]]
 case = "CM01"
@@ -1919,20 +1973,6 @@ verdict = "*"
 match = ["ExternalView", "StockItem"]
 
 [[wanted]]
-case = "HZ13"
-decision = "Unknown is never clean: a lazy map of bare names where no entry resolves (a written limit, Nov 12)"
-rule = "*"
-verdict = "*"
-match = ["products.legacy.backend.facade.barelazy"]
-
-[[wanted]]
-case = "HZ14"
-decision = "Unknown is never clean: a lazy value that names the attribute, 'pkg.mod:Name' (a written limit, Nov 12)"
-rule = "*"
-verdict = "*"
-match = ["products.legacy.backend.facade.colonlazy"]
-
-[[wanted]]
 case = "ME09"
 decision = "A written limit (Nov 13): outside a surface file a bare dict, a bare object and a missing annotation have no row"
 rule = "*"
@@ -1959,6 +1999,13 @@ decision = "A written limit (T14, Nov 13): a metaclass given by a call is not re
 rule = "export-shape"
 verdict = "unknown"
 match = ["products.catalog.backend.facade.bases.EntryStale", "export-unknown"]
+
+[[wanted]]
+case = "HO04"
+decision = "A written limit (Nov 13): a public name bound by a call or a member past a class, not listed in __all__, is not judged"
+rule = "export-shape"
+verdict = "unknown"
+match = ["products.catalog.backend.facade.aliases.built"]
 
 # Levels: the products that pass and fail each level.
 
