@@ -329,6 +329,52 @@ def test_the_certificate_compares_the_app_facts_a_pack_writes_from_the_whole_tre
         assert planted.status() == "MISSED", planted.line()
 
 
+ALIAS_REPO = {
+    "hoglint.toml": 'schema = 1\n\n[discovery]\nsource_roots = ["."]\nfirst_party = ["core"]\n',
+    "core/__init__.py": "",
+    "core/models.py": "class Item:\n    pass\n",
+    "core/types.py": "Orders = list[int]\n",
+    "core/use.py": "from core.types import Orders\n\n\ndef orders() -> Orders:\n    return []\n",
+    "core/box.py": "from core.types import Orders\n\n\nclass Box:\n    items: Orders\n",
+    "core/deep/__init__.py": "",
+    "core/deep/errors.py": "from core.types import Orders\n\n\nclass Rejected(Exception):\n    def items(self) -> Orders:\n        return []\n",
+    "core/deep/again.py": "from core.deep.errors import Rejected\n\n__all__ = ['Rejected']\n",
+    "core/door.py": "from core.deep.again import Rejected\n\n__all__ = ['Rejected']\n",
+}
+# Each child changes what an alias another module imports stands for: the importing file's `exposes`
+# rows move while the file stays as it is, so its trace must record the read of the alias.
+ALIAS_CHANGES: dict[str, tuple[dict[str, str | None], str]] = {
+    "a slot of a function": ({"core/types.py": "from core.models import Item\n\nOrders = list[Item]\n"}, "core/use.py"),
+    "an attribute of a class": (
+        {"core/types.py": "from core.models import Item\n\nOrders = list[Item]\n"},
+        "core/box.py",
+    ),
+    "a method of a class a re-export chain hands out": (
+        {
+            "core/deep/errors.py": "from core.models import Item\n\n\nclass Rejected(Exception):\n    def items(self) -> Item:\n        return Item()\n"
+        },
+        "core/deep/errors.py",
+    ),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(ALIAS_CHANGES))
+def alias_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    edits, _ = ALIAS_CHANGES[request.param]
+    return git_pair(tmp_path_factory.mktemp("replay-alias"), request.param, ALIAS_REPO, edits)
+
+
+def test_the_certificate_follows_an_alias_and_a_member_slot_outside_a_surface(
+    tmp_path: Path, alias_pair: tuple[Path, Pair]
+) -> None:
+    result = replay(tmp_path, alias_pair, "traces")
+    assert result.status() == "HELD", result.line()
+    assert result.prediction is not None
+    moved = ALIAS_CHANGES[alias_pair[1].name][1]
+    assert moved in result.prediction.truth
+    assert moved in result.prediction.predicted
+
+
 def missed_prediction() -> PredictionScore:
     item = TruthItem("edges", "imports", "core/t.py", frozenset({"core/t.py"}))
     return PredictionScore(frozenset({"core/t.py"}), frozenset(), (item,), (item,))
