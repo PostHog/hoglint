@@ -416,4 +416,61 @@ mod tests {
         }
         assert!(rows > 30, "the table has {rows} rows");
     }
+
+    /// The table of `and`, `or` and `not` (`tests/native/test_rule_relations.py` reads it too).
+    const CONNECTIVES: &str = include_str!("../../../tests/rules/connectives.txt");
+
+    /// Every ref reads as unknown.
+    struct Unknowns;
+
+    impl<'a> Resolve<'a> for Unknowns {
+        fn resolve(&self, _field: Ref) -> Value<'a> {
+            Value::Unknown
+        }
+    }
+
+    /// A part with the truth `name`: a bare `true` or `false`, or a bare field nothing sets.
+    fn part(name: &str) -> Node {
+        match name {
+            "true" => Node::Bare(Operand::Bool(true)),
+            "false" => Node::Bare(Operand::Bool(false)),
+            _ => Node::Bare(Operand::Ref(Ref::Src(EndField::Field(0, None)))),
+        }
+    }
+
+    #[test]
+    fn and_or_and_not_carry_an_unknown_part_as_kleene_logic_does() {
+        let mut rows = 0;
+        for line in CONNECTIVES.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let [connective, left, right, expected] =
+                line.split_whitespace().collect::<Vec<_>>()[..]
+            else {
+                panic!("a row needs four columns: {line}");
+            };
+            let expected = truth(expected);
+            match connective {
+                "and" => {
+                    let parts = vec![part(left), part(right)];
+                    let staged = super::super::staged::class_truth(&parts, &Unknowns, false);
+                    // A selection's top-level `and` is judged part by part (`StagedSelection`).
+                    assert_eq!(staged, expected, "staged {line}");
+                    assert_eq!(evaluate(&Node::And(parts), &Unknowns), expected, "{line}");
+                }
+                "or" => {
+                    let parts = vec![part(left), part(right)];
+                    assert_eq!(evaluate(&Node::Or(parts), &Unknowns), expected, "{line}");
+                }
+                "not" => {
+                    let not = Node::Not(Box::new(part(left)));
+                    assert_eq!(evaluate(&not, &Unknowns), expected, "{line}");
+                }
+                other => panic!("a connective the table does not know: {other}"),
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 21, "the table has {rows} rows");
+    }
 }
