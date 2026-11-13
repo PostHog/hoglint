@@ -1005,7 +1005,6 @@ CLASS_BODY_CASES: dict[str, tuple[Files, Verdict]] = {
 STAR_REASON = "a star import in an export module is not one hand-out per name it binds yet"
 ASSIGNED_REASON = "a top-level assignment that names a class or a function is not a hand-out yet"
 BASE_REASON = "a base given by a call, or by a name that is no class, still reads as a known class"
-DOUBLE_REASON = "the copy test does not ask the other modules of the same export yet"
 PLACE = "def place(order: Order) -> None:\n    pass\n"
 EVERYTHING = ORDER_DC + "\n\n" + EXC_METHOD + "\n\n" + PLACE + "\n\nclass Loose:\n    pass\n"
 ALL_FIVE = "\n\n__all__ = ['Order', 'Receipt', 'Rejected', 'place', 'Loose']\n"
@@ -1205,7 +1204,10 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
         ES,
         BASE_REASON,
     ),
-    # A class one facade module hands out and another names in a slot: the copy's rule reports it, once.
+}
+
+# A class one facade module hands out and another names in a slot: the copy's rule reports it, once.
+COPY_CASES: dict[str, tuple[Files, Verdict]] = {
     "handed out by facade.contracts, returned by facade.api": (
         {
             f"{D}/errors.py": src(INFO),
@@ -1213,7 +1215,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": GET_FROM_LOGIC,
         },
         FS,
-        DOUBLE_REASON,
     ),
     "handed out as Info as Details by facade.contracts, returned by facade.api": (
         {
@@ -1222,7 +1223,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": GET_FROM_LOGIC,
         },
         FS,
-        DOUBLE_REASON,
     ),
     "handed out by facade.contracts, a field of a logic dataclass facade.api returns": (
         {
@@ -1231,7 +1231,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": get_returns("errors", "Outer"),
         },
         FS,
-        DOUBLE_REASON,
     ),
     "handed out by facade.contracts and the facade package, returned by facade.api": (
         {
@@ -1241,7 +1240,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": GET_FROM_LOGIC,
         },
         {SIGNATURE: 2},
-        DOUBLE_REASON,
     ),
     "a dataclass with a bare dict field, handed out by facade.contracts, returned by facade.api": (
         {
@@ -1252,7 +1250,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": GET_FROM_LOGIC,
         },
         {SIGNATURE: 2},
-        DOUBLE_REASON,
     ),
 }
 
@@ -1335,7 +1332,7 @@ NEIGHBORS: dict[str, tuple[Files, Verdict]] = {
     ),
 }
 
-CASES = {**table_cases(), **ATTACKS, **member_cases(), **CLASS_BODY_CASES, **NEIGHBORS}
+CASES = {**table_cases(), **ATTACKS, **member_cases(), **CLASS_BODY_CASES, **COPY_CASES, **NEIGHBORS}
 
 
 def case_params() -> list[object]:
