@@ -25,7 +25,7 @@ from hoglint.rules.engine import Engine, primitive_of
 from hoglint.selectors import And, Bare, Compare, ListLiteral, Literal, Node, Not, Or, Parser, Ref, leaves
 
 from native.require import native_module
-from native.test_evaluator import CONFIG, REFS, Tables, Varied, World, rule_table
+from native.test_evaluator import CONFIG, REFS, UNKNOWN_TYPES, Tables, Varied, World, render_toml, rule_table
 
 CONNECTIVES = Path(__file__).parents[1] / "rules" / "connectives.txt"
 
@@ -48,8 +48,10 @@ ROUNDS = 60
 VARIED = 100
 EXPORTS = 80
 # Per relation, the families whose siblings must give some row, a floor below what the seeds give.
-TELLING = {"R0": 150, "R1": 200, "R2": 40, "R3": 40, "R4": 25, "R5": 150, "R6": 300, "R8": 2}
+TELLING = {"R0": 150, "R1": 200, "R2": 40, "R3": 40, "R4": 25, "R5": 150, "R6": 300, "R8": 2, "R9": 50}
 
+# A type no destination names.
+NOTHING = "nowhere.Nothing"
 # Leaf truths R0 must read as unknown on a resolved destination, a floor below what the seeds give.
 UNKNOWN_LEAVES = 500
 
@@ -479,6 +481,40 @@ class Relations:
             return []
         return [f"R5: one identity column more changes {sorted(set(plain.items()) ^ set(narrowed.items()))[:3]}"]
 
+    def unknown_types_mark(self, family: Family) -> list[str]:
+        """R9. A signature rule with `unknown_types = L` gives an unknown type exactly where its
+        selection is not false, the destination is resolved and either its symbol is in `L` (an
+        edge rule selecting `dst.symbol in L` tells which) or the rule with no list already gives
+        one; anywhere else it gives the row of the rule whose list names nothing. (An empty list
+        reads as the type's default list.)"""
+        if family.mode != "signature":
+            return []
+        listed = family.table.get("unknown_types") or UNKNOWN_TYPES
+        plain = family.without("unknown_types", "deny", "unless")
+        rules = {
+            "listed": {**family.table, "unknown_types": listed},
+            "unlisted": {**family.table, "unknown_types": [NOTHING]},
+            "selected": {**plain, "unknown_types": [NOTHING]},
+            "named": {**family.edge_core(keep_from=False), "select": f"dst.symbol in {render_toml(listed)}"},
+        }
+        judge = self.judge(family, rules, "R9")
+        if judge is None:
+            return []
+        with_list, without, selected, named = (judge.rows(name) for name in rules)
+        self.tell("R9", with_list)
+        out = []
+        for key in set(with_list) | set(without) | set(selected):
+            chosen = outcome(selected, key)
+            if chosen in (CLEAN, UNRESOLVED):
+                expected = outcome(without, key)
+            elif outcome(named, key) == VIOLATION:
+                expected = "unknown-type"
+            else:
+                expected = outcome(without, key)
+            if outcome(with_list, key) != expected:
+                out.append(f"R9 {key}: listed {outcome(with_list, key)}, expected {expected} (selection {chosen})")
+        return out
+
     # R6: candidates.
 
     def candidates(self, family: Family) -> list[str]:
@@ -544,6 +580,7 @@ class Relations:
             self.unless_subtracts,
             self.identity_is_a_label,
             self.candidates,
+            self.unknown_types_mark,
         ):
             out.extend(relation(family))
         return out
