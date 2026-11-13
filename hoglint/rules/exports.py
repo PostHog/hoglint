@@ -478,9 +478,10 @@ class ExportPrimitive(RuleType):
         slot: SlotRead | None = None,
     ) -> None:
         """Findings are keyed by (symbol, module), so a symbol already checked for this module and
-        policy adds nothing the second time. A check of a slot left to a named rule marks only a
-        class or a function, whose walk a check of a slot judged here would repeat: a later full
-        check may still report anything else. Nor does an unknown type in a slot judged here
+        policy adds nothing the second time. A check that may report less than a check of a slot
+        judged here (a slot left to a named rule, or a hand-out with no slot) marks only a class or
+        a function, whose walk a full check would repeat: a later full check may still report
+        anything else. Nor does an unknown type in a slot judged here
         (`edge` is its row) that every named rule's policy leaves out mark it. An assignment there
         that the producer did not expand is unknown."""
         visit = (module, policy.name, symbol)
@@ -497,7 +498,7 @@ class ExportPrimitive(RuleType):
         judged = slot is not None and not slot.left
         if judged and edge is not None and not denied and unknown_type and self.slot_policy_leaves_out(edge):
             return
-        if judged or slot is None or shapes & {"class", "function"}:
+        if judged or shapes & {"class", "function"}:
             self.visited.add(visit)
         if denied:
             self.finding(symbol, module, f"export-denied({denied[0]})", trail, edge)

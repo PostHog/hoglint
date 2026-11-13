@@ -977,6 +977,28 @@ SLOT_OWNER_CASES = {
             "facade-signature": [[API, "get", "param:x", f"{SHOP}.errors.Ref"]],
         },
     ),
+    # A name the module hands out itself, next to the class whose member names it, in both orders.
+    **{
+        f"{kind} handed out {order}": (
+            {
+                f"{SHOP_DIR}/errors.py": IMPORTS_ORDER + UNEXPANDED_NAMES[kind] + MEMBER_TAKES_REF,
+                f"{SHOP_DIR}/facade/errors.py": HANDS_OUT_ERRORS.format(
+                    names=", ".join(names), listed=", ".join(f"'{name}'" for name in names)
+                ),
+            },
+            REF_UNKNOWN_AT_ERRORS,
+        )
+        for kind in UNEXPANDED_NAMES
+        for order, names in (("before the class", ("Ref", "Rejected")), ("after the class", ("Rejected", "Ref")))
+    },
+    "a TypeVar and its generic class, handed out by a module with no function": (
+        {
+            f"{SHOP_DIR}/errors.py": "from typing import Generic, TypeVar\n\nT = TypeVar('T')\n\n\n"
+            "class Rejected(Exception, Generic[T]):\n    def item(self) -> T:\n        raise ValueError\n",
+            f"{SHOP_DIR}/facade/errors.py": f"from {SHOP}.errors import T, Rejected\n",
+        },
+        {"export-shape": [[f"{SHOP}.errors.T", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
     # A name the producer does not expand, next to or inside an alias it does expand.
     "a NewType inside an alias's value": (
         handed_out(UNEXPANDED_NAMES["a NewType"] + "Maybe = Ref | None\n" + returns_in_rejected("Maybe"), "Rejected"),

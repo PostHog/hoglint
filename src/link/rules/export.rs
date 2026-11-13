@@ -690,9 +690,10 @@ impl<'a> Walk<'a> {
         false
     }
 
-    /// `ExportPrimitive.check`. A check of a slot left to a named rule marks only a class or a
-    /// function, whose walk a full check would repeat: a later full check may still report
-    /// anything else. Nor does an unknown type in a slot judged here (`edge` is its row) that every
+    /// `ExportPrimitive.check`. A check that may report less than a check of a slot judged here (a
+    /// slot left to a named rule, or a hand-out with no slot) marks only a class or a function,
+    /// whose walk a full check would repeat: a later full check may still report anything else.
+    /// Nor does an unknown type in a slot judged here (`edge` is its row) that every
     /// named rule's policy leaves out mark it.
     fn check(
         &mut self,
@@ -732,7 +733,7 @@ impl<'a> Walk<'a> {
         {
             return;
         }
-        if judged || slot.is_none() || shapes.contains("class") || shapes.contains("function") {
+        if judged || shapes.contains("class") || shapes.contains("function") {
             self.visited.insert(visit);
         }
         if let Some(first) = denied.first() {
