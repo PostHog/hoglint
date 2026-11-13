@@ -1002,8 +1002,7 @@ CLASS_BODY_CASES: dict[str, tuple[Files, Verdict]] = {
 
 # ── Part 3: holes whose verdict is decided and not built. Each case asserts the decided verdict and
 # runs as an expected failure until the change lands; the reason says what is missing. ──
-STAR_REASON = "a star import in an export module is not one hand-out per name it binds yet"
-ASSIGNED_REASON = "a top-level assignment that names a class or a function is not a hand-out yet"
+STAR_REASON = "the engine reads a third-party star source and hands its names out, not one unresolved import"
 PLACE = "def place(order: Order) -> None:\n    pass\n"
 EVERYTHING = ORDER_DC + "\n\n" + EXC_METHOD + "\n\n" + PLACE + "\n\nclass Loose:\n    pass\n"
 ALL_FIVE = "\n\n__all__ = ['Order', 'Receipt', 'Rejected', 'place', 'Loose']\n"
@@ -1015,16 +1014,24 @@ GET_FROM_LOGIC = get_returns("errors")
 NAMED_FIVE: Verdict = {EXPORT: 2, SIGNATURE: 2}
 
 HOLES: dict[str, tuple[Files, Verdict, str]] = {
-    # A star import: the same rows as the named import of each name it binds.
+    # A third-party star import: the decided verdict is one unresolved import. The engine reads the
+    # module's source in site-packages and hands its names out as a named import would (clean).
+    "a star import of a third-party module": (
+        {f"{D}/facade/errors.py": "from rest_framework.serializers import *\n"},
+        ES,
+        STAR_REASON,
+    ),
+}
+
+# A star import: the same rows as the named import of each name it binds.
+STAR_CASES: dict[str, tuple[Files, Verdict]] = {
     "a star import of five kinds, the facade without a function": (
         {f"{D}/errors.py": src(EVERYTHING + ALL_FIVE), f"{D}/facade/errors.py": STAR},
         NAMED_FIVE,
-        STAR_REASON,
     ),
     "a star import of a source without __all__": (
         {f"{D}/errors.py": src(EVERYTHING), f"{D}/facade/errors.py": STAR},
         NAMED_FIVE,
-        STAR_REASON,
     ),
     "a star import, the facade lists two of its names and has a function": (
         {
@@ -1033,7 +1040,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             + "\n__all__ = ['Order', 'Rejected', 'noop']\n\n\ndef noop() -> None:\n    pass\n",
         },
         ES,
-        STAR_REASON,
     ),
     "a star import of a module that star-imports": (
         {
@@ -1042,7 +1048,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": f"from {S}.again import *\n",
         },
         NAMED_FIVE,
-        STAR_REASON,
     ),
     "a star import of a source that lists a private exception": (
         {
@@ -1052,12 +1057,10 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": STAR,
         },
         ES,
-        STAR_REASON,
     ),
     "a star import of a source that imports a model": (
         {f"{D}/errors.py": f"from {S}.models import Order\n", f"{D}/facade/errors.py": STAR},
         ES,
-        STAR_REASON,
     ),
     "a star import of a source that lists a constant and an alias of a model": (
         {
@@ -1065,28 +1068,22 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/errors.py": STAR,
         },
         ES,
-        STAR_REASON,
     ),
     "a star import whose source __all__ cannot be read": (
         {f"{D}/errors.py": src(EVERYTHING + "\n\n__all__ = sorted(globals())\n"), f"{D}/facade/errors.py": STAR},
         BOTH,
-        STAR_REASON,
-    ),
-    "a star import of a third-party module": (
-        {f"{D}/facade/errors.py": "from rest_framework.serializers import *\n"},
-        ES,
-        STAR_REASON,
     ),
     "a star import in a registration surface": (
         {f"{D}/errors.py": src(EVERYTHING + ALL_FIVE), f"{D}/routes.py": STAR},
         ES,
-        STAR_REASON,
     ),
-    # A top-level assignment of a public or listed name: a hand-out under that name.
+}
+
+# A top-level assignment of a public or listed name: a hand-out under that name.
+ASSIGNED_CASES: dict[str, tuple[Files, Verdict]] = {
     "Thing = models.Order, listed": (
         {f"{D}/facade/api.py": IMPORTS_MODELS + "\nThing = models.Order\n\n__all__ = ['Thing']\n"},
         ES,
-        ASSIGNED_REASON,
     ),
     "Thing = Loose, a class of no allowed shape, listed": (
         {
@@ -1094,7 +1091,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": f"from {S}.errors import Loose\n\nThing = Loose\n\n__all__ = ['Thing']\n",
         },
         ES,
-        ASSIGNED_REASON,
     ),
     "Thing = place, a function, listed": (
         {
@@ -1102,7 +1098,6 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": f"from {S}.errors import place\n\nThing = place\n\n__all__ = ['Thing']\n",
         },
         FS,
-        ASSIGNED_REASON,
     ),
     "Thing = Receipt, a dataclass, listed": (
         {
@@ -1110,12 +1105,10 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             f"{D}/facade/api.py": f"from {S}.errors import Receipt\n\nThing = Receipt\n\n__all__ = ['Thing']\n",
         },
         FS,
-        ASSIGNED_REASON,
     ),
     "Thing = models.Order, no __all__, the module has no function": (
         {f"{D}/facade/api.py": IMPORTS_MODELS + "\nThing = models.Order\n"},
         ES,
-        ASSIGNED_REASON,
     ),
     "Thing = models.Order, public and not listed, the module has a function": (
         {
@@ -1123,12 +1116,10 @@ HOLES: dict[str, tuple[Files, Verdict, str]] = {
             + "\nThing = models.Order\n\n\ndef noop() -> None:\n    pass\n\n\n__all__ = ['noop']\n"
         },
         ES,
-        ASSIGNED_REASON,
     ),
     "Thing = Order in a registration surface, listed": (
         {f"{D}/routes.py": f"from {S}.models import Order\n\nThing = Order\n\n__all__ = ['Thing']\n"},
         ES,
-        ASSIGNED_REASON,
     ),
 }
 
@@ -1326,7 +1317,17 @@ NEIGHBORS: dict[str, tuple[Files, Verdict]] = {
     ),
 }
 
-CASES = {**table_cases(), **ATTACKS, **member_cases(), **CLASS_BODY_CASES, **BASE_CASES, **COPY_CASES, **NEIGHBORS}
+CASES = {
+    **table_cases(),
+    **ATTACKS,
+    **member_cases(),
+    **CLASS_BODY_CASES,
+    **STAR_CASES,
+    **ASSIGNED_CASES,
+    **BASE_CASES,
+    **COPY_CASES,
+    **NEIGHBORS,
+}
 
 
 def case_params() -> list[object]:
