@@ -962,14 +962,14 @@ def member_cases() -> dict[str, tuple[Files, Verdict]]:
         extra=f"from {S}.types import A40\n",
     )
     deep_types = {f"{D}/types.py": src(DEEP_ALIAS)}
-    # Too deep to expand: the name where the walk stops is reported, once per name it reads.
+    # Too deep to expand: one row for the name, the marker where the walk stops.
     cases["an alias too deep to expand, handed out"] = (
         {**deep_types, f"{D}/errors.py": deep, **handed_out},
-        {EXPORT: 2},
+        ES,
     )
     cases["an alias too deep to expand, in the facade"] = (
         {**deep_types, f"{D}/facade/contracts.py": deep},
-        {SIGNATURE: 2},
+        FS,
     )
     # An attribute with a value and no annotation is no slot.
     cases["an attribute with a value and no annotation, handed out"] = (
