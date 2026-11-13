@@ -444,6 +444,8 @@ FINE_HIDDEN_IN_ATTRIBUTE = (
 )
 # A frozen dataclass with one field and one `ClassVar` that names a model.
 CLASS_VAR_DATACLASS = "@dataclasses.dataclass(frozen=True)\nclass Record:\n    total: int\n    kind: ClassVar[Order]\n"
+# A pydantic model core defines whose field is a model.
+CORE_MODEL_ROW = "class Record(BaseModel):\n    order: Order\n"
 # A class-body alias whose name a module-level alias also binds.
 SHADOWED_ALIAS = (
     "Ref = int\n\n\nclass Rejected(Exception):\n    Ref = Order\n\n    def item(self) -> Ref:\n        raise ValueError\n"
@@ -1128,6 +1130,34 @@ SLOT_OWNER_CASES = {
             + "@dataclasses.dataclass(frozen=True)\nclass CoreRecord:\n    count: int\n\n"
             "    def load(self) -> Order:\n        raise ValueError\n",
             f"{SHOP_DIR}/facade/api.py": "from posthog.records import CoreRecord\n\n__all__ = ['CoreRecord']\n",
+        },
+        CLEAN,
+    ),
+    # The fields of a dataclass-like class core defines are read where a slot names it; its methods are not.
+    "a field of a pydantic model core defines, returned by a facade function": (
+        {"posthog/records.py": IMPORTS_ORDER + CORE_MODEL_ROW, f"{SHOP_DIR}/facade/api.py": returns("posthog.records", "Record")},
+        {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade-signature": []},
+    ),
+    "a field of a pydantic model core defines, returned by a method of a handed-out exception": (
+        {
+            "posthog/records.py": IMPORTS_ORDER + CORE_MODEL_ROW,
+            **handed_out("from posthog.records import Record\n" + returns_in_rejected("Record"), "Rejected"),
+        },
+        DENIED_AT_ERRORS,
+    ),
+    "a field of a pydantic model core defines, in a field of a contract dataclass": (
+        {
+            "posthog/records.py": IMPORTS_ORDER + CORE_MODEL_ROW,
+            f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\n\nfrom posthog.records import Record\n\n\n"
+            "@dataclasses.dataclass(frozen=True)\nclass Info:\n    record: Record\n",
+        },
+        {"export-shape": [[ORDER, CONTRACTS, "export-denied(model)"]], "facade-signature": []},
+    ),
+    "a method of a pydantic model core defines, returned by a facade function": (
+        {
+            "posthog/records.py": IMPORTS_ORDER
+            + "class Record(BaseModel):\n    total: int\n\n    def load(self) -> Order:\n        raise ValueError\n",
+            f"{SHOP_DIR}/facade/api.py": returns("posthog.records", "Record"),
         },
         CLEAN,
     ),

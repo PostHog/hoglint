@@ -615,12 +615,19 @@ impl<'a> Walk<'a> {
         evaluate(node, &EntityEnv::of(self.cx, owner, Some(symbol), None))
     }
 
-    /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged. Where
-    /// `walk_where` cannot be told, the class is walked.
+    /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged: always
+    /// the fields of a data shape and of a class with a base of `dataclass_bases`, whoever defines
+    /// it. Where `walk_where` cannot be told, the class is walked.
     fn walks(&mut self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
         let policy = &self.cx.rules.shapes[shape];
         let dataclass_like = shapes.contains("dataclass") || shapes.contains("frozen-dataclass");
         if dataclass_like && policy.data.iter().any(|name| shapes.contains(name)) {
+            return true;
+        }
+        let link = self.cx.link;
+        let (ancestors, _) = self.cx.rules.facts.ancestors(link, symbol);
+        let bases = &link.settings.dataclass_bases;
+        if bases.iter().any(|&base| ancestors.contains(self.cx.text(base))) {
             return true;
         }
         if !(policy.signatures || dataclass_like) {

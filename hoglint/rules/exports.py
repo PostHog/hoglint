@@ -179,6 +179,7 @@ class ExportPrimitive(RuleType):
         self.run = RuleRun(spec)
         self.facts = ctx.labeler.facts
         self.dataclass_kinds = ConfigInputs.of(ctx.config).core.dataclass_kinds
+        self.dataclass_bases = frozenset(ConfigInputs.of(ctx.config).core.dataclass_bases)
         self.index = ctx.labeler.index
         self.reported: set[tuple[str, str, str]] = set()
         self.visited: set[tuple[str, str, str]] = set()
@@ -425,10 +426,15 @@ class ExportPrimitive(RuleType):
 
     def walks(self, symbol: str, shapes: frozenset[str], policy: ShapePolicy) -> bool:
         """Whether what an allowed class's members name is judged: always the fields of a data
-        shape; in a contract the members of any other allowed class, unless `walk_where` is false.
-        Where it cannot be told the class is walked, as `allow_where` excuses only where it holds."""
+        shape, and of a class with a base of `dataclass_bases` (a pydantic model), whoever defines
+        it; in a contract the members of any other allowed class, unless `walk_where` is false.
+        Where it cannot be told the class is walked, as `allow_where` excuses only where it holds.
+        Where `walk_where` is false, `member_handles` reads only the fields."""
         dataclass_like = bool(shapes & {"dataclass", "frozen-dataclass"})
         if dataclass_like and shapes & set(policy.data):
+            return True
+        ancestors, _ = self.facts.ancestors(symbol)
+        if ancestors & self.dataclass_bases:
             return True
         if not (policy.signatures or dataclass_like):
             return False
