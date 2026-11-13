@@ -5,7 +5,6 @@ origin, so edges can keep surface, via and origin apart.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -27,16 +26,6 @@ BLOCK = 64
 
 # Module-level statements: module body plus if, try, with, loop and TYPE_CHECKING bodies.
 MODULE_LEVEL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY | BLOCK
-# Module-level statements that run at run time: every block but the `if TYPE_CHECKING:` body.
-RUN_TIME_MODULE_FLAGS = TC_ELSE | IF | TRY | BLOCK
-# Statements that may not run, or run instead of another branch.
-CONDITIONAL_FLAGS = TYPE_ONLY | TC_ELSE | IF | TRY
-
-# A name as a lazy map writes it: an ASCII identifier.
-IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-MODULE_ATTRIBUTES = frozenset(
-    {"__doc__", "__file__", "__name__", "__path__", "__spec__", "__loader__", "__package__", "__dict__", "__all__"}
-)
 
 
 def module_level(scope: int, flags: int, allowed: int) -> bool:
@@ -69,11 +58,6 @@ def module_assigns(record: Mapping[str, Any] | None) -> dict[str, dict]:
 Binding = tuple
 
 
-def is_module_path(text: str) -> bool:
-    """Dotted ASCII identifiers, as a lazy map writes a module path."""
-    return all(IDENTIFIER.fullmatch(part) for part in text.split("."))
-
-
 def absolute_import(module: str, is_package: bool, target: str | None, level: int) -> str | None:
     """Absolute module named by `from <level dots><target> import ...` inside `module`."""
     if level == 0:
@@ -87,39 +71,6 @@ def absolute_import(module: str, is_package: bool, target: str | None, level: in
         parts = parts[: len(parts) - climb]
     base = ".".join(parts)
     return f"{base}.{target}" if target else base
-
-
-def unresolved_surface(target: str | None, level: int, name: str) -> str:
-    """How a relative import that climbs above the top package is written: `...pkg.name`."""
-    return "." * level + (f"{target}." if target else "") + name
-
-
-def import_binding(module: str, is_package: bool, row: list) -> tuple[str, Binding] | None:
-    """(bound name, binding) for one `imports` row; None for a star import or a bad relative one."""
-    _, _, _, _, target, level, name, asname = row
-    if name is None:
-        if asname:
-            return asname, ("module", target)
-        head = target.split(".")[0]
-        return head, ("module", head)
-    if name == "*":
-        return None
-    source = absolute_import(module, is_package, target, level)
-    if source is None:
-        return None
-    return asname or name, ("from", source, name)
-
-
-def import_surface(module: str, is_package: bool, row: list) -> tuple[str, str, str | None]:
-    """(bound name, surface, source) of one `imports` row. `import a.b` binds `a` (or its alias)
-    and has `a.b` as surface and source. A from import's surface is `source.name`, a star's
-    `source.*`; above the top package the source is None and the surface is the text as written."""
-    _, _, _, _, target, level, name, asname = row
-    if name is None:
-        return asname or target.split(".")[0], target, target
-    source = absolute_import(module, is_package, target, level)
-    surface = f"{source}.{name}" if source is not None else unresolved_surface(target, level, name)
-    return asname or name, surface, source
 
 
 def unpacked_names(target: object) -> list[str]:

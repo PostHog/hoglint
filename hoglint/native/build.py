@@ -1,9 +1,8 @@
-"""What packs read of a snapshot, backed by the native link (the CoreBuild interface).
+"""What packs read of a snapshot, backed by the native link.
 
-Packs keep their code: records, file scopes, tables and the module index look the same. Every
-resolution goes to the link, so packs see the resolver caches the core producers left, as
-they do in the Python engine. A record decodes one fact kind the first time a pack reads it,
-from that record's text alone.
+Records, file scopes, tables and the module index are Python views over the link. Every
+resolution goes to the link, so packs see the resolver caches the core producers left. A record
+decodes one fact kind the first time a pack reads it, from that record's text alone.
 """
 
 from __future__ import annotations
@@ -85,7 +84,7 @@ class NativeRecord(dict[str, Any]):
 
 
 class NativeStore:
-    """`FactStore.records` over the link: path -> record, in fact order."""
+    """The records over the link: path -> record, in fact order."""
 
     def __init__(self, link: Any, paths: list[str]) -> None:
         self.records: dict[str, NativeRecord] = {path: NativeRecord(link, i, path) for i, path in enumerate(paths)}
@@ -327,7 +326,7 @@ class NativeResolver:
 
 
 class NativeClassIndex:
-    """The ClassIndex methods packs call: MROs over resolved bases, answered by the link."""
+    """Class ancestry packs ask for: MROs over resolved bases, answered by the link."""
 
     def __init__(self, link: Any, entities: Entities, store: NativeStore, paths: list[str]) -> None:
         self.entities = entities
@@ -367,7 +366,7 @@ class NativeClassIndex:
 
 
 class NativeContext:
-    """The BuildContext lookups packs call, at sites of native file scopes. A lookup's read is
+    """The lookups packs call at sites of native file scopes. A lookup's read is
     keyed by the scope's path, so it is asked again through the scope of that path."""
 
     def __init__(self, link: Any, entities: Entities, scope_of: dict[str, FileScope]) -> None:
@@ -405,7 +404,7 @@ class NativeContext:
 
 
 class NativeBuild:
-    """CoreBuild for packs on the native engine. `extracted_by` names what made the facts (the
+    """What packs read of one snapshot: index, tables, resolver, classes, files. `extracted_by` names what made the facts (the
     extractor and its options); a pack's per-file cache keys on it (`fact_digest`)."""
 
     def __init__(

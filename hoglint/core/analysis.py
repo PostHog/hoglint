@@ -1,27 +1,12 @@
-"""Snapshot to Graph: discover files, extract facts (cached by content), build core edges."""
+"""What a run of one snapshot is asked: its options, and what the registered packs need extracted."""
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
-from hoglint.core.discovery import Discovery, Inventory, ListedSnapshot, Snapshot, StagedIndex
-from hoglint.core.modules import ModuleNamer
-from hoglint.core.producers import PRODUCERS, TABLE_KINDS, Producer
-from hoglint.facts import (
-    Extractor,
-    ExtractRequest,
-    FactNeeds,
-    FactStore,
-    SitePackagesFiles,
-    default_cache_dir,
-    site_packages,
-)
-from hoglint.ledger.listing import TreeListing, WorktreeListing
-from hoglint.model import Graph
+from hoglint.facts import FactNeeds, default_cache_dir
 from hoglint.plugins import REGISTRY
 
 
@@ -50,80 +35,3 @@ class AnalysisOptions:
     cache_dir: Path | None = field(default_factory=default_cache_dir)
     needs: FactNeeds | None = None
     tree: str = ""  # a git tree id: read that tree's blobs instead of the index or the working tree
-
-
-@dataclass(frozen=False)
-class AnalysisResult:
-    inventory: Inventory
-    store: FactStore
-    build: CoreBuild
-    graph: Graph
-    timings: dict[str, float] = field(default_factory=dict)
-
-
-class CoreAnalysis:
-    """`producers` are the core producers to run."""
-
-    def __init__(
-        self,
-        options: AnalysisOptions,
-        extractor: Extractor | None = None,
-        producers: tuple[type[Producer], ...] = PRODUCERS,
-    ) -> None:
-        self.options = options
-        self.extractor = extractor or Extractor()
-        self.producers = producers
-
-    def snapshot(self) -> Snapshot:
-        if self.options.tree:
-            return ListedSnapshot(TreeListing.of(self.options.repo, self.options.tree))
-        if self.options.staged:
-            return StagedIndex(self.options.repo)
-        return ListedSnapshot(WorktreeListing.of(self.options.repo))
-
-    def first_party(self, inventory: Inventory) -> tuple[str, ...]:
-        config = self.options.config
-        if config.first_party:
-            return config.first_party
-        namer = ModuleNamer(config.source_roots)
-        heads = {namer.module_of(path)[0].split(".")[0] for path in inventory.files}
-        return tuple(sorted(head for head in heads if head.isidentifier()))
-
-    def needs(self) -> FactNeeds:
-        options = self.options
-        reads = frozenset(TABLE_KINDS).union(*(producer.fact_kinds(options.config) for producer in self.producers))
-        core = FactNeeds(kinds=reads, watch_callees=frozenset(options.config.loader_callee_names()))
-        return core | (options.needs if options.needs is not None else registered_needs())
-
-    def extract(self, inventory: Inventory, external: dict[str, str]) -> FactStore:
-        site = site_packages()
-        records = {str(site / inside): record for record, inside in external.items()}
-        request = ExtractRequest(
-            root=inventory.root,
-            files=(*inventory.files, *records),
-            first_party=self.first_party(inventory),
-            out_path=self.options.work_dir / "facts.jsonl",
-            cache_dir=self.options.cache_dir,
-            needs=self.needs(),
-            lite=tuple(records),
-        )
-        return FactStore.from_jsonl(self.extractor.extract(request), records)
-
-    def run(self) -> AnalysisResult:
-        timings: dict[str, float] = {}
-        snapshot = self.snapshot()
-        external = SitePackagesFiles.of(self.options.config.external_packages)
-        try:
-            started = time.perf_counter()
-            inventory = Discovery(self.options.config).run(snapshot)
-            timings["discover"] = time.perf_counter() - started
-            started = time.perf_counter()
-            store = self.extract(inventory, external)
-            timings["extract"] = time.perf_counter() - started
-        finally:
-            snapshot.close()
-        started = time.perf_counter()
-        build = CoreBuild(self.options.config, store, list(inventory.analyzed), external)
-        graph = build.graph(self.producers)
-        timings["edges"] = time.perf_counter() - started
-        return AnalysisResult(inventory, store, build, graph, timings)

@@ -49,7 +49,7 @@ fn starts_with_any(text: &str, prefixes: &[String]) -> bool {
         .any(|prefix| text.starts_with(prefix.as_str()))
 }
 
-/// `CHAIN_TOKEN` of hoglint/core/producers.py. Python's `\w` is a letter, a number or `_`.
+/// `CHAIN_TOKEN` of hoglint/core/records.py. Python's `\w` is a letter, a number or `_`.
 static CHAIN_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\.[\p{L}\p{N}_]+|\(\)|\[\]").expect("a valid pattern"));
 /// `str.isidentifier`.

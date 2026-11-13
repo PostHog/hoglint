@@ -5,8 +5,7 @@ registers its plugins when its module is imported; `extends` and `[discovery] pl
 in the config name the modules to import.
 
 The pack API (D22): a pack reads one snapshot through a `PackReader` and writes what it makes
-into a `PackSink`. Both engines give packs the same reader and sink types, so one pack runs on
-either. A pack never copies an edge core made: it refines it by handle.
+into a `PackSink`. A pack never copies an edge core made: it refines it by handle.
 """
 
 from __future__ import annotations
@@ -159,14 +158,6 @@ def conflict_text(name: str, handle: int, producer: str | None, value: str) -> s
     return f"{name} of edge {handle} ({producer} set {value!r})"
 
 
-def fields_of(refinement: Refinement) -> list[tuple[str, str]]:
-    """(field, value) of what a refinement sets; an attr is `attr:<name>`."""
-    pairs = (("shape", refinement.shape), ("shape_detail", refinement.shape_detail))
-    out = [(name, value) for name, value in pairs if value is not None]
-    out.extend((f"attr:{name}", value) for name, value in refinement.attrs)
-    return out
-
-
 @dataclass(frozen=False, slots=True)
 class Refinements:
     """Refinements as columns, one row per refined edge, in the order they apply: what a sink
@@ -207,60 +198,6 @@ class Refinements:
             elif isinstance(item, Refinements):
                 out.extend(item)
         return out
-
-
-@dataclass(frozen=False, slots=True)
-class RefinedFields:
-    """What each producer set on each edge it refined, so a sink finds two producers that set
-    one field apart. A field's owner is the first producer that set it, and a producer's first
-    value of a field is the one that counts."""
-
-    made: dict[str, Refinements] = field(default_factory=dict)
-    rows: dict[str, dict[int, list[int]]] = field(default_factory=dict)
-
-    def rows_of(self, producer: str) -> dict[int, list[int]]:
-        """handle -> the rows of `producer`'s refinements, made when another producer refines."""
-        found = self.rows.get(producer)
-        if found is None:
-            found = self.rows[producer] = {}
-            for at, handle in enumerate(self.made[producer].handles):
-                found.setdefault(handle, []).append(at)
-        return found
-
-    def owner(self, handle: int, name: str) -> tuple[str, str] | None:
-        """(producer, value) of the first producer that set field `name` of edge `handle`."""
-        for producer, refined in self.made.items():
-            for at in self.rows_of(producer).get(handle, ()):
-                for field_name, value in fields_of(refined.row(at)):
-                    if field_name == name:
-                        return producer, value
-        return None
-
-    def conflicts(self, producer: str, refinements: Refinements, own_attrs: Any) -> list[str]:
-        """The fields of `refinements` another producer set to another value, or an edge's own
-        attr a refinement would change; `own_attrs(handle)` gives an edge's own attrs, asked only
-        for a refinement that sets attrs."""
-        out = []
-        for at in range(len(refinements)):
-            if not self.made and not refinements.attrs[at]:
-                continue
-            refinement = refinements.row(at)
-            mine: dict[str, str] | None = None
-            for name, value in fields_of(refinement):
-                found = self.owner(refinement.handle, name) if self.made else None
-                if found is not None and found[0] != producer and found[1] != value:
-                    out.append(conflict_text(name, refinement.handle, found[0], found[1]))
-                if not name.startswith("attr:"):
-                    continue
-                if mine is None:
-                    mine = own_attrs(refinement.handle)
-                if mine.get(name[5:], value) != value:
-                    out.append(conflict_text(name, refinement.handle, None, mine[name[5:]]))
-        return out
-
-    def record(self, producer: str, refinements: Refinements) -> None:
-        self.made.setdefault(producer, Refinements()).extend(refinements)
-        self.rows.pop(producer, None)
 
 
 class Pack(Protocol):

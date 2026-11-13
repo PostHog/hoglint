@@ -3,14 +3,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
 from hoglint.core.memo import NULL_TRACER, ItemOutput, ItemRun, Items, Output, PackMemo, StepItems, Tracer
 from hoglint.core.sites import FileScope
-from hoglint.model import Context, Edge, Graph, Resolution, Site, refined_edge
-from hoglint.plugins import PackReader, PackSink, ProducerFailure, RefinedFields, Refinements
+from hoglint.model import Context, Edge, Resolution, Site
+from hoglint.plugins import PackReader, PackSink, ProducerFailure, Refinements
 
 PRODUCER_ERROR = "producer-error"
 
@@ -169,38 +169,3 @@ class ProducerPlan:
             step_ended = getattr(sink, "step_ended", None)
             if step_ended is not None:
                 step_ended()
-
-
-class GraphSink:
-    """The Python engine's sink: edges join the graph, a refinement replaces the edge at its
-    handle with the refined edge, which keeps the handle."""
-
-    def __init__(self, graph: Graph) -> None:
-        self.graph = graph
-        self.refined = RefinedFields()
-
-    def add_edges(self, producer: str, edges: Sequence[Edge]) -> None:
-        self.graph.extend(edges)
-
-    def own_attrs(self, handle: int) -> dict[str, str]:
-        return dict(self.graph.edges[handle].attrs)
-
-    def refine(self, producer: str, kinds: frozenset[str], refinements: Refinements) -> None:
-        conflicts = self.refined.conflicts(producer, refinements, self.own_attrs)
-        if conflicts:
-            more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
-            self.fail(producer, ProducerFailure(f"sets {conflicts[0]}{more} apart", kinds))
-            return
-        self.refined.record(producer, refinements)
-        edges = self.graph.edges
-        for at in range(len(refinements)):
-            refinement = refinements.row(at)
-            edges[refinement.handle] = refined_edge(edges[refinement.handle], refinement)
-        self.graph.kind_index = {}
-        self.graph.indexed = 0
-
-    def add_symbols(self, facts: Mapping[str, Mapping[str, str]]) -> None:
-        self.graph.symbols.update({name: dict(values) for name, values in facts.items()})
-
-    def fail(self, producer: str, failure: ProducerFailure) -> None:
-        self.graph.failed_producers[producer] = failure

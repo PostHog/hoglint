@@ -112,7 +112,7 @@ INSTANCE_SHAPES = frozenset({"instance-single", "instance-many"})
 LOCAL_ASSIGN_STEPS = ("assign:", "annassign:", "walrus:")
 
 # The names the link's shape code reads (src/link/packs/django/shapes.rs `Vocabulary`), handed
-# over with each run of the producer: one list for both engines.
+# over with each run of the producer: one list for the link and the shape code here.
 VOCABULARY: dict[str, list[str]] = {
     "managers": sorted(MANAGERS),
     "scalar_terminals": sorted(SCALAR_TERMINALS),

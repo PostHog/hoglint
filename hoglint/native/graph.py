@@ -259,7 +259,7 @@ class NativeSink:
 class NativeGraph(Graph):
     """A Graph whose edges, core and pack, live in the link. `by_kind` and `edges_to` ask it.
 
-    A producer may hand over one Edge object several times; the Python engine gives such an
+    A producer may hand over one Edge object several times; a plain Graph gives such an
     object one handle, its last row, so its ordinal is its last place. `repeats` maps each row of
     such an object to its last row, so ordinals agree."""
 

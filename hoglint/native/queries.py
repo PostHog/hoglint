@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from array import array
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,7 +20,6 @@ import orjson
 
 from hoglint.core.records import last_name
 from hoglint.core.sites import FileScope
-from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Edge, EntityId, Graph
 from hoglint.native.build import NativeBuild
 from hoglint.plugins import AttributeUse, EdgeBatch
@@ -49,55 +48,10 @@ class Words:
         return cls(parts=tuple(sorted({f".{name}" for name in names})))
 
 
-ATTR_COLUMN = "attr:"
-EDGE_COLUMNS: dict[str, Callable[[Edge], Any]] = {
-    "path": lambda edge: edge.site.path,
-    "module": lambda edge: edge.site.module,
-    "scope": lambda edge: edge.site.scope,
-    "line": lambda edge: edge.site.line,
-    "column": lambda edge: edge.site.column,
-    "surface": lambda edge: edge.surface,
-    "target": lambda edge: edge.target,
-    "producer": lambda edge: edge.producer,
-}
-
-
-def column_of(edge: Edge, name: str) -> Any:
-    """One `EdgeBatch` column's value for an edge."""
-    if name.startswith(ATTR_COLUMN):
-        return edge.attr(name[len(ATTR_COLUMN) :])
-    return EDGE_COLUMNS[name](edge)
-
-
-def batch_of(edges: Sequence[Edge], columns: Sequence[str]) -> EdgeBatch:
-    return EdgeBatch(
-        [edge.handle for edge in edges], {name: [column_of(edge, name) for edge in edges] for name in columns}
-    )
-
-
 def entities_named(qualified: str) -> list[EntityId]:
     """Every (module, symbol) split of a qualified name: one of them is the entity it names."""
     parts = qualified.split(".")
     return [EntityId(LANGUAGE_PYTHON, ".".join(parts[:cut]), ".".join(parts[cut:])) for cut in range(1, len(parts))]
-
-
-def first_party_roots(scope: FileScope, roots: set[str], first_party: Any) -> set[str]:
-    """Those of `roots` a first-party import binds anywhere in the file. A name that only
-    third-party imports bind cannot lead into first-party code."""
-    out: set[str] = set()
-    for _, _, _, _, target, level, name, asname in scope.record.get("imports", ()):
-        if name is None:
-            bound = asname or target.split(".")[0]
-            if bound in roots and first_party.contains(target):
-                out.add(bound)
-            continue
-        bound = asname or name
-        if bound not in roots or name == "*":
-            continue
-        source = absolute_import(scope.module, scope.is_package, target, level)
-        if source is not None and first_party.contains(source):
-            out.add(bound)
-    return out
 
 
 class NativePackQueries:

@@ -19,16 +19,6 @@ def chain_tokens(chain: str) -> list[str]:
     return CHAIN_TOKEN.findall(chain)
 
 
-def leading_attrs(tokens: list[str]) -> list[str]:
-    """Attribute names before the first call or subscript, without their dots."""
-    out = []
-    for token in tokens:
-        if not token.startswith("."):
-            break
-        out.append(token[1:])
-    return out
-
-
 def const_of(value: object) -> object:
     """The Python constant of a V constant (str, int, bool, None), else NO_CONST."""
     if value is None or isinstance(value, (bool, int)):

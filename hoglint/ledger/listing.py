@@ -12,7 +12,7 @@ the working tree's listing. `check` reads the status to tell whether the working
 HEAD's inputs (sources, declared side inputs, the ledger), so that it can run HEAD's tree
 instead. One `git status --porcelain=v2 -uall` answers both.
 
-Both engines and every plugin read a snapshot through one of these, and a question whether a
+The engine and every plugin read a snapshot through one of these, and a question whether a
 path exists is answered from its list, never from the file system.
 
 A symlink is read as its target (D41): a listing resolves it to the file it leads to inside the
@@ -34,7 +34,7 @@ from typing import ClassVar
 
 from hoglint.ledger.errors import EngineError, RepoRootError
 
-# The files both engines read as Python sources.
+# The files the engine reads as Python sources.
 SOURCE_SUFFIXES = (".py", ".pyi")
 SUBMODULE_MODE = "160000"
 LINK_MODE = "120000"

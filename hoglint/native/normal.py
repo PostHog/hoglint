@@ -1,5 +1,5 @@
-"""The normalized forms both engines are compared in: one JSON-ready list per edge, every field
-and attr kept, in graph order."""
+"""The normalized forms two dumps are compared in: one JSON-ready list per edge, every field and
+attr kept, in graph order."""
 
 from __future__ import annotations
 

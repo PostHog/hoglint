@@ -385,8 +385,8 @@ class ConfigInputs:
 
     @cached_property
     def core(self) -> CoreConfig:
-        """`[discovery]` and the surfaces as core reads them, parsed once: both engines and the
-        rules read this one value."""
+        """`[discovery]` and the surfaces as core reads them, parsed once: the link and the rules
+        read this one value."""
         return CoreConfig.from_discovery(self.config.discovery, self.contract_surfaces, self.export_surfaces)
 
     def rule_files(self) -> dict[str, str]:

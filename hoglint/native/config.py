@@ -15,7 +15,7 @@ __all__ = ["TRACE_ENV", "link_config"]
 
 
 def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping[str, str]) -> dict[str, Any]:
-    """The JSON the link takes. Builtins come from this interpreter, as the Python engine's do."""
+    """The JSON the link takes. Builtins come from this interpreter."""
     return {
         "source_roots": list(config.source_roots),
         "first_party": list(config.first_party),

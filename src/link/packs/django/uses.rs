@@ -1,11 +1,11 @@
-//! `django.uses@1`: the refinements of hoglint/packs/django/uses.py (`UseProducer.uses` and
-//! `UseProducer.shaped`), judged in the link with no Python object per use.
+//! `django.uses@1`: the Django shape of every use of a model, judged in the link with no Python
+//! object per use.
 //!
 //! Core makes one `reference` edge per use site. This producer takes those whose one target is
 //! a model, gives each its Django shape, and follows the locals a use flows into (`qs =
 //! M.objects.filter(); qs.update()`), which only the file's `derived` rows show. A file whose
-//! uses the shape code cannot read fails whole, as an exception in the Python producer does: it
-//! adds no refinement, and the caller words its failure.
+//! uses the shape code cannot read fails whole: it adds no refinement, and the caller words its
+//! failure (hoglint/packs/django/native_uses.py).
 
 use super::shapes::{Shape, Unreadable, UsePosition, Vocabulary};
 use crate::link::Link;
@@ -52,7 +52,7 @@ struct Later {
 }
 
 /// Each (chain, up) pair of a use parses and classifies once, and each pair of a later use
-/// parses once, as the Python producer's memos do. A pair that cannot be read stays unreadable.
+/// parses once. A pair that cannot be read stays unreadable.
 #[derive(Default)]
 struct Memo {
     shaped_at: FxHashMap<(Sid, Sid), Result<usize, Unreadable>>,
@@ -207,7 +207,7 @@ impl<'l> Judge<'l> {
     }
 
     /// One file's uses (`rows`, edge ids in batch order) once every shape of the file is
-    /// known: `UseProducer.shaped`.
+    /// known.
     fn file(&mut self, file: u32, rows: &[u32]) -> Result<Vec<Judged>, Unreadable> {
         let link = self.link;
         let it = &link.core.it;

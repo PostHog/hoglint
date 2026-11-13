@@ -218,7 +218,7 @@ impl Link {
         Ok(self.inner.core.located(class))
     }
 
-    /// `BuildContext.value_lookup` at a site of the analyzed file with this scope index.
+    /// The lookup of a value at a site of the analyzed file with this scope index.
     fn value_lookup(
         &mut self,
         scope: u32,
@@ -240,7 +240,7 @@ impl Link {
         Ok(found.map(|found| self.lookup(found)))
     }
 
-    /// `BuildContext.chain_lookup`: the lookup and the attribute names left over.
+    /// The lookup and the attribute names left over.
     #[allow(clippy::type_complexity)]
     fn chain_lookup(
         &mut self,

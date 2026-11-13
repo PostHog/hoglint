@@ -112,7 +112,7 @@ class NativeAnalysis:
         started = time.perf_counter()
         snapshot = self.blob_snapshot()
         external = SitePackagesFiles.of(config.external_packages)
-        inventory = Discovery(config).run(snapshot)  # type: ignore[arg-type]
+        inventory = Discovery(config).run(snapshot)
         timings["snapshot"] = time.perf_counter() - started
         started = time.perf_counter()
         native = bridge.load()

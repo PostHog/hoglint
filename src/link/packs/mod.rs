@@ -1,6 +1,5 @@
 //! Pack producers the link runs itself (D49): a producer whose judgment is per row moves here
-//! when a profile shows it pays, and writes its refinements with no Python object per row. Its
-//! Python producer stays the meaning: the Python engine runs it, and a test holds the two equal.
+//! when a profile shows it pays, and writes its refinements with no Python object per row.
 //!
 //! They read linked edges and the records through the link, never the fact cache's own format,
 //! so they stay out of the `[facts]` id (engine-sources.txt). `refined` keeps the native sink's

@@ -1,4 +1,4 @@
-//! What a contract surface hands out (hoglint/core/surfaces.py `HandedOut`).
+//! What a contract surface hands out.
 //!
 //! A module hands out a name it binds by import when `__all__` lists it, when the import binds
 //! it under its own name (`from x import f as f`), when it is a lazy (PEP 562) name, or when the
@@ -79,12 +79,12 @@ const CONSTANT_MARKERS: [&str; 8] = [
     "...",
     "JoinedStr",
 ];
-/// How many names deep a constant is followed (`ConstantValues.MAX_DEPTH`).
+/// How many names deep a constant is followed.
 const MAX_CONSTANT_DEPTH: usize = 32;
 
-/// Whether the last module-level assignment of a bare name binds a constant expression
-/// (`ConstantValues.binds_constant`). The record leaves out a value that is None. `seen` holds
-/// the names on the way here, so a cycle stops.
+/// Whether the last module-level assignment of a bare name binds a constant expression. The
+/// record leaves out a value that is None. `seen` holds the names on the way here, so a cycle
+/// stops.
 pub fn binds_constant(
     core: &mut Core,
     module: Sid,
@@ -118,8 +118,7 @@ pub fn binds_constant(
     constant
 }
 
-/// Whether a name resolves, whole, to a first-party module-level constant
-/// (`ConstantValues.names_constant`).
+/// Whether a name resolves, whole, to a first-party module-level constant.
 fn names_constant(
     core: &mut Core,
     module: Sid,
@@ -147,7 +146,7 @@ fn names_constant(
     binds_constant(core, origin.m, origin.s, depth + 1, seen)
 }
 
-/// Whether a module-level value is a constant expression (`ConstantValues.is_constant`): built
+/// Whether a module-level value is a constant expression: built
 /// only from literals; unary, binary, comparison and boolean operators; f-strings; tuples,
 /// lists, sets and dicts (starred parts too) of constants; a call of a builtin constructor the
 /// module does not bind, on one constant; and names of module-level constants by this same rule.
@@ -328,7 +327,7 @@ fn from_future(core: &mut Core, source: Sid, name: Sid) -> bool {
     matches!(core.binding_of(source, name), Some(Binding::From(from, _)) if from == future)
 }
 
-/// The names one source of a star import binds (`StarNames.bound`); None when it, or a source it
+/// The names one source of a star import binds; None when it, or a source it
 /// star-imports, cannot be read. A source already read adds nothing more.
 fn star_bound(core: &mut Core, source: Sid, seen: &mut FxHashSet<Sid>) -> Option<FxHashSet<Sid>> {
     if !seen.insert(source) {
@@ -376,7 +375,7 @@ fn star_bound(core: &mut Core, source: Sid, seen: &mut FxHashSet<Sid>) -> Option
     Some(names)
 }
 
-/// The names `from source import *` binds (`StarNames.of`): the source's `__all__`, else its
+/// The names `from source import *` binds: the source's `__all__`, else its
 /// public top-level names with those of its own star imports; never a name a `from __future__
 /// import` binds. Sorted; None when the source, or a source it star-imports, cannot be read.
 pub fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
@@ -550,7 +549,7 @@ impl HandedOut {
     }
 
     /// The class `attrs` name inside the body of a top-level class, one level per name, the last
-    /// def of a name winning (`HandedOut.nested_class`); None when a name is no class declared
+    /// def of a name winning; None when a name is no class declared
     /// directly in the class above it.
     fn nested_class(core: &mut Core, outer: Ent, attrs: &[Sid]) -> Option<Ent> {
         let (file, mut at) = core.located(outer)?;
@@ -576,8 +575,8 @@ impl HandedOut {
         })
     }
 
-    /// What `name = chain` binds, when the chain resolves, whole, to a class or a function
-    /// (`HandedOut.assigned_hit`): a class nested in a class counts, a member past a class does
+    /// What `name = chain` binds, when the chain resolves, whole, to a class or a function:
+    /// a class nested in a class counts, a member past a class does
     /// not.
     fn assigned_hit(core: &mut Core, scope: &Scope, name: Sid, chain: Sid) -> Option<HitId> {
         let (hit, used, total) = core.resolve_chain(scope.module, chain);
@@ -605,8 +604,8 @@ impl HandedOut {
     }
 
     /// The names the module binds again by a top-level assignment of one bare name to a name or
-    /// an attribute chain that resolves, whole, to a class or a function, each with what it binds
-    /// (`HandedOut.assigned`): handed out by the clause of a definition, when the name is public
+    /// an attribute chain that resolves, whole, to a class or a function, each with what it binds:
+    /// handed out by the clause of a definition, when the name is public
     /// or `__all__` lists it. Only the last assignment of a name counts, as the module table
     /// reads it.
     pub fn assigned(&self, core: &mut Core, scope: &Scope) -> Vec<(Handed, HitId)> {
@@ -701,7 +700,7 @@ impl HandedOut {
     }
 
     /// The first-party module-level assignments the handed-out names resolve to, as symbols, when
-    /// the value is no literal constant (`HandedOut.unknown_values`): a `NewType`, a `TypeVar`, a
+    /// the value is no literal constant: a `NewType`, a `TypeVar`, a
     /// type alias, a value a call makes. What they hand out is unknown.
     fn unknown_values(
         &self,
@@ -730,7 +729,7 @@ impl HandedOut {
         out
     }
 
-    /// The names a readable `__all__` lists (`HandedOut.listed`); none when it cannot be read or
+    /// The names a readable `__all__` lists; none when it cannot be read or
     /// is not there.
     pub fn listed(&self) -> FxHashSet<Sid> {
         match &self.dunder_all.names {
@@ -740,7 +739,7 @@ impl HandedOut {
     }
 
     /// The names with a leading `_` a readable `__all__` lists that the module defines by a
-    /// top-level def or class (`HandedOut.listed_private`): handed out as a public def is.
+    /// top-level def or class: handed out as a public def is.
     fn listed_private(&self, core: &mut Core, scope: &Scope) -> FxHashSet<Sid> {
         let Some(table) = core.table(scope.module) else {
             return FxHashSet::default();
@@ -758,7 +757,7 @@ impl HandedOut {
     }
 
     /// The names a readable `__all__` lists that the module binds by no def, no import, no other
-    /// edge of what it hands out and no literal constant (`HandedOut.unaccounted`): what they hand
+    /// edge of what it hands out and no literal constant: what they hand
     /// out is unknown.
     fn unaccounted(
         &self,

@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import os
-import sys
 import stat
 import time
 import shutil
 import sysconfig
-import subprocess
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import orjson
 
 from hoglint.ledger.cache import FACTS, SITE_PACKAGES_ANSWERS, AnswerStore, cache_root
 
@@ -181,88 +176,6 @@ def find_binary() -> Path:
     if on_path:
         return Path(on_path)
     raise FileNotFoundError(f"{BINARY_NAME} not found; build it with bin/build or set HOGLINT_FACTS_BIN")
-
-
-@dataclass(frozen=True)
-class ExtractRequest:
-    """One extractor run over an explicit file list. `root` may be a temp tree of staged blobs.
-
-    `lite` files (third-party sources) only need what module tables and class ancestry read.
-    """
-
-    root: Path
-    files: tuple[str, ...]
-    first_party: tuple[str, ...]
-    out_path: Path
-    cache_dir: Path | None = None
-    needs: FactNeeds = FactNeeds(kinds=FACT_KINDS)
-    lite: tuple[str, ...] = ()
-
-
-class Extractor:
-    """Runs the hoglint-facts binary. The binary only reads files; it never imports them."""
-
-    def __init__(self, binary: Path | None = None) -> None:
-        self.binary = binary or find_binary()
-
-    @staticmethod
-    def write_list(path: Path, files: tuple[str, ...]) -> Path:
-        path.write_text("\n".join(files) + "\n")
-        return path
-
-    def command(self, request: ExtractRequest) -> list[str]:
-        needs = request.needs
-        command = [
-            str(self.binary),
-            str(request.root),
-            str(self.write_list(request.out_path.with_suffix(".files"), request.files)),
-            "--first-party",
-            ",".join(request.first_party),
-            "--kinds",
-            ",".join(sorted(needs.kinds)),
-            "--out",
-            str(request.out_path),
-        ]
-        for flag, values in (
-            ("--watch-callees", needs.watch_callees),
-            ("--watch-prefixes", needs.watch_prefixes),
-            ("--watch-keys", needs.watch_keys),
-        ):
-            if values:
-                command += [flag, ",".join(sorted(values))]
-        if request.lite:
-            command += ["--lite-list", str(self.write_list(request.out_path.with_suffix(".lite"), request.lite))]
-        return command
-
-    def extract(self, request: ExtractRequest) -> Path:
-        request.out_path.parent.mkdir(parents=True, exist_ok=True)
-        command = self.command(request)
-        if request.cache_dir is not None:
-            command += ["--mode", "cache", "--cache", str(request.cache_dir)]
-        else:
-            command += ["--mode", "stream"]
-        subprocess.run(command, check=True, stdout=sys.stderr)
-        return request.out_path
-
-
-class FactStore:
-    """L1 records by path."""
-
-    def __init__(self) -> None:
-        self.records: dict[str, dict] = {}
-
-    @classmethod
-    def from_jsonl(cls, path: Path, renamed: Mapping[str, str] | None = None) -> FactStore:
-        """The records of an extractor's output; `renamed` gives a file read under another path
-        its record path."""
-        store = cls()
-        with open(path, "rb") as handle:
-            for line in handle:
-                record = orjson.loads(line)
-                if renamed is not None and record["path"] in renamed:
-                    record["path"] = renamed[record["path"]]
-                store.records[record["path"]] = record
-        return store
 
 
 def default_cache_dir() -> Path:
