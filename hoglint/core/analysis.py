@@ -39,8 +39,8 @@ def registered_needs() -> FactNeeds:
 class AnalysisOptions:
     """`staged` reads the git index instead of the working tree. `cache_dir` None disables the cache.
 
-    `producers` are the core producers to run. `needs` is what the packs that run afterwards ask
-    of the extractor; None means every registered pack with its defaults.
+    `needs` is what the packs that run afterwards ask of the extractor; None means every
+    registered pack with its defaults.
     """
 
     repo: Path
@@ -48,7 +48,6 @@ class AnalysisOptions:
     work_dir: Path
     staged: bool = False
     cache_dir: Path | None = field(default_factory=default_cache_dir)
-    producers: tuple[type[Producer], ...] = PRODUCERS
     needs: FactNeeds | None = None
     tree: str = ""  # a git tree id: read that tree's blobs instead of the index or the working tree
 
@@ -63,9 +62,17 @@ class AnalysisResult:
 
 
 class CoreAnalysis:
-    def __init__(self, options: AnalysisOptions, extractor: Extractor | None = None) -> None:
+    """`producers` are the core producers to run."""
+
+    def __init__(
+        self,
+        options: AnalysisOptions,
+        extractor: Extractor | None = None,
+        producers: tuple[type[Producer], ...] = PRODUCERS,
+    ) -> None:
         self.options = options
         self.extractor = extractor or Extractor()
+        self.producers = producers
 
     def snapshot(self) -> Snapshot:
         if self.options.tree:
@@ -84,7 +91,7 @@ class CoreAnalysis:
 
     def needs(self) -> FactNeeds:
         options = self.options
-        reads = frozenset(TABLE_KINDS).union(*(producer.fact_kinds(options.config) for producer in options.producers))
+        reads = frozenset(TABLE_KINDS).union(*(producer.fact_kinds(options.config) for producer in self.producers))
         core = FactNeeds(kinds=reads, watch_callees=frozenset(options.config.loader_callee_names()))
         return core | (options.needs if options.needs is not None else registered_needs())
 
@@ -117,6 +124,6 @@ class CoreAnalysis:
             snapshot.close()
         started = time.perf_counter()
         build = CoreBuild(self.options.config, store, list(inventory.analyzed), external)
-        graph = build.graph(self.options.producers)
+        graph = build.graph(self.producers)
         timings["edges"] = time.perf_counter() - started
         return AnalysisResult(inventory, store, build, graph, timings)

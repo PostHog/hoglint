@@ -158,11 +158,10 @@ def main() -> None:
             config=config,
             work_dir=Path(work),
             staged=args.index,
-            producers=PRODUCERS,
             needs=FactNeeds(),
             cache_dir=None if args.no_cache else default_cache_dir(),
         )
-        result = CoreAnalysis(options).run()
+        result = CoreAnalysis(options, producers=PRODUCERS).run()
     output = TachMap(result.graph, result.inventory.files, config.source_roots, args.case_insensitive)
     mapping = output.write(args.out)
     if args.compare:
