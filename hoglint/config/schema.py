@@ -40,8 +40,10 @@ from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
 from hoglint.selectors import (
+    EDGE_DEPENDENT_FIELDS,
     KEYWORDS,
     NAME_PART,
+    And,
     Catalog,
     Condition,
     FieldInfo,
@@ -878,7 +880,37 @@ class SchemaBuilder:
             spec = self.read_rule(rule_id, table, rule_ids, registries, exports)
             if spec is not None:
                 out[rule_id] = spec
+        for rule_id, spec in out.items():
+            self.check_slot_owners(f"rules.{rule_id}.leave_slots_to", spec.leave_slots_to, out)
         return out
+
+    def check_slot_owners(self, key: str, names: tuple[str, ...], rules: dict[str, RuleSpec]) -> None:
+        """Each rule `leave_slots_to` names splits its selection into conditions that read only
+        the source (where it reads rows) and conditions that read no source field (which slots it
+        judges); the export rule reads the two parts apart, so a condition that mixes them has no
+        reading there."""
+        for name in names:
+            rule = rules.get(name)
+            if rule is None:
+                continue
+            for selector in (rule.from_, rule.select):
+                if selector is None:
+                    continue
+                parts = selector.node.parts if isinstance(selector.node, And) else (selector.node,)
+                for part in parts:
+                    fields = sorted({str(ref) for ref in refs(part)})
+                    source = [
+                        field
+                        for field in fields
+                        if field.startswith("src.") and field.split(".", 1)[1] not in EDGE_DEPENDENT_FIELDS
+                    ]
+                    if source and len(source) < len(fields):
+                        self.fail(
+                            key,
+                            f"{name!r} has a condition that mixes the source with the edge or the destination "
+                            f"({', '.join(fields)}); write it as conditions joined by `and`, each reading only "
+                            "`src.*` fields or none of them",
+                        )
 
     def read_rule(
         self,

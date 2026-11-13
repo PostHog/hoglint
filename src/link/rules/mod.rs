@@ -29,7 +29,8 @@ use self::coverage::{Cover, CoverInputs, Required, cover_edges, required};
 use self::entities::EntityRule;
 use self::env::{Cx, Endpoint, Env, Role, UNKNOWN_ATTRS};
 use self::export::{
-    ExportInputs, ExportRow, ExportRule, Shape, Walk, binds_handed, module_scope_imports,
+    ExportInputs, ExportRow, ExportRule, Shape, SlotPolicy, Walk, binds_handed,
+    module_scope_imports,
 };
 use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
@@ -808,7 +809,14 @@ impl Rules {
                     .export
                     .slot_policies
                     .iter()
-                    .map(|policy| Ok((edge.optional(&policy.rest)?, role_of(&policy.endpoint)?)))
+                    .map(|policy| {
+                        Ok(SlotPolicy {
+                            rest: edge.optional(&policy.rest)?,
+                            role: role_of(&policy.endpoint)?,
+                            include: policy.include,
+                            exclude: policy.exclude,
+                        })
+                    })
                     .collect::<Result<Vec<_>, String>>()?;
                 RuleKind::Export(ExportRule::new(
                     &found.export,

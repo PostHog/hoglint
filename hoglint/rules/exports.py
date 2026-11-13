@@ -180,7 +180,8 @@ class ExportPrimitive(RuleType):
         self.exclude = frozenset(NOT_HANDED_CONTEXTS if spec.contexts_exclude is None else spec.contexts_exclude)
         self.slot_owners = self.signature_scopes()
         self.slot_policies = self.signature_policies()
-        self.slots_seen: dict[str, bool] = {}
+        self.slot_contexts = self.signature_contexts()
+        self.slots_seen: dict[str, tuple[int, ...]] = {}
         self.policy_modules: dict[tuple[str, str], bool] = {}
         # The name each export module hands a symbol out by, read before any of its symbols is
         # checked, so a class reached in a slot first finds the name a later hand-out gives it.
@@ -246,15 +247,27 @@ class ExportPrimitive(RuleType):
             out.append((joined(parts), rule.endpoint))
         return out
 
-    def signature_sees(self, module: str) -> bool:
-        """Whether a signature rule sees the slots of a module's public callables. A module a
-        rule cannot tell about is not seen, so its slots are judged here."""
-        seen = self.slots_seen.get(module)
-        if seen is None:
+    def signature_contexts(self) -> list[tuple[frozenset[str], frozenset[str]]]:
+        """The contexts each signature rule of `leave_slots_to` reads and leaves out."""
+        return [
+            (frozenset(rule.contexts_include), frozenset(rule.contexts_exclude or ())) for rule in self.slot_rules()
+        ]
+
+    def holding_rules(self, module: str) -> tuple[int, ...]:
+        """The signature rules of `leave_slots_to`, by place, whose source part holds for a module.
+        A module a rule cannot tell about is not held, so its slots are judged here."""
+        found = self.slots_seen.get(module)
+        if found is None:
             resolve = self.ctx.module_env(module).resolve
-            seen = any(node is None or evaluate(node, resolve) is Truth.TRUE for node in self.slot_owners)
-            self.slots_seen[module] = seen
-        return seen
+            found = self.slots_seen[module] = tuple(
+                at for at, node in enumerate(self.slot_owners) if node is None or evaluate(node, resolve) is Truth.TRUE
+            )
+        return found
+
+    def signature_sees(self, module: str, row: Edge) -> bool:
+        """Whether a signature rule reads a row in a module: its source part holds for the module
+        and its contexts take the row's."""
+        return any(context_ok(row, *self.slot_contexts[at]) for at in self.holding_rules(module))
 
     def plan(self) -> dict[str, Any]:
         """The exports it checks by place, the contexts it reads and leaves out, and how it
@@ -271,8 +284,13 @@ class ExportPrimitive(RuleType):
             "start": selector_tree(spec.from_),
             "slot_owners": [None if node is None else tree(node) for node in self.slot_owners],
             "slot_policies": [
-                {"rest": None if node is None else tree(node), "endpoint": endpoint}
-                for node, endpoint in self.slot_policies
+                {
+                    "rest": None if node is None else tree(node),
+                    "endpoint": endpoint,
+                    "include": context_bits(include),
+                    "exclude": context_bits(exclude),
+                }
+                for (node, endpoint), (include, exclude) in zip(self.slot_policies, self.slot_contexts)
             ],
         }
         return {"id": spec.id, "mode": self.NATIVE_MODE, "identity": identity_paths(spec.identity), "export": checked}
@@ -540,11 +558,13 @@ class ExportPrimitive(RuleType):
             out.extend((handle, owner, qualname, walked) for handle in self.exposes_under(owner).get(qualname, ()))
         return out
 
-    def holds_copy(self, module: str, callable_name: str, slot: str) -> bool:
-        """Whether a module holds an exposes row of a callable's slot: the copy the producer
-        writes where a surface hands out a function or a data shape's fields."""
+    def copies(self, module: str, callable_name: str, slot: str) -> list[Edge]:
+        """A module's exposes rows of a callable's slot: the copy the producer writes where a
+        surface hands out a function or a data shape's fields."""
         handles = self.exposes_under(module).get(callable_name, [])
-        return any(edge.attr("callable") == callable_name and edge.attr("slot") == slot for edge in self.edges(handles))
+        return [
+            edge for edge in self.edges(handles) if edge.attr("callable") == callable_name and edge.attr("slot") == slot
+        ]
 
     def copy_places(self, symbol: str, module: str, bound: str) -> list[tuple[str, str]]:
         """(module, name) of each place the producer may hold a copy of the walked symbol's slots:
@@ -566,11 +586,11 @@ class ExportPrimitive(RuleType):
             found = self.policy_modules[key] = any(self.ctx.config.exports[name].shape == policy.name for name in names)
         return found
 
-    def reads_under(self, module: str, policy: ShapePolicy) -> bool:
-        """Whether a signature rule reads a module's rows for this walk: it holds for the module,
+    def reads_under(self, module: str, policy: ShapePolicy, row: Edge) -> bool:
+        """Whether a signature rule reads a row in a module for this walk: it reads the row there,
         and the module is a surface of the shape policy the walk runs under, so the rule judges
         the slot as this policy would."""
-        return self.signature_sees(module) and self.under_policy(module, policy)
+        return self.under_policy(module, policy) and self.signature_sees(module, row)
 
     def leaves_slot(
         self, row: Edge, owner: str, qualname: str, symbol: str, module: str, bound: str, policy: ShapePolicy
@@ -578,14 +598,14 @@ class ExportPrimitive(RuleType):
         """Whether a slot is left to a signature rule: a public callable's slot whose row that rule
         reads. The row's own module is one it reads for this walk, or such a module holds the copy
         of the slot (`copy_places`); "public" is asked of the callable of the row the rule reads."""
-        if SignaturePrimitive.sees_callable(row) and self.reads_under(owner, policy):
+        if SignaturePrimitive.sees_callable(row) and self.reads_under(owner, policy, row):
             return True
         rest = row.attr("callable")[len(qualname) :]
         for place, name in self.copy_places(symbol, module, bound):
             copy = name + rest
-            if is_private(copy) or not self.reads_under(place, policy):
+            if is_private(copy) or not self.under_policy(place, policy):
                 continue
-            if self.holds_copy(place, copy, row.attr("slot")):
+            if any(self.signature_sees(place, found) for found in self.copies(place, copy, row.attr("slot"))):
                 return True
         return False
 

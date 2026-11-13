@@ -126,6 +126,12 @@ ledger = false
             "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['cross']\nledger = false\n",
             "'cross' is no signature rule",
         ),
+        # the named rule's selection splits into where it reads rows and which slots it judges
+        (
+            "[rules.mixed]\nprimitive = 'signature'\nselect = \"src.module == 'a' or edge.slot == 'return'\"\n"
+            "ledger = false\n[rules.other]\nprimitive = 'export'\nleave_slots_to = ['mixed']\nledger = false\n",
+            "mixes the source with the edge or the destination",
+        ),
         # limits of the config, which both engines judge alike
         (
             "[shapes.c]\nallow = ['class']\n"

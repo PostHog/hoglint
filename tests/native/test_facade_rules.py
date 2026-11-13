@@ -377,6 +377,16 @@ on_unknown = "finding"
 identity   = "facade-slot"
 ledger     = false
 """
+# A signature rule that reads only rows in a test context: it reads no production slot.
+TEST_ONLY_SIGNATURE_RULE = """
+[rules.test-signature]
+primitive  = "signature"
+select     = "src.zone == 'facade'"
+contexts   = { include = ["test"] }
+deny       = "dst.kind == 'model'"
+identity   = "facade-slot"
+ledger     = false
+"""
 DENIED_AT_ERRORS = {"export-shape": [[ORDER, ERRORS, "export-denied(model)"]], "facade-signature": []}
 # A slot is left to the signature rule only where that rule reads the slot's row: in a facade
 # module, in a public callable, or in the copy a facade holds of a function or a data shape's fields
@@ -631,6 +641,15 @@ SLOT_OWNER_CASES = {
             "export-shape": [["posthog.models.team.team.Team", ROUTES, "export-denied(model)"]],
             "facade-signature": [],
         },
+    ),
+    "a facade function a named rule reads in other contexts only": (
+        {
+            "hoglint.toml": ROOT_CONFIG
+            + TEST_ONLY_SIGNATURE_RULE
+            + '\n[rules.export-shape]\nleave_slots_to = { add = ["test-signature"], remove = ["facade-signature"] }\n',
+            f"{SHOP_DIR}/facade/api.py": IMPORTS_ORDER + "def place(order: Order) -> None:\n    pass\n",
+        },
+        {"export-shape": [[ORDER, API, "export-denied(model)"]], "test-signature": []},
     ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),

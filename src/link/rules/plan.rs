@@ -186,6 +186,9 @@ pub struct ExportRulePlan {
 pub struct SlotPolicyPlan {
     pub rest: Option<NodePlan>,
     pub endpoint: String,
+    /// The contexts the rule reads, and the ones it leaves out.
+    pub include: u8,
+    pub exclude: u8,
 }
 
 /// One thing a coverage rule needs covered (`CoverSpec`).

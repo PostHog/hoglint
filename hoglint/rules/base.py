@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 from hoglint.rules.findings import FindingTable
 from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import (
+    EDGE_DEPENDENT_FIELDS,
     NONE,
     UNKNOWN,
     And,
@@ -69,7 +70,6 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "export": ("import", "exposes", "inherit", "decorate"),
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
-EDGE_DEPENDENT_FIELDS = frozenset({"context", "exported"})
 
 
 class RuleType:

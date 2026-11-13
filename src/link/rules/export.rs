@@ -80,8 +80,22 @@ enum Column {
 }
 
 /// A named signature rule's slot policy: the parts of its selection that do not read only the
-/// source (None: none), and the endpoint it reads a row's destination by.
-pub type SlotPolicy = (Option<Node>, Role);
+/// source (None: none), the endpoint it reads a row's destination by, and the contexts it reads
+/// and leaves out.
+pub struct SlotPolicy {
+    pub rest: Option<Node>,
+    pub role: Role,
+    pub include: u8,
+    pub exclude: u8,
+}
+
+impl SlotPolicy {
+    /// Whether the rule's contexts take edge `id`'s (`context_ok`).
+    fn reads(&self, cx: &Cx, id: u32) -> bool {
+        let ctx = cx.link.edges.seen_ctx(id);
+        !((self.include != 0 && ctx & self.include == 0) || ctx & self.exclude != 0)
+    }
+}
 
 /// What an export rule adds to a rule.
 pub struct ExportRule {
@@ -154,7 +168,7 @@ impl ExportRule {
         let policies = self
             .slot_policies
             .iter()
-            .filter_map(|(rest, _)| rest.as_ref());
+            .filter_map(|policy| policy.rest.as_ref());
         self.start
             .iter()
             .chain(self.slot_owners.iter().flatten())
@@ -302,7 +316,7 @@ pub struct Walk<'a> {
     walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
-    slots_seen: FxHashMap<String, bool>,
+    slots_seen: FxHashMap<String, Vec<usize>>,
     /// `ExportPrimitive.bindings`: per export module, the name it hands each symbol out by.
     bindings: FxHashMap<String, FxHashMap<String, String>>,
 }
@@ -733,16 +747,17 @@ impl<'a> Walk<'a> {
         out
     }
 
-    /// `ExportPrimitive.holds_copy`: whether a module holds an exposes row of a callable's slot.
-    fn holds_copy(&mut self, module: Sid, callable_name: &str, slot: &str) -> bool {
+    /// `ExportPrimitive.copies`: a module's exposes rows of a callable's slot.
+    fn copies(&mut self, module: Sid, callable_name: &str, slot: &str) -> Vec<u32> {
         let link = self.cx.link;
         let callable = link.core.it.get("callable");
         let slot_attr = link.core.it.get("slot");
         self.exposes_under(module, callable_name)
             .into_iter()
-            .any(|id| {
+            .filter(|&id| {
                 self.cx.attr(id, callable) == callable_name && self.cx.attr(id, slot_attr) == slot
             })
+            .collect()
     }
 
     /// `ExportPrimitive.copy_places`: (module, name) of each place the producer may hold a copy
@@ -775,8 +790,8 @@ impl<'a> Walk<'a> {
 
     /// `ExportPrimitive.reads_under`: whether a signature rule reads a module's rows for this
     /// walk: it holds for the module, which is a surface of the walk's shape policy.
-    fn reads_under(&mut self, module: &str, shape: usize) -> bool {
-        self.signature_sees(module) && self.under_policy(module, shape)
+    fn reads_under(&mut self, module: &str, shape: usize, id: u32) -> bool {
+        self.under_policy(module, shape) && self.signature_sees(module, id)
     }
 
     /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
@@ -795,44 +810,57 @@ impl<'a> Walk<'a> {
         let link = self.cx.link;
         let row_callable = self.cx.attr(id, link.core.it.get("callable"));
         let owner_name = self.cx.text(owner).to_string();
-        if !is_private(row_callable) && self.reads_under(&owner_name, shape) {
+        if !is_private(row_callable) && self.reads_under(&owner_name, shape, id) {
             return true;
         }
         let rest = &row_callable[qualname.len()..];
         let slot = self.cx.attr(id, link.core.it.get("slot"));
         for (place, name) in self.copy_places(symbol, module, bound) {
             let copy = format!("{name}{rest}");
-            if is_private(&copy) || !self.reads_under(&place, shape) {
+            if is_private(&copy) || !self.under_policy(&place, shape) {
                 continue;
             }
             let Some(place_sid) = link.core.it.get(&place) else {
                 continue;
             };
-            if self.holds_copy(place_sid, &copy, slot) {
-                return true;
+            for found in self.copies(place_sid, &copy, slot) {
+                if self.signature_sees(&place, found) {
+                    return true;
+                }
             }
         }
         false
     }
 
-    /// `ExportPrimitive.signature_sees`: whether a signature rule sees the slots of a module's
-    /// public callables. A module a rule cannot tell about is not seen.
-    fn signature_sees(&mut self, module: &str) -> bool {
-        if let Some(&seen) = self.slots_seen.get(module) {
-            return seen;
+    /// `ExportPrimitive.holding_rules`: the named rules, by place, whose source part holds for a
+    /// module. A module a rule cannot tell about is not held.
+    fn holding_rules(&mut self, module: &str) -> Vec<usize> {
+        if let Some(found) = self.slots_seen.get(module) {
+            return found.clone();
         }
-        let seen = match self.cx.link.core.it.get(module) {
-            None => false,
+        let found = match self.cx.link.core.it.get(module) {
+            None => Vec::new(),
             Some(sid) => {
                 let env = self.cx.module_env(sid);
-                self.rule.slot_owners.iter().any(|owner| match owner {
-                    None => true,
-                    Some(node) => evaluate(node, &env) == Truth::True,
-                })
+                (0..self.rule.slot_owners.len())
+                    .filter(|&at| match &self.rule.slot_owners[at] {
+                        None => true,
+                        Some(node) => evaluate(node, &env) == Truth::True,
+                    })
+                    .collect()
             }
         };
-        self.slots_seen.insert(module.to_string(), seen);
-        seen
+        self.slots_seen.insert(module.to_string(), found.clone());
+        found
+    }
+
+    /// `ExportPrimitive.signature_sees`: whether a named rule reads row `id` in a module: its
+    /// source part holds for the module and its contexts take the row's.
+    fn signature_sees(&mut self, module: &str, id: u32) -> bool {
+        let cx = self.cx;
+        self.holding_rules(module)
+            .into_iter()
+            .any(|at| self.rule.slot_policies[at].reads(&cx, id))
     }
 
     /// `ExportPrimitive.policy_leaves_out`: whether every named signature rule's slot policy is
@@ -844,11 +872,11 @@ impl<'a> Walk<'a> {
         let cx = self.cx;
         let src = cx.src_endpoint(id);
         let mut dsts = Vec::new();
-        for (rest, role) in &self.rule.slot_policies {
-            let Some(rest) = rest else {
+        for policy in &self.rule.slot_policies {
+            let Some(rest) = &policy.rest else {
                 return false;
             };
-            cx.dst_endpoints(id, *role, &mut dsts);
+            cx.dst_endpoints(id, policy.role, &mut dsts);
             if dsts.is_empty() {
                 return false;
             }

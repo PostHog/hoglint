@@ -93,6 +93,8 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
 - One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `leave_slots_to = ["facade-signature"]` in the preset.
   Each name must be a signature rule of the config; any other name is a config error.
+  The named rule's selection must split into conditions that read only `src.*` fields (where it reads rows) and conditions that read none (which slots it judges), joined by `and`; a condition that mixes the two is a config error.
+  A row is left to the rule only where its contexts take the row's, as the rule itself reads it.
   The export rule leaves a slot to a named rule only where that rule reads the slot's row for this walk: the row's own module is one the rule's source selection holds for, or such a module holds the producer's copy of the slot (a handed-out function, a data shape's fields, a contract dataclass's inherited fields), under the name it is handed out or defined by.
   That module must also be a surface of the shape policy the walk runs under: a registration surface that returns a contract class judges that class's fields by its own policy, in full.
   There it judges only the shape of a class in the slot; a model, an unknown type, a missing annotation or an unresolved name is the signature rule's finding, under its own identity.

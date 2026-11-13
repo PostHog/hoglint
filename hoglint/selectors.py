@@ -67,6 +67,10 @@ NONE = Value(State.NONE)
 UNKNOWN = Value(State.UNKNOWN)
 
 
+# Endpoint fields whose value depends on the edge, not on the endpoint alone.
+EDGE_DEPENDENT_FIELDS = frozenset({"context", "exported"})
+
+
 # ── Syntax tree ───────────────────────────────────────────────────
 
 
