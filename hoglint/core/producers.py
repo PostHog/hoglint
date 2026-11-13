@@ -1391,16 +1391,18 @@ class DeclarationProducer(Producer):
         subscript, a `|` union, or the bare name of a builtin type. Another name or attribute chain
         is left out, so a member past a class stays unknown."""
         found = context.alias(module, name)
-        if found is None or found[0] is None:
+        if found is None:
             return None
         scope, row = found
+        if scope is None:
+            return None
         value = row["v"]
         if isinstance(value, dict):
-            return found if "sub" in value or value.get("bin") == "|" else None
+            return (scope, row) if "sub" in value or value.get("bin") == "|" else None
         if "." in value:
             return None
         looked = self.lookup_at(context, SlotLookup(scope, -1, row["l"]), value)
-        return found if self.plain_builtin(looked, value) else None
+        return (scope, row) if self.plain_builtin(looked, value) else None
 
     def expose_alias(
         self, context: BuildContext, graph: Graph, scope: FileScope, bound: str, clause: str, line: int, column: int
