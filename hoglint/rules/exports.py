@@ -195,7 +195,6 @@ class ExportPrimitive(RuleType):
         self.slot_rules = self.named_slot_rules()
         self.slots_seen: dict[str, tuple[SlotRule, ...]] = {}
         self.policy_modules: dict[tuple[str, str], bool] = {}
-        # By the identity of the row Edge: `edges` makes each one once.
         self.left_out: dict[int, bool] = {}
         self.copy_index: dict[str, dict[str, list[int]]] = {}
         # A callable's rows by slot, so a class's fields are not scanned once per field.
@@ -660,9 +659,9 @@ class ExportPrimitive(RuleType):
         """Whether every named signature rule's slot policy is false for a row: the type it
         mentions is no part of what a slot may not hold (an opaque payload), so it is not judged
         as an unknown type here either. Unknown counts as true. Worked out once per row."""
-        found = self.left_out.get(id(row))
+        found = self.left_out.get(row.handle)
         if found is None:
-            found = self.left_out[id(row)] = self.find_policy_leaves_out(row)
+            found = self.left_out[row.handle] = self.find_policy_leaves_out(row)
         return found
 
     def find_policy_leaves_out(self, row: Edge) -> bool:
