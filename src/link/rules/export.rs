@@ -816,7 +816,8 @@ impl<'a> Walk<'a> {
         if !is_private(row_callable) && self.reads_under(&owner_name, shape, id) {
             return true;
         }
-        let rest = &row_callable[qualname.len()..];
+        // A row with no `callable` attr is indexed by its site scope; Python's slice gives "".
+        let rest = row_callable.get(qualname.len()..).unwrap_or("");
         let slot = self.cx.attr(id, link.core.it.get("slot"));
         for (place, name) in self.copy_places(symbol, module, bound) {
             let copy = format!("{name}{rest}");
