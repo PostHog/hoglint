@@ -40,13 +40,15 @@ impl SymbolFacts {
         let mut bases: FxHashMap<String, Vec<String>> = FxHashMap::default();
         let mut decorators: FxHashMap<String, Vec<String>> = FxHashMap::default();
         if let Some(inherit) = link.kind_sid("inherit") {
-            for (owner, _, names, _) in link.class_facts(inherit, "class") {
+            for (owner, surface, names, _, called, resolved) in link.class_facts(inherit, "class") {
+                let names = Self::base_names(link, &surface, names, called, resolved);
                 bases.entry(owner).or_default().extend(names);
             }
         }
         let mut frozen_by: FxHashMap<String, Vec<String>> = FxHashMap::default();
         if let Some(decorate) = link.kind_sid("decorate") {
-            for (owner, surface, names, is_frozen) in link.class_facts(decorate, "decorated") {
+            for (owner, surface, names, is_frozen, _, _) in link.class_facts(decorate, "decorated")
+            {
                 if is_frozen {
                     let found = frozen_by.entry(owner.clone()).or_default();
                     found.push(surface.clone());
@@ -87,6 +89,33 @@ impl SymbolFacts {
             children,
             frozen_by,
         }
+    }
+
+    /// The names of an inherit edge as ancestry reads them: a call's result, and a first-party
+    /// name that is no declared class, are unknown bases (`SymbolFacts.base_names`).
+    fn base_names(
+        link: &Link,
+        surface: &str,
+        names: Vec<String>,
+        called: bool,
+        resolved: bool,
+    ) -> Vec<String> {
+        if called {
+            return vec![format!("?{surface}()")];
+        }
+        if !resolved {
+            return names;
+        }
+        names
+            .into_iter()
+            .map(|name| {
+                if Self::decl(link, &name) == "class" {
+                    name
+                } else {
+                    format!("?{name}")
+                }
+            })
+            .collect()
     }
 
     /// Whether `graph.symbols` holds the name.

@@ -90,7 +90,13 @@ def labeler(tmp_path: Path) -> Labeler:
         )
         .symbol("posthog.models.team.Team")
         .symbol("posthog.models.team.Mystery")
-        .edge("inherit", "posthog.models.team", "django.db.models.Model", attrs=(("class", "Team"),))
+        .edge(
+            "inherit",
+            "posthog.models.team",
+            "django.db.models.Model",
+            resolution=Resolution.EXTERNAL,
+            attrs=(("class", "Team"),),
+        )
         .edge("decorate", "posthog.models.team", "lib.cell_silo_model", attrs=(("decorated", "Team"),))
         .edge(
             "inherit",
@@ -208,7 +214,13 @@ def test_symbol_conflicts_are_a_config_error_when_no_rule_reads_the_symbol(
         GraphBuilder()
         .module("posthog.models.team")
         .symbol("posthog.models.team.Team")
-        .edge("inherit", "posthog.models.team", "django.db.models.Model", attrs=(("class", "Team"),))
+        .edge(
+            "inherit",
+            "posthog.models.team",
+            "django.db.models.Model",
+            resolution=Resolution.EXTERNAL,
+            attrs=(("class", "Team"),),
+        )
         .edge("decorate", "posthog.models.team", "lib.cell_silo_model", attrs=(("decorated", "Team"),))
         .graph
     )

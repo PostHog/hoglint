@@ -124,7 +124,9 @@ class SymbolFacts:
     def add_edges(self, inherits: list[Edge], decorates: list[Edge]) -> None:
         for edge in inherits:
             if edge.attr("class"):
-                self.add_base(f"{edge.site.module}.{edge.attr('class')}", self.names(edge))
+                called, resolved = edge.attr("called") == "1", edge.resolution is Resolution.RESOLVED
+                names = self.base_names(edge.surface, self.names(edge), called, resolved)
+                self.add_base(f"{edge.site.module}.{edge.attr('class')}", names)
         for edge in decorates:
             if not edge.attr("decorated"):
                 continue
@@ -138,6 +140,15 @@ class SymbolFacts:
         if edge.targets:
             return [str(target) for target in edge.targets]
         return [edge.surface] if edge.surface else []
+
+    def base_names(self, surface: str, names: list[str], called: bool, resolved: bool) -> list[str]:
+        """`names` of an inherit edge as ancestry reads them: a call's result, and a first-party
+        name that is no declared class, are unknown bases (`?`)."""
+        if called:
+            return [f"?{surface}()"]
+        if not resolved:
+            return names
+        return [name if self.decl(name) == "class" else f"?{name}" for name in names]
 
     def has(self, symbol: str) -> bool:
         return symbol in self.symbols

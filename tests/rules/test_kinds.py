@@ -50,7 +50,8 @@ def graph_builder() -> GraphBuilder:
         ("Cell", MODEL),
     ]
     for owner, base in bases:
-        builder.edge("inherit", "app.models", base, attrs=(("class", owner),))
+        resolution = Resolution.EXTERNAL if base.startswith("django.") else Resolution.RESOLVED
+        builder.edge("inherit", "app.models", base, resolution=resolution, attrs=(("class", owner),))
     for owner in ("Mystery", "AbstractMystery", "MysteryCell"):
         builder.edge(
             "inherit",

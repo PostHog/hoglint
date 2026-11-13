@@ -679,6 +679,15 @@ fn named_in(wanted: &[Sid], surface: Sid, target: Option<Sid>) -> bool {
     wanted.contains(&surface) || target.is_some_and(|name| wanted.contains(&name))
 }
 
+/// Whether a class base is a call, also under a subscript: `make()`, `make()[T]`.
+fn called_base(base: &V) -> bool {
+    match base {
+        V::Sub(inner, _) => called_base(inner),
+        V::Call(..) => true,
+        _ => false,
+    }
+}
+
 /// A name in a type expression.
 struct Named {
     name: Sid,
@@ -1721,15 +1730,15 @@ impl Producers<'_> {
         fields.iter().map(|(_, field)| field).collect()
     }
 
-    /// One unresolved row per base along the MRO that does not resolve: the fields it adds to
-    /// the generated `__init__` are unknown.
+    /// One unresolved row per base along the MRO that does not resolve or is a call: the fields
+    /// it adds to the generated `__init__` are unknown.
     fn expose_unresolved_bases(&mut self, rows: SlotRows, lineage: &[(usize, u32)]) {
         let facts = self.core.facts.clone();
         for &(owner, idx) in lineage {
             let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
             for base in &node.bases {
                 let (surface, resolved) = self.lookup_value(owner, base, node.s, node.l);
-                if resolved.res != Res::Unresolved {
+                if resolved.res != Res::Unresolved && !called_base(base) {
                     continue;
                 }
                 self.push_unresolved(rows, surface, self.settings.k.fields, None);
@@ -1984,7 +1993,10 @@ impl Producers<'_> {
                     let (surface, resolved) = self.lookup_value(owner, base, enclosing, node.l);
                     let k = &self.settings.k;
                     let index = self.core.it.intern(&position.to_string());
-                    let attrs = [(k.class, qualname), (k.index, index)];
+                    let mut attrs = vec![(k.class, qualname), (k.index, index)];
+                    if called_base(base) {
+                        attrs.push((k.called, k.one));
+                    }
                     let use_ = k.use_base;
                     self.push(
                         INHERIT, owner, enclosing, node.l, node.c, ctx, surface, resolved, use_,

@@ -233,8 +233,9 @@ impl Timings {
     }
 }
 
-/// One inherit or decorate fact for `SymbolFacts`: (owner symbol, surface, names, frozen).
-pub type ClassFact = (String, String, Vec<String>, bool);
+/// One inherit or decorate fact for `SymbolFacts`: (owner symbol, surface, names, frozen,
+/// called, resolved).
+pub type ClassFact = (String, String, Vec<String>, bool, bool, bool);
 
 /// A pack edge to add (`Link::add_pack`), its strings interned and its record found.
 pub struct NewPackRow {
@@ -606,14 +607,17 @@ impl Link {
     }
 
     /// What `SymbolFacts` reads of the inherit or decorate edges, core and pack, in graph order:
-    /// (owner symbol, surface, names, frozen) where the owner is "module.<class or decorated
-    /// attr>", the names are the targets, `?<surface>` when unresolved, else the surface, and
-    /// frozen says a decorator call passed `frozen=True`.
+    /// (owner symbol, surface, names, frozen, called, resolved) where the owner is "module.<class
+    /// or decorated attr>", the names are the targets, `?<surface>` when unresolved, else the
+    /// surface, frozen says a decorator call passed `frozen=True`, called says the edge has the
+    /// attr `called=1` and resolved says the edge resolved to first-party code.
     pub fn class_facts(&mut self, kind: Sid, owner_attr: &str) -> Vec<ClassFact> {
         let Some(owner_key) = self.core.it.get(owner_attr) else {
             return Vec::new();
         };
-        let frozen = (self.core.it.get("frozen"), self.core.it.get("1"));
+        let one = self.core.it.get("1");
+        let frozen = (self.core.it.get("frozen"), one);
+        let called = (self.core.it.get("called"), one);
         let ids = self.index.of_kind(&self.edges, kind).to_vec();
         let core = &self.core;
         let edges = &self.edges;
@@ -640,15 +644,17 @@ impl Link {
             } else {
                 vec![surface.clone()]
             };
-            let is_frozen = match frozen {
-                (Some(key), Some(one)) => edges.attrs_with(id).any(|&pair| pair == (key, one)),
+            let has_pair = |pair: (Option<Sid>, Option<Sid>)| match pair {
+                (Some(key), Some(one)) => edges.attrs_with(id).any(|&found| found == (key, one)),
                 _ => false,
             };
             out.push((
                 format!("{}.{}", core.it.s(module), core.it.s(owner)),
                 surface,
                 names,
-                is_frozen,
+                has_pair(frozen),
+                has_pair(called),
+                edges.res_of(id) == scope::Res::Resolved,
             ));
         }
         out

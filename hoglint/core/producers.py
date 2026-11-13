@@ -147,6 +147,13 @@ def frozen_keyword(call: dict) -> bool:
     return any(pair == ["frozen", True] for pair in call.get("kw", ()))
 
 
+def called_base(base: object) -> bool:
+    """Whether a class base is a call, also under a subscript: `make()`, `make()[T]`."""
+    while isinstance(base, dict) and "sub" in base:
+        base = base["sub"]
+    return isinstance(base, dict) and "call" in base
+
+
 @dataclass(frozen=True, slots=True)
 class Followed:
     """Where a handed-out name leads: a def in an analyzed file, or (scope None) nowhere the
@@ -959,13 +966,16 @@ class DeclarationProducer(Producer):
         rows: SlotRows,
         lineage: list[tuple[FileScope, int]],
     ) -> None:
-        """One unresolved row per base along the MRO that does not resolve: the fields it adds
-        to the generated `__init__` are unknown."""
+        """One unresolved row per base along the MRO that does not resolve or is a call: the
+        fields it adds to the generated `__init__` are unknown."""
         for scope, idx in lineage:
             node = scope.defs[idx]
             for base in node.get("bases", ()):
                 found = context.value_lookup(scope, base, node["s"], node["l"])
-                if found is not None and context.classifier.classify_lookup(found).resolution != Resolution.UNRESOLVED:
+                resolved = (
+                    found is not None and context.classifier.classify_lookup(found).resolution != Resolution.UNRESOLVED
+                )
+                if resolved and not called_base(base):
                     continue
                 graph.edges.append(rows.unresolved(found.surface if found else "", "fields"))
 
@@ -1046,6 +1056,8 @@ class DeclarationProducer(Producer):
                 surface = found.surface if found else ""
                 resolved = context.classifier.classify_lookup(found) if found else UNRESOLVED
                 attrs = (("class", qualname), ("index", str(position)))
+                if called_base(base):
+                    attrs = (*attrs, ("called", "1"))
                 graph.edges.append(
                     self.edge(
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs

@@ -438,6 +438,31 @@ MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n
 REF_UNKNOWN_AT_ERRORS = {"export-shape": [[f"{SHOP}.errors.Ref", ERRORS, "export-unknown"]], "facade-signature": []}
 
 
+MAKES_A_BASE = "def make() -> type:\n    return object\n\n\n"
+# Bases that resolve to something that is no class: a call's result, a function, a variable.
+UNKNOWN_BASES = {
+    "an allowed class with a call base": "class Rejected(Exception, make()):\n    pass\n",
+    "a class whose one base is a call": "class Rejected(make()):\n    pass\n",
+    "an allowed class with a subscript of a call as base": "class Rejected(Exception, make()[int]):\n    pass\n",
+    "an allowed class with a third-party call base": (
+        "from collections import namedtuple\n\n\nclass Rejected(Exception, namedtuple('Pair', 'a b')):\n    pass\n"
+    ),
+    "an allowed class whose call base hides a model method": (
+        "class Mixin:\n    def item(self) -> Order:\n        raise ValueError\n\n\n"
+        "def mixin() -> type:\n    return Mixin\n\n\nclass Rejected(Exception, mixin()):\n    pass\n"
+    ),
+    "an allowed class with an ancestor with a call base": (
+        "class Middle(make()):\n    pass\n\n\nclass Rejected(Exception, Middle):\n    pass\n"
+    ),
+    "an allowed class with a function as base": "class Rejected(Exception, make):\n    pass\n",
+    "an allowed class with a base bound to a call's result": "Base = make()\n\n\nclass Rejected(Exception, Base):\n    pass\n",
+    "an allowed class with a subscript of a variable as base": (
+        "BASES = (ValueError,)\n\n\nclass Rejected(Exception, BASES[0]):\n    pass\n"
+    ),
+}
+REJECTED_UNKNOWN = {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []}
+
+
 def returns(module: str, name: str) -> str:
     """A facade file whose one function returns a class it imports from `module`."""
     return f"from {module} import {name}\n\n\ndef get() -> {name}:\n    raise ValueError\n"
@@ -668,6 +693,53 @@ SLOT_OWNER_CASES = {
             f"from {SHOP}.nowhere import Missing\n\n\nclass Rejected(Exception, Missing):\n    pass\n", "Rejected"
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
+    ),
+    **{case: (handed_out(MAKES_A_BASE + body, "Rejected"), REJECTED_UNKNOWN) for case, body in UNKNOWN_BASES.items()},
+    "an allowed class with a base that names a first-party class through an alias": (
+        handed_out(
+            "class ShopError(Exception):\n    pass\n\n\nBase = ShopError\n\n\nclass Rejected(Base):\n    pass\n",
+            "Rejected",
+        ),
+        CLEAN,
+    ),
+    "an allowed class with a generic base": (
+        handed_out(
+            "from typing import Generic, TypeVar\n\nT = TypeVar('T')\n\n\nclass Rejected(Exception, Generic[T]):\n    pass\n",
+            "Rejected",
+        ),
+        CLEAN,
+    ),
+    "a contract class with a call base": (
+        {f"{SHOP_DIR}/facade/contracts.py": MAKES_A_BASE + "class Rejected(Exception, make()):\n    pass\n"},
+        {"export-shape": [[f"{CONTRACTS}.Rejected", CONTRACTS, "export-unknown"]], "facade-signature": []},
+    ),
+    "a handed-out dataclass with a call base": (
+        handed_out(MAKES_A_BASE + "@dataclasses.dataclass(frozen=True)\nclass Info(make()):\n    total: int\n", "Info"),
+        {
+            "export-shape": [[f"{SHOP}.errors.Info", ERRORS, "export-unknown"]],
+            "facade-signature": [[ERRORS, "Info.__init__", "fields", f"{SHOP}.errors.make"]],
+        },
+    ),
+    "a contract dataclass with a call base": (
+        {
+            f"{SHOP_DIR}/facade/contracts.py": "import dataclasses\n\n\n"
+            + MAKES_A_BASE
+            + "@dataclasses.dataclass(frozen=True)\nclass Info(make()):\n    total: int\n"
+        },
+        {
+            "export-shape": [[f"{CONTRACTS}.Info", CONTRACTS, "export-unknown"]],
+            "facade-signature": [[CONTRACTS, "Info.__init__", "fields", f"{CONTRACTS}.make"]],
+        },
+    ),
+    "a facade function slot that names a class with a call base": (
+        {
+            f"{SHOP_DIR}/errors.py": MAKES_A_BASE + "class Rejected(Exception, make()):\n    pass\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.errors import Rejected\n\n\ndef get(x: Rejected) -> None:\n    pass\n",
+        },
+        {
+            "export-shape": [[f"{SHOP}.errors.Rejected", API, "export-unknown"]],
+            "facade-signature": [[API, "get", "param:x", f"{SHOP}.errors.Rejected"]],
+        },
     ),
     "a type alias in a method of a handed-out exception": (
         handed_out(

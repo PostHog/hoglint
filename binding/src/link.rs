@@ -560,7 +560,8 @@ impl Link {
     }
 
     /// The inherit (`owner_attr` "class") or decorate ("decorated") facts of every edge, core
-    /// and pack, for SymbolFacts: [(owner symbol, surface, names, frozen)] in graph order.
+    /// and pack, for SymbolFacts: [(owner symbol, surface, names, frozen, called, resolved)] in
+    /// graph order.
     fn class_facts(&mut self, kind: &str, owner_attr: &str) -> Vec<ClassFact> {
         match self.inner.kind_sid(kind) {
             Some(kind) => self.inner.class_facts(kind, owner_attr),

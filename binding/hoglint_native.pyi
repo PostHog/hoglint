@@ -144,8 +144,9 @@ class Link:
     def subclasses(self, qualified: str) -> list[Pair]:
         """Module-level classes of the analyzed modules whose MRO holds `qualified`, the class
         itself included, in scope and table order: `is_subclass` asked of every class at once."""
-    def class_facts(self, kind: str, owner_attr: str) -> list[tuple[str, str, list[str], bool]]:
-        """(owner, surface, names, frozen) of the inherit or decorate edges, core and pack."""
+    def class_facts(self, kind: str, owner_attr: str) -> list[tuple[str, str, list[str], bool, bool, bool]]:
+        """(owner, surface, names, frozen, called, resolved) of the inherit or decorate edges, core
+        and pack."""
     def add_symbol_facts(self, facts: list[tuple[str, list[tuple[str, str]]]]) -> None:
         """Records the facts packs wrote for some symbols: each symbol's (key, value) pairs replace
         whatever was written for it before, as `NativeSymbols.update` does."""

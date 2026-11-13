@@ -135,6 +135,18 @@ CASES = [
         ("target", "spelled"),
     ),
     Case(
+        "a base class in another file turns into a call",
+        {
+            "app/mid.py": "from app.base import Model\n\n\nclass Mid(Model):\n    pass\n",
+            "app/thing.py": "from app.mid import Mid\n\n\nclass Plain(Mid):\n    pass\n",
+            "app/views/__init__.py": "",
+            "app/views/page.py": "from app.thing import Plain\n",
+        },
+        {"app/mid.py": "from app.base import Model\n\n\nclass Mid(Model()):\n    pass\n"},
+        "app/views/page.py",
+        ("target", "spelled"),
+    ),
+    Case(
         "a handed-out function's annotation changes in its origin file",
         {
             "app/logic.py": "def charge(amount: int) -> None:\n    pass\n",
