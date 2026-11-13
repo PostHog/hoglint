@@ -16,11 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
-from hoglint.core.build import CoreBuild
+from hoglint.core.build import CoreBuild, python_pack_io
 from hoglint.core.config import CoreConfig
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.core.modules import FirstParty
-from hoglint.core.reader import python_pack_io
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.packs.django.config import SECTION, DjangoPackConfig

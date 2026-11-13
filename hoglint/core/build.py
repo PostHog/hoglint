@@ -10,6 +10,7 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.harness import GraphSink, ProducerPlan, ProducerStep
 from hoglint.core.modules import FirstParty, ModuleIndex, ModuleNamer
 from hoglint.core.producers import PRODUCERS, BuildContext, Producer
+from hoglint.core.reader import BuildReader
 from hoglint.core.records import RecordBodies, chain_tokens, last_name, leading_attrs
 from hoglint.core.resolver import ClassIndex, RecordFileScope, RecordTables, Resolver
 from hoglint.core.symbols import absolute_import
@@ -204,3 +205,8 @@ class PackQueries:
         """A digest of a file's facts of `kinds`, for a pack that caches what it reads from one
         file. None when the engine has no fact text to digest: the pack reads the file instead."""
         return None
+
+
+def python_pack_io(build: CoreBuild, graph: Graph) -> tuple[BuildReader, GraphSink]:
+    """The reader and sink packs get on the Python engine."""
+    return BuildReader(build, PackQueries(build, graph)), GraphSink(graph)

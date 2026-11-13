@@ -145,7 +145,7 @@ class GraphSource:
 
     def build_fresh(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> Graph:
         from hoglint.core.analysis import AnalysisOptions, CoreAnalysis  # noqa: PLC0415 - see fact_needs
-        from hoglint.core.reader import python_pack_io  # noqa: PLC0415 - see fact_needs
+        from hoglint.core.build import python_pack_io  # noqa: PLC0415 - see fact_needs
 
         packs = active_packs(config)
         work = Path(tempfile.mkdtemp(dir=self.work_dir))

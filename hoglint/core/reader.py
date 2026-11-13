@@ -1,7 +1,4 @@
-"""The pack reader (`hoglint.plugins.PackReader`) over an engine's build and candidate queries.
-
-Both engines give packs this one reader; what differs is the build (decoded records, or the
-native link) and the queries (`PackQueries` or `NativePackQueries`).
+"""The pack reader (`hoglint.plugins.PackReader`) over the native build and its candidate queries.
 
 While an item runs (hoglint/core/memo.py), each query notes what it read: a file's facts when its
 answer comes from that file alone, else the question and its answer.
@@ -12,12 +9,14 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from hoglint.core.build import CoreBuild, PackQueries
-from hoglint.core.harness import GraphSink
 from hoglint.core.memo import NULL_TRACER, PackMemo, TracedQuery, digest, edge_form, key_of
+from hoglint.core.modules import ModuleIndex
 from hoglint.core.records import RecordBodies
 from hoglint.core.sites import FileScope
-from hoglint.model import Edge, EntityId, Graph
+from hoglint.core.symbols import Tables
+from hoglint.model import Edge, EntityId
+from hoglint.native.build import NativeBuild
+from hoglint.native.queries import NativePackQueries
 from hoglint.plugins import AttributeUse, EdgeBatch
 
 if TYPE_CHECKING:
@@ -44,14 +43,14 @@ class BuildReader:
     """What a pack reads of one snapshot. `memo` is the run's pack memo, None when it is off;
     `tracer` is its tracer, or one that notes nothing."""
 
-    def __init__(self, build: CoreBuild, queries: PackQueries, memo: PackMemo | None = None) -> None:
+    def __init__(self, build: NativeBuild, queries: NativePackQueries, memo: PackMemo | None = None) -> None:
         self.build = build
         self.queries = queries
         self.scopes = build.files
         self.record_paths = list(build.store.records)
-        self.index = build.index
+        self.index: ModuleIndex = build.index
         self.first_party = build.first_party
-        self.tables = build.tables
+        self.tables: Tables = build.tables
         self.resolver = build.resolver
         self.classes = build.classes
         self.context = build.context
@@ -171,8 +170,3 @@ class BuildReader:
 
     def subclasses(self, qualified: str) -> list[EntityId]:
         return self.subclasses_read(qualified)
-
-
-def python_pack_io(build: CoreBuild, graph: Graph) -> tuple[BuildReader, GraphSink]:
-    """The reader and sink packs get on the Python engine."""
-    return BuildReader(build, PackQueries(build, graph)), GraphSink(graph)
