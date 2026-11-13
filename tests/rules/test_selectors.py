@@ -1,24 +1,11 @@
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from hoglint.selectors import (
-    NONE,
-    UNKNOWN,
-    Catalog,
-    ClassSelection,
-    FieldInfo,
-    FieldType,
-    Ref,
-    Selector,
-    SelectorError,
-    Truth,
-    Value,
-)
+from hoglint.selectors import NONE, UNKNOWN, Catalog, FieldInfo, FieldType, Ref, Selector, SelectorError, Truth, Value
 
 VALUES: dict[str, Value] = {
     "src.package": Value.known("billing"),
@@ -130,28 +117,6 @@ class MissingSideCase:
 def test_a_missing_side_differs_from_every_value_and_equals_another_missing_side(case: MissingSideCase) -> None:
     assert Selector.parse(case.text()).evaluate(case.resolve) is case.truth
     assert Selector.parse(f"not ({case.text()})").evaluate(case.resolve) is case.negated
-
-
-def test_a_selector_judged_per_label_class_answers_like_evaluating_each_entity() -> None:
-    selector = Selector.parse(
-        "src.package != dst.package and (dst.package == 'core' or dst.tier == 'product') "
-        "and dst.zone in ['facade', 'logic'] and not dst.role == 'feature'"
-    )
-    classes = ClassSelection(selector.node)
-    choices = {
-        "src.package": [Value.known("billing"), Value.known("core")],
-        "dst.package": [Value.known("billing"), Value.known("core"), UNKNOWN],
-        "dst.tier": [Value.known("product"), Value.known("core"), Value.known("billing"), NONE, UNKNOWN],
-        "dst.zone": [Value.known("contracts", chain=("contracts", "facade")), Value.known("logic"), NONE],
-        "dst.role": [Value.known("feature"), NONE, UNKNOWN],
-    }
-    for picked in itertools.product(*choices.values()):
-        values = dict(zip(choices, picked))
-
-        def resolve(ref: Ref, values: dict[str, Value] = values) -> Value:
-            return values[str(ref)]
-
-        assert classes.truth(resolve) is selector.evaluate(resolve), values
 
 
 CATALOG = Catalog(

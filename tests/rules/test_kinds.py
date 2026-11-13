@@ -9,7 +9,7 @@ from hoglint.index import GraphIndex, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.model import Resolution
 from hoglint.rules.engine import Engine
-from hoglint.selectors import NONE, UNKNOWN, State, Truth, Value
+from hoglint.selectors import NONE, UNKNOWN, Truth, Value
 
 from rules.support import GraphBuilder, config_from, native_graph
 
@@ -114,14 +114,6 @@ def test_kind_sets_answer_like_classifying_each_symbol(tmp_path: Path) -> None:
     for name in names:
         for first_party in (True, False):
             assert labeler.kind(name, first_party) == classify(labeler, name, first_party), (name, first_party)
-    for wanted in ({"model"}, {"manager", "cell"}, {"handler"}, {"no-such-kind"}):
-        kinds = {symbol: classify(labeler, symbol, True)[0] for symbol in sorted(graph.symbols)}
-        expected = [
-            symbol
-            for symbol, value in kinds.items()
-            if value.state is State.UNKNOWN or (value.state is State.KNOWN and value.data in wanted)
-        ]
-        assert labeler.kind_candidates(frozenset(wanted)) == expected, wanted
     conflicts = {name for name in names if classify(labeler, name, True)[1] == "conflicting kinds"}
     assert conflicts == {"app.models.Both", "app.models.Cell"}
     assert {line.partition(":")[0] for line in labeler.find_conflicts()} == conflicts

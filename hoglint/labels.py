@@ -13,29 +13,18 @@ from functools import cached_property
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from hoglint.config.model import (
-    Assignment,
-    Config,
-    Domain,
-    ExportSpec,
-    FieldSpec,
-    KindSpec,
-    LevelSpec,
-    ProviderSpec,
-    RegistrySpec,
-)
+from hoglint.config.model import Assignment, Config, Domain, FieldSpec, KindSpec, LevelSpec, ProviderSpec, RegistrySpec
 from hoglint.config.schema import ENTITY_FIELDS, canonical
 from hoglint.globs import CAPTURE_RE, GlobIndex, compile_label_glob, fill, glob_match
 from hoglint.index import GraphIndex, Memo, index_of
 from hoglint.model import Context, Edge, Graph, Resolution
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, Provided
-from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, any_of, members, refs
+from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, members
 
 REGISTRY_FIELD = "registry"
 HANDED_ZONES = "handed_zones"
 # Entity attributes the labeler answers itself; every other name is a declared field.
 BUILTIN_ENTITY_NAMES = frozenset({*ENTITY_FIELDS, "kind", "subject"})
-MODULE_LEVEL_BUILTINS = frozenset({"module", "path", "external", "registry", "lifecycle", HANDED_ZONES})
 # A type-only or test import hands nothing out (the export primitive's default exclude).
 NOT_HANDED_CONTEXTS = frozenset({Context.TYPE_ONLY, Context.TEST})
 
@@ -301,26 +290,9 @@ class Labeler:
         self.symbol_labels = Memo(self.label_symbol)
         self.handed_zones = Memo(self.find_handed_zones)
         self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
-        self.export_member = Memo(self.find_export_member)
-        self.path_exports = Memo(self.find_path_exports)
         self.module_ordinal = {module: at for at, module in enumerate(graph.modules)}
         self.columns: dict[str, list[tuple[Value, str] | None]] = {}
         self.sparse_values: dict[tuple[str | None, str | None, str], tuple[Value, str]] = {}
-        self.exported_cache: dict[tuple[str | None, str | None, str | None, str | None], Truth] = {}
-        self.audience_by_module = all(
-            spec.audience is None or all(self.module_level(ref) for ref in refs(spec.audience.node))
-            for spec in config.exports.values()
-        )
-
-    def module_level(self, ref: Ref) -> bool:
-        """Whether `src.<name>` or `dst.<name>` reads only the endpoint's module, never its symbol or edge."""
-        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst"):
-            return False
-        name = ref.path[1]
-        if name in MODULE_LEVEL_BUILTINS:
-            return True
-        spec = self.config.fields.get(name)
-        return spec is not None and spec.on == "module"
 
     # ── modules and paths ──
 
@@ -601,16 +573,6 @@ class Labeler:
             return UNKNOWN, "no facts for this symbol, or a base did not resolve"
         return NONE, "no kind matches"
 
-    def kind_candidates(self, wanted: frozenset[str]) -> list[str]:
-        """The symbols with facts whose kind is not known to be outside `wanted`, sorted: members of
-        a wanted kind, names two kinds hold, and symbols of unknown kind."""
-        sets = self.kind_sets
-        found = set(sets.unknown)
-        for name in wanted:
-            found.update(sets.members.get(name, ()))
-        found.update(symbol for symbol, kinds in sets.kinds_of.items() if len(kinds) > 1)
-        return sorted(symbol for symbol in found if self.facts.has(symbol))
-
     # ── values ──
 
     def in_domain(self, domain: Domain | None, path: str | None, resolve: Resolver) -> bool:
@@ -818,85 +780,6 @@ class Labeler:
         """A module field's value as text when it is known."""
         value, _ = self.field_value(module, None, name)
         return str(value.data) if value.state is State.KNOWN else None
-
-    # ── exports ──
-
-    def find_path_exports(self, path: str) -> frozenset[str]:
-        """The exports whose `within` and `paths` the path lies inside."""
-        return frozenset(spec.name for spec in self.config.exports.values() if spec.files.covers(path))
-
-    def export_covers(self, spec: ExportSpec, path: str) -> bool:
-        """Whether the path lies inside the export's `within` and `paths`."""
-        return spec.name in self.path_exports(path)
-
-    def find_export_member(self, key: tuple[str, str, str | None]) -> Truth:
-        """Whether a module (symbol None) or a symbol at `path` belongs to the export.
-
-        With `subclass_of` only symbols count: a listed base itself, or a class that inherits one.
-        With `symbols` only the listed symbols count.
-        """
-        name, path, symbol = key
-        spec = self.config.exports[name]
-        if not self.export_covers(spec, path):
-            return Truth.FALSE
-        if spec.symbols:
-            return Truth.of(symbol in spec.symbols)
-        if not spec.subclass_of:
-            return Truth.TRUE
-        if symbol is None:
-            return Truth.FALSE
-        ancestors, complete = self.facts.ancestors(symbol)
-        if set(spec.subclass_of) & (ancestors | {symbol}):
-            return Truth.TRUE
-        return Truth.FALSE if complete else Truth.UNKNOWN
-
-    def exported(
-        self,
-        module: str | None,
-        symbol: str | None,
-        audience_resolver: Resolver,
-        src: tuple[str | None, str | None] | None = None,
-    ) -> Truth:
-        """Is this module or symbol in an export whose audience includes the caller?
-
-        `src` is the caller's (module, path); when every audience reads only module-level fields
-        the answer is cached on it."""
-        key = (*src, module, symbol) if src is not None and self.audience_by_module else None
-        if key is not None and key in self.exported_cache:
-            return self.exported_cache[key]
-        truth = self.compute_exported(module, symbol, audience_resolver)
-        if key is not None:
-            self.exported_cache[key] = truth
-        return truth
-
-    def hands_out(self, module: str, symbol: str | None) -> Truth:
-        """Whether a module hands out the name a symbol in it is bound by (`Graph.hand_outs`). A
-        name it does not bind by import is its own definition; one it imports and keeps to itself
-        is no part of what it exports, unknown when its `__all__` cannot be read."""
-        hand_out = self.graph.hand_outs.get(module)
-        if hand_out is None or symbol is None or not symbol.startswith(f"{module}."):
-            return Truth.TRUE
-        name = symbol[len(module) + 1 :].split(".", 1)[0]
-        if name not in hand_out.kept:
-            return Truth.TRUE
-        return Truth.UNKNOWN if hand_out.unread else Truth.FALSE
-
-    def compute_exported(self, module: str | None, symbol: str | None, audience_resolver: Resolver) -> Truth:
-        path = self.path_of(module) if module else None
-        if module is None or path is None:
-            return Truth.UNKNOWN
-        handed = self.hands_out(module, symbol)
-        if handed is not Truth.TRUE:
-            return handed
-        results: list[Truth] = []
-        for spec in self.config.exports.values():
-            truth = self.export_member((spec.name, path, symbol))
-            if truth is Truth.FALSE:
-                continue
-            if truth is Truth.TRUE and spec.audience is not None:
-                truth = spec.audience.evaluate(audience_resolver)
-            results.append(truth)
-        return any_of(results)
 
     def level_groups(self, spec: LevelSpec) -> list[str] | None:
         """The groups a level judges, when a labeler that holds every module's labels finds them

@@ -8,7 +8,6 @@ rules come back as rows that hold what a message names: the rule's Python class 
 
 from __future__ import annotations
 
-import json
 from array import array
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import cached_property
@@ -16,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from hoglint.config.model import Config
-from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
+from hoglint.index import DECL_NAMES, MODULE_SCOPE, GraphIndex, Memo, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
 from hoglint.model import Edge, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow, owner_module
@@ -39,32 +38,9 @@ from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
-from hoglint.rules.plan import tree
-from hoglint.selectors import Node, Truth
+from hoglint.selectors import Truth
 
 T = TypeVar("T")
-
-
-class LazyKinds(Mapping[str, list[Edge]]):
-    """kind -> every edge of that kind, made on first read."""
-
-    def __init__(self, graph: NativeGraph, kinds: list[str]) -> None:
-        self.graph = graph
-        self.kinds = kinds
-        self.made: dict[str, list[Edge]] = {}
-
-    def __getitem__(self, kind: str) -> list[Edge]:
-        if kind not in self.kinds:
-            raise KeyError(kind)
-        if kind not in self.made:
-            self.made[kind] = self.graph.by_kind(kind)
-        return self.made[kind]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.kinds)
-
-    def __len__(self) -> int:
-        return len(self.kinds)
 
 
 class LazyModules(Mapping[str, Any]):
@@ -92,30 +68,6 @@ class LazyModules(Mapping[str, Any]):
     def __contains__(self, module: object) -> bool:
         """Membership with no value made: `Mapping.__contains__` would make it."""
         return module in self.known
-
-
-class LazyGroups(Mapping[str, LazyModules]):
-    """kind -> its edges per source module (`NativeGraphIndex.group`), the module list read
-    from the link on first read."""
-
-    def __init__(self, index: NativeGraphIndex, kinds: list[str]) -> None:
-        self.index = index
-        self.kinds = kinds
-        self.made: dict[str, LazyModules] = {}
-
-    def __getitem__(self, kind: str) -> LazyModules:
-        if kind not in self.kinds:
-            raise KeyError(kind)
-        found = self.made.get(kind)
-        if found is None:
-            found = self.made[kind] = LazyModules(self.index.modules_of(kind), self.index.group_maker(kind))
-        return found
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.kinds)
-
-    def __len__(self) -> int:
-        return len(self.kinds)
 
 
 class NativeSymbolFacts(SymbolFacts):
@@ -469,13 +421,11 @@ class NativeRuleContext(RuleContext):
             seen = rows.seen(at, rows.alone_edges[rows.edges[at]])
             yield at, rule.worded(seen, rows.judgment(at))
 
-    def judged(self, rule: EdgeRule) -> bool:
+    def judged(self, rule: EdgeRule) -> None:
         """The evaluator's rows of an edge, entrypoint, signature or use-shape rule, into the
         rule's findings table in the order the rule judges: a violation (or a slot of unknown
         type the rule reports as a finding) is a row of the evaluator's columns, and a row the
         rule's `report` words is a row it made."""
-        if rule.NATIVE_MODE != "judge":
-            return False
         rows = JudgedRows(self, rule, self.run_rule(self.evaluator.judge, rule))
         table = rule.run.findings
         number = table.take(rows)
@@ -486,7 +436,6 @@ class NativeRuleContext(RuleContext):
             rule.run.incomplete.extend(reported.incomplete)
             start = at + 1
         table.add_rows(number, start, len(rows.edges))
-        return True
 
     def export_run(self, rule: ExportPrimitive) -> RuleRun:
         """The evaluator's check of an export rule, its rows made into findings and incomplete
@@ -519,7 +468,7 @@ class NativeRuleContext(RuleContext):
             run.findings.append(finding)
         return run
 
-    def inventory_judged(self, rule: EdgeInventory) -> bool:
+    def inventory_judged(self, rule: EdgeInventory) -> None:
         """The evaluator's rows of an inventory over edges: the first destination with each
         identity, kept as a handle, and the ones it cannot place, which the rule reports itself;
         then the classification file's entries, as `EdgeInventory.evaluate` compares them."""
@@ -549,11 +498,8 @@ class NativeRuleContext(RuleContext):
             rule.run.findings.append(finding)
         for identity in sorted(classified - set(seen)):
             rule.run.findings.append(self.finding(spec, identity, rule.stale(identity), None, ledgerable=False))
-        return True
 
-    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
-        if rule.NATIVE_MODE != "entities":
-            return None
+    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]]:
         return self.run_rule(self.evaluator.entities, rule)
 
     def layout_roots(self, within: str) -> list[str]:
@@ -617,21 +563,6 @@ class NativeRuleContext(RuleContext):
             out.append(Found(what, source, walked, seen, verdict))
         return out
 
-    def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
-        return list(dict.fromkeys(kinds)) if kinds else self.native.kind_order()
-
-    def edges_passing(self, kinds: tuple[str, ...], node: Node | None) -> list[Edge]:
-        """`node`, which reads only an edge's kind and contexts, judged by the evaluator; only the
-        edges it does not make false become Edges."""
-        if node is None or not kinds:
-            return super().edges_passing(kinds, node)
-        with engine_errors():
-            passing = array("I", self.evaluator.passing(list(kinds), json.dumps(tree(node))))
-        return self.native.native.core.get(passing)
-
-    def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
-        return sorted({module for kind in self.kinds_or_all(kinds) for module in self.native.modules_of(kind)})
-
 
 class NativeGraphIndex(GraphIndex):
     """GraphIndex over a NativeGraph: nothing reads every edge unless a caller asks for it."""
@@ -641,18 +572,12 @@ class NativeGraphIndex(GraphIndex):
         self.native = graph
         self.core_count: int = graph.link.core_count()
         self.module_order: dict[str, list[str]] = {}
-        self.by_kind = LazyKinds(graph, self.kind_order())
-        self.groups = LazyGroups(self, self.kind_order())
         self.facts = NativeSymbolFacts(graph)
         self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_of_symbol = Memo(self.find_module)
 
     context_class: type[RuleContext] = NativeRuleContext
     labeler_class: type[Labeler] = NativeLabeler
-
-    def kind_order(self) -> list[str]:
-        """Kinds in the order their first edge appears: core kinds, then pack kinds."""
-        return list(self.native.link.kind_order())
 
     def modules_of(self, kind: str) -> list[str]:
         """Source modules of `kind` in the order their first edge appears."""
@@ -661,28 +586,9 @@ class NativeGraphIndex(GraphIndex):
             found = self.module_order[kind] = self.native.link.source_modules(kind)
         return found
 
-    def pack_edges(self, kind: str, module: str) -> list[Edge]:
-        """The pack edges of `kind` from one module."""
-        ids = array("I", self.native.link.ids_from(kind, module))
-        return self.native.core.get(array("I", (i for i in ids if i >= self.core_count)))
-
-    def is_irregular(self, edge: Edge) -> bool:
-        site = edge.site
-        if has_endpoint_attrs(edge):
-            return True
-        return bool(site.path) and site.path != self.graph.modules.get(site.module)
-
     def module_edges(self, kind: str, module: str) -> list[Edge]:
         """One module's edges of one kind, core then pack, with no irregular edges sorted out."""
         return self.native.core.get(array("I", self.native.link.ids_from(kind, module)))
-
-    def group(self, kind: str, module: str) -> EdgeGroup:
-        """One module's edges of one kind, core then pack."""
-        edges = self.module_edges(kind, module)
-        return EdgeGroup(edges, [edge for edge in edges if self.is_irregular(edge)])
-
-    def group_maker(self, kind: str) -> Any:
-        return lambda module: self.group(kind, module)
 
     @cached_property
     def ordinals(self) -> dict[int, int]:  # type: ignore[override]

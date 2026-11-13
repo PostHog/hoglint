@@ -5,11 +5,9 @@ so compare's runs under two policies over one snapshot index it once."""
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterable, Mapping
-from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Generic, TypeVar
 
-from hoglint.core.config import DataclassDecorators
 from hoglint.model import Edge, Graph, Resolution, set_handle
 from hoglint.selectors import split_list
 
@@ -32,21 +30,6 @@ class Memo(Generic[K, V]):
             return self.values[key]
         value = self.values[key] = self.compute(key)
         return value
-
-
-def has_endpoint_attrs(edge: Edge) -> bool:
-    """Whether the edge sets `src.*`/`dst.*` attributes, which override its endpoints' labels."""
-    return bool(edge.attrs) and any(name.startswith(("src.", "dst.")) for name, _ in edge.attrs)
-
-
-@dataclass(frozen=False, slots=True)
-class EdgeGroup:
-    """The edges of one kind from one module. `irregular` holds the ones a module-wide answer
-    cannot speak for: an edge with its own `src.*`/`dst.*` attributes, or a site path that is not
-    the module's."""
-
-    edges: list[Edge] = field(default_factory=list)
-    irregular: list[Edge] = field(default_factory=list)
 
 
 def written_facts(symbols: Mapping[str, Mapping[str, str]]) -> Iterable[tuple[str, Mapping[str, str]]]:
@@ -151,18 +134,6 @@ class SymbolFacts:
     def decorators(self, symbol: str) -> list[str]:
         return self.decorator_map.get(symbol, []) + split_list(self.get(symbol, "decorators"))
 
-    def is_dataclass(self, symbol: str, kinds: DataclassDecorators) -> bool:
-        return bool(kinds.make & set(self.decorators(symbol))) or self.get(symbol, "dataclass") == "true"
-
-    def is_frozen(self, symbol: str, kinds: DataclassDecorators) -> bool:
-        """A dataclass decorator call passes `frozen=True`, or a decorator that always freezes
-        makes the class."""
-        if self.get(symbol, "frozen") == "true":
-            return True
-        if kinds.make & set(self.frozen_by.get(symbol, ())):
-            return True
-        return bool(kinds.freeze & set(self.decorators(symbol)))
-
     @cached_property
     def children(self) -> dict[str, list[str]]:
         """base -> the classes that name it as a base: `bases` read backwards. Read after every
@@ -215,20 +186,11 @@ class GraphIndex:
     def __init__(self, graph: Graph) -> None:
         self.graph = graph
         by_kind: dict[str, list[Edge]] = {}
-        groups: dict[str, dict[str, EdgeGroup]] = {}
         for at, edge in enumerate(graph.edges):
             if edge.handle != at:
                 set_handle(edge, at)  # an edge appended to `Graph.edges` directly
-            site = edge.site
             by_kind.setdefault(edge.kind, []).append(edge)
-            group = groups.setdefault(edge.kind, {}).get(site.module)
-            if group is None:
-                group = groups[edge.kind][site.module] = EdgeGroup()
-            group.edges.append(edge)
-            if has_endpoint_attrs(edge) or (site.path and site.path != graph.modules.get(site.module)):
-                group.irregular.append(edge)
         self.by_kind: Mapping[str, list[Edge]] = by_kind
-        self.groups: Mapping[str, Mapping[str, EdgeGroup]] = groups
         self.facts = SymbolFacts(
             graph, by_kind.get("inherit", []), by_kind.get("decorate", []), by_kind.get("declares", [])
         )
@@ -259,14 +221,6 @@ class GraphIndex:
         """Each edge's place among edges with the same module, scope, kind and surface, by its
         handle. An edge object a producer repeats has one handle, so it keeps its last place."""
         return self.count_ordinals()
-
-    @cached_property
-    def sorted_modules(self) -> list[tuple[str, str]]:
-        return sorted(self.graph.modules.items())
-
-    @cached_property
-    def sorted_symbols(self) -> list[str]:
-        return sorted(self.graph.symbols)
 
     @cached_property
     def module_imports(self) -> dict[str, list[Edge]]:

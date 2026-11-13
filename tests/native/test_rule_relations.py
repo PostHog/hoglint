@@ -188,7 +188,7 @@ class Seen:
 
     def __init__(self, judge: Judge, name: str) -> None:
         rule = judge.rule(name)
-        self.kinds = sorted(rule.kind_set)
+        self.kinds = sorted(set(rule.kinds()))
         self.include = sorted(rule.include)
         self.exclude = sorted(rule.exclude)
         self.endpoint = judge.config.rules[name].endpoint
@@ -550,9 +550,10 @@ class Relations:
         spec = judge.config.rules[name]
         include = frozenset(spec.contexts_include)
         exclude = frozenset(spec.contexts_exclude or ())
+        kinds = frozenset(rule.kinds())
         out: Counter[bool] = Counter()
         for edge in self.world.graph.edges:
-            if rule.kind_set and edge.kind not in rule.kind_set:
+            if kinds and edge.kind not in kinds:
                 continue
             if edge.resolution is Resolution.NOT_APPLICABLE:
                 continue
