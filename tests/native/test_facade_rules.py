@@ -1393,6 +1393,119 @@ def test_export_shape_judges_a_slot_no_signature_rule_reads(
     assert {rule: findings_of(out["native"], rule) for rule in expected} == expected
 
 
+# A model, a frozen dataclass, an exception whose method returns the model, a function and a plain
+# class, behind a `__future__` import.
+STAR_SOURCE = (
+    "from __future__ import annotations\n\nimport dataclasses\n\nfrom products.shop.backend.models import Order\n\n\n"
+    + ORDER_DATACLASS.format(name="Receipt")
+    + "\n\nclass Rejected(Exception):\n    def item(self) -> Order:\n        raise ValueError\n\n\n"
+    "def place(order: Order) -> None:\n    pass\n\n\nclass Loose:\n    pass\n"
+)
+LISTS_FIVE = "\n\n__all__ = ['Order', 'Receipt', 'Rejected', 'place', 'Loose']\n"
+STAR = "from products.shop.backend.errors import *\n"
+FIVE_ROWS = {
+    "export-shape": [[f"{SHOP}.errors.Loose", ERRORS, "export-shape(class)"], [ORDER, ERRORS, "export-denied(model)"]],
+    "facade-signature": [[ERRORS, "Receipt.__init__", "field:order", ORDER], [ERRORS, "place", "param:order", ORDER]],
+}
+UNREAD_STAR = f"{SHOP}.errors.*"
+# A star import hands out what the same names, imported by name, hand out: each name it binds is an
+# import edge of its own. A star the engine cannot read is an unresolved import.
+STAR_CASES = {
+    "a star import of a source with __all__": (
+        {f"{SHOP_DIR}/errors.py": STAR_SOURCE + LISTS_FIVE, f"{SHOP_DIR}/facade/errors.py": STAR},
+        FIVE_ROWS,
+    ),
+    "the same five names imported by name": (
+        {
+            f"{SHOP_DIR}/errors.py": STAR_SOURCE + LISTS_FIVE,
+            f"{SHOP_DIR}/facade/errors.py": STAR.replace("*", "Order, Receipt, Rejected, place, Loose"),
+        },
+        FIVE_ROWS,
+    ),
+    "a star import of a source with no __all__": (
+        {f"{SHOP_DIR}/errors.py": STAR_SOURCE, f"{SHOP_DIR}/facade/errors.py": STAR},
+        FIVE_ROWS,
+    ),
+    "a star import of a module that star-imports": (
+        {
+            f"{SHOP_DIR}/errors.py": STAR_SOURCE + LISTS_FIVE,
+            f"{SHOP_DIR}/again.py": STAR,
+            f"{SHOP_DIR}/facade/errors.py": STAR.replace("errors", "again"),
+        },
+        FIVE_ROWS,
+    ),
+    "a star import whose names the facade lists": (
+        {
+            f"{SHOP_DIR}/errors.py": STAR_SOURCE + LISTS_FIVE,
+            f"{SHOP_DIR}/facade/errors.py": STAR
+            + "\n__all__ = ['Order', 'Rejected', 'noop']\n\n\ndef noop() -> None:\n    pass\n",
+        },
+        DENIED_AT_ERRORS,
+    ),
+    "a star import of a source whose __all__ cannot be read": (
+        {
+            f"{SHOP_DIR}/errors.py": STAR_SOURCE + "\n\n__all__ = sorted(globals())\n",
+            f"{SHOP_DIR}/facade/errors.py": STAR,
+        },
+        {
+            "export-shape": [[UNREAD_STAR, ERRORS, "unresolved-import"]],
+            "facade-signature": [[ERRORS, "*", "signature", UNREAD_STAR]],
+        },
+    ),
+    "a star import whose source lists a name it does not bind": (
+        {
+            f"{SHOP_DIR}/errors.py": STAR_SOURCE + "\n\n__all__ = ['Rejected', 'Ghost']\n",
+            f"{SHOP_DIR}/facade/errors.py": STAR,
+        },
+        {
+            "export-shape": [
+                [f"{SHOP}.errors.Ghost", ERRORS, "unresolved-import"],
+                [ORDER, ERRORS, "export-denied(model)"],
+            ],
+            "facade-signature": [[ERRORS, "Ghost", "signature", f"{SHOP}.errors.Ghost"]],
+        },
+    ),
+    "a star import whose source lists a private class": (
+        {
+            f"{SHOP_DIR}/errors.py": IMPORTS_ORDER
+            + "class _Hidden(Exception):\n    def item(self) -> Order:\n        raise ValueError\n\n\n__all__ = ['_Hidden']\n",
+            f"{SHOP_DIR}/facade/errors.py": STAR,
+        },
+        DENIED_AT_ERRORS,
+    ),
+    "a star import of a third-party module": (
+        {f"{SHOP_DIR}/facade/errors.py": "from rest_framework.serializers import *\n"},
+        {"export-shape": [], "facade-signature": []},
+    ),
+    "a star import of a module that does not exist": (
+        {f"{SHOP_DIR}/facade/errors.py": STAR.replace("errors", "nowhere")},
+        {
+            "export-shape": [[f"{SHOP}.nowhere.*", ERRORS, "unresolved-import"]],
+            "facade-signature": [[ERRORS, "*", "signature", f"{SHOP}.nowhere.*"]],
+        },
+    ),
+    "a star import in a registration surface": (
+        {f"{SHOP_DIR}/errors.py": STAR_SOURCE + LISTS_FIVE, f"{SHOP_DIR}/routes.py": STAR},
+        {"export-shape": [[ORDER, ROUTES, "export-denied(model)"]]},
+    ),
+    "a star import in a registration surface of a source whose __all__ cannot be read": (
+        {f"{SHOP_DIR}/errors.py": STAR_SOURCE + "\n\n__all__ = sorted(globals())\n", f"{SHOP_DIR}/routes.py": STAR},
+        {"export-shape": [[UNREAD_STAR, ROUTES, "unresolved-import"]]},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", STAR_CASES)
+def test_a_star_import_hands_out_what_its_names_imported_by_name_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = STAR_CASES[case]
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+        rule: sorted(rows) for rule, rows in expected.items()
+    }
+
+
 def test_the_fixture_module_is_outside_the_contract_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     testing = (
         "from typing import Any\n\nfrom rest_framework import serializers\n\n"

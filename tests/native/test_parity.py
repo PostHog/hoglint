@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, WitnessRow, witness_row
+from hoglint.model import Edge, Graph, WitnessRow, witness_row
 from hoglint.native.parity import Dump, compare_dumps, read_lines
 from hoglint.native.rules import Rejudged
 from hoglint.native.source import ENGINES
@@ -578,7 +578,33 @@ HANDING_IMPORTS = {
         ["other", "run"],
         [],
     ),
+    "a star import of a listed name": (
+        "from products.shop.backend.temporal.jobs import *\n\n__all__ = ['run', 'build']",
+        ["run"],
+        [],
+    ),
+    "a star import of a name that is not listed": (
+        "from products.shop.backend.temporal.jobs import *\n\n__all__ = ['build']",
+        [],
+        ["run"],
+    ),
 }
+HOOKS = "products/shop/backend/facade/hooks.py"
+JOBS = "products/shop/backend/temporal/jobs.py"
+
+
+def checked_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, files: dict[str, str]) -> Graph:
+    """One engine's graph of a repo of the handed config, the shop packages and `files`."""
+    native_module()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    root = tmp_path / "repo"
+    write_repo(root, {"hoglint.toml": HANDED_CONFIG, **SHOP, **files})
+    (tmp_path / "work").mkdir()
+    try:
+        graph, _, _, _ = Dump(root, engine, tmp_path / "out", tmp_path / "work").check()
+    finally:
+        gc.enable()
+    return graph
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -586,27 +612,62 @@ HANDING_IMPORTS = {
 def test_the_hand_out_set_holds_every_name_a_handed_import_binds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, engine: str
 ) -> None:
-    native_module()
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     text, handed, kept = HANDING_IMPORTS[case]
-    repo = {
-        "hoglint.toml": HANDED_CONFIG,
-        **SHOP,
-        "products/shop/backend/facade/hooks.py": text + BODY,
-        "products/shop/backend/temporal/jobs.py": RUN,
-    }
-    root = tmp_path / "repo"
-    write_repo(root, repo)
-    (tmp_path / "work").mkdir()
-    try:
-        graph, _, _, _ = Dump(root, engine, tmp_path / "out", tmp_path / "work").check()
-    finally:
-        gc.enable()
+    graph = checked_graph(tmp_path, monkeypatch, engine, {HOOKS: text + BODY, JOBS: RUN})
     found = graph.hand_outs["products.shop.backend.facade.hooks"]
     assert (sorted(found.handed), sorted(found.kept), found.unread) == (handed, kept, False)
 
 
-HOOKS = "products/shop/backend/facade/hooks.py"
+# The edge kinds that bind a name an export module hands out.
+HAND_OUT_KINDS = ("import",)
+# (files, the names the facade module hands out): every name an export module hands out has a
+# module-scope edge that binds it, so each reader of what it hands out reads the same edges.
+HAND_OUT_EDGE_CASES = {
+    **{case: ({HOOKS: text + BODY, JOBS: RUN}, handed) for case, (text, handed, _) in HANDING_IMPORTS.items()},
+    "a star import of a module that star-imports": (
+        {
+            HOOKS: "from products.shop.backend.temporal.again import *\n",
+            "products/shop/backend/temporal/again.py": "from .jobs import *\n",
+            JOBS: RUN,
+        },
+        ["run"],
+    ),
+    "a star import of a module with a __future__ import": (
+        {HOOKS: "from ..temporal.jobs import *\n", JOBS: "from __future__ import annotations\n\n" + RUN},
+        ["run"],
+    ),
+    "a star import of a module whose __all__ cannot be read": (
+        {HOOKS: "from ..temporal.jobs import *\n", JOBS: "__all__ = sorted(NAMES)\n\n" + RUN},
+        ["*"],
+    ),
+    "a star import of two modules that star-import each other": (
+        {
+            HOOKS: "from ..temporal.jobs import *\n",
+            "products/shop/backend/temporal/again.py": "from .jobs import *\n\nLIMIT = 3\n",
+            JOBS: "from .again import *\n\n" + RUN,
+        },
+        ["LIMIT", "run"],
+    ),
+}
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("case", HAND_OUT_EDGE_CASES)
+def test_every_name_an_export_module_hands_out_has_an_edge_that_binds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, engine: str
+) -> None:
+    files, handed = HAND_OUT_EDGE_CASES[case]
+    graph = checked_graph(tmp_path, monkeypatch, engine, files)
+    assert sorted(graph.hand_outs["products.shop.backend.facade.hooks"].handed) == handed
+    for module, found in graph.hand_outs.items():
+        bound = {
+            edge.attr("binds")
+            for edge in graph.edges
+            if edge.kind in HAND_OUT_KINDS and edge.site.module == module and edge.site.scope in ("<module>", "")
+        }
+        assert found.handed <= bound, module
+
+
 HOOK = "\n\ndef __getattr__(name):\n    raise AttributeError(name)\n"
 
 

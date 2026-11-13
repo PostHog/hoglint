@@ -14,7 +14,7 @@ from hoglint.core.config import CoreConfig
 from hoglint.core.modules import FirstParty, ModuleIndex
 from hoglint.core.records import is_class_var
 from hoglint.core.sites import Classifier, FileScope, Lookup, NameLookup, Resolved
-from hoglint.core.surfaces import ALL_CLAUSE, HandedOut
+from hoglint.core.surfaces import ALL_CLAUSE, HandedOut, StarNames
 from hoglint.core.symbols import CLASS, FUNC, Binding, ClassIndex, Hit, Resolver, entity, import_surface, module_assigns
 from hoglint.facts import FactStore
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution
@@ -23,6 +23,8 @@ PRODUCER_VERSION = 1
 UNRESOLVED = Resolved(Resolution.UNRESOLVED, (), ())
 # The attr of an import edge that a lazy (PEP 562) name gets.
 LAZY_ATTR = ("lazy", "1")
+# The attr of an import edge for one name a star import binds in an export module.
+STAR_ATTR = ("star", "1")
 BUILTIN_NAMES = frozenset(dir(builtins))
 CHAIN_TOKEN = re.compile(r"\.\w+|\(\)|\[\]")
 # Escape steps that pass a value through unchanged, as the extractor's local derivation reads them.
@@ -285,6 +287,11 @@ class BuildContext:
             found.update(classes)
         return sorted(found)
 
+    def is_export_module(self, scope: FileScope) -> bool:
+        """Whether an `[exports]` entry covers a file that is no test: a module whose hand-outs
+        core records."""
+        return Context.TEST not in scope.base_contexts and self.config.in_export(scope.path)
+
     def name_lookup(self, scope: FileScope, name: str, at_scope: int, line: int) -> Lookup:
         """A bare name; unbound names are builtins or missing module globals."""
         found = self.names.lookup(scope, name, at_scope, line)
@@ -452,7 +459,11 @@ class ImportProducer(Producer):
 
     A lazy (PEP 562) name gets an edge too, at the dict entry that names its module: the import
     `__getattr__` runs when the name is first read. It does not run on import, so its context is
-    `function_local`, and its `lazy` attr tells it apart from an import written in a function."""
+    `function_local`, and its `lazy` attr tells it apart from an import written in a function.
+
+    In an export module a star import also gets one edge per name it binds, read as a named import
+    of that name, at the star's line: what the module hands out is then always an edge that binds
+    the name. Its `star` attr tells it apart from a named import."""
 
     kind = "import"
 
@@ -488,9 +499,29 @@ class ImportProducer(Producer):
                 self.edge(self.kind, scope, -1, entry.line, entry.column, surface, resolved, contexts, attrs=attrs)
             )
 
+    def star_name_edges(
+        self,
+        context: BuildContext,
+        graph: Graph,
+        scope: FileScope,
+        row: list,
+        source: str,
+        contexts: frozenset[Context],
+    ) -> None:
+        """One edge per name a star import binds, as `from source import name` would bind it."""
+        at_scope, line, column = row[:3]
+        for name in StarNames(context.resolver.tables).of(source) or ():
+            surface, hit, loaded = self.from_target(context, source, name)
+            attrs = (*self.bound_attrs(context, name, loaded), STAR_ATTR)
+            resolved = context.classifier.classify(surface, hit)
+            graph.edges.append(
+                self.edge(self.kind, scope, at_scope, line, column, surface, resolved, contexts, attrs=attrs)
+            )
+
     def run(self, context: BuildContext, graph: Graph) -> None:
         resolver = context.resolver
         for scope in context.files:
+            export = context.is_export_module(scope)
             for row in scope.record.get("imports", ()):
                 at_scope, line, column, flags, _, _, name, _ = row
                 contexts = scope.contexts(flags, at_scope)
@@ -511,6 +542,8 @@ class ImportProducer(Producer):
                 graph.edges.append(
                     self.edge(self.kind, scope, at_scope, line, column, surface, resolved, contexts, attrs=tuple(attrs))
                 )
+                if export and name == "*":
+                    self.star_name_edges(context, graph, scope, row, source, contexts)
             self.lazy_imports(context, graph, scope)
 
 
@@ -1320,7 +1353,7 @@ class DeclarationProducer(Producer):
     def record_hand_out(self, context: BuildContext, graph: Graph, scope: FileScope) -> None:
         """What an export module hands out by import, for every rule that asks what it exports.
         A test file hands nothing out."""
-        if Context.TEST in scope.base_contexts or not context.config.in_export(scope.path):
+        if not context.is_export_module(scope):
             return
         handed = HandedOut(scope, context.resolver.tables.get(scope.module), context.resolver.tables)
         used = self.used_names(scope) if handed.no_functions else frozenset()

@@ -8,8 +8,10 @@
 //! time; one under `if TYPE_CHECKING:` does not.
 //!
 //! A star import hands out the names it binds (the source's `__all__`, else its public top-level
-//! names) under the same clauses; a source that cannot be read hands out `*`, which nothing
-//! follows. `import a.b as name` binds the module `a.b` under `name` and is handed out by the same
+//! names with those of its own star imports, never a `__future__` name) under the same clauses; in
+//! an export module each name it binds is an import edge of its own. A source that cannot be read
+//! hands out `*`, which nothing follows: the export rule reports it as an import that did not
+//! resolve. `import a.b as name` binds the module `a.b` under `name` and is handed out by the same
 //! clauses; a plain `import a.b` binds `a`, no surface of its own, and hands out nothing. A relative
 //! import that climbs above the top package resolves to nothing and still binds its name: handed
 //! out, it leaves what the module hands out unresolved.
@@ -25,7 +27,7 @@
 use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
-use super::resolve::{Core, RUN_TIME_MODULE_FLAGS, import_surface, module_level};
+use super::resolve::{Binding, Core, RUN_TIME_MODULE_FLAGS, import_surface, module_level};
 use super::scope::Scope;
 use super::trace::Kind;
 use rustc_hash::FxHashSet;
@@ -34,6 +36,8 @@ pub const ALL_CLAUSE: &str = "all";
 pub const ALIAS_CLAUSE: &str = "alias";
 pub const LAZY_CLAUSE: &str = "lazy";
 pub const NO_FUNCTIONS_CLAUSE: &str = "no-functions";
+/// The module whose names a star import never hands on.
+const FUTURE: &str = "__future__";
 
 /// A name a module hands out: where it binds it, what it names, and the clause that holds.
 pub struct Handed {
@@ -181,9 +185,18 @@ fn dunder_all(core: &mut Core, file: usize) -> DunderAll {
     }
 }
 
-/// The names `from source import *` binds: the source's `__all__`, else its public top-level
-/// names, sorted; None when the source cannot be read.
-fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
+/// Whether a module binds a name by `from __future__ import`, read through the traced lookup.
+fn from_future(core: &mut Core, source: Sid, name: Sid) -> bool {
+    let future = core.it.intern(FUTURE);
+    matches!(core.binding_of(source, name), Some(Binding::From(from, _)) if from == future)
+}
+
+/// The names one source of a star import binds (`StarNames.bound`); None when it, or a source it
+/// star-imports, cannot be read. A source already read adds nothing more.
+fn star_bound(core: &mut Core, source: Sid, seen: &mut FxHashSet<Sid>) -> Option<FxHashSet<Sid>> {
+    if !seen.insert(source) {
+        return Some(FxHashSet::default());
+    }
     core.rec.read(Kind::Names, source, EMPTY);
     let table = core.table(source)?;
     let file = core.table_at(table).record?;
@@ -194,16 +207,45 @@ fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
     if listing.unread.is_some() {
         return None;
     }
-    let mut names: Vec<Sid> = match listing.names {
-        Some(names) => names.into_iter().collect(),
-        None => core
-            .table_at(table)
-            .names
-            .iter()
-            .map(|(name, _)| name)
-            .filter(|name| !core.it.s(*name).starts_with('_'))
-            .collect(),
-    };
+    if let Some(listed) = listing.names {
+        return Some(
+            listed
+                .into_iter()
+                .filter(|&name| !from_future(core, source, name))
+                .collect(),
+        );
+    }
+    let public: Vec<Sid> = core
+        .table_at(table)
+        .names
+        .iter()
+        .map(|(name, _)| name)
+        .filter(|name| !core.it.s(*name).starts_with('_'))
+        .collect();
+    let mut names: FxHashSet<Sid> = public
+        .into_iter()
+        .filter(|&name| !from_future(core, source, name))
+        .collect();
+    core.rec.read(Kind::Stars, source, EMPTY);
+    let stars = core.table_at(table).star_imports.clone();
+    for star in stars {
+        let found = star_bound(core, star, seen)?;
+        names.extend(
+            found
+                .into_iter()
+                .filter(|name| !core.it.s(*name).starts_with('_')),
+        );
+    }
+    Some(names)
+}
+
+/// The names `from source import *` binds (`StarNames.of`): the source's `__all__`, else its
+/// public top-level names with those of its own star imports; never a name a `from __future__
+/// import` binds. Sorted; None when the source, or a source it star-imports, cannot be read.
+pub fn star_names(core: &mut Core, source: Sid) -> Option<Vec<Sid>> {
+    let mut names: Vec<Sid> = star_bound(core, source, &mut FxHashSet::default())?
+        .into_iter()
+        .collect();
     names.sort_by(|a, b| core.it.s(*a).cmp(core.it.s(*b)));
     Some(names)
 }
@@ -377,15 +419,28 @@ impl HandedOut {
             .map(|item| item.bound)
             .collect();
         let star = core.star();
-        let kept = core.facts.files[scope.file as usize]
-            .imports
-            .iter()
-            .filter(|row| binds_at_run_time(row))
-            .filter_map(|row| match row.name {
-                Some(name) if name == star => None,
-                Some(name) => Some(named(row.asname, name)),
-                None => row.asname.filter(|&a| a != EMPTY),
-            })
+        let facts = core.facts.clone();
+        let mut bound: FxHashSet<Sid> = FxHashSet::default();
+        for row in facts.files[scope.file as usize].imports.iter() {
+            if !binds_at_run_time(row) {
+                continue;
+            }
+            match row.name {
+                Some(name) if name == star => {
+                    let (_, _, source) =
+                        import_surface(&mut core.it, scope.module, scope.is_package, row);
+                    if let Some(found) = source.and_then(|source| star_names(core, source)) {
+                        bound.extend(found);
+                    }
+                }
+                Some(name) => {
+                    bound.insert(named(row.asname, name));
+                }
+                None => bound.extend(row.asname.filter(|&a| a != EMPTY)),
+            }
+        }
+        let kept = bound
+            .into_iter()
             .filter(|bound| !handed.contains(bound))
             .collect();
         HandOut {

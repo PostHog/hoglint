@@ -340,10 +340,15 @@ class ExportPrimitive(RuleType):
 
     def exported_symbols(self, module: str) -> list[tuple[str, Edge | None]]:
         """The module's public top-level definitions, then the imports it hands out
-        (`Graph.hand_outs`): an import it keeps to itself is no part of what it exports."""
+        (`Graph.hand_outs`): an import it keeps to itself is no part of what it exports. A star
+        import whose names cannot be read hands out `*`, which is reported as unresolved."""
         out: list[tuple[str, Edge | None]] = [(symbol, None) for symbol in self.top_level.get(module, [])]
         for edge in self.ctx.labeler.handed_imports(module):
             if not context_ok(edge, self.include, self.exclude):
+                continue
+            if edge.attr("binds") == "*" and edge.resolution is not Resolution.UNRESOLVED:
+                if "*" in self.ctx.labeler.graph.hand_outs[module].handed:
+                    self.unresolved(edge, module)
                 continue
             if edge.resolution is Resolution.UNRESOLVED or not edge.targets:
                 self.unresolved(edge, module)

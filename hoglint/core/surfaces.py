@@ -12,7 +12,9 @@ An import in any block of the module body counts (`try`, `except`, `if`, `else`,
 binds the name at run time; one under `if TYPE_CHECKING:` does not.
 
 A star import hands out the names it binds (the source's `__all__`, else its public top-level
-names) under the same clauses; a source that cannot be read hands out `*`, which nothing follows.
+names with those of its own star imports, never a `__future__` name) under the same clauses; in an
+export module each name it binds is an import edge of its own. A source that cannot be read hands
+out `*`, which nothing follows: the export rule reports it as an import that did not resolve.
 `import a.b as name` binds the module `a.b` under `name` and is handed out by the same clauses; a
 plain `import a.b` binds `a`, no surface of its own, and hands out nothing. A relative import that
 climbs above the top package resolves to nothing and still binds its name: handed out, it leaves
@@ -153,6 +155,47 @@ def read_dunder_all(record: dict) -> DunderAll:
     return DunderAll(names, min(unread) if unread else None)
 
 
+class StarNames:
+    """The names `from source import *` binds: the source's `__all__`, else its public top-level
+    names with those of its own star imports; never a name a `from __future__ import` binds. None
+    when the source, or a source it star-imports, cannot be read. A star import that comes back
+    to a module already read adds nothing more."""
+
+    FUTURE = "__future__"
+
+    def __init__(self, tables: Tables) -> None:
+        self.tables = tables
+
+    def of(self, source: str) -> list[str] | None:
+        found = self.bound(source, set())
+        return sorted(found) if found is not None else None
+
+    def from_future(self, source: str, name: str) -> bool:
+        binding = self.tables.binding(source, name)
+        return binding is not None and binding[0] == "from" and binding[1] == self.FUTURE
+
+    def bound(self, source: str, seen: set[str]) -> set[str] | None:
+        if source in seen:
+            return set()
+        seen.add(source)
+        table = self.tables.get(source)
+        record = self.tables.record(source)
+        if table is None or record is None or record.get("status") != "ok":
+            return None
+        listing = read_dunder_all(record)
+        if listing.unread is not None:
+            return None
+        if listing.names is not None:
+            return {name for name in listing.names if not self.from_future(source, name)}
+        names = {name for name in table.names if not name.startswith("_") and not self.from_future(source, name)}
+        for star in table.star_imports:
+            found = self.bound(star, seen)
+            if found is None:
+                return None
+            names.update(name for name in found if not name.startswith("_"))
+        return names
+
+
 def binds_at_run_time(scope: int, flags: int) -> bool:
     """An import of the module body that runs at run time, in whatever block it sits: one under
     `if TYPE_CHECKING:` binds nothing at run time, and one in a function or class binds no
@@ -184,20 +227,6 @@ class HandedOut:
             return ALIAS_CLAUSE
         return ""
 
-    def star_names(self, source: str) -> list[str] | None:
-        """The names `from source import *` binds: the source's `__all__`, else its public
-        top-level names; None when the source cannot be read."""
-        table = self.tables.get(source)
-        record = self.tables.record(source)
-        if table is None or record is None or record.get("status") != "ok":
-            return None
-        listing = read_dunder_all(record)
-        if listing.unread is not None:
-            return None
-        if listing.names is not None:
-            return sorted(listing.names)
-        return sorted(name for name in table.names if not name.startswith("_"))
-
     def star(self, source: str | None, surface: str) -> list[tuple[str, str, str]]:
         """(bound, target, clause) of each name a star import hands out. A source that cannot be
         read, or a relative one above the top package (`source` None), hands out `*` at the
@@ -206,7 +235,7 @@ class HandedOut:
         if not self.no_functions and listed is None:
             return []
         clause = NO_FUNCTIONS_CLAUSE if self.no_functions else ALL_CLAUSE
-        found = self.star_names(source) if source is not None else None
+        found = StarNames(self.tables).of(source) if source is not None else None
         if found is None:
             return [("*", surface, clause)]
         if listed is not None:
@@ -258,10 +287,17 @@ class HandedOut:
         """The names the module hands out and the ones it binds by import and keeps to itself.
         `used` as in `names`."""
         handed = frozenset(item.bound for item in self.names(used))
-        bound = {
-            asname or name
-            for scope_id, _, _, flags, _, _, name, asname in self.scope.record.get("imports", ())
-            if binds_at_run_time(scope_id, flags) and name != "*" and (asname or name)
-        }
+        bound: set[str] = set()
+        for row in self.scope.record.get("imports", ()):
+            scope_id, _, _, flags, _, _, name, asname = row
+            if not binds_at_run_time(scope_id, flags):
+                continue
+            if name != "*":
+                if asname or name:
+                    bound.add(asname or name)
+                continue
+            source = import_surface(self.scope.module, self.scope.is_package, row)[2]
+            found = StarNames(self.tables).of(source) if source is not None else None
+            bound.update(found or ())
         unread = not self.no_functions and self.dunder_all.unread is not None
         return HandOut(handed, frozenset(bound - handed), unread)

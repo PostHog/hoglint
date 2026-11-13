@@ -2,14 +2,14 @@
 //! dynamic-import and unparsed edges, in the order and with the fields Python makes them.
 
 use super::LinkConfig;
-use super::facts::{Argument, Assign, Def, Op, V};
+use super::facts::{Argument, Assign, Def, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
     Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, import_surface, module_assigns,
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
-use super::surface::{ALL_CLAUSE, HandOut, HandedOut};
+use super::surface::{ALL_CLAUSE, HandOut, HandedOut, star_names};
 use super::trace::{Kind, Memo};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::rc::Rc;
@@ -339,6 +339,8 @@ struct Keys {
     zero: Sid,
     one: Sid,
     star: Sid,
+    /// The attr name of an import edge for one name a star import binds.
+    star_attr: Sid,
     use_call: Sid,
     use_decorator: Sid,
     use_base: Sid,
@@ -421,6 +423,7 @@ impl Producing {
             zero: it.intern("0"),
             one: it.intern("1"),
             star: it.intern("*"),
+            star_attr: it.intern("star"),
             use_call: it.intern("call"),
             use_decorator: it.intern("decorator"),
             use_base: it.intern("base"),
@@ -966,9 +969,41 @@ impl Producers<'_> {
         }
     }
 
+    /// Whether an `[exports]` entry covers a file that is no test: a module whose hand-outs core
+    /// records.
+    fn is_export_module(&self, owner: usize) -> bool {
+        let scope = &self.scopes[owner];
+        let path = &self.core.facts.files[scope.file as usize].path;
+        let covered = self
+            .settings
+            .export_surfaces
+            .iter()
+            .any(|surface| surface.covered_root(path).is_some());
+        scope.base_ctx & ctx::TEST == 0 && covered
+    }
+
+    /// One edge per name a star import binds, as `from source import name` would bind it.
+    fn star_name_edges(&mut self, owner: usize, row: &Import, source: Sid, ctx: u8) {
+        let names = star_names(self.core, source).unwrap_or_default();
+        for name in names {
+            let (surface, hit, loaded) = Self::from_target(self.core, source, name);
+            let mut attrs = self.bound_attrs(name, loaded);
+            let k = &self.settings.k;
+            attrs.push((k.star_attr, k.one));
+            let resolved = self.core.classify(surface, hit);
+            self.push(
+                IMPORT, owner, row.scope, row.line, row.col, ctx, surface, resolved, EMPTY, &attrs,
+            );
+        }
+    }
+
+    /// One edge per import binding, in every context. In an export module a star import also
+    /// gets one edge per name it binds, at the star's line, so what the module hands out is always
+    /// an edge that binds the name; its `star` attr tells it apart from a named import.
     fn imports(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
+        let export = self.is_export_module(owner);
         for row in &facts.files[file].imports {
             let core = &mut *self.core;
             let scope = &mut self.scopes[owner];
@@ -996,6 +1031,9 @@ impl Producers<'_> {
             self.push(
                 IMPORT, owner, row.scope, row.line, row.col, ctx, surface, resolved, EMPTY, &attrs,
             );
+            if export && row.name == Some(self.settings.k.star) {
+                self.star_name_edges(owner, row, source, ctx);
+            }
         }
         self.lazy_imports(owner);
     }
@@ -2400,14 +2438,7 @@ impl Producers<'_> {
     /// What an export module hands out by import, for every rule that asks what it exports. A
     /// test file hands nothing out.
     fn record_hand_out(&mut self, owner: usize) {
-        let scope = &self.scopes[owner];
-        let path = &self.core.facts.files[scope.file as usize].path;
-        let covered = self
-            .settings
-            .export_surfaces
-            .iter()
-            .any(|surface| surface.covered_root(path).is_some());
-        if scope.base_ctx & ctx::TEST != 0 || !covered {
+        if !self.is_export_module(owner) {
             return;
         }
         let handed = HandedOut::new(self.core, &self.scopes[owner]);

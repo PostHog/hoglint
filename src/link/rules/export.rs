@@ -504,8 +504,26 @@ impl<'a> Walk<'a> {
             .collect()
     }
 
+    /// Whether import edge `id` is a star import's own edge: it binds `*`.
+    fn binds_star(&self, id: u32) -> bool {
+        let link = self.cx.link;
+        let star = link.core.star();
+        link.edges
+            .attrs_with(id)
+            .any(|&(key, value)| Some(key) == self.keys.binds && value == star)
+    }
+
+    /// Whether a module hands out `*`: a star import whose names cannot be read.
+    fn hands_out_star(&self, module: Sid) -> bool {
+        let link = self.cx.link;
+        link.hand_outs
+            .get(&module)
+            .is_some_and(|found| found.handed.contains(&link.core.star()))
+    }
+
     /// `ExportPrimitive.exported_symbols`: top-level symbols, then the imports the module hands
-    /// out; an import that did not resolve is reported on the way.
+    /// out; an import that did not resolve is reported on the way, and so is a star import whose
+    /// names cannot be read.
     fn exported_symbols(&mut self, module: Sid) -> Vec<(String, Option<u32>)> {
         let mut out: Vec<(String, Option<u32>)> = self
             .top_level(module)
@@ -529,6 +547,12 @@ impl<'a> Walk<'a> {
                 continue;
             }
             if !self.hands_out(module, id) {
+                continue;
+            }
+            if self.binds_star(id) && self.cx.link.edges.res_of(id) != Res::Unresolved {
+                if self.hands_out_star(module) {
+                    self.unresolved(id, &module_name);
+                }
                 continue;
             }
             let edges = &self.cx.link.edges;
