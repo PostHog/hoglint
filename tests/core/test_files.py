@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from hoglint.core import symbols
 from hoglint.core.config import PathGlobs
-from hoglint.core.discovery import StagedIndex
 from hoglint.outputs.tach_map import TachResolver
 
 TACH_EXCLUDES = ("**/*__pycache__", "**/*egg-info", "docs", "products/posthog_ai/eval_harness", "products/*/evals")
@@ -44,23 +42,6 @@ def test_excludes_follow_gitignore_globs(path: str, excluded: bool) -> None:
 def test_tach_resolution_order_and_member_fallback(dotted: str, case_insensitive: bool, expected: str | None) -> None:
     resolver = TachResolver(["pkg/__init__.py", "pkg/mod.py", "pkg/mod.pyi"], (".",), case_insensitive)
     assert resolver.resolve(dotted) == expected
-
-
-def test_index_mode_reads_staged_blobs_not_the_working_tree(tmp_path: Path) -> None:
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    git("init", "-q")
-    (tmp_path / "a.py").write_text("STAGED = 1\n")
-    git("add", "a.py")
-    (tmp_path / "a.py").write_text("WORKING = 1\n")
-    (tmp_path / "untracked.py").write_text("")
-    snapshot = StagedIndex(tmp_path)
-    try:
-        assert snapshot.list(("*.py",)) == ["a.py"]
-        assert (snapshot.root / "a.py").read_text() == "STAGED = 1\n"
-    finally:
-        snapshot.close()
 
 
 def test_python_flag_constants_match_the_extractor() -> None:

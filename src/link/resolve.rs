@@ -1,6 +1,5 @@
-//! Module symbol tables, name resolution that follows re-exports, and class MROs
-//! (hoglint/core/symbols.py). Caches and their cycle rule match the Python resolver, so
-//! the order of queries gives the same answers.
+//! Module symbol tables, name resolution that follows re-exports, and class MROs. Caches and
+//! their cycle rule make the order of queries give the same answers.
 
 use super::facts::{Assign, Def, FactSet, FileFacts, Import, Op, V};
 use super::heap;
@@ -300,7 +299,7 @@ pub fn import_binding(
     }
 }
 
-/// (bound name, surface, source) of one import row (`symbols.import_surface`). `import a.b` binds
+/// (bound name, surface, source) of one import row. `import a.b` binds
 /// `a` (or its alias) and has `a.b` as surface and source. A from import's surface is
 /// `source.name`, a star's `source.*`; above the top package the source is None and the surface
 /// is the text as written.

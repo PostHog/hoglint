@@ -6,7 +6,8 @@ use hoglint_facts::link::rules::conflicts::Conflict;
 use hoglint_facts::link::rules::export::ExportRow;
 use hoglint_facts::link::rules::labels::Cell;
 use hoglint_facts::link::rules::reach::Found;
-use hoglint_facts::link::rules::{NO_PLACE, Rules as CoreRules, place_of};
+use hoglint_facts::link::rules::value::Value;
+use hoglint_facts::link::rules::{NO_PLACE, Named, Rules as CoreRules, place_of};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -14,9 +15,9 @@ use rustc_hash::FxHashMap;
 
 /// The rows of a judged rule as columns, so Python makes no object per row: (edge ids,
 /// destination indexes, judgment names, each row's judgment by place, distinct identities, each
-/// row's identity by place (`Judgment::has_identity`), distinct modules, each row's source module by place, each row's
-/// destination module by place). Per-row columns are little-endian u32s; a row with no identity
-/// or no destination module has `NO_PLACE` there.
+/// row's identity by place, distinct modules, each row's source module by place, each row's
+/// destination module by place, `WordColumns`). Per-row columns are little-endian u32s; a row
+/// with no destination module has `NO_PLACE` there.
 type JudgedColumns<'py> = (
     Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
@@ -27,20 +28,71 @@ type JudgedColumns<'py> = (
     Vec<String>,
     Bound<'py, PyBytes>,
     Bound<'py, PyBytes>,
+    WordColumns<'py>,
 );
 
-/// A cycle row: (edge id, destination index, judgment name, the pair's groups or None).
-type PairTuple = (u32, u32, &'static str, Option<(String, String)>);
+/// What a message names of each row (`Words`): (distinct texts, each row's source symbol,
+/// destination symbol, label and unknown refs by place). A row with no symbol has `NO_PLACE`.
+type WordColumns<'py> = (
+    Vec<String>,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+);
+
+/// One destination as `explain edge:` shows it: (symbol or None, module or None, [(selector
+/// key, truth name)]).
+type ExplainedTuple = (Option<String>, Option<String>, Vec<(String, &'static str)>);
+
+/// A cycle row: (edge id, destination index, judgment name, the pair's groups or None, source
+/// module, `NamedTuple` or None). A row has its words when Python words it alone, and for the
+/// first row of each pair.
+type PairTuple = (
+    u32,
+    u32,
+    &'static str,
+    Option<(String, String)>,
+    String,
+    Option<NamedTuple>,
+);
+
+/// What a reach or cycle row's message names (`Named`): (identity, destination module or None,
+/// source symbol or None, destination symbol or None, label).
+type NamedTuple = (
+    Vec<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
 
 /// A label set two ways: (what, entity, field). What: "module" (a module's field), "zones" (leaf
 /// zones that claim a module's path), "kind" (a name two kinds hold), "symbol" (a symbol's field),
 /// "provided" (a module's provider labels). The field is empty where it names none.
 type ConflictTuple = (&'static str, String, String);
 
-/// A reach finding: (what, start module, path of (edge id, destination index), verdict).
-/// What: "start" (path empty), "unresolved", "unknown" or "denied". The verdict of a denied
-/// target is a truth's name, "true" or "unknown"; None for anything else.
-type FoundTuple = (&'static str, String, Vec<(u32, u32)>, Option<&'static str>);
+/// A reach finding: (what, start module, path of (edge id, destination index), verdict,
+/// `NamedTuple` of its last hop seen from the start, or None for "start"). What: "start" (path
+/// empty), "unresolved", "unknown" or "denied". The verdict of a denied target is a truth's
+/// name, "true" or "unknown"; None for anything else.
+type FoundTuple = (
+    &'static str,
+    String,
+    Vec<(u32, u32)>,
+    Option<&'static str>,
+    Option<NamedTuple>,
+);
+
+fn named_tuple(it: &hoglint_facts::link::intern::Interner, named: Named) -> NamedTuple {
+    (
+        named.identity,
+        named.dst_module.map(|module| it.s(module).to_string()),
+        named.words.src_symbol,
+        named.words.dst_symbol,
+        named.words.label,
+    )
+}
 
 /// A module field's column: its distinct values as (type, items), and each module's place.
 type ValueColumn<'py> = (Vec<(&'static str, Vec<String>)>, Bound<'py, PyBytes>);
@@ -131,7 +183,19 @@ impl Rules {
         let mut identity_places = FxHashMap::default();
         let mut modules = Vec::new();
         let mut module_places = FxHashMap::default();
+        let mut texts = Vec::new();
+        let mut text_places = FxHashMap::default();
+        let mut words: [Vec<u32>; 4] = std::array::from_fn(|_| Vec::with_capacity(count));
         for row in rows {
+            let mut text_at = |text: Option<String>| match text {
+                Some(text) => place_of(&mut text_places, &mut texts, text),
+                None => NO_PLACE,
+            };
+            let found = row.words;
+            words[0].push(text_at(found.src_symbol));
+            words[1].push(text_at(found.dst_symbol));
+            words[2].push(text_at(Some(found.label)));
+            words[3].push(text_at(Some(found.unknown)));
             edges.push(row.edge);
             targets.push(row.target);
             judgment_at.push(place_of(
@@ -139,11 +203,11 @@ impl Rules {
                 &mut judgments,
                 row.judgment.name(),
             ));
-            identity_at.push(if row.judgment.has_identity() {
-                place_of(&mut identity_places, &mut identities, row.identity)
-            } else {
-                NO_PLACE
-            });
+            identity_at.push(place_of(
+                &mut identity_places,
+                &mut identities,
+                row.identity,
+            ));
             src_at.push(place_of(&mut module_places, &mut modules, row.src_module));
             dst_at.push(match row.dst_module {
                 Some(module) => place_of(&mut module_places, &mut modules, module),
@@ -163,6 +227,13 @@ impl Rules {
                 .collect(),
             ids_bytes(py, &src_at),
             ids_bytes(py, &dst_at),
+            (
+                texts,
+                ids_bytes(py, &words[0]),
+                ids_bytes(py, &words[1]),
+                ids_bytes(py, &words[2]),
+                ids_bytes(py, &words[3]),
+            ),
         ))
     }
 
@@ -175,10 +246,86 @@ impl Rules {
             .inner
             .pairs(&mut bound.inner, rule)
             .map_err(PyValueError::new_err)?;
+        let it = &bound.inner.core.it;
         Ok(rows
             .into_iter()
-            .map(|row| (row.edge, row.target, row.judgment.name(), row.pair))
+            .map(|row| {
+                (
+                    row.edge,
+                    row.target,
+                    row.judgment.name(),
+                    row.pair,
+                    row.src_module
+                        .map_or(String::new(), |module| it.s(module).to_string()),
+                    row.named.map(|named| named_tuple(it, named)),
+                )
+            })
             .collect())
+    }
+
+    /// The identity of each (edge id, destination index) of cycle rule `rule` (`cycle_identities`).
+    fn cycle_identities(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+        steps: Vec<(u32, u32)>,
+    ) -> PyResult<Vec<Vec<String>>> {
+        let bound = self.link.bind(py).borrow();
+        self.inner
+            .cycle_identities(&bound.inner, rule, &steps)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// `explain edge:` of edge `edge` under rule `rule`, a rule over edges: per destination
+    /// (symbol or None, module or None, [(selector key, truth name)]); None when the rule does not
+    /// see the edge.
+    fn explain_edge(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+        edge: u32,
+    ) -> PyResult<Option<Vec<ExplainedTuple>>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        let found = self
+            .inner
+            .explain_edge(&mut bound.inner, rule, edge)
+            .map_err(PyValueError::new_err)?;
+        Ok(found.map(|rows| {
+            rows.into_iter()
+                .map(|(symbol, module, truths)| {
+                    let named = truths
+                        .into_iter()
+                        .map(|(name, truth)| (name, truth.name()))
+                        .collect();
+                    (symbol, module, named)
+                })
+                .collect()
+        }))
+    }
+
+    /// The rendered values of `columns` (paths of edge refs) per destination of each edge of
+    /// `edges` rule `rule` sees; None for an edge it does not see.
+    fn edge_values(
+        &self,
+        py: Python<'_>,
+        rule: usize,
+        edges: Vec<u32>,
+        columns: Vec<Vec<String>>,
+    ) -> PyResult<Vec<Option<Vec<Vec<String>>>>> {
+        let mut bound = self.link.bind(py).borrow_mut();
+        self.inner
+            .edge_values(&mut bound.inner, rule, &edges, &columns)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// The zones `module` hands out names from, as (type, items): "set", "unknown" or "none".
+    fn handed_zones(&self, py: Python<'_>, module: &str) -> (&'static str, Vec<String>) {
+        let bound = self.link.bind(py).borrow();
+        match self.inner.handed_zones(&bound.inner, module) {
+            Value::Unknown => ("unknown", Vec::new()),
+            Value::Set(items) => ("set", items.iter().map(|item| item.to_string()).collect()),
+            _ => ("none", Vec::new()),
+        }
     }
 
     /// The search of reach rule `rule`, from every start module its `from` selects, in the order
@@ -194,23 +341,41 @@ impl Rules {
             .into_iter()
             .map(|found| match found {
                 Found::UnknownStart { module } => {
-                    ("start", it.s(module).to_string(), Vec::new(), None)
+                    ("start", it.s(module).to_string(), Vec::new(), None, None)
                 }
-                Found::Unresolved { source, step } => {
-                    ("unresolved", it.s(source).to_string(), vec![step], None)
-                }
-                Found::Unknown { source, step } => {
-                    ("unknown", it.s(source).to_string(), vec![step], None)
-                }
+                Found::Unresolved {
+                    source,
+                    step,
+                    named,
+                } => (
+                    "unresolved",
+                    it.s(source).to_string(),
+                    vec![step],
+                    None,
+                    Some(named_tuple(it, named)),
+                ),
+                Found::Unknown {
+                    source,
+                    step,
+                    named,
+                } => (
+                    "unknown",
+                    it.s(source).to_string(),
+                    vec![step],
+                    None,
+                    Some(named_tuple(it, named)),
+                ),
                 Found::Denied {
                     source,
                     path,
                     verdict,
+                    named,
                 } => (
                     "denied",
                     it.s(source).to_string(),
                     path,
                     Some(verdict.name()),
+                    Some(named_tuple(it, named)),
                 ),
             })
             .collect())

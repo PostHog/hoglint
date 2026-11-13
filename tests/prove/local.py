@@ -20,7 +20,7 @@ KNOWN_FAILURES = {
     ),
 }
 # The diagnostics `ty check` reports on main. A change adds none; lower it when one is fixed.
-TY_BASELINE = 37
+TY_BASELINE = 24
 
 
 def build(root: Path, log: Path, env: dict[str, str]) -> Path | None:
@@ -51,7 +51,7 @@ class Build(Check):
 
 
 class ModelRepo(Check):
-    """The model repository in both engines: the engines equal, every row as reviewed."""
+    """The model repository in the native engine: every row as reviewed, every table as stored."""
 
     name = "model repository"
 
@@ -60,9 +60,9 @@ class ModelRepo(Check):
         env = context.env("model-repo", {"PYTHONPATH": f"{context.root}:{context.root / 'tests'}"})
         code = context.run(log, [str(context.python), "-m", "model_repo.check"], env)
         text = log.read_text()
-        engines = "engines equal" if "both engines give the same ten tables" in text else "ENGINES DIFFER"
         rows = "every row as expected" if "every row as expected" in text else "ROWS CHANGED"
-        return [Outcome(self.name, code == 0, f"{engines}; {rows}")]
+        tables = "every table as stored" if "every table as stored" in text else "TABLES CHANGED"
+        return [Outcome(self.name, code == 0, f"{rows}; {tables}")]
 
 
 class Suite(Check):
@@ -192,7 +192,7 @@ class ModelRepoDumps:
     def dump(self, label: str, cache: Path, extra: dict[str, str]) -> Path:
         out = self.work / label
         argv = [str(self.context.python), "-m", "model_repo.dump", "dump", "--repo", str(self.repo)]
-        argv += ["--engine", "native", "--out", str(out), "--work", str(self.work / f"work-{label}")]
+        argv += ["--out", str(out), "--work", str(self.work / f"work-{label}")]
         env = self.context.env(self.name, {"PYTHONPATH": self.pythonpath, **extra, "XDG_CACHE_HOME": str(cache)})
         if self.context.run(self.log, argv, env) != 0:
             raise RuntimeError(f"the {label} dump failed: {self.log}")

@@ -44,7 +44,8 @@ from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
 PROTOCOL = 4
-ENGINE_PYTHON = "python"
+# The engine's name: the prefix of every engine id, and what `--engine` accepts.
+ENGINE_NATIVE = "native"
 ENGINE_SOURCES = "engine-sources.txt"
 PROTOCOL_LINE = "protocol "
 # The sections of engine-sources.txt, each adding files to the one before it.
@@ -220,7 +221,7 @@ class EngineId:
         return sources.digest(ENGINE)
 
     @staticmethod
-    def of(crate: Path, name: str = ENGINE_PYTHON) -> str:
+    def of(crate: Path, name: str = ENGINE_NATIVE) -> str:
         return f"{name}-{EngineId.digest(crate)}"
 
     @staticmethod
@@ -231,7 +232,7 @@ class EngineId:
         return EngineId.digest(crate)
 
     @staticmethod
-    def of_running(crate: Path, name: str = ENGINE_PYTHON) -> str:
+    def of_running(crate: Path, name: str = ENGINE_NATIVE) -> str:
         """`of` for the crate of the running code."""
         return f"{name}-{EngineId.running_digest(crate)}"
 
@@ -384,8 +385,8 @@ class ConfigInputs:
 
     @cached_property
     def core(self) -> CoreConfig:
-        """`[discovery]` and the surfaces as core reads them, parsed once: both engines and the
-        rules read this one value."""
+        """`[discovery]` and the surfaces as core reads them, parsed once: the link and the rules
+        read this one value."""
         return CoreConfig.from_discovery(self.config.discovery, self.contract_surfaces, self.export_surfaces)
 
     def rule_files(self) -> dict[str, str]:

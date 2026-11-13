@@ -1,5 +1,6 @@
-"""Checks the model repository with the real preset in both engines and compares the result with
-the reviewed expected file. `test_model_repo.py` and `bin/model-repo` use it."""
+"""Checks the model repository with the real preset in the native engine and compares the result
+with the reviewed expected file and the stored digests of the ten tables. `test_model_repo.py` and
+`bin/model-repo` use it."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import re
 import json
 import time
 import shutil
+import hashlib
 import tomllib
 import subprocess
 from collections import Counter
@@ -17,16 +19,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hoglint import facts
-from hoglint.core import analysis as core_analysis
 from hoglint.ledger.envelope import Framework
 from hoglint.native import analysis as native_analysis
-from hoglint.native.parity import Dump, RowDiff, compare_dumps, read_lines
-from hoglint.native.source import ENGINES
+from hoglint.native.parity import LIST_OUTPUTS, VALUE_OUTPUTS, Dump, read_lines
 
 HERE = Path(__file__).resolve().parent
 TREE = HERE / "repo"
 SITE = HERE / "site"
 EXPECTED = HERE / "expected.toml"
+TABLES = HERE / "tables.toml"
+MESSAGES = HERE / "messages.toml"
 CASES = HERE / "CASES.md"
 PRESET = HERE.parents[1] / "presets" / "posthog.toml"
 # Where the tree's root config finds the preset, as in the monorepo.
@@ -52,6 +54,18 @@ WANTED_HEADER = """\
 # whose identity holds every string of `match`.
 """
 LEVELS_HEADER = "# Levels: the products that pass and fail each level.\n"
+TABLES_HEADER = """\
+# The ten parity tables of the model repository as the native engine dumps them: per table the
+# row count and a digest of its bytes. A change that moves any row of any table changes a digest.
+# `bin/model-repo --refresh` rewrites it with expected.toml; `bin/model-repo --keep` keeps the dump
+# to read the rows. See docs/design/12-how-work-is-done.md, "The model repository".
+"""
+MESSAGES_HEADER = """\
+# The words of the model repository's result, in the order the native engine dumps them: per
+# finding its rule, identity and message, per incomplete item its rule, key and reason. One engine
+# words them; this file is what holds the wording still. `bin/model-repo --refresh` rewrites it with
+# expected.toml; review the diff of every message that moved.
+"""
 
 
 def stub_site_packages() -> Path:
@@ -60,12 +74,11 @@ def stub_site_packages() -> Path:
 
 @contextmanager
 def stub_site() -> Iterator[None]:
-    """Both engines read the stub `django` and `rest_framework` sources as site-packages, so the
+    """The engine reads the stub `django` and `rest_framework` sources as site-packages, so the
     model repository needs neither installed. Each module that looks site-packages up is patched
     where it holds the function."""
     patches: list[tuple[object, str, object]] = [
         (facts, "site_packages", stub_site_packages),
-        (core_analysis, "site_packages", stub_site_packages),
         (native_analysis, "site_packages", stub_site_packages),
         (Framework, "site", staticmethod(stub_site_packages)),
     ]
@@ -102,7 +115,7 @@ class Row:
 
 @dataclass(frozen=True)
 class Result:
-    """What one engine gave: every row with its count, and per level its passing and failing products."""
+    """What the engine gave: every row with its count, and per level its passing and failing products."""
 
     rows: Counter[Row]
     levels: dict[str, dict[str, list[str]]]
@@ -119,42 +132,34 @@ def copy_tree(repo: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
 
 
-def dump_tree(repo: Path, engine: str, out: Path, work: Path) -> None:
-    """One engine's ten parity tables of a copy of the tree, with the stub site-packages."""
+def dump_tree(repo: Path, out: Path, work: Path) -> None:
+    """The ten parity tables of a copy of the tree, with the stub site-packages."""
     with stub_site():
         try:
-            Dump(repo, engine, out, work).run()
+            Dump(repo, out, work).run()
         finally:
             gc.enable()
 
 
 class Dumps:
-    """One check of a copy of the tree per engine, dumped as the ten parity tables."""
+    """One check of a copy of the tree in the native engine, dumped as the ten parity tables."""
 
     def __init__(self, work: Path) -> None:
         self.work = work
         self.repo = work / "repo"
-        self.seconds: dict[str, float] = {}
+        self.out = work / "native"
+        self.seconds = 0.0
 
-    def out(self, engine: str) -> Path:
-        return self.work / engine
-
-    def run(self, engines: tuple[str, ...] = ENGINES) -> None:
+    def run(self) -> None:
         copy_tree(self.repo)
-        for engine in engines:
-            scratch = self.work / f"work-{engine}"
-            scratch.mkdir()
-            started = time.perf_counter()
-            dump_tree(self.repo, engine, self.out(engine), scratch)
-            self.seconds[engine] = round(time.perf_counter() - started, 2)
+        scratch = self.work / "work-native"
+        scratch.mkdir()
+        started = time.perf_counter()
+        dump_tree(self.repo, self.out, scratch)
+        self.seconds = round(time.perf_counter() - started, 2)
 
-    def differences(self) -> list[RowDiff]:
-        """The parity tables in which the two engines differ."""
-        diffs = compare_dumps(self.out("python"), self.out("native"))
-        return [diff for diff in diffs if not diff.equal]
-
-    def result(self, engine: str) -> Result:
-        out = self.out(engine)
+    def result(self) -> Result:
+        out = self.out
         rows: Counter[Row] = Counter()
         for finding in read_lines(out / "findings.jsonl"):
             verdict = "unknown" if finding[UNKNOWN_COLUMN] else "finding"
@@ -165,6 +170,108 @@ class Dumps:
         for name, (passing, failing) in json.loads((out / "levels.json").read_text()).items():
             levels[name] = {"passing": sorted(passing), "failing": sorted(product for product, _ in failing)}
         return Result(rows, levels)
+
+
+@dataclass(frozen=True)
+class Table:
+    """One parity table as stored: its row count and the digest of its bytes."""
+
+    rows: int
+    digest: str
+
+    @staticmethod
+    def of(data: bytes, rows: int) -> Table:
+        return Table(rows, hashlib.blake2b(data, digest_size=16).hexdigest())
+
+
+def dumped_tables(out: Path) -> dict[str, Table]:
+    """The ten tables of a dump: each table file's rows (a value table is one row) and digest."""
+    tables = {}
+    for name in LIST_OUTPUTS:
+        data = (out / f"{name}.jsonl").read_bytes()
+        tables[name] = Table.of(data, data.count(b"\n"))
+    for name in VALUE_OUTPUTS:
+        tables[name] = Table.of((out / f"{name}.json").read_bytes(), 1)
+    return tables
+
+
+def read_tables(path: Path = TABLES) -> dict[str, Table]:
+    data = tomllib.loads(path.read_text())
+    return {name: Table(entry["rows"], entry["digest"]) for name, entry in data.items()}
+
+
+def render_tables(tables: dict[str, Table]) -> str:
+    out = [TABLES_HEADER]
+    for name, table in tables.items():
+        out.append(f"\n[{quoted(name)}]\nrows = {table.rows}\ndigest = {quoted(table.digest)}\n")
+    return "".join(out)
+
+
+def changed_tables(stored: dict[str, Table], found: dict[str, Table]) -> list[str]:
+    """One line per table whose rows or bytes differ from the stored ones."""
+    lines = []
+    for name in sorted(set(stored) | set(found)):
+        before, after = stored.get(name), found.get(name)
+        if before == after:
+            continue
+        rows = f"{before.rows if before else '-'} -> {after.rows if after else '-'} rows"
+        lines.append(
+            f"table {name}: {rows}, digest {before.digest if before else '-'} -> {after.digest if after else '-'}"
+        )
+    return lines
+
+
+@dataclass(frozen=True)
+class Message:
+    """The words of one result row: a finding's message by its identity, or an incomplete item's
+    reason by its key."""
+
+    rule: str
+    verdict: str
+    identity: tuple[str, ...]
+    text: str
+
+    def render(self) -> str:
+        return (
+            f"[[{self.verdict}]]\nrule = {quoted(self.rule)}\nidentity = {quoted_list(self.identity)}\n"
+            f"text = {quoted(self.text)}\n"
+        )
+
+    def line(self) -> str:
+        return f"{self.rule} {self.verdict} {' | '.join(self.identity)}: {self.text}"
+
+
+def dumped_messages(out: Path) -> list[Message]:
+    """Every finding's message and every incomplete item's reason of a dump, in its order."""
+    messages = [
+        Message(finding[0], "finding", tuple(finding[1]), finding[2]) for finding in read_lines(out / "findings.jsonl")
+    ]
+    messages.extend(
+        Message(item[0], "incomplete", (item[1],), item[2]) for item in read_lines(out / "incomplete.jsonl")
+    )
+    return messages
+
+
+def read_messages(path: Path = MESSAGES) -> list[Message]:
+    data = tomllib.loads(path.read_text())
+    return [
+        Message(entry["rule"], verdict, tuple(entry["identity"]), entry["text"])
+        for verdict in ("finding", "incomplete")
+        for entry in data.get(verdict, [])
+    ]
+
+
+def render_messages(messages: list[Message]) -> str:
+    return MESSAGES_HEADER + "".join("\n" + message.render() for message in messages)
+
+
+def changed_messages(stored: list[Message], found: list[Message]) -> list[str]:
+    """One line per message the dump does not give as stored, and per one it gives that is not stored."""
+    lines = [f"message gone: {message.line()}" for message in stored if message not in found]
+    lines.extend(f"message new: {message.line()}" for message in found if message not in stored)
+    if not lines and stored != found:
+        lines.append("messages in another order")
+    return lines
 
 
 @dataclass(frozen=True)

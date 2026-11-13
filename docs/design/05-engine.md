@@ -1,7 +1,7 @@
-# 5. The engine: Rust link, Python shell, two engines, packs
+# 5. The engine: Rust link, Python shell, packs
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 13, 2026.
 
 ## Decided (current form)
 
@@ -14,14 +14,25 @@
 - The bridge is in-process PyO3: pure core crates plus a thin binding crate, maturin, abi3 cp312 wheels and a `.pyi` stub (D2).
   The layout matches an existing PostHog PyO3 package (owner, Nov 9).
 
-**Two engines.**
-The Python implementation is frozen as the executable spec.
-Every phase must equal it on ten parity tables: zero delta, or a named delta.
-- After adoption, a scheduled shadow job runs both engines and fails on any difference (D42).
-  The reason: the native evaluator's `clean` is never judged again at run time.
-  The Python engine needs about 35 s for this job.
-- D7 amended: a small independent oracle stays for generated cases.
-  A golden corpus replaces the Python engine when that engine leaves the wheel.
+**One engine** (owner, Nov 13).
+The native engine builds the graph: core producers, name resolution, class ancestry, what a surface hands out, the pack queries, `django.uses`.
+The Python graph build that did the same is retired; `--engine native` is still accepted, because a newer `compare` passes it to an older base's scan, and any other engine name is refused.
+- **The native evaluator alone judges every rule** (Nov 13).
+  The Python rule classes no longer judge a row again, at run time or on a ledger write; the ledger-write confirm (D50, D55) is gone with them.
+  A rule, label or selector change is written once, in Rust.
+- **Python words what the evaluator judged and holds the metadata** (D51, D53).
+  The evaluator gives each row what its message names: the identity, the two ends' names, the edge's label and the refs the judgment read as unknown.
+  Python keeps each rule type's class (its metadata, its plan, its messages and remedies), the labeler that words a label set two ways and gives `explain` its sources, and the steps with no Rust twin: a layout rule's file and registry checks, the coverage adapter, a cycle rule's strongly connected parts, levels, stale names, the classification compare.
+  `explain edge:`, the couplings a rename scope keeps and `explain`'s label values come from the evaluator too.
+  A graph that is not linked natively gets no rule context; hand-built test graphs are loaded into a native link first.
+- **What stands in for the comparison of the two engines:**
+  - the model repository's stored result: its reviewed rows (`tests/model_repo/expected.toml`), the row count and digest of each of the ten tables (`tests/model_repo/tables.toml`), every message and reason (`tests/model_repo/messages.toml`) and what `explain` says (`tests/model_repo/explained.txt`), checked by `bin/model-repo` and the suite;
+  - the stored runs of the generated rule configs (`tests/native/generated_runs.jsonl`) and of the hand-written rule cases (`tests/native/stored_rows.json`), written while both engines still agreed on them;
+  - relations between sibling rules on the evaluator alone (`tests/native/test_rule_relations.py`), and the tables `tests/rules/judgment.txt`, `connectives.txt` and `missing_side.txt`, each read by a Rust test;
+  - the rule tests on hand-built graphs, the slot table test, the generated exactly-once test, and the producer and pack tests, which link hand-written records in the native engine and assert stored rows;
+  - `bin/prove --real <snapshot> --base <rev>`: every row of the ten tables of the head against a base build at real size, the moved rows written out.
+- **What these cannot show:** a stored value holds the engine to its own earlier output, so an error the engine always had stays (the reason D7 amended kept an oracle).
+  A relation holds wherever an error is the same in every sibling rule, so an atom read wrong everywhere is seen only where a stored value reads it.
 
 **What was ported, in order.**
 Each phase landed with zero delta unless a delta is named.
@@ -72,7 +83,8 @@ Each phase landed with zero delta unless a delta is named.
 | Port `drives` to Rust | See Why | Architect, D49 | `docs/history/decision-log-3.md` |
 | `mentions_many` for installs and signals | 0.43 to 0.42 s, inside the noise | N3a build; skipped | not published |
 | A two-row compatibility view for pack copies | The parity tooling already names every delta | Architect, D22 | `docs/history/decision-log-2.md` |
-| Delete the Python resolver at adoption (D7, original) | Ten equal tables cannot show an error that both engines share | Architect, D7 amended | `docs/history/decision-log-2.md` |
+| Keep the Python rule classes as a second judge inside every native run (D27, D42, D50, D55) | By the record it never caught a real difference at run time or on a ledger write; it made every rule change get written twice and cost a ledger write about 5 s. The stored runs, the relations test and the judgment tables stand in for the test-time comparison | Architect, on the owner's delegation, Nov 13 | not published |
+| Delete the Python resolver at adoption (D7, original) | Ten equal tables cannot show an error that both engines share. Reversed on Nov 13: the owner retired the Python graph build, with the stored tables above in its place | Architect, D7 amended | `docs/history/decision-log-2.md` |
 
 ## What would change the answer
 

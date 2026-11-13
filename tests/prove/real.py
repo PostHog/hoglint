@@ -75,10 +75,10 @@ class RealDumps:
         self.python = python
         self.log = log
 
-    def dump(self, engine: Engine, kind: str, repo: Path, label: str) -> Path:
+    def dump(self, engine: Engine, repo: Path, label: str) -> Path:
         out = self.context.scratch / "dumps" / label
         work = self.context.scratch / "dumps" / f"work-{label}"
-        argv = [str(self.python), "-m", "hoglint.native.parity", "dump", "--engine", kind]
+        argv = [str(self.python), "-m", "hoglint.native.parity", "dump"]
         argv += ["--repo", str(repo), "--out", str(out), "--work", str(work)]
         env = self.context.env(f"dump-{label}", {**engine.native.env(), "PYTHONPATH": str(engine.root)})
         code = self.context.run(self.log, argv, env, cwd=engine.root)
@@ -173,39 +173,29 @@ class RowReport:
 
 
 class RealSize(Check):
-    """One snapshot: the head (and the base, when one is given) dumped in the native engine and
-    compared row by row; with `parity`, a Python-engine dump of the head against the native one."""
+    """One snapshot: the head (and the base, when one is given) dumped and compared row by row."""
 
-    def __init__(self, snapshot: Snapshot, python: Path, head: Engine, base: Engine | None, parity: bool) -> None:
+    def __init__(self, snapshot: Snapshot, python: Path, head: Engine, base: Engine | None) -> None:
         self.snapshot = snapshot
         self.python = python
         self.head = head
         self.base = base
-        self.parity = parity
         self.name = f"real size {snapshot.name}"
 
     def run(self, context: Context) -> list[Outcome]:
         log = context.log(f"real-{self.snapshot.name}")
         dumps = RealDumps(context, self.python, log)
         head_tree = self.snapshot.laid_copy(context, self.head)
-        head = dumps.dump(self.head, "native", head_tree, f"{self.snapshot.name}-head-native")
+        head = dumps.dump(self.head, head_tree, f"{self.snapshot.name}-head")
         outcomes = []
         if self.base is not None:
             base_tree = self.snapshot.laid_copy(context, self.base)
-            base = dumps.dump(self.base, "native", base_tree, f"{self.snapshot.name}-base-native")
+            base = dumps.dump(self.base, base_tree, f"{self.snapshot.name}-base")
             shutil.rmtree(base_tree)
             out = context.logs / f"real-{self.snapshot.name}"
             passed, line = RowReport(base, head, out).write()
             outcomes.append(Outcome(f"{self.name}: {self.base.label} vs head", passed, f"{line} ({out})"))
             shutil.rmtree(base)
-        if self.parity:
-            python = dumps.dump(self.head, "python", head_tree, f"{self.snapshot.name}-head-python")
-            unequal = [diff for diff in compare_dumps(python, head) if not diff.equal]
-            with open(log, "a") as handle:
-                handle.write("\n".join(diff.render() for diff in compare_dumps(python, head)) + "\n")
-            line = "python = native on all ten tables" if not unequal else f"differ: {[d.name for d in unequal]}"
-            outcomes.append(Outcome(f"{self.name}: parity", not unequal, line))
-            shutil.rmtree(python)
         shutil.rmtree(head)
         shutil.rmtree(head_tree)
         return outcomes

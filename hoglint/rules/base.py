@@ -1,6 +1,8 @@
-"""What every primitive shares: endpoints, the selector environment, edge selection, findings.
+"""What every primitive shares: rule metadata, its plan, and the words of what the native evaluator
+judged (findings and incomplete items).
 
-Unknown semantics per position:
+The judgment is the evaluator's (src/link/rules; `tests/rules/judgment.txt` holds it). Unknown
+semantics per position:
 - `from` / `select` false: the edge is not the rule's business.
 - the destination did not resolve: `on_unresolved` decides (finding, block, incomplete).
 - `from` / `select` unknown on a resolved edge: the rule is incomplete for that edge.
@@ -10,7 +12,6 @@ Unknown semantics per position:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -18,19 +19,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from hoglint.config.model import Config, RuleSpec
-from hoglint.index import MODULE_SCOPE, EdgeGroup, GraphIndex, has_endpoint_attrs
-from hoglint.labels import BUILTIN_ENTITY_NAMES, Labeler
+from hoglint.index import GraphIndex
+from hoglint.labels import Labeler
+from hoglint.ledger.errors import EngineError
 from hoglint.model import (
     Context,
     Edge,
-    EntityId,
     Finding,
     FindingDetail,
     Graph,
     IncompleteCause,
     Owners,
     Remedy,
-    Resolution,
     Shown,
     Site,
     context_bits,
@@ -40,32 +40,10 @@ if TYPE_CHECKING:
     from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
-    from hoglint.rules.levels import LevelResult
 
 from hoglint.rules.findings import FindingTable
-from hoglint.rules.plan import identity_paths, selector_tree, tree
-from hoglint.selectors import (
-    EDGE_DEPENDENT_FIELDS,
-    NONE,
-    UNKNOWN,
-    ClassSelection,
-    Node,
-    Ref,
-    Resolver,
-    Selector,
-    State,
-    Truth,
-    Value,
-    all_of,
-    any_of,
-    conjuncts,
-    endpoint_only,
-    joined,
-    refs,
-    render_value,
-    source_part,
-    split_list,
-)
+from hoglint.rules.plan import identity_paths, ref_paths, selector_tree, tree
+from hoglint.selectors import Ref, Resolver, Selector, State, conjuncts, render_value
 
 PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "use-shape": ("reference",),
@@ -73,6 +51,8 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "export": ("import", "exposes", "inherit", "decorate"),
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
+# The selectors of a rule over edges that `explain edge:` shows, by `RuleSpec` key, in order.
+EXPLAINED_SELECTORS = ("from_", "select", "deny", "allow", "require", "unless")
 
 
 class RuleType:
@@ -94,9 +74,6 @@ class RuleType:
     # Whether its selectors and identity read entities (a module, a symbol or a path) rather than
     # an edge's two ends.
     ENTITIES: ClassVar[bool] = False
-    # How a ledger write confirms what the evaluator found: "row" (the rule's own code judges each
-    # row again) or "whole" (the rule runs whole again in Python).
-    CONFIRM: ClassVar[str]
     # The config keys the rule's code reads, besides the ones every rule has
     # (`config.schema.EVERY_RULE_READS`).
     READS: ClassVar[frozenset[str]]
@@ -165,216 +142,88 @@ class Endpoint:
     unresolved: bool = False
     scope: str = ""
 
-    @property
-    def label_symbol(self) -> str | None:
-        """The top-level symbol that carries symbol labels (a method's class, a function)."""
-        if self.symbol is None or self.module is None:
-            return self.symbol
-        if not self.symbol.startswith(self.module + "."):
-            return self.symbol
-        head = self.symbol[len(self.module) + 1 :].split(".", 1)[0]
-        return f"{self.module}.{head}"
+
+@dataclass(frozen=True, slots=True)
+class Seen:
+    """One destination of one edge as a judgment saw it: what its finding or incomplete item is
+    worded from. The native evaluator gives every part but the edge (`Rules.judge`)."""
+
+    edge: Edge
+    src: Endpoint
+    dst: Endpoint
+    # The edge's label (`edge.label`).
+    label: str
+    # The refs the judgment read as unknown, as its message names them; empty for any other judgment.
+    unknown: str
+    # The rule's identity columns; empty for a judgment that `report` words as no finding.
+    identity: tuple[str, ...]
 
 
 class RuleContext:
-    """Shared state of one evaluation: config, graph, labels, per-edge ordinals and endpoint caches."""
+    """Shared state of one evaluation: config, graph, labels and the runs so far. The native
+    evaluator judges (`NativeRuleContext`); a rule words what it gives."""
 
     def __init__(self, config: Config, graph: Graph, labeler: Labeler, repo_root: Path | None = None) -> None:
         self.config = config
         self.graph = graph
         self.labeler = labeler
         self.repo_root = repo_root
-        index = labeler.index
-        self.by_kind = index.by_kind
-        self.groups = index.groups
-        self.index = index
+        self.index = labeler.index
         self.results: dict[str, RuleRun] = {}
-        self.src_cache: dict[tuple[str, str, str], Endpoint] = {}
-        self.symbol_cache: dict[tuple[str, Resolution], Endpoint] = {}
-        self.target_cache: dict[tuple[EntityId, bool], Endpoint] = {}
 
     def find_conflicts(self) -> None:
         """Records every label the config sets two ways on this graph, before any rule runs
         (`Labeler.find_conflicts`)."""
         self.labeler.find_conflicts()
 
-    def confirm_findings(self, ran: list[RuleSpec]) -> None:
-        """Judges again, by each rule's own code, every finding a judge outside that code made
-        for the rules in `ran`; a run that writes a ledger asks for it. The Python engine's rules
-        judge their own edges."""
-
     def met_conflicts(self) -> None:
         """Records the labels set two ways that the run met so far, outside the labeler. The
         labeler records them as it reads them, so there is nothing left to do here."""
 
-    def confirm_levels(self, levels: dict[str, LevelResult], runs: dict[str, RuleRun]) -> None:
-        """Judges every level again with labels its labeler did not compute, for a run that
-        writes a ledger. The Python engine's labeler computes its own."""
+    # What the native evaluator answers (`NativeRuleContext`): a rule asks its context, and words
+    # what comes back.
 
-    def edges_of(self, kinds: tuple[str, ...]) -> list[Edge]:
-        """Edges of the given kinds, kind by kind in the order named; every edge when none is named."""
-        if not kinds:
-            return self.graph.edges
-        return [edge for kind in dict.fromkeys(kinds) for edge in self.by_kind.get(kind, [])]
+    def reach_found(self, rule: ReachPrimitive) -> list[Found]:
+        """What a reach rule's search finds."""
+        raise NotImplementedError
 
-    def edges_passing(self, kinds: tuple[str, ...], node: Node | None) -> list[Edge]:
-        """`edges_of(kinds)`, less edges whose kind and contexts make `node` false. `node` reads
-        only an edge's kind and contexts; callers still judge it per edge."""
-        return self.edges_of(kinds)
+    def inventory_judged(self, rule: EdgeInventory) -> None:
+        """An inventory over edges judged into the rule's run."""
+        raise NotImplementedError
 
-    def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
-        return list(dict.fromkeys(kinds)) if kinds else list(self.groups)
-
-    def module_groups(self, kinds: tuple[str, ...]) -> Iterator[tuple[str, EdgeGroup]]:
-        """(source module, its edges) kind by kind in the order named; every kind when none is named."""
-        for kind in self.kinds_or_all(kinds):
-            yield from self.groups.get(kind, {}).items()
-
-    def rule_groups(self, rule: EdgeRule) -> Iterator[tuple[str, EdgeGroup]]:
-        """The (source module, edges) a rule judges. An index that groups edges by label class
-        may leave out edges that cannot make a finding or an incomplete for this rule."""
-        return self.module_groups(rule.kinds())
-
-    def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
-        """Modules with an edge of the given kinds, sorted."""
-        return sorted({module for module, _ in self.module_groups(kinds)})
-
-    def groups_of(self, kinds: tuple[str, ...], module: str) -> list[EdgeGroup]:
-        out = []
-        for kind in self.kinds_or_all(kinds):
-            group = self.groups.get(kind, {}).get(module)
-            if group is not None:
-                out.append(group)
-        return out
-
-    def reach_found(self, rule: ReachPrimitive) -> list[Found] | None:
-        """What a reach rule's search finds when this context runs it itself, else None."""
-        return None
-
-    def inventory_judged(self, rule: EdgeInventory) -> bool:
-        """Whether this context judged an inventory over edges itself, into the rule's run."""
-        return False
-
-    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
+    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]]:
         """What a layout rule's or an entity inventory's entities report, as data the rule words
-        (`EntityRule.report_rows`), in order, when this context finds them itself; else None."""
-        return None
+        (`EntityRule.report_rows`), in order."""
+        raise NotImplementedError
 
-    def layout_roots(self, within: str) -> list[str] | None:
-        """The roots `within` names among the graph's module paths, sorted, when this context
-        finds them itself; else None."""
-        return None
+    def layout_roots(self, within: str) -> list[str]:
+        """The roots `within` names among the graph's module paths, sorted."""
+        raise NotImplementedError
 
-    def registry_modules(self, pattern: str) -> list[tuple[str, str]] | None:
-        """The graph's (module, path) whose path `pattern` matches, by module, when this context
-        finds them itself; else None."""
-        return None
+    def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
+        """The graph's (module, path) whose path `pattern` matches, by module."""
+        raise NotImplementedError
 
-    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]] | None:
-        """The paths a coverage rule needs covered when this context finds them itself, its items
-        that cannot be placed already in the rule's run; else None."""
-        return None
+    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]]:
+        """The paths a coverage rule needs covered, its items that cannot be placed already in the
+        rule's run."""
+        raise NotImplementedError
 
-    def export_run(self, rule: ExportPrimitive) -> RuleRun | None:
-        """An export rule's run when this context checks it itself, else None."""
-        return None
+    def export_run(self, rule: ExportPrimitive) -> RuleRun:
+        """An export rule's run."""
+        raise NotImplementedError
 
-    def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow] | None:
-        """A cycle rule's rows when this context finds them itself, else None."""
-        return None
+    def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
+        """A cycle rule's rows."""
+        raise NotImplementedError
 
-    def judged(self, rule: EdgeRule) -> bool:
-        """Whether this context judged every edge of the rule itself, into the rule's run. When it
-        did not, the rule judges the edges `judged_edges` gives it."""
-        return False
+    def cycle_identities(self, rule: CyclePrimitive, steps: list[tuple[int, int]]) -> list[tuple[str, ...]]:
+        """The identity of each (edge, destination) of a cycle rule."""
+        raise NotImplementedError
 
-    def judged_edges(self, rule: EdgeRule) -> Iterator[Edge]:
-        """Each edge the rule judges, in order."""
-        for module, group in self.rule_groups(rule):
-            for edge in rule.group_edges(module, group):
-                if rule.sees(edge):
-                    yield edge
-
-    def ordinal(self, edge: Edge) -> int:
-        """The edge's place among edges with the same module, scope, kind and surface."""
-        return self.labeler.index.ordinals.get(edge.handle, 0)
-
-    def src_endpoint(self, site: Site) -> Endpoint:
-        return self.src_endpoint_at(site.module, site.scope, site.path)
-
-    def src_endpoint_at(self, module: str, site_scope: str, path: str) -> Endpoint:
-        """The `src` endpoint of a site written in `module`, inside `site_scope`, in file `path`."""
-        key = (module, site_scope, path)
-        cached = self.src_cache.get(key)
-        if cached is not None:
-            return cached
-        scope = site_scope if site_scope and site_scope != MODULE_SCOPE else ""
-        symbol = f"{module}.{scope}" if scope else None
-        endpoint = Endpoint(module, symbol, path or self.labeler.path_of(module), scope=scope)
-        self.src_cache[key] = endpoint
-        return endpoint
-
-    def module_endpoint(self, module: str) -> Endpoint:
-        return Endpoint(module, None, self.labeler.path_of(module))
-
-    def module_env(self, module: str) -> ModuleEnv:
-        """The environment of a module on its own, with no edge and no destination."""
-        return ModuleEnv(self, self.module_endpoint(module))
-
-    def symbol_endpoint(self, name: str, resolution: Resolution) -> Endpoint:
-        key = (name, resolution)
-        cached = self.symbol_cache.get(key)
-        if cached is None:
-            cached = self.symbol_cache[key] = self.new_symbol_endpoint(name, resolution)
-        return cached
-
-    def new_symbol_endpoint(self, name: str, resolution: Resolution) -> Endpoint:
-        if resolution is Resolution.EXTERNAL:
-            module = self.labeler.module_of_symbol(name) or name
-            return Endpoint(module, name, self.labeler.path_of(module), external=name.split(".", 1)[0])
-        module = self.labeler.name_owner(name)
-        if module is None:
-            return Endpoint(None, name, unresolved=True)
-        symbol = name if name != module else None
-        return Endpoint(module, symbol, self.labeler.path_of(module))
-
-    def dst_endpoints(self, edge: Edge, role: str) -> list[Endpoint]:
-        return self.dst_endpoints_of(role, edge.resolution, edge.surface, edge.targets, edge.via)
-
-    def dst_endpoints_of(
-        self,
-        role: str,
-        resolution: Resolution,
-        surface: str,
-        targets: tuple[EntityId, ...],
-        via: tuple[EntityId, ...] = (),
-    ) -> list[Endpoint]:
-        """The `dst` endpoints of an edge with these fields, as rule `role` reads them."""
-        if role == "via":
-            return [self.symbol_endpoint(str(hop), Resolution.RESOLVED) for hop in via]
-        if role == "surface":
-            if resolution is Resolution.UNRESOLVED:
-                endpoint = self.symbol_endpoint(surface, Resolution.RESOLVED)
-                return [endpoint if not endpoint.unresolved else Endpoint(None, surface, unresolved=True)]
-            return [self.symbol_endpoint(surface, resolution)]
-        if resolution is Resolution.UNRESOLVED or not targets:
-            return [Endpoint(None, surface, unresolved=True)]
-        external = resolution is Resolution.EXTERNAL
-        return [self.target_endpoint(target, external) for target in targets]
-
-    def target_endpoint(self, target: EntityId, external: bool) -> Endpoint:
-        key = (target, external)
-        cached = self.target_cache.get(key)
-        if cached is not None:
-            return cached
-        name = str(target)
-        path = self.labeler.path_of(target.module)
-        if external:
-            endpoint = Endpoint(target.module, name, path, external=target.module.split(".", 1)[0])
-        else:
-            endpoint = Endpoint(target.module, name if target.symbol else None, path)
-        self.target_cache[key] = endpoint
-        return endpoint
+    def judged(self, rule: EdgeRule) -> None:
+        """Every edge of an edge, entrypoint, signature or use-shape rule judged into its run."""
+        raise NotImplementedError
 
     def finding(
         self,
@@ -426,8 +275,12 @@ def subjects_of(src: str | None, dst: str | None) -> tuple[str, ...]:
 
 
 def context_class(index: GraphIndex) -> type[RuleContext]:
-    """The rule context for an index: an index over edges kept outside Python brings its own."""
-    return getattr(index, "context_class", RuleContext)
+    """The rule context for an index: the native graph's, whose evaluator judges every rule. A
+    graph that is not linked natively has none: rules run in the native evaluator only."""
+    found = getattr(index, "context_class", None)
+    if found is None:
+        raise EngineError("rules run in the native evaluator only: link the graph natively first")
+    return found
 
 
 def labeler_class(index: GraphIndex) -> type[Labeler]:
@@ -449,148 +302,13 @@ def contexts_of(edge: Edge) -> frozenset[str]:
     return edge.contexts or DEFAULT_CONTEXTS
 
 
-def context_ok(edge: Edge, include: frozenset[str], exclude: frozenset[str]) -> bool:
-    contexts = contexts_of(edge)
-    if include and not contexts & include:
-        return False
-    return not contexts & exclude
-
-
-def read_endpoint(ctx: RuleContext, endpoint: Endpoint, name: str, edge: Edge | None, root: str) -> Value:
-    """`src.<name>` or `dst.<name>` of one endpoint. `context` and `exported` need the edge: see EdgeEnv.
-
-    The endpoint answers what it knows better than its module (its own path, scope, external
-    package, an edge's `src.*`/`dst.*` attributes); other built-in names are the labeler's."""
-    if name == "symbol":
-        target = endpoint.symbol or endpoint.module
-        return Value.known(target) if target else UNKNOWN
-    if endpoint.unresolved:
-        return UNKNOWN
-    if name == "module":
-        return Value.known(endpoint.module) if endpoint.module else NONE
-    if name == "path":
-        return Value.known(endpoint.path) if endpoint.path else NONE
-    if name == "scope":
-        return Value.known(endpoint.scope) if endpoint.scope else NONE
-    if name == "name":
-        target = endpoint.symbol or endpoint.module or ""
-        return Value.known(target.rpartition(".")[2]) if target else NONE
-    if name == "external":
-        return Value.known(endpoint.external) if endpoint.external else NONE
-    if name == "kind":
-        if endpoint.symbol is None:
-            return NONE
-        return ctx.labeler.kind(endpoint.symbol, first_party=endpoint.external is None)[0]
-    if name in BUILTIN_ENTITY_NAMES:
-        return ctx.labeler.builtin(endpoint.module, endpoint.symbol, name)
-    spec = ctx.config.fields.get(name)
-    attr = edge.attr(f"{root}.{name}") if edge is not None and has_endpoint_attrs(edge) else ""
-    if attr:
-        if spec is not None and spec.type.value == "set":
-            return Value.known(frozenset(split_list(attr)))
-        return Value.known(attr)
-    if spec is None:
-        return UNKNOWN
-    if endpoint.external is not None:
-        return NONE
-    symbol = endpoint.label_symbol if spec.on == "symbol" else None
-    return ctx.labeler.field_value(endpoint.module, symbol, name)[0]
-
-
-class EdgeEnv:
-    """Resolves `src.*`, `dst.*` and `edge.*` for one edge and one destination endpoint.
-
-    `shape` and `shape_detail` default to the edge's; a primitive that refines the shape (use-shape
-    with def-use flow) passes its own, so the edge itself stays the witness.
-    """
-
-    def __init__(
-        self,
-        ctx: RuleContext,
-        edge: Edge,
-        src: Endpoint,
-        dst: Endpoint,
-        shape: str | None = None,
-        shape_detail: str | None = None,
-    ) -> None:
-        self.ctx = ctx
-        self.edge = edge
-        self.src = src
-        self.dst = dst
-        self.shape = edge.shape if shape is None else shape
-        self.shape_detail = edge.shape_detail if shape_detail is None else shape_detail
-
-    def label(self) -> str:
-        if self.dst.unresolved:
-            return f"unresolved-{self.edge.kind}"
-        if self.shape:
-            return f"{self.shape}({self.shape_detail})" if self.shape_detail else self.shape
-        return self.edge.kind
-
-    def resolve(self, ref: Ref) -> Value:
-        if len(ref.path) != 2:
-            return UNKNOWN
-        root, name = ref.path
-        if root == "edge":
-            return self.edge_value(name)
-        if root == "src":
-            return self.endpoint_value(self.src, name, root)
-        if root == "dst":
-            return self.endpoint_value(self.dst, name, root)
-        return UNKNOWN
-
-    def edge_value(self, name: str) -> Value:
-        edge = self.edge
-        simple = {
-            "kind": edge.kind,
-            "shape": self.shape,
-            "use": edge.use,
-            "label": self.label(),
-            "resolution": edge.resolution.value,
-            "surface": edge.surface,
-            "producer": edge.producer,
-        }
-        if name in simple:
-            return Value.known(simple[name]) if simple[name] else NONE
-        if name == "context":
-            return Value.known(contexts_of(edge))
-        if name == "ordinal":
-            return Value.known(str(self.ctx.ordinal(edge)))
-        raw = edge.attr(name)
-        if raw:
-            return Value.known(raw)
-        return UNKNOWN if edge.attr_unknown(name) else NONE
-
-    def endpoint_value(self, endpoint: Endpoint, name: str, root: str) -> Value:
-        if name == "context":
-            return Value.known(contexts_of(self.edge))
-        if name == "exported":
-            return UNKNOWN if endpoint.unresolved else self.exported(endpoint)
-        return read_endpoint(self.ctx, endpoint, name, self.edge, root)
-
-    def exported(self, endpoint: Endpoint) -> Value:
-        if endpoint.external is not None:
-            return NONE
-        # An edge's own endpoint attrs can change what an audience reads, so its answer is not the
-        # one the labeler keeps per module pair.
-        src = None if has_endpoint_attrs(self.edge) else (self.src.module, self.src.path)
-        truth = self.ctx.labeler.exported(endpoint.module, endpoint.symbol, self.resolve, src)
-        if truth is Truth.UNKNOWN:
-            return UNKNOWN
-        return Value.known(truth is Truth.TRUE)
-
-
-class ModuleEnv:
-    """Resolves `src.*` for a module on its own, with no edge (reach's `from`)."""
-
-    def __init__(self, ctx: RuleContext, endpoint: Endpoint) -> None:
-        self.ctx = ctx
-        self.endpoint = endpoint
-
-    def resolve(self, ref: Ref) -> Value:
-        if len(ref.path) != 2 or ref.path[0] != "src" or ref.path[1] in EDGE_DEPENDENT_FIELDS:
-            return UNKNOWN
-        return read_endpoint(self.ctx, self.endpoint, ref.path[1], None, "src")
+def named_seen(edge: Edge, src: str, named: tuple[Any, ...], unresolved: bool) -> Seen:
+    """What the evaluator names of a reach or cycle row (`Named`): (identity, destination module,
+    source symbol, destination symbol, label), its edge being `edge` and its source `src`."""
+    identity, dst, src_symbol, dst_symbol, label = named
+    return Seen(
+        edge, Endpoint(src, src_symbol), Endpoint(dst, dst_symbol, unresolved=unresolved), label, "", tuple(identity)
+    )
 
 
 @cache
@@ -606,108 +324,16 @@ def project(columns: tuple[str, ...], resolve: Resolver) -> tuple[str, ...]:
 # ── staged selection ─────────────────────────────────────────────
 
 
-def classes_of(node: Node | None) -> ClassSelection | None:
-    return ClassSelection(node) if node is not None else None
-
-
-class StagedSelection:
-    """A rule's selection split into the parts that read only `src`, only `dst`, and the rest.
-
-    The endpoint parts are evaluated once per endpoint and cached, so a rule over a million edges
-    reads each module's labels once. An edge with its own `src.*` or `dst.*` attributes bypasses
-    the cache, because those attributes override labels.
-    """
-
-    def __init__(self, ctx: RuleContext, selectors: tuple[Selector | None, ...]) -> None:
-        self.ctx = ctx
-        parts = conjuncts(selectors)
-        self.src_part = source_part(selectors)
-        self.dst_part = joined([part for part in parts if endpoint_only(part) == "dst"])
-        self.rest = joined([part for part in parts if endpoint_only(part) == ""])
-        self.src_classes = classes_of(self.src_part)
-        self.dst_classes = classes_of(self.dst_part)
-        self.rest_classes = classes_of(self.rest)
-        self.module_level = self.module_only(self.src_part)
-        self.rest_modules = self.module_only(self.rest)
-        self.rest_cache: dict[tuple[object, ...], Truth] = {}
-        self.module_cache: dict[str, Truth] = {}
-        self.src_cache: dict[Endpoint, Truth] = {}
-        self.dst_cache: dict[Endpoint, Truth] = {}
-
-    def module_only(self, part: Node | None) -> bool:
-        """Whether the part reads only endpoint fields that belong to a module, never a symbol."""
-        return part is not None and all(self.ctx.labeler.module_level(ref) for ref in refs(part))
-
-    def bypass(self, edge: Edge) -> bool:
-        """An edge with its own `src.*`/`dst.*` attributes is judged alone: they override labels."""
-        return has_endpoint_attrs(edge)
-
-    def module_false(self, module: str) -> bool:
-        """True when the `src` part is false for every regular edge of the module."""
-        if not self.module_level or self.src_classes is None:
-            return False
-        cached = self.module_cache.get(module)
-        if cached is None:
-            cached = self.src_classes.truth(self.ctx.module_env(module).resolve)
-            self.module_cache[module] = cached
-        return cached is Truth.FALSE
-
-    def part_truth(
-        self, classes: ClassSelection | None, cache: dict[Endpoint, Truth], edge: Edge, endpoint: Endpoint
-    ) -> Truth:
-        if classes is None:
-            return Truth.TRUE
-        if self.bypass(edge):
-            return classes.truth(EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
-        cached = cache.get(endpoint)
-        if cached is None:
-            cached = cache[endpoint] = classes.truth(EdgeEnv(self.ctx, edge, endpoint, endpoint).resolve)
-        return cached
-
-    def src_truth(self, edge: Edge, src: Endpoint) -> Truth:
-        return self.part_truth(self.src_classes, self.src_cache, edge, src)
-
-    def dst_truth(self, edge: Edge, dst: Endpoint) -> Truth:
-        return self.part_truth(self.dst_classes, self.dst_cache, edge, dst)
-
-    def rest_truth(self, rest: ClassSelection, env: EdgeEnv) -> Truth:
-        """The rest of the selection; one evaluation per module pair when it reads only module fields."""
-        if not self.rest_modules or self.bypass(env.edge):
-            return rest.truth(env.resolve)
-        key = self.rest_key(env)
-        cached = self.rest_cache.get(key)
-        if cached is None:
-            cached = self.rest_cache[key] = rest.truth(env.resolve)
-        return cached
-
-    @staticmethod
-    def rest_key(env: EdgeEnv) -> tuple[object, ...]:
-        """The module pair the rest of the selection is cached under: a cache key, not a read."""
-        src, dst = env.src, env.dst
-        return (src.module, src.path, dst.module, dst.path, dst.external, dst.unresolved)
-
-    def truth(self, env: EdgeEnv) -> Truth:
-        parts = [self.src_truth(env.edge, env.src), self.dst_truth(env.edge, env.dst)]
-        if self.rest_classes is not None:
-            parts.append(self.rest_truth(self.rest_classes, env))
-        return all_of(parts)
-
-
 class EdgeRule(RuleType):
-    """Selection and the predicate step for every primitive that judges single edges."""
+    """What every rule over edges words and plans: the evaluator judges each edge (`Rules.judge`),
+    the rule words each row it gives."""
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
         self.spec = spec
         self.run = RuleRun(spec)
-        self.kind_set = frozenset(self.kinds())
         self.include = frozenset(spec.contexts_include)
         self.exclude = frozenset(spec.contexts_exclude or ())
-        self.staged = StagedSelection(ctx, self.selectors())
-        self.deny_classes = ClassSelection(spec.deny.node) if spec.deny is not None else None
-        self.allow_classes = ClassSelection(spec.allow.node) if spec.allow is not None else None
-        self.require_classes = ClassSelection(spec.require.node) if spec.require is not None else None
-        self.unless_classes = ClassSelection(spec.unless.node) if spec.unless is not None else None
 
     def kinds(self) -> tuple[str, ...]:
         return rule_kinds(self.spec, self.ctx.config.views)
@@ -716,95 +342,20 @@ class EdgeRule(RuleType):
         """The selectors that pick edges, in the order they apply."""
         return self.spec.from_, self.spec.select
 
-    def sees(self, edge: Edge) -> bool:
-        """Whether the rule looks at this edge at all. The engine and `explain` both ask this."""
-        if self.kind_set and edge.kind not in self.kind_set:
-            return False
-        if edge.resolution is Resolution.NOT_APPLICABLE:
-            return False
-        return context_ok(edge, self.include, self.exclude)
+    def identified(self) -> frozenset[Judgment]:
+        """The judgments whose rows `report` words as findings: only their rows carry the rule's
+        identity, so an identity column is read where a finding needs it."""
+        out = {Judgment.VIOLATION, Judgment.UNKNOWN_VIOLATION}
+        if self.spec.on_unresolved != "incomplete":
+            out.add(Judgment.UNRESOLVED)
+        return frozenset(out)
 
-    def env(self, edge: Edge, src: Endpoint, dst: Endpoint) -> EdgeEnv:
-        return EdgeEnv(self.ctx, edge, src, dst)
+    def incomplete(self, seen: Seen, reason: str) -> None:
+        key = f"{seen.src.module}|{seen.edge.kind}|{seen.edge.surface}"
+        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(seen), edge=seen.edge))
 
-    def envs_of(self, edge: Edge) -> list[EdgeEnv]:
-        """One environment per destination of the edge, selected or not."""
-        src = self.ctx.src_endpoint(edge.site)
-        return [self.env(edge, src, dst) for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint)]
-
-    def group_edges(self, module: str, group: EdgeGroup) -> list[Edge]:
-        """One module's edges, less the regular ones when the module-wide part is false."""
-        return group.irregular if self.staged.module_false(module) else group.edges
-
-    def group_envs(self, module: str, group: EdgeGroup) -> Iterator[EdgeEnv]:
-        """The environments of one module's edges whose selection is not false. The module-wide and
-        endpoint-only parts go first, so most edges are dropped before any per-edge work."""
-        for edge in self.group_edges(module, group):
-            yield from self.edge_envs(edge)
-
-    def edge_envs(self, edge: Edge) -> Iterator[EdgeEnv]:
-        if not self.sees(edge):
-            return
-        staged = self.staged
-        src = self.ctx.src_endpoint(edge.site)
-        if staged.src_truth(edge, src) is Truth.FALSE:
-            return
-        for dst in self.ctx.dst_endpoints(edge, self.spec.endpoint):
-            if staged.dst_truth(edge, dst) is Truth.FALSE:
-                continue
-            yield self.env(edge, src, dst)
-
-    def envs(self) -> Iterator[EdgeEnv]:
-        for edge in self.ctx.judged_edges(self):
-            yield from self.edge_envs(edge)
-
-    def decide(self, env: EdgeEnv) -> Judgment:
-        """The rule's judgment of one environment: the decision, and nothing that names the edge."""
-        selected = self.selection(env)
-        if selected is Truth.FALSE:
-            return Judgment.CLEAN
-        if env.dst.unresolved:
-            return Judgment.UNRESOLVED
-        if selected is Truth.UNKNOWN:
-            return Judgment.UNKNOWN_SELECTION
-        verdict = self.violation(env)
-        if verdict is Truth.FALSE or self.excused(env):
-            return Judgment.CLEAN
-        if verdict is Truth.UNKNOWN:
-            return Judgment.UNKNOWN_VIOLATION
-        return Judgment.VIOLATION
-
-    def selection(self, env: EdgeEnv) -> Truth:
-        return self.staged.truth(env)
-
-    def violation(self, env: EdgeEnv) -> Truth:
-        """True when the predicate says the edge breaks the rule. No predicate: selection is the finding."""
-        parts: list[Truth] = []
-        if self.deny_classes is not None:
-            parts.append(self.deny_classes.truth(env.resolve))
-        if self.allow_classes is not None:
-            parts.append(self.allow_classes.truth(env.resolve).negate())
-        if self.require_classes is not None:
-            parts.append(self.require_classes.truth(env.resolve).negate())
-        if not parts:
-            return Truth.TRUE
-        return any_of(parts)
-
-    def excused(self, env: EdgeEnv) -> bool:
-        return self.unless_classes is not None and self.unless_classes.truth(env.resolve) is Truth.TRUE
-
-    def unknown_refs(self, selector: Selector | None, env: EdgeEnv) -> str:
-        if selector is None:
-            return ""
-        names = [str(ref) for ref in selector.refs() if env.resolve(ref).is_unknown]
-        return ", ".join(dict.fromkeys(names))
-
-    def incomplete(self, env: EdgeEnv, reason: str) -> None:
-        key = f"{env.src.module}|{env.edge.kind}|{env.edge.surface}"
-        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(env), edge=env.edge))
-
-    def subjects(self, env: EdgeEnv) -> tuple[str, ...]:
-        return subjects_of(env.src.module, env.dst.module)
+    def subjects(self, seen: Seen) -> tuple[str, ...]:
+        return subjects_of(seen.src.module, seen.dst.module)
 
     # Whether `report` names the edge as a finding's only witness. Then a finding whose detail is
     # made when read still has its witness and site without making it.
@@ -822,33 +373,33 @@ class EdgeRule(RuleType):
             return self.spec.on_unresolved == "finding", True
         return True, judgment is Judgment.UNKNOWN_VIOLATION
 
-    def finding_of(self, env: EdgeEnv, judgment: Judgment, detail: Shown) -> Finding:
-        """The finding `judgment` makes for one environment. Its identity, owner and subjects name
-        the entity, so they come from the environment; its flags from the judgment."""
+    def finding_of(self, seen: Seen, judgment: Judgment, detail: Shown) -> Finding:
+        """The finding `judgment` makes for one destination. Its identity, owner and subjects name
+        the entity, so they come from what was seen; its flags from the judgment."""
         ledgerable, unknown = self.flags(judgment)
         later = self.witness_is_edge and not isinstance(detail, FindingDetail)
         return Finding(
             rule=self.spec.id,
-            identity=project(self.spec.identity, env.resolve),
+            identity=seen.identity,
             detail=detail,
-            owner=self.ctx.owner(env.src.module),
-            subjects=self.subjects(env),
+            owner=self.ctx.owner(seen.src.module),
+            subjects=self.subjects(seen),
             ledgerable=ledgerable,
             unknown=unknown,
-            witness=env.edge if later else None,
+            witness=seen.edge if later else None,
         )
 
     def emit(
         self,
-        env: EdgeEnv,
+        seen: Seen,
         judgment: Judgment,
         message: str,
         remedies: tuple[Remedy, ...] = (),
         witnesses: tuple[Edge, ...] = (),
     ) -> Finding:
-        shown = witnesses or (env.edge,)
+        shown = witnesses or (seen.edge,)
         detail = FindingDetail(message, shown[0].site, shown, remedies or self.remedies())
-        finding = self.finding_of(env, judgment, detail)
+        finding = self.finding_of(seen, judgment, detail)
         self.run.findings.append(finding)
         return finding
 
@@ -857,53 +408,40 @@ class EdgeRule(RuleType):
             return (Remedy("documented-replacement", self.spec.remedy),)
         return ()
 
-    def on_unresolved(self, env: EdgeEnv) -> None:
-        what = f"{env.edge.kind} {env.edge.surface!r} did not resolve"
+    def on_unresolved(self, seen: Seen) -> None:
+        what = f"{seen.edge.kind} {seen.edge.surface!r} did not resolve"
         if self.spec.on_unresolved == "incomplete":
-            self.incomplete(env, what)
+            self.incomplete(seen, what)
             return
-        self.emit(env, Judgment.UNRESOLVED, what)
+        self.emit(seen, Judgment.UNRESOLVED, what)
 
-    def report(self, env: EdgeEnv, judgment: Judgment, describe: str) -> None:
-        """The finding or incomplete `judgment` makes for one environment, all of it from the
-        environment's own edge; `describe` is the finding message."""
+    def report(self, seen: Seen, judgment: Judgment, describe: str) -> None:
+        """The finding or incomplete `judgment` makes for one destination, all of it from what was
+        seen of it; `describe` is the finding message."""
         if judgment is Judgment.UNRESOLVED:
-            self.on_unresolved(env)
+            self.on_unresolved(seen)
         elif judgment is Judgment.UNKNOWN_SELECTION:
-            unknown = self.unknown_refs(self.spec.from_, env) or self.unknown_refs(self.spec.select, env)
-            self.incomplete(env, f"selection reads unknown {unknown or 'values'}")
+            self.incomplete(seen, f"selection reads unknown {seen.unknown or 'values'}")
         elif judgment is Judgment.UNKNOWN_VIOLATION:
-            unknown = ", ".join(
-                filter(None, (self.unknown_refs(s, env) for s in (self.spec.deny, self.spec.allow, self.spec.require)))
-            )
-            self.emit(env, judgment, f"{describe}; cannot tell, unassigned: {unknown or 'a value'}")
+            self.emit(seen, judgment, f"{describe}; cannot tell, unassigned: {seen.unknown or 'a value'}")
         elif judgment is Judgment.VIOLATION:
-            self.emit(env, judgment, describe)
-
-    def judge(self, env: EdgeEnv, describe: str) -> None:
-        """The decision for one edge, then what it reports; `describe` is the finding message."""
-        self.report(env, self.decide(env), describe)
+            self.emit(seen, judgment, describe)
 
     def evaluate(self) -> RuleRun:
-        if self.ctx.judged(self):
-            return self.run
-        for edge in self.ctx.judged_edges(self):
-            for env in self.edge_envs(edge):
-                self.judge(env, self.describe(env))
+        self.ctx.judged(self)
         return self.run
 
-    def recorded(self, envs: Iterable[EdgeEnv]) -> RuleRun:
-        """What judging `envs` makes, kept out of this rule's run."""
+    def worded(self, seen: Seen, judgment: Judgment) -> RuleRun:
+        """What `judgment` reports for `seen`, message included, kept out of this rule's run."""
         saved, self.run = self.run, RuleRun(self.spec)
         try:
-            for env in envs:
-                self.judge(env, self.describe(env))
+            self.report(seen, judgment, self.describe(seen))
             return self.run
         finally:
             self.run = saved
 
-    def describe(self, env: EdgeEnv) -> str:
-        return f"{env.src.module} -> {env.dst.symbol or env.dst.module} ({env.edge.kind})"
+    def describe(self, seen: Seen) -> str:
+        return f"{seen.src.module} -> {seen.dst.symbol or seen.dst.module} ({seen.edge.kind})"
 
     def edges_plan(self) -> dict[str, Any]:
         """Which edges the rule sees, and its selection in the order it applies."""
@@ -925,6 +463,16 @@ class EdgeRule(RuleType):
             "require": selector_tree(spec.require),
         }
 
+    def selectors_plan(self) -> list[tuple[str, dict[str, Any]]]:
+        """Each selector of the rule by its `RuleSpec` key, as `explain edge:` reads them."""
+        spec = self.spec
+        out = []
+        for name in EXPLAINED_SELECTORS:
+            selector: Selector | None = getattr(spec, name)
+            if selector is not None:
+                out.append((name, tree(selector.node)))
+        return out
+
     def plan(self) -> dict[str, Any]:
         """A rule judged per edge. A signature rule adds its part, an entrypoint rule its
         `uses_at_import`."""
@@ -932,8 +480,14 @@ class EdgeRule(RuleType):
         return {
             "id": spec.id,
             "mode": self.NATIVE_MODE,
+            "selectors": self.selectors_plan(),
             "edges": self.edges_plan(),
             "identity": identity_paths(spec.identity),
+            "identified": sorted(self.identified()),
+            "unknown_refs": {
+                "selection": [ref_paths(spec.from_), ref_paths(spec.select)],
+                "verdict": [ref_paths(spec.deny), ref_paths(spec.allow), ref_paths(spec.require)],
+            },
             "unless": selector_tree(spec.unless),
             "signature": None,
             "verdict": self.verdict_plan(),

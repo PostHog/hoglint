@@ -118,7 +118,7 @@ def replay(tmp_path: Path, pair: tuple[Path, Pair], mode: str | Mode, damages: t
     os.environ.setdefault("PYTHONHASHSEED", "0")
     repo, found = pair
     picked = MODES[mode]() if isinstance(mode, str) else mode
-    checker = Checker(repo, "native", picked, tmp_path / "work", datetime.date(2026, 1, 1))
+    checker = Checker(repo, picked, tmp_path / "work", datetime.date(2026, 1, 1))
     return Replay(checker, pick_damages(",".join(damages))).run(found)
 
 

@@ -1,24 +1,17 @@
-"""Both engines over small repos, compared output by output as `hoglint.native.parity` does."""
+"""The native engine over small repos, read from the tables `hoglint.native.parity` dumps."""
 
 from __future__ import annotations
 
 import gc
 import os
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, Graph, WitnessRow, witness_row
-from hoglint.native.parity import Dump, compare_dumps, read_lines
-from hoglint.native.rules import Rejudged
-from hoglint.native.source import ENGINES
-from hoglint.rules.base import EdgeRule, Judgment, context_class, project
-from hoglint.rules.engine import Engine, primitive_of
-from rules.support import GraphBuilder, config_from
+from hoglint.model import Graph
+from hoglint.native.parity import Dump, read_lines
 
 from native.require import native_module
 
@@ -136,9 +129,10 @@ def write_repo(repo: Path, sources: dict[str, str]) -> None:
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
 
 
-def dumps(
+def dump_repo(
     tmp_path: Path, sources: dict[str, str], monkeypatch: pytest.MonkeyPatch, unreadable: tuple[str, ...] = ()
-) -> dict[str, Path]:
+) -> Path:
+    """The native engine's tables of a repo of `sources`, with the files `unreadable` names unreadable."""
     native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     repo = tmp_path / "repo"
@@ -147,13 +141,11 @@ def dumps(
         (repo / path).chmod(0)
         if os.access(repo / path, os.R_OK):
             pytest.skip("this user reads files whatever their mode (root)")
-    out = {}
+    out = tmp_path / "native"
+    work = tmp_path / "work-native"
+    work.mkdir()
     try:
-        for engine in ENGINES:
-            out[engine] = tmp_path / engine
-            work = tmp_path / f"work-{engine}"
-            work.mkdir()
-            Dump(repo, engine, out[engine], work).run()
+        Dump(repo, out, work).run()
     finally:
         gc.enable()
         for path in unreadable:
@@ -161,16 +153,11 @@ def dumps(
     return out
 
 
-def same_in_both_engines(out: dict[str, Path]) -> None:
-    assert [diff.render() for diff in compare_dumps(out["python"], out["native"]) if not diff.equal] == []
-
-
 def test_grouped_findings_take_owners_and_subjects_from_their_own_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    out = dumps(tmp_path, OWNERS_REPO, monkeypatch)
-    same_in_both_engines(out)
-    findings = read_lines(out["native"] / "findings.jsonl")
+    out = dump_repo(tmp_path, OWNERS_REPO, monkeypatch)
+    findings = read_lines(out / "findings.jsonl")
     owners = {row[3][1]: (row[6], row[8]) for row in findings}
     assert owners == {
         "core.a": (["team-a"], ["core.a", "products.billing.models"]),
@@ -178,60 +165,17 @@ def test_grouped_findings_take_owners_and_subjects_from_their_own_edge(
     }
 
 
-def test_a_source_no_engine_can_read_is_the_same_incomplete_item_in_both(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    out = dumps(tmp_path, OWNERS_REPO, monkeypatch, unreadable=("core/a.py",))
-    same_in_both_engines(out)
+def test_a_source_the_engine_cannot_read_is_an_incomplete_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out = dump_repo(tmp_path, OWNERS_REPO, monkeypatch, unreadable=("core/a.py",))
     reason = "core/a.py could not be read, so its facts are missing"
-    assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out["native"] / "incomplete.jsonl")
-
-
-@dataclass(frozen=True, slots=True)
-class Held:
-    """A finding's edge, already made."""
-
-    edge: Edge
-
-    @property
-    def edge_id(self) -> int:
-        return self.edge.handle
-
-    def get(self) -> Edge:
-        return self.edge
-
-    def row(self) -> WitnessRow:
-        return witness_row(self.edge)
-
-
-def test_a_finding_judged_again_apart_from_its_group_is_an_engine_error(tmp_path: Path) -> None:
-    config = config_from(tmp_path, OWNERS_REPO["hoglint.toml"])
-    built = (
-        GraphBuilder()
-        .module("core.a", "products.billing.models")
-        .edge("import", "core.a", "products.billing.models.Invoice")
-        .graph
-    )
-    engine = Engine(config, built, tmp_path)
-    ctx = context_class(engine.labeler.index)(config, built, engine.labeler, tmp_path)
-    spec = config.rules["core-to-product"]
-    rule = primitive_of(spec)(ctx, spec)
-    assert isinstance(rule, EdgeRule)
-    edge = Held(built.edges[0])
-    identity = project(spec.identity, rule.envs_of(built.edges[0])[0].resolve)
-    assert Rejudged(rule, edge, Judgment.VIOLATION, identity).get().message
-    with pytest.raises(EngineError):
-        Rejudged(rule, edge, Judgment.UNKNOWN_VIOLATION, identity).get()
-    with pytest.raises(EngineError, match="the identity"):
-        Rejudged(rule, edge, Judgment.VIOLATION, ("made", "up")).get()
+    assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out / "incomplete.jsonl")
 
 
 def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    out = dumps(tmp_path, ADAPTER_REPO, monkeypatch)
-    same_in_both_engines(out)
-    flagged = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "public-surface"]
+    out = dump_repo(tmp_path, ADAPTER_REPO, monkeypatch)
+    flagged = [row[1] for row in read_lines(out / "findings.jsonl") if row[0] == "public-surface"]
     assert sorted(flagged) == [
         ["products.billing.presentation.views.Plain"],
         ["products.billing.presentation.views.render"],
@@ -260,11 +204,10 @@ on_unresolved = "block"
 
 
 def test_grouped_findings_keep_the_flags_their_judgment_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    out = dumps(tmp_path, BLOCK_REPO, monkeypatch)
-    same_in_both_engines(out)
+    out = dump_repo(tmp_path, BLOCK_REPO, monkeypatch)
     flags = {
         (row[1][0], row[1][1]): (row[9], row[10])
-        for row in read_lines(out["native"] / "findings.jsonl")
+        for row in read_lines(out / "findings.jsonl")
         if row[0] == "core-imports"
     }
     assert flags == {
@@ -342,9 +285,8 @@ NAMESPACE_REPO = {
 def test_a_namespace_directory_reads_the_labels_of_a_file_inside_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    out = dumps(tmp_path, NAMESPACE_REPO, monkeypatch)
-    same_in_both_engines(out)
-    assert sorted(row[1] for row in read_lines(out["native"] / "findings.jsonl")) == [
+    out = dump_repo(tmp_path, NAMESPACE_REPO, monkeypatch)
+    assert sorted(row[1] for row in read_lines(out / "findings.jsonl")) == [
         ["products.shop.backend.facade", "?", "shop"],
         ["products.shop.backend.presentation", "presentation", "shop"],
         ["tools.hogli", "-", "tools-hogli"],
@@ -550,10 +492,9 @@ def test_a_handed_member_whose_zone_is_unknown_makes_the_handed_zones_unknown(
         "products/shop/backend/facade/hooks.py": f"{line}\n\n__all__ = ['{name}']" + BODY,
         **files,
     }
-    out = dumps(tmp_path, repo, monkeypatch)
-    same_in_both_engines(out)
-    assert [row[1] for row in read_lines(out["native"] / "findings.jsonl")] == [[symbol] for symbol in found]
-    assert [row[1] for row in read_lines(out["native"] / "incomplete.jsonl")] == incomplete
+    out = dump_repo(tmp_path, repo, monkeypatch)
+    assert [row[1] for row in read_lines(out / "findings.jsonl")] == [[symbol] for symbol in found]
+    assert [row[1] for row in read_lines(out / "incomplete.jsonl")] == incomplete
 
 
 HANDING_IMPORTS = {
@@ -593,27 +534,26 @@ HOOKS = "products/shop/backend/facade/hooks.py"
 JOBS = "products/shop/backend/temporal/jobs.py"
 
 
-def checked_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, files: dict[str, str]) -> Graph:
-    """One engine's graph of a repo of the handed config, the shop packages and `files`."""
+def checked_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[str, str]) -> Graph:
+    """The native graph of a repo of the handed config, the shop packages and `files`."""
     native_module()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     root = tmp_path / "repo"
     write_repo(root, {"hoglint.toml": HANDED_CONFIG, **SHOP, **files})
     (tmp_path / "work").mkdir()
     try:
-        graph, _, _, _ = Dump(root, engine, tmp_path / "out", tmp_path / "work").check()
+        graph, _, _, _ = Dump(root, tmp_path / "out", tmp_path / "work").check()
     finally:
         gc.enable()
     return graph
 
 
-@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("case", HANDING_IMPORTS)
 def test_the_hand_out_set_holds_every_name_a_handed_import_binds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, engine: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     text, handed, kept = HANDING_IMPORTS[case]
-    graph = checked_graph(tmp_path, monkeypatch, engine, {HOOKS: text + BODY, JOBS: RUN})
+    graph = checked_graph(tmp_path, monkeypatch, {HOOKS: text + BODY, JOBS: RUN})
     found = graph.hand_outs["products.shop.backend.facade.hooks"]
     assert (sorted(found.handed), sorted(found.kept), found.unread) == (handed, kept, False)
 
@@ -655,13 +595,12 @@ HAND_OUT_EDGE_CASES = {
 }
 
 
-@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("case", HAND_OUT_EDGE_CASES)
 def test_every_name_an_export_module_hands_out_has_an_edge_that_binds_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, engine: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     files, handed = HAND_OUT_EDGE_CASES[case]
-    graph = checked_graph(tmp_path, monkeypatch, engine, files)
+    graph = checked_graph(tmp_path, monkeypatch, files)
     assert sorted(graph.hand_outs["products.shop.backend.facade.hooks"].handed) == handed
     for module, found in graph.hand_outs.items():
         bound = {
@@ -689,9 +628,8 @@ def import_edges(out: Path, path: str) -> list[list[Any]]:
 def test_a_lazy_edge_sits_at_the_dict_whose_entry_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hooks = '_A = {"run": "products.shop.backend.temporal.jobs"}\n_B = {"run": "Run it"}\n' + HOOK
     repo = {"hoglint.toml": HANDED_CONFIG, **SHOP, HOOKS: hooks, "products/shop/backend/temporal/jobs.py": RUN}
-    out = dumps(tmp_path, repo, monkeypatch)
-    same_in_both_engines(out)
-    assert import_edges(out["native"], HOOKS) == [
+    out = dump_repo(tmp_path, repo, monkeypatch)
+    assert import_edges(out, HOOKS) == [
         ["products.shop.backend.temporal.jobs.run", 1, "resolved", ["products.shop.backend.temporal.jobs.run"]]
     ]
 
@@ -708,8 +646,7 @@ def test_a_lazy_name_from_a_third_party_module_reads_as_its_import(
         plain: "from json import run\n",
         "products/shop/backend/temporal/jobs.py": RUN,
     }
-    out = dumps(tmp_path, repo, monkeypatch)
-    same_in_both_engines(out)
-    [imported] = import_edges(out["native"], plain)
-    lazy = [row for row in import_edges(out["native"], HOOKS) if row[0] == imported[0]]
+    out = dump_repo(tmp_path, repo, monkeypatch)
+    [imported] = import_edges(out, plain)
+    lazy = [row for row in import_edges(out, HOOKS) if row[0] == imported[0]]
     assert [row[2:] for row in lazy] == [imported[2:]] == [["external", ["json.run"]]]

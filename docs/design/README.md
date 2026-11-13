@@ -35,11 +35,11 @@ Each page has the same sections: what is decided now, why, what was considered a
 
 | Page | One line |
 |---|---|
-| `01-purpose-and-principles.md` | What hoglint replaces; the fixed principles (the test skip's safety, no edge deleted, unknown never clean, a cache never wrong, no framework names in core, exact runs, two engines that agree) |
+| `01-purpose-and-principles.md` | What hoglint replaces; the fixed principles (the test skip's safety, no edge deleted, unknown never clean, a cache never wrong, no framework names in core, exact runs, one graph engine with every changed row named) |
 | `02-policy-exceptions-ledger.md` | Three files; ledger identity, equality and growth; growth per product (D67); move admission; owners; no noise in the ledger |
 | `03-levels-and-isolated.md` | The Isolated test skip specified apart from lint acceptance; who owns an incomplete result; levels from rules |
 | `04-rules.md` | Eleven primitives; selectors and domains; scoping by zone, tier, context and export; graph rules; rule states |
-| `05-engine.md` | A Python shell over PyO3; Rust per-row work; the frozen Python oracle; port order; the pack API |
+| `05-engine.md` | A Python shell over PyO3; Rust per-row work; one engine that builds the graph and judges every rule, Python wording its rows; port order; the pack API |
 | `06-fact-cache-and-summaries.md` | The fact database keyed by blob; run summaries keyed by input set; the cache rules; cache size and bound |
 | `07-speed-and-memory.md` | Every measured state with date and conditions; what worked and what did not; the lessons about estimates |
 | `08-fast-hook.md` | The hook on every commit in 2-3 s; exact reuse in stages; salsa, prewarm and a fast subset mode turned down |

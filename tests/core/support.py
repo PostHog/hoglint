@@ -1,14 +1,21 @@
-"""Small synthetic L1 records, in the extractor's row shapes, for core tests."""
+"""Small synthetic L1 records, in the extractor's row shapes, linked by the native engine."""
 
 from __future__ import annotations
 
 import os
+import json
+import tempfile
 from pathlib import Path
 
-from hoglint.core.build import CoreBuild
 from hoglint.core.config import CoreConfig
-from hoglint.facts import FactStore
+from hoglint.core.memo import PackMemo
+from hoglint.core.reader import BuildReader
 from hoglint.model import Edge, Graph
+from hoglint.native.build import NativeBuild
+from hoglint.native.config import link_config
+from hoglint.native.graph import NativeGraph, NativeSink
+from hoglint.native.queries import NativePackQueries
+from native.require import native_module
 
 SITE = ".venv/lib/python3.14/site-packages/"
 
@@ -35,9 +42,33 @@ def assign_row(target: str, value: object, line: int, scope: int = -1, flags: in
     return {"s": scope, "l": line, "c": 0, "op": "=", "t": [target], "v": value, "f": flags}
 
 
+class Linked:
+    """Records linked by the native engine as a run links a snapshot's facts: the core graph, and
+    the build packs read. Paths under SITE are third-party files: they resolve, and make no edges."""
+
+    def __init__(self, records: dict[str, dict], config: CoreConfig) -> None:
+        native = native_module()
+        external = {path: path.removeprefix(SITE) for path in records if path.startswith(SITE)}
+        analyzed = tuple(path for path in records if path not in external)
+        with tempfile.TemporaryDirectory(prefix="hoglint-facts-") as scratch:
+            facts = Path(scratch) / "facts.jsonl"
+            facts.write_text("".join(json.dumps(record) + "\n" for record in records.values()))
+            self.link = native.link_jsonl(str(facts), json.dumps(link_config(config, analyzed, external)), 1)
+        self.graph = NativeGraph(self.link, {})
+        self.build = NativeBuild(config, self.link, external, self.graph.core.maker)
+        self.graph.modules = self.build.index.repo_modules()
+
+    def reader(self, memo: PackMemo | None = None) -> BuildReader:
+        if memo is not None:
+            self.build.trace_with(memo.tracer)
+        return BuildReader(self.build, NativePackQueries(self.build, self.graph, self.link), memo)
+
+    def sink(self) -> NativeSink:
+        return NativeSink(self.graph)
+
+
 class Repo:
-    """Records keyed by path, completed with the envelope the store expects. Paths under SITE are
-    third-party files: they resolve, and make no edges."""
+    """Records keyed by path, completed with the envelope the extractor writes."""
 
     def __init__(self, *groups: dict[str, dict]) -> None:
         self.records: dict[str, dict] = {}
@@ -45,11 +76,8 @@ class Repo:
             for path, record in group.items():
                 self.records[path] = {"path": path, "status": "ok", **record}
 
-    def build(self, config: CoreConfig | None = None) -> CoreBuild:
-        store = FactStore()
-        store.records = dict(self.records)
-        external = {path: path.removeprefix(SITE) for path in self.records if path.startswith(SITE)}
-        return CoreBuild(config or CoreConfig(), store, external=external)
+    def link(self, config: CoreConfig | None = None) -> Linked:
+        return Linked(self.records, config or CoreConfig())
 
 
 class FileFacts:
@@ -110,10 +138,9 @@ class FileFacts:
 
 
 def build(files: list[FileFacts], config: CoreConfig | None = None) -> Graph:
-    store = FactStore()
-    for facts in files:
-        store.records[facts.record["path"]] = facts.record
-    return CoreBuild(config or CoreConfig(), store).graph()
+    """The core graph of `files`, linked by the native engine."""
+    records = {facts.record["path"]: facts.record for facts in files}
+    return Linked(records, config or CoreConfig()).graph
 
 
 def edges_of(graph: Graph, kind: str, path: str) -> list[Edge]:
@@ -132,28 +159,3 @@ CYCLE_SOURCES = {
     "app/pkg/sub.py": "",
 }
 CYCLE_KEYS = (("app.p", "X"), ("app.q", "X"), ("app.pkg", "sub"), ("app", "p"))
-
-
-def cycle_files() -> list[FileFacts]:
-    return [
-        FileFacts("app/__init__.py"),
-        FileFacts("app/p/__init__.py").import_from("app.q", "X"),
-        FileFacts("app/q/__init__.py").import_from("app.p", "X"),
-        FileFacts("app/p/X.py"),
-        FileFacts("app/q/X.py"),
-        FileFacts("app/pkg/__init__.py").import_from("app.pkg", "sub"),
-        FileFacts("app/pkg/sub.py"),
-    ]
-
-
-def cycle_answers(order: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], tuple[str, tuple[str, ...]] | None]:
-    """The Python resolver's answer for each key, asked in `order` of a fresh resolver."""
-    store = FactStore()
-    for facts in cycle_files():
-        store.records[facts.record["path"]] = facts.record
-    resolver = CoreBuild(CoreConfig(), store).resolver
-    out: dict[tuple[str, str], tuple[str, tuple[str, ...]] | None] = {}
-    for module, name in order:
-        hit = resolver.resolve_name(module, name)
-        out[(module, name)] = (hit.kind, tuple(str(step) for step in hit.chain)) if hit is not None else None
-    return out

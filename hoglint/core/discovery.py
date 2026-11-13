@@ -1,16 +1,13 @@
-"""Which source files exist in a snapshot: the working tree, or the staged index."""
+"""Which source files exist in a snapshot, and which of them are analyzed."""
 
 from __future__ import annotations
 
-import shutil
-import fnmatch
-import tempfile
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from hoglint.core.config import CoreConfig
-from hoglint.ledger.listing import SOURCE_SUFFIXES, SUBMODULE_MODE, Listing, parse_index, read_blobs
+from hoglint.ledger.listing import SOURCE_SUFFIXES
 
 SOURCE_PATTERNS = tuple(f"*{suffix}" for suffix in SOURCE_SUFFIXES)
 
@@ -24,77 +21,13 @@ class Inventory:
     analyzed: tuple[str, ...]
 
 
-class StagedIndex:
-    """Staged blobs written to a temp tree. Never reads the working tree."""
+class Snapshot(Protocol):
+    """The source files of one snapshot (`hoglint.native.snapshot.BlobSnapshot`)."""
 
-    def __init__(self, repo: Path) -> None:
-        self.repo = repo
-        self.root = Path(tempfile.mkdtemp(prefix="hoglint-index-"))
-        self.written: set[str] = set()
+    @property
+    def root(self) -> Path: ...
 
-    def entries(self, patterns: tuple[str, ...]) -> dict[str, str]:
-        out = subprocess.run(
-            ["git", "ls-files", "-s", "-z", "--", *patterns],
-            cwd=self.repo,
-            capture_output=True,
-            check=True,
-        ).stdout.decode()
-        return {
-            record.path: record.oid
-            for record in parse_index(out)
-            if record.stage == "0" and record.mode != SUBMODULE_MODE
-        }
-
-    def materialize(self, blobs: dict[str, str]) -> None:
-        pending = {rel: sha for rel, sha in blobs.items() if rel not in self.written}
-        for rel, data in read_blobs(self.repo, pending).items():
-            target = self.root / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            self.written.add(rel)
-
-    def list(self, patterns: tuple[str, ...]) -> list[str]:
-        blobs = self.entries(patterns)
-        self.materialize(blobs)
-        return sorted(blobs)
-
-    def read_bytes(self, rel: str) -> bytes:
-        if rel not in self.written:
-            self.materialize(self.entries((rel,)))
-        return (self.root / rel).read_bytes()
-
-    def close(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
-
-
-class ListedSnapshot:
-    """The source files of one listed snapshot (listing.py), written into a temp tree on first
-    read: a git tree's blobs, or the working tree as git sees it (D40), the index's blobs overlaid
-    with the files git status reports. Never reads a file the listing does not name, so never
-    the index of a tree run, an ignored file, or a file behind a skip-worktree bit."""
-
-    def __init__(self, listing: Listing) -> None:
-        self.listing = listing
-        self.root = Path(tempfile.mkdtemp(prefix="hoglint-snapshot-"))
-        self.written: set[str] = set()
-
-    def list(self, patterns: tuple[str, ...]) -> list[str]:
-        paths = [rel for rel in self.listing.paths if any(fnmatch.fnmatchcase(rel, p) for p in patterns)]
-        self.listing.write(self.root, [rel for rel in paths if rel not in self.written])
-        self.written.update(paths)
-        return sorted(paths)
-
-    def read_bytes(self, rel: str) -> bytes:
-        if rel not in self.written:
-            self.listing.write(self.root, [rel])
-            self.written.add(rel)
-        return (self.root / rel).read_bytes()
-
-    def close(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
-
-
-Snapshot = ListedSnapshot | StagedIndex
+    def list(self, patterns: tuple[str, ...]) -> list[str]: ...
 
 
 class Discovery:

@@ -11,12 +11,12 @@ from hoglint.model import Context, Graph, Resolution
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.source import GraphSource
 
-from rules.support import GraphBuilder, shape_config
+from rules.support import GraphBuilder, native_graph, shape_config
 
 
 def run_shape(tmp_path: Path, name: str, graph: Graph, files: dict[str, str] | None = None) -> RunResult:
     config = shape_config(tmp_path, name, files)
-    return Engine(config, graph, tmp_path, today=datetime.date(2026, 11, 9)).evaluate()
+    return Engine(config, native_graph(graph), tmp_path, today=datetime.date(2026, 11, 9)).evaluate()
 
 
 def found(result: RunResult, rule: str) -> list[tuple[str, ...]]:

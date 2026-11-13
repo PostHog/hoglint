@@ -1,5 +1,4 @@
-"""What the export primitive reads of a surface module: the shape of each class it hands out, in
-both engines."""
+"""What the export primitive reads of a surface module: the shape of each class it hands out."""
 
 from __future__ import annotations
 
@@ -9,7 +8,7 @@ import pytest
 
 from hoglint.native.parity import read_lines
 
-from native.test_contract_slots import both_engines, findings_of
+from native.test_contract_slots import clean_dump, findings_of
 
 CONFIG = """
 schema = 1
@@ -83,9 +82,9 @@ def test_a_frozen_dataclass_is_read_from_the_dataclass_decorators(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     body, flagged = FROZEN_CASES[case]
-    out = both_engines(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": IMPORTS + body}, monkeypatch)
+    out = clean_dump(tmp_path, BASE, {"products/shop/backend/facade/contracts.py": IMPORTS + body}, monkeypatch)
     expected = [[f"{CONTRACTS}.Order", CONTRACTS, "export-shape(class)"]] if flagged else []
-    assert findings_of(out["native"], "export-shape") == expected
+    assert findings_of(out, "export-shape") == expected
 
 
 SURFACE_CONFIG = (
@@ -133,8 +132,8 @@ API = f"{SHOP}.facade.api"
 
 
 def test_a_surface_module_exports_only_what_it_hands_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    out = both_engines(tmp_path, BASE, SURFACE, monkeypatch)
-    findings = sorted([row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl"))
+    out = clean_dump(tmp_path, BASE, SURFACE, monkeypatch)
+    findings = sorted([row[0], row[1]] for row in read_lines(out / "findings.jsonl"))
     assert findings == [
         ["export-shape", [f"{SHOP}.facade.contracts.Own", f"{SHOP}.facade.contracts", "export-shape(class)"]],
         ["export-shape", [f"{SHOP}.logic.Late", f"{SHOP}.facade.lazy", "export-shape(class)"]],
@@ -201,8 +200,8 @@ def test_an_expanded_alias_is_judged_by_what_it_expands_to(
         "products/shop/backend/models.py": MODELS,
         "products/shop/backend/facade/api.py": "from products.shop.backend.models import Order\n\n" + body,
     }
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    findings = sorted([row[0], row[1]] for row in read_lines(out["native"] / "findings.jsonl"))
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    findings = sorted([row[0], row[1]] for row in read_lines(out / "findings.jsonl"))
     assert [row for row in findings if row[0] == "facade-signature"] == sorted(expected)
 
 
@@ -240,8 +239,8 @@ def test_a_rule_tells_a_bare_generic_from_one_with_arguments(
         f"def charge(amount: {annotation}) -> None:\n    pass\n"
     )
     files = {"hoglint.toml": BARE_DICT_CONFIG, "products/shop/backend/facade/api.py": api}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    findings = [row[1] for row in read_lines(out["native"] / "findings.jsonl") if row[0] == "bare-dict"]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    findings = [row[1] for row in read_lines(out / "findings.jsonl") if row[0] == "bare-dict"]
     assert findings == ([[API, "charge", "param:amount"]] if flagged else [])
 
 
@@ -267,9 +266,9 @@ def test_a_module_level_import_in_a_block_is_handed_out(
     imports, flagged = IMPORT_BLOCK_CASES[case]
     api = imports + '\n__all__ = ["Order"]\n\n\ndef place() -> None:\n    pass\n'
     files = {"products/shop/backend/logic.py": LOGIC, "products/shop/backend/facade/api.py": api}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
     expected = [[f"{SHOP}.logic.Order", API, "export-shape(class)"]] if flagged else []
-    assert findings_of(out["native"], "export-shape") == expected
+    assert findings_of(out, "export-shape") == expected
 
 
 # A lazy name that does not resolve is named by the full path its map gives it, the base its values
@@ -296,14 +295,12 @@ def test_an_unresolved_lazy_name_is_named_by_its_full_path(
         "def __getattr__(name):\n    return _BASE + _LAZY[name]\n"
     )
     files = {"products/shop/backend/logic.py": LOGIC, "products/shop/backend/facade/lazy.py": lazy, **extra}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    unresolved = [row for row in findings_of(out["native"], "export-shape") if row[-1] == "unresolved-import"]
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    unresolved = [row for row in findings_of(out, "export-shape") if row[-1] == "unresolved-import"]
     assert unresolved == [[path, f"{SHOP}.facade.lazy", "unresolved-import"]]
 
 
-def test_a_bare_string_names_one_dataclass_decorator_in_both_engines(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_bare_string_names_one_dataclass_decorator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     kit = "products.shop.backend.kit"
     config = CONFIG.replace(
         f'dataclass_decorators = [\n  "dataclasses.dataclass", "{kit}.frozen", "{kit}.model",\n]\n'
@@ -313,5 +310,5 @@ def test_a_bare_string_names_one_dataclass_decorator_in_both_engines(
     assert config != CONFIG
     contracts = IMPORTS + "@frozen\nclass Order:\n    id: int\n"
     files = {"hoglint.toml": config, "products/shop/backend/facade/contracts.py": contracts}
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert findings_of(out["native"], "export-shape") == []
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert findings_of(out, "export-shape") == []

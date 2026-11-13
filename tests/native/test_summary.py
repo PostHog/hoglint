@@ -13,8 +13,8 @@ from hoglint.config import CONFIG_FILE, load_config
 from hoglint.ledger.envelope import Envelope
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph
-from hoglint.native.rules import Rejudged
-from hoglint.native.source import ENGINES, batch_mode, graph_source
+from hoglint.native.rules import Worded
+from hoglint.native.source import NativeGraphSource, batch_mode
 from hoglint.rules.engine import Engine
 from rules.test_attribution import DYNAMIC_CONFIG, LOADER, SECOND_LOADER
 from rules.test_compare import git_in, write_files
@@ -36,18 +36,18 @@ strict = ["core-to-product"]
 }
 
 
-def summary(repo: Path, engine: str, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+def summary(repo: Path, work: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     """The summary of a run whose ledger accepts every finding, and whose strict level they all
-    block. Grouped findings must not be judged again to judge the level or store the summary."""
+    block. Grouped findings must not be worded to judge the level or store the summary."""
     config = load_config(repo, repo / CONFIG_FILE)
     work.mkdir()
-    graph = graph_source(engine, work).build(repo, config)
+    graph = NativeGraphSource(work).build(repo, config)
 
-    def judged_again(_: Rejudged) -> None:
-        raise AssertionError("an accepted grouped finding was judged again for a level or a summary")
+    def worded(_: Worded) -> None:
+        raise AssertionError("an accepted grouped finding was worded for a level or a summary")
 
     with monkeypatch.context() as patched:
-        patched.setattr(Rejudged, "get", judged_again)
+        patched.setattr(Worded, "get", worded)
         result = Engine(config, graph, repo).evaluate(rewrite_ledger=True)
         made = ScanSummary.from_run(result, graph, ENVELOPE, roots=(repo,)).to_json()
     assert {finding.status for finding in result.findings()} == {FindingStatus.ACCEPTED}
@@ -55,7 +55,7 @@ def summary(repo: Path, engine: str, work: Path, monkeypatch: pytest.MonkeyPatch
     return made
 
 
-def test_levels_and_summaries_of_accepted_grouped_findings_judge_no_edge_again(
+def test_levels_and_summaries_of_accepted_grouped_findings_word_no_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     native_module()
@@ -67,10 +67,9 @@ def test_levels_and_summaries_of_accepted_grouped_findings_judge_no_edge_again(
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     try:
-        made = {engine: summary(repo, engine, tmp_path / f"work-{engine}", monkeypatch) for engine in ENGINES}
+        summary(repo, tmp_path / "work", monkeypatch)
     finally:
         gc.enable()
-    assert made["native"] == made["python"]
 
 
 def test_an_inline_baseline_frees_its_graph_before_the_staged_run(
@@ -95,8 +94,8 @@ def test_an_inline_baseline_frees_its_graph_before_the_staged_run(
 
     monkeypatch.setattr(Runner, "run", keep_a_weak_reference)
     (tmp_path / "work").mkdir()
-    commands = Commands(repo, tmp_path / "work", "native")
-    batch_mode("native")
+    commands = Commands(repo, tmp_path / "work")
+    batch_mode()
     try:
         tree = commands.snapshots.write_tree()
         baseline = commands.baselines.prepare(commands.snapshots.policy_of(tree), tree, staged=True)

@@ -1,0 +1,31 @@
+# How a rule judges one destination of one edge (`EdgeRule.decide`, and `SignaturePrimitive.decide`
+# for the unknown type). src/link/rules/mod.rs `judgment` is held to this table.
+#
+# Columns: the selection's truth, whether the destination did not resolve, whether a signature
+# slot has no usable type, the predicate's truth (`deny`, `allow`, `require`; true when the rule
+# has none), the truth of `unless` (`none` when the rule has none), and the judgment.
+# `-` is an input the judgment does not depend on: it is never read, so a label behind it is not
+# met either.
+#
+# The reasons: a selection that is false is not the rule's business; a destination that did not
+# resolve is reported as such before anything else of it is read; a selection hoglint cannot tell
+# on a resolved destination makes the rule incomplete there; an unknown predicate is a finding,
+# because an unknown never escapes a deny; `unless` excuses only when it is true.
+
+# selected  unresolved  unknown_type  verdict  unless   judgment
+false       no          -             -        -        clean
+false       yes         -             -        -        clean
+true        yes         -             -        -        unresolved
+unknown     yes         -             -        -        unresolved
+true        no          yes           -        -        unknown-type
+unknown     no          yes           -        -        unknown-type
+unknown     no          no            -        -        unknown-selection
+true        no          no            false    -        clean
+true        no          no            true     none     violation
+true        no          no            true     true     clean
+true        no          no            true     false    violation
+true        no          no            true     unknown  violation
+true        no          no            unknown  none     unknown-violation
+true        no          no            unknown  true     clean
+true        no          no            unknown  false    unknown-violation
+true        no          no            unknown  unknown  unknown-violation

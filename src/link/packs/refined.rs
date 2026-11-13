@@ -1,4 +1,4 @@
-//! The native sink's conflict bookkeeping: `RefinedFields` of hoglint/plugins.py, in the link.
+//! The native sink's conflict bookkeeping, in the link.
 //! It records what each producer set on each edge it refined, whether the producer runs in Python
 //! or in the link, so a later producer that sets one field of one edge apart meets the conflict.
 //!

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Checks the model repository (tests/model_repo) in both engines and prints which cases changed
-# verdict against its reviewed expected file. Run it after a rule or preset change.
+# Checks the model repository (tests/model_repo) in the native engine and prints which cases
+# changed verdict against its reviewed expected file. Run it after a rule or preset change.
 #
-# Usage: bin/model-repo [--engine python|native] [--refresh] [--keep]
+# Usage: bin/model-repo [--refresh] [--keep]
 # Env:   HOGLINT_PYTHON (default: the repo's .venv), and the usual HOGLINT_NATIVE_DIR and
 #        HOGLINT_FACTS_BIN for a native module and extractor built elsewhere.
 

@@ -23,8 +23,7 @@ from functools import cached_property
 from typing import Any
 
 from hoglint.core.memo import ItemOutput, ItemRun, Items, TracedMap, TracedMemo, TracedQuery, key_of
-from hoglint.core.producers import chain_tokens
-from hoglint.core.records import RecordBodies, is_const, last_name, str_literal
+from hoglint.core.records import RecordBodies, chain_tokens, is_const, last_name, str_literal
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site

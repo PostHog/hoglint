@@ -8,14 +8,13 @@ is a ledger or exception match.
 from __future__ import annotations
 
 import hashlib
-import dataclasses
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from hoglint.plugins import ProducerFailure, Refinement
+    from hoglint.plugins import ProducerFailure
 
 # Bump when the meaning or shape of any fact, edge or identity changes. The ledger header
 # stores it; a changed value makes the growth check compare under both schemas.
@@ -86,19 +85,6 @@ def set_handle(edge: Edge, handle: int) -> None:
     outside the edge's value (see `Edge`), so it is set on the frozen edge in place. An edge
     object a producer repeats keeps the handle of its last row."""
     object.__setattr__(edge, "handle", handle)
-
-
-def refined_edge(edge: Edge, refinement: Refinement) -> Edge:
-    """The edge with what a refinement sets: shape and shape detail when it names them, and its
-    attrs after the edge's own (one the edge already has is not repeated). The handle stays."""
-    refined = dataclasses.replace(
-        edge,
-        shape=edge.shape if refinement.shape is None else refinement.shape,
-        shape_detail=edge.shape_detail if refinement.shape_detail is None else refinement.shape_detail,
-        attrs=(*edge.attrs, *(pair for pair in refinement.attrs if pair not in edge.attrs)),
-    )
-    set_handle(refined, edge.handle)
-    return refined
 
 
 def flag(value: bool) -> str:

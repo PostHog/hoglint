@@ -707,30 +707,6 @@ def compared_values(node: Node, name: str) -> set[str]:
     return out
 
 
-class ClassSelection:
-    """A selector evaluated once per label class: the values of the fields it reads. The parts of
-    an `and` are classed apart and judged in order, so a false part stops the rest as `and`
-    does, and the rest's fields are never read."""
-
-    def __init__(self, node: Node) -> None:
-        parts = node.parts if isinstance(node, And) else (node,)
-        self.parts = [(part, tuple(dict.fromkeys(refs(part)))) for part in parts]
-        self.truths: list[dict[tuple[Value, ...], Truth]] = [{} for _ in parts]
-
-    def truth(self, resolve: Resolver) -> Truth:
-        result = Truth.TRUE
-        for (part, part_refs), truths in zip(self.parts, self.truths):
-            values = tuple(resolve(ref) for ref in part_refs)
-            found = truths.get(values)
-            if found is None:
-                found = truths[values] = evaluate(part, dict(zip(part_refs, values)).__getitem__)
-            if found is Truth.FALSE:
-                return Truth.FALSE
-            if found is Truth.UNKNOWN:
-                result = Truth.UNKNOWN
-        return result
-
-
 @dataclass(frozen=True, slots=True)
 class Selector:
     """A parsed and validated selector, kept with its source text for explain output. `node` holds

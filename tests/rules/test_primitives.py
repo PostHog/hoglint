@@ -11,12 +11,12 @@ import pytest
 
 from hoglint.config import Config
 from hoglint.ledger.file import LedgerFile
-from hoglint.model import Context, FindingStatus, Graph, HandOut, IncompleteCause, Resolution
+from hoglint.model import Context, FindingStatus, Graph, IncompleteCause, Resolution
 from hoglint.plugins import ProducerFailure
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 
-from rules.support import GraphBuilder, config_from
+from rules.support import GraphBuilder, config_from, native_graph
 
 FIELDS = """
 schema = 1
@@ -57,7 +57,7 @@ def run(
     parsed = None
     if exceptions is not None:
         parsed = ExceptionsFile.parse(tomllib.loads(exceptions), config)
-    return Engine(config, graph, tmp_path, today=datetime.date(2026, 11, 9)).evaluate(ledger, parsed)
+    return Engine(config, native_graph(graph), tmp_path, today=datetime.date(2026, 11, 9)).evaluate(ledger, parsed)
 
 
 def messages(result: RunResult, rule: str) -> list[str]:
@@ -180,7 +180,7 @@ def test_a_kind_marked_expected_that_matches_nothing_makes_its_rules_incomplete(
         'subclass_of = "django.db.models.Model" }', 'subclass_of = "django.db.models.Model", expected = true }'
     )
     config = config_from(tmp_path, expected + USE_SHAPE + EDGE_RULE)
-    result = Engine(config, graph, tmp_path).evaluate()
+    result = Engine(config, native_graph(graph), tmp_path).evaluate()
     assert [item.cause for item in result.runs["model-crossings"].incomplete] == [IncompleteCause.EXTRACTOR]
     assert result.runs["no-product-from-core"].incomplete == []
     assert result.exit_code() == 2
@@ -312,10 +312,11 @@ def test_use_shape_with_flow_keeps_the_graph_edge_and_its_ordinal(tmp_path: Path
             attrs=(("flow_shape", "write(save)"),),
             line=line,
         )
-    graph = builder.graph
+    graph = native_graph(builder.graph)
     findings = run(tmp_path, FLOW_SHAPE, graph).runs["model-sites"].findings
     assert sorted(f.identity[-1] for f in findings) == ["0", "1"]
-    assert all(any(f.witnesses[0] is edge for edge in graph.edges) for f in findings)
+    handles = {edge.handle for edge in graph.edges}
+    assert all(f.witnesses[0].handle in handles and f.witnesses[0].shape == "instance-single" for f in findings)
     assert {f.message.rsplit(" as ", 1)[1] for f in findings} == {"write(save)"}
 
 
@@ -435,135 +436,6 @@ def test_signature_denies_models_and_reads_any_as_unknown(tmp_path: Path) -> Non
             "products.billing.facade.api.charge: param:payload has no usable type (typing.Any)",
         ),
     }
-
-
-ADAPTER = """
-[shapes.adapter]
-allow = ["class"]
-deny = ["model"]
-
-[exports.adapter]
-within = "products/{product}"
-paths = ["presentation/**"]
-subclass_of = ["products.billing.presentation.mixins.BillingMixin"]
-shape = "adapter"
-
-[rules.export-shape]
-primitive = "export"
-identity = "module-symbol"
-growth_key = ["dst.symbol"]
-
-[rules.public-surface]
-primitive = "entrypoint"
-kinds = ["import"]
-select = "src.package != dst.package and dst.tier == 'product'"
-identity = "module-symbol"
-growth_key = ["dst.symbol"]
-"""
-
-
-def test_export_by_base_class_hands_out_only_the_adapters(tmp_path: Path) -> None:
-    graph = (
-        base_graph()
-        .module("products.billing.presentation.mixins", "products.billing.presentation.views")
-        .symbol("products.billing.presentation.mixins.BillingMixin")
-        .symbol("products.billing.presentation.views.InvoiceViewSet")
-        .symbol("products.billing.presentation.views.render", "def")
-        .edge(
-            "declares",
-            "products.billing.presentation.mixins",
-            "products.billing.presentation.mixins.BillingMixin",
-            attrs=(("decl", "class"),),
-        )
-        .edge(
-            "inherit",
-            "products.billing.presentation.views",
-            "products.billing.presentation.mixins.BillingMixin",
-            attrs=(("class", "InvoiceViewSet"),),
-        )
-        # views uses the model internally; importing it does not export it
-        .edge("import", "products.billing.presentation.views", "products.billing.models.Invoice")
-        .edge("import", "core.views", "products.billing.presentation.mixins.BillingMixin")
-        .edge("import", "core.views", "products.billing.presentation.views.InvoiceViewSet")
-        .edge("import", "core.views", "products.billing.presentation.views.render")
-        .graph
-    )
-    result = run(tmp_path, ADAPTER, graph)
-    assert identities(result, "export-shape") == []
-    assert identities(result, "public-surface") == [
-        ("products.billing.presentation.views.render", "core.views", "import")
-    ]
-
-
-EXPORT = """
-[shapes.contract]
-data = ["frozen-dataclass"]
-deny = ["model"]
-
-[exports.facade]
-within = "products/{product}"
-paths = ["facade/**"]
-shape = "contract"
-
-[rules.export-shape]
-primitive = "export"
-identity = "module-symbol"
-growth_key = ["dst.symbol"]
-"""
-
-
-# `products.billing.facade.api` hands out the `Invoice` it imports.
-BINDS_INVOICE = (("binds", "Invoice"),)
-HANDS_OUT_INVOICE = HandOut(frozenset({"Invoice"}), frozenset(), False)
-
-
-def test_export_shape_is_checked_through_fields(tmp_path: Path) -> None:
-    graph = (
-        base_graph()
-        .symbol("products.billing.facade.contracts.Result")
-        .edge(
-            "decorate",
-            "products.billing.facade.contracts",
-            "dataclasses.dataclass",
-            resolution=Resolution.EXTERNAL,
-            attrs=(("decorated", "Result"), ("frozen", "1")),
-        )
-        .edge(
-            "exposes",
-            "products.billing.facade.contracts",
-            "products.billing.models.Invoice",
-            attrs=(("callable", "Result.__init__"), ("slot", "field:invoice")),
-        )
-        .edge("import", "products.billing.facade.api", "products.billing.models.Invoice", attrs=BINDS_INVOICE)
-        .graph
-    )
-    graph.hand_outs["products.billing.facade.api"] = HANDS_OUT_INVOICE
-    result = run(tmp_path, EXPORT, graph)
-    found = sorted(identities(result, "export-shape"))
-    assert found == [
-        ("products.billing.models.Invoice", "products.billing.facade.api", "export-denied(model)"),
-        ("products.billing.models.Invoice", "products.billing.facade.contracts", "export-denied(model)"),
-    ]
-
-
-@pytest.mark.parametrize("contexts, reported", [("", False), ("contexts = { exclude = [] }\n", True)])
-def test_export_skips_test_imports_by_default_and_an_empty_exclude_keeps_them(
-    tmp_path: Path, contexts: str, reported: bool
-) -> None:
-    graph = (
-        base_graph()
-        .edge(
-            "import",
-            "products.billing.facade.api",
-            "products.billing.models.Invoice",
-            contexts=(Context.TEST,),
-            attrs=BINDS_INVOICE,
-        )
-        .graph
-    )
-    graph.hand_outs["products.billing.facade.api"] = HANDS_OUT_INVOICE
-    result = run(tmp_path, EXPORT + contexts, graph)
-    assert bool(identities(result, "export-shape")) is reported
 
 
 LAYOUT_AND_COVERAGE = """

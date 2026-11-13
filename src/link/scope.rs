@@ -1,5 +1,5 @@
-//! Per-file scopes, contexts and name lookup at a site (hoglint/core/sites.py and the lookups of
-//! hoglint/core/producers.py BuildContext).
+//! Per-file scopes, contexts and name lookup at a site. Packs read the same scopes through
+//! hoglint/native/build.py (`NativeFileScope`, `NativeContext`).
 
 use super::facts::V;
 use super::heap;

@@ -1,0 +1,1569 @@
+# The words of the model repository's result, in the order the native engine dumps them: per
+# finding its rule, identity and message, per incomplete item its rule, key and reason. One engine
+# words them; this file is what holds the wording still. `bin/model-repo --refresh` rewrites it with
+# expected.toml; review the diff of every message that moved.
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.logic.pricing.price_for", "bin.build_types", "import"]
+text = "bin.build_types names products.catalog.backend.logic.pricing.price_for, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "import"]
+text = "ee.api.widgets names products.legacy.backend.models.Widget, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.logic.widgets.widget_total", "livestream.bot", "import"]
+text = "livestream.bot names products.legacy.backend.logic.widgets.widget_total, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.logic.widgets.widget_total", "manage", "import"]
+text = "manage names products.legacy.backend.logic.widgets.widget_total, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.api.widgets.WidgetViewSet", "posthog.api", "import"]
+text = "posthog.api names products.legacy.backend.api.widgets.WidgetViewSet, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.logic.widgets", "posthog.api.widget_report", "import"]
+text = "posthog.api.widget_report names products.legacy.backend.logic.widgets, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.logic.widgets.widget_total", "posthog.api.widget_report", "import"]
+text = "posthog.api.widget_report names products.legacy.backend.logic.widgets.widget_total, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "posthog.clickhouse.schema", "import"]
+text = "posthog.clickhouse.schema names products.catalog.backend.sql.ENTRY_TABLE_SQL, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.batch_exports.backend.sql.EXPORT_TABLE_SQL", "posthog.clickhouse.test.test_schema", "import"]
+text = "posthog.clickhouse.test.test_schema names products.batch_exports.backend.sql.EXPORT_TABLE_SQL, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.models.CatalogEntry", "posthog.models.resource_transfer.visitors", "import"]
+text = "posthog.models.resource_transfer.visitors names products.catalog.backend.models.CatalogEntry, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "posthog.models.resource_transfer.visitors", "import"]
+text = "posthog.models.resource_transfer.visitors names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.models.Widget", "posthog.models.resource_transfer.visitors", "import"]
+text = "posthog.models.resource_transfer.visitors names products.legacy.backend.models.Widget, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.access_control.backend.models.AccessRule", "posthog.test.test_auth", "import"]
+text = "posthog.test.test_auth names products.access_control.backend.models.AccessRule, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.api.widgets.WidgetViewSet", "posthog.urls", "import"]
+text = "posthog.urls names products.legacy.backend.api.widgets.WidgetViewSet, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.shapes", "import"]
+text = "products.catalog.backend.facade.shapes names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "import"]
+text = "products.catalog.backend.logic.errors names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.views_out", "import"]
+text = "products.catalog.backend.logic.views_out names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.presentation.views.EntryViewSet", "products.legacy.backend.api.widgets", "import"]
+text = "products.legacy.backend.api.widgets names products.catalog.backend.presentation.views.EntryViewSet, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
+text = "import '......gone' did not resolve"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.events.ENTRY_CREATED", "products.legacy.backend.facade.contracts", "import"]
+text = "products.legacy.backend.facade.contracts names products.catalog.backend.events.ENTRY_CREATED, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "import"]
+text = "products.legacy.backend.logic.widgets names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.presentation.views.EntryExportView", "products.legacy.backend.presentation.views", "import"]
+text = "products.legacy.backend.presentation.views names products.catalog.backend.presentation.views.EntryExportView, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.presentation.serializers.StockSerializer", "products.legacy.backend.presentation.views", "import"]
+text = "products.legacy.backend.presentation.views names products.inventory.backend.presentation.serializers.StockSerializer, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.receivers", "import"]
+text = "products.legacy.backend.receivers names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.stock_listeners", "import"]
+text = "products.legacy.backend.stock_listeners names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_stock_signals", "import"]
+text = "products.legacy.backend.tests.test_stock_signals names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_widgets", "import"]
+text = "products.legacy.backend.tests.test_widgets names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.logic.pricing.price_for", "products.reports.backend.logic.build", "import"]
+text = "products.reports.backend.logic.build names products.catalog.backend.logic.pricing.price_for, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.batch_exports.backend.sql.EXPORT_TABLE_SQL", "products.reports.backend.logic.build", "import"]
+text = "products.reports.backend.logic.build names products.batch_exports.backend.sql.EXPORT_TABLE_SQL, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "products.reports.backend.logic.build", "import"]
+text = "products.reports.backend.logic.build names products.catalog.backend.sql.ENTRY_TABLE_SQL, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.reports.backend.logic.build.run_count", "tools.codegen.generate", "import"]
+text = "tools.codegen.generate names products.reports.backend.logic.build.run_count, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "tools.viewkit.shapes", "import"]
+text = "tools.viewkit.shapes names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.legacy.backend.logic.widgets.WIDGET_LIMIT", "posthog.api.widget_report", "reference"]
+text = "posthog.api.widget_report names products.legacy.backend.logic.widgets.WIDGET_LIMIT, which is not exported to it"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
+text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.logic.handouts.HandoutBox: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.logic.handouts.HandoutHolder.Kind", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
+text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.logic.handouts.HandoutHolder.Kind: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.facade.alias_listed.made", "products.catalog.backend.facade.alias_listed", "export-unknown"]
+text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.facade.alias_listed.made: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.aliases", "export-denied(model)"]
+text = "products.catalog.backend.facade.aliases exports products.catalog.backend.models.CatalogEntry: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.api", "export-shape(class)"]
+text = "products.catalog.backend.facade.api exports products.catalog.backend.api.serializers.EntrySerializer: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.facade.bases.EntryHeld", "products.catalog.backend.facade.bases", "export-unknown"]
+text = "products.catalog.backend.facade.bases exports products.catalog.backend.facade.bases.EntryHeld: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.facade.bases.EntryLocked", "products.catalog.backend.facade.bases", "export-unknown"]
+text = "products.catalog.backend.facade.bases exports products.catalog.backend.facade.bases.EntryLocked: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.batches", "export-denied(model)"]
+text = "products.catalog.backend.facade.batches exports products.catalog.backend.logic.errors.EntryBatchRejected -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.logic.errors.EntryBroken", "products.catalog.backend.facade.errors", "export-unknown"]
+text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryBroken: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.errors", "export-denied(model)"]
+text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryExpired -> products.catalog.backend.models.CatalogEntry: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.errors", "export-denied(model)"]
+text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryRejected -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.handout", "export-denied(model)"]
+text = "products.catalog.backend.facade.handout exports scripts.shapes.ExternalView -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.models", "export-denied(model)"]
+text = "products.catalog.backend.facade.models exports products.catalog.backend.models.CatalogEntry: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_names", "export-denied(model)"]
+text = "products.catalog.backend.facade.private_names exports products.catalog.backend.logic.views_out.PrivateView -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_tracking", "export-denied(model)"]
+text = "products.catalog.backend.facade.private_tracking exports products.catalog.backend.facade.private_tracking.track_private -> products.catalog.backend.logic.views_out.PrivateView -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["typing.Any", "products.catalog.backend.facade.rows", "export-unknown"]
+text = "products.catalog.backend.facade.rows exports products.catalog.backend.logic.errors.EntryPayloadDetail -> typing.Any: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.rows", "export-denied(model)"]
+text = "products.catalog.backend.facade.rows exports products.catalog.backend.logic.errors.EntryRow -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.serializers", "export-shape(class)"]
+text = "products.catalog.backend.facade.serializers exports products.catalog.backend.api.serializers.EntrySerializer: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.facade.shapes.EntryDraft", "products.catalog.backend.facade.shapes", "export-shape(class)"]
+text = "products.catalog.backend.facade.shapes exports products.catalog.backend.facade.shapes.EntryDraft: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.sinks", "export-denied(model)"]
+text = "products.catalog.backend.facade.sinks exports products.catalog.backend.logic.errors.StockSink -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.starred", "export-shape(class)"]
+text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutBox: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.logic.handouts.HandoutHolder", "products.catalog.backend.facade.starred", "export-shape(class)"]
+text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutHolder: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.starred", "export-denied(model)"]
+text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutRejected -> products.catalog.backend.models.CatalogEntry: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
+text = "products.legacy.backend.facade.aboveworkers exports ......gone: unresolved-import"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.legacy.backend.facade.backfill_command.Command", "products.legacy.backend.facade.backfill_command", "export-denied(command)"]
+text = "products.legacy.backend.facade.backfill_command exports products.legacy.backend.facade.backfill_command.Command: export-denied(command)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.legacy.backend.facade.barelazy.run_job", "products.legacy.backend.facade.barelazy", "export-unknown"]
+text = "products.legacy.backend.facade.barelazy exports products.legacy.backend.facade.barelazy.run_job: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
+text = "products.legacy.backend.facade.colonlazy exports products.legacy.backend.facade.colonlazy.run_job: export-unknown"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
+text = "products.legacy.backend.facade.lazygoneworkers exports products.legacy.backend.temporal.gone.run_gone: unresolved-import"
+
+[[finding]]
+rule = "export-shape"
+identity = ["posthog.models.team.team.Team", "products.inventory.backend.routes", "export-denied(model)"]
+text = "products.inventory.backend.routes exports products.inventory.backend.routes.stock_owner -> products.inventory.backend.facade.owners.StockOwner -> posthog.models.team.team.Team: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.inventory.backend.models.StockItem", "products.inventory.backend.routes", "export-denied(model)"]
+text = "products.inventory.backend.routes exports products.inventory.backend.route_helpers.stock_route_name -> products.inventory.backend.models.StockItem: export-denied(model)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.alias_listed", "place", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.alias_listed.place exposes products.catalog.backend.models.CatalogEntry in param:entry"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.alias_listed", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.alias_listed.MaybeEntry exposes products.catalog.backend.models.CatalogEntry in alias"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "get_entry", "return", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.api.get_entry exposes products.catalog.backend.models.CatalogEntry in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "entries_for", "return", "django.db.models.query.QuerySet"]
+text = "products.catalog.backend.facade.api.entries_for exposes django.db.models.query.QuerySet in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "entries_for", "return", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.api.entries_for exposes products.catalog.backend.models.CatalogEntry in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "entry_manager", "return", "products.catalog.backend.models.EntryManager"]
+text = "products.catalog.backend.facade.api.entry_manager exposes products.catalog.backend.models.EntryManager in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "for_integration", "param:integration", "posthog.models.integration.Integration"]
+text = "products.catalog.backend.facade.api.for_integration exposes posthog.models.integration.Integration in param:integration"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "integration_of", "return", "posthog.models.integration.Integration"]
+text = "products.catalog.backend.facade.api.integration_of exposes posthog.models.integration.Integration in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "take_object", "param:value", "builtins.object"]
+text = "products.catalog.backend.facade.api.take_object: param:value has no usable type (builtins.object)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "take_any", "param:value", "typing.Any"]
+text = "products.catalog.backend.facade.api.take_any: param:value has no usable type (typing.Any)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "take_bare_dict", "param:value", "builtins.dict"]
+text = "products.catalog.backend.facade.api.take_bare_dict: param:value has no usable type (builtins.dict)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "give_payload", "return", "typing.Any"]
+text = "products.catalog.backend.facade.api.give_payload: return has no usable type (typing.Any)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "take_unannotated", "param:value", "?"]
+text = "exposes '' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "take_union", "param:value", "typing.Any"]
+text = "products.catalog.backend.facade.api.take_union: param:value has no usable type (typing.Any)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "give_list_any", "return", "typing.Any"]
+text = "products.catalog.backend.facade.api.give_list_any: return has no usable type (typing.Any)"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "for_ghost", "param:ghost", "posthog.models.ghost.Ghost"]
+text = "exposes 'posthog.models.ghost.Ghost' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "run_import", "param:command", "products.catalog.backend.management.commands.import_entries.Command"]
+text = "products.catalog.backend.facade.api.run_import exposes products.catalog.backend.management.commands.import_entries.Command in param:command"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "import_command", "return", "products.catalog.backend.management.commands.import_entries.Command"]
+text = "products.catalog.backend.facade.api.import_command exposes products.catalog.backend.management.commands.import_entries.Command in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.handout", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.handout.InternalView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.handout", "SandboxView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.handout.SandboxView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.handout", "ToolView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.handout.ToolView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.named", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.named.InternalView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.private_names", "lookup", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.private_names.lookup exposes products.catalog.backend.models.CatalogEntry in param:entry"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.records", "EntryStockRecord.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.records.EntryStockRecord.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "EntryIntegration.__init__", "field:integration", "posthog.models.integration.Integration"]
+text = "products.catalog.backend.facade.shapes.EntryIntegration.__init__ exposes posthog.models.integration.Integration in field:integration"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "EntryOutOfStock", "attr:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.shapes.EntryOutOfStock exposes products.inventory.backend.models.StockItem in attr:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "EntryStockView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.shapes.EntryStockView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "StockListener.__call__", "param:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.shapes.StockListener.__call__ exposes products.inventory.backend.models.StockItem in param:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "EntryTeams.__init__", "field:integrations", "posthog.models.integration.Integration"]
+text = "products.catalog.backend.facade.shapes.EntryTeams.__init__ exposes posthog.models.integration.Integration in field:integrations"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "EntryJob.__init__", "field:command", "products.catalog.backend.management.commands.import_entries.Command"]
+text = "products.catalog.backend.facade.shapes.EntryJob.__init__ exposes products.catalog.backend.management.commands.import_entries.Command in field:command"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shapes", "StockHolder", "attr:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.shapes.StockHolder exposes products.inventory.backend.models.StockItem in attr:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.shipments", "ShipmentView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
+text = "products.catalog.backend.facade.shipments.ShipmentView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.starred", "place_entry", "param:entry", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.starred.place_entry exposes products.catalog.backend.models.CatalogEntry in param:entry"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:args", "?"]
+text = "exposes '' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
+text = "exposes '' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "run_gone", "signature", "products.legacy.backend.temporal.gone.run_gone"]
+text = "exposes 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.aliasworkers.start_alias", "products.legacy.backend.facade.aliasworkers"]
+text = "products.legacy.backend.facade.aliasworkers -> products.legacy.backend.facade.aliasworkers.start_alias (declares)"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.lazyworkers.start_lazy", "products.legacy.backend.facade.lazyworkers"]
+text = "products.legacy.backend.facade.lazyworkers -> products.legacy.backend.facade.lazyworkers.start_lazy (declares)"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.nsworkers.job_names", "products.legacy.backend.facade.nsworkers"]
+text = "products.legacy.backend.facade.nsworkers -> products.legacy.backend.facade.nsworkers.job_names (declares)"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.queries.widget_names", "products.legacy.backend.facade.queries"]
+text = "products.legacy.backend.facade.queries -> products.legacy.backend.facade.queries.widget_names (declares)"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
+text = "products.legacy.backend.facade.relativeworkers -> products.legacy.backend.facade.relativeworkers.start_relative (declares)"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.workers.start", "products.legacy.backend.facade.workers"]
+text = "products.legacy.backend.facade.workers -> products.legacy.backend.facade.workers.start (declares)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.inventory.backend.routes", "products.inventory.backend.route_helpers"]
+text = "products.inventory.backend.routes -> products.inventory.backend.route_helpers.stock_route_name (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
+text = "products.legacy.backend.presentation.review_views -> products.legacy.backend.drafts (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.presentation.views", "products.catalog.backend.presentation.views"]
+text = "products.legacy.backend.presentation.views -> products.catalog.backend.presentation.views.EntryExportView (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.presentation.views", "products.inventory.backend.presentation.serializers"]
+text = "products.legacy.backend.presentation.views -> products.inventory.backend.presentation.serializers.StockSerializer (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.presentation.views", "products.legacy.backend.helpers"]
+text = "products.legacy.backend.presentation.views -> products.legacy.backend.helpers.widget_label (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.presentation.views", "products.legacy.backend.models"]
+text = "products.legacy.backend.presentation.views -> products.legacy.backend.models.Widget (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.routes", "products.legacy.backend.api.widgets"]
+text = "products.legacy.backend.routes -> products.legacy.backend.api.widgets.WidgetViewSet (import)"
+
+[[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.legacy.backend.routes", "products.legacy.backend.route_helpers"]
+text = "products.legacy.backend.routes -> products.legacy.backend.route_helpers.widget_route_name (import)"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.catalog.backend.facade.api", "?"]
+text = "import 'posthog.models.ghost.Ghost' did not resolve"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.catalog.backend.facade.api", "products.catalog.backend.api.serializers"]
+text = "products.catalog.backend.facade.api -> products.catalog.backend.api.serializers.EntrySerializer (import)"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.catalog.backend.facade.serializers", "products.catalog.backend.api.serializers"]
+text = "products.catalog.backend.facade.serializers -> products.catalog.backend.api.serializers.EntrySerializer (import)"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.legacy.backend.facade.aboveworkers", "?"]
+text = "import '......gone' did not resolve"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.legacy.backend.facade.api", "django.http"]
+text = "products.legacy.backend.facade.api -> django.http.Http404 (import)"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.legacy.backend.facade.api", "rest_framework.exceptions"]
+text = "products.legacy.backend.facade.api -> rest_framework.exceptions.PermissionDenied (import)"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.legacy.backend.facade.api", "products.legacy.backend.presentation.views"]
+text = "products.legacy.backend.facade.api -> products.legacy.backend.presentation.views.widget_page (import)"
+
+[[finding]]
+rule = "facade-no-drf"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
+text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+
+[[finding]]
+rule = "contracts-no-django"
+identity = ["products.legacy.backend.facade.contracts", "django.conf"]
+text = "products.legacy.backend.facade.contracts reaches django.conf.settings: products.legacy.backend.facade.contracts -> products.catalog.backend.events.ENTRY_CREATED -> posthog.kafka_client.client.produce -> django.conf.settings"
+
+[[finding]]
+rule = "thin-commands"
+identity = ["products.legacy.backend.management.commands.backfill_widget_names", "products.legacy.backend.logic.widgets"]
+text = "products.legacy.backend.management.commands.backfill_widget_names -> products.legacy.backend.logic.widgets.widget_total (import)"
+
+[[finding]]
+rule = "thin-commands"
+identity = ["products.legacy.backend.management.commands.seed_widgets", "products.legacy.backend.models"]
+text = "products.legacy.backend.management.commands.seed_widgets -> products.legacy.backend.models.Widget (import)"
+
+[[finding]]
+rule = "thin-commands"
+identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
+text = "products.legacy.backend.management.commands.sync_widgets -> products.legacy.backend.tasks.cleanup.cleanup (import)"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["posthog.request_log", "?"]
+text = "import 'products.gatekeeper.backend.facade.trail' did not resolve"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.catalog.backend.facade.api", "?"]
+text = "import 'posthog.models.ghost.Ghost' did not resolve"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.catalog.backend.logic.errors", "?"]
+text = "import 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.legacy.backend.facade.aboveworkers", "?"]
+text = "import '......gone' did not resolve"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
+text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.reviews.tests"]
+text = "products.legacy.backend.presentation.review_views -> products.legacy.backend.reviews.tests (import)"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.legacy.backend.tasks.cleanup", "products.legacy.backend.tests.factories"]
+text = "products.legacy.backend.tasks.cleanup -> products.legacy.backend.tests.factories.make_widget (import)"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "instance-many(filter)"]
+text = "ee.api.widgets uses products.legacy.backend.models.Widget as instance-many(filter)"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.catalog.backend.models.CatalogEntry", "posthog.models.resource_transfer.visitors", "in-collection"]
+text = "posthog.models.resource_transfer.visitors uses products.catalog.backend.models.CatalogEntry as in-collection"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.inventory.backend.models.StockItem", "posthog.models.resource_transfer.visitors", "in-collection"]
+text = "posthog.models.resource_transfer.visitors uses products.inventory.backend.models.StockItem as in-collection"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.legacy.backend.models.Widget", "posthog.models.resource_transfer.visitors", "in-collection"]
+text = "posthog.models.resource_transfer.visitors uses products.legacy.backend.models.Widget as in-collection"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
+text = "products.catalog.backend.logic.errors uses products.inventory.backend.models.StockItem as in-collection"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
+text = "products.legacy.backend.logic.widgets uses products.inventory.backend.models.StockItem as instance-many(filter)"
+
+[[finding]]
+rule = "model-crossings"
+identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
+text = "products.reports.backend.logic.build uses products.catalog.backend.models.CatalogEntry as instance-many(filter)"
+
+[[finding]]
+rule = "get-model"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "get_model"]
+text = "products.legacy.backend.logic.widgets -> products.inventory.backend.models.StockItem (model-label)"
+
+[[finding]]
+rule = "get-model"
+identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolved-model-label"]
+text = "model-label 'apps.get_model' did not resolve"
+
+[[finding]]
+rule = "reverse-accessor"
+identity = ["products.legacy.backend.models.Widget", "posthog.models.sharing.SharingConfiguration", "widget", "sharingconfiguration_set"]
+text = "posthog.models.sharing -> products.legacy.backend.models.Widget (reverse-accessor)"
+
+[[finding]]
+rule = "reverse-accessor"
+identity = ["posthog.models.team.team.Team", "products.legacy.backend.models.Widget", "team", "widget_set"]
+text = "products.legacy.backend.models -> posthog.models.team.team.Team (reverse-accessor)"
+
+[[finding]]
+rule = "reverse-accessor"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.models.Widget", "stock", "widget_set"]
+text = "products.legacy.backend.models -> products.inventory.backend.models.StockItem (reverse-accessor)"
+
+[[finding]]
+rule = "receiver-direction"
+identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.receivers"]
+text = "products.legacy.backend.receivers -> products.inventory.backend.models.StockItem (signal)"
+
+[[finding]]
+rule = "receiver-direction"
+identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
+text = "products.legacy.backend.stock_listeners -> products.inventory.backend.models.StockItem (signal)"
+
+[[finding]]
+rule = "drives"
+identity = ["reports:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(WidgetQuery)"]
+text = "posthog.test.test_widget_query -> products.reports.backend.hogql_queries (drives)"
+
+[[finding]]
+rule = "drives"
+identity = ["catalog:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(EntryQuery)"]
+text = "posthog.test.test_widget_query -> products.catalog.backend.hogql_queries (drives)"
+
+[[finding]]
+rule = "drives"
+identity = ["legacy:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(AuditQuery)"]
+text = "posthog.test.test_widget_query -> products.legacy.backend.hogql_queries (drives)"
+
+[[finding]]
+rule = "request-path"
+identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
+text = "ee.settings reaches products.gatekeeper.backend.admin_gate.AdminGateMiddleware: ee.settings -> products.gatekeeper.backend.admin_gate.AdminGateMiddleware"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.api.routing", "products.gatekeeper.backend.facade.api"]
+text = "posthog.api.routing reaches products.gatekeeper.backend.facade.api: posthog.api.routing -> posthog.auth.authenticate -> products.gatekeeper.backend.facade.api"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.api.routing", "products.gatekeeper.backend.logic.decisions"]
+text = "posthog.api.routing reaches products.gatekeeper.backend.logic.decisions: posthog.api.routing -> posthog.auth.authenticate -> products.gatekeeper.backend.facade.api -> products.gatekeeper.backend.logic.decisions"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.debug_gate.DebugGateMiddleware: posthog.settings.web -> products.gatekeeper.backend.debug_gate.DebugGateMiddleware"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.middleware.GateSessionMiddleware: posthog.settings.web -> products.gatekeeper.backend.middleware.GateSessionMiddleware"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.session_gate.SessionGateBackend: posthog.settings.web -> products.gatekeeper.backend.session_gate.SessionGateBackend"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.token_check.TokenCheck: posthog.settings.web -> products.gatekeeper.backend.token_check.TokenCheck"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.validator.GateValidator: posthog.settings.web -> products.gatekeeper.backend.validator.GateValidator"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.facade.lazy_gate"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.facade.lazy_gate: posthog.settings.web -> products.gatekeeper.backend.middleware.GateSessionMiddleware -> products.gatekeeper.backend.facade.lazy_gate"
+
+[[finding]]
+rule = "request-path"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.logic.session"]
+text = "posthog.settings.web reaches products.gatekeeper.backend.logic.session.touch_session: posthog.settings.web -> products.gatekeeper.backend.middleware.GateSessionMiddleware -> products.gatekeeper.backend.logic.session.touch_session"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["catalog", "?"]
+text = "import 'posthog.models.ghost.Ghost' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["catalog", "?"]
+text = "import 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["legacy", "?"]
+text = "import '......gone' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["legacy", "?"]
+text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["catalog", "?"]
+text = "reference 'posthog.models.ghost.Ghost' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["catalog", "?"]
+text = "reference 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["legacy", "?"]
+text = "model-label 'apps.get_model' did not resolve"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["catalog", "reports"]
+text = "catalog -> reports closes a cycle (1 edges)"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["reports", "catalog"]
+text = "reports -> catalog closes a cycle (9 edges)"
+
+[[finding]]
+rule = "foundation-direction"
+identity = ["access_control", "gatekeeper"]
+text = "products.access_control.backend.logic.rules -> products.gatekeeper.backend.facade.api.may_enter (import)"
+
+[[finding]]
+rule = "infrastructure-direction"
+identity = ["egress", "gatekeeper"]
+text = "posthog.egress.client -> products.gatekeeper.backend.facade.api.may_enter (import)"
+
+[[finding]]
+rule = "infrastructure-direction"
+identity = ["kafka_client", "billing"]
+text = "posthog.kafka_client.client -> ee.billing.quota.over_quota (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["ee.api.widgets", "products.legacy.backend.models"]
+text = "ee.api.widgets -> products.legacy.backend.models.Widget (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["ee.hogai.tools", "products.inventory.backend.facade.api"]
+text = "ee.hogai.tools -> products.inventory.backend.facade.api.get_stock (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.api", "products.legacy.backend.api.widgets"]
+text = "posthog.api -> products.legacy.backend.api.widgets.WidgetViewSet (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.api.sharing", "products.inventory.backend.facade.api"]
+text = "posthog.api.sharing -> products.inventory.backend.facade.api (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
+text = "posthog.api.widget_report -> products.legacy.backend.logic.widgets (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
+text = "posthog.api.widget_report -> products.legacy.backend.logic.widgets.widget_total (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.auth", "products.gatekeeper.backend.facade.api"]
+text = "posthog.auth -> products.gatekeeper.backend.facade.api (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.clickhouse.schema", "products.batch_exports.backend.sql"]
+text = "posthog.clickhouse.schema -> products.batch_exports.backend.sql.EXPORT_TABLE_SQL (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.clickhouse.schema", "products.catalog.backend.sql"]
+text = "posthog.clickhouse.schema -> products.catalog.backend.sql.ENTRY_TABLE_SQL (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.egress.client", "products.gatekeeper.backend.facade.api"]
+text = "posthog.egress.client -> products.gatekeeper.backend.facade.api.may_enter (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.hogql_queries.query_runner", "products.reports.backend.hogql_queries.widget"]
+text = "posthog.hogql_queries.query_runner -> products.reports.backend.hogql_queries.widget.WidgetQueryRunner (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.hogql_queries.query_runner", "products.catalog.backend.hogql_queries.entries"]
+text = "posthog.hogql_queries.query_runner -> products.catalog.backend.hogql_queries.entries.EntryQueryRunner (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.hogql_queries.query_runner", "products.legacy.backend.hogql_queries.audit"]
+text = "posthog.hogql_queries.query_runner -> products.legacy.backend.hogql_queries.audit.AuditQueryRunner (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.management.commands.start_temporal_worker", "products.reports.backend.temporal.workflows"]
+text = "posthog.management.commands.start_temporal_worker -> products.reports.backend.temporal.workflows.BuildReportWorkflow (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.migrations.0002_entry_table", "products.catalog.backend.sql"]
+text = "posthog.migrations.0002_entry_table -> products.catalog.backend.sql.ENTRY_TABLE_SQL (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.models.resource_transfer.visitors", "products.catalog.backend.models"]
+text = "posthog.models.resource_transfer.visitors -> products.catalog.backend.models.CatalogEntry (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.models.resource_transfer.visitors", "products.inventory.backend.models"]
+text = "posthog.models.resource_transfer.visitors -> products.inventory.backend.models.StockItem (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.models.resource_transfer.visitors", "products.legacy.backend.models"]
+text = "posthog.models.resource_transfer.visitors -> products.legacy.backend.models.Widget (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.permissions", "products.access_control.backend.facade.api"]
+text = "posthog.permissions -> products.access_control.backend.facade.api.may_view (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.request_log", "?"]
+text = "import 'products.gatekeeper.backend.facade.trail' did not resolve"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.tasks.scheduled", "products.catalog.backend.tasks.reindex"]
+text = "posthog.tasks.scheduled -> products.catalog.backend.tasks.reindex.reindex_catalog (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.tasks.scheduled", "products.inventory.backend.tasks.restock"]
+text = "posthog.tasks.scheduled -> products.inventory.backend.tasks.restock.restock (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.tasks.scheduled", "products.reports.backend.tasks.nightly"]
+text = "posthog.tasks.scheduled -> products.reports.backend.tasks.nightly.nightly_reports (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.urls", "products.legacy.backend.api.widgets"]
+text = "posthog.urls -> products.legacy.backend.api.widgets.WidgetViewSet (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
+text = "ee.settings -> products.gatekeeper.backend.admin_gate.AdminGateMiddleware (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.access_control.backend.apps"]
+text = "posthog.settings.web -> products.access_control.backend.apps.AccessControlConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.notifications.backend.apps"]
+text = "posthog.settings.web -> products.notifications.backend.apps.NotificationsConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.inventory.backend.apps"]
+text = "posthog.settings.web -> products.inventory.backend.apps.InventoryConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.catalog.backend.apps"]
+text = "posthog.settings.web -> products.catalog.backend.apps.CatalogConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.legacy.backend.apps"]
+text = "posthog.settings.web -> products.legacy.backend.apps.LegacyConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.reports.backend.apps"]
+text = "posthog.settings.web -> products.reports.backend.apps.ReportsConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.apps"]
+text = "posthog.settings.web -> products.gatekeeper.backend.apps.GatekeeperConfig (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
+text = "posthog.settings.web -> products.gatekeeper.backend.debug_gate.DebugGateMiddleware (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
+text = "posthog.settings.web -> products.gatekeeper.backend.middleware.GateSessionMiddleware (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.throttles"]
+text = "posthog.settings.web -> products.gatekeeper.backend.throttles.GateThrottle (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.reports.backend.logic.build"]
+text = "posthog.settings.web -> products.reports.backend.logic.build (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
+text = "posthog.settings.web -> products.gatekeeper.backend.session_gate.SessionGateBackend (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
+text = "posthog.settings.web -> products.gatekeeper.backend.token_check.TokenCheck (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
+text = "posthog.settings.web -> products.gatekeeper.backend.validator.GateValidator (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
+text = "posthog.settings.web -> products.gatekeeper.backend.login_flow.check_login (dotted-path)"
+
+[[finding]]
+rule = "leaves-stay-leaves"
+identity = ["packages.owners_yaml.django_glue", "django.conf"]
+text = "packages.owners_yaml.django_glue -> django.conf.settings (import)"
+
+[[finding]]
+rule = "leaves-stay-leaves"
+identity = ["packages.owners_yaml.django_glue", "posthog.redis"]
+text = "packages.owners_yaml.django_glue -> posthog.redis.get_client (import)"
+
+[[finding]]
+rule = "orm-independent"
+identity = ["posthog.egress.client", "send_for_team", "param:team", "posthog.models.team.team.Team"]
+text = "posthog.egress.client.send_for_team exposes posthog.models.team.team.Team in param:team"
+
+[[finding]]
+rule = "migration-database"
+identity = ["legacy.0001_initial", "posthog.0001_initial"]
+text = "products.legacy.backend.migrations.0001_initial -> posthog.migrations.0001_initial (migration-parent)"
+
+[[finding]]
+rule = "product-code-at-home"
+identity = ["ai_observability", "posthog.temporal.ai_observability"]
+text = "posthog.temporal.ai_observability"
+
+[[finding]]
+rule = "product-code-at-home"
+identity = ["ai_observability", "posthog.temporal.ai_observability.summarize"]
+text = "posthog.temporal.ai_observability.summarize"
+
+[[finding]]
+rule = "health-checks-no-dags"
+identity = []
+text = "products.reports.backend.health_checks reaches posthog.dags.backfill.backfill_partition: products.reports.backend.health_checks -> posthog.dags.backfill.backfill_partition"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/hogql_queries/__init__.py"]
+text = "products/catalog/backend/hogql_queries/__init__.py is needed by rules.drives.dst.path but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/admin_gate.py"]
+text = "products/gatekeeper/backend/admin_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/debug_gate.py"]
+text = "products/gatekeeper/backend/debug_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/logic/decisions.py"]
+text = "products/gatekeeper/backend/logic/decisions.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/session_gate.py"]
+text = "products/gatekeeper/backend/session_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/token_check.py"]
+text = "products/gatekeeper/backend/token_check.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/validator.py"]
+text = "products/gatekeeper/backend/validator.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/apps.py"]
+text = "products/legacy/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/stock_listeners.py"]
+text = "products/legacy/backend/stock_listeners.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/apps.py"]
+text = "products/reports/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/hogql_queries/widget.py"]
+text = "products/reports/backend/hogql_queries/widget.py is needed by rules.drives.dst.path but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/logic/build.py"]
+text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/reports/turbo.json does not watch it"
+
+[[incomplete]]
+rule = "public-surface"
+identity = ["products.catalog.backend.facade.handout|import|sandbox.shapes.SandboxView"]
+text = "selection reads unknown dst.package, dst.tier"
+
+[[incomplete]]
+rule = "public-surface"
+identity = ["products.catalog.backend.facade.handout|import|scripts.shapes.ExternalView"]
+text = "selection reads unknown dst.package, dst.tier"
+
+[[incomplete]]
+rule = "public-surface"
+identity = ["products.legacy.backend.logic.widgets|import|scripts.helpers.slug"]
+text = "selection reads unknown dst.package, dst.tier"
+
+[[incomplete]]
+rule = "public-surface"
+identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads unknown src.package"
+
+[[incomplete]]
+rule = "public-surface"
+identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+text = "selection reads unknown src.package"
+
+[[incomplete]]
+rule = "public-surface"
+identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads unknown src.package"
+
+[[incomplete]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
+text = "selection reads unknown src.handed_zones"
+
+[[incomplete]]
+rule = "facade-logic"
+identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
+text = "selection reads unknown src.handed_zones"
+
+[[incomplete]]
+rule = "installs"
+identity = ["products.gatekeeper.backend.wiring|installs|registry.register_post_delete_hook"]
+text = "installs 'registry.register_post_delete_hook' did not resolve"
+
+[[incomplete]]
+rule = "installs"
+identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
+text = "installs 'registry.register_post_delete_hook' did not resolve"
+
+[[incomplete]]
+rule = "dynamic-imports"
+identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
+text = "dynamic-import '' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.catalog.backend.facade.handout|import|sandbox.shapes.SandboxView"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.catalog.backend.facade.handout|import|scripts.shapes.ExternalView"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.legacy.backend.logic.widgets|import|scripts.helpers.slug"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["sandbox.shapes|reference|products.inventory.backend.models.StockItem"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["scripts.shapes|reference|products.inventory.backend.models.StockItem"]
+text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-product-lists-in-core"
+identity = ["sandbox.shapes|import|pydantic.BaseModel"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "no-product-lists-in-core"
+identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "no-product-lists-in-core"
+identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "no-product-lists-in-core"
+identity = ["scripts.shapes|import|pydantic.BaseModel"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "no-product-lists-in-core"
+identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "leaves-stay-leaves"
+identity = ["sandbox.shapes|import|pydantic.BaseModel"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "leaves-stay-leaves"
+identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "leaves-stay-leaves"
+identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "leaves-stay-leaves"
+identity = ["scripts.shapes|import|pydantic.BaseModel"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "leaves-stay-leaves"
+identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+text = "selection reads unknown src.tier"
+
+[[incomplete]]
+rule = "orm-independent"
+identity = ["posthog.egress.client|exposes|typing.Any"]
+text = "posthog.egress.client.forward: param:kwargs has no usable type (typing.Any)"
+
+[[incomplete]]
+rule = "own-database"
+identity = ["products.access_control.backend.models.AccessRule"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "own-database"
+identity = ["products.catalog.backend.models.CatalogEntry"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "own-database"
+identity = ["products.inventory.backend.models.StockItem"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "own-database"
+identity = ["products.legacy.backend.models.Widget"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "own-database"
+identity = ["products.reports.backend.models.ReportRun"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "product-code-at-home"
+identity = ["sandbox.shapes"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "product-code-at-home"
+identity = ["scripts.helpers"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "product-code-at-home"
+identity = ["scripts.new_tool"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "product-code-at-home"
+identity = ["scripts.shapes"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "registry-slots"
+identity = ["products.catalog.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
+text = "no producer records module-level assignments"
+
+[[incomplete]]
+rule = "registry-slots"
+identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
+text = "no producer records module-level assignments"
+
+[[incomplete]]
+rule = "registry-slots"
+identity = ["products.inventory.backend.health_checks.HEALTH_CHECKS"]
+text = "no producer records module-level assignments"
+
+[[incomplete]]
+rule = "registry-slots"
+identity = ["products.legacy.backend.health_checks.HEALTH_CHECKS"]
+text = "no producer records module-level assignments"
+
+[[incomplete]]
+rule = "registry-slots"
+identity = ["products.reports.backend.health_checks.HEALTH_CHECKS"]
+text = "no producer records module-level assignments"
+
+[[incomplete]]
+rule = "generated-producer"
+identity = ["posthog.schema"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "generated-producer"
+identity = ["posthog.schema_enums"]
+text = "cannot tell whether this entity is selected"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
+text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
+text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["rules.request-path|posthog.settings.web|dotted-path|products.gatekeeper.backend.throttles.GateThrottle"]
+text = "rule request-path cannot tell: cannot tell whether to follow dotted-path 'products.gatekeeper.backend.throttles.GateThrottle'"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["rules.request-path|posthog.settings.web|import|products.gatekeeper.backend.facade.trail"]
+text = "rule request-path cannot tell: import 'products.gatekeeper.backend.facade.trail' did not resolve"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/cache_utils.py"]
+text = "posthog/cache_utils.py is named by [[assign]] common/**, posthog/db_backends/**, posthog/redis.py, posthog/cache_utils.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/api/rest_router.py"]
+text = "posthog/api/rest_router.py is named by [[assign]] posthog/api/__init__.py, posthog/api/rest_router.py, posthog/urls.py, posthog/ee_urls.py, posthog/product_urls.py, posthog/products.py, posthog/apps.py, posthog/settings/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/ee_urls.py"]
+text = "posthog/ee_urls.py is named by [[assign]] posthog/api/__init__.py, posthog/api/rest_router.py, posthog/urls.py, posthog/ee_urls.py, posthog/product_urls.py, posthog/products.py, posthog/apps.py, posthog/settings/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/product_urls.py"]
+text = "posthog/product_urls.py is named by [[assign]] posthog/api/__init__.py, posthog/api/rest_router.py, posthog/urls.py, posthog/ee_urls.py, posthog/product_urls.py, posthog/products.py, posthog/apps.py, posthog/settings/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/management/commands/execute_temporal_workflow.py"]
+text = "posthog/management/commands/execute_temporal_workflow.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/management/commands/start_temporal_workflow.py"]
+text = "posthog/management/commands/start_temporal_workflow.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/temporal/schedule.py"]
+text = "posthog/temporal/schedule.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/temporal/ai/__init__.py"]
+text = "posthog/temporal/ai/__init__.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/temporal/health_checks/registry.py"]
+text = "posthog/temporal/health_checks/registry.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/error_tracking/backend/sql.py"]
+text = "products/error_tracking/backend/sql.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/error_tracking/backend/embedding.py"]
+text = "products/error_tracking/backend/embedding.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/error_tracking/backend/indexed_embedding.py"]
+text = "products/error_tracking/backend/indexed_embedding.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py"]
+text = "products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/warehouse_sources/backend/facade/_access_control_base.py"]
+text = "products/warehouse_sources/backend/facade/_access_control_base.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/warehouse_sources/sources/sdk/testing.py"]
+text = "products/warehouse_sources/sources/sdk/testing.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/management/commands/setup_test_environment.py"]
+text = "posthog/management/commands/setup_test_environment.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/management/commands/reset_test_clickhouse_db.py"]
+text = "posthog/management/commands/reset_test_clickhouse_db.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/aeo/backend/management/commands/seed_aeo_prompts.py"]
+text = "products/aeo/backend/management/commands/seed_aeo_prompts.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py"]
+text = "products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py"]
+text = "products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py"]
+text = "products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py"]
+text = "products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/signals/backend/management/commands/seed_inbox_data.py"]
+text = "products/signals/backend/management/commands/seed_inbox_data.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/signals/backend/management/commands/seed_refund_test_data.py"]
+text = "products/signals/backend/management/commands/seed_refund_test_data.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/tasks/backend/management/commands/bake_dev_stack_image.py"]
+text = "products/tasks/backend/management/commands/bake_dev_stack_image.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/tasks/backend/management/commands/demo_mts_example.py"]
+text = "products/tasks/backend/management/commands/demo_mts_example.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/visual_review/backend/management/commands/seed_snapshot_history.py"]
+text = "products/visual_review/backend/management/commands/seed_snapshot_history.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products/web_analytics/backend/management/commands/generate_aeo_content.py"]
+text = "products/web_analytics/backend/management/commands/generate_aeo_content.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog/api/view_base.py"]
+text = "posthog/api/view_base.py is named by [[assign]] posthog/api/view_base.py  (hoglint.toml) but no file has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin"]
+text = "products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin"]
+text = "products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin"]
+text = "products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin"]
+text = "products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"

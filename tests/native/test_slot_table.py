@@ -1,9 +1,8 @@
-"""Who reports a type slot of a contract surface, and how many times, on small product trees, in
-both engines.
+"""Who reports a type slot of a contract surface, and how many times, on small product trees.
 
 Each case is a tree (a base plus a few files) and a verdict: how many findings each rule gives,
 `export-shape` (ES) and `facade-signature` (FS), and a third signature rule where a case adds one.
-Both engines must give the same ten tables in every case. The first part is the slot table of
+No case may fail a producer. The first part is the slot table of
 docs/design/09-contract-surfaces.md, cell by cell; the second part is the forms that attack it;
 the third part is the decided verdicts of holes that are not built yet, run as expected failures.
 """
@@ -18,12 +17,11 @@ from pathlib import Path
 import pytest
 
 from hoglint import facts
-from hoglint.core import analysis as core_analysis
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
 from rules.support import PRESET
 
-from native.test_contract_slots import both_engines
+from native.test_contract_slots import clean_dump
 from native.test_facade_rules import MODEL, ROOT_CONFIG, SITE_PACKAGES
 
 D = "products/shop/backend"
@@ -79,7 +77,7 @@ def site_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for path, text in SITE_PACKAGES.items():
         (site / path).parent.mkdir(parents=True, exist_ok=True)
         (site / path).write_text(text)
-    for module in (facts, core_analysis, native_analysis):
+    for module in (facts, native_analysis):
         monkeypatch.setattr(module, "site_packages", lambda: site)
 
 
@@ -1002,7 +1000,6 @@ CLASS_BODY_CASES: dict[str, tuple[Files, Verdict]] = {
 
 # ── Part 3: holes whose verdict is decided and not built. Each case asserts the decided verdict and
 # runs as an expected failure until the change lands; the reason says what is missing. ──
-STAR_REASON = "the engine reads a third-party star source and hands its names out, not one unresolved import"
 PLACE = "def place(order: Order) -> None:\n    pass\n"
 EVERYTHING = ORDER_DC + "\n\n" + EXC_METHOD + "\n\n" + PLACE + "\n\nclass Loose:\n    pass\n"
 ALL_FIVE = "\n\n__all__ = ['Order', 'Receipt', 'Rejected', 'place', 'Loose']\n"
@@ -1013,18 +1010,16 @@ GET_FROM_LOGIC = get_returns("errors")
 # The named import of the five names: the rows a star import of them must give.
 NAMED_FIVE: Verdict = {EXPORT: 2, SIGNATURE: 2}
 
-HOLES: dict[str, tuple[Files, Verdict, str]] = {
-    # A third-party star import: the decided verdict is one unresolved import. The engine reads the
-    # module's source in site-packages and hands its names out as a named import would (clean).
-    "a star import of a third-party module": (
-        {f"{D}/facade/errors.py": "from rest_framework.serializers import *\n"},
-        ES,
-        STAR_REASON,
-    ),
-}
+HOLES: dict[str, tuple[Files, Verdict, str]] = {}
 
 # A star import: the same rows as the named import of each name it binds.
 STAR_CASES: dict[str, tuple[Files, Verdict]] = {
+    # The engine reads the installed distribution's source, so the star hands out the names a named
+    # import would. Where the distribution is not installed, the star is an unresolved import.
+    "a star import of a third-party module": (
+        {f"{D}/facade/errors.py": "from rest_framework.serializers import *\n"},
+        NONE,
+    ),
     "a star import of five kinds, the facade without a function": (
         {f"{D}/errors.py": src(EVERYTHING + ALL_FIVE), f"{D}/facade/errors.py": STAR},
         NAMED_FIVE,
@@ -1238,6 +1233,57 @@ COPY_CASES: dict[str, tuple[Files, Verdict]] = {
     ),
 }
 
+# A field of a class core defines, the class named in a facade function's slot: only a denied kind
+# is reported at the product. The walk goes on into a product class the field names.
+CORE_FIELD_CLASSES = {
+    "a core frozen dataclass": "@dataclasses.dataclass(frozen=True)\nclass CoreThing{P}:\n    x: {T}\n",
+    "a core pydantic model": "class CoreThing{P}(BaseModel):\n    x: {T}\n",
+}
+# (the field's type, the type parameters of the class, what the core module adds, the verdict).
+CORE_FIELD_TYPES: dict[str, tuple[str, str, str, Verdict]] = {
+    "Any": ("Any", "", "", NONE),
+    "a name that does not resolve": ("Missing", "", MISSING, NONE),
+    "a type parameter": ("list[T]", "[T]", "", NONE),
+    "a call": ("conint(ge=0)", "", "from pydantic import conint\n", NONE),
+    "a core class of no allowed shape": ("CoreLoose", "", "", NONE),
+    "a model": ("Order", "", "", ES),
+    "a product frozen dataclass with a model field": ("Receipt", "", f"from {S}.errors import Receipt\n", ES),
+    "a product class of no allowed shape": ("Plain", "", "", ES),
+}
+CORE_LOOSE = "\n\nclass CoreLoose:\n    pass\n"
+GET_CORE_THING = "from posthog.corefields import CoreThing\n\n\ndef get() -> CoreThing:\n    raise ValueError\n"
+
+
+def core_field_cases() -> dict[str, tuple[Files, Verdict]]:
+    cases: dict[str, tuple[Files, Verdict]] = {}
+    for kind, template in CORE_FIELD_CLASSES.items():
+        for name, (annotation, params, extra, verdict) in CORE_FIELD_TYPES.items():
+            body = template.replace("{P}", params).replace("{T}", annotation)
+            if annotation == "CoreLoose":
+                body += CORE_LOOSE
+            files = {
+                "posthog/corefields.py": src(body, extra=extra),
+                f"{D}/errors.py": src(ORDER_DC),
+                f"{D}/facade/api.py": GET_CORE_THING,
+            }
+            cases[f"{name} in a field of {kind} a facade function returns"] = (files, verdict)
+        # The same class as an ancestor: its fields are the product class's constructor slots.
+        child = (
+            "@dataclasses.dataclass(frozen=True)\nclass Row(CoreThing):\n    title: str = ''\n"
+            if "dataclass" in kind
+            else "class Row(CoreThing):\n    title: str\n"
+        )
+        cases[f"Any in a field of {kind} a product class inherits, the class returned by a facade function"] = (
+            {
+                "posthog/corefields.py": src(template.replace("{P}", "").replace("{T}", "Any")),
+                f"{D}/errors.py": src(child, extra="from posthog.corefields import CoreThing\n"),
+                f"{D}/facade/api.py": get_returns("errors", "Row"),
+            },
+            ES,
+        )
+    return cases
+
+
 # The neighbors of the holes that give their verdict today and keep it after the change.
 NEIGHBORS: dict[str, tuple[Files, Verdict]] = {
     "a star import in a module with a function and no __all__ hands out nothing": (
@@ -1326,6 +1372,7 @@ CASES = {
     **ASSIGNED_CASES,
     **BASE_CASES,
     **COPY_CASES,
+    **core_field_cases(),
     **NEIGHBORS,
 }
 
@@ -1347,5 +1394,5 @@ def reported(out: Path) -> Verdict:
 def test_who_reports_a_slot_and_how_many_times(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: Files, verdict: Verdict
 ) -> None:
-    out = both_engines(tmp_path, BASE, files, monkeypatch)
-    assert reported(out["native"]) == verdict
+    out = clean_dump(tmp_path, BASE, files, monkeypatch)
+    assert reported(out) == verdict

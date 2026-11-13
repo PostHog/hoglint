@@ -1,7 +1,7 @@
 # 1. What hoglint is for, and its fixed principles
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 13, 2026.
 
 ## Decided
 
@@ -59,9 +59,10 @@ A cached or reused answer must equal a full run.
 D5 (the whole repo every run) is the current form.
 Any reuse must keep this property and prove it with an oracle (D59 point 3, D61).
 
-**Principle 7: two engines must agree.**
-The Python implementation is frozen as the executable spec.
-The native engine must equal it on ten parity tables, with zero delta or a named delta.
+**Principle 7: one engine; every changed row is named.**
+The native engine builds the graph and judges every rule (owner, Nov 13: the Python engine is retired, the graph build first, then the rule judgment).
+Python words what the engine judged and holds the rule metadata.
+A change keeps every row of the ten parity tables and every stored message, or names each one it changes: against the model repository's stored rows, tables and messages, the stored runs of the generated and hand-written rule configs, the slot table test, and the real-size compare with a base.
 See `05-engine.md`.
 
 ## Why
@@ -95,10 +96,6 @@ See `05-engine.md`.
 - A second repo that uses hoglint with no `products/` folder tests principle 5.
   Configs for Sentry, Saleor and Zulip exist in `docs/research/generality.md`.
 
-## Open
-
-- Whether the Python engine stays as a shadow oracle after adoption, or a golden corpus replaces it (D7 amended, D42).
-  See `05-engine.md`.
 
 ## Sources
 

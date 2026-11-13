@@ -21,18 +21,16 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
+from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.config import CoreConfig
 from hoglint.core.modules import normalize_root
-from hoglint.core.producers import ImportProducer, ParseFailureProducer, StringProducer
 from hoglint.facts import FactNeeds, default_cache_dir
 from hoglint.model import Context, Edge, Graph
+from hoglint.native.analysis import NativeAnalysis
 from hoglint.views import RefsView, reverse_dependents
 
 STRING_LITERALS = frozenset({"whole", "part"})
 TYPE_CHECKING_BRANCHES = frozenset({Context.TYPE_ONLY, Context.TYPE_CHECKING_ELSE})
-# The map needs import and dotted-path edges, and parse failures so a broken file is never silent.
-PRODUCERS = (ImportProducer, StringProducer, ParseFailureProducer)
 
 
 def is_potential_module_path(value: str) -> bool:
@@ -158,11 +156,10 @@ def main() -> None:
             config=config,
             work_dir=Path(work),
             staged=args.index,
-            producers=PRODUCERS,
             needs=FactNeeds(),
             cache_dir=None if args.no_cache else default_cache_dir(),
         )
-        result = CoreAnalysis(options).run()
+        result = NativeAnalysis(options).run()
     output = TachMap(result.graph, result.inventory.files, config.source_roots, args.case_insensitive)
     mapping = output.write(args.out)
     if args.compare:

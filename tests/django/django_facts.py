@@ -1,4 +1,5 @@
-"""A tiny Django project as hand-written L1 fact records, enough for the pack's producers."""
+"""A tiny Django project as hand-written L1 fact records, enough for the pack's producers, linked
+by the native engine."""
 
 from __future__ import annotations
 
@@ -6,7 +7,6 @@ from pathlib import Path
 
 from core.support import SITE, Repo, assign_row, class_def, func_def, import_row
 from hoglint.core.config import CoreConfig
-from hoglint.core.reader import python_pack_io
 from hoglint.model import Graph
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
@@ -79,11 +79,9 @@ class FactRepo(Repo):
     def graph(
         self, hooks: tuple[str, ...] = (), routing: DatabaseRouting | None = None, scan_roots: tuple[str, ...] = ()
     ) -> Graph:
-        build = self.build(CoreConfig(first_party=FIRST_PARTY))
-        graph = build.graph()
+        linked = self.link(CoreConfig(first_party=FIRST_PARTY))
         config = DjangoPackConfig(
             settings_modules=("proj.settings",), routing=routing, hooks=hooks, scan_roots=scan_roots
         )
-        reader, sink = python_pack_io(build, graph)
-        DjangoPack.run(reader, config, sink, Path("."))
-        return graph
+        DjangoPack.run(linked.reader(), config, linked.sink(), Path("."))
+        return linked.graph

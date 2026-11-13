@@ -1,0 +1,44 @@
+# The ten parity tables of the model repository as the native engine dumps them: per table the
+# row count and a digest of its bytes. A change that moves any row of any table changes a digest.
+# `bin/model-repo --refresh` rewrites it with expected.toml; `bin/model-repo --keep` keeps the dump
+# to read the rows. See docs/design/12-how-work-is-done.md, "The model repository".
+
+["edges"]
+rows = 1308
+digest = "c6555a3cff9ca75ace8832aef2f595ca"
+
+["symbols"]
+rows = 371
+digest = "6446c3f0c829027f222d38f5052084be"
+
+["modules"]
+rows = 300
+digest = "c1772f04eecf26ab1de694c0a486925c"
+
+["failed"]
+rows = 0
+digest = "cae66941d9efbd404e4d88758ea67670"
+
+["findings"]
+rows = 230
+digest = "38d05108a729847302f1a745678a20e8"
+
+["incomplete"]
+rows = 83
+digest = "a55b3c2002f4e6551f563edd61f9a5fb"
+
+["scan-lines"]
+rows = 215
+digest = "78d13f203c04e9bf2f972cf6ccdeff5f"
+
+["couplings"]
+rows = 1127
+digest = "42f73c02d497c1e6b18cb2fb1eddc8d6"
+
+["stored-summary"]
+rows = 1337
+digest = "174464ca22f275b73240a49bdea50232"
+
+["levels"]
+rows = 1
+digest = "4b256c7bdcacbf6b43ffd58ab29bec97"

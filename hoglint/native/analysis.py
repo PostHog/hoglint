@@ -1,8 +1,7 @@
 """Snapshot to native Graph: list the snapshot's blobs, read or extract their facts, link in Rust.
 
 The facts of a blob are cached under (facts id, blob oid) in the fact database, so a warm run
-reads one database and no source at all. Discovery, fact needs and the extractor options are the
-Python engine's, so both engines read the same facts. Packs read them through `NativeBuild`.
+reads one database and no source at all. Packs read them through `NativeBuild`.
 """
 
 from __future__ import annotations
@@ -12,10 +11,11 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from hoglint.core.analysis import CoreAnalysis
+from hoglint.core.analysis import AnalysisOptions, registered_needs
+from hoglint.core.catalog import core_edge_kinds, core_fact_kinds
 from hoglint.core.discovery import Discovery, Inventory
-from hoglint.core.producers import PRODUCERS
-from hoglint.facts import SitePackagesFiles, site_packages
+from hoglint.core.modules import ModuleNamer
+from hoglint.facts import FactNeeds, SitePackagesFiles, site_packages
 from hoglint.native import bridge
 from hoglint.native.build import NativeBuild, NativeStore
 from hoglint.native.config import link_config
@@ -33,7 +33,8 @@ LITE_KINDS = ("imports", "defs", "assigns")
 
 @dataclass(frozen=False)
 class NativeAnalysisResult:
-    """AnalysisResult with the link in place of the Python fact store and core build."""
+    """What a run of one snapshot gives: its inventory, the link's store and build, the graph,
+    and the seconds of each phase."""
 
     inventory: Inventory
     store: NativeStore
@@ -42,7 +43,23 @@ class NativeAnalysisResult:
     timings: dict[str, float] = field(default_factory=dict)
 
 
-class NativeAnalysis(CoreAnalysis):
+class NativeAnalysis:
+    def __init__(self, options: AnalysisOptions) -> None:
+        self.options = options
+
+    def first_party(self, inventory: Inventory) -> tuple[str, ...]:
+        config = self.options.config
+        if config.first_party:
+            return config.first_party
+        namer = ModuleNamer(config.source_roots)
+        heads = {namer.module_of(path)[0].split(".")[0] for path in inventory.files}
+        return tuple(sorted(head for head in heads if head.isidentifier()))
+
+    def needs(self) -> FactNeeds:
+        config = self.options.config
+        core = FactNeeds(kinds=core_fact_kinds(config), watch_callees=frozenset(config.loader_callee_names()))
+        return core | (self.options.needs if self.options.needs is not None else registered_needs())
+
     def threads(self) -> int:
         """Worker threads for extraction and the link: HOGLINT_THREADS, else one for a staged run
         (pre-commit) and the baseline it starts, else every core (0). Output is the same at any
@@ -84,18 +101,18 @@ class NativeAnalysis(CoreAnalysis):
     def conflict_failure(conflicts: list[str]) -> ProducerFailure:
         """Conflict entries in the index: the code under check is not decided, so every rule that
         reads edges is incomplete."""
-        kinds = {kind for producer in PRODUCERS for kind in producer().edge_kinds}
+        kinds = set(core_edge_kinds())
         kinds |= {kind for pack in REGISTRY.packs.values() for kind in pack.edge_kinds}
         more = f" and {len(conflicts) - 1} more" if len(conflicts) > 1 else ""
         return ProducerFailure(f"the index holds merge conflicts: {conflicts[0]}{more}", frozenset(kinds))
 
-    def run(self) -> NativeAnalysisResult:  # type: ignore[override]
+    def run(self) -> NativeAnalysisResult:
         timings: dict[str, float] = {}
         config = self.options.config
         started = time.perf_counter()
         snapshot = self.blob_snapshot()
         external = SitePackagesFiles.of(config.external_packages)
-        inventory = Discovery(config).run(snapshot)  # type: ignore[arg-type]
+        inventory = Discovery(config).run(snapshot)
         timings["snapshot"] = time.perf_counter() - started
         started = time.perf_counter()
         native = bridge.load()

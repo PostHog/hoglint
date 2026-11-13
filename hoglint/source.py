@@ -96,7 +96,8 @@ def run_packs(
 
 
 class GraphSource:
-    """Builds and caches one Graph per (code root, staged or git tree, config sections).
+    """Builds and caches one Graph per (code root, staged or git tree, config sections). A subclass
+    builds it (`hoglint.native.source.NativeGraphSource`).
 
     `tree` names a git tree whose blobs are the code, read by id with no checkout. `stores` are
     the run's stores (`RunStores.current` by default)."""
@@ -144,21 +145,5 @@ class GraphSource:
         return needs
 
     def build_fresh(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> Graph:
-        from hoglint.core.analysis import AnalysisOptions, CoreAnalysis  # noqa: PLC0415 - see fact_needs
-        from hoglint.core.reader import python_pack_io  # noqa: PLC0415 - see fact_needs
-
-        packs = active_packs(config)
-        work = Path(tempfile.mkdtemp(dir=self.work_dir))
-        options = AnalysisOptions(
-            repo=code_root,
-            config=self.core_config(config),
-            work_dir=work,
-            staged=staged,
-            needs=self.fact_needs(packs),
-            tree=tree,
-        )
-        analysis = CoreAnalysis(options).run()
-        graph = analysis.graph
-        reader, sink = python_pack_io(analysis.build, graph)
-        run_packs(packs, reader, sink, self.listing_of(code_root, tree))
-        return graph
+        """The graph of one snapshot: `NativeGraphSource` links it in Rust."""
+        raise NotImplementedError

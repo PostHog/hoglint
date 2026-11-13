@@ -306,7 +306,7 @@ impl Link {
 
     /// A module's table, or None when the module does not exist: (is_package, names in
     /// binding order as (name, binding), star import sources, lazy map in order). A binding is
-    /// the Python resolver's tuple: ("class"|"def", def index, ""|"stub"), ("variable",),
+    /// the `Binding` tuple of hoglint/core/symbols.py: ("class"|"def", def index, ""|"stub"), ("variable",),
     /// ("module", dotted), ("from", source, name) or ("alias", chain).
     #[allow(clippy::type_complexity)]
     fn table<'py>(
@@ -525,8 +525,8 @@ impl Link {
         })
     }
 
-    /// Refinements a link producer judged, as (edge ids, shapes, details, attrs): for the
-    /// proofs that hold them equal to the Python producer's.
+    /// Refinements a link producer judged, as (edge ids, shapes, details, attrs): for the tests
+    /// that read them.
     #[allow(clippy::type_complexity)]
     fn staged_columns<'py>(
         &self,

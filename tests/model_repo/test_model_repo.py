@@ -1,5 +1,5 @@
 """The model repository: a miniature of the monorepo's layout with one invented example per case,
-checked with the real preset in both engines. See CASES.md for the cases and expected.toml for
+checked with the real preset in the native engine. See CASES.md for the cases and expected.toml for
 the reviewed result."""
 
 from __future__ import annotations
@@ -10,7 +10,21 @@ import pytest
 
 from native.require import native_module
 
-from model_repo.harness import UNTIED, Comparison, Dumps, Expected, WantedRow, case_ids, catalog_rows
+from model_repo.harness import (
+    UNTIED,
+    Comparison,
+    Dumps,
+    Expected,
+    WantedRow,
+    case_ids,
+    catalog_rows,
+    changed_messages,
+    changed_tables,
+    dumped_messages,
+    dumped_tables,
+    read_messages,
+    read_tables,
+)
 
 EXPECTED = Expected.read()
 
@@ -26,10 +40,6 @@ def checked(tmp_path_factory: pytest.TempPathFactory) -> Dumps:
     return dumps
 
 
-def test_both_engines_give_the_same_ten_tables(checked: Dumps) -> None:
-    assert [diff.render() for diff in checked.differences()] == []
-
-
 def test_every_expected_row_is_tied_to_a_case_of_the_catalog() -> None:
     known = case_ids()
     untied = [entry for entry in EXPECTED.rows if entry.case == UNTIED or entry.case not in known]
@@ -38,8 +48,16 @@ def test_every_expected_row_is_tied_to_a_case_of_the_catalog() -> None:
 
 
 def test_the_result_equals_the_reviewed_expected_file(checked: Dumps) -> None:
-    comparison = Comparison(EXPECTED, checked.result("native"))
+    comparison = Comparison(EXPECTED, checked.result())
     assert comparison.equal(), "\n" + comparison.render()
+
+
+def test_every_table_is_the_stored_one(checked: Dumps) -> None:
+    assert changed_tables(read_tables(), dumped_tables(checked.out)) == []
+
+
+def test_every_message_is_the_stored_one(checked: Dumps) -> None:
+    assert changed_messages(read_messages(), dumped_messages(checked.out)) == []
 
 
 def wanted_case(wanted: WantedRow) -> object:
@@ -49,7 +67,7 @@ def wanted_case(wanted: WantedRow) -> object:
 
 @pytest.mark.parametrize("wanted", [wanted_case(wanted) for wanted in EXPECTED.wanted])
 def test_a_wanted_verdict_is_given(checked: Dumps, wanted: WantedRow) -> None:
-    assert wanted.found_in(checked.result("native").rows)
+    assert wanted.found_in(checked.result().rows)
 
 
 def catalog_paths() -> list[str]:

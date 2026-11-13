@@ -1,5 +1,5 @@
-//! The core producers (hoglint/core/producers.py): import, reference, declaration, dotted-path,
-//! dynamic-import and unparsed edges, in the order and with the fields Python makes them.
+//! The core producers: import, reference, declaration, dotted-path, dynamic-import and unparsed
+//! edges. hoglint/core/catalog.py names the edge kinds and fact kinds of each.
 
 use super::LinkConfig;
 use super::facts::{Argument, Assign, Def, Import, Op, V};
@@ -604,7 +604,7 @@ pub fn chain_tokens(chain: &str) -> Vec<&str> {
     out
 }
 
-/// `StringProducer.in_path_position`: a patch target, or the first argument of a callee
+/// A patch target, or the first argument of a callee
 /// `path_callees` names. Only there does a string that resolves to nothing stay an edge.
 fn in_path_position(up: &str, patch: bool, path_callees: &[String]) -> bool {
     if patch {
@@ -634,7 +634,7 @@ fn patch_role(up: &str, patch_callees: &[String]) -> bool {
     }
 }
 
-/// Where an `exposes` edge is written (hoglint/core/producers.py `SlotSite`).
+/// Where an `exposes` edge is written.
 #[derive(Clone, Copy)]
 struct SlotSite {
     owner: usize,
@@ -772,7 +772,7 @@ fn fields_by_class(it: &Interner, assigns: &[Assign]) -> FxHashMap<i32, Vec<u32>
     fields
 }
 
-/// What tells a slot's rows of one name apart (`DeclarationProducer.markers`), as the attrs are
+/// What tells a slot's rows of one name apart, as the attrs are
 /// made of it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Marks {
@@ -804,7 +804,7 @@ impl Marks {
 /// An alias expansion row of a slot, as written once: (surface, whole position, marks).
 type AliasRow = (Sid, bool, Marks);
 
-/// What a class-body row of a class is a slot of (`DeclarationProducer.expose_fields`'s `kind`).
+/// What a class-body row of a class is a slot of.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Member {
     /// A field of a dataclass-like class's `__init__`.
@@ -1087,7 +1087,7 @@ impl Producers<'_> {
         }
     }
 
-    /// Every dotted name in a type expression (`DeclarationProducer.mentions`). `Annotated`
+    /// Every dotted name in a type expression. `Annotated`
     /// passes its type through as it stands.
     fn mentions(&mut self, value: &V, whole: bool, argument_of: Sid, out: &mut Vec<Named>) {
         let k = &self.settings.k;
@@ -1140,7 +1140,7 @@ impl Producers<'_> {
         }
     }
 
-    /// `DeclarationProducer.unread`: whether a type expression has a part `mentions` cannot read
+    /// Whether a type expression has a part `mentions` cannot read
     /// as types. A `Literal`'s values, the metadata of `Annotated` and `...` are no types.
     fn unread(&mut self, value: &V) -> bool {
         let k = &self.settings.k;
@@ -1179,7 +1179,7 @@ impl Producers<'_> {
         Some(self.lookup_at(at, argument_of).surface)
     }
 
-    /// What tells a slot's rows of one name apart (`DeclarationProducer.markers`): an expanded
+    /// What tells a slot's rows of one name apart: an expanded
     /// alias, a generic given arguments, and the generic it is an argument of.
     fn markers(
         &mut self,
@@ -1261,7 +1261,7 @@ impl Producers<'_> {
         Some((file, at))
     }
 
-    /// `BuildContext.alias_rows`: every module-level assignment (file, row) of a name the module
+    /// Every module-level assignment (file, row) of a name the module
     /// binds more than once (once per branch, say), in source order, when each one assigns a
     /// type alias; empty for a name bound once; None when one binding is no type alias.
     fn alias_rows(&mut self, module: Sid, name: Sid) -> Option<Vec<(u32, u32)>> {
@@ -1397,7 +1397,7 @@ impl Producers<'_> {
         }
     }
 
-    /// `DeclarationProducer.expand_alias`: an alias's value into an expansion. A name bound more
+    /// An alias's value into an expansion. A name bound more
     /// than once expands every binding's value, in source order, each looked up where it is
     /// assigned: it stands for the union.
     fn expand_alias(&mut self, alias: Alias, top: bool, expansion: &mut Expansion) {
@@ -1531,7 +1531,7 @@ impl Producers<'_> {
         found
     }
 
-    /// `DeclarationProducer.plain_builtin`: whether a name resolves to a plain builtin; outside a
+    /// Whether a name resolves to a plain builtin; outside a
     /// contract it gets no row.
     fn plain_builtin(&mut self, found: Lookup, name: Sid) -> bool {
         let core = &mut *self.core;
@@ -1713,7 +1713,7 @@ impl Producers<'_> {
         row.ann.as_ref().is_some_and(|ann| self.is_class_var(ann))
     }
 
-    /// `DeclarationProducer.expose_fields`: the annotated class-body rows of a class as slots of
+    /// The annotated class-body rows of a class as slots of
     /// `kind`, the fields of a dataclass-like class (`field:`, of its `__init__`) or the
     /// attributes of a class (`attr:`, of the class: all rows of a class that is no dataclass, the
     /// `ClassVar` rows of one). In a contract only a row directly in a class body is a whole slot.
@@ -1778,7 +1778,7 @@ impl Producers<'_> {
             .is_some_and(|found| !found.is_empty())
     }
 
-    /// `BuildContext.branch_bound`: the first step of a hit's chain whose module binds the name
+    /// The first step of a hit's chain whose module binds the name
     /// more than once (once per branch, say): such a name stands for every one of its bindings.
     fn branch_bound(&mut self, hit: HitId) -> Option<Ent> {
         let chain = self.core.chain(hit).to_vec();
@@ -1797,7 +1797,7 @@ impl Producers<'_> {
         None
     }
 
-    /// `BuildContext.followed_base`: whether a base's bindings are followed: it resolves to a
+    /// Whether a base's bindings are followed: it resolves to a
     /// first-party name that is no class, or through a name bound more than once.
     fn followed_base(&mut self, hit: HitId, resolved: Resolved) -> bool {
         if resolved.res == Res::Resolved && self.core.kind(hit) == HitKind::Variable {
@@ -1806,7 +1806,7 @@ impl Producers<'_> {
         matches!(resolved.res, Res::Resolved | Res::External) && self.branch_bound(hit).is_some()
     }
 
-    /// `BuildContext.hit_classes`: the classes a resolved name stands for, as a base: a class, a
+    /// The classes a resolved name stands for, as a base: a class, a
     /// third-party name (read as a class, as a third-party base is), or a name bound more than
     /// once or to no class whose bindings all name classes. None for anything else.
     fn hit_classes(
@@ -1843,7 +1843,7 @@ impl Producers<'_> {
         }
     }
 
-    /// `BuildContext.binding_classes`: the classes one module-level binding of `name` stands
+    /// The classes one module-level binding of `name` stands
     /// for; None when it is no class.
     fn binding_classes(
         &mut self,
@@ -1886,7 +1886,7 @@ impl Producers<'_> {
         }
     }
 
-    /// `BuildContext.bound_classes`: the classes a module-level name stands for, as a base:
+    /// The classes a module-level name stands for, as a base:
     /// every binding of it names a class, or a subscript of one (a name bound once per branch
     /// takes the union). Sorted; None when one binding is no class, on a cycle, or past the alias
     /// depth.
@@ -1976,7 +1976,7 @@ impl Producers<'_> {
         named_in(&self.settings.dataclass_decorators, surface, target)
     }
 
-    /// `DeclarationProducer.has_dataclass_base`: whether a class or one of its ancestors names a
+    /// Whether a class or one of its ancestors names a
     /// base of `dataclass_bases`, by spelling or target. Worked out once per class; a file that
     /// asks again reads what the answer read.
     fn has_dataclass_base(&mut self, owner: usize, idx: u32) -> bool {
@@ -2498,8 +2498,8 @@ impl Producers<'_> {
         self.hand_outs.insert(self.scopes[owner].module, found);
     }
 
-    /// The line and column of a module-level value the producer expands as a type alias
-    /// (`DeclarationProducer.type_alias`): a subscript, a `|` union, or the bare name of a
+    /// The line and column of a module-level value the producer expands as a type alias:
+    /// a subscript, a `|` union, or the bare name of a
     /// builtin type. Another name or attribute chain is left out, so a member past a class stays
     /// unknown.
     fn type_alias(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
@@ -2523,7 +2523,7 @@ impl Producers<'_> {
     }
 
     /// The rows a handed-out type alias expands to, as a slot `alias` of the name it is handed
-    /// out by, at the line that hands it out (`DeclarationProducer.expose_alias`).
+    /// out by, at the line that hands it out.
     fn expose_alias(&mut self, owner: usize, bound: Sid, clause: Sid, line: u32, col: u32) {
         let rows = SlotRows {
             site: self.module_site(owner, line, col),
@@ -2540,7 +2540,7 @@ impl Producers<'_> {
     }
 
     /// Writes the rows of every listed or handed-out value that is a type alias, and takes those
-    /// values out of what the hand-out record leaves unknown (`DeclarationProducer.expose_aliases`).
+    /// values out of what the hand-out record leaves unknown.
     fn expose_aliases(
         &mut self,
         owner: usize,

@@ -12,11 +12,10 @@ from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
 from hoglint.plugins import PLUGIN_ROOTS
-from hoglint.rules.base import RuleContext
-from hoglint.rules.engine import Engine
 from hoglint.source import GraphSource
+from native.require import native_module
 
-from rules.support import GraphBuilder, write_config
+from rules.support import GraphBuilder, native_graph, write_config
 from rules.test_compare import git_in
 
 CONFIG = """
@@ -62,7 +61,7 @@ def commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Commands:
     built = graph()
 
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return built
+        return native_graph(built)
 
     monkeypatch.setattr(GraphSource, "build", build)
     write_config(tmp_path / "repo", CONFIG)
@@ -107,6 +106,13 @@ def test_a_crash_is_an_internal_error_with_exit_2_never_1(
     assert printed.startswith("internal error:\nTraceback") and "KeyError: 'boom'" in printed
 
 
+def test_the_python_engine_is_refused_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exited:
+        main(["--repo", str(tmp_path), "--engine", "python", "explain-config"])
+    assert exited.value.code == 2
+    assert "the python engine is gone" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "git_dir, error",
     [
@@ -147,7 +153,7 @@ def test_a_policy_root_apart_from_the_code_asks_about_the_code_roots_declared_pa
     packages = GraphBuilder().package("products.billing", "products.alerts").graph
 
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return packages
+        return native_graph(packages)
 
     monkeypatch.setattr(GraphSource, "build", build)
     policy, code = tmp_path / "policy", tmp_path / "code"
@@ -167,14 +173,30 @@ def test_a_policy_root_apart_from_the_code_asks_about_the_code_roots_declared_pa
         PLUGIN_ROOTS.holds(run.files_root, "products/billing/notes.txt")
 
 
-def test_explain_edge_lists_rules_that_read_every_edge_kind(
-    commands: Commands, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run = commands.runner.run(commands.repo)
-    ctx = RuleContext(run.config, run.graph, Engine(run.config, run.graph).labeler)
-    edge = run.graph.edges[0]
-    assert commands.explain(f"edge:{edge.run_id(ctx.ordinal(edge))}") == 0
-    assert "rule     unresolved-anything" in capsys.readouterr().out
+def test_explain_edge_lists_rules_that_read_every_edge_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    native_module()
+    repo = tmp_path / "repo"
+    write_config(repo, CONFIG)
+    for path, text in {
+        "products/__init__.py": "",
+        "products/billing/__init__.py": "",
+        "products/billing/logic.py": "def total():\n    return 1\n",
+        "products/alerts/__init__.py": "",
+        "products/alerts/logic.py": "from products.billing.logic import total\n",
+    }.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", ".")
+    (tmp_path / "work").mkdir()
+    commands = Commands(repo, tmp_path / "work", memo=False)
+    run = commands.runner.run(repo)
+    ordinals = run.result.labeler.index.ordinals
+    edge = next(edge for edge in run.graph.edges if edge.kind == "import")
+    assert commands.explain(f"edge:{edge.run_id(ordinals.get(edge.handle, 0))}") == 0
+    out = capsys.readouterr().out
+    assert "rule     unresolved-anything" in out
+    assert "select: edge.resolution == 'unresolved' -> false" in out
 
 
 MEMO_CONFIG = """
@@ -330,7 +352,7 @@ def test_a_stored_summary_stands_in_for_a_check_of_its_tree_only_when_the_output
     shows: str | None,
 ) -> None:
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return memo_graph(staged)
+        return native_graph(memo_graph(staged))
 
     monkeypatch.setattr(GraphSource, "build", build)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -371,7 +393,7 @@ def test_a_source_the_run_could_not_read_blocks_and_its_summary_is_never_stored(
     reads_fail = [True]
 
     def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
-        return memo_graph(staged, read_error=bool(reads_fail))
+        return native_graph(memo_graph(staged, read_error=bool(reads_fail)))
 
     monkeypatch.setattr(GraphSource, "build", build)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the mechanical checks of a change side by side and prints one verdict table, with a log
 # file per check. Exit 0 only when every check passed. See `bin/prove --help` for the real-size
-# options (snapshots, a base rev, engine parity, the replay sample).
+# options (snapshots, a base rev, the replay sample).
 #
 # Usage: bin/prove [options]
 # Env:   HOGLINT_PYTHON (default: the repo's .venv), the Python that runs the checks and the suite.

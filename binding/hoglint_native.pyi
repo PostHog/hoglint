@@ -115,7 +115,7 @@ class Link:
     def ids_spelled(self, kind: str, names: list[str]) -> bytes: ...
     def rows_named(self, kind: str, names: list[str]) -> list[tuple[int, bytes]]:
         """Rows of `calls` or `callees` in the analyzed files whose callee's last dotted name is
-        one of `names`, as (file id, row JSON) in fact order: what `PackQueries.calls_named` reads."""
+        one of `names`, as (file id, row JSON) in fact order: what `NativePackQueries.calls_named` reads."""
     def import_rows_named(self, names: list[str]) -> list[tuple[int, ImportRow]]:
         """`imports` rows in the analyzed files that import one of `names` by name (`from x
         import name`), as (file id, row) in fact order, then row order."""

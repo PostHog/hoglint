@@ -1,0 +1,32 @@
+# How `and`, `or` and `not` carry truth (Kleene logic). Both sides read this table:
+# tests/native/test_rule_relations.py composes a selection's truth from its parts with it, and
+# src/link/rules/selector.rs holds the evaluator's `and`, `or`, `not` and the staged `and` of a
+# selection's parts to it.
+#
+# Columns: connective, left, right (`-` for `not`), truth.
+# The reason: a part hoglint cannot tell stays unknown unless the other part decides alone, so an
+# unknown never reads as clean.
+
+and   true     true     true
+and   true     false    false
+and   true     unknown  unknown
+and   false    true     false
+and   false    false    false
+and   false    unknown  false
+and   unknown  true     unknown
+and   unknown  false    false
+and   unknown  unknown  unknown
+
+or    true     true     true
+or    true     false    true
+or    true     unknown  true
+or    false    true     true
+or    false    false    false
+or    false    unknown  unknown
+or    unknown  true     true
+or    unknown  false    unknown
+or    unknown  unknown  unknown
+
+not   true     -        false
+not   false    -        true
+not   unknown  -        unknown

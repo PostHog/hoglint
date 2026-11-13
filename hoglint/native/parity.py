@@ -1,6 +1,6 @@
-"""Semantic parity of the native engine against the Python engine, field by field.
+"""The ten parity tables of a check, and the compare of two dumps, field by field.
 
-Each engine runs a full check in its own process and dumps normalized outputs: every edge
+A check runs in its own process and dumps normalized outputs: every edge
 (core and pack) with every field and attr, symbol facts, modules, failed producers, findings
 with their witnesses, incompletes, levels, scan lines, the coupling count of every edge, and the
 run summary as the store keeps it, built by the code `check` and `compare` use (with triples,
@@ -9,12 +9,10 @@ and as multisets. Exit 0 when nothing differs. A dump step that fails fails the 
 is ever left empty because something went wrong.
 
 Usage:
-  python -m hoglint.native.parity [--repo <root>] [--work <dir>]
-      run both engines and compare
   python -m hoglint.native.parity --determinism N [--repo <root>] [--work <dir>]
-      run the native engine N times, each with its own hash seed, thread count and empty fact
-      cache (so extraction runs at that thread count too), and compare each to the first
-  python -m hoglint.native.parity dump --engine native|python --out <dir> [--repo <root>]
+      run N checks, each with its own hash seed, thread count and empty fact cache (so
+      extraction runs at that thread count too), and compare each to the first
+  python -m hoglint.native.parity dump --out <dir> [--repo <root>]
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import Finding, Graph
 from hoglint.native.normal import FIELDS, Row, edge_row
-from hoglint.native.source import ENGINES, batch_mode, graph_source
+from hoglint.native.source import NativeGraphSource, batch_mode
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
@@ -60,7 +58,7 @@ LIST_OUTPUTS = (
     "stored-summary",
 )
 VALUE_OUTPUTS = ("levels",)
-# The stored summary's key: both engines' summaries are stored under one, so they compare.
+# The stored summary's key: every dump's summary is stored under one, so two dumps compare.
 DUMP_ENVELOPE = Envelope("dump-tree", "dump-engine", "dump-policy", "dump-framework")
 # Every n-th module, sorted, is the rename scope whose couplings and witnesses the summary keeps.
 SCOPE_STEP = 50
@@ -232,11 +230,10 @@ class Tables:
 
 
 class Dump:
-    """One engine's check over a repo, written as normalized files into `out`."""
+    """One check over a repo, written as normalized files into `out`."""
 
-    def __init__(self, repo: Path, engine: str, out: Path, work: Path) -> None:
+    def __init__(self, repo: Path, out: Path, work: Path) -> None:
         self.repo = repo
-        self.engine = engine
         self.out = out
         self.work = work
         self.timings: dict[str, float] = {}
@@ -247,13 +244,13 @@ class Dump:
         return now
 
     def check(self) -> tuple[Graph, RunResult, ExceptionsFile, Path]:
-        batch_mode(self.engine)
+        batch_mode()
         started = time.perf_counter()
         config = load_config(self.repo, self.repo / CONFIG_FILE)
-        source = graph_source(self.engine, self.work)
+        source = NativeGraphSource(self.work)
         graph = source.build(self.repo, config)
         if not graph.modules:
-            raise RuntimeError(f"the {self.engine} engine read no module under {self.repo}: nothing to compare")
+            raise RuntimeError(f"the engine read no module under {self.repo}: nothing to compare")
         started = self.lap("graph", started)
         ledger = LedgerFile.read(self.repo / config.ledger.file)
         exceptions = ExceptionsFile.read(self.repo / config.ledger.exceptions, config)
@@ -317,8 +314,8 @@ def compare_dumps(
     return diffs
 
 
-def dump_in_process(repo: Path, engine: str, out: Path, env: dict[str, str] | None = None) -> None:
-    command = [sys.executable, "-m", "hoglint.native.parity", "dump", "--engine", engine, "--out", str(out)]
+def dump_in_process(repo: Path, out: Path, env: dict[str, str] | None = None) -> None:
+    command = [sys.executable, "-m", "hoglint.native.parity", "dump", "--out", str(out)]
     subprocess.run([*command, "--repo", str(repo)], check=True, env={**os.environ, **(env or {})})
 
 
@@ -344,10 +341,9 @@ def report(title: str, diffs: list[RowDiff], left: Path, right: Path) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", nargs="?", choices=("compare", "dump"), default="compare")
+    parser.add_argument("command", nargs="?", choices=("dump",))
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--work", type=Path)
-    parser.add_argument("--engine", choices=ENGINES, default="native")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--determinism", type=int, default=0)
     args = parser.parse_args()
@@ -355,22 +351,18 @@ def main() -> None:
     work = args.work or Path(tempfile.mkdtemp(prefix="hoglint-native-parity-"))
     work.mkdir(parents=True, exist_ok=True)
     if args.command == "dump":
-        Dump(repo, args.engine, args.out or work / args.engine, work).run()
+        Dump(repo, args.out or work / "native", work).run()
         return
+    if not args.determinism:
+        parser.error("give `dump` or `--determinism N`")
     ok = True
-    if args.determinism:
-        first = work / "native-0"
-        dump_in_process(repo, "native", first, determinism_env(work, 0))
-        for run in range(1, args.determinism):
-            other = work / f"native-{run}"
-            env = determinism_env(work, run)
-            dump_in_process(repo, "native", other, env)
-            ok = report(f"native run 0 vs run {run} ({env})", compare_dumps(first, other), first, other) and ok
-    else:
-        python, native = work / "python", work / "native"
-        dump_in_process(repo, "python", python)
-        dump_in_process(repo, "native", native)
-        ok = report("python (left) vs native (right)", compare_dumps(python, native), python, native)
+    first = work / "native-0"
+    dump_in_process(repo, first, determinism_env(work, 0))
+    for run in range(1, args.determinism):
+        other = work / f"native-{run}"
+        env = determinism_env(work, run)
+        dump_in_process(repo, other, env)
+        ok = report(f"run 0 vs run {run} ({env})", compare_dumps(first, other), first, other) and ok
     sys.exit(0 if ok else 1)
 
 

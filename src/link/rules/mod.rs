@@ -1,10 +1,13 @@
-//! Rule evaluation over the link (D39, phase N1): labels, kinds and exports of the run, and
-//! `EdgeRule.decide` for every candidate edge and each of its destinations, with no grouping.
+//! Rule evaluation over the link (D39, phase N1): labels, kinds and exports of the run, and the
+//! judgment of every candidate edge and each of its destinations, with no grouping.
 //!
 //! Python hands over a plan (`plan.rs`): the config as data. The evaluator reads the graph's
 //! modules, symbols and edges from the link, computes every module's labels once, and judges
-//! edges in parallel chunks; the output is the same at any thread count. The Python engine stays
-//! the meaning: each function here names the Python code it follows.
+//! edges in parallel chunks; the output is the same at any thread count. It is the only judge:
+//! Python words the rows it gives. A comment that names Python code or "the Python engine"
+//! names the code this one was ported from, which is retired; the reading it describes is held by
+//! the stored runs and tables (`tests/native/generated_runs.jsonl`, `tests/model_repo/`) and by
+//! `tests/rules/judgment.txt`.
 
 pub mod conflicts;
 pub mod coverage;
@@ -12,6 +15,7 @@ pub mod cycle;
 pub mod edges;
 pub mod entities;
 pub mod env;
+pub mod explain;
 pub mod export;
 pub mod glob;
 pub mod labels;
@@ -33,8 +37,8 @@ use self::export::{
 };
 use self::labels::{Cell, Domain, Export, Field, FieldKind, Labels};
 use self::plan::{
-    CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, VerdictPlan,
-    check_columns,
+    CoreBasesPlan, EdgesPlan, ModePlan, NodePlan, Plan, RulePlan, SetValue, UnknownRefsPlan,
+    VerdictPlan, check_columns,
 };
 use self::selector::{Compiler, EdgeField, EndField, Node, Operand, Reading, Ref};
 use self::signature::Signature;
@@ -133,6 +137,23 @@ pub enum Judgment {
 }
 
 impl Judgment {
+    const ALL: [Judgment; 6] = [
+        Judgment::Clean,
+        Judgment::Unresolved,
+        Judgment::UnknownSelection,
+        Judgment::UnknownViolation,
+        Judgment::Violation,
+        Judgment::UnknownType,
+    ];
+
+    /// The judgment a name in a plan names.
+    fn named(name: &str) -> Result<Judgment, String> {
+        Judgment::ALL
+            .into_iter()
+            .find(|judgment| judgment.name() == name)
+            .ok_or_else(|| format!("a judgment the evaluator does not know: {name}"))
+    }
+
     /// The judgment's name, its value in `rules.base.Judgment`.
     pub fn name(self) -> &'static str {
         match self {
@@ -144,33 +165,169 @@ impl Judgment {
             Judgment::UnknownType => "unknown-type",
         }
     }
-
-    /// Whether a row of this judgment carries the rule's identity: Python reports any other
-    /// judgment with its own code.
-    pub fn has_identity(self) -> bool {
-        matches!(self, Judgment::Violation | Judgment::UnknownType)
-    }
 }
 
-/// One destination of one edge a rule does not judge clean: what Python needs to make its
-/// finding without judging again.
+/// One destination of one edge a rule does not judge clean: what Python words its finding or
+/// incomplete item from, with no judgment of its own.
 pub struct Row {
     pub edge: u32,
     /// The destination's place among the edge's destinations.
     pub target: u32,
     pub judgment: Judgment,
-    /// The identity columns of a violation or an unknown type, rendered as `rules.base.project`
-    /// renders them; empty for any other judgment, which the rule's own code reports.
+    /// The identity columns, rendered as `rules.base.project` renders them, for a judgment the
+    /// rule words as a finding (`Judged::identified`); else empty.
     pub identity: Vec<String>,
     /// The source module (the finding's owner module) and the destination's module.
     pub src_module: Sid,
     pub dst_module: Option<Sid>,
+    pub words: Words,
+}
+
+/// What a message names of one destination besides its edge and modules: the dotted names of
+/// the two ends (`Endpoint.symbol`), the edge's label (`edge.label`), and the refs the judgment
+/// read as unknown, joined as the message names them (empty for any other judgment).
+pub struct Words {
+    pub src_symbol: Option<String>,
+    pub dst_symbol: Option<String>,
+    pub label: String,
+    pub unknown: String,
+}
+
+impl Words {
+    fn of(env: &Env, unknown: String) -> Words {
+        let cx = env.cx;
+        Words {
+            src_symbol: cx.symbol_text(env.src.symbol).map(|name| name.into_owned()),
+            dst_symbol: cx.symbol_text(env.dst.symbol).map(|name| name.into_owned()),
+            label: render(&evaluate_ref(Ref::Edge(EdgeField::Label), env)),
+            unknown,
+        }
+    }
+}
+
+/// A rule's identity columns, and the judgments whose rows Python words as findings: only their
+/// rows carry the identity, so an identity column is read where a finding needs it.
+pub struct Identity {
+    fields: Vec<Ref>,
+    identified: Vec<Judgment>,
+}
+
+impl Identity {
+    fn new(
+        compiler: &Compiler,
+        fields: &[Vec<String>],
+        identified: &[String],
+    ) -> Result<Identity, String> {
+        Ok(Identity {
+            fields: fields.iter().map(|path| compiler.reference(path)).collect(),
+            identified: identified
+                .iter()
+                .map(|name| Judgment::named(name))
+                .collect::<Result<Vec<_>, String>>()?,
+        })
+    }
+
+    /// The identity of a row of `judgment` in `env`, rendered as `rules.base.project` renders
+    /// it; empty for a judgment Python words as no finding.
+    fn of(&self, judgment: Judgment, env: &Env) -> Vec<String> {
+        if !self.identified.contains(&judgment) {
+            return Vec::new();
+        }
+        self.columns(env)
+    }
+
+    fn columns(&self, env: &Env) -> Vec<String> {
+        self.fields
+            .iter()
+            .map(|field| render(&evaluate_ref(*field, env)))
+            .collect()
+    }
+
+    fn reads_ordinal(&self) -> bool {
+        self.fields.iter().any(|field| is_ordinal(*field))
+    }
+}
+
+/// What a row of a reach or cycle rule names besides its edge and source: its identity, its
+/// destination's module and its words.
+pub struct Named {
+    pub identity: Vec<String>,
+    pub dst_module: Option<Sid>,
+    pub words: Words,
+}
+
+impl Named {
+    fn of(identity: Vec<String>, env: &Env) -> Named {
+        Named {
+            identity,
+            dst_module: env.dst.module,
+            words: Words::of(env, String::new()),
+        }
+    }
+}
+
+/// The refs a message names where a judgment reads them unknown (`EdgeRule.unknown_refs`): per
+/// selector, each ref once in the selector's order, with its dotted text.
+pub struct UnknownRefs {
+    /// `from`, then `select`: an unknown selection names the first that reads an unknown.
+    selection: Vec<Vec<(Ref, String)>>,
+    /// `deny`, `allow`, `require`: an unknown violation names every one that reads an unknown.
+    verdict: Vec<Vec<(Ref, String)>>,
+}
+
+impl UnknownRefs {
+    fn new(compiler: &Compiler, plan: &UnknownRefsPlan) -> UnknownRefs {
+        let groups = |groups: &[Vec<Vec<String>>]| {
+            groups
+                .iter()
+                .map(|refs| {
+                    refs.iter()
+                        .map(|path| (compiler.reference(path), path.join(".")))
+                        .collect()
+                })
+                .collect()
+        };
+        UnknownRefs {
+            selection: groups(&plan.selection),
+            verdict: groups(&plan.verdict),
+        }
+    }
+
+    fn named(refs: &[(Ref, String)], env: &Env) -> String {
+        refs.iter()
+            .filter(|(field, _)| matches!(evaluate_ref(*field, env), Value::Unknown))
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The text a message of `judgment` names its unknown refs by.
+    fn text(&self, judgment: Judgment, env: &Env) -> String {
+        match judgment {
+            Judgment::UnknownSelection => self
+                .selection
+                .iter()
+                .map(|refs| Self::named(refs, env))
+                .find(|named| !named.is_empty())
+                .unwrap_or_default(),
+            Judgment::UnknownViolation => self
+                .verdict
+                .iter()
+                .map(|refs| Self::named(refs, env))
+                .filter(|named| !named.is_empty())
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => String::new(),
+        }
+    }
 }
 
 /// One compiled rule: its id, and its mode with what that mode reads.
 pub struct Rule {
     pub id: String,
     pub kind: RuleKind,
+    /// A rule over edges: its selectors by config key, read one by one by `explain edge:`.
+    pub selectors: Vec<(String, Node)>,
 }
 
 /// A rule's mode (`RuleType.NATIVE_MODE`) and what it reads.
@@ -202,7 +359,8 @@ pub struct Edges {
 /// A rule judged per edge: edge, entrypoint, signature, use-shape and edge inventory rules.
 pub struct Judged {
     edges: Edges,
-    identity: Vec<Ref>,
+    identity: Identity,
+    unknown_refs: UnknownRefs,
     unless: Option<Node>,
     /// What a signature rule adds.
     signature: Option<Signature>,
@@ -229,6 +387,7 @@ pub enum Verdict {
 /// A reach rule (`ReachPrimitive`).
 pub struct Reach {
     edges: Edges,
+    identity: Identity,
     /// Its `from`.
     start: Option<Node>,
     deny: Option<Node>,
@@ -240,6 +399,7 @@ pub struct Reach {
 /// A cycle rule (`CyclePrimitive`): its group field on each end.
 pub struct Cycle {
     edges: Edges,
+    identity: Identity,
     group: (Ref, Ref),
 }
 
@@ -756,11 +916,8 @@ impl Rules {
         let kind = match &plan.mode {
             ModePlan::Judge(found) => RuleKind::Judge(Judged {
                 edges: edges(&found.edges)?,
-                identity: found
-                    .identity
-                    .iter()
-                    .map(|path| edge.reference(path))
-                    .collect(),
+                identity: Identity::new(edge, &found.identity, &found.identified)?,
+                unknown_refs: UnknownRefs::new(edge, &found.unknown_refs),
                 unless: edge.optional(&found.unless)?,
                 signature: found.signature.as_ref().map(|signature| Signature {
                     unknown_types: signature.unknown_types.clone(),
@@ -788,6 +945,7 @@ impl Rules {
             }),
             ModePlan::Reach(found) => RuleKind::Reach(Reach {
                 edges: edges(&found.edges)?,
+                identity: Identity::new(edge, &found.identity, &found.identified)?,
                 start: edge.optional(&found.start)?,
                 deny: edge.optional(&found.deny)?,
                 unless: edge.optional(&found.unless)?,
@@ -797,6 +955,7 @@ impl Rules {
                 let path = |root: &str| [root.to_string(), found.group.clone()];
                 RuleKind::Cycle(Cycle {
                     edges: edges(&found.edges)?,
+                    identity: Identity::new(edge, &found.identity, &found.identified)?,
                     group: (edge.reference(&path("src")), edge.reference(&path("dst"))),
                 })
             }
@@ -837,6 +996,11 @@ impl Rules {
         Ok(Rule {
             id: plan.id.clone(),
             kind,
+            selectors: plan
+                .selectors
+                .iter()
+                .map(|(name, node)| Ok((name.clone(), edge.node(node)?)))
+                .collect::<Result<Vec<_>, String>>()?,
         })
     }
 
@@ -942,6 +1106,14 @@ impl Rules {
         found.into_iter().flatten().collect()
     }
 
+    /// The environment of destination `target` of edge `id`, as `role` reads its destinations.
+    fn env_at<'a>(&'a self, link: &'a Link, role: Role, id: u32, target: u32) -> Env<'a> {
+        let cx = Cx { link, rules: self };
+        let mut dsts = Vec::with_capacity(2);
+        cx.dst_endpoints(id, role, &mut dsts);
+        Env::new(cx, Some(id), cx.src_endpoint(id), dsts[target as usize])
+    }
+
     /// `rows`, which come grouped by edge in id order, with the edges in the order rule `id`
     /// judges them; an edge's rows keep their order.
     fn in_rule_order<T>(
@@ -987,14 +1159,8 @@ impl Rules {
                 if judgment == Judgment::Clean {
                     continue;
                 }
-                let identity = if judgment.has_identity() {
-                    rule.identity
-                        .iter()
-                        .map(|field| render(&evaluate_ref(*field, &env)))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let identity = rule.identity.of(judgment, &env);
+                let unknown = rule.unknown_refs.text(judgment, &env);
                 out.push(Row {
                     edge: id,
                     target: target as u32,
@@ -1002,6 +1168,7 @@ impl Rules {
                     identity,
                     src_module: src.module.unwrap_or_default(),
                     dst_module: dst.module,
+                    words: Words::of(&env, unknown),
                 });
             }
         });
@@ -1178,7 +1345,17 @@ impl Rule {
 
     fn reads_ordinal(&self) -> bool {
         self.nodes().into_iter().any(|node| node.reads(is_ordinal))
-            || matches!(&self.kind, RuleKind::Judge(rule) if rule.identity.iter().any(|field| is_ordinal(*field)))
+            || self.identity().is_some_and(Identity::reads_ordinal)
+    }
+
+    /// The identity of a rule whose rows carry one the evaluator renders.
+    fn identity(&self) -> Option<&Identity> {
+        match &self.kind {
+            RuleKind::Judge(rule) => Some(&rule.identity),
+            RuleKind::Reach(rule) => Some(&rule.identity),
+            RuleKind::Cycle(rule) => Some(&rule.identity),
+            _ => None,
+        }
     }
 
     /// Every ref the rule reads: its selectors, identity columns, group field, covers, an
@@ -1188,8 +1365,11 @@ impl Rule {
         for node in self.nodes() {
             node.refs(&mut out);
         }
+        if let Some(identity) = self.identity() {
+            out.extend(&identity.fields);
+        }
         match &self.kind {
-            RuleKind::Judge(rule) => out.extend(&rule.identity),
+            RuleKind::Judge(_) | RuleKind::Reach(_) => {}
             RuleKind::Cycle(rule) => out.extend([rule.group.0, rule.group.1]),
             RuleKind::Coverage(covers) => {
                 for cover in covers {
@@ -1198,7 +1378,6 @@ impl Rule {
             }
             RuleKind::Entities(rule) => rule.refs(&mut out),
             RuleKind::Export(rule) => rule.refs(&mut out),
-            RuleKind::Reach(_) => {}
         }
         out
     }
@@ -1279,24 +1458,12 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
 /// `EdgeRule.decide` for one environment, and `SignaturePrimitive.decide` for a signature rule.
 /// `deny`, `allow` and `require` are all judged, as `EdgeRule.violation` judges them.
 pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
-    let selected = rule.edges.staged.truth(env);
-    if selected == Truth::False {
-        return Judgment::Clean;
-    }
-    if let (Some(signature), Some(id)) = (&rule.signature, env.edge)
-        && !env.dst.unresolved
-        && signature.unknown_type(&env.cx, id, &env.dst)
-    {
-        return Judgment::UnknownType;
-    }
-    if env.dst.unresolved {
-        return Judgment::Unresolved;
-    }
-    if selected == Truth::Unknown {
-        return Judgment::UnknownSelection;
-    }
-    let verdict = match &rule.verdict {
-        Verdict::Inventory => return Judgment::Violation,
+    let unknown_type = || match (&rule.signature, env.edge) {
+        (Some(signature), Some(id)) => signature.unknown_type(&env.cx, id, &env.dst),
+        _ => false,
+    };
+    let verdict = || match &rule.verdict {
+        Verdict::Inventory => Truth::True,
         Verdict::DefaultAllow => truth(&EXPORTED, env).negate(),
         Verdict::UseShape(use_shape) => use_shape.violation(env),
         Verdict::Predicates {
@@ -1321,12 +1488,43 @@ pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
             }
         }
     };
+    let unless = || rule.unless.as_ref().map(|unless| truth(unless, env));
+    judgment(
+        rule.edges.staged.truth(env),
+        env.dst.unresolved,
+        unknown_type,
+        verdict,
+        unless,
+    )
+}
+
+/// The judgment of one destination from what a rule reads of it; `tests/rules/judgment.txt`
+/// holds it. An input after `unresolved` is read only where the judgment depends on it, as the
+/// Python engine read it: a label set two ways is met only where a judgment reads it.
+pub fn judgment(
+    selected: Truth,
+    unresolved: bool,
+    unknown_type: impl FnOnce() -> bool,
+    verdict: impl FnOnce() -> Truth,
+    unless: impl FnOnce() -> Option<Truth>,
+) -> Judgment {
+    if selected == Truth::False {
+        return Judgment::Clean;
+    }
+    if !unresolved && unknown_type() {
+        return Judgment::UnknownType;
+    }
+    if unresolved {
+        return Judgment::Unresolved;
+    }
+    if selected == Truth::Unknown {
+        return Judgment::UnknownSelection;
+    }
+    let verdict = verdict();
     if verdict == Truth::False {
         return Judgment::Clean;
     }
-    if let Some(unless) = &rule.unless
-        && truth(unless, env) == Truth::True
-    {
+    if unless() == Some(Truth::True) {
         return Judgment::Clean;
     }
     if verdict == Truth::Unknown {
@@ -1356,4 +1554,82 @@ fn ordinals(link: &Link, repeats: &[(u32, u32)]) -> Vec<u32> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Judgment, judgment};
+    use crate::link::rules::value::Truth;
+    use std::cell::Cell;
+
+    /// The table of `judgment` (`tests/rules/judgment.txt`).
+    const JUDGMENT: &str = include_str!("../../../tests/rules/judgment.txt");
+
+    fn truth(name: &str) -> Truth {
+        match name {
+            "true" => Truth::True,
+            "false" => Truth::False,
+            "unknown" => Truth::Unknown,
+            other => panic!("not a truth: {other}"),
+        }
+    }
+
+    fn judgment_named(name: &str) -> Judgment {
+        Judgment::named(name).unwrap()
+    }
+
+    #[test]
+    fn a_judgment_follows_its_table_and_reads_only_the_inputs_it_needs() {
+        let mut rows = 0;
+        for line in JUDGMENT.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let [
+                selected,
+                unresolved,
+                unknown_type,
+                verdict,
+                unless,
+                expected,
+            ] = line.split_whitespace().collect::<Vec<_>>()[..]
+            else {
+                panic!("a row needs six columns: {line}");
+            };
+            // An input the row marks `-` must not be read: `read` names each one that was.
+            let read: Cell<Vec<&str>> = Cell::new(Vec::new());
+            let note = |name: &'static str| {
+                let mut seen = read.take();
+                seen.push(name);
+                read.set(seen);
+            };
+            let found = judgment(
+                truth(selected),
+                unresolved == "yes",
+                || {
+                    note("unknown_type");
+                    unknown_type == "yes"
+                },
+                || {
+                    note("verdict");
+                    truth(verdict)
+                },
+                || {
+                    note("unless");
+                    (unless != "none").then(|| truth(unless))
+                },
+            );
+            assert_eq!(found, judgment_named(expected), "{line}");
+            let read = read.take();
+            for (name, column) in [
+                ("unknown_type", unknown_type),
+                ("verdict", verdict),
+                ("unless", unless),
+            ] {
+                assert_eq!(read.contains(&name), column != "-", "{name} read: {line}");
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 16, "the table has {rows} rows");
+    }
 }

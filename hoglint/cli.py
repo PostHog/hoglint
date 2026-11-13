@@ -32,13 +32,13 @@ from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.loader import PACK_PREFIX
 from hoglint.config.schema import as_tuple
-from hoglint.facts import Extractor
+from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import (
     ENGINE,
-    ENGINE_PYTHON,
+    ENGINE_NATIVE,
     ENGINE_SOURCES,
     NATIVE,
     PROTOCOL,
@@ -61,11 +61,13 @@ from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
-from hoglint.native.source import ENGINES, batch_mode, graph_source
-from hoglint.rules.base import EdgeRule, RuleContext
+from hoglint.native.bridge import engine_errors
+from hoglint.native.labels import NativeLabeler
+from hoglint.native.source import NativeGraphSource, batch_mode
+from hoglint.rules.base import EdgeRule
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
-from hoglint.selectors import Selector, State
+from hoglint.selectors import State
 from hoglint.source import GraphSource
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -473,17 +475,15 @@ class CheckReport:
 class LocalEngine:
     """The engine this process runs: its id, its extractor, and the envelope of one of its runs."""
 
-    def __init__(
-        self, name: str = ENGINE_PYTHON, digests: InputDigests | None = None, stores: RunStores | None = None
-    ) -> None:
-        self.name = name
+    def __init__(self, digests: InputDigests | None = None, stores: RunStores | None = None) -> None:
+        self.name = ENGINE_NATIVE
         self.frameworks: dict[tuple[str, ...], str] = {}
         self.digests = digests or InputDigests(cache_root(), stores)
 
     @cached_property
     def binary(self) -> Path:
         try:
-            return Extractor.find_binary()
+            return find_binary()
         except FileNotFoundError as error:
             raise EngineError(str(error)) from error
 
@@ -693,7 +693,7 @@ class Baselines:
         except subprocess.CalledProcessError:
             ledger = LedgerFile(source=ABSENT)
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
-        runner = Runner(graph_source(self.engine.name, work, self.store.stores))
+        runner = Runner(NativeGraphSource(work, self.store.stores))
         run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
         return summary_of(run, envelope, with_triples=False)
 
@@ -768,17 +768,16 @@ class Commands:
         self,
         repo: Path,
         work_dir: Path,
-        engine: str = ENGINE_PYTHON,
         today: datetime.date | None = None,
         memo: bool = True,
     ) -> None:
         self.repo = repo
         self.work_dir = work_dir
         self.stores = RunStores.of_environment()
-        self.source: GraphSource = graph_source(engine, work_dir, self.stores)
+        self.source: GraphSource = NativeGraphSource(work_dir, self.stores)
         self.runner = Runner(self.source, today)
         self.snapshots = Snapshots(repo, work_dir)
-        self.engine = LocalEngine(engine, stores=self.stores)
+        self.engine = LocalEngine(stores=self.stores)
         self.summaries = SummaryStore(stores=self.stores)
         self.baselines = Baselines(self.snapshots, self.engine, self.summaries)
         self.base_engines = BaseEngines(repo, work_dir, self.engine, ExtractorStore(stores=self.stores))
@@ -883,8 +882,13 @@ class Commands:
         return 0
 
     def explain_edge(self, run: Run, run_id: str) -> int:
-        ctx = RuleContext(run.config, run.graph, run.result.labeler, run.root)
-        edge = next((e for e in run.graph.edges if e.run_id(ctx.ordinal(e)) == run_id), None)
+        """Each rule over edges that sees the edge, and per destination the truth of each of its
+        selectors, as the evaluator reads them."""
+        labeler = run.result.labeler
+        if not isinstance(labeler, NativeLabeler) or labeler.evaluator is None:
+            raise EngineError("explain edge: needs a run of the native evaluator")
+        ordinals = labeler.index.ordinals
+        edge = next((e for e in run.graph.edges if e.run_id(ordinals.get(e.handle, 0)) == run_id), None)
         if edge is None:
             sys.stderr.write(f"no edge with id {run_id}\n")
             return 2
@@ -894,20 +898,14 @@ class Commands:
         sys.stdout.write(
             f"         resolution={edge.resolution.value} contexts={sorted(c.value for c in edge.contexts)}\n"
         )
-        for spec in run.config.rules.values():
-            primitive = primitive_of(spec)
-            if not issubclass(primitive, EdgeRule):
+        for at, spec in enumerate(run.config.rules.values()):
+            if not issubclass(primitive_of(spec), EdgeRule):
                 continue
-            rule = primitive(ctx, spec)
-            if not rule.sees(edge):
-                continue
-            for env in rule.envs_of(edge):
-                parts = []
-                for name in ("from_", "select", "deny", "allow", "require", "unless"):
-                    selector: Selector | None = getattr(spec, name)
-                    if selector is not None:
-                        parts.append(f"{name.rstrip('_')}: {selector.source} -> {selector.evaluate(env.resolve).value}")
-                sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {env.dst.symbol or env.dst.module})\n")
+            with engine_errors():
+                found = labeler.evaluator.explain_edge(at, edge.handle)
+            for dst_symbol, dst_module, truths in found or ():
+                parts = [f"{name.rstrip('_')}: {getattr(spec, name).source} -> {truth}" for name, truth in truths]
+                sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {dst_symbol or dst_module})\n")
                 sys.stdout.write("".join(f"           {part}\n" for part in parts))
         for finding in run.result.findings():
             if edge in finding.witnesses:
@@ -1130,13 +1128,23 @@ class Commands:
         return summary
 
 
+def engine_name(value: str) -> str:
+    """`--engine native` is the one engine: a newer `compare` passes it to an older base's scan.
+    Any other name is refused."""
+    if value != ENGINE_NATIVE:
+        raise argparse.ArgumentTypeError(f"there is one engine, native; the {value} engine is gone")
+    return value
+
+
 def parser() -> argparse.ArgumentParser:
     """Each subcommand sets `handler`, a function of (Commands, parsed args) that returns the exit code."""
     main = argparse.ArgumentParser(
         prog="hoglint", description="Boundary linter: facts, edges, rules and a generated ledger."
     )
     main.add_argument("--repo", type=Path, default=Path.cwd(), help="repo root that holds hoglint.toml")
-    main.add_argument("--engine", choices=ENGINES, default=ENGINE_PYTHON, help="python, or the Rust link (native)")
+    main.add_argument(
+        "--engine", type=engine_name, default=ENGINE_NATIVE, help="native, the one engine; a base scan is passed it"
+    )
     sub = main.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="run every rule; exit 0 clean, 1 violations, 2 blocking incomplete")
     check.add_argument("--index", action="store_true", help="check the staged snapshot (git index), config included")
@@ -1177,9 +1185,9 @@ def parser() -> argparse.ArgumentParser:
 def command(argv: list[str] | None) -> int:
     args = parser().parse_args(argv)
     repo = args.repo.resolve()
-    batch_mode(args.engine)
+    batch_mode()
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
-        commands = Commands(repo, Path(work), args.engine)
+        commands = Commands(repo, Path(work))
         try:
             check_root(repo)
             with commands.stores.as_current():

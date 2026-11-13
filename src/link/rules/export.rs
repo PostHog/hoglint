@@ -305,6 +305,9 @@ impl ExportInputs {
 #[derive(Clone, Copy)]
 struct SlotRead {
     left: bool,
+    /// A field of a class `walk_where` is false for, read while that class is walked: only a
+    /// denied kind is reported, and the walk goes on into a class `walk_where` holds for.
+    core: bool,
 }
 
 /// A graph module as `Cx::module_of_symbol` gives it: its name and its place.
@@ -334,6 +337,8 @@ pub struct Walk<'a> {
     rows: Vec<ExportRow>,
     reported: FxHashSet<(String, String, String)>,
     visited: FxHashSet<(String, usize, String)>,
+    /// The types walked on through a field of a class core defines (`check_core`).
+    core_visited: FxHashSet<(String, usize, String)>,
     shapes: FxHashMap<String, Shapes>,
     /// `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
     allowed: FxHashMap<(usize, String), bool>,
@@ -361,6 +366,7 @@ impl<'a> Walk<'a> {
             rows: Vec::new(),
             reported: FxHashSet::default(),
             visited: FxHashSet::default(),
+            core_visited: FxHashSet::default(),
             shapes: FxHashMap::default(),
             allowed: FxHashMap::default(),
             walked: FxHashMap::default(),
@@ -830,6 +836,13 @@ impl<'a> Walk<'a> {
         if slot.is_some_and(|read| read.left) && (!denied.is_empty() || unknown_type) {
             return;
         }
+        if slot.is_some_and(|read| read.core)
+            && denied.is_empty()
+            && !self.judged_in_full(symbol, shape)
+        {
+            self.check_core(symbol, module, shape, trail);
+            return;
+        }
         let judged = slot.is_some_and(|read| !read.left);
         if let (true, Some(row)) = (judged, edge)
             && denied.is_empty()
@@ -899,6 +912,40 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// Whether a type a field of a class core defines names is judged in full there: a symbol the
+    /// graph defines that `walk_where` holds for.
+    fn judged_in_full(&mut self, symbol: &str, shape: usize) -> bool {
+        self.cx.rules.has_symbol(self.cx.link, symbol) && self.walk_holds(symbol, shape)
+    }
+
+    /// A type a field of a class core defines names that is no denied kind and is not judged in
+    /// full: nothing is reported, but an allowed class the policy walks is walked on, so a denied
+    /// kind or a class judged in full deeper down is still found. It does not mark the symbol
+    /// visited: a slot of the product's own that names it later is judged in full.
+    fn check_core(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
+        let visit = (module.to_string(), shape, symbol.to_string());
+        if self.visited.contains(&visit) || !self.core_visited.insert(visit) {
+            return;
+        }
+        let rules = self.cx.rules;
+        if !rules.has_symbol(self.cx.link, symbol) {
+            return;
+        }
+        let (shapes, _) = self.recognize(symbol);
+        if !shapes.contains("class") {
+            return;
+        }
+        let policy = &rules.shapes[shape];
+        let listed = policy
+            .data
+            .iter()
+            .chain(&policy.allow)
+            .any(|name| shapes.contains(name));
+        if (listed || self.behavior_ok(symbol, shape)) && self.walks(symbol, &shapes, shape) {
+            self.check_members(symbol, module, shape, trail);
+        }
+    }
+
     /// `ExportPrimitive.unexpanded_assignment`: whether a slot judged here names an assignment the
     /// producer did not expand, at the top of a module or in a class body.
     fn unexpanded_assignment(
@@ -954,12 +1001,14 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.member_edges`: the rows that are judged, each with the module (as a place)
-    /// and the qualname length of the class or callable it belongs to; the marker row of an
+    /// and the qualname length of the class or callable it belongs to, and whether it is a field of
+    /// a class `walk_where` is false for, read while such a class is walked; the marker row of an
     /// expanded alias is left out. Of a class `walk_where` is false for, the handed-out class or
     /// an ancestor, only the constructor fields are read.
-    fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize)> {
+    fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize, bool)> {
         let is_class = self.cx.rules.symbol_decl(self.cx.link, symbol) == "class";
         let walked = !is_class || self.walk_holds(symbol, shape);
+        let symbol_walked = walked;
         let mut lineage = vec![(symbol.to_string(), walked)];
         if is_class {
             let (ancestors, _) = self.cx.rules.facts.ancestors(self.cx.link, symbol);
@@ -978,7 +1027,7 @@ impl<'a> Walk<'a> {
             for id in self.exposes_under(owner.0, qualname) {
                 let read = walked || self.constructor_slot(id);
                 if read && self.cx.attr(id, self.keys.alias) != "expanded" {
-                    out.push((id, owner, qualname.len()));
+                    out.push((id, owner, qualname.len(), !symbol_walked && !walked));
                 }
             }
         }
@@ -1136,7 +1185,8 @@ impl<'a> Walk<'a> {
     }
 
     /// `ExportPrimitive.judge_row`: the types one slot row names, judged in full or, where a
-    /// signature rule reads the row, by their shape only.
+    /// signature rule reads the row, by their shape only. A field of a class core defines reports
+    /// no missing or unread annotation and no unresolved name.
     fn judge_row(
         &mut self,
         symbol: &str,
@@ -1144,12 +1194,13 @@ impl<'a> Walk<'a> {
         shape: usize,
         trail: &[String],
         id: u32,
-        shape_only: bool,
+        read: SlotRead,
     ) {
         let link = self.cx.link;
         let Keys {
             annotation, slot, ..
         } = self.keys;
+        let shape_only = read.left || read.core;
         let written = self.cx.attr(id, annotation);
         if written == "missing" || written == "unread" {
             if !shape_only {
@@ -1186,14 +1237,7 @@ impl<'a> Walk<'a> {
             if !name.is_empty() && !trail.contains(&name) {
                 let mut deeper = trail.to_vec();
                 deeper.push(name.clone());
-                self.check(
-                    &name,
-                    module,
-                    shape,
-                    Some(id),
-                    &deeper,
-                    Some(SlotRead { left: shape_only }),
-                );
+                self.check(&name, module, shape, Some(id), &deeper, Some(read));
             }
         }
     }
@@ -1202,9 +1246,9 @@ impl<'a> Walk<'a> {
     /// symbol out by names the copy of a slot.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let places = self.copy_places(symbol, shape);
-        for (id, owner, qualname_len) in self.member_edges(symbol, shape) {
-            let shape_only = self.leaves_slot(id, (owner, qualname_len), &places, shape);
-            self.judge_row(symbol, module, shape, trail, id, shape_only);
+        for (id, owner, qualname_len, core) in self.member_edges(symbol, shape) {
+            let left = self.leaves_slot(id, (owner, qualname_len), &places, shape);
+            self.judge_row(symbol, module, shape, trail, id, SlotRead { left, core });
         }
     }
 
@@ -1237,8 +1281,9 @@ impl<'a> Walk<'a> {
                 }
                 Truth::True => {}
             }
-            let shape_only = self.leaves_slot(id, (place, callable.len()), &[], shape);
-            self.judge_row(&symbol, module, shape, &trail, id, shape_only);
+            let left = self.leaves_slot(id, (place, callable.len()), &[], shape);
+            let read = SlotRead { left, core: false };
+            self.judge_row(&symbol, module, shape, &trail, id, read);
         }
     }
 

@@ -237,7 +237,7 @@ def traced_dump(tmp_path: Path, name: str, files: dict[str, str], monkeypatch: p
     work.mkdir()
     out.mkdir()
     try:
-        graph, result, _, _ = Dump(repo, "native", out, work).check()
+        graph, result, _, _ = Dump(repo, out, work).check()
     finally:
         gc.enable()
     jsonl(out / "modules.jsonl", [[module, path] for module, path in graph.modules.items()])

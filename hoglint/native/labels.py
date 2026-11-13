@@ -11,7 +11,7 @@ from array import array
 from typing import Any
 
 from hoglint.config.model import KindSpec, LevelSpec
-from hoglint.labels import Labeler
+from hoglint.labels import HANDED_ZONES, Labeler, render
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
@@ -94,6 +94,26 @@ class NativeLabeler(Labeler):
         if name == "registry":
             return Value.known(spec.name)
         return Value.known(spec.lifecycle) if spec.lifecycle else NONE
+
+    def explain(self, module: str) -> list[tuple[str, str, str]]:
+        """`Labeler.explain` with each value the evaluator holds taken from it; the Python label
+        pass gives the source of each and the values it alone holds (provider fields)."""
+        rows = super().explain(module)
+        if self.evaluator is None:
+            return rows
+        out = []
+        for name, value, source in rows:
+            if name == HANDED_ZONES:
+                with engine_errors():
+                    kind, items = self.evaluator.handed_zones(module)
+                value = render(self.value_of(kind, items))
+            elif name in REGISTRY_NAMES:
+                found = self.builtin(module, None, name)
+                value = str(found.data) if name == "registry" else render(found)
+            else:
+                value = render(self.field_value(module, None, name)[0])
+            out.append((name, value, source))
+        return out
 
     def kind_members(self, spec: KindSpec) -> frozenset[str]:
         """The evaluator's members of a kind: the Python labeler would classify every symbol."""

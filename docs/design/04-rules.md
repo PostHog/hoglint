@@ -1,7 +1,7 @@
 # 4. Rules: primitives, scoping, states
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 12, 2026.
+> Current as of Nov 13, 2026.
 
 ## Decided
 
@@ -12,10 +12,12 @@
   Anything that needs one of those is a derived-edge producer.
 - Rules are TOML.
   The primitives are a closed set, and no plugin adds one (D38, then D39).
-- A rule type is declared once, on its class: native mode, entities, how a ledger write confirms it, and the keys it reads per mode.
-  The schema, the plan, the ledger-write set and the test generator derive from that declaration (D53).
+- A rule type is declared once, on its class: native mode, entities, and the keys it reads per mode.
+  The schema, the plan and the test generator derive from that declaration (D53).
+- The native evaluator judges every rule; the rule's class words each row it gives (D51).
+  How one destination is judged from its selection, resolution, unknown type, verdict and `unless` is the table `tests/rules/judgment.txt`; how `and`, `or` and `not` carry an unknown is `tests/rules/connectives.txt`.
 - A key a rule does not read is a config error (D52).
-  A limit is a config error in both engines (D46).
+  A limit is a config error (D46).
   Set fields hold strings only and have one text form (D45).
 
 **Projection v1: typed labels, three-valued selectors, PostHog as a preset** (agreed by exclusion, Nov 9).
@@ -45,7 +47,7 @@ A comparison reads them so:
   So a missing side differs from every value, and only `unknown` stays open.
 - The cost: two ends that both have no value count as equal.
   A rule that must not match third-party code says so (`dst.external == none`).
-- Both engines read one table of these cases (`tests/rules/missing_side.txt`).
+- The evaluator and the Python selector parser read one table of these cases (`tests/rules/missing_side.txt`).
 
 **Named conditions** (owner, Nov 12).
 `[conditions]` maps a name to selector text; a selector names it wherever an expression may stand, and the name reads as its text in parentheses.

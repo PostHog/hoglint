@@ -247,9 +247,14 @@ pub struct RulePlan {
     pub id: String,
     #[serde(flatten)]
     pub mode: ModePlan,
+    /// A rule over edges: its selectors by config key, as `explain edge:` names them.
+    #[serde(default)]
+    pub selectors: Vec<(String, NodePlan)>,
 }
 
 /// How the evaluator treats a rule, as the rule's Python class states it (`RuleType.NATIVE_MODE`).
+// Decoded once per rule: the size of the largest variant costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ModePlan {
@@ -290,9 +295,24 @@ pub struct JudgePlan {
     /// usable type apart (`SignaturePrimitive`).
     pub signature: Option<SignaturePlan>,
     pub verdict: VerdictPlan,
+    /// The judgments whose rows Python words as findings, by name: only their rows carry the
+    /// identity, so an identity column is read where a finding needs it.
+    pub identified: Vec<String>,
+    /// The refs a message names where the judgment reads them unknown.
+    pub unknown_refs: UnknownRefsPlan,
     /// An entrypoint rule that judges a later use of an imported name at its import
     /// (`EntrypointPrimitive.sees`).
     pub uses_at_import: bool,
+}
+
+/// Per selector, the paths of the refs it reads, each once, in its order
+/// (`EdgeRule.unknown_refs`).
+#[derive(Deserialize)]
+pub struct UnknownRefsPlan {
+    /// `from`, then `select`.
+    pub selection: Vec<Vec<Vec<String>>>,
+    /// `deny`, `allow`, `require`.
+    pub verdict: Vec<Vec<Vec<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -325,6 +345,9 @@ pub enum VerdictPlan {
 #[derive(Deserialize)]
 pub struct ReachPlan {
     pub edges: EdgesPlan,
+    pub identity: Vec<Vec<String>>,
+    /// The judgments whose rows Python words as findings (`JudgePlan::identified`).
+    pub identified: Vec<String>,
     /// Its `from`: which modules it searches from, read of the module alone.
     pub start: Option<NodePlan>,
     pub deny: Option<NodePlan>,
@@ -336,6 +359,9 @@ pub struct ReachPlan {
 #[derive(Deserialize)]
 pub struct CyclePlan {
     pub edges: EdgesPlan,
+    pub identity: Vec<Vec<String>>,
+    /// The judgments whose rows Python words as findings (`JudgePlan::identified`).
+    pub identified: Vec<String>,
     /// The field whose values are the nodes of its graph (`CyclePrimitive.group_field`).
     pub group: String,
 }

@@ -1,16 +1,19 @@
-"""The native evaluator (src/link/rules) against the Python rule code, per edge, on one small repo:
-hand-written rules for the corners where the meaning is irregular, and seeded generated ones."""
+"""The native evaluator (src/link/rules) on one small repo: hand-written rules for the corners where
+the meaning is irregular, and seeded generated ones, held to the runs both engines gave before the
+Python rule code left the comparison (`stored_rows.json`, `generated_runs.jsonl`)."""
 
 from __future__ import annotations
 
 import gc
+import os
+import ast
 import json
 import random
+import hashlib
 import subprocess
 import dataclasses
 from array import array
-from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +28,9 @@ from hoglint.ledger.errors import EngineError
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution, Site
 from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
-from hoglint.native.source import graph_source
+from hoglint.native.source import NativeGraphSource
 from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
-from hoglint.rules import engine
-from hoglint.rules.base import EdgeRule, Judgment, RuleContext, project, subjects_of
+from hoglint.rules.base import subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
 from hoglint.rules.exports import ExportPrimitive, SlotRule
 from hoglint.selectors import Selector
@@ -308,7 +310,7 @@ class World:
         self.repo = repo
         work = root / "work"
         work.mkdir()
-        self.graph: Graph = graph_source("native", work).build(repo, load_config(repo, repo / CONFIG_FILE))
+        self.graph: Graph = NativeGraphSource(work).build(repo, load_config(repo, repo / CONFIG_FILE))
         gc.enable()
 
     def config(self, rules: str, base: str = CONFIG) -> Config:
@@ -317,42 +319,20 @@ class World:
         path.write_text(base + rules)
         return load_config(self.repo, path)
 
-    def contexts(self, config: Config) -> tuple[NativeRuleContext, RuleContext]:
+    def context(self, config: Config) -> NativeRuleContext:
         labeler: Labeler = Engine(config, self.graph, self.repo).labeler
         labeler.find_conflicts()
-        native = NativeRuleContext(config, self.graph, labeler, self.repo)
-        return native, RuleContext(config, self.graph, labeler, self.repo)
+        return NativeRuleContext(config, self.graph, labeler, self.repo)
 
     def rows(self, config: Config, name: str) -> list[tuple[Any, ...]]:
-        """What rule `name` reports, the same in both engines."""
-        native, python = self.contexts(config)
+        """What rule `name` reports."""
         spec = config.rules[name]
-        found = run_rows(primitive_of(spec)(native, spec).evaluate())
-        assert found == run_rows(primitive_of(spec)(python, spec).evaluate())
-        return found
+        return run_rows(primitive_of(spec)(self.context(config), spec).evaluate())
 
 
 @pytest.fixture(scope="module")
 def world(tmp_path_factory: pytest.TempPathFactory) -> World:
     return World(tmp_path_factory.mktemp("evaluator"))
-
-
-def python_rows(ctx: RuleContext, rule: EdgeRule) -> Counter[tuple[int, int, str, tuple[str, ...]]]:
-    """(edge, destination, judgment, identity) of every destination `EdgeRule.decide` does not
-    judge clean, by the Python rule code alone; only a violation's row and a signature slot of
-    unknown type carry their identity."""
-    out: Counter[tuple[int, int, str, tuple[str, ...]]] = Counter()
-    for edge in ctx.graph.edges:
-        if not rule.sees(edge):
-            continue
-        for target, env in enumerate(rule.envs_of(edge)):
-            judgment = rule.decide(env)
-            if judgment is Judgment.CLEAN:
-                continue
-            found = judgment in (Judgment.VIOLATION, Judgment.UNKNOWN_TYPE)
-            identity = project(rule.spec.identity, env.resolve) if found else ()
-            out[(edge.handle, target, judgment.value, identity)] += 1
-    return out
 
 
 def run_rows(run: Any) -> list[tuple[Any, ...]]:
@@ -363,27 +343,80 @@ def run_rows(run: Any) -> list[tuple[Any, ...]]:
     return [*findings, *incomplete]
 
 
-JudgedRow = tuple[int, int, str, list[str] | None, str, str | None]
-# The judgments whose rows carry the rule's identity (`Judgment::has_identity`).
-IDENTIFIED = (Judgment.VIOLATION.value, Judgment.UNKNOWN_TYPE.value)
+def group_name(name: str) -> str:
+    """A level's group as stored: a group of a set field is named by Python's `str()` of a
+    frozenset, whose order follows the hash seed, so its items are sorted here."""
+    if not name.startswith("frozenset("):
+        return name
+    items = ast.literal_eval(name.removeprefix("frozenset(").removesuffix(")"))
+    return "{" + ", ".join(sorted(items)) + "}"
+
+
+def run_lines(world: World, at: int, base: str, rules: str) -> list[list[Any]]:
+    """A whole run of one config as stored lines: each rule's findings (identity, message, flags,
+    subjects) and incomplete items (key, reason, subjects), the levels, or the config error."""
+    try:
+        result = Engine(world.config(rules, base), world.graph, world.repo).evaluate()
+    except ConfigError as error:
+        # A problem names the config file, which sits in this run's temporary directory.
+        root = str(world.root.resolve())
+        return [["error", at, sorted(problem.replace(root, "<root>") for problem in error.problems)]]
+    out: list[list[Any]] = []
+    for rule, run in result.runs.items():
+        for finding in run.findings:
+            identity, flags = list(finding.identity), [finding.ledgerable, finding.unknown]
+            out.append(["finding", at, rule, identity, finding.message, *flags, list(finding.subjects)])
+        out.extend(["incomplete", at, rule, item.key, item.reason, list(item.subjects)] for item in run.incomplete)
+    for name, level in result.levels.items():
+        passing = sorted(group_name(group) for group in level.passing)
+        failing = {group_name(group): reasons for group, reasons in level.failing.items()}
+        out.append(["level", at, name, passing, dict(sorted(failing.items()))])
+    return out
+
+
+# The whole runs of the hand-written cases that compared the two engines, as `run_lines` gives
+# them, by case: what both engines gave before the Python rule code left the comparison.
+# `HOGLINT_REFRESH_GENERATED=1` rewrites the cases a run meets; review the diff.
+STORED_ROWS = Path(__file__).parent / "stored_rows.json"
+
+
+def assert_stored(world: World, name: str, rules: str, base: str = CONFIG) -> None:
+    """A whole run of `rules` over `base` gives the lines stored for case `name`."""
+    found = json.loads(json.dumps(run_lines(world, 0, base, rules), ensure_ascii=False))
+    stored = json.loads(STORED_ROWS.read_text()) if STORED_ROWS.exists() else {}
+    if os.environ.get("HOGLINT_REFRESH_GENERATED"):
+        stored[name] = found
+        STORED_ROWS.write_text(json.dumps(stored, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
+    assert found == stored.get(name)
+
+
+# (edge id, destination, judgment name, identity, source module, destination module, words): the
+# words are the source symbol, destination symbol, label and unknown refs (`Words`).
+JudgedRow = tuple[int, int, str, list[str], str, str | None, tuple[str | None, str | None, str, str]]
 
 
 def judged_rows(columns: tuple[Any, ...]) -> list[JudgedRow]:
-    """`Rules.judge`'s columns as rows: (edge id, destination, judgment name, identity, source
-    module, destination module)."""
+    """`Rules.judge`'s columns as rows."""
     names: list[str] = columns[2]
     identities: list[list[str]] = columns[4]
     modules: list[str] = columns[6]
+    texts: list[str] = columns[9][0]
     edges, targets, judgment_at, identity_at, src_at, dst_at = (array("I", columns[at]) for at in (0, 1, 3, 5, 7, 8))
+    words = [array("I", column) for column in columns[9][1:]]
     place = native_module().NO_PLACE
+
+    def text(at: int) -> str | None:
+        return texts[at] if at != place else None
+
     return [
         (
             edges[at],
             targets[at],
             names[judgment_at[at]],
-            identities[identity_at[at]] if identity_at[at] != place else [],
+            identities[identity_at[at]],
             modules[src_at[at]],
             modules[dst_at[at]] if dst_at[at] != place else None,
+            (text(words[0][at]), text(words[1][at]), texts[words[2][at]], texts[words[3][at]]),
         )
         for at in range(len(edges))
     ]
@@ -395,47 +428,25 @@ def judged_columns(rows: list[JudgedRow]) -> tuple[Any, ...]:
     names: dict[str, int] = {}
     identities: dict[tuple[str, ...], int] = {}
     modules: dict[str, int] = {}
+    texts: dict[str, int] = {}
 
     def at(found: dict[Any, int], value: Any) -> int:
         return found.setdefault(value, len(found))
 
-    columns = [array("I") for _ in range(6)]
-    for edge, target, name, identity, src, dst in rows:
+    columns = [array("I") for _ in range(10)]
+    for edge, target, name, identity, src, dst, words in rows:
         columns[0].append(edge)
         columns[1].append(target)
         columns[2].append(at(names, name))
-        columns[3].append(at(identities, tuple(identity)) if name in IDENTIFIED and identity is not None else place)
+        columns[3].append(at(identities, tuple(identity)))
         columns[4].append(at(modules, src))
         columns[5].append(at(modules, dst) if dst is not None else place)
-    edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns)
+        for column, word in zip(columns[6:], words):
+            column.append(at(texts, word) if word is not None else place)
+    edges, targets, judgment_at, identity_at, src_at, dst_at = (column.tobytes() for column in columns[:6])
     distinct = [list(identity) for identity in identities]
-    return edges, targets, list(names), judgment_at, distinct, identity_at, list(modules), src_at, dst_at
-
-
-def differences(world: World, rules: str, base: str = CONFIG) -> list[str]:
-    """Where the evaluator and the Python rule code differ for every rule of `rules`."""
-    config = world.config(rules, base)
-    native, python = world.contexts(config)
-    out = []
-    for spec in config.rules.values():
-        mode = primitive_of(spec).NATIVE_MODE
-        rule = primitive_of(spec)(native, spec)
-        index = native.plan.index[spec.id]
-        # An inventory's rows keep the first destination of each identity; its run is compared.
-        if mode == "judge" and spec.primitive != "inventory":
-            assert isinstance(rule, EdgeRule)
-            ours = Counter(
-                (edge, target, name, tuple(identity))
-                for edge, target, name, identity, _, _ in judged_rows(native.evaluator.judge(index))
-            )
-            theirs = python_rows(python, rule)
-            if ours != theirs:
-                out.append(f"{spec.id}: rust only {sorted(ours - theirs)}, python only {sorted(theirs - ours)}")
-        native.results[spec.id] = primitive_of(spec)(native, spec).evaluate()
-        python.results[spec.id] = primitive_of(spec)(python, spec).evaluate()
-        if run_rows(native.results[spec.id]) != run_rows(python.results[spec.id]):
-            out.append(f"{spec.id}: the {mode} run differs from the Python run")
-    return out
+    word_columns = (list(texts), *(column.tobytes() for column in columns[6:]))
+    return edges, targets, list(names), judgment_at, distinct, identity_at, list(modules), src_at, dst_at, word_columns
 
 
 def rule_table(name: str, fields: dict[str, Any]) -> str:
@@ -643,9 +654,9 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
             "identity": ["dst.module", "dst.package", "dst.tier", "dst.zone", "dst.stage"],
         },
     )
-    assert differences(world, rules) == []
+    assert_stored(world, "namespace", rules)
     config = world.config(rules)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     found = primitive_of(config.rules["namespace"])(native, config.rules["namespace"]).evaluate()
     # the directory sits under products/alerts: the product's labels, and a zone from its path; the
     # unresolved `uses` edge reads unknown everywhere
@@ -657,7 +668,217 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
 
 @pytest.mark.parametrize("name", sorted(CORNERS))
 def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
-    assert differences(world, rule_table(name, CORNERS[name])) == []
+    assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]))
+
+
+# The export rule's corners, as both engines gave them before the Python walk went: per finding its
+# identity, message and unknown flag, per incomplete item its key and reason.
+EXPORT_CORNER_ROWS = {
+    "export-shapes": (
+        [
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.nowhere",
+                    "unresolved-import",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.nowhere: unresolved-import",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Desk",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk: export-shape(class)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Draft",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft: export-shape(class)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.models.Invoice",
+                    "export-denied(model)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice: export-denied(model)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Note",
+                    "export-unknown",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.Port",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port: export-shape(class)",
+                False,
+            ),
+            (
+                ("products.billing.backend.facade.slots", "typing.Any", "export-unknown", "-", "product", "-"),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> typing.Any: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.models.Loose",
+                    "export-unknown",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> products.billing.backend.models.Loose: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.facade.slots",
+                    "products.billing.backend.facade.slots.charge",
+                    "export-unknown",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge: export-unknown",
+                True,
+            ),
+            (
+                (
+                    "products.billing.backend.presentation.mixins",
+                    "products.billing.backend.presentation.mixins.Mixin",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.presentation.mixins exports products.billing.backend.presentation.mixins.Mixin: export-shape(class)",
+                False,
+            ),
+            (
+                (
+                    "products.billing.backend.presentation.views",
+                    "products.billing.backend.presentation.views.View",
+                    "export-shape(class)",
+                    "billing",
+                    "product",
+                    "-",
+                ),
+                "products.billing.backend.presentation.views exports products.billing.backend.presentation.views.View: export-shape(class)",
+                False,
+            ),
+        ],
+        [],
+    ),
+    "export-unknowns-as-incomplete": (
+        [
+            (
+                ("products.billing.backend.facade.slots.Desk",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk: export-shape(class)",
+                False,
+            ),
+            (
+                ("products.billing.backend.facade.slots.Draft",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft: export-shape(class)",
+                False,
+            ),
+            (
+                ("products.billing.backend.models.Invoice",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice: export-denied(model)",
+                False,
+            ),
+            (
+                ("products.billing.backend.facade.slots.Port",),
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port: export-shape(class)",
+                False,
+            ),
+        ],
+        [
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.nowhere",
+                "'products.billing.backend.nowhere' did not resolve",
+            ),
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.facade.slots.Note",
+                "products.billing.backend.facade.slots.Note: param:untyped has no annotation",
+            ),
+            (
+                "products.billing.backend.facade.slots|typing.Any",
+                "products.billing.backend.facade.slots.charge -> typing.Any: a type hoglint reads as unknown",
+            ),
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.models.Loose",
+                "products.billing.backend.facade.slots.charge -> products.billing.backend.models.Loose: its bases did not all resolve",
+            ),
+            (
+                "products.billing.backend.facade.slots|products.billing.backend.facade.slots.charge",
+                "products.billing.backend.facade.slots.charge: param:untyped has no annotation",
+            ),
+        ],
+    ),
+}
+
+
+def export_rows(world: World, name: str, fields: dict[str, Any]) -> tuple[list[tuple[Any, ...]], list[tuple[str, str]]]:
+    config = world.config(rule_table(name, fields))
+    native = world.context(config)
+    spec = config.rules[name]
+    run = primitive_of(spec)(native, spec).evaluate()
+    findings = [(tuple(f.identity), f.message, f.unknown) for f in run.findings]
+    return findings, [(item.key, item.reason) for item in run.incomplete]
+
+
+@pytest.mark.parametrize("name", sorted(EXPORT_CORNER_ROWS))
+def test_an_export_corner_gives_its_stored_rows(world: World, name: str) -> None:
+    findings, incomplete = EXPORT_CORNER_ROWS[name]
+    assert export_rows(world, name, CORNERS[name]) == (findings, incomplete)
+
+
+# Relation R7 of the rule-half design: the order of `exports` changes no row, and `on_unknown` and
+# `on_unresolved` change the form of an unknown row (a finding or an incomplete item), not its key.
+def test_an_export_rule_gives_the_same_rows_in_any_export_order_and_report_mode(world: World) -> None:
+    base = {"primitive": "export", "identity": ["src.module", "dst.symbol"], "ledger": False}
+    forward, _ = export_rows(world, "forward", {**base, "exports": ["facade", "adapter"]})
+    backward, _ = export_rows(world, "backward", {**base, "exports": ["adapter", "facade"]})
+    assert sorted(forward) == sorted(backward) and forward
+    incomplete_mode = {**base, "on_unknown": "incomplete", "on_unresolved": "incomplete"}
+    found, items = export_rows(world, "quiet", incomplete_mode)
+    assert [row for row in forward if not row[2]] == found
+    assert sorted("|".join(identity) for identity, _, unknown in forward if unknown) == sorted(key for key, _ in items)
 
 
 CONFLICTS = {
@@ -699,9 +920,9 @@ TEAM_CYCLE = {"primitive": "cycle", "view": "packages", "identity": ["src.module
 
 def test_a_cycle_over_a_group_a_provider_sets_finds_its_pairs_natively(world: World) -> None:
     rules = rule_table("teams", TEAM_CYCLE)
-    assert differences(world, rules, PROVIDED) == []
+    assert_stored(world, "teams", rules, PROVIDED)
     config = world.config(rules, PROVIDED)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     run = primitive_of(config.rules["teams"])(native, config.rules["teams"]).evaluate()
     assert {finding.message.split(" closes")[0] for finding in run.findings} >= {
         "@team-alerts -> @team-billing",
@@ -713,7 +934,7 @@ def test_a_provider_field_read_without_its_column_stops_the_evaluator(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     monkeypatch.setattr(RulePlan, "provided", lambda self, names: ([], []))
     with pytest.raises(EngineError, match="field team, which a provider sets"):
         assert native.evaluator
@@ -723,7 +944,7 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = world.config(rule_table("teams", TEAM_CYCLE), PROVIDED)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     monkeypatch.setattr(RulePlan, "modules", lambda self: list(reversed(self.graph.modules)))
     with pytest.raises(EngineError, match="modules in another order"):
         assert native.evaluator
@@ -731,12 +952,14 @@ def test_a_plan_with_its_modules_in_another_order_stops_the_evaluator(
 
 def test_a_capture_over_a_directory_that_is_not_ascii_gives_one_zone_in_both_engines(world: World) -> None:
     config = world.config(rule_table("ascii", CORNERS["non-ascii-capture-under-within"]))
+    assert_stored(world, "ascii", rule_table("ascii", CORNERS["non-ascii-capture-under-within"]))
     found = world.rows(config, "ascii")
     assert {identity for identity, *_ in found} == {("products.é.jobs", "models", "é")}
 
 
 def test_a_set_read_as_text_is_its_identity_column_in_both_engines(world: World) -> None:
     config = world.config(rule_table("text", CORNERS["set-read-as-text"]))
+    assert_stored(world, "text", rule_table("text", CORNERS["set-read-as-text"]))
     found = world.rows(config, "text")
     assert {identity[0] for identity, *_ in found} >= {"core.a", "core.legacy"}
 
@@ -784,6 +1007,7 @@ def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
     if "allow" in keys:
         del spec_table["deny"]
     config = world.config(rule_table("uses", spec_table))
+    assert_stored(world, f"uses at import: {case}", rule_table("uses", spec_table))
     found = world.rows(config, "uses")
     identities = {identity for identity, *_ in found}
     assert {(symbol, module) for symbol, module, kind in identities if kind == "reference"} == references
@@ -818,6 +1042,7 @@ def test_an_export_that_names_its_symbols_holds_them_and_not_their_subclasses_in
     base = CONFIG.replace(ADAPTER, f"{members}\naudience = \"src.tier == 'product'\"")
     assert base != CONFIG
     config = world.config(rule_table("doors", CORNERS["export-by-class-and-audience"]), base)
+    assert_stored(world, f"doors {members}", rule_table("doors", CORNERS["export-by-class-and-audience"]), base)
     found = world.rows(config, "doors")
     presentation = {identity[0] for identity, *_ in found if ".presentation." in identity[0]}
     assert presentation == found_symbols
@@ -845,7 +1070,7 @@ def test_an_evaluator_error_is_an_engine_error(world: World, primitive: str) -> 
     spec = CORNERS["flow-shape-use-shape"] if primitive == "use-shape" else spec
     spec = CORNERS["cycle-between-packages"] if primitive == "cycle" else spec
     config = world.config(rule_table("refused", spec))
-    native, _ = world.contexts(config)
+    native = world.context(config)
     native.__dict__["evaluator"] = Refusing()
     with pytest.raises(EngineError, match="refused"):
         if primitive == "conflicts":
@@ -856,7 +1081,7 @@ def test_an_evaluator_error_is_an_engine_error(world: World, primitive: str) -> 
 
 def test_a_use_shape_rule_on_the_flow_shape_keeps_edges_whose_link_shape_differs(world: World) -> None:
     config = world.config(rule_table("flows", CORNERS["flow-shape-use-shape"]))
-    native, _ = world.contexts(config)
+    native = world.context(config)
     spec = config.rules["flows"]
     run = primitive_of(spec)(native, spec).evaluate()
     assert sorted(finding.identity for finding in run.findings) == [("core.a",), ("core.b",)]
@@ -1163,44 +1388,21 @@ def schema_gaps(drawn: list[tuple[str, frozenset[str], bool]]) -> list[str]:
     return out
 
 
-def level_differences(world: World, config: Config, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Where the two engines differ on a whole evaluation's levels, or on the config error it
-    stops with."""
-
-    def outcome() -> list[str]:
-        try:
-            result = Engine(config, world.graph, world.repo).evaluate()
-        except ConfigError as error:
-            return sorted(error.problems)
-        return [f"{name}: {level.passing} {dict(level.failing)}" for name, level in result.levels.items()]
-
-    native = outcome()
-    with monkeypatch.context() as patched:
-        patched.setattr(engine, "context_class", lambda index: RuleContext)
-        python = outcome()
-    return [] if native == python else [f"levels: native {native}, python {python}"]
-
-
-def test_generated_rules_are_judged_the_same_in_both(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_generated_rules_reach_every_key_of_the_schema(world: World) -> None:
     tables = Tables(random.Random(20261111))
     drawn: list[tuple[str, frozenset[str], bool]] = []
-    failures = []
-    # Every mode in turn, until a table of it loads: each mode gets as many judged configs.
+    # Every mode in turn, until a table of it loads, as the stored runs draw them.
     for mode in list(MODES) * 24:
         while True:
             before = len(tables.drawn)
             rules = tables.rules("generated", mode)
             try:
-                config = world.config(rules)
+                world.config(rules)
             except ConfigError:
                 drawn.extend((drawn_mode, keys, False) for drawn_mode, keys in tables.drawn[before:])
                 continue
             drawn.extend((drawn_mode, keys, True) for drawn_mode, keys in tables.drawn[before:])
             break
-        failures.extend(f"{found}\n{rules}" for found in differences(world, rules))
-        if config.levels:
-            failures.extend(f"{found}\n{rules}" for found in level_differences(world, config, monkeypatch))
-    assert failures == []
     assert schema_gaps(drawn) == []
 
 
@@ -1233,28 +1435,31 @@ KEY_ROUNDS, KEY_ROUNDS_MAX = 48, 480
 
 
 class KeysRead:
-    """Per mode, the keys its rule class read in a run of the Python engine, and the keys the
-    native plan read to plan it; both among the keys its primitive accepts and some rules do not
-    read (`EVERY_RULE_READS` aside)."""
+    """Per mode, the keys its rule class read in its constructor, its plan and a native run whose
+    every message is read, and the keys the native plan read to plan it; both among the keys its
+    primitive accepts and some rules do not read (`EVERY_RULE_READS` aside)."""
 
     def __init__(self) -> None:
         self.by_class: dict[str, set[str]] = {mode: set() for mode in TYPES}
         self.by_plan: dict[str, set[str]] = {mode: set() for mode in TYPES}
 
     def record(self, world: World, config: Config) -> None:
-        native, python = world.contexts(config)
+        native = world.context(config)
         for spec in config.rules.values():
             cls = primitive_of(spec)
             accepted = RULE_KEYS[cls.PRIMITIVE] - EVERY_RULE_READS
-            recording: Any = Recording(spec)
-            python.results[spec.id] = cls(python, recording).evaluate()
-            self.by_class[cls.MODE] |= recording.keys & accepted
             planned: Any = Recording(spec)
             rule = cls(native, planned)
             self.by_class[cls.MODE] |= planned.keys & accepted
             planned.keys.clear()
             rule.plan()
             self.by_plan[cls.MODE] |= planned.keys & accepted
+            self.by_class[cls.MODE] |= planned.keys & accepted
+            ran: Any = Recording(spec)
+            run = native.results[spec.id] = cls(native, ran).evaluate()
+            for finding in run.findings:
+                assert finding.message is not None and finding.remedies is not None
+            self.by_class[cls.MODE] |= ran.keys & accepted
 
     def every_key_read(self) -> bool:
         return all(cls.READS <= self.by_class[mode] for mode, cls in TYPES.items())
@@ -1410,34 +1615,7 @@ def outcome(world: World, config: Config) -> list[str]:
     return []
 
 
-def test_a_label_set_two_ways_stops_both_engines_alike(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    rng = random.Random(1110)
-    stopped = judged = 0
-    failures = []
-    while judged < 150:
-        conflicting = Conflicting(rng)
-        text = conflicting.config()
-        try:
-            world.config("", text)
-        except ConfigError:
-            continue
-        text += conflicting.rules(world, text)
-        config = world.config("", text)
-        judged += 1
-        native = outcome(world, config)
-        with monkeypatch.context() as patched:
-            patched.setattr(engine, "context_class", lambda index: RuleContext)
-            python = outcome(world, config)
-        stopped += bool(python)
-        if native != python:
-            failures.append(f"native {native}\npython {python}\n{text}")
-    assert failures == []
-    assert stopped > judged // 3
-
-
-def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_where_read(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_where_read(world: World) -> None:
     base = CONFIG.replace(SILO, TWO_SILOS) + "".join(
         f'\n[[assign]]\nmatch = "core/legacy.py"\nsymbols = {{}}\nset = {{ silo = "{silo}" }}\n'
         for silo in ("cell", "control")
@@ -1446,13 +1624,10 @@ def test_a_symbol_label_set_two_ways_outside_the_graphs_symbols_stops_the_run_wh
     assert outcome(world, world.config("", base)) == []
     native = outcome(world, world.config(reads, base))
     assert [problem.partition(" by ")[0] for problem in native] == ["core.legacy.api: field 'silo' set differently"]
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert outcome(world, world.config(reads, base)) == native
+    assert_stored(world, "silo read", reads, base)
 
 
-def test_an_edge_with_no_destination_reads_its_source_where_python_reads_it(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_edge_with_no_destination_reads_its_source(world: World) -> None:
     lead = (
         CONFIG.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
         + '\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["lead"]\n'
@@ -1460,8 +1635,7 @@ def test_an_edge_with_no_destination_reads_its_source_where_python_reads_it(
     )
     reads = rule_table("via", {**EDGE, "endpoint": "via", "select": "src.scope startswith src.lead"})
     native = outcome(world, world.config(reads, lead))
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == outcome(world, world.config(reads, lead))
+    assert_stored(world, "via", reads, lead)
     assert len(native) > 1
 
 
@@ -1533,10 +1707,28 @@ class Varied:
         return out
 
 
-def test_generated_configs_are_judged_the_same_in_both(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+# The runs of the generated configs as both engines gave them, stored: one JSON list per line, a
+# config's line (a digest of its base config and rules) before its rows. One engine judges and
+# words them now; this file holds their verdicts and words still. Rewrite it with
+# `HOGLINT_REFRESH_GENERATED=1` after a change of the generators, and review the diff.
+GENERATED_RUNS = Path(__file__).parent / "generated_runs.jsonl"
+
+
+def generated_configs(world: World) -> Iterator[tuple[str, str]]:
+    """(base config, rules) of every config the generated tests draw: the generated rules over the
+    fixture's config, configs that differ outside `[rules]`, and configs that set a label two ways."""
+    tables = Tables(random.Random(20261111))
+    for mode in list(MODES) * 24:
+        while True:
+            rules = tables.rules("generated", mode)
+            try:
+                world.config(rules)
+            except ConfigError:
+                continue
+            break
+        yield CONFIG, rules
     rng = random.Random(1111)
-    judged = levels = 0
-    failures = []
+    judged = 0
     while judged < 60:
         varied = Varied(rng)
         base = varied.config()
@@ -1545,15 +1737,58 @@ def test_generated_configs_are_judged_the_same_in_both(world: World, monkeypatch
         except ConfigError:
             continue
         judged += 1
-        rules = varied.rules(world, base)
-        failures.extend(f"{found}\n{base[len(CONFIG) :]}{rules}" for found in differences(world, rules, base))
-        config = world.config(rules, base)
-        if config.levels:
-            levels += 1
-            found = level_differences(world, config, monkeypatch)
-            failures.extend(f"{found}\n{base[len(CONFIG) :]}{rules}" for found in found)
-    assert failures == []
-    assert levels > 5
+        yield base, varied.rules(world, base)
+    rng = random.Random(1110)
+    judged = 0
+    while judged < 150:
+        conflicting = Conflicting(rng)
+        text = conflicting.config()
+        try:
+            world.config("", text)
+        except ConfigError:
+            continue
+        text += conflicting.rules(world, text)
+        judged += 1
+        yield text, ""
+
+
+def config_digest(base: str, rules: str) -> str:
+    return hashlib.blake2b((base + rules).encode(), digest_size=8).hexdigest()
+
+
+def stored_runs() -> dict[int, tuple[str, list[list[Any]]]]:
+    """The stored runs by config: its digest and its lines."""
+    out: dict[int, tuple[str, list[list[Any]]]] = {}
+    for text in GENERATED_RUNS.read_text().splitlines():
+        line = json.loads(text)
+        if line[0] == "config":
+            out[line[1]] = (line[2], [])
+        else:
+            out[line[1]][1].append(line)
+    return out
+
+
+def test_a_generated_config_gives_its_stored_run(world: World) -> None:
+    configs = list(generated_configs(world))
+    if os.environ.get("HOGLINT_REFRESH_GENERATED"):
+        lines: list[list[Any]] = []
+        for at, (base, rules) in enumerate(configs):
+            lines.append(["config", at, config_digest(base, rules)])
+            lines.extend(run_lines(world, at, base, rules))
+        GENERATED_RUNS.write_text("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines))
+    stored = stored_runs()
+    assert len(stored) == len(configs) == 24 * len(MODES) + 60 + 150
+    moved = []
+    for at, (base, rules) in enumerate(configs):
+        digest, lines = stored[at]
+        if digest != config_digest(base, rules):
+            moved.append(f"config {at} is not the stored one: the generators changed")
+            continue
+        found = json.loads(json.dumps(run_lines(world, at, base, rules), ensure_ascii=False))
+        if found != lines:
+            first = next((a, b) for a, b in zip([*found, None], [*lines, None]) if a != b)
+            moved.append(f"config {at}: given {first[0]}, stored {first[1]}")
+    assert moved == []
 
 
 # A field whose domain reads a provider field that a provider and an assignment set apart on
@@ -1570,7 +1805,7 @@ DOMAIN_READS_A_CONFLICT = CONFIG.replace(
 @pytest.mark.parametrize("base", [CONFIG, DOMAIN_READS_A_CONFLICT], ids=["fixture", "domain-reads-a-conflict"])
 def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, base: str) -> None:
     config = world.config("", base)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     native.find_conflicts()
     python = Labeler(config, world.graph, world.repo, native.labeler.index)
     names = [name for name, spec in config.fields.items() if spec.on == "module"]
@@ -1600,16 +1835,16 @@ COVERED = rule_table("named", {**EDGE, "kinds": ["import", "uses"], "deny": "dst
 )
 
 
-def test_a_coverage_rule_needs_the_paths_the_python_rule_needs(world: World) -> None:
-    assert differences(world, COVERED) == []
+def test_a_coverage_rule_gives_its_stored_paths(world: World) -> None:
+    assert_stored(world, "covered", COVERED)
     config = world.config(COVERED)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     native.results["named"] = primitive_of(config.rules["named"])(native, config.rules["named"]).evaluate()
     run = primitive_of(config.rules["covered"])(native, config.rules["covered"]).evaluate()
     assert len(run.findings) > 3 and run.incomplete
 
 
-def test_a_surface_with_a_control_character_is_worded_once_for_both_engines(world: World) -> None:
+def test_a_surface_with_a_control_character_is_worded_once(world: World) -> None:
     rules = rule_table(
         "unplaced",
         {
@@ -1620,9 +1855,9 @@ def test_a_surface_with_a_control_character_is_worded_once_for_both_engines(worl
             "ledger": False,
         },
     )
-    assert differences(world, rules) == []
+    assert_stored(world, "unplaced", rules)
     config = world.config(rules)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     run = primitive_of(config.rules["unplaced"])(native, config.rules["unplaced"]).evaluate()
     assert "cannot place 'products.billing.backend.models.Invoice\\x07' for coverage" in [
         item.reason for item in run.incomplete
@@ -1655,25 +1890,6 @@ def lie(monkeypatch: pytest.MonkeyPatch, **changes: Any) -> None:
     )
 
 
-def test_a_run_that_writes_a_ledger_judges_every_evaluator_finding_again(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'nowhere'"}))
-    edge = next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
-    row = (edge.handle, 0, Judgment.VIOLATION.value, ["a", "b"], edge.site.module, None)
-    lie(monkeypatch, judge=lambda rows: [*rows, row])
-    assert ("a", "b") in [f.identity for f in Engine(config, world.graph, world.repo).evaluate().findings()]
-    with pytest.raises(EngineError, match="apart from the evaluator"):
-        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
-
-
-def test_a_found_row_with_no_identity_is_an_engine_error(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = world.config(rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}))
-    lie(monkeypatch, judge=lambda rows: [(*rows[0][:3], None, *rows[0][4:]), *rows[1:]])
-    with pytest.raises(EngineError, match="no identity"):
-        Engine(config, world.graph, world.repo).evaluate()
-
-
 @pytest.mark.parametrize(
     ("src", "dst", "subjects"),
     [("a", "b", ("a", "b")), ("a", "a", ("a",)), ("a", None, ("a",)), ("", "b", ("b",)), ("", None, ())],
@@ -1699,7 +1915,7 @@ def test_a_finding_names_its_source_and_another_destination_as_subjects(
         ),
         (
             rule_table("lied", CORNERS["reach-from-contracts"]),
-            {"reach": lambda rows: [(*row[:3], "maybe" if row[3] is not None else None) for row in rows]},
+            {"reach": lambda rows: [(*row[:3], "maybe" if row[3] is not None else None, row[4]) for row in rows]},
             "maybe",
         ),
     ],
@@ -1714,119 +1930,6 @@ def test_a_name_the_rule_code_does_not_know_stops_the_run(
         Engine(config, world.graph, world.repo).evaluate()
 
 
-def an_import(world: World) -> Edge:
-    return next(edge for edge in world.graph.edges if edge.kind == "import" and edge.targets)
-
-
-def made_up(text: str) -> str:
-    return "made-up" if text == "billing" else text
-
-
-def swapped(text: str, pair: tuple[str, str] = ("core", "billing")) -> str:
-    """Two values of a label column the other way round: a column with the same values, on the
-    wrong modules."""
-    first, second = pair
-    return second if text == first else first if text == second else text
-
-
-def relabeled(change: Callable[[str], str]) -> Callable[[Any], Any]:
-    """A lie of the `values` call: every value of a label column changed by `change`."""
-    return lambda found: [[(kind, [change(item) for item in items]) for kind, items in found[0]], found[1]]
-
-
-def made_up_label(changes: dict[str, Any]) -> dict[str, Any]:
-    """A `package` column that says `made-up` where it says `billing`, and judge rows whose
-    identities say the same: labels the evaluator computed, wrong on both sides."""
-    return {
-        **changes,
-        "values": relabeled(made_up),
-        "judge": lambda rows: [(*row[:3], [made_up(item) for item in row[3]], *row[4:]) for row in rows],
-    }
-
-
-COVERED_CORE = rule_table(
-    "lied",
-    {
-        "primitive": "coverage",
-        "covers": ["edge.kind in ['import'] and src.tier == 'core': dst"],
-        "inputs": {"adapter": "globs", "paths": ["core/**"]},
-        "ledger": False,
-    },
-)
-
-# Per rule type, the rules and the lies of the evaluator's calls (each made from the fixture): a
-# row with an identity the rule's own `project` does not give, a first row left out, or a made-up
-# row: a label column, a reach path, a cycle pair, a coverage path, a level group.
-LEDGER_LIES: dict[str, tuple[str, Any]] = {
-    "identity": (
-        rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
-        lambda world: {"judge": lambda rows: [(*rows[0][:3], ["made", "up"], *rows[0][4:]), *rows[1:]]},
-    ),
-    "label column on an unresolved row": (
-        rule_table(
-            "lied",
-            {
-                **EDGE,
-                "kinds": ["uses"],
-                "on_unresolved": "finding",
-                "identity": ["src.package", "dst.symbol"],
-                "ledger": True,
-                "growth_key": ["src.package"],
-            },
-        ),
-        lambda world: {"values": relabeled(swapped)},
-    ),
-    "source module": (
-        rule_table("lied", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'billing'"}),
-        lambda world: {"judge": lambda rows: [(*rows[0][:4], "made.up", *rows[0][5:]), *rows[1:]]},
-    ),
-    "label column": (
-        rule_table(
-            "lied", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package", "identity": ["dst.package"]}
-        ),
-        lambda world: made_up_label({}),
-    ),
-    "export": (rule_table("lied", CORNERS["export-shapes"]), lambda world: {"export": lambda rows: rows[1:]}),
-    "layout": (rule_table("lied", CORNERS["layout-on-modules"]), lambda world: {"entities": lambda rows: rows[1:]}),
-    "entity-inventory": (
-        rule_table("lied", CORNERS["inventory-exactly-one"]),
-        lambda world: {"entities": lambda rows: rows[1:]},
-    ),
-    "inventory": (rule_table("lied", CORNERS["inventory-classify"]), lambda world: {"judge": lambda rows: rows[1:]}),
-    "reach path": (
-        rule_table("lied", CORNERS["reach-from-contracts"]),
-        lambda world: {"reach": lambda rows: [*rows, ("denied", "core.a", [(an_import(world).handle, 0)], "true")]},
-    ),
-    "cycle pair": (
-        rule_table("lied", CORNERS["cycle-between-packages"]),
-        lambda world: {
-            "pairs": lambda rows: [
-                *rows,
-                (an_import(world).handle, 0, Judgment.VIOLATION.value, ("made", "up")),
-                (an_import(world).handle, 0, Judgment.VIOLATION.value, ("up", "made")),
-            ]
-        },
-    ),
-    "coverage path": (
-        COVERED_CORE,
-        lambda world: {"coverage": lambda found: [[*found[0], ("made/up.py", 0, None)], found[1]]},
-    ),
-}
-
-
-@pytest.mark.parametrize("name", sorted(LEDGER_LIES))
-def test_a_ledger_write_holds_every_rule_type_to_its_own_code(
-    world: World, monkeypatch: pytest.MonkeyPatch, name: str
-) -> None:
-    rules, lies = LEDGER_LIES[name]
-    config = world.config(rules)
-    assert Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True).runs["lied"].findings
-    lie(monkeypatch, **lies(world))
-    Engine(config, world.graph, world.repo).evaluate()
-    with pytest.raises(EngineError, match="evaluator"):
-        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
-
-
 LEVELS = (
     rule_table("crossing", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package"})
     + '\n[levels.isolated]\ngroup_by = "package"\nselect = "tier != \'leaf\'"\nrequires = ["crossing"]\n'
@@ -1834,51 +1937,15 @@ LEVELS = (
 )
 
 
-def test_a_level_judges_the_groups_the_python_level_judges(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_level_gives_its_stored_groups(world: World) -> None:
     def levels() -> dict[str, tuple[list[str], dict[str, list[str]]]]:
         result = Engine(config, world.graph, world.repo).evaluate()
         return {name: (level.passing, dict(level.failing)) for name, level in result.levels.items()}
 
     config = world.config(LEVELS)
     native = levels()
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == levels()
+    assert_stored(world, "levels", LEVELS)
     assert all(passing or failing for passing, failing in native.values())
-
-
-def test_a_ledger_write_holds_a_level_to_the_groups_a_python_labeler_gives(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = world.config(LEVELS)
-    Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
-    lie(monkeypatch, level_groups=lambda groups: [*groups, "made-up"])
-    assert any(
-        "made-up" in level.passing for level in Engine(config, world.graph, world.repo).evaluate().levels.values()
-    )
-    with pytest.raises(EngineError, match="evaluator"):
-        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
-
-
-def test_a_ledger_write_holds_a_level_to_the_groups_a_python_labeler_blocks(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def levels() -> dict[str, tuple[list[str], list[str]]]:
-        result = Engine(config, world.graph, world.repo).evaluate()
-        return {name: (level.passing, sorted(level.failing)) for name, level in result.levels.items()}
-
-    rules = rule_table("crossing", {**EDGE, "kinds": ["import"], "deny": "dst.package == 'alerts'"})
-    config = world.config(rules + '\n[levels.isolated]\ngroup_by = "package"\nrequires = ["crossing"]\n')
-    Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
-    honest = levels()
-    # `billing` fails the level and `leaf` passes it.
-    pair = ("billing", "leaf")
-    lie(monkeypatch, values=relabeled(lambda item: swapped(item, pair)))
-    lied = levels()
-    assert lied != honest and {name: set(sum(groups, [])) for name, groups in lied.items()} == {
-        name: set(sum(groups, [])) for name, groups in honest.items()
-    }
-    with pytest.raises(EngineError, match="evaluator"):
-        Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=True)
 
 
 def problems(world: World, config: Config) -> list[str]:
@@ -1903,14 +1970,11 @@ LEAD_SET_TWO_WAYS = (
     ['group_by = "lead"', 'group_by = "package"\nselect = "lead != \'nobody\'"'],
     ids=["group-by", "select"],
 )
-def test_a_conflict_only_a_level_meets_stops_both_engines_alike(
-    world: World, monkeypatch: pytest.MonkeyPatch, level: str
-) -> None:
+def test_a_conflict_only_a_level_meets_stops_the_run(world: World, level: str) -> None:
     rules = LEVELS.replace('group_by = "zone"', level)
     config = world.config(rules, LEAD_SET_TWO_WAYS)
     native = problems(world, config)
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == problems(world, config)
+    assert_stored(world, f"level conflict {level}", rules, LEAD_SET_TWO_WAYS)
     assert native and all("field 'lead' set differently" in problem for problem in native)
 
 
@@ -1921,19 +1985,14 @@ EXPECTED_KINDS = CONFIG.replace(
 )
 
 
-def test_an_expected_kind_no_symbol_holds_makes_a_rule_incomplete_in_both(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_expected_kind_no_symbol_holds_makes_a_rule_incomplete(world: World) -> None:
     rules = rule_table("kinds", {**EDGE, "deny": "dst.kind in ['ghost', 'model']"})
     config = world.config(rules, EXPECTED_KINDS)
 
     def reasons() -> list[str]:
         return [item.reason for item in Engine(config, world.graph, world.repo).evaluate().incomplete()]
 
-    native = reasons()
-    monkeypatch.setattr(engine, "context_class", lambda index: RuleContext)
-    assert native == reasons()
-    assert native == ["kind ghost matched no symbol, but [kinds] marks it expected"]
+    assert reasons() == ["kind ghost matched no symbol, but [kinds] marks it expected"]
 
 
 # A provider-set field read in each role the evaluator compiles (D54), as (rules, config).
@@ -1979,18 +2038,13 @@ COLUMN_ROLES = {
 
 
 @pytest.mark.parametrize("role", sorted(COLUMN_ROLES))
-def test_a_provider_field_read_in_each_role_gets_its_column(
-    world: World, monkeypatch: pytest.MonkeyPatch, role: str
-) -> None:
+def test_a_provider_field_read_in_each_role_gets_its_column(world: World, role: str) -> None:
     rules, base = COLUMN_ROLES[role]
     config = world.config(rules, base)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     reads = native_module().Rules.reads(native.native.native.link, json.dumps(native.plan.data()))
     assert set(reads) & {"team", "lead"}
-    if config.levels:
-        assert level_differences(world, config, monkeypatch) == []
-    else:
-        assert differences(world, rules, base) == []
+    assert_stored(world, f"column role {role}", rules, base)
 
 
 # An export rule's slot owners are selectors it compiles itself: a provider field one reads gets its
@@ -2006,7 +2060,7 @@ def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monke
     }
     rules = rule_table("read", {**export, "ledger": False}) + rule_table("seer", SIGNATURE)
     config = world.config(rules, PROVIDED)
-    native, _ = world.contexts(config)
+    native = world.context(config)
     reads = native_module().Rules.reads(native.native.native.link, json.dumps(native.plan.data()))
     assert reads == ["team"]
-    assert differences(world, rules, PROVIDED) == []
+    assert_stored(world, "slot owner column", rules, PROVIDED)

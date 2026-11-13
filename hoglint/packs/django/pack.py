@@ -37,7 +37,7 @@ from hoglint.packs.django.relations import (
 )
 from hoglint.packs.django.setting_names import SETTINGS_PRODUCER, SettingNames
 from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalItems, SignalProducer
-from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelItems, GetModelProducer, UseProducer
+from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelItems, GetModelProducer
 from hoglint.plugins import PackReader, PackSink, ProducerFailure, Refinement
 
 APPS_PRODUCER = "django.apps@1"
@@ -177,12 +177,10 @@ class DjangoRun:
         return []
 
     def use_edges(self) -> Sequence[Output]:
-        """On the native engine the link judges the uses (D49); `UseProducer` is the meaning."""
+        """The link judges the uses (D49)."""
         assert self.registry is not None
-        producer = UseProducer(self.reader, self.registry)
-        if isinstance(self.sink, NativeSink):
-            return NativeUses(producer, self.sink).produce(self.files, USES_KINDS)
-        return producer.produce(self.files)
+        assert isinstance(self.sink, NativeSink)
+        return NativeUses(self.reader, self.registry, self.sink).produce(self.files, USES_KINDS)
 
     def relation_items(self) -> RelationItems:
         assert self.registry is not None

@@ -50,7 +50,7 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   A name that assigns a class is followed to the class.
   Written limits: a conditional expression is unknown (the record keeps none of its parts); a builtin constructor called with a keyword or with no argument is unknown; a name that assigns another alias, or an attribute chain past a class (`Model.Status.choices`), is unknown.
 - What a hand-out by star or by assignment does not read, in plain words:
-  1. Star: a source that makes its names by code (`globals().update(...)`, a loop) is read by its table, so those names are not seen; `__all__ = a.__all__ + b.__all__` cannot be read, so it is unknown. A name a source binds under a condition or deletes again is read as bound. In a module with a function and no `__all__` a star hands out nothing, as a named import there hands out nothing (D64). Outside export modules a star import stays one edge.
+  1. Star: a source that makes its names by code (`globals().update(...)`, a loop) is read by its table, so those names are not seen; `__all__ = a.__all__ + b.__all__` cannot be read, so it is unknown. A name a source binds under a condition or deletes again is read as bound. In a module with a function and no `__all__` a star hands out nothing, as a named import there hands out nothing (D64). Outside export modules a star import stays one edge. A star of a third-party module reads the installed distribution's source, so it hands out the names a named import would; when the distribution is not installed, the star is an import that did not resolve.
   2. Assignment: a member past a class (`Account.DoesNotExist`, `Order.objects`, `Status.choices`), a call (`acreate = sync_to_async(create)`), a list of classes, a tuple target (`A, B = X, Y`), two targets (`A = B = X`) and the first of two assignments to one name are not handed out. Not listed, they are not judged anywhere; listed in `__all__`, they are unknown. A generic or union alias (`Thing = list[Order]`) is judged where a slot names it, where the producer expands it.
   3. Listed names: a value by any other form than those above is unknown.
 - A lazy name has an import edge, written by the core producer: an import of the name from the module the lazy map names, at the map's line (Nov 12).
@@ -128,6 +128,12 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   One rule decides which members of a class are read (Nov 13): `walk_where` decides the methods and attributes of a class, the handed-out class and each ancestor alike, a `ClassVar` included.
   So the methods of a frozen dataclass core defines, handed out by a product's facade, are core's contract and are not judged, as the methods a product class inherits from a class core defines are not.
   The fields of a frozen dataclass and of a pydantic model are always read, wherever a slot names the class and whoever defines it: they are constructor slots of the class, and of a class that inherits them.
+  In a class `walk_where` is false for (a class core defines), the export rule reports a field only for a denied kind of the shape policy (`deny`: a model, a manager, a queryset, a command) (Nov 13).
+  An unknown type (`Any`), a missing or unread annotation (a call such as `conint(ge=0)`), a name that does not resolve (a type parameter of the class too) and a class of no allowed shape in such a field are core's: the product cannot change them.
+  The walk goes on through such a field: an allowed class `walk_where` is false for is walked on by the same rule, and a class `walk_where` holds for (a class of a product) is judged in full, so a model in its field is still reported.
+  The test reads only `walk_where` and the policy's `deny` list.
+  A field a product class inherits from such a class is a constructor slot of the product class and is judged in full.
+  Where a facade hands such a class out by name, the copy of its fields at the facade is the signature rule's, as any copy is.
   A dataclass core defines that is no data shape (its query syntax tree) is core's contract as a whole: `walk_where` decides its fields too.
 
 **What an export may hand out besides data** (the same batch).
@@ -151,7 +157,9 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   | A public method, `__init__`, property or attribute of an allowed class handed out from outside the facade | `export-shape`: one row per type and module, the trail in the message |
   | A private method of a walked class | `export-shape` |
   | A method or attribute (a `ClassVar` too) of a class core defines, handed out or inherited | none: core's contract |
-  | A field of a frozen dataclass or a pydantic model core defines, handed out, inherited or named in a slot | as a field of the handed-out class |
+  | A field of a frozen dataclass or a pydantic model core defines, named in a slot (one level deeper or more) | `export-shape` for a denied kind only; a product class it names is judged in full |
+  | A field of a frozen dataclass or a pydantic model core defines, handed out | `facade-signature` at the copy |
+  | A field of a frozen dataclass or a pydantic model core defines, inherited by a product class | as a field of the product class |
   | A member of a class named in a slot (one level deeper) | as the rows above, by where its row is read |
   | Every slot above, at every depth | judged by one slot policy: the named rule's selection |
 

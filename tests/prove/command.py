@@ -3,18 +3,17 @@ passed or failed, one line, and the seconds it took. Each check writes its own l
 only when every check passed.
 
 Usage: bin/prove [--jobs N] [--work DIR] [--keep] [--skip-local]
-                 [--real SNAPSHOT ...] [--base REV] [--parity] [--replay SAMPLE] [--replay-counts FILE]
+                 [--real SNAPSHOT ...] [--base REV] [--replay SAMPLE] [--replay-counts FILE]
 
-Always: the build, the model repository in both engines, pytest with the native engine required,
+Always: the build, the model repository in the native engine, pytest with the native engine required,
 cargo test, clippy, cargo fmt, ruff check and format, ty against its baseline, determinism (three
 hash seeds times one and four threads) and the store modes on the model repository.
 
   --real SNAPSHOT  a snapshot of the monorepo (repeatable), copied and laid with this repo's preset:
-                   the head dumped in the native engine
+                   the head dumped
   --base REV       with --real: REV exported and built into its own target directory, dumped on
                    each snapshot, and every table compared with the head's; the moved rows are
                    written to the log directory
-  --parity         with --real: a Python-engine dump of the head, compared on all ten tables
   --replay SAMPLE  the replay sample (a directory with `repo` and `pairs-*.tsv`), in today mode and
                    as the certificate; prints the pairs that are not EQUAL or not HELD
   --replay-counts FILE  the stored truth and predicted counts per pair (`pair<TAB>truth<TAB>predicted`)
@@ -108,7 +107,7 @@ class ProveCommand:
         checks: list[Check] = []
         for index, path in enumerate(args.real, start=1):
             snapshot = Snapshot(Path(path).resolve(), f"{index}-{Path(path).name}")
-            checks.append(RealSize(snapshot, python, head, base, args.parity))
+            checks.append(RealSize(snapshot, python, head, base))
         if args.replay:
             stored = Path(args.replay_counts).resolve() if args.replay_counts else None
             for mode in ("today", "traces"):
@@ -147,13 +146,12 @@ def main() -> None:
     parser.add_argument("--real", action="append", default=[])
     parser.add_argument("--base")
     parser.add_argument("--base-target")
-    parser.add_argument("--parity", action="store_true")
     parser.add_argument("--real-python")
     parser.add_argument("--replay")
     parser.add_argument("--replay-counts")
     args = parser.parse_args()
-    if (args.base or args.parity) and not args.real:
-        parser.error("--base and --parity need --real")
+    if args.base and not args.real:
+        parser.error("--base needs --real")
     command = ProveCommand(args)
     try:
         code = command.run()

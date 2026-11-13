@@ -8,8 +8,7 @@ from core.support import Repo, class_def, func_def, import_row
 from django_facts import FactRepo
 from hoglint.core import memo
 from hoglint.core.config import CoreConfig
-from hoglint.core.harness import PRODUCER_ERROR, GraphSink
-from hoglint.core.reader import python_pack_io
+from hoglint.core.harness import PRODUCER_ERROR
 from hoglint.model import Graph, Resolution
 from hoglint.presets_py.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
 from hoglint.presets_py.posthog.pack import PosthogPack
@@ -61,11 +60,12 @@ def repo() -> Repo:
 
 @pytest.mark.parametrize("shuffle_seed", [0, 1])
 def test_a_walk_the_depth_limit_stops_is_unknown_whichever_test_walks_first(shuffle_seed: int) -> None:
-    build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
+    linked = repo().link(CoreConfig(first_party=("posthog", "products", "common")))
 
-    edges = DrivesProducer(python_pack_io(build, Graph())[0], shuffle_seed).produce()
+    edges = DrivesProducer(linked.reader(), shuffle_seed).produce()
 
-    assert [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges] == [
+    found = [(e.site.module, e.attr("execution"), e.resolution, e.attr("chain").count(">")) for e in edges]
+    assert sorted(found) == [
         ("posthog.test.test_from_the_middle", "via-helper", Resolution.RESOLVED, HELPERS - MIDDLE),
         ("posthog.test.test_from_the_start", "unknown", Resolution.UNRESOLVED, 0),
     ]
@@ -76,11 +76,9 @@ def django_run() -> Graph:
 
 
 def posthog_run() -> Graph:
-    build = repo().build(CoreConfig(first_party=("posthog", "products", "common")))
-    graph = Graph()
-    reader, _ = python_pack_io(build, graph)
-    PosthogPack.run(reader, GraphSink(graph))
-    return graph
+    linked = repo().link(CoreConfig(first_party=("posthog", "products", "common")))
+    PosthogPack.run(linked.reader(), linked.sink())
+    return linked.graph
 
 
 @pytest.mark.parametrize("run", [django_run, posthog_run])

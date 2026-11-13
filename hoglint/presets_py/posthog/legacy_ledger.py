@@ -15,14 +15,17 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from hoglint.core.analysis import AnalysisOptions, CoreAnalysis
-from hoglint.core.build import CoreBuild
+from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.config import CoreConfig
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.core.modules import FirstParty
-from hoglint.core.reader import python_pack_io
+from hoglint.core.reader import BuildReader
 from hoglint.core.records import sequence_items, str_literal
 from hoglint.model import Context, Edge, Graph, Resolution
+from hoglint.native.analysis import NativeAnalysis
+from hoglint.native.build import NativeBuild
+from hoglint.native.graph import NativeGraph, NativeSink
+from hoglint.native.queries import NativePackQueries
 from hoglint.packs.django.config import SECTION, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
 from hoglint.presets_py.posthog.drives import UNKNOWN_EXECUTION
@@ -103,7 +106,7 @@ class CrossingsPolicy:
     model_crossings: frozenset[tuple[str, str]]
 
     @classmethod
-    def from_facts(cls, build: CoreBuild) -> CrossingsPolicy:
+    def from_facts(cls, build: NativeBuild) -> CrossingsPolicy:
         record = build.store.records[ISOLATION_PATH]
         for row in record.get("assigns", ()):
             if row["s"] != -1 or "MODEL_CROSSINGS" not in row["t"]:
@@ -437,15 +440,16 @@ class ParityResult:
 class Parity:
     """Builds the graph with the Django pack and the PostHog producers, then diffs the ledger."""
 
-    def __init__(self, repo_root: Path, build: CoreBuild) -> None:
+    def __init__(self, repo_root: Path, build: NativeBuild) -> None:
         self.repo_root = repo_root
         self.build = build
 
-    def produce(self, graph: Graph) -> None:
+    def produce(self, graph: NativeGraph) -> None:
         """The repo's own `[django]` table drives the Django pack, so parity checks the real config.
         The facade facts producer runs here only: a check gets its slots from core."""
         section = tomllib.loads((self.repo_root / ROOT_CONFIG).read_text()).get(SECTION, {})
-        reader, sink = python_pack_io(self.build, graph)
+        reader = BuildReader(self.build, NativePackQueries(self.build, graph, graph.link))
+        sink = NativeSink(graph)
         DjangoPack.run(reader, DjangoPackConfig.from_section(section), sink, self.repo_root)
         POSTHOG_PACK.run(reader, sink)
 
@@ -471,7 +475,7 @@ def main() -> None:
     """Usage: python -m hoglint.presets_py.posthog.legacy_ledger <repo_root> [<work_dir>]"""
     repo_root = Path(sys.argv[1]).resolve()
     work_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(tempfile.mkdtemp(prefix="hoglint-parity-"))
-    analysis = CoreAnalysis(AnalysisOptions(repo=repo_root, config=PARITY_CONFIG, work_dir=work_dir)).run()
+    analysis = NativeAnalysis(AnalysisOptions(repo=repo_root, config=PARITY_CONFIG, work_dir=work_dir)).run()
     parity = Parity(repo_root, analysis.build)
     graph = analysis.graph
     parity.produce(graph)

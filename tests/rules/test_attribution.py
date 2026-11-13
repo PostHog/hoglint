@@ -14,7 +14,7 @@ import pytest
 
 from core.support import set_modified
 from hoglint.cli import WAY_OUT, Commands, Snapshots
-from hoglint.facts import Extractor
+from hoglint.facts import find_binary
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
 from hoglint.ledger.cache import RunStores
@@ -47,7 +47,7 @@ from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.source import GraphSource
 from native.require import native_required
 
-from rules.support import GraphBuilder, config_from
+from rules.support import GraphBuilder, config_from, native_graph
 from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, needs_extractor, write_files
 
 DYNAMIC = ("dynamic-imports", "app.loader|dynamic-import|", "dynamic-import '' did not resolve")
@@ -184,7 +184,9 @@ def test_a_summary_holds_no_absolute_path_and_no_day(tmp_path: Path) -> None:
     graph = GraphBuilder().module("app.a", "app.b").edge("import", "app.a", "app.b").graph
     entry = {"rule": "flags", "match": {"src.module": "gone"}, "reason": "r", "owners": ["t"], "scope": "prod"}
     exceptions = ExceptionsFile.parse({"schema": 1, "exception": [{**entry, "review_by": "2026-01-01"}]}, config)
-    result = Engine(anchored, graph, code_root, today=datetime.date(2026, 11, 9)).evaluate(None, exceptions)
+    result = Engine(anchored, native_graph(graph), code_root, today=datetime.date(2026, 11, 9)).evaluate(
+        None, exceptions
+    )
     summary = ScanSummary.from_run(result, graph, Envelope(), roots=(policy_root, code_root), exceptions=exceptions)
     assert str(tmp_path) not in json.dumps(summary.to_json())
     shown = [f.shown for f in summary.findings]
@@ -233,7 +235,7 @@ def test_a_stored_summary_keeps_what_check_prints_and_names_other_findings_by_ke
     )
     accepted = ("cross", ("core.a", "products.billing.logic"))
     ledger = LedgerFile(schema=1, policy=config.policy_hash, lines={accepted: 1}, exists=True)
-    result = Engine(config, graph, tmp_path).evaluate(ledger)
+    result = Engine(config, native_graph(graph), tmp_path).evaluate(ledger)
     envelope = Envelope("t" * 40, "engine", "policy", "framework")
     store = SummaryStore(tmp_path / "cache")
     store.put(envelope, ScanSummary.from_run(result, graph, envelope, roots=(tmp_path,)))
@@ -330,7 +332,9 @@ def test_a_cache_that_cannot_be_used_warns_once_and_changes_no_verdict(
     git_in(repo, "commit", "-qm", "one computed import")
     (repo / "core/loader.py").write_text(SECOND_LOADER)
     git_in(repo, "add", "-A")
-    monkeypatch.setattr(GraphSource, "build", lambda *args, **kwargs: GraphBuilder().module("core.loader").graph)
+    monkeypatch.setattr(
+        GraphSource, "build", lambda *args, **kwargs: native_graph(GraphBuilder().module("core.loader").graph)
+    )
 
     def check(cache: Path) -> int:
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
@@ -445,7 +449,7 @@ def test_the_extractor_reports_the_ids_of_its_sources(section: str) -> None:
     assert sources is not None
     if not has_extractor() and not native_required():
         pytest.skip("no extractor binary is built")
-    reported = BinaryIds.of(Extractor.find_binary(), section)
+    reported = BinaryIds.of(find_binary(), section)
     if reported != sources.digest(section) and not native_required():
         pytest.skip(f"the extractor binary was built from other [{section}] sources: rebuild it")
     assert reported == sources.digest(section)
@@ -491,6 +495,7 @@ def test_couplings_carry_the_shape_the_rule_judges(tmp_path: Path) -> None:
         .edge("reference", "products.beta.other", widget, shape="annotation")
         .graph
     )
+    graph = native_graph(graph)
     result = Engine(config_from(tmp_path, USE_SHAPE), graph, tmp_path).evaluate()
     couplings = CouplingScan(result, graph, frozenset({"products.beta.old_name"}))
     assert couplings.counts() == {
@@ -820,8 +825,7 @@ def stored_manifests(cache: Path) -> list[str]:
 
 
 @needs_extractor
-@pytest.mark.parametrize("engine", ["python", "native"])
-def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored(tmp_path: Path, engine: str) -> None:
+def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     write_files(
         repo, {**FILES, "hoglint.toml": GONE, ".gitignore": "__pycache__/\n", "products/billing/legacy/a.py": ""}
@@ -841,15 +845,15 @@ def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored
     reports = []
     for args in (("check",), ("check", "--index")):
         shutil.rmtree(cache, ignore_errors=True)
-        done = hoglint(repo, "--engine", engine, *args)
+        done = hoglint(repo, *args)
         reports.append((done.returncode, done.stdout.replace("this run", "HEAD"), stored_manifests(cache)))
     shutil.rmtree(cache, ignore_errors=True)
-    hoglint(repo, "--engine", engine, "summary", "export", "--file", str(tmp_path / "summary"))
+    hoglint(repo, "summary", "export", "--file", str(tmp_path / "summary"))
     assert reports[0] == reports[1], reports
     assert stored_manifests(cache) == reports[0][2] and len(reports[0][2]) == 1
     assert "violations (1)" in reports[0][1] and "core.api" not in reports[0][1]
     (repo / "products/alerts/new.py").write_text("X = 1\n")
-    dirty = hoglint(repo, "--engine", engine, "check")
+    dirty = hoglint(repo, "check")
     assert "violations (1)" in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
     # A failed check names the allowed way past a new finding, never a ledger rewrite.
     assert WAY_OUT in dirty.stdout and "write-ledger" not in dirty.stdout
@@ -867,8 +871,7 @@ LINKS = {
 
 
 @needs_extractor
-@pytest.mark.parametrize("engine", ["python", "native"])
-def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside(tmp_path: Path, engine: str) -> None:
+def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     config = OWNED_CONFIG.replace('file = "CODEOWNERS"', 'file = ".github/CODEOWNERS"')
     write_files(repo, {**FILES, "hoglint.toml": config, "CODEOWNERS": "*.py @team-a\n"})
@@ -882,11 +885,11 @@ def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside
     git_in(repo, "init", "-q")
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "links")
-    outputs = [hoglint(repo, "--engine", engine, *args).stdout for args in (("check",), ("check", "--index"))]
+    outputs = [hoglint(repo, *args).stdout for args in (("check",), ("check", "--index"))]
     assert outputs[0] == outputs[1]
     # An untracked file makes `check` read the working tree, which follows the same links.
     (repo / "core/notes.py").write_text("")
-    outputs.append(hoglint(repo, "--engine", engine, "check").stdout)
+    outputs.append(hoglint(repo, "check").stdout)
     for printed in outputs:
         assert "products.billing.logic.charge core.link import" in printed, printed
         assert "core/impl.py:1  [@team-a]" in printed

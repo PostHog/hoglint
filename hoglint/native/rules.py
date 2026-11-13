@@ -1,72 +1,46 @@
 """Rules over the native graph: lazy edge tables, and rule evaluation by the native evaluator.
 
 The evaluator (src/link/rules) judges every edge of a rule on its own, per destination, from a
-plan of the config (`hoglint.native.plan`). Edge and entrypoint rules come back as rows: a
-violation becomes its finding here, and anything else goes to the rule's own code, which must
-judge the same. Rules that judge in Python (use-shape, signature, inventory) take their
-selection from it; cycle and reach rules take their pairs and their search.
+plan of the config (`hoglint.native.plan`). Edge, entrypoint, use-shape, signature and inventory
+rules come back as rows that hold what a message names: the rule's Python class words each row
+(`EdgeRule.report`) and judges none again. Cycle and reach rules take their pairs and their search.
 """
 
 from __future__ import annotations
 
-import json
 from array import array
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import cached_property
 from pathlib import Path
 from typing import Any, TypeVar
 
-from hoglint.config.model import Config, RuleSpec
-from hoglint.index import DECL_NAMES, MODULE_SCOPE, EdgeGroup, GraphIndex, Memo, SymbolFacts, has_endpoint_attrs
+from hoglint.config.model import Config
+from hoglint.index import DECL_NAMES, MODULE_SCOPE, GraphIndex, Memo, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, EdgeRef, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow, owner_module
+from hoglint.model import Edge, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow, owner_module
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.plan import RulePlan
 from hoglint.rules.base import (
-    EdgeEnv,
     EdgeRule,
-    IncompleteItem,
+    Endpoint,
     Judgment,
     RuleContext,
     RuleRun,
     RuleType,
-    project,
+    Seen,
+    named_seen,
     subjects_of,
 )
 from hoglint.rules.engine import primitive_of
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityRule
 from hoglint.rules.exports import ExportPrimitive
 from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
-from hoglint.rules.levels import LevelEvaluator, LevelResult
-from hoglint.rules.plan import tree
-from hoglint.selectors import Node, Truth
+from hoglint.selectors import Truth
 
 T = TypeVar("T")
-
-
-class LazyKinds(Mapping[str, list[Edge]]):
-    """kind -> every edge of that kind, made on first read."""
-
-    def __init__(self, graph: NativeGraph, kinds: list[str]) -> None:
-        self.graph = graph
-        self.kinds = kinds
-        self.made: dict[str, list[Edge]] = {}
-
-    def __getitem__(self, kind: str) -> list[Edge]:
-        if kind not in self.kinds:
-            raise KeyError(kind)
-        if kind not in self.made:
-            self.made[kind] = self.graph.by_kind(kind)
-        return self.made[kind]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.kinds)
-
-    def __len__(self) -> int:
-        return len(self.kinds)
 
 
 class LazyModules(Mapping[str, Any]):
@@ -94,30 +68,6 @@ class LazyModules(Mapping[str, Any]):
     def __contains__(self, module: object) -> bool:
         """Membership with no value made: `Mapping.__contains__` would make it."""
         return module in self.known
-
-
-class LazyGroups(Mapping[str, LazyModules]):
-    """kind -> its edges per source module (`NativeGraphIndex.group`), the module list read
-    from the link on first read."""
-
-    def __init__(self, index: NativeGraphIndex, kinds: list[str]) -> None:
-        self.index = index
-        self.kinds = kinds
-        self.made: dict[str, LazyModules] = {}
-
-    def __getitem__(self, kind: str) -> LazyModules:
-        if kind not in self.kinds:
-            raise KeyError(kind)
-        found = self.made.get(kind)
-        if found is None:
-            found = self.made[kind] = LazyModules(self.index.modules_of(kind), self.index.group_maker(kind))
-        return found
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.kinds)
-
-    def __len__(self) -> int:
-        return len(self.kinds)
 
 
 class NativeSymbolFacts(SymbolFacts):
@@ -225,90 +175,28 @@ class RowDetail:
         return self.made
 
 
-def decided(rule: EdgeRule, edge: Edge, target: int, judgment: Judgment) -> EdgeEnv:
-    """The environment of the edge's `target`-th destination, once the rule's own code judges it
-    as the evaluator did: a judgment that differs is an engine error, never a silent difference."""
-    env = rule.envs_of(edge)[target]
-    judged = rule.decide(env)
-    if judged is not judgment:
-        site = edge.site
-        raise EngineError(
-            f"rule {rule.spec.id} judges {edge.kind} {site.path}:{site.line} {judged}, "
-            f"apart from the evaluator's {judgment}"
-        )
-    return env
+class Worded:
+    """The detail of a finding the evaluator found: the rule words it from the row when something
+    reads the message, site, witnesses or remedies."""
 
+    __slots__ = ("at", "made", "rows")
 
-class Rejudged:
-    """The detail of a finding made from a judgment made outside the rule's own code: the rule
-    judges the edge's destination again when something reads the message, site, witnesses or
-    remedies. A judgment or an identity that differs is an engine error, never a silent
-    difference."""
-
-    __slots__ = ("handle", "identity", "judgment", "made", "rule", "target")
-
-    def __init__(
-        self, rule: EdgeRule, handle: EdgeRef, judgment: Judgment, identity: tuple[str, ...], target: int = 0
-    ) -> None:
-        self.rule = rule
-        self.handle = handle
-        self.judgment = judgment
-        self.identity = identity
-        self.target = target
+    def __init__(self, rows: JudgedRows, at: int) -> None:
+        self.rows = rows
+        self.at = at
         self.made: FindingDetail | None = None
-
-    def confirmed(self, rule: EdgeRule | None = None) -> EdgeEnv:
-        """The destination's environment, once the rule's own code judges it as the evaluator did
-        and its own `project` gives the evaluator's identity: the ledger keys a finding by it.
-        `rule` is the rule over the labels it judges with: the run's own by default, one over a
-        plain Python labeler on a ledger write (D55)."""
-        rule = rule or self.rule
-        edge = self.handle.get()
-        env = decided(rule, edge, self.target, self.judgment)
-        identity = project(rule.spec.identity, env.resolve)
-        if identity != self.identity:
-            site = edge.site
-            raise EngineError(
-                f"rule {rule.spec.id} gives {edge.kind} {site.path}:{site.line} the identity {identity}, "
-                f"apart from the evaluator's {self.identity}"
-            )
-        return env
-
-    def reported(self, env: EdgeEnv) -> RuleRun:
-        """What the judgment reports for `env`, message included, kept out of the rule's run: the
-        judgment is checked already, so the rule does not decide again."""
-        rule = self.rule
-        saved, rule.run = rule.run, RuleRun(rule.spec)
-        try:
-            rule.report(env, self.judgment, rule.describe(env))
-            return rule.run
-        finally:
-            rule.run = saved
 
     def get(self) -> FindingDetail:
         if self.made is None:
-            self.made = self.reported(self.confirmed()).findings[0].detail.get()
+            rows, at = self.rows, self.at
+            seen = rows.seen(at, rows.handle(at).get())
+            self.made = rows.rule.worded(seen, rows.judgment(at)).findings[0].detail.get()
         return self.made
 
 
 def distinct_ids(ids: Iterable[int]) -> array[int]:
     """Edge ids, each once, in the order first seen, as the link reads them."""
     return array("I", dict.fromkeys(ids))
-
-
-def confirmed_row(finding: Finding) -> tuple[object, ...]:
-    """What a ledger write holds the evaluator to of a finding: its identity, subjects and flags."""
-    return finding.identity, finding.subjects, finding.ledgerable, finding.unknown
-
-
-def confirmed_rows(run: RuleRun) -> list[tuple[object, ...] | IncompleteItem]:
-    """What a ledger write holds the evaluator to of a run: each finding (`confirmed_row`) and each
-    incomplete item, in order."""
-    return [*(confirmed_row(finding) for finding in run.findings), *run.incomplete]
-
-
-# The detail of a finding a ledger write makes only to compare it (`confirmed_row`).
-NO_DETAIL = FindingDetail("", None)
 
 
 def u32s(raw: bytes) -> array[int]:
@@ -319,7 +207,7 @@ def u32s(raw: bytes) -> array[int]:
 
 class JudgedRows:
     """A judged rule's rows as the evaluator gives them (`Rules.judge`): columns, with each
-    judgment, identity and module once. The rows whose judgment the rule takes as a finding
+    judgment, identity, module and text once. The rows whose judgment the rule takes as a finding
     (`EdgeRule.found`) are a `RowColumns` source of the rule's table: a `Finding` is made for one of them
     only when a reader asks for it."""
 
@@ -329,25 +217,30 @@ class JudgedRows:
         "alone_set",
         "ctx",
         "dst_at",
+        "dst_symbol_at",
         "edges",
         "found",
         "identities",
         "identity_at",
         "judgment_at",
         "judgments",
+        "label_at",
         "ledgerable",
         "modules",
         "no_place",
-        "reported",
         "row_edges",
         "rule",
         "src_at",
+        "src_symbol_at",
         "targets",
+        "texts",
         "unknown",
+        "unknown_at",
     )
 
     def __init__(self, ctx: NativeRuleContext, rule: EdgeRule, raw: tuple[Any, ...]) -> None:
-        edges, targets, names, judgment_at, identities, identity_at, modules, src_at, dst_at = raw
+        edges, targets, names, judgment_at, identities, identity_at, modules, src_at, dst_at, words = raw
+        texts, src_symbol_at, dst_symbol_at, label_at, unknown_at = words
         self.ctx = ctx
         self.rule = rule
         self.edges = u32s(edges)
@@ -360,33 +253,45 @@ class JudgedRows:
         self.modules: list[str] = modules
         self.src_at = u32s(src_at)
         self.dst_at = u32s(dst_at)
+        self.texts: list[str] = texts
+        self.src_symbol_at = u32s(src_symbol_at)
+        self.dst_symbol_at = u32s(dst_symbol_at)
+        self.label_at = u32s(label_at)
+        self.unknown_at = u32s(unknown_at)
         self.no_place: int = import_module().NO_PLACE
         self.found = rule.found()
         flags = [rule.flags(judgment) if judgment in self.found else (False, False) for judgment in self.judgments]
         self.ledgerable = bytes([flags[at][0] for at in self.judgment_at])
         self.unknown = bytes([flags[at][1] for at in self.judgment_at])
         self.row_edges: RowEdges | None = None
-        # What the rule's own code reported for each row it judged, kept for a ledger write.
-        self.reported: dict[int, RuleRun] = {}
-        # The rows whose judgment goes to the rule's own code, in order: few or none.
+        # The rows whose judgment the rule words by its own `report`, in order: few or none.
         places = {at for at, judgment in enumerate(self.judgments) if judgment not in self.found}
         self.alone = [row for row, at in enumerate(self.judgment_at) if at in places] if places else []
         self.alone_set = frozenset(self.alone)
-        # Rust gives only some judgments an identity (`Judgment::has_identity`); Python decides
-        # which judgments are findings, and a finding needs one.
-        if self.no_place in self.identity_at:
-            for at, place in enumerate(self.identity_at):
-                if place == self.no_place and at not in self.alone_set:
-                    raise EngineError(
-                        f"rule {rule.spec.id}: the evaluator gives a {self.judgment(at)} row no identity, "
-                        "but the rule takes it as a finding"
-                    )
-        # The edges of the rows the rule's own code reports, by id.
+        # The edges of the rows the rule reports by its own `report`, by id.
         ids = distinct_ids(self.edges[at] for at in self.alone)
         self.alone_edges: dict[int, Edge] = dict(zip(ids, ctx.native.native.core.get(ids)))
 
     def judgment(self, at: int) -> Judgment:
         return self.judgments[self.judgment_at[at]]
+
+    def text(self, place: int) -> str | None:
+        return None if place == self.no_place else self.texts[place]
+
+    def seen(self, at: int, edge: Edge) -> Seen:
+        """What row `at` names, `edge` being its edge: what the rule words its finding or
+        incomplete item from."""
+        src = Endpoint(self.src(at), self.text(self.src_symbol_at[at]))
+        unresolved = self.judgment(at) is Judgment.UNRESOLVED
+        dst = Endpoint(self.dst(at), self.text(self.dst_symbol_at[at]), unresolved=unresolved)
+        return Seen(
+            edge,
+            src,
+            dst,
+            self.texts[self.label_at[at]],
+            self.texts[self.unknown_at[at]],
+            tuple(self.identities[self.identity_at[at]]),
+        )
 
     def edge_rows(self) -> RowEdges:
         """The edges of the rows the rule takes as findings."""
@@ -434,44 +339,18 @@ class JudgedRows:
             subjects.append(found)
         return witnesses, [owners[src_at[at]] for at in ats], subjects
 
-    def rejudged(self, at: int, identity: tuple[str, ...]) -> Rejudged:
-        return Rejudged(self.rule, self.handle(at), self.judgment(at), identity, self.targets[at])
-
     def finding(self, at: int, identity: tuple[str, ...]) -> Finding:
         handle = self.handle(at)
         return Finding(
             rule=self.rule.spec.id,
             identity=identity,
-            detail=self.rejudged(at, identity),
+            detail=Worded(self, at),
             owner=self.ctx.owner(self.src(at)),
             subjects=self.subjects(at),
             ledgerable=bool(self.ledgerable[at]),
             unknown=bool(self.unknown[at]),
             witness=handle,
         )
-
-    def confirm(self, judge: EdgeRule) -> None:
-        """Every row judged again by `judge` (D50, D55) over its own labels, and held to what a
-        ledger write keeps of it (`confirmed_row`): a row the rule takes as a finding must give
-        its judgment and identity, and then the finding the rule's own code makes of it; a row
-        that code reported must give what it reported over the evaluator's labels."""
-        for at in range(len(self.edges)):
-            if at in self.alone_set:
-                edge = self.alone_edges[self.edges[at]]
-                ours = confirmed_rows(self.reported[at])
-                theirs = confirmed_rows(judge.recorded([decided(judge, edge, self.targets[at], self.judgment(at))]))
-            else:
-                identity = self.identities[self.identity_at[at]]
-                env = self.rejudged(at, identity).confirmed(judge)
-                edge = env.edge
-                ours = [confirmed_row(self.finding(at, identity))]
-                theirs = [confirmed_row(judge.finding_of(env, self.judgment(at), NO_DETAIL))]
-            if ours != theirs:
-                site = edge.site
-                raise EngineError(
-                    f"rule {judge.spec.id} reports {edge.kind} {site.path}:{site.line} as {theirs} "
-                    f"with its own labels, apart from {ours} with the evaluator's"
-                )
 
 
 class NativeRuleContext(RuleContext):
@@ -483,7 +362,6 @@ class NativeRuleContext(RuleContext):
         index = labeler.index
         assert isinstance(index, NativeGraphIndex)
         self.native = index
-        self.judged_rows: list[JudgedRows] = []
         self.owners: dict[str, Owners | None] = {}
 
     @cached_property
@@ -536,31 +414,21 @@ class NativeRuleContext(RuleContext):
                 labeler.provider_labels(entity)
 
     @staticmethod
-    def judged_alone(rule: EdgeRule, edge: Edge, target: int, judgment: Judgment) -> RuleRun:
-        """What the rule's own code reports for one destination the evaluator judged neither
-        clean nor a finding of its own."""
-        return rule.recorded([decided(rule, edge, target, judgment)])
-
-    def alone_reports(self, rule: EdgeRule, rows: JudgedRows) -> Iterator[tuple[int, RuleRun]]:
-        """Each row whose judgment the rule does not take as a finding, with what the rule's own
-        code reports for it; that code must judge as the evaluator did."""
+    def alone_reports(rule: EdgeRule, rows: JudgedRows) -> Iterator[tuple[int, RuleRun]]:
+        """Each row whose judgment the rule does not take as a finding, with what the rule's
+        `report` words of it."""
         for at in rows.alone:
-            reported = rows.reported[at] = self.judged_alone(
-                rule, rows.alone_edges[rows.edges[at]], rows.targets[at], rows.judgment(at)
-            )
-            yield at, reported
+            seen = rows.seen(at, rows.alone_edges[rows.edges[at]])
+            yield at, rule.worded(seen, rows.judgment(at))
 
-    def judged(self, rule: EdgeRule) -> bool:
+    def judged(self, rule: EdgeRule) -> None:
         """The evaluator's rows of an edge, entrypoint, signature or use-shape rule, into the
         rule's findings table in the order the rule judges: a violation (or a slot of unknown
         type the rule reports as a finding) is a row of the evaluator's columns, and a row the
-        rule's own code reports is a row it made."""
-        if rule.CONFIRM != "row":
-            return False
+        rule's `report` words is a row it made."""
         rows = JudgedRows(self, rule, self.run_rule(self.evaluator.judge, rule))
         table = rule.run.findings
         number = table.take(rows)
-        self.judged_rows.append(rows)
         start = 0
         for at, reported in self.alone_reports(rule, rows):
             table.add_rows(number, start, at)
@@ -568,7 +436,6 @@ class NativeRuleContext(RuleContext):
             rule.run.incomplete.extend(reported.incomplete)
             start = at + 1
         table.add_rows(number, start, len(rows.edges))
-        return True
 
     def export_run(self, rule: ExportPrimitive) -> RuleRun:
         """The evaluator's check of an export rule, its rows made into findings and incomplete
@@ -601,7 +468,7 @@ class NativeRuleContext(RuleContext):
             run.findings.append(finding)
         return run
 
-    def inventory_judged(self, rule: EdgeInventory) -> bool:
+    def inventory_judged(self, rule: EdgeInventory) -> None:
         """The evaluator's rows of an inventory over edges: the first destination with each
         identity, kept as a handle, and the ones it cannot place, which the rule reports itself;
         then the classification file's entries, as `EdgeInventory.evaluate` compares them."""
@@ -631,11 +498,8 @@ class NativeRuleContext(RuleContext):
             rule.run.findings.append(finding)
         for identity in sorted(classified - set(seen)):
             rule.run.findings.append(self.finding(spec, identity, rule.stale(identity), None, ledgerable=False))
-        return True
 
-    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]] | None:
-        if rule.NATIVE_MODE != "entities":
-            return None
+    def entity_rows(self, rule: EntityRule) -> list[tuple[str, str, str | None, int, list[str]]]:
         return self.run_rule(self.evaluator.entities, rule)
 
     def layout_roots(self, within: str) -> list[str]:
@@ -676,89 +540,28 @@ class NativeRuleContext(RuleContext):
             found = self.owners[module] = super().owner(module)
         return found
 
-    @cached_property
-    def plain(self) -> RuleContext:
-        """A rule context over a plain Python labeler, which reads no label the evaluator
-        computed: what a ledger write confirms the evaluator's rows with (D55)."""
-        labeler = Labeler(self.config, self.graph, self.repo_root, self.index)
-        return RuleContext(self.config, self.graph, labeler, self.repo_root)
-
-    def confirm_findings(self, ran: list[RuleSpec]) -> None:
-        """Every finding the evaluator made is judged again by its rule's own code, with labels
-        the evaluator did not compute: a run that writes a ledger reads no message, so a wrong
-        row would become accepted debt (D50, D55).
-
-        A rule whose class confirms per row (`RuleType.CONFIRM`) has each row judged again by its
-        rule over the plain context. Every other rule that ran runs whole again in its Python
-        primitive over the plain context, the runs before it at hand for a coverage rule, and
-        must give the evaluator's findings and incomplete items, in order."""
-        plain = self.plain
-        for rows in self.judged_rows:
-            judge = primitive_of(rows.rule.spec)(plain, rows.rule.spec)
-            assert isinstance(judge, EdgeRule)
-            rows.confirm(judge)
-        plain.results.update(self.results)
-        for spec in ran:
-            if primitive_of(spec).CONFIRM != "whole":
-                continue
-            ours, theirs = (
-                confirmed_rows(self.results[spec.id]),
-                confirmed_rows(primitive_of(spec)(plain, spec).evaluate()),
-            )
-            if ours == theirs:
-                continue
-            at = next(
-                (at for at, (mine, other) in enumerate(zip(ours, theirs)) if mine != other), min(len(ours), len(theirs))
-            )
-            mine = ours[at] if at < len(ours) else "nothing"
-            other = theirs[at] if at < len(theirs) else "nothing"
-            raise EngineError(f"rule {spec.id}: the evaluator gives {mine} as row {at}, the rule's own code {other}")
-
-    def confirm_levels(self, levels: dict[str, LevelResult], runs: dict[str, RuleRun]) -> None:
-        """Every level, as the run judged it, must pass and fail the groups it passes and fails
-        over a plain Python labeler (D55): a ledger writes a line per passing group, and a group's
-        label decides which findings block it."""
-        for name, spec in self.config.levels.items():
-            ours = levels[name]
-            theirs = LevelEvaluator(spec, self.plain.labeler, runs).evaluate()
-            if ours.passing == theirs.passing and set(ours.blocks) == set(theirs.blocks):
-                continue
-            wrong = sorted(set(ours.passing) ^ set(theirs.passing)) or sorted(set(ours.blocks) ^ set(theirs.blocks))
-            raise EngineError(f"level {name}: the evaluator and the Python labeler pass groups apart on {wrong[:3]}")
-
     def cycle_rows(self, rule: CyclePrimitive) -> list[CycleRow]:
         rows = self.run_rule(self.evaluator.pairs, rule)
         with engine_errors():
-            return [CycleRow(edge, target, Judgment(name), pair) for edge, target, name, pair in rows]
+            return [CycleRow(edge, target, Judgment(name), *rest) for edge, target, name, *rest in rows]
+
+    def cycle_identities(self, rule: CyclePrimitive, steps: list[tuple[int, int]]) -> list[tuple[str, ...]]:
+        found = self.run_rule(self.evaluator.cycle_identities, rule, steps)
+        return [tuple(identity) for identity in found]
 
     def reach_found(self, rule: ReachPrimitive) -> list[Found]:
         """The evaluator's search of a reach rule, its paths made into Edges."""
         found = self.run_rule(self.evaluator.reach, rule)
         with engine_errors():
-            verdicts = [Truth(verdict) if verdict is not None else None for _, _, _, verdict in found]
-        ids = distinct_ids(edge for _, _, path, _ in found for edge, _ in path)
+            verdicts = [Truth(verdict) if verdict is not None else None for _, _, _, verdict, _ in found]
+        ids = distinct_ids(edge for _, _, path, _, _ in found for edge, _ in path)
         edges = dict(zip(ids, self.native.native.core.get(ids)))
         out = []
-        for (what, source, path, _), verdict in zip(found, verdicts, strict=True):
+        for (what, source, path, _, named), verdict in zip(found, verdicts, strict=True):
             walked = tuple(edges[edge] for edge, _ in path)
-            dst = rule.envs_of(walked[-1])[path[-1][1]].dst if walked else None
-            out.append(Found(what, source, walked, dst, verdict))
+            seen = named_seen(walked[-1], source, named, what == "unresolved") if walked else None
+            out.append(Found(what, source, walked, seen, verdict))
         return out
-
-    def kinds_or_all(self, kinds: tuple[str, ...]) -> list[str]:
-        return list(dict.fromkeys(kinds)) if kinds else self.native.kind_order()
-
-    def edges_passing(self, kinds: tuple[str, ...], node: Node | None) -> list[Edge]:
-        """`node`, which reads only an edge's kind and contexts, judged by the evaluator; only the
-        edges it does not make false become Edges."""
-        if node is None or not kinds:
-            return super().edges_passing(kinds, node)
-        with engine_errors():
-            passing = array("I", self.evaluator.passing(list(kinds), json.dumps(tree(node))))
-        return self.native.native.core.get(passing)
-
-    def source_modules(self, kinds: tuple[str, ...]) -> list[str]:
-        return sorted({module for kind in self.kinds_or_all(kinds) for module in self.native.modules_of(kind)})
 
 
 class NativeGraphIndex(GraphIndex):
@@ -769,18 +572,12 @@ class NativeGraphIndex(GraphIndex):
         self.native = graph
         self.core_count: int = graph.link.core_count()
         self.module_order: dict[str, list[str]] = {}
-        self.by_kind = LazyKinds(graph, self.kind_order())
-        self.groups = LazyGroups(self, self.kind_order())
         self.facts = NativeSymbolFacts(graph)
         self.path_to_module = {path: module for module, path in graph.modules.items()}
         self.module_of_symbol = Memo(self.find_module)
 
     context_class: type[RuleContext] = NativeRuleContext
     labeler_class: type[Labeler] = NativeLabeler
-
-    def kind_order(self) -> list[str]:
-        """Kinds in the order their first edge appears: core kinds, then pack kinds."""
-        return list(self.native.link.kind_order())
 
     def modules_of(self, kind: str) -> list[str]:
         """Source modules of `kind` in the order their first edge appears."""
@@ -789,28 +586,9 @@ class NativeGraphIndex(GraphIndex):
             found = self.module_order[kind] = self.native.link.source_modules(kind)
         return found
 
-    def pack_edges(self, kind: str, module: str) -> list[Edge]:
-        """The pack edges of `kind` from one module."""
-        ids = array("I", self.native.link.ids_from(kind, module))
-        return self.native.core.get(array("I", (i for i in ids if i >= self.core_count)))
-
-    def is_irregular(self, edge: Edge) -> bool:
-        site = edge.site
-        if has_endpoint_attrs(edge):
-            return True
-        return bool(site.path) and site.path != self.graph.modules.get(site.module)
-
     def module_edges(self, kind: str, module: str) -> list[Edge]:
         """One module's edges of one kind, core then pack, with no irregular edges sorted out."""
         return self.native.core.get(array("I", self.native.link.ids_from(kind, module)))
-
-    def group(self, kind: str, module: str) -> EdgeGroup:
-        """One module's edges of one kind, core then pack."""
-        edges = self.module_edges(kind, module)
-        return EdgeGroup(edges, [edge for edge in edges if self.is_irregular(edge)])
-
-    def group_maker(self, kind: str) -> Any:
-        return lambda module: self.group(kind, module)
 
     @cached_property
     def ordinals(self) -> dict[int, int]:  # type: ignore[override]
@@ -834,30 +612,6 @@ class NativeGraphIndex(GraphIndex):
     def module_rebinds(self) -> Mapping[str, list[Edge]]:  # type: ignore[override]
         """`rebind` edges per module: the names an export module hands out by assigning them again."""
         return LazyModules(self.modules_of("rebind"), lambda module: self.module_edges("rebind", module))
-
-    @cached_property
-    def exposes(self) -> Mapping[str, list[tuple[str, Edge]]]:  # type: ignore[override]
-        """(callable qualname, exposes edge) per module."""
-
-        def exposes(module: str) -> list[tuple[str, Edge]]:
-            return [(e.attr("callable") or e.site.scope, e) for e in self.module_edges("exposes", module)]
-
-        return LazyModules(self.modules_of("exposes"), exposes)
-
-    @cached_property
-    def exposed_handles(self) -> Mapping[str, list[tuple[str, int]]]:  # type: ignore[override]
-        """(callable qualname, handle of the exposes edge) per module, read off the link's
-        columns."""
-
-        def exposed(module: str) -> list[tuple[str, int]]:
-            ids = self.native.link.ids_from("exposes", module)
-            callables, scopes = self.native.link.columns(ids, ["attr:callable", "scope"])
-            return [
-                (callable_name or scope, handle)
-                for callable_name, scope, handle in zip(callables, scopes, array("I", ids))
-            ]
-
-        return LazyModules(self.modules_of("exposes"), exposed)
 
     def edges_at(self, handles: list[int]) -> list[Edge]:
         return self.native.core.get(array("I", handles))
