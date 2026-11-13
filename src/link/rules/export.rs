@@ -798,8 +798,7 @@ impl<'a> Walk<'a> {
             if self.cx.attr(id, alias) == "expanded" {
                 continue;
             }
-            let shape_only =
-                trail.len() == 1 && self.leaves_slot(id, owner, &qualname, module, bound);
+            let shape_only = self.leaves_slot(id, owner, &qualname, module, bound);
             if self.cx.attr(id, annotation) == "missing" {
                 if !shape_only {
                     let why = ("no-annotation", self.cx.attr(id, slot));

@@ -95,7 +95,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   The export rule leaves a slot to a named rule only where that rule reads the slot's row: the row's own module is one the rule's source selection holds for, or the exporting module holds the producer's copy of the slot (a handed-out function, a data shape's fields).
   There it judges only the shape of a class in the slot; a model, an unknown type, a missing annotation or an unresolved name is the signature rule's finding, under its own identity.
   Every other slot it judges in full, as it judges a private method.
-  The fields of a class found in a slot are still judged in full by the export rule.
+  The same test holds at every depth: a field of a class found in a slot is left to the signature rule where it reads that field's row, so a contract class in one facade module that another facade module's function returns is reported once, where the class is defined.
 
   | Slot | Reported by |
   |---|---|
@@ -104,7 +104,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   | A public method, `__init__`, property or attribute of an allowed class handed out from outside the facade | `export-shape`: one row per type and module, the trail in the message |
   | A private method of a walked class | `export-shape` |
   | A member inherited from a class core defines | none: core's contract |
-  | A member of a class named in a slot (one level deeper) | `export-shape`, in full |
+  | A member of a class named in a slot (one level deeper) | as the rows above, by where its row is read |
 
   For example, a facade module hands out `OrderRejected`, an exception its product defines in a logic module, and `OrderRejected.order()` returns another product's model: `export-shape` reports the model at the facade module, with `OrderRejected -> Order` in the message.
 - **A written limit** (Nov 13): a parameter with no annotation, or one typed only with a plain builtin (a bare `dict` or `object` included), on a public method of a handed-out class defined outside a surface file has no row, so no rule judges it.

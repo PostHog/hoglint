@@ -15,8 +15,9 @@ missing annotation or an unresolved name there is the signature rule's to report
 reads the rows of a public callable in a module its `from` and the source-only parts of its
 `select` hold for; the other parts of its selection judge the slot's type. So a slot is left to it
 where the row's own module is such a module, or where the exporting module is one and holds the
-producer's copy of the slot. A slot no signature rule reads, such as a method of a class handed out
-from outside a facade, and every deeper slot (the fields of such a class), is judged in full.
+producer's copy of the slot. This holds at every depth: the fields of a class a slot names are left
+to the signature rule where it reads their rows. A slot no signature rule reads, such as a method of
+a class handed out from outside a facade, is judged in full.
 """
 
 from __future__ import annotations
@@ -511,15 +512,15 @@ class ExportPrimitive(RuleType):
     def check_members(
         self, symbol: str, module: str, policy: ShapePolicy, trail: tuple[str, ...], edge: Edge | None
     ) -> None:
-        """The types in the slots of a member. In the slots of an exported symbol itself, the rule
-        judges only the shape of a class where a signature rule of `leave_slots_to` reads the
-        slot's row; `edge` is the import the module hands the symbol out by, if any."""
+        """The types in the slots of a member, at any depth. The rule judges only the shape of a
+        class where a signature rule of `leave_slots_to` reads the slot's row; `edge` is the import
+        the module hands the symbol out by, if any, which names the copy of a slot."""
         bound = edge.attr("binds") if edge is not None and len(trail) == 1 else ""
         include_bases = self.facts.decl(symbol) == "class"
         for row, owner, qualname in self.member_edges(symbol, include_bases, policy):
             if row.attr("alias") == "expanded":
                 continue
-            shape_only = len(trail) == 1 and self.leaves_slot(row, owner, qualname, module, bound)
+            shape_only = self.leaves_slot(row, owner, qualname, module, bound)
             if row.attr("annotation") == "missing":
                 if not shape_only:
                     self.unknown(symbol, module, policy, trail, row, "no-annotation", row.attr("slot"))

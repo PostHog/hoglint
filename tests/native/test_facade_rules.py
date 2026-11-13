@@ -481,6 +481,17 @@ SLOT_OWNER_CASES = {
         ),
         {"export-shape": [[f"{SHOP}.errors.Rejected", ERRORS, "export-unknown"]], "facade-signature": []},
     ),
+    "a field of a contract class a facade function returns": (
+        {
+            f"{SHOP_DIR}/facade/contracts.py": IMPORTS_ORDER
+            + "@dataclasses.dataclass(frozen=True)\nclass Info:\n    order: Order\n",
+            f"{SHOP_DIR}/facade/api.py": f"from {SHOP}.facade.contracts import Info\n\n\ndef get() -> Info:\n    raise ValueError\n",
+        },
+        {
+            "export-shape": [],
+            "facade-signature": [[f"{SHOP}.facade.contracts", "Info.__init__", "field:order", ORDER]],
+        },
+    ),
     "a method of a handed-out class that is a finding": (
         handed_out("class Loader:\n    def load(self) -> Order:\n        raise ValueError\n", "Loader"),
         {"export-shape": [[f"{SHOP}.errors.Loader", ERRORS, "export-shape(class)"]], "facade-signature": []},
