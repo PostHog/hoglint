@@ -758,15 +758,16 @@ class DeclarationProducer(Producer):
         return found
 
     @staticmethod
-    def in_contract(scope: FileScope, idx: int) -> bool:
+    def in_contract(scope: FileScope, idx: int, listed: frozenset[str]) -> bool:
         """Whether a def is a public callable of the module's contract: a top-level function or
-        class, or a method directly in a top-level class, with no leading `_` (`__init__` kept)."""
+        class with no leading `_` or one `__all__` lists (`listed`), or a method directly in such a
+        class with no leading `_` (`__init__` kept)."""
         node = scope.defs[idx]
         parent = node["s"]
         if parent == -1:
-            return node.get("f", 0) == 0 and not node["n"].startswith("_")
+            return node.get("f", 0) == 0 and (not node["n"].startswith("_") or node["n"] in listed)
         owner = scope.defs[parent]
-        if node["k"] == "class" or owner["k"] != "class" or not DeclarationProducer.in_contract(scope, parent):
+        if node["k"] == "class" or owner["k"] != "class" or not DeclarationProducer.in_contract(scope, parent, listed):
             return False
         if owner["s"] != -1 or node.get("f", 0) != CLASS:
             return False
@@ -1212,7 +1213,9 @@ class DeclarationProducer(Producer):
         idx: int,
         node: dict,
         contract: bool,
+        listed: frozenset[str],
     ) -> None:
+        """`listed`: the names a readable `__all__` of a contract module lists."""
         qualname = scope.qualnames[idx]
         enclosing = node["s"]
         line, column = node["l"], node["c"]
@@ -1276,7 +1279,7 @@ class DeclarationProducer(Producer):
                         "inherit", scope, enclosing, line, column, surface, resolved, contexts, use="base", attrs=attrs
                     )
                 )
-        in_contract = contract and self.in_contract(scope, idx)
+        in_contract = contract and self.in_contract(scope, idx, listed)
         # Only a class whose fields can be slots asks for its dataclass base: one that declares a
         # field, or one in a contract, which also exposes the fields it inherits.
         if (
@@ -1386,8 +1389,9 @@ class DeclarationProducer(Producer):
     def run(self, context: BuildContext, graph: Graph) -> None:
         for scope in context.files:
             contract = bool(self.contract_roots(context, scope))
+            listed = HandedOut(scope, context.resolver).listed() if contract else frozenset()
             for idx, node in enumerate(scope.defs):
-                self.declare(context, graph, scope, idx, node, contract)
+                self.declare(context, graph, scope, idx, node, contract, listed)
             if contract:
                 self.hand_out(context, graph, scope)
             self.record_hand_out(context, graph, scope)

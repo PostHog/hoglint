@@ -352,10 +352,14 @@ class ExportPrimitive(RuleType):
         return sorted(f"{module}.{name}" for name in hand_out.unknown) if hand_out is not None else []
 
     def exported_symbols(self, module: str) -> list[tuple[str, Edge | None]]:
-        """The module's public top-level definitions, then the imports it hands out
+        """The module's public top-level definitions and the private ones `__all__` lists, then
+        the imports it hands out
         (`Graph.hand_outs`): an import it keeps to itself is no part of what it exports. A star
         import whose names cannot be read hands out `*`, which is reported as unresolved."""
         out: list[tuple[str, Edge | None]] = [(symbol, None) for symbol in self.top_level.get(module, [])]
+        hand_out = self.ctx.labeler.graph.hand_outs.get(module)
+        if hand_out is not None:
+            out.extend((f"{module}.{name}", None) for name in sorted(hand_out.listed_private))
         for edge in self.ctx.labeler.handed_imports(module):
             if not context_ok(edge, self.include, self.exclude):
                 continue

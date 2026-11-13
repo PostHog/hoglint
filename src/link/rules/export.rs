@@ -556,7 +556,8 @@ impl<'a> Walk<'a> {
             .is_some_and(|found| found.handed.contains(&link.core.star()))
     }
 
-    /// `ExportPrimitive.exported_symbols`: top-level symbols, then the imports the module hands
+    /// `ExportPrimitive.exported_symbols`: top-level symbols and the private ones `__all__` lists,
+    /// then the imports the module hands
     /// out; an import that did not resolve is reported on the way, and so is a star import whose
     /// names cannot be read.
     fn exported_symbols(&mut self, module: Sid) -> Vec<(String, Option<u32>)> {
@@ -566,6 +567,16 @@ impl<'a> Walk<'a> {
             .map(|symbol| (symbol, None))
             .collect();
         let module_name = self.cx.text(module).to_string();
+        if let Some(found) = self.cx.link.hand_outs.get(&module) {
+            let it = &self.cx.link.core.it;
+            let mut private: Vec<String> = found
+                .listed_private
+                .iter()
+                .map(|&name| format!("{module_name}.{}", it.s(name)))
+                .collect();
+            private.sort();
+            out.extend(private.into_iter().map(|symbol| (symbol, None)));
+        }
         let imports = self
             .inputs
             .imports

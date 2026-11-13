@@ -402,16 +402,29 @@ class HandedOut:
             found = StarNames(self.tables).of(source) if source is not None else None
             bound.update(found or ())
         unread = not self.no_functions and self.dunder_all.unread is not None
-        return HandOut(handed, frozenset(bound - handed), unread, self.unaccounted(handed))
+        return HandOut(handed, frozenset(bound - handed), unread, self.unaccounted(handed), self.listed_private())
+
+    def listed(self) -> frozenset[str]:
+        """The names a readable `__all__` lists; none when it cannot be read or is not there."""
+        names = self.dunder_all.names
+        return names if names is not None and self.dunder_all.unread is None else frozenset()
+
+    def listed_private(self) -> frozenset[str]:
+        """The names with a leading `_` a readable `__all__` lists that the module defines by a
+        top-level def or class: handed out as a public def is."""
+        if self.table is None:
+            return frozenset()
+        return frozenset(
+            name
+            for name in self.listed()
+            if name.startswith("_") and self.table.names.get(name, ("",))[0] in ("class", "def")
+        )
 
     def unaccounted(self, handed: frozenset[str]) -> frozenset[str]:
         """The names a readable `__all__` lists that the module binds by no def, no import, no
         other edge of what it hands out and no literal constant: what they hand out is unknown."""
-        listed = self.dunder_all.names
-        if listed is None or self.dunder_all.unread is not None:
-            return frozenset()
         out: set[str] = set()
-        for name in listed - handed:
+        for name in self.listed() - handed:
             binding = self.table.names.get(name) if self.table is not None else None
             if binding is not None and binding[0] in BOUND_KINDS:
                 continue

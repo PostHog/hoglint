@@ -327,12 +327,14 @@ class HandOut:
     """What one export module binds by import, split by the hand-out rule (`core.surfaces`): the
     names it hands out, the names it keeps to itself, whether its `__all__` cannot be read, and the
     names a readable `__all__` lists that the module binds by no def, no hand-out edge and no
-    literal constant (`unknown`)."""
+    literal constant (`unknown`), and the names with a leading `_` it lists and defines
+    (`listed_private`), handed out as public defs are."""
 
     handed: frozenset[str]
     kept: frozenset[str]
     unread: bool
     unknown: frozenset[str] = frozenset()
+    listed_private: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=False, slots=True)

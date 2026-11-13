@@ -2153,16 +2153,17 @@ impl Producers<'_> {
     }
 
     /// Whether a def is a public callable of the module's contract: a top-level function or
-    /// class, or a method directly in a top-level class, with no leading `_` (`__init__` kept).
-    fn in_contract(&self, defs: &[Def], idx: usize) -> bool {
+    /// class with no leading `_` or one `__all__` lists (`listed`), or a method directly in such a
+    /// class with no leading `_` (`__init__` kept).
+    fn in_contract(&self, defs: &[Def], idx: usize, listed: &FxHashSet<Sid>) -> bool {
         let node = &defs[idx];
         let name = self.core.it.s(node.n);
         if node.s == -1 {
-            return node.f == 0 && !name.starts_with('_');
+            return node.f == 0 && (!name.starts_with('_') || listed.contains(&node.n));
         }
         let parent = node.s as usize;
         let owner = &defs[parent];
-        if node.is_class() || !owner.is_class() || !self.in_contract(defs, parent) {
+        if node.is_class() || !owner.is_class() || !self.in_contract(defs, parent, listed) {
             return false;
         }
         if owner.s != -1 || node.f != CLASS {
@@ -2289,6 +2290,12 @@ impl Producers<'_> {
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];
         let contract = !self.contract_roots(owner).is_empty();
+        // The names a readable `__all__` of a contract module lists.
+        let listed = if contract {
+            HandedOut::new(self.core, &self.scopes[owner]).listed()
+        } else {
+            FxHashSet::default()
+        };
         for (idx, node) in record.defs.iter().enumerate() {
             let k = &self.settings.k;
             let module = self.scopes[owner].module;
@@ -2366,7 +2373,7 @@ impl Producers<'_> {
                     );
                 }
             }
-            let in_contract = contract && self.in_contract(&record.defs, idx);
+            let in_contract = contract && self.in_contract(&record.defs, idx, &listed);
             // Only a class whose fields can be slots asks for its dataclass base: one that declares
             // a field, or one in a contract, which also exposes the fields it inherits.
             if node.is_class()

@@ -697,7 +697,8 @@ impl Link {
                 sorted_names(it, &found.handed),
                 sorted_names(it, &found.kept),
                 found.unread,
-                sorted_names(it, &found.unknown)
+                sorted_names(it, &found.unknown),
+                sorted_names(it, &found.listed_private)
             ]);
             writeln!(out, "{row}").map_err(fail)?;
         }

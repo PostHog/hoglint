@@ -55,12 +55,14 @@ pub struct Handed {
 /// What one export module binds by import, split by the hand-out rule (hoglint/model.py
 /// `HandOut`): the names it hands out, the names it keeps to itself, whether its `__all__`
 /// cannot be read, and the names a readable `__all__` lists that the module binds by no def, no
-/// hand-out edge and no literal constant (`unknown`).
+/// hand-out edge and no literal constant (`unknown`), and the names with a leading `_` it lists
+/// and defines (`listed_private`), handed out as public defs are.
 pub struct HandOut {
     pub handed: FxHashSet<Sid>,
     pub kept: FxHashSet<Sid>,
     pub unread: bool,
     pub unknown: FxHashSet<Sid>,
+    pub listed_private: FxHashSet<Sid>,
 }
 
 /// The markers of a number the value tree does not spell out, and of a long or odd string.
@@ -594,12 +596,41 @@ impl HandedOut {
             .filter(|bound| !handed.contains(bound))
             .collect();
         let unknown = self.unaccounted(core, scope, &handed);
+        let listed_private = self.listed_private(core, scope);
         HandOut {
             handed,
             kept,
             unread: !self.no_functions && self.dunder_all.unread.is_some(),
             unknown,
+            listed_private,
         }
+    }
+
+    /// The names a readable `__all__` lists (`HandedOut.listed`); none when it cannot be read or
+    /// is not there.
+    pub fn listed(&self) -> FxHashSet<Sid> {
+        match &self.dunder_all.names {
+            Some(names) if self.dunder_all.unread.is_none() => names.clone(),
+            _ => FxHashSet::default(),
+        }
+    }
+
+    /// The names with a leading `_` a readable `__all__` lists that the module defines by a
+    /// top-level def or class (`HandedOut.listed_private`): handed out as a public def is.
+    fn listed_private(&self, core: &mut Core, scope: &Scope) -> FxHashSet<Sid> {
+        let Some(table) = core.table(scope.module) else {
+            return FxHashSet::default();
+        };
+        self.listed()
+            .into_iter()
+            .filter(|name| {
+                core.it.s(*name).starts_with('_')
+                    && matches!(
+                        core.table_at(table).names.get(name),
+                        Some(Binding::Class(..) | Binding::Def(..))
+                    )
+            })
+            .collect()
     }
 
     /// The names a readable `__all__` lists that the module binds by no def, no import, no other
@@ -612,12 +643,7 @@ impl HandedOut {
         handed: &FxHashSet<Sid>,
     ) -> FxHashSet<Sid> {
         let mut out = FxHashSet::default();
-        let Some(listed) = self.dunder_all.names.as_ref() else {
-            return out;
-        };
-        if self.dunder_all.unread.is_some() {
-            return out;
-        }
+        let listed = self.listed();
         let table = core.table(scope.module);
         let facts = core.facts.clone();
         let record = &facts.files[scope.file as usize];

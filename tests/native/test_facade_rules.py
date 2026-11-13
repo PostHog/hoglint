@@ -1630,6 +1630,28 @@ LISTED_CASES = {
     ),
     # A written limit: a negative number is an operation, not a literal.
     "a negative number": ({API_FILE: "LIMIT = -1\n\n__all__ = ['LIMIT']\n"}, unknown_at_api("LIMIT")),
+    "a private function listed": (
+        {
+            API_FILE: f"from {SHOP}.models import Order\n\n\ndef _get(order: Order) -> None:\n    pass\n\n\n__all__ = ['_get']\n"
+        },
+        DENIED_AT_API,
+    ),
+    "a private function listed, with a slot that has no annotation": (
+        {API_FILE: "def _get(order) -> None:\n    pass\n\n\n__all__ = ['_get']\n"},
+        unknown_at_api("_get"),
+    ),
+    "a private function not listed": (
+        {
+            API_FILE: f"from {SHOP}.models import Order\n\n\ndef _get(order: Order) -> None:\n    pass\n"
+            + NOOP
+            + "\n\n__all__ = ['noop']\n"
+        },
+        CLEAN_AT_API,
+    ),
+    "a private class listed": (
+        {API_FILE: "class _Box:\n    pass\n\n\n__all__ = ['_Box']\n"},
+        {"export-shape": [[f"{API}._Box", API, "export-shape(class)"]], "facade-signature": []},
+    ),
     "an import, a def and a class": (
         {
             API_FILE: IMPORTS_MODELS + "def get() -> None:\n    pass\n\n\nclass Box:\n    pass\n\n\n"
