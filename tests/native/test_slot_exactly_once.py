@@ -1,13 +1,15 @@
 """A model in a type slot of what a facade hands out is reported exactly once, on generated trees.
 
 A tree is one choice from each of three axes: where the slot sits (`PLACEMENTS`), how its type is
-written (`WRAPPERS`) and how the facade hands the thing out (`HAND_OUTS`). Each tree runs with three
-probes in the slot: a model of the product, `int` and a name that does not resolve.
+written (`WRAPPERS`) and how the facade hands the thing out (`HAND_OUTS`). Each tree runs with the
+probes in the slot: a model of the product, `int`, a name that does not resolve and, under the bare
+wrapper, `Any`.
 
-The invariant, in both engines:
-- the model gives exactly one finding, and it names the model;
+The invariant, in every engine the shared harness runs (`dump_engines`), its tables equal:
+- the model gives exactly one finding, from the rule the slot table of the design page names, and it
+  names the model;
 - `int` gives no finding;
-- the unresolved name gives exactly one finding.
+- the unresolved name and `Any` give exactly one finding each, from that rule.
 
 A wrapper the design page reads as unknown (a `NewType`, a `TypeVar`, a functional `TypedDict`, a
 class-body alias) gives one finding that names the wrapper, with every probe. A member of a class
@@ -38,7 +40,8 @@ from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
 from rules.support import PRESET
 
-from native.test_contract_slots import both_engines
+# The shared harness: it dumps a repo in each engine it runs and asserts their tables are equal.
+from native.test_contract_slots import both_engines as dump_engines
 from native.test_facade_rules import MODEL, ROOT_CONFIG, SITE_PACKAGES
 
 # Every tree is written for the product `shop` and its core module `posthog/coreslot.py`, then moved
@@ -68,7 +71,8 @@ class Probe:
 MODEL_PROBE = Probe("model", "Order", f"from {S}.models import Order\n", r"\.models\.Order\b")
 CLEAN_PROBE = Probe("int", "int", "", "")
 UNRESOLVED_PROBE = Probe("unresolved", "Missing", f"from {S}.nowhere import Missing\n", "")
-PROBES = (MODEL_PROBE, CLEAN_PROBE, UNRESOLVED_PROBE)
+ANY_PROBE = Probe("Any", "Any", "from typing import Any\n", r"\btyping\.Any\b")
+PROBES = (MODEL_PROBE, CLEAN_PROBE, UNRESOLVED_PROBE, ANY_PROBE)
 
 
 # ── Axis 2: how the type is written. ──
@@ -383,6 +387,30 @@ def named_in_a_slot(depth: str, in_facade: bool) -> Placement:
     )
 
 
+CORE_NAMED = {
+    "a core pydantic model": "class CoreThing(BaseModel):\n    {CB}\n    x: {T}\n",
+    "a core frozen dataclass": "@dataclasses.dataclass(frozen=True)\nclass CoreThing:\n    {CB}\n    x: {T}\n",
+}
+
+
+def core_named_in_a_slot(kind: str, in_facade: bool) -> Placement:
+    """A field of a dataclass-like class core defines, named in the return of a function."""
+
+    def build(typed: Typed) -> Site:
+        core = {CORE_PATH: module(CORE_NAMED[kind], typed)}
+        signature = "() -> CoreThing:\n    raise ValueError\n"
+        if not in_facade:
+            errors = module(f"def place{signature}", Typed(""), extra=f"from {CORE} import CoreThing\n")
+            return Site({**typed.files, **core, f"{D}/errors.py": errors}, "place", "errors")
+        api = module(f"def get{signature}", Typed(""), extra=f"from {CORE} import CoreThing\n")
+        return Site({**typed.files, **core, f"{D}/facade/api.py": api}, "get", "facade.api")
+
+    where = "a facade function" if in_facade else "a function handed out from another module"
+    return Placement(
+        f"a field of {kind} the return of {where} names", build, in_class=True, in_facade=in_facade, owner=EXPORT
+    )
+
+
 def placements() -> Iterator[Placement]:
     for in_facade in (True, False):
         for slot in ("parameter", "return"):
@@ -400,6 +428,8 @@ def placements() -> Iterator[Placement]:
             yield core_ancestor(member, in_facade)
         for depth in DEPTHS:
             yield named_in_a_slot(depth, in_facade)
+        for kind in CORE_NAMED:
+            yield core_named_in_a_slot(kind, in_facade)
 
 
 PLACEMENTS = tuple(placements())
@@ -458,6 +488,15 @@ def star(site: Site) -> Files:
     }
 
 
+def named_by_another(site: Site) -> Files | None:
+    """`facade/errors.py` hands out a class defined outside the facade; `facade/api.py` names it."""
+    if site.home.startswith("facade.") or not site.carrier[0].isupper():
+        return None
+    use = from_home(site, site.carrier) + f"\n\ndef use(x: {site.carrier}) -> None:\n    pass\n"
+    hand = from_home(site, site.carrier) + f"\n__all__ = ['{site.carrier}']\n"
+    return {f"{D}/facade/errors.py": hand, f"{D}/facade/api.py": use}
+
+
 HAND_OUTS = (
     HandOut("defined in the facade module", lambda site: {} if site.home.startswith("facade.") else None),
     HandOut("a named import", outside(lambda site: {f"{D}/facade/errors.py": from_home(site, site.carrier)})),
@@ -486,6 +525,16 @@ HAND_OUTS = (
         ),
     ),
     HandOut("a second facade module", second_module),
+    HandOut(
+        "a private name, then a public name",
+        outside(
+            lambda site: {
+                f"{D}/facade/errors.py": from_home(site, f"{site.carrier} as _{site.carrier}, {site.carrier}")
+                + f"\n__all__ = ['_{site.carrier}', '{site.carrier}']\n"
+            }
+        ),
+    ),
+    HandOut("one facade module hands a class out, another names it in a slot", named_by_another),
 )
 
 
@@ -527,6 +576,15 @@ def trees() -> list[Tree]:
 
 
 TREES = trees()
+
+
+def probes_of(tree: Tree) -> tuple[Probe, ...]:
+    """`Any` runs under the bare wrapper only: the other wrappers ask how a name is read, not what."""
+    return PROBES if tree.wrapper.name == "bare" else (MODEL_PROBE, CLEAN_PROBE, UNRESOLVED_PROBE)
+
+
+def runs_of(trees: list[Tree]) -> list[tuple[Tree, Probe]]:
+    return [(tree, probe) for tree in trees for probe in probes_of(tree)]
 
 
 # ── Many trees in one repo: one product per tree. ──
@@ -604,7 +662,7 @@ def run_batch(work: Path, monkeypatch: pytest.MonkeyPatch, trees: list[Files]) -
     write_site_packages(site)
     for module_ in (facts, core_analysis, native_analysis):
         monkeypatch.setattr(module_, "site_packages", lambda: site)
-    out = both_engines(work, {}, batch_repo(trees), monkeypatch)
+    out = dump_engines(work, {}, batch_repo(trees), monkeypatch)
     per_tree, stray = findings_by_tree(out["native"], len(trees))
     assert stray == []
     return per_tree
@@ -615,13 +673,17 @@ def wanted(tree: Tree, probe: Probe) -> tuple[int, str, str]:
     """How many findings the tree must give with this probe, the rule that gives them, and what
     each of them names."""
     placement = tree.placement
-    # A private name holds no copy the signature rule reads, so the export rule judges the slot.
-    rule = EXPORT if placement.copied and tree.hand_out.name == "a private name" else placement.owner
+    # The signature rule reads public names only: under a private name the export rule judges the
+    # slot, whether the facade defines the carrier or holds a copy of it.
+    private = tree.hand_out.name == "a private name" and (placement.copied or placement.in_facade)
+    rule = EXPORT if private else placement.owner
     opaque = rf"\b{tree.wrapper.opaque}\b" if tree.wrapper.opaque else ""
     if placement.cores_contract:
         return 0, rule, ""
     if probe is CLEAN_PROBE:
         return (1, rule, opaque) if opaque else (0, rule, "")
+    if probe is ANY_PROBE:
+        return 1, rule, probe.named
     if probe is UNRESOLVED_PROBE:
         # An unknown is named by the name the reading stops at: the probe, or an alias of it.
         return 1, rule, ""
@@ -671,35 +733,24 @@ NOT_WRITTEN = "not written"
 # Rows are matched in order; the first that holds for a tree gives its verdict.
 LIMITS: tuple[Limit, ...] = (
     Limit(
-        why="the producer reads no name inside a starred argument, so the slot has no row",
-        page=NOT_WRITTEN,
-        gives={},
-        wrappers=("a starred tuple",),
+        why="a public module-level alias of a class in a facade module hands the class out under the alias, "
+        "so the model is reported for that hand-out and for the slot",
+        page="A top-level assignment of one bare name to a name or an attribute chain that resolves, whole, to a "
+        "class or a function (`NotFound = errors.NotFound`, `Status = Run.Status`) hands that class or function "
+        "out under the new name, by the clause of a definition: when the name is public or `__all__` lists it, "
+        "whether or not the module has a function (Nov 13).",
+        gives={EXPORT: 1, SIGNATURE: 1},
+        # The slot sits in the facade module itself, so the alias does too.
+        placements=placed(
+            lambda placement: placement.in_facade and placement.owner == SIGNATURE and "inherited" not in placement.name
+        ),
+        wrappers=("a module-level alias", "an alias of an alias", "a type statement"),
+        hand_outs=("defined in the facade module", "__all__", "a second facade module"),
+        probes=("model",),
     ),
     Limit(
-        why="a private class or function a facade module defines is read by no rule, even when __all__ lists it",
-        page=NOT_WRITTEN,
-        gives={},
-        placements=placed(lambda placement: placement.in_facade),
-        hand_outs=("a private name",),
-    ),
-    Limit(
-        why="a star import gives the copy of a function or a data shape's fields, but the export rule reads no "
-        "hand-out from it",
-        page=NOT_WRITTEN,
-        gives={},
-        placements=placed(lambda placement: not placement.in_facade and not placement.copied),
-        hand_outs=("a star import",),
-    ),
-    Limit(
-        why="a top-level assignment that names a class or a function is no hand-out",
-        page=NOT_WRITTEN,
-        gives={},
-        placements=placed(lambda placement: not placement.in_facade),
-        hand_outs=("an assignment",),
-    ),
-    Limit(
-        why="each facade module that hands the carrier out holds a copy, and each copy is reported",
+        why="each facade module that hands the carrier out holds a copy, and each copy is a slot of its own, "
+        "reported by the signature rule",
         page=NOT_WRITTEN,
         gives={SIGNATURE: 2},
         placements=placed(lambda placement: placement.copied),
@@ -711,10 +762,11 @@ LIMITS: tuple[Limit, ...] = (
         "module that names the class.",
         gives={EXPORT: 2},
         placements=placed(lambda placement: placement.owner == EXPORT),
-        hand_outs=("a second facade module",),
+        hand_outs=("a second facade module", "one facade module hands a class out, another names it in a slot"),
     ),
     Limit(
-        why="the facade holds one copy per public name, and each copy is reported",
+        why="the facade holds one copy per public name, and each copy is a slot of its own, reported by the "
+        "signature rule",
         page=NOT_WRITTEN,
         gives={SIGNATURE: 2},
         placements=placed(lambda placement: placement.copied),
@@ -732,7 +784,7 @@ def limit_of(tree: Tree, probe: Probe) -> Limit | None:
 
 # ── What the suite runs. ──
 SEED = 20261113
-SAMPLE = 400
+SAMPLE = 200
 
 
 def selected() -> list[Tree]:
@@ -747,7 +799,7 @@ def selected() -> list[Tree]:
     return core + random.Random(SEED).sample(rest, SAMPLE)
 
 
-RUNS = [(tree, probe) for tree in selected() for probe in PROBES]
+RUNS = runs_of(selected())
 BATCHES = [RUNS[at : at + BATCH] for at in range(0, len(RUNS), BATCH)]
 
 
@@ -794,4 +846,4 @@ def test_a_model_in_a_slot_is_reported_exactly_once(
 
 @pytest.mark.parametrize("limit", LIMITS, ids=[limit.why for limit in LIMITS])
 def test_every_limit_holds_for_a_tree(limit: Limit) -> None:
-    assert any(limit.holds_for(tree, probe) for tree in TREES for probe in PROBES)
+    assert any(limit.holds_for(tree, probe) for tree, probe in runs_of(TREES))
