@@ -44,6 +44,7 @@ from hoglint.core.symbols import (
     Tables,
     entity,
     import_surface,
+    is_module_assign,
     module_assigns,
     module_level,
 )
@@ -54,6 +55,10 @@ ALIAS_CLAUSE = "alias"
 LAZY_CLAUSE = "lazy"
 ASSIGNED_CLAUSE = "assigned"
 NO_FUNCTIONS_CLAUSE = "no-functions"
+# The markers of a number the value tree does not spell out, and of a long or odd string.
+LITERAL_MARKERS = frozenset({"int", "float", "complex", "longstr", "badstr"})
+# The kinds of binding that are a def or an import: an edge or a symbol says what they bind.
+BOUND_KINDS = frozenset({"class", "def", "module", "from"})
 # A call of a method on `__all__` in the module body: `__all__.extend(...)`.
 METHOD_CALL = re.compile(r"__all__\.\w+")
 
@@ -138,6 +143,33 @@ class ListedNames:
                 return None
             out.add(text)
         return frozenset(out)
+
+
+def is_literal(value: object) -> bool:
+    """A number, a string, None, a bool, or a tuple, list, set or dict of those."""
+    if value is None or isinstance(value, (bool, int)):
+        return True
+    if not isinstance(value, dict):
+        return False
+    if set(value) == {"s"}:
+        return True
+    if set(value) == {"o"}:
+        return value["o"] in LITERAL_MARKERS
+    if "dict" in value:
+        return all(key is not None and is_literal(key) and is_literal(item) for key, item in value["dict"])
+    items = sequence_items(value)
+    return items is not None and all(is_literal(item) for item in items)
+
+
+def binds_literal(record: dict, name: str) -> bool:
+    """Whether the last module-level assignment of a bare name binds a literal constant. The
+    record leaves out a value that is None."""
+    rows = [row for row in record.get("assigns", ()) if is_module_assign(row) and name in row["t"]]
+    if not rows:
+        return False
+    if "v" not in rows[-1]:
+        return rows[-1]["op"] == "="
+    return is_literal(rows[-1]["v"])
 
 
 def read_dunder_all(record: dict) -> DunderAll:
@@ -370,4 +402,20 @@ class HandedOut:
             found = StarNames(self.tables).of(source) if source is not None else None
             bound.update(found or ())
         unread = not self.no_functions and self.dunder_all.unread is not None
-        return HandOut(handed, frozenset(bound - handed), unread)
+        return HandOut(handed, frozenset(bound - handed), unread, self.unaccounted(handed))
+
+    def unaccounted(self, handed: frozenset[str]) -> frozenset[str]:
+        """The names a readable `__all__` lists that the module binds by no def, no import, no
+        other edge of what it hands out and no literal constant: what they hand out is unknown."""
+        listed = self.dunder_all.names
+        if listed is None or self.dunder_all.unread is not None:
+            return frozenset()
+        out: set[str] = set()
+        for name in listed - handed:
+            binding = self.table.names.get(name) if self.table is not None else None
+            if binding is not None and binding[0] in BOUND_KINDS:
+                continue
+            if binding is not None and binds_literal(self.scope.record, name):
+                continue
+            out.add(name)
+        return frozenset(out)

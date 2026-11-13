@@ -268,8 +268,8 @@ class NativeGraph(Graph):
         names, kinds, files = link.symbol_columns()
         symbols = NativeSymbols(names, kinds, array("I", files), link.paths())
         hand_outs = {
-            module: HandOut(frozenset(handed), frozenset(kept), unread)
-            for module, handed, kept, unread in link.hand_outs()
+            module: HandOut(frozenset(handed), frozenset(kept), unread, frozenset(unknown))
+            for module, handed, kept, unread, unknown in link.hand_outs()
         }
         super().__init__(edges=EdgeList(self.core), modules=modules, symbols=symbols, hand_outs=hand_outs)  # type: ignore[arg-type]
         self.repeats: dict[int, int] = {}

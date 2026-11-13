@@ -141,6 +141,7 @@ UNKNOWN_WHY = {
     "no-annotation": "{detail} has no annotation",
     "unread-annotation": "{detail} has a part of its annotation hoglint cannot read",
     "alias": "a name hoglint does not expand into types",
+    "listed": "__all__ lists it, but hoglint cannot tell what it binds",
 }
 
 
@@ -336,7 +337,19 @@ class ExportPrimitive(RuleType):
                         self.unknown(symbol, module, policy, (symbol,), edge, "not-member", export.name)
                         continue
                     self.check(symbol, module, policy, edge, (symbol,))
+                for symbol in self.listed_unknown(module):
+                    member = labeler.export_member((export.name, path, symbol))
+                    if member is Truth.FALSE:
+                        continue
+                    why = "not-member" if member is Truth.UNKNOWN else "listed"
+                    self.unknown(symbol, module, policy, (symbol,), None, why, export.name)
         return self.run
+
+    def listed_unknown(self, module: str) -> list[str]:
+        """The names `__all__` lists that the module binds by nothing the engine can tell
+        (`HandOut.unknown`), as symbols, sorted."""
+        hand_out = self.ctx.labeler.graph.hand_outs.get(module)
+        return sorted(f"{module}.{name}" for name in hand_out.unknown) if hand_out is not None else []
 
     def exported_symbols(self, module: str) -> list[tuple[str, Edge | None]]:
         """The module's public top-level definitions, then the imports it hands out

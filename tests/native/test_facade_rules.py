@@ -1509,6 +1509,11 @@ DENIED_AT_API = {"export-shape": [[ORDER, API, "export-denied(model)"]], "facade
 CLEAN_AT_API = {"export-shape": [], "facade-signature": []}
 
 
+def unknown_at_api(*names: str) -> dict[str, list[list[str]]]:
+    """`export-unknown` for each name the facade api module lists and binds by nothing hoglint reads."""
+    return {"export-shape": [[f"{API}.{name}", API, "export-unknown"] for name in names], "facade-signature": []}
+
+
 def rebinds(value: str, *, imports: str = IMPORTS_MODELS, name: str = "Thing", tail: str = "") -> str:
     """A facade module that binds `name` again to `value` and lists it in `__all__`."""
     return f"{imports}{name} = {value}\n{tail}\n__all__ = ['{name}']\n"
@@ -1584,17 +1589,66 @@ ASSIGNED_CASES = {
         {f"{SHOP_DIR}/routes.py": rebinds("models.Order")},
         {"export-shape": [[ORDER, ROUTES, "export-denied(model)"]]},
     ),
-    # Written limits: none of these is judged as a name handed out.
-    "a member past a class": ({API_FILE: rebinds("models.Order.objects")}, CLEAN_AT_API),
-    "a call": ({API_FILE: rebinds("models.Order()")}, CLEAN_AT_API),
-    "two targets": ({API_FILE: IMPORTS_MODELS + "A = B = models.Order\n\n__all__ = ['A', 'B']\n"}, CLEAN_AT_API),
+    # Written limits: none of these is judged as a name handed out; listed, each is unknown.
+    "a member past a class": ({API_FILE: rebinds("models.Order.objects")}, unknown_at_api("Thing")),
+    "a call": ({API_FILE: rebinds("models.Order()")}, unknown_at_api("Thing")),
+    "two targets": (
+        {API_FILE: IMPORTS_MODELS + "A = B = models.Order\n\n__all__ = ['A', 'B']\n"},
+        unknown_at_api("A", "B"),
+    ),
     "a tuple target": (
         {API_FILE: IMPORTS_MODELS + "A, B = models.Order, models.Order\n\n__all__ = ['A', 'B']\n"},
-        CLEAN_AT_API,
+        unknown_at_api("A", "B"),
     ),
     "the first of two assignments": ({API_FILE: rebinds("models.Order", tail="Thing = 3\n")}, CLEAN_AT_API),
-    "a generic alias": ({API_FILE: rebinds("list[models.Order]")}, CLEAN_AT_API),
+    "a generic alias": ({API_FILE: rebinds("list[models.Order]")}, unknown_at_api("Thing")),
+    "a public name not listed, bound by a call": (
+        {API_FILE: IMPORTS_MODELS + "Thing = models.Order()\n" + NOOP + "\n\n__all__ = ['noop']\n"},
+        CLEAN_AT_API,
+    ),
 }
+
+# Every name a readable `__all__` lists is a def, an edge, a literal constant, or unknown.
+LISTED_CASES = {
+    "literal constants": (
+        {
+            API_FILE: "LIMIT = 3\nNAME = 'shop'\nNOTHING = None\nFLAG = True\nRATE = 1.5\n"
+            "PAIR = (1, 'a', None, False)\nNAMES = ['a', 'b']\nMAP = {'a': 1}\n\n"
+            "__all__ = ['LIMIT', 'NAME', 'NOTHING', 'FLAG', 'RATE', 'PAIR', 'NAMES', 'MAP']\n"
+        },
+        CLEAN_AT_API,
+    ),
+    "a list of classes": ({API_FILE: rebinds("[models.Order]", name="MODELS")}, unknown_at_api("MODELS")),
+    "a dict whose value is a class": (
+        {API_FILE: rebinds("{'order': models.Order}", name="KINDS")},
+        unknown_at_api("KINDS"),
+    ),
+    "a name the module does not bind": ({API_FILE: "__all__ = ['Ghost']\n"}, unknown_at_api("Ghost")),
+    "a module-level name of another module": (
+        {API_FILE: rebinds("models.LIMIT", name="LIMIT")},
+        unknown_at_api("LIMIT"),
+    ),
+    # A written limit: a negative number is an operation, not a literal.
+    "a negative number": ({API_FILE: "LIMIT = -1\n\n__all__ = ['LIMIT']\n"}, unknown_at_api("LIMIT")),
+    "an import, a def and a class": (
+        {
+            API_FILE: IMPORTS_MODELS + "def get() -> None:\n    pass\n\n\nclass Box:\n    pass\n\n\n"
+            "__all__ = ['models', 'get', 'Box']\n"
+        },
+        {"export-shape": [[f"{API}.Box", API, "export-shape(class)"]], "facade-signature": []},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", LISTED_CASES)
+def test_every_name_a_readable_dunder_all_lists_is_accounted_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    files, expected = LISTED_CASES[case]
+    out = both_engines(tmp_path, BASE, files, monkeypatch)
+    assert {rule: findings_of(out["native"], rule) for rule in expected} == {
+        rule: sorted(rows) for rule, rows in expected.items()
+    }
 
 
 @pytest.mark.parametrize("case", ASSIGNED_CASES)

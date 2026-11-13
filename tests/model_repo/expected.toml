@@ -241,6 +241,18 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "HZ13"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.barelazy.run_job", "products.legacy.backend.facade.barelazy", "export-unknown"]
+
+[[row]]
+case = "HZ14"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
+
+[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"

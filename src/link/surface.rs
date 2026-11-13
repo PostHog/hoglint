@@ -28,8 +28,8 @@ use super::facts::{Assign, COPY_CALLEES, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::queries::named;
 use super::resolve::{
-    Binding, Core, Ent, HitId, HitKind, RUN_TIME_MODULE_FLAGS, import_surface, module_assigns,
-    module_level,
+    Binding, Core, Ent, HitId, HitKind, RUN_TIME_MODULE_FLAGS, import_surface, is_module_assign,
+    module_assigns, module_level,
 };
 use super::scope::Scope;
 use super::trace::Kind;
@@ -53,12 +53,51 @@ pub struct Handed {
 }
 
 /// What one export module binds by import, split by the hand-out rule (hoglint/model.py
-/// `HandOut`): the names it hands out, the names it keeps to itself, and whether its `__all__`
-/// cannot be read.
+/// `HandOut`): the names it hands out, the names it keeps to itself, whether its `__all__`
+/// cannot be read, and the names a readable `__all__` lists that the module binds by no def, no
+/// hand-out edge and no literal constant (`unknown`).
 pub struct HandOut {
     pub handed: FxHashSet<Sid>,
     pub kept: FxHashSet<Sid>,
     pub unread: bool,
+    pub unknown: FxHashSet<Sid>,
+}
+
+/// The markers of a number the value tree does not spell out, and of a long or odd string.
+const LITERAL_MARKERS: [&str; 5] = ["int", "float", "complex", "longstr", "badstr"];
+
+/// Whether the last module-level assignment of a bare name binds a literal constant
+/// (`binds_literal`). The record leaves out a value that is None.
+fn binds_literal(it: &Interner, assigns: &[Assign], name: Sid) -> bool {
+    let last = assigns.iter().rfind(|row| {
+        is_module_assign(row)
+            && row
+                .targets
+                .iter()
+                .any(|target| matches!(target, V::Chain(bound) if *bound == name))
+    });
+    match last {
+        None => false,
+        Some(row) => match &row.value {
+            None => row.op == Op::Assign,
+            Some(value) => is_literal(it, value),
+        },
+    }
+}
+
+/// A number, a string, None, a bool, or a tuple, list, set or dict of those (`is_literal`).
+fn is_literal(it: &Interner, value: &V) -> bool {
+    match value {
+        V::Null | V::Scalar | V::Str(_, None) => true,
+        V::Opaque(what) => LITERAL_MARKERS.contains(&it.s(*what)),
+        V::Tuple(items) | V::List(items) | V::Set(items) => {
+            items.iter().all(|item| is_literal(it, item))
+        }
+        V::Dict(pairs) => pairs.iter().all(|(key, item)| {
+            key.as_ref().is_some_and(|key| is_literal(it, key)) && is_literal(it, item)
+        }),
+        _ => false,
+    }
 }
 
 /// The names of a hand-out set as text, sorted: the order every reader of `HandOut` prints.
@@ -554,10 +593,50 @@ impl HandedOut {
             .into_iter()
             .filter(|bound| !handed.contains(bound))
             .collect();
+        let unknown = self.unaccounted(core, scope, &handed);
         HandOut {
             handed,
             kept,
             unread: !self.no_functions && self.dunder_all.unread.is_some(),
+            unknown,
         }
+    }
+
+    /// The names a readable `__all__` lists that the module binds by no def, no import, no other
+    /// edge of what it hands out and no literal constant (`HandedOut.unaccounted`): what they hand
+    /// out is unknown.
+    fn unaccounted(
+        &self,
+        core: &mut Core,
+        scope: &Scope,
+        handed: &FxHashSet<Sid>,
+    ) -> FxHashSet<Sid> {
+        let mut out = FxHashSet::default();
+        let Some(listed) = self.dunder_all.names.as_ref() else {
+            return out;
+        };
+        if self.dunder_all.unread.is_some() {
+            return out;
+        }
+        let table = core.table(scope.module);
+        let facts = core.facts.clone();
+        let record = &facts.files[scope.file as usize];
+        for &name in listed.iter().filter(|name| !handed.contains(name)) {
+            let binding = table.and_then(|table| core.table_at(table).names.get(&name).copied());
+            let bound = matches!(
+                binding,
+                Some(
+                    Binding::Class(..) | Binding::Def(..) | Binding::Module(_) | Binding::From(..)
+                )
+            );
+            if bound {
+                continue;
+            }
+            if binding.is_some() && binds_literal(&core.it, &record.assigns, name) {
+                continue;
+            }
+            out.insert(name);
+        }
+        out
     }
 }

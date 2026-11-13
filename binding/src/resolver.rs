@@ -6,7 +6,7 @@ use crate::{HitTuple, Pair};
 use hoglint_facts::link::facts::{COPY_CALLEES, V};
 use hoglint_facts::link::intern::Interner;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyString};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyString};
 
 /// Whether call keywords (`[[name, value], ...]`) pass `frozen=True`.
 fn frozen_keyword(keywords: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -30,6 +30,12 @@ fn py_value(it: &mut Interner, obj: &Bound<'_, PyAny>) -> PyResult<V> {
     }
     if let Ok(text) = obj.cast::<PyString>() {
         return Ok(V::Chain(it.intern(&text.to_cow()?)));
+    }
+    if obj.is_instance_of::<PyBool>()
+        || obj.is_instance_of::<PyInt>()
+        || obj.is_instance_of::<PyFloat>()
+    {
+        return Ok(V::Scalar);
     }
     let Ok(map) = obj.cast::<PyDict>() else {
         return Ok(V::Other);

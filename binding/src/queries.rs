@@ -103,7 +103,7 @@ impl Link {
 /// attribute name or a callee.
 fn value_mentions(value: &V, found: &impl Fn(Sid) -> bool) -> bool {
     match value {
-        V::Null | V::Other => false,
+        V::Null | V::Scalar | V::Other => false,
         V::Chain(s) | V::Opaque(s) => found(*s),
         V::Str(s, parsed) => {
             found(*s) || parsed.as_deref().is_some_and(|p| value_mentions(p, found))

@@ -363,6 +363,7 @@ impl<'a> Digest<'a> {
                 self.sid(*what);
             }
             V::Other => self.number(14),
+            V::Scalar => self.number(15),
         }
     }
 
@@ -695,7 +696,8 @@ impl Link {
                 it.s(module),
                 sorted_names(it, &found.handed),
                 sorted_names(it, &found.kept),
-                found.unread
+                found.unread,
+                sorted_names(it, &found.unknown)
             ]);
             writeln!(out, "{row}").map_err(fail)?;
         }

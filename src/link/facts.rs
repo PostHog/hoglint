@@ -30,6 +30,8 @@ pub enum V {
     /// `{"bin": op, "l": .., "r": ..}`; the flag is whether `op` is `|`.
     Bin(bool, Box<V>, Box<V>),
     Opaque(Sid),
+    /// A number or a bool, written as itself.
+    Scalar,
     Other,
 }
 
@@ -396,6 +398,7 @@ pub fn value(it: &mut Interner, json: &J) -> V {
     match json {
         J::Null => V::Null,
         J::String(chain) => V::Chain(it.intern(chain)),
+        J::Bool(_) | J::Number(_) => V::Scalar,
         J::Object(map) => {
             if let Some(inner) = map.get("sub") {
                 let index = map.get("i").map_or(V::Null, |i| value(it, i));

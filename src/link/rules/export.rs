@@ -410,9 +410,38 @@ impl<'a> Walk<'a> {
                         }
                     }
                 }
+                for symbol in self.listed_unknown(module) {
+                    let member =
+                        rules.export_member(self.cx.link, &rules.exports[export], Some(&symbol));
+                    let code = match member {
+                        Truth::False => continue,
+                        Truth::Unknown => "not-member",
+                        Truth::True => "listed",
+                    };
+                    let trail = vec![symbol.clone()];
+                    let why = (code, rules.export_names[export].as_str());
+                    self.unknown(&symbol, &module_name, shape, &trail, None, why);
+                }
             }
         }
         self.rows
+    }
+
+    /// `ExportPrimitive.listed_unknown`: the names `__all__` lists that the module binds by
+    /// nothing the engine can tell, as symbols, sorted.
+    fn listed_unknown(&self, module: Sid) -> Vec<String> {
+        let link = self.cx.link;
+        let Some(found) = link.hand_outs.get(&module) else {
+            return Vec::new();
+        };
+        let name = self.cx.text(module);
+        let mut out: Vec<String> = found
+            .unknown
+            .iter()
+            .map(|&unknown| format!("{name}.{}", link.core.it.s(unknown)))
+            .collect();
+        out.sort();
+        out
     }
 
     /// `ExportPrimitive.judges`: whether the rule judges what a module exports, by its `from`

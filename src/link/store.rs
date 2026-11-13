@@ -138,6 +138,7 @@ impl Enc<'_> {
                 self.sid(*s);
             }
             V::Other => self.u8(13),
+            V::Scalar => self.u8(14),
         }
     }
 
@@ -430,6 +431,7 @@ impl<'b> Dec<'b, '_> {
                 V::Bin(pipe, Box::new(l), Box::new(self.v()?))
             }
             12 => V::Opaque(self.sid()?),
+            14 => V::Scalar,
             _ => V::Other,
         })
     }
