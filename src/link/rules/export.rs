@@ -79,6 +79,10 @@ enum Column {
     Src(EntityField),
 }
 
+/// A named signature rule's slot policy: the parts of its selection that do not read only the
+/// source (None: none), and the endpoint it reads a row's destination by.
+pub type SlotPolicy = (Option<Node>, Role);
+
 /// What an export rule adds to a rule.
 pub struct ExportRule {
     exports: Vec<usize>,
@@ -90,7 +94,7 @@ pub struct ExportRule {
     slot_owners: Vec<Option<Node>>,
     /// `leave_slots_to`: each named rule's slot policy, the parts of its selection that do not
     /// read only the source (None: none), and the endpoint it reads a row's destination by.
-    slot_policies: Vec<(Option<Node>, Role)>,
+    slot_policies: Vec<SlotPolicy>,
     include: u8,
     exclude: u8,
     unknown_types: Vec<String>,
@@ -105,7 +109,7 @@ impl ExportRule {
         identity: &[Vec<String>],
         entity: &Compiler,
         start: Option<Node>,
-        (slot_owners, slot_policies): (Vec<Option<Node>>, Vec<(Option<Node>, Role)>),
+        (slot_owners, slot_policies): (Vec<Option<Node>>, Vec<SlotPolicy>),
     ) -> ExportRule {
         let field = |name: &str| match entity.reference(&[name.to_string()]) {
             Ref::Entity(found) => found,
