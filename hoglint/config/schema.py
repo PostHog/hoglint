@@ -40,10 +40,8 @@ from hoglint.globs import CAPTURE_RE
 from hoglint.model import Context, Resolution
 from hoglint.plugins import REGISTRY
 from hoglint.selectors import (
-    EDGE_DEPENDENT_FIELDS,
     KEYWORDS,
     NAME_PART,
-    And,
     Catalog,
     Condition,
     FieldInfo,
@@ -51,7 +49,10 @@ from hoglint.selectors import (
     Parser,
     Selector,
     SelectorError,
+    conjuncts,
+    endpoint_only,
     refs,
+    source_field,
     suggest,
 )
 
@@ -893,24 +894,16 @@ class SchemaBuilder:
             rule = rules.get(name)
             if rule is None:
                 continue
-            for selector in (rule.from_, rule.select):
-                if selector is None:
-                    continue
-                parts = selector.node.parts if isinstance(selector.node, And) else (selector.node,)
-                for part in parts:
-                    fields = sorted({str(ref) for ref in refs(part)})
-                    source = [
-                        field
-                        for field in fields
-                        if field.startswith("src.") and field.split(".", 1)[1] not in EDGE_DEPENDENT_FIELDS
-                    ]
-                    if source and len(source) < len(fields):
-                        self.fail(
-                            key,
-                            f"{name!r} has a condition that mixes the source with the edge or the destination "
-                            f"({', '.join(fields)}); write it as conditions joined by `and`, each reading only "
-                            "`src.*` fields or none of them",
-                        )
+            for part in conjuncts((rule.from_, rule.select)):
+                part_refs = refs(part)
+                if endpoint_only(part) != "src" and any(source_field(ref) for ref in part_refs):
+                    fields = sorted({str(ref) for ref in part_refs})
+                    self.fail(
+                        key,
+                        f"{name!r} has a condition that mixes the source with the edge or the destination "
+                        f"({', '.join(fields)}); write it as conditions joined by `and`, each reading only "
+                        "`src.*` fields or none of them",
+                    )
 
     def read_rule(
         self,

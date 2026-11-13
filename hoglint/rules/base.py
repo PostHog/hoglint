@@ -48,7 +48,6 @@ from hoglint.selectors import (
     EDGE_DEPENDENT_FIELDS,
     NONE,
     UNKNOWN,
-    And,
     ClassSelection,
     Node,
     Ref,
@@ -59,8 +58,12 @@ from hoglint.selectors import (
     Value,
     all_of,
     any_of,
+    conjuncts,
+    endpoint_only,
+    joined,
     refs,
     render_value,
+    source_part,
     split_list,
 )
 
@@ -601,37 +604,6 @@ def project(columns: tuple[str, ...], resolve: Resolver) -> tuple[str, ...]:
 
 
 # ── staged selection ─────────────────────────────────────────────
-
-
-def conjuncts(selectors: tuple[Selector | None, ...]) -> list[Node]:
-    out: list[Node] = []
-    for selector in selectors:
-        if selector is None:
-            continue
-        out.extend(selector.node.parts if isinstance(selector.node, And) else (selector.node,))
-    return out
-
-
-def endpoint_only(node: Node) -> str:
-    """`src` or `dst` when the node reads only that endpoint's own fields, else ''."""
-    roots: set[str] = set()
-    node_refs = refs(node)
-    for ref in node_refs:
-        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst") or ref.path[1] in EDGE_DEPENDENT_FIELDS:
-            return ""
-        roots.add(ref.path[0])
-    return roots.pop() if len(roots) == 1 else ""
-
-
-def joined(parts: list[Node]) -> Node | None:
-    if not parts:
-        return None
-    return parts[0] if len(parts) == 1 else And(tuple(parts))
-
-
-def source_part(selectors: tuple[Selector | None, ...]) -> Node | None:
-    """The conjuncts of a rule's selection that read only the source, joined."""
-    return joined([part for part in conjuncts(selectors) if endpoint_only(part) == "src"])
 
 
 def classes_of(node: Node | None) -> ClassSelection | None:

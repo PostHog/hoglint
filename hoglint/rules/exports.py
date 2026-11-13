@@ -33,22 +33,10 @@ from hoglint.globs import compile_label_glob
 from hoglint.labels import NOT_HANDED_CONTEXTS
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.model import Edge, Resolution, context_bits
-from hoglint.rules.base import (
-    EdgeEnv,
-    IncompleteItem,
-    RuleContext,
-    RuleRun,
-    RuleType,
-    conjuncts,
-    context_ok,
-    endpoint_only,
-    joined,
-    project,
-    rule_kinds,
-)
+from hoglint.rules.base import EdgeEnv, IncompleteItem, RuleContext, RuleRun, RuleType, context_ok, project, rule_kinds
 from hoglint.rules.edges import is_private
 from hoglint.rules.plan import identity_paths, selector_tree, tree
-from hoglint.selectors import NONE, Node, Ref, Resolver, Selector, State, Truth, Value, evaluate
+from hoglint.selectors import NONE, Node, Ref, Resolver, Selector, State, Truth, Value, evaluate, rest_part, source_part
 
 ABC_BASES = frozenset({"abc.ABC"})
 ABC_METAS = frozenset({"abc.ABCMeta"})
@@ -249,17 +237,16 @@ class ExportPrimitive(RuleType):
 
     def named_slot_rules(self) -> list[SlotRule]:
         """The signature rules of `leave_slots_to` that read exposes rows, each with its selection
-        split once. The config check refuses a name that is no signature rule."""
+        split into where it reads rows and which slots it judges. The config check refuses a name
+        that is no signature rule."""
         out: list[SlotRule] = []
         for name in self.spec.leave_slots_to:
             rule = self.ctx.config.rules[name]
             if "exposes" not in rule_kinds(rule, self.ctx.config.views):
                 continue
-            parts = conjuncts((rule.from_, rule.select))
-            scope = joined([part for part in parts if endpoint_only(part) == "src"])
-            rest = joined([part for part in parts if endpoint_only(part) != "src"])
+            selection = (rule.from_, rule.select)
             include, exclude = frozenset(rule.contexts_include), frozenset(rule.contexts_exclude or ())
-            out.append(SlotRule(name, scope, rest, rule.endpoint, include, exclude))
+            out.append(SlotRule(name, source_part(selection), rest_part(selection), rule.endpoint, include, exclude))
         return out
 
     def holding_rules(self, module: str) -> tuple[SlotRule, ...]:

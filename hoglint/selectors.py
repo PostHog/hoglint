@@ -650,6 +650,51 @@ def refs(node: Node) -> list[Ref]:
     return out
 
 
+# ── a selection, split ────────────────────────────────────────────
+
+
+def conjuncts(selectors: tuple[Selector | None, ...]) -> list[Node]:
+    out: list[Node] = []
+    for selector in selectors:
+        if selector is None:
+            continue
+        out.extend(selector.node.parts if isinstance(selector.node, And) else (selector.node,))
+    return out
+
+
+def endpoint_only(node: Node) -> str:
+    """`src` or `dst` when the node reads only that endpoint's own fields, else ''."""
+    roots: set[str] = set()
+    node_refs = refs(node)
+    for ref in node_refs:
+        if len(ref.path) != 2 or ref.path[0] not in ("src", "dst") or ref.path[1] in EDGE_DEPENDENT_FIELDS:
+            return ""
+        roots.add(ref.path[0])
+    return roots.pop() if len(roots) == 1 else ""
+
+
+def joined(parts: list[Node]) -> Node | None:
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else And(tuple(parts))
+
+
+def source_part(selectors: tuple[Selector | None, ...]) -> Node | None:
+    """The conjuncts of a rule's selection that read only the source, joined."""
+    return joined([part for part in conjuncts(selectors) if endpoint_only(part) == "src"])
+
+
+def rest_part(selectors: tuple[Selector | None, ...]) -> Node | None:
+    """The conjuncts of a rule's selection that do not read only the source, joined: the other
+    half of `source_part`."""
+    return joined([part for part in conjuncts(selectors) if endpoint_only(part) != "src"])
+
+
+def source_field(ref: Ref) -> bool:
+    """Whether a reference reads one of the source endpoint's own fields."""
+    return len(ref.path) == 2 and ref.path[0] == "src" and ref.path[1] not in EDGE_DEPENDENT_FIELDS
+
+
 def compared_values(node: Node, name: str) -> set[str]:
     """Literals compared against a `<root>.<name>` or bare `<name>` field (never `edge.*`)."""
     out: set[str] = set()

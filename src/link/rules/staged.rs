@@ -15,7 +15,7 @@ use super::{Edges, Rules};
 use crate::link::Link;
 use crate::link::intern::Sid;
 
-/// The endpoint a conjunct of a selection reads alone (`rules.base.endpoint_only`), in the order
+/// The endpoint a conjunct of a selection reads alone (`selectors.endpoint_only`), in the order
 /// `StagedSelection` judges them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Class {
