@@ -48,8 +48,11 @@ Each page has the same sections: what is decided now, why, what was considered a
 | `11-repo-and-packaging.md` | The own repo, the wheel, the toolchain |
 | `12-how-work-is-done.md` | Gates, independent verification, reviews; what went wrong and the rule each mistake left |
 | `traps.md` | Ideas that look right and were turned down: design, engine and process |
+| `glossary.md` | The words a newcomer cannot guess, each with the config key or module where it lives |
 
 ## Terms
+
+The most used terms are below; `glossary.md` has the rest, each with where it lives in the config and the code.
 
 - **Edge:** a coupling from one module or symbol to another (an import, a call, a subclass, a framework wiring).
 - **Finding:** an edge or entity that a rule judges a violation.

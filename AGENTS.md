@@ -11,6 +11,7 @@ Most ideas that look obviously right were already weighed.
 
 - `docs/design/README.md`: the current design, one page per topic, and how to use it.
 - `docs/design/traps.md`: ideas that look right and were turned down.
+- `docs/design/glossary.md`: the words of the code, the config and the docs that plain English does not explain.
 - `docs/history/decision-log.md` (then `-2`, `-3`): the decisions D1 to D70 in order.
 - `docs/research/README.md`: the studies, spikes and second opinions behind the decisions.
 
