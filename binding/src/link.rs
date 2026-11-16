@@ -166,6 +166,20 @@ impl Link {
         }
         Ok(index)
     }
+
+    /// The index of scope `scope`, once `at` is checked to name one of its defs or its module
+    /// (-1). A def index the scope's file does not have is an error the caller can handle, never
+    /// a panic that ends the run.
+    pub(crate) fn site_scope(&self, scope: u32, at: i32) -> PyResult<usize> {
+        let index = self.scope_index(scope)?;
+        let defs = self.inner.scopes[index].qualnames.len();
+        if at < -1 || usize::try_from(at).is_ok_and(|at| at >= defs) {
+            return Err(PyValueError::new_err(format!(
+                "no def {at} in scope {scope}, which has {defs} defs"
+            )));
+        }
+        Ok(index)
+    }
 }
 
 #[pymethods]

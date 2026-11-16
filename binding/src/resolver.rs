@@ -218,7 +218,8 @@ impl Link {
         Ok(self.inner.core.located(class))
     }
 
-    /// The lookup of a value at a site of the analyzed file with this scope index.
+    /// The lookup of a value at a site of the analyzed file with this scope index; `at` is the
+    /// site's def index in that file, -1 for module level.
     fn value_lookup(
         &mut self,
         scope: u32,
@@ -227,7 +228,7 @@ impl Link {
         line: u32,
     ) -> PyResult<Option<(String, Option<HitTuple>, bool)>> {
         self.rows()?;
-        let index = self.scope_index(scope)?;
+        let index = self.site_scope(scope, at)?;
         let value = py_value(&mut self.inner.core.it, value)?;
         let link = &mut self.inner;
         let found = link.core.value_lookup(
@@ -250,7 +251,7 @@ impl Link {
         line: u32,
     ) -> PyResult<((String, Option<HitTuple>, bool), Vec<String>)> {
         self.rows()?;
-        let index = self.scope_index(scope)?;
+        let index = self.site_scope(scope, at)?;
         let chain = self.sid(chain);
         let link = &mut self.inner;
         let (found, rest) = link.core.chain_lookup(
