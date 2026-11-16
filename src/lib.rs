@@ -9,6 +9,7 @@ mod derive;
 mod encode;
 mod extract;
 mod facts;
+mod loops;
 mod path;
 mod source;
 mod strings;

@@ -166,6 +166,38 @@ def load():
 }
 
 #[test]
+fn a_loop_over_a_literal_sequence_gives_one_call_row_per_value() {
+    let source = r#"LABELS = ("app.Thing", "app.Other")
+GROWN = ["app.Thing"]
+GROWN.append("app.More")
+TWICE = ("app.Thing",)
+TWICE = ("app.Other",)
+
+def wire():
+    local = ["app.Local"]
+    for label in LABELS:
+        apps.get_model(label)
+        register_later(lambda: apps.get_model(label))
+    for label in local:
+        apps.get_model(label)
+    for label in ("app.Inline",):
+        for kind in (a.b, c):
+            register_kind(label, kind=kind)
+    for label in GROWN:
+        apps.get_model(label)
+    for label in TWICE:
+        apps.get_model(label)
+    for label in LABELS:
+        label = label.lower()
+        apps.get_model(label)
+"#;
+    assert_eq!(
+        facts(source, "calls"),
+        r#"[[0,-1,10,8,68,"apps.get_model",[{"s":"app.Other"}],[]],[0,-1,10,8,68,"apps.get_model",[{"s":"app.Thing"}],[]],[0,-1,11,8,68,"register_later",[{"o":"Lambda"}],[]],[0,-1,11,31,68,"apps.get_model",["label"],[]],[0,-1,13,8,68,"apps.get_model",[{"s":"app.Local"}],[]],[0,-1,16,12,68,"register_kind",[{"s":"app.Inline"}],[["kind","a.b"]]],[0,-1,16,12,68,"register_kind",[{"s":"app.Inline"}],[["kind","c"]]],[0,-1,18,8,68,"apps.get_model",["label"],[]],[0,-1,20,8,68,"apps.get_model",["label"],[]],[0,-1,23,8,68,"apps.get_model",["label"],[]]]"#
+    );
+}
+
+#[test]
 fn strs_tags_and_names_read_string_literals() {
     let source = r#"PATH = "app.models.Thing"
 PARTS = ("app.views." "Home")

@@ -790,6 +790,11 @@ text = "products.legacy.backend.models -> products.inventory.backend.models.Stoc
 
 [[finding]]
 rule = "receiver-direction"
+identity = ["label", "gatekeeper", "products.gatekeeper.backend.apps"]
+text = "signal 'label' did not resolve"
+
+[[finding]]
+rule = "receiver-direction"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.receivers"]
 text = "products.legacy.backend.receivers -> products.inventory.backend.models.StockItem (signal)"
 
@@ -1722,6 +1727,11 @@ text = "cannot place 'registry.register_post_delete_hook' for coverage"
 rule = "wiring-watched"
 identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.apps|label"]
+text = "cannot place 'label' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"

@@ -120,7 +120,12 @@ Reading a package also gives its models and the names it re-exports to every oth
   Only a Django signal's `connect` counts; a database driver's `connect` makes no hook.
 - The `surface` endpoint of an edge that resolves to library code reads as the graph module the code names, when one names it: a patch target `products....module.client.send` is the product module's, since the test depends on that module binding `client`.
 
-Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`), and a sender bound by a `for` loop over a constant sequence; the facts hold no instance-attribute type and no loop binding.
+Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`); the facts hold no instance-attribute type.
+
+**A loop variable bound over a literal sequence takes each of its values** (the architect, Nov 16).
+In `for model in RULE_MODELS:` the extractor gives a watched call in the loop's body one `calls` row per value, with the variable replaced where the call passes it as a whole argument, so each `post_save.connect(..., sender=model)` is one placed signal edge per sender.
+The sequence is a tuple or list literal, written in the `for` or bound to a name the file binds exactly once, in the module or in the loop's own scope.
+Anything else stays as written, and so unknown: a name bound twice or by anything but that assignment, a list whose attributes the file uses (`X.append(...)` can change it), a starred element, a loop variable the body binds again, a call in a lambda or a comprehension (it runs later), an empty sequence, and more than 64 rows for one call.
 
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
