@@ -679,7 +679,9 @@ doc        = "A product never listens to another product's sender (B6). The ledg
 kinds      = ["signal"]
 select     = "crosses-package and dst.tier == 'product'"
 contexts   = { exclude = ["test"] }
-# A receiver whose sender hoglint cannot place (none, a variable, a call) is an item, not a finding.
+# A receiver whose sender hoglint cannot place (a variable, a call, no sender on a signal that does
+# not resolve) is an item, not a finding. With no sender on a signal it can place, the signal's module
+# is the sender.
 on_unresolved = "incomplete"
 identity   = "receiver-sender"
 counted    = true
