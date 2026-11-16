@@ -554,6 +554,7 @@ impl<'a> Resolve<'a> for Env<'a> {
             },
             Ref::Src(field) => self.endpoint_value(&self.src, field),
             Ref::Dst(field) => self.endpoint_value(&self.dst, field),
+            Ref::Surface(field) => self.surface_value(field),
             Ref::Entity(_) | Ref::Unknown => Value::Unknown,
         }
     }
@@ -619,6 +620,19 @@ impl<'a> Env<'a> {
             return Value::text(shape);
         }
         Value::Text(Cow::Owned(format!("{shape}({detail})")))
+    }
+
+    /// A field of the module the code named, whatever endpoint `dst` reads; unknown with no edge.
+    fn surface_value(&self, field: EndField) -> Value<'a> {
+        let Some(id) = self.edge else {
+            return Value::Unknown;
+        };
+        let mut found = Vec::new();
+        self.cx.dst_endpoints(id, Role::Surface, &mut found);
+        match found.first() {
+            Some(surface) => self.endpoint_value(surface, field),
+            None => Value::Unknown,
+        }
     }
 
     fn endpoint_value(&self, endpoint: &Endpoint<'a>, field: EndField) -> Value<'a> {

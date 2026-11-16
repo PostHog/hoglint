@@ -69,6 +69,8 @@ pub enum Ref {
     Edge(EdgeField),
     Src(EndField),
     Dst(EndField),
+    /// The module the code named (`surface.*`), whatever endpoint `dst` reads.
+    Surface(EndField),
     Entity(EntityField),
     Unknown,
 }
@@ -79,6 +81,7 @@ impl Ref {
         match self {
             Ref::Src(EndField::Field(at, _))
             | Ref::Dst(EndField::Field(at, _))
+            | Ref::Surface(EndField::Field(at, _))
             | Ref::Entity(EntityField::Field(at)) => Some(at),
             _ => None,
         }
@@ -278,6 +281,7 @@ impl Compiler<'_> {
             "edge" => Ref::Edge(self.edge_field(name)),
             "src" => Ref::Src(self.end_field("src", name)),
             "dst" => Ref::Dst(self.end_field("dst", name)),
+            "surface" => Ref::Surface(self.end_field("surface", name)),
             _ => Ref::Unknown,
         }
     }
