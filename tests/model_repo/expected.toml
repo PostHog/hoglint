@@ -188,12 +188,6 @@ identity = ["products/warehouse_sources/backend/temporal/data_imports/sources/ge
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
-identity = ["products/warehouse_sources/sources/sdk/testing.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
 identity = ["products/web_analytics/backend/management/commands/generate_aeo_content.py"]
 
 [[row]]
@@ -2129,6 +2123,65 @@ rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/gatekeeper/backend/validator.py"]
 
+[[row]]
+case = "SV00"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/warehouse_sources/backend/facade/api.py"]
+
+[[row]]
+case = "SV00"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/warehouse_sources/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "SV01"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.source", "products.inventory.backend.facade.api"]
+
+[[row]]
+case = "SV01"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.source", "posthog.models.team.team"]
+
+[[row]]
+case = "SV02"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.sdk.base", "common.hogvm.stl"]
+
+[[row]]
+case = "SV03"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.conftest", "posthog.models.team.team"]
+
+[[row]]
+case = "SV04"
+rule = "sources-vendors-independent"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.source", "products.warehouse_sources.sources.beta.registry"]
+
+[[row]]
+case = "SV04"
+rule = "sources-vendors-independent"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.lazy", "products.warehouse_sources.sources.beta.registry"]
+
+[[row]]
+case = "SV05"
+rule = "sources-vendors-independent"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.sdk.catalog", "products.warehouse_sources.sources.beta.registry"]
+
+[[row]]
+case = "WC01"
+rule = "webhook-consumers-use-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backend.logic.widgets"]
 
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
 # is an expected failure of test_model_repo.py until the rule gives it. A wanted row matches a
@@ -2237,4 +2290,4 @@ match = ["products.catalog.backend.facade.aliases.built"]
 
 [levels.isolated]
 passing = ["shelf"]
-failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "racks", "reports", "visual_review"]
+failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]

@@ -95,6 +95,20 @@ The config loads before the tree is read, so only a run can tell.
 `prefetch` is no allowed shape of the PostHog preset's `model-crossings`: the rows a `Prefetch(..., queryset=Model.objects...)` loads are instances of the model on the consumer's objects, and the old crossings scanner counts them.
 No decision had allowed the shape.
 
+**Three import contracts of the monorepo are preset rules** (Nov 16).
+They had no hoglint rule, so a new violation would fail the old import checker and pass hoglint.
+Each reads every import, in tests, under `TYPE_CHECKING` and inside functions, as the old checker does, and each contract's ignore list is part of the rule.
+- `sources-vendors-use-sdk` (`edge`): a warehouse source vendor imports no core, `ee`, `common` or product module outside the sources tree.
+  The SDK may import core and products, its testing module `common`, the tree's conftest products.
+- `sources-vendors-independent` (`reach`): the members of the sources tree (each vendor, the SDK and the conftest; field `source_vendor`) do not import each other, directly or through other modules of the tree.
+  An import of the SDK is no path: the vendors share it.
+- `webhook-consumers-use-facade` (`edge`): a product's webhook consumers module imports product backend code only through a facade.
+
+Their limits, in plain words:
+1. The independence rule follows a chain only inside the sources tree.
+   A chain that leaves the tree starts with a finding of `sources-vendors-use-sdk`.
+2. A webhook consumers module that imports a test module of a product is `prod-imports-test`'s finding, not this rule's.
+
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
 Never `ignore` (architect default, Nov 4).

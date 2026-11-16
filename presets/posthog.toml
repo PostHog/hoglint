@@ -38,6 +38,10 @@ setting-api-schema     = "edge.setting == 'SPECTACULAR_SETTINGS' or edge.setting
 setting-logging        = "edge.setting == 'LOGGING' or edge.setting startswith 'LOGGING.'"
 setting-caches         = "edge.setting == 'CACHES' or edge.setting startswith 'CACHES.'"
 setting-login-flow     = "edge.setting in ['SOCIAL_AUTH_PIPELINE', 'AXES_LOCKOUT_CALLABLE']"  # a login flow behind a URL, not the per-request pipeline
+# The warehouse sources tree: a package per vendor, the SDK they share and the tree's conftest (its
+# members, `source_vendor`), under the tree's own package.
+in-sources-tree = "dst.path startswith 'products/warehouse_sources/sources/'"
+sources-member  = "src.source_vendor != none"
 
 # ── Fields ─────────────────────────────────────────────────────
 # required_on is the field's domain: inside it a missing value is unknown, outside it a known none.
@@ -67,6 +71,8 @@ permanent = { type = "bool" }
 crosses   = { type = "bool", on = "symbol" }
 # A core module the request pipeline starts from that no setting names: the class every API view inherits.
 request_seed = { type = "bool" }
+# The member of the warehouse sources tree a module belongs to: a vendor, `sdk` or `conftest`.
+source_vendor = { type = "string" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -188,6 +194,14 @@ set = { permanent = true }
 [[assign]]
 match = "packages/{pkg}/**"
 set   = { package = "{pkg}", tier = "leaf" }
+
+[[assign]]
+match = "products/warehouse_sources/sources/{vendor}/**"
+set   = { source_vendor = "{vendor}" }
+
+[[assign]]
+match = "products/warehouse_sources/sources/conftest.py"
+set   = { source_vendor = "conftest" }
 
 # ClickHouse migrations are frozen history, but no Django migrations: they keep the prod context.
 [[assign]]
@@ -516,6 +530,43 @@ kinds      = ["import", "dotted-path"]
 contexts   = { exclude = ["test"] }
 from       = "src.testcode != true"
 deny       = "dst.testcode == true"
+identity   = "module-pair"
+growth_key = ["dst.module", "src.package"]
+
+# The rules of three import-linter contracts. A rule reads every import, in tests, under
+# TYPE_CHECKING and inside functions too, as import-linter does.
+
+[rules.sources-vendors-use-sdk]
+primitive  = "edge"
+doc        = "A warehouse source vendor takes shared code only from the sources SDK: no core, ee, common or product module outside the sources tree. The SDK may import core and products, its testing module common, the tree's conftest products."
+kinds      = ["import"]
+contexts   = { exclude = [] }
+from       = "sources-member"
+endpoint   = "surface"
+deny       = "dst.tier in ['core', 'product'] and not in-sources-tree"
+unless     = "(src.source_vendor == 'sdk' and not (dst.path startswith 'ee/' or dst.path startswith 'common/')) or (src.module == 'products.warehouse_sources.sources.sdk.testing' and dst.path startswith 'common/') or (src.source_vendor == 'conftest' and dst.path startswith 'products/')"
+identity   = "module-pair"
+growth_key = ["dst.module", "src.package"]
+
+[rules.sources-vendors-independent]
+primitive  = "reach"
+doc        = "Warehouse source vendors, the SDK and the tree's conftest do not import each other, directly or through other modules of the sources tree. An import of the SDK is no path: the vendors share it."
+view       = "file-imports"
+from       = "sources-member"
+select     = "in-sources-tree and dst.source_vendor != 'sdk'"
+deny       = "dst.source_vendor != none and src.source_vendor != dst.source_vendor"
+contexts   = { exclude = [] }
+identity   = "module-pair"
+growth_key = ["dst.module", "src.package"]
+
+[rules.webhook-consumers-use-facade]
+primitive  = "edge"
+doc        = "A product's webhook consumers module imports product backend code only through a facade, its own or another product's."
+kinds      = ["import"]
+contexts   = { exclude = [] }
+from       = "src.registry == 'webhook_consumers'"
+endpoint   = "surface"
+deny       = "dst.zone == 'backend' and dst.zone != 'facade'"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 

@@ -684,6 +684,46 @@ identity = ["products.legacy.backend.tasks.cleanup", "products.legacy.backend.te
 text = "products.legacy.backend.tasks.cleanup -> products.legacy.backend.tests.factories.make_widget (import)"
 
 [[finding]]
+rule = "sources-vendors-use-sdk"
+identity = ["products.warehouse_sources.sources.alpha.source", "products.inventory.backend.facade.api"]
+text = "products.warehouse_sources.sources.alpha.source -> products.inventory.backend.facade.api (import)"
+
+[[finding]]
+rule = "sources-vendors-use-sdk"
+identity = ["products.warehouse_sources.sources.alpha.source", "posthog.models.team.team"]
+text = "products.warehouse_sources.sources.alpha.source -> posthog.models.team.team.Team (import)"
+
+[[finding]]
+rule = "sources-vendors-use-sdk"
+identity = ["products.warehouse_sources.sources.conftest", "posthog.models.team.team"]
+text = "products.warehouse_sources.sources.conftest -> posthog.models.team.team.Team (import)"
+
+[[finding]]
+rule = "sources-vendors-use-sdk"
+identity = ["products.warehouse_sources.sources.sdk.base", "common.hogvm.stl"]
+text = "products.warehouse_sources.sources.sdk.base -> common.hogvm.stl.quote (import)"
+
+[[finding]]
+rule = "sources-vendors-independent"
+identity = ["products.warehouse_sources.sources.alpha.lazy", "products.warehouse_sources.sources.beta.registry"]
+text = "products.warehouse_sources.sources.alpha.lazy reaches products.warehouse_sources.sources.beta.registry: products.warehouse_sources.sources.alpha.lazy -> products.warehouse_sources.sources -> products.warehouse_sources.sources.beta.registry"
+
+[[finding]]
+rule = "sources-vendors-independent"
+identity = ["products.warehouse_sources.sources.alpha.source", "products.warehouse_sources.sources.beta.registry"]
+text = "products.warehouse_sources.sources.alpha.source reaches products.warehouse_sources.sources.beta.registry.BETA_TABLES: products.warehouse_sources.sources.alpha.source -> products.warehouse_sources.sources.beta.registry.BETA_TABLES"
+
+[[finding]]
+rule = "sources-vendors-independent"
+identity = ["products.warehouse_sources.sources.sdk.catalog", "products.warehouse_sources.sources.beta.registry"]
+text = "products.warehouse_sources.sources.sdk.catalog reaches products.warehouse_sources.sources.beta.registry.BETA_TABLES: products.warehouse_sources.sources.sdk.catalog -> products.warehouse_sources.sources.beta.registry.BETA_TABLES"
+
+[[finding]]
+rule = "webhook-consumers-use-facade"
+identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backend.logic.widgets"]
+text = "products.legacy.backend.webhook_consumers -> products.legacy.backend.logic.widgets.WIDGET_LIMIT (import)"
+
+[[finding]]
 rule = "model-crossings"
 identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "instance-many(filter)"]
 text = "ee.api.widgets uses products.legacy.backend.models.Widget as instance-many(filter)"
@@ -1157,6 +1197,16 @@ text = "products/visual_review lacks backend/facade/{contracts.py,contracts}"
 rule = "has-facade"
 identity = ["products/visual_review/backend/facade/api.py"]
 text = "products/visual_review lacks backend/facade/api.py"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/warehouse_sources/backend/facade/{contracts.py,contracts}"]
+text = "products/warehouse_sources lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/warehouse_sources/backend/facade/api.py"]
+text = "products/warehouse_sources lacks backend/facade/api.py"
 
 [[finding]]
 rule = "has-facade"
@@ -1652,11 +1702,6 @@ text = "products/warehouse_sources/backend/temporal/data_imports/sources/generat
 rule = "config:stale-name"
 identity = ["products/warehouse_sources/backend/facade/_access_control_base.py"]
 text = "products/warehouse_sources/backend/facade/_access_control_base.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
-
-[[incomplete]]
-rule = "config:stale-name"
-identity = ["products/warehouse_sources/sources/sdk/testing.py"]
-text = "products/warehouse_sources/sources/sdk/testing.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
