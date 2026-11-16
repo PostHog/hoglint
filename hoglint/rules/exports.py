@@ -169,9 +169,7 @@ class ExportPrimitive(RuleType):
 
     PRIMITIVE = MODE = "export"
     NATIVE_MODE = "export"
-    READS = frozenset(
-        {"exports", "contexts", "from", "slots_reported_by", "on_unknown", "unknown_types", "on_unresolved"}
-    )
+    READS = frozenset({"exports", "contexts", "from", "slots_reported_by", "on_unknown", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
@@ -229,7 +227,6 @@ class ExportPrimitive(RuleType):
             "exports": [places.index(export.name) for export in self.selected_exports()],
             "include": context_bits(self.include),
             "exclude": context_bits(self.exclude),
-            "unknown_types": list(spec.unknown_types),
             "on_unknown": spec.on_unknown,
             "on_unresolved": spec.on_unresolved,
             "start": selector_tree(spec.from_),

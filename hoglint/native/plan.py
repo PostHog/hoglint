@@ -166,6 +166,7 @@ class RulePlan:
                     "signatures": policy.signatures,
                     "allow_symbols": selector_tree(policy.allow_symbols),
                     "owned_elsewhere": selector_tree(policy.owned_elsewhere),
+                    "unknown_types": list(policy.unknown_types),
                 }
                 for policy in config.shapes.values()
             ],

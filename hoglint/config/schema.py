@@ -140,7 +140,7 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "use-shape": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"allow_shapes", "deny_shapes", "flow"},
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
-    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots_reported_by", "on_unknown", "unknown_types"},
+    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots_reported_by", "on_unknown"},
     "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
@@ -157,7 +157,18 @@ ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_p
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
 SHAPE_KEYS = frozenset(
-    {"data", "behavior", "allow", "allow_symbols", "owned_elsewhere", "deny", "unknown", "signatures", "doc"}
+    {
+        "data",
+        "behavior",
+        "allow",
+        "allow_symbols",
+        "owned_elsewhere",
+        "deny",
+        "unknown",
+        "unknown_types",
+        "signatures",
+        "doc",
+    }
 )
 # Keys renamed once, each with what to write now. An old key reads nothing, so it is a config error
 # that names its new form (D52), never an alias.
@@ -165,7 +176,12 @@ RENAMED_SHAPE_KEYS = {
     "allow_where": "`allow_symbols`",
     "walk_where": '`owned_elsewhere`, with the reverse sign: `walk_where = X` is `owned_elsewhere = "not (X)"`',
 }
-RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {"export": {"leave_slots_to": "`slots_reported_by`"}}
+RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {
+    "export": {
+        "leave_slots_to": "`slots_reported_by`",
+        "unknown_types": "`unknown_types` of the shape policy each export names: the walk reads its policy's list",
+    }
+}
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by"})
@@ -613,6 +629,7 @@ class SchemaBuilder:
                 signatures=self.check_bool(f"{key}.signatures", table.get("signatures", False)),
                 allow_symbols=self.parse(f"{key}.allow_symbols", table.get("allow_symbols"), entity),
                 owned_elsewhere=self.parse(f"{key}.owned_elsewhere", table.get("owned_elsewhere"), entity),
+                unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
                 source=self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):

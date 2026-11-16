@@ -582,7 +582,6 @@ CORNERS = {
         "exports": ["facade"],
         "on_unknown": "incomplete",
         "on_unresolved": "incomplete",
-        "unknown_types": ["typing.Any"],
         "contexts": {"exclude": []},
         "identity": ["dst.symbol"],
         "ledger": False,
@@ -667,9 +666,17 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
     }
 
 
+# The corners whose shape policy is not the fixture's: an export rule reads its policy's unknown types.
+CORNER_BASES = {
+    "export-unknowns-as-incomplete": CONFIG.replace(
+        "[shapes.contract]\n", '[shapes.contract]\nunknown_types = ["typing.Any"]\n'
+    ),
+}
+
+
 @pytest.mark.parametrize("name", sorted(CORNERS))
 def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
-    assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]))
+    assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]), CORNER_BASES.get(name, CONFIG))
 
 
 # The export rule's corners, stored: per finding its identity, message and unknown flag, per
@@ -854,8 +861,10 @@ EXPORT_CORNER_ROWS = {
 }
 
 
-def export_rows(world: World, name: str, fields: dict[str, Any]) -> tuple[list[tuple[Any, ...]], list[tuple[str, str]]]:
-    config = world.config(rule_table(name, fields))
+def export_rows(
+    world: World, name: str, fields: dict[str, Any], base: str = CONFIG
+) -> tuple[list[tuple[Any, ...]], list[tuple[str, str]]]:
+    config = world.config(rule_table(name, fields), base)
     native = world.context(config)
     spec = config.rules[name]
     run = primitive_of(spec)(native, spec).evaluate()
@@ -866,7 +875,7 @@ def export_rows(world: World, name: str, fields: dict[str, Any]) -> tuple[list[t
 @pytest.mark.parametrize("name", sorted(EXPORT_CORNER_ROWS))
 def test_an_export_corner_gives_its_stored_rows(world: World, name: str) -> None:
     findings, incomplete = EXPORT_CORNER_ROWS[name]
-    assert export_rows(world, name, CORNERS[name]) == (findings, incomplete)
+    assert export_rows(world, name, CORNERS[name], CORNER_BASES.get(name, CONFIG)) == (findings, incomplete)
 
 
 # Relation R7 of the rule-half design: the order of `exports` changes no row, and `on_unknown` and

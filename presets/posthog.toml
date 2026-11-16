@@ -380,6 +380,8 @@ allow_symbols = "may_cross == true"
 owned_elsewhere = "tier == 'core'"
 behavior   = "abc"
 deny       = ["model", "manager", "queryset", "command"]
+# A slot typed with one of these says nothing: it is unknown.
+unknown_types = ["typing.Any", "builtins.dict", "typing.Dict", "builtins.object"]
 signatures = true
 
 # Registration modules and presentation adapters hand out classes, never ORM types.

@@ -142,6 +142,8 @@ pub struct ShapePlan {
     /// An entity selector: a class it holds for is its owner's contract, so an allowed class that
     /// is no data shape is walked only where it does not hold.
     pub owned_elsewhere: Option<NodePlan>,
+    /// The types a slot's row reads as unknown when an export rule walks under the policy.
+    pub unknown_types: Vec<String>,
 }
 
 /// The base classes and metaclasses that make each core shape (`exports.core_shape_bases`): the
@@ -164,7 +166,6 @@ pub struct ExportRulePlan {
     /// names its own.
     pub include: u8,
     pub exclude: u8,
-    pub unknown_types: Vec<String>,
     pub on_unknown: String,
     pub on_unresolved: String,
     /// Its `from`: which export modules it judges, read of the module alone.

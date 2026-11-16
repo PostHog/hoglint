@@ -32,6 +32,8 @@ pub struct Shape {
     /// `owned_elsewhere`: a class it holds for is its owner's contract, so an allowed class that
     /// is no data shape is walked only where it does not hold.
     owned_elsewhere: Option<Node>,
+    /// `unknown_types`: the types a slot's row reads as unknown under this policy.
+    unknown_types: Vec<String>,
 }
 
 impl Shape {
@@ -45,6 +47,7 @@ impl Shape {
             signatures: plan.signatures,
             allow_symbols: entity.optional(&plan.allow_symbols)?,
             owned_elsewhere: entity.optional(&plan.owned_elsewhere)?,
+            unknown_types: plan.unknown_types.clone(),
         })
     }
 
@@ -105,7 +108,6 @@ pub struct ExportRule {
     slot_rules: Vec<SlotRule>,
     include: u8,
     exclude: u8,
-    unknown_types: Vec<String>,
     on_unknown: String,
     on_unresolved: String,
     columns: Vec<Column>,
@@ -149,7 +151,6 @@ impl ExportRule {
             slot_rules,
             include: plan.include,
             exclude: plan.exclude,
-            unknown_types: plan.unknown_types.clone(),
             on_unknown: plan.on_unknown.clone(),
             on_unresolved: plan.on_unresolved.clone(),
             columns,
@@ -826,7 +827,7 @@ impl<'a> Walk<'a> {
             .filter(|name| shapes.contains(*name))
             .collect();
         denied.sort();
-        let unknown_type = self.rule.unknown_types.iter().any(|name| name == symbol);
+        let unknown_type = policy.unknown_types.iter().any(|name| name == symbol);
         if slot.is_some_and(|read| read.left) && (!denied.is_empty() || unknown_type) {
             return;
         }

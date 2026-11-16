@@ -109,6 +109,8 @@ class ShapePolicy:
     # An entity selector: a class it holds for is its owner's contract, so an allowed class that is
     # no data shape is walked only where it does not hold, and it makes a behavior class.
     owned_elsewhere: Selector | None = None
+    # The types a slot's row reads as unknown when the export rule walks under this policy.
+    unknown_types: tuple[str, ...] = ()
     source: str = ""
 
 

@@ -127,6 +127,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 
 **What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
 - A slot type is unknown when it is `Any`, `object`, a bare `dict` or no annotation.
+  The type list is the shape policy's `unknown_types`, written out in `[shapes.contract]`; the export rule reads the list of the policy it walks under (Nov 16).
   `object` stays unknown because a slot typed `object` would let any model cross unseen.
   A mapping given type arguments (`dict[str, str]`) is typed.
 - `Any` as an argument of a mapping (`dict[str, Any]`) is an opaque payload: allowed in a parameter and a field, a finding in a return value.

@@ -156,7 +156,7 @@ Some words have two meanings; the entry names both.
 - **Shape** (two meanings).
   Of a symbol: the core shape names `dataclass`, `frozen-dataclass`, `abc`, `enum`, `protocol`, `exception`, `function`, `constant`, `class`, plus the config's kinds.
   Of an edge: what a pack says a use means (edge fields `shape`, `shape_detail`), such as a Django `write` or `lock`, read by `use-shape` rules.
-- **Shape policy** (`[shapes.<name>]`, keys `data`, `behavior`, `allow`, `deny`, `unknown`, `signatures`, `allow_symbols`, `owned_elsewhere`).
+- **Shape policy** (`[shapes.<name>]`, keys `data`, `behavior`, `allow`, `deny`, `unknown`, `unknown_types`, `signatures`, `allow_symbols`, `owned_elsewhere`).
   What an export may hand out: data shapes whose fields are walked, allowed and denied shapes, and what to do with a type it cannot tell.
   Each export names one with its `shape` key.
 - **`allow_symbols`** (shape policy key).
@@ -169,8 +169,9 @@ Some words have two meanings; the entry names both.
 - **`slots_reported_by`** (export rule key).
   The signature rules that report the slots they read.
   In such a slot the export rule judges only the shape of a class, so one slot is reported by one rule.
-- **`unknown_types`** (signature and export rule key).
-  The types that a rule reads as unknown in a slot, such as `typing.Any` and a bare `dict`.
+- **`unknown_types`** (shape policy key; signature rule key).
+  The types read as unknown in a slot, such as `typing.Any` and a bare `dict`.
+  The export rule reads the list of the policy it walks under; a signature rule reads its own, or its policy's (`shape`).
 - **Trail** (export finding).
   The chain of names from the exported symbol to the type that a finding reports, as in `OrderRejected -> Order`.
 

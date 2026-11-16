@@ -163,6 +163,10 @@ ledger = false
             "[shapes.c]\nallow = ['class']\nbehavior = { kind = 'abc', where = \"tier == 'core'\" }\n",
             '`behavior` names a shape, as `behavior = "abc"`; its `where` is now `owned_elsewhere`',
         ),
+        (
+            "[rules.other]\nprimitive = 'export'\nunknown_types = ['typing.Any']\nledger = false\n",
+            "`unknown_types` is now `unknown_types` of the shape policy each export names",
+        ),
         # a behavior class is allowed only where its base is owned elsewhere, so the policy says where
         ("[shapes.c]\nallow = ['class']\nbehavior = 'abc'\n", "`behavior` needs `owned_elsewhere`"),
         (
