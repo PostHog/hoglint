@@ -162,6 +162,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `TC02` | `products/legacy/backend/management/commands/backfill_widget_names.py` | A one-off backfill imports logic | thin-commands finding | D93, D104 |
 | `TC03` | `products/legacy/backend/management/commands/sync_widgets.py` | An ordinary command imports its product's tasks | thin-commands finding | |
 | `TC04` | `products/inventory/backend/management/commands/show_stock.py` | A command that goes through its facade | clean | |
+| `TC05` | `products/inventory/backend/management/commands/restock_now.py` | A command imports a name its facade's tasks module hands out from the product's tasks | clean | Judged at the origin, excused when the surface is the product's facade (Nov 16) |
 | `TC05` | `products/visual_review/backend/management/commands/seed_dummy_runs.py` | A dev seeder on the named list writes through its models | clean | Named as test code (D104) |
 | `AT01` | `products/legacy/backend/presentation/views.py` | Presentation opens a transaction (`with` and decorator) | clean: no reference edge for a call, `with` or decorator | The rule cannot fire (wanted) |
 | `AT02` | `products/inventory/backend/logic/stock.py`, `products/legacy/backend/api/widgets.py` | A transaction outside presentation | clean | |
@@ -379,7 +380,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | no-new-package-cycles | A pair with non-facade edges | `CY01` (other direction) |
 | drives | A test outside the product runs its query kind | `DR01`, `DR02` |
 | drives | A test imports a runner by name | None |
-| thin-commands | An import through the product's own facade | `TC04` |
+| thin-commands | An import through the product's own facade | `TC04`, `TC05` (a name the facade re-exports) |
 | thin-commands | Dev seeders | `TC01` |
 | thin-commands | One-off backfills | `TC02` |
 | thin-commands | Operational commands | `TC03` |

@@ -795,18 +795,6 @@ identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 # has-facade
 
 [[row]]
-case = "LE11"
-rule = "has-facade"
-verdict = "finding"
-identity = ["products/kiosk/backend/facade/api.py"]
-
-[[row]]
-case = "LE11"
-rule = "has-facade"
-verdict = "finding"
-identity = ["products/kiosk/backend/facade/{contracts.py,contracts}"]
-
-[[row]]
 case = "LE08"
 rule = "has-facade"
 verdict = "finding"
@@ -859,6 +847,18 @@ case = "LE09"
 rule = "has-facade"
 verdict = "finding"
 identity = ["products/visual_review/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE11"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/kiosk/backend/facade/api.py"]
+
+[[row]]
+case = "LE11"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/kiosk/backend/facade/{contracts.py,contracts}"]
 
 [[row]]
 case = "SV00"

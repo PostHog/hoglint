@@ -565,6 +565,8 @@ doc        = "A management command reaches its own product through the facade (B
 view       = "zones"
 from       = "src.zone == 'commands' and src.testcode != true"
 deny       = "dst.package == src.package and dst.zone in ['models', 'logic', 'tasks']"
+# An import through the product's own facade is what the rule asks for, wherever the name is defined.
+unless     = "surface.zone == 'facade'"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 
