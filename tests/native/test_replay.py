@@ -72,6 +72,18 @@ DJANGO_REPO = {
     "django/db/models/base.py": "class Model:\n    pass\n",
 }
 MODEL_EDITS = {"app/models.py": MODEL + "\n\nclass Refund(models.Model):\n    pass\n"}
+# A connect call in `Panel.wire`, def 1 of its file: the signals step looks its receiver up at
+# def 1. In the child, def 1 is gone, or names another method where the lookup gives the same
+# answer. A stored lookup must be a change either way, never a crash and never "unchanged".
+WIRED = "class Panel:\n    def wire(self):\n        self.button.connect(print)\n"
+SITE_EDITS = {
+    "def-gone": {"app/signals.py": "def wire(button):\n    button.connect(print)\n"},
+    "def-moved": {
+        "app/signals.py": (
+            "class Panel:\n    def other(self):\n        pass\n\n    def wire(self):\n        self.button.connect(print)\n"
+        )
+    },
+}
 
 
 def write_tree(repo: Path, files: Mapping[str, str | None]) -> str:
@@ -156,6 +168,18 @@ def test_a_pack_memo_that_forgets_its_reads_or_stays_broken_makes_the_replay_fai
 ) -> None:
     result = replay(tmp_path, model_pair, mode, damages)
     assert result.ok is equal, result.line()
+
+
+@pytest.fixture(scope="module", params=sorted(SITE_EDITS))
+def site_pair(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pair]:
+    return param_pair(request, tmp_path_factory, {**DJANGO_REPO, "app/signals.py": WIRED}, SITE_EDITS[request.param])
+
+
+def test_a_stored_lookup_at_a_def_the_child_lacks_or_moved_is_a_change(
+    tmp_path: Path, site_pair: tuple[Path, Pair]
+) -> None:
+    result = replay(tmp_path, site_pair, "today")
+    assert result.status() == "EQUAL", result.line()
 
 
 def test_the_truth_set_holds_the_file_whose_rows_changed_and_the_commit_predicts_it(

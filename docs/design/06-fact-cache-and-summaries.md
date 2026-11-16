@@ -1,10 +1,9 @@
 # 6. The fact cache and stored run summaries
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 11, 2026.
+> Current as of Nov 11, 2026; the pack memo entry as of Nov 16, 2026.
 
-Two caches exist.
-Both are per machine, shared by all worktrees, under one cache root: `hoglint` under `XDG_CACHE_HOME`, which defaults to `.cache` in the home directory (D3, D10, D19).
+The fact cache, the run summaries and the pack memo are per machine, shared by all worktrees, under one cache root: `hoglint` under `XDG_CACHE_HOME`, which defaults to `.cache` in the home directory (D3, D10, D19).
 
 ## Decided
 
@@ -41,6 +40,16 @@ There are no checkouts.
   Paths come from git, never from the file system (D14, portability).
   The cross-platform gate passed at 461ef834c48 on macOS arm64, Linux arm64 and Linux amd64.
 
+**The pack memo keeps each pack step's items with the reads they made** (stage S3 in `08-fast-hook.md`; `hoglint/core/memo.py`, `hoglint/native/memo_store.py`).
+- One SQLite file per engine id and layout in `memo/` under the cache root; layout 5 since Nov 16.
+- A later run reuses an item's output when every read the item made has the same answer again.
+  That run may be on another tree, so a read names what it asked by values with one meaning in every tree: paths, module and symbol names, content keys.
+- A lookup at a site (`value-lookup`, `chain-lookup`) names the site by its def index and line, which have a meaning only in one content of the file.
+  So its key also holds the file's content key: where the file has other content, the read is a change and the link is not asked.
+  The lookup also notes the file read, so an item that looked up a site of a file with no content key is not stored.
+- A read that cannot be answered again (its file gone, a def index the file does not have, any error) is a change, and the item runs again: never a crash, never "unchanged" (architect, Nov 16).
+  The link answers a def index that a file does not have with an error, not a panic.
+
 **A consuming repo's main-branch CI can publish run summaries under the same key, from an existing CI job, with no new workflow** (owner, Nov 9; D14).
 A PR's `compare` then restores the merge base's summary, and runs the full base scan on a miss.
 
@@ -60,6 +69,10 @@ The target is Ruff-like speed from the tool itself, not a job that hides a secon
 - lz4 per key: zstd level 3 would give 63 MB for the records, at three times the decode time.
   lz4 is pure Rust and faster.
   Whole-record lz4 cost +0.045 s per warm check in the Django pack; per-key frames brought it back to the base.
+- The content key in a lookup's read (layout 5): before it, the key held only the path, the def index and the line.
+  A cache filled from one tree and then used for an older tree asked a stored def index of a file with fewer defs, and the run crashed.
+  In the same pair, most stored lookups at a def index of a changed file still held: they answered about whatever def had that index now.
+  Each of those items also held the read of its file, which had changed, so none was reused; the read alone did not say that.
 - The 1 GB bound: the prune keeps two engine versions, and one version is 305-321 MB.
   So 500 MB could not hold them, and the size trim removed rows that the next check needs.
 

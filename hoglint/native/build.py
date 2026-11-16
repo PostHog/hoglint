@@ -366,13 +366,19 @@ class NativeClassIndex:
 
 
 class NativeContext:
-    """The lookups packs call at sites of native file scopes. A lookup's read is
-    keyed by the scope's path, so it is asked again through the scope of that path."""
+    """The lookups packs call at sites of native file scopes. A site's def index and line name a
+    place in one content of its file, so a lookup's read is keyed by the path and that content's
+    key (`keys`): asked again where the file has other content, it does not hold. A lookup reads
+    the file's bindings, so it notes the file too, and an item that looked up a site of a file
+    with no content key is not stored."""
 
-    def __init__(self, link: Any, entities: Entities, scope_of: dict[str, FileScope]) -> None:
+    def __init__(
+        self, link: Any, entities: Entities, scope_of: dict[str, FileScope], keys: Mapping[str, str | None]
+    ) -> None:
         self.link = link
         self.entities = entities
         self.scope_of = scope_of
+        self.keys = keys
         tracer = NULL_TRACER
         self.values = TracedQuery(tracer, "value-lookup", self.ask_value)
         self.chains = TracedQuery(tracer, "chain-lookup", self.ask_chain, tuple)
@@ -380,12 +386,18 @@ class NativeContext:
     def traced(self) -> list[Traced]:
         return [self.values, self.chains]
 
-    def ask_value(self, path: str, value: object, at_scope: int, line: int) -> Any:
-        scope: Any = self.scope_of[path]
+    def scope_at(self, path: str, content: str | None) -> Any:
+        """The scope of `path` while the file still has `content`."""
+        if self.keys.get(path) != content:
+            raise KeyError(f"{path} has other content than the site was read from")
+        return self.scope_of[path]
+
+    def ask_value(self, path: str, content: str | None, value: object, at_scope: int, line: int) -> Any:
+        scope = self.scope_at(path, content)
         return self.link.value_lookup(scope.scope, value, at_scope, line)
 
-    def ask_chain(self, path: str, chain: str, at_scope: int, line: int) -> Any:
-        scope: Any = self.scope_of[path]
+    def ask_chain(self, path: str, content: str | None, chain: str, at_scope: int, line: int) -> Any:
+        scope = self.scope_at(path, content)
         return self.link.chain_lookup(scope.scope, chain, at_scope, line)
 
     def lookup(self, found: tuple[str, Hits | None, bool]) -> Lookup:
@@ -394,12 +406,14 @@ class NativeContext:
 
     def value_lookup(self, scope: FileScope, value: object, at_scope: int, line: int) -> Lookup | None:
         assert isinstance(scope, NativeFileScope)
-        found = self.values(scope.path, value, at_scope, line)
+        scope.touch()
+        found = self.values(scope.path, self.keys.get(scope.path), value, at_scope, line)
         return self.lookup(found) if found is not None else None
 
     def chain_lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> tuple[Lookup, list[str]]:
         assert isinstance(scope, NativeFileScope)
-        found, rest = self.chains(scope.path, chain, at_scope, line)
+        scope.touch()
+        found, rest = self.chains(scope.path, self.keys.get(scope.path), chain, at_scope, line)
         return self.lookup(found), rest
 
 
@@ -429,13 +443,14 @@ class NativeBuild:
             for scope, (file, module, is_package, bits) in enumerate(link.scopes())
         ]
         self.scope_of = {scope.path: scope for scope in self.files}
-        self.context = NativeContext(link, entities, self.scope_of)
+        self.content_keys: dict[str, str | None] = dict(zip(paths, link.blob_keys(), strict=True))
+        self.context = NativeContext(link, entities, self.scope_of, self.content_keys)
         self.bodies_cache: dict[str, RecordBodies] = {}
 
     def trace_with(self, tracer: Tracer) -> None:
         """Notes what packs read of this build on `tracer`, the run's pack memo's: the files by
         id and content key, and each query the build answers."""
-        tracer.files = FileKeysMap(self.paths, dict(zip(self.paths, self.link.blob_keys(), strict=True)))
+        tracer.files = FileKeysMap(self.paths, self.content_keys)
         for record in self.store.records.values():
             record.tracer = tracer
         reads = [*self.index.reads, self.tables.table_read]
@@ -469,5 +484,6 @@ class NativeBuild:
         self.tables.cache.clear()
         self.files.clear()
         self.scope_of.clear()
+        self.content_keys.clear()
         self.bodies_cache.clear()
         self.link.release_facts()

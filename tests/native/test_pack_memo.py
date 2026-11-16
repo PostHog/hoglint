@@ -4,6 +4,7 @@ store is a miss, never a failed run."""
 from __future__ import annotations
 
 import gc
+import json
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -11,11 +12,20 @@ from typing import Any
 
 import pytest
 
-from hoglint.core.memo import ItemOutput, ItemRun, Items, PackMemo, TracedMap, Tracer, part_of
+from hoglint.core.config import CoreConfig
+from hoglint.core.memo import FILE, ItemOutput, ItemRun, Items, PackMemo, TracedMap, Tracer, part_of
 from hoglint.ledger.cache import FACT_STORE, MEMO, RunStores
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
+from hoglint.native.analysis import LITE_KINDS
+from hoglint.native.build import NativeBuild
+from hoglint.native.config import link_config
+from hoglint.native.graph import EdgeMaker
 from hoglint.native.memo_store import MemoStore
+from hoglint.native.snapshot import BlobSnapshot
 from hoglint.packs.django.models import ModelEntry
+from rules.test_compare import git_in, write_files
+
+from native.require import native_module
 
 KIND = "test.answer"
 
@@ -245,6 +255,56 @@ def test_an_item_that_reads_a_whole_traced_map_runs_again_when_the_map_gains_a_k
         memo.flush()
         ran.append(items.ran)
     assert ran == [["a"], ["a"]]
+
+
+# A connect call in `Panel.wire`, def 1 of its file: a lookup of its receiver is asked at def 1.
+WIRED = "class Panel:\n    def wire(self):\n        self.button.connect(print)\n"
+# The file in another tree. Where def 1 is another method, `self` is a local there too, so the
+# lookup asked again at def 1 would give the same answer about another def.
+OTHER_TREES = {
+    "same content": WIRED,
+    "def 1 gone": "def wire(button):\n    button.connect(print)\n",
+    "def 1 another method": (
+        "class Panel:\n    def other(self):\n        pass\n\n    def wire(self):\n        self.button.connect(print)\n"
+    ),
+}
+
+
+def blob_build(root: Path, wiring: str) -> NativeBuild:
+    """What packs read of a git index that holds `wiring`, with each file keyed by its blob id."""
+    native = native_module()
+    write_files(root, {"app/__init__.py": "", "app/wiring.py": wiring})
+    git_in(root, "init", "-q")
+    git_in(root, "add", ".")
+    snapshot = BlobSnapshot.index(root)
+    paths = sorted(snapshot.blobs)
+    blobs = [(path, *snapshot.blobs[path]) for path in paths]
+    extract = {"first_party": ["app"], "kinds": [], "watch_callees": [], "lite_kinds": list(LITE_KINDS)}
+    config = json.dumps(link_config(CoreConfig(), tuple(paths), {}))
+    link, _ = native.link_blobs(str(root), blobs, [], json.dumps(extract), config, None, 1)
+    return NativeBuild(CoreConfig(), link, {}, EdgeMaker())
+
+
+@pytest.mark.parametrize("other", sorted(OTHER_TREES))
+def test_a_lookup_at_a_site_holds_in_another_tree_only_while_its_file_has_the_same_content(
+    tmp_path: Path, other: str
+) -> None:
+    first = blob_build(tmp_path / "first", WIRED)
+    tracer = Tracer()
+    first.trace_with(tracer)
+    with tracer.frame() as frame:
+        first.context.value_lookup(first.scope_of["app/wiring.py"], "self.button", 1, 3)
+    stored = tracer.stored_reads(frame)
+    assert stored is not None
+    second = blob_build(tmp_path / "second", OTHER_TREES[other])
+    again = Tracer()
+    second.trace_with(again)
+    lookups = [(kind, key, found) for kind, key, found in stored if kind != FILE]
+    assert [again.current(kind, key) == found for kind, key, found in lookups] == [other == "same content"]
+    assert [kind for kind, _, _ in stored if kind == FILE] == [FILE]
+    scope: Any = second.scope_of["app/wiring.py"]
+    with pytest.raises(ValueError, match="no def 9"):
+        second.link.value_lookup(scope.scope, "self.button", 9, 3)
 
 
 def test_a_pack_memo_that_cannot_open_says_so_apart_from_the_fact_cache(
