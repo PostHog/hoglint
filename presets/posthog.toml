@@ -38,6 +38,10 @@ migrations = [
 # A third-party end reads no package, so it is no crossing.
 [conditions]
 crosses-package = "src.package != dst.package and dst.external == none"
+# A use whose import public-surface reports: a product module past its export, in another package,
+# that no allowance of public-surface lets through. model-crossings leaves it there (A5: one rule
+# owns each coupling).
+public-surface-reports = "surface.tier == 'product' and surface.package != src.package and src.history != true and not (surface.exported or (src.wiring == 'registration' and surface.wiring == 'location') or (surface.permanent == true and src.tier == 'core'))"
 # A facade's own code, its fixtures left out.
 facade-code = "src.zone == 'facade' and src.zone != 'fixtures'"
 # The settings keys request-path does not follow (D103): what they name is not the per-request
@@ -631,9 +635,9 @@ growth_key = ["dst.module", "src.package"]
 
 [rules.model-crossings]
 primitive    = "use-shape"
-doc          = "Outside its package, a model appears only in allowed shapes: a type, a cast, value rows, a signal sender, the team-extension registry. Judged at the origin, so a re-export hides nothing."
+doc          = "Outside its package, a model appears only in allowed shapes: a type, a cast, value rows, a signal sender, the team-extension registry. Judged at the origin, so a re-export hides nothing. A use that came in past the export, where public-surface reports its import, is that rule's (one rule owns each coupling)."
 kinds        = ["reference"]
-select       = "dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none"
+select       = "dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports"
 endpoint     = "origin"
 allow_shapes = [
   "annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "sender",

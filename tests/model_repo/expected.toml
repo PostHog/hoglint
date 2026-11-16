@@ -941,66 +941,24 @@ identity = ["scripts.shapes|import|pydantic.BaseModel"]
 # migration-database
 
 [[row]]
-case = "MD04"
-rule = "migration-database"
-verdict = "incomplete"
-identity = ["products.reports.backend.migrations.0002_extend|migration-parent|dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}"]
-
-[[row]]
 case = "MD01"
 rule = "migration-database"
 verdict = "finding"
 identity = ["legacy.0001_initial", "posthog.0001_initial"]
 
+[[row]]
+case = "MD04"
+rule = "migration-database"
+verdict = "incomplete"
+identity = ["products.reports.backend.migrations.0002_extend|migration-parent|dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}"]
+
 # model-crossings
-
-[[row]]
-case = "MC01"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
-
-[[row]]
-case = "MC03"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "prefetch"]
-
-[[row]]
-case = "ME08"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
 
 [[row]]
 case = "PS08"
 rule = "model-crossings"
 verdict = "finding"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
-
-[[row]]
-case = "PS25"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "instance-many(filter)"]
-
-[[row]]
-case = "PS26"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.catalog.backend.models.CatalogEntry", "posthog.models.resource_transfer.visitors", "in-collection"]
-
-[[row]]
-case = "PS26"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "posthog.models.resource_transfer.visitors", "in-collection"]
-
-[[row]]
-case = "PS26"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "posthog.models.resource_transfer.visitors", "in-collection"]
 
 # no-new-package-cycles
 

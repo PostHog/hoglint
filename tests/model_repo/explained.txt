@@ -9864,7 +9864,7 @@ rule     public-surface (endpoint surface, ee.settings.MIDDLEWARE)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, ee.settings.MIDDLEWARE)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, ee.settings.MIDDLEWARE)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, ee.settings.MIDDLEWARE)
@@ -9879,7 +9879,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.sql.ENTRY_TA
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.sql.ENTRY_TABLE_SQL)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.sql.ENTRY_TABLE_SQL)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, products.catalog.backend.sql.ENTRY_TABLE_SQL)
@@ -9894,7 +9894,7 @@ rule     public-surface (endpoint surface, products.reports.backend.hogql_querie
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.reports.backend.hogql_queries.widget.WidgetQueryRunner)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.reports.backend.hogql_queries.widget.WidgetQueryRunner)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, products.reports.backend.hogql_queries.widget.WidgetQueryRunner)
@@ -9906,7 +9906,7 @@ rule     infrastructure-direction (endpoint origin, products.reports.backend.hog
 edge     reference posthog/models/resource_transfer/visitors.py:5 products.catalog.backend.models.CatalogEntry -> ['products.catalog.backend.models.CatalogEntry']
          resolution=resolved contexts=['prod']
 rule     model-crossings (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> true
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.CatalogEntry)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -9915,14 +9915,13 @@ rule     foundation-direction (endpoint origin, products.catalog.backend.models.
 rule     infrastructure-direction (endpoint origin, products.catalog.backend.models.CatalogEntry)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
-finding  [new] model-crossings products.catalog.backend.models.CatalogEntry posthog.models.resource_transfer.visitors in-collection
 edge     reference products/access_control/backend/logic/rules.py:8 products.access_control.backend.models.AccessRule -> ['products.access_control.backend.models.AccessRule']
          resolution=resolved contexts=['function_local', 'prod']
 rule     public-surface (endpoint surface, products.access_control.backend.models.AccessRule)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.access_control.backend.models.AccessRule)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.access_control.backend.models.AccessRule)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.access_control.backend.models.AccessRule)
@@ -9937,7 +9936,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.models.Catal
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.CatalogEntry)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -9952,7 +9951,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.models.Entry
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.models.EntryManager)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.EntryManager)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.models.EntryManager)
@@ -9967,7 +9966,7 @@ rule     public-surface (endpoint surface, posthog.models.Project)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, posthog.models.project.Project)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, posthog.models.project.Project)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, posthog.models.project.Project)
@@ -9982,7 +9981,7 @@ rule     public-surface (endpoint surface, posthog.models.OrganizationMembership
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, posthog.models.organization.OrganizationMembership)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, posthog.models.organization.OrganizationMembership)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, posthog.models.organization.OrganizationMembership)
@@ -9997,7 +9996,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.management.c
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.management.commands.import_entries.Command)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.management.commands.import_entries.Command)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.management.commands.import_entries.Command)
@@ -10012,7 +10011,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.logic.views_
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.logic.views_out.StockBase)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.logic.views_out.StockBase)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.logic.views_out.StockBase)
@@ -10027,7 +10026,7 @@ rule     public-surface (endpoint surface, posthog.models.Project)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, posthog.models.project.Project)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, posthog.models.project.Project)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, posthog.models.project.Project)
@@ -10042,7 +10041,7 @@ rule     public-surface (endpoint surface, posthog.models.Team)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, posthog.models.team.team.Team)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, posthog.models.team.team.Team)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, posthog.models.team.team.Team)
@@ -10057,7 +10056,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.logic.views_
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.logic.views_out.ShipmentView)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.logic.views_out.ShipmentView)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.logic.views_out.ShipmentView)
@@ -10072,7 +10071,7 @@ rule     public-surface (endpoint surface, posthog.errors.CoreLookupError)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, posthog.errors.CoreLookupError)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, posthog.errors.CoreLookupError)
            select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, posthog.errors.CoreLookupError)
@@ -10087,7 +10086,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.models.Catal
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.CatalogEntry)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -10099,7 +10098,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.mod
 edge     reference products/catalog/backend/logic/views_out.py:10 products.inventory.backend.models.StockItem -> ['products.inventory.backend.models.StockItem']
          resolution=resolved contexts=['prod']
 rule     model-crossings (endpoint origin, products.inventory.backend.models.StockItem)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> true
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
@@ -10114,7 +10113,7 @@ rule     public-surface (endpoint surface, products.access_control.backend.prese
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.access_control.backend.presentation.access_control.AccessControlViewSetMixin)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.access_control.backend.presentation.access_control.AccessControlViewSetMixin)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.access_control.backend.presentation.access_control.AccessControlViewSetMixin)
@@ -10129,7 +10128,7 @@ rule     public-surface (endpoint surface, products.inventory.backend.facade.con
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.inventory.backend.facade.contracts.StockLevel)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.facade.contracts.StockLevel)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.facade.contracts.StockLevel)
@@ -10144,7 +10143,7 @@ rule     public-surface (endpoint surface, products.inventory.backend.logic.note
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.inventory.backend.logic.notes.StockLevelNote)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.logic.notes.StockLevelNote)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.logic.notes.StockLevelNote)
@@ -10159,7 +10158,7 @@ rule     public-surface (endpoint surface, products.inventory.backend.models.Sto
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.inventory.backend.models.StockItem)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
@@ -10174,7 +10173,7 @@ rule     public-surface (endpoint surface, products.access_control.backend.prese
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.access_control.backend.presentation.access_control.AccessControlViewSetMixin)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.access_control.backend.presentation.access_control.AccessControlViewSetMixin)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.access_control.backend.presentation.access_control.AccessControlViewSetMixin)
@@ -10191,7 +10190,7 @@ rule     public-surface (endpoint surface, products.inventory.backend.models.Sto
 edge     reference products/legacy/backend/facade/contracts.py:8 products.catalog.backend.events.ENTRY_CREATED -> ['products.catalog.backend.events.ENTRY_CREATED']
          resolution=resolved contexts=['prod']
 rule     model-crossings (endpoint origin, products.catalog.backend.events.ENTRY_CREATED)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.events.ENTRY_CREATED)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.events.ENTRY_CREATED)
@@ -10203,7 +10202,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.eve
 edge     reference products/legacy/backend/logic/widgets.py:25 products.inventory.backend.models.StockItem -> ['products.inventory.backend.models.StockItem']
          resolution=resolved contexts=['function_local', 'prod']
 rule     model-crossings (endpoint origin, products.inventory.backend.models.StockItem)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> true
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
@@ -10212,11 +10211,10 @@ rule     foundation-direction (endpoint origin, products.inventory.backend.model
 rule     infrastructure-direction (endpoint origin, products.inventory.backend.models.StockItem)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
-finding  [new] model-crossings products.inventory.backend.models.StockItem products.legacy.backend.logic.widgets instance-many(filter)
 edge     reference products/legacy/backend/logic/widgets.py:62 products.inventory.backend.models.StockItem -> ['products.inventory.backend.models.StockItem']
          resolution=resolved contexts=['function_local', 'prod']
 rule     model-crossings (endpoint origin, products.inventory.backend.models.StockItem)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> true
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
@@ -10231,7 +10229,7 @@ rule     public-surface (endpoint surface, products.legacy.backend.models.Widget
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.legacy.backend.models.Widget)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.legacy.backend.models.Widget)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.legacy.backend.models.Widget)
@@ -10243,7 +10241,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.mode
 edge     reference products/legacy/backend/receivers.py:7 products.inventory.backend.models.StockItem -> ['products.inventory.backend.models.StockItem']
          resolution=resolved contexts=['prod']
 rule     model-crossings (endpoint origin, products.inventory.backend.models.StockItem)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> true
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
@@ -10263,7 +10261,7 @@ rule     public-surface (endpoint surface, products.catalog.backend.facade.model
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> true
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> true
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.CatalogEntry)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -10279,7 +10277,7 @@ rule     public-surface (endpoint surface, products.inventory.backend.facade.con
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.inventory.backend.facade.enums.StockState)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.inventory.backend.facade.enums.StockState)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.inventory.backend.facade.enums.StockState)
@@ -10294,7 +10292,7 @@ rule     public-surface (endpoint surface, products.warehouse_sources.sources.be
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.warehouse_sources.sources.beta.registry.BETA_TABLES)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.warehouse_sources.sources.beta.registry.BETA_TABLES)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.warehouse_sources.sources.beta.registry.BETA_TABLES)
@@ -10309,7 +10307,7 @@ rule     public-surface (endpoint surface, products.warehouse_sources.sources.be
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     model-crossings (endpoint origin, products.warehouse_sources.sources.beta.registry.BETA_TABLES)
-           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none -> false
+           select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> false
 rule     no-new-package-cycles (endpoint origin, products.warehouse_sources.sources.beta.registry.BETA_TABLES)
            select: src.tier == 'product' and dst.tier == 'product' -> true
 rule     foundation-direction (endpoint origin, products.warehouse_sources.sources.beta.registry.BETA_TABLES)

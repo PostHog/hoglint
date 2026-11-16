@@ -68,9 +68,8 @@ def test_posthog_preset_products_zones_exports_and_isolated(tmp_path: Path) -> N
     assert found(result, "presentation-uses-facade") == [
         ("products.alerts.backend.presentation.views", "products.billing.backend.logic")
     ]
-    assert found(result, "model-crossings") == [
-        ("products.billing.backend.models.Invoice", "products.alerts.backend.logic", "write(save)")
-    ]
+    # The model came in past billing's export: the coupling is public-surface's row above (A5).
+    assert found(result, "model-crossings") == []
     assert found(result, "foundation-direction") == [("access_control", "alerts")]
     assert found(result, "infrastructure-direction") == [("egress", "billing")]
     assert found(result, "leaves-stay-leaves") == [("packages.owners_yaml.resolver", "django.db")]
@@ -444,10 +443,13 @@ def test_posthog_preset_lets_a_model_cross_only_in_shapes_that_hold_no_instance(
         ("passed-as-class", "build"),
         ("instance-many", "filter"),
     ]
-    builder = GraphBuilder().module("products.billing.backend.models", "posthog.api.thing")
+    builder = GraphBuilder().package("products.billing.backend.facade")
+    builder.module("products.billing.backend.models", "products.billing.backend.facade.api", "posthog.api.thing")
     builder.symbol(invoice, "model", abstract="false")
+    # Through the facade, which hands the model out: a use past the export would be public-surface's (A5).
+    door = "products.billing.backend.facade.api.Invoice"
     for line, (shape, detail) in enumerate(shapes, start=1):
-        builder.edge("reference", "posthog.api.thing", invoice, shape=shape, detail=detail, line=line)
+        builder.edge("reference", "posthog.api.thing", invoice, door, shape=shape, detail=detail, line=line)
     result = run_shape(tmp_path, "posthog", builder.graph)
     assert [f.identity[2] for f in result.runs["model-crossings"].findings] == [
         "passed-as-class(build)",

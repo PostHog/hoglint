@@ -770,41 +770,6 @@ text = "products.legacy.backend.webhook_consumers -> products.legacy.backend.log
 
 [[finding]]
 rule = "model-crossings"
-identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "instance-many(filter)"]
-text = "ee.api.widgets uses products.legacy.backend.models.Widget as instance-many(filter)"
-
-[[finding]]
-rule = "model-crossings"
-identity = ["products.catalog.backend.models.CatalogEntry", "posthog.models.resource_transfer.visitors", "in-collection"]
-text = "posthog.models.resource_transfer.visitors uses products.catalog.backend.models.CatalogEntry as in-collection"
-
-[[finding]]
-rule = "model-crossings"
-identity = ["products.inventory.backend.models.StockItem", "posthog.models.resource_transfer.visitors", "in-collection"]
-text = "posthog.models.resource_transfer.visitors uses products.inventory.backend.models.StockItem as in-collection"
-
-[[finding]]
-rule = "model-crossings"
-identity = ["products.legacy.backend.models.Widget", "posthog.models.resource_transfer.visitors", "in-collection"]
-text = "posthog.models.resource_transfer.visitors uses products.legacy.backend.models.Widget as in-collection"
-
-[[finding]]
-rule = "model-crossings"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
-text = "products.catalog.backend.logic.errors uses products.inventory.backend.models.StockItem as in-collection"
-
-[[finding]]
-rule = "model-crossings"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
-text = "products.legacy.backend.logic.widgets uses products.inventory.backend.models.StockItem as instance-many(filter)"
-
-[[finding]]
-rule = "model-crossings"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "prefetch"]
-text = "products.legacy.backend.logic.widgets uses products.inventory.backend.models.StockItem as prefetch"
-
-[[finding]]
-rule = "model-crossings"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
 text = "products.reports.backend.logic.build uses products.catalog.backend.models.CatalogEntry as instance-many(filter)"
 
