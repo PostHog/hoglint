@@ -44,7 +44,7 @@ from hoglint.native.factdb import EPOCH, FactDatabase, is_corrupt
 
 CRATE = bridge.CRATE
 PACKAGE = CRATE / "hoglint"
-LAYOUT = 4
+LAYOUT = 5
 # States of a step past the newest few are not read again and go.
 STATES_KEPT = 4
 SCHEMA = (
