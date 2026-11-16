@@ -217,6 +217,10 @@ class Pack(Protocol):
     it reads as one unit. The predictor (hoglint/native/predict.py) predicts all of them when one
     changes.
 
+    A pack whose framework reads every string of some modules as a dotted path (settings
+    modules) declares `path_modules(section) -> tuple[str, ...]`: their names and `*` globs. Core
+    reads a string there that names a module as a `dotted-path` edge wherever it stands.
+
     A pack that writes a symbol fact on every run from the whole tree, where the fact can sit in
     another file than what it was read from, declares `whole_symbol_kinds(section) ->
     tuple[str, ...]`: the `kind` facts of those symbols. The predictor compares every symbol of

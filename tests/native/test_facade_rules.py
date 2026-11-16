@@ -436,8 +436,11 @@ def returns_in_rejected(annotation: str) -> str:
 UNEXPANDED_NAMES = {
     "a NewType": "from typing import NewType\n\nRef = NewType('Ref', Order)\n",
     "a TypeVar": "from typing import TypeVar\n\nRef = TypeVar('Ref')\n",
-    "a functional TypedDict": "from typing import TypedDict\n\nRef = TypedDict('Ref', {'order': Order})\n",
     "a constant": "Ref = 3\n",
+}
+# Names a call declares that the producer expands as a type alias, by what they stand for.
+DECLARED_TYPES = {
+    "a TypeVar with a bound": "from typing import TypeVar\n\nRef = TypeVar('Ref', bound=Order)\n",
 }
 MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n        raise ValueError\n"
 # An allowed class, and an attribute that names a class-body alias of the same spelling.
@@ -1040,12 +1043,6 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
     ),
     "a NewType next to an alias in one slot": (
         handed_out(UNEXPANDED_NAMES["a NewType"] + "Ids = list[int]\n" + returns_in_rejected("Ids | Ref"), "Rejected"),
-        REF_UNKNOWN_AT_ERRORS,
-    ),
-    "a functional TypedDict inside an alias's value": (
-        handed_out(
-            UNEXPANDED_NAMES["a functional TypedDict"] + "Many = list[Ref]\n" + returns_in_rejected("Many"), "Rejected"
-        ),
         REF_UNKNOWN_AT_ERRORS,
     ),
     "a TypeVar inside an alias of an alias": (
@@ -1674,6 +1671,10 @@ VALUE_CASES = {
         handed_out("Ref = list[Order]\n", "Ref"),
         {"export-shape": [], "facade-signature": [[ERRORS, "Ref", "alias", ORDER]]},
     ),
+    **{
+        name: (handed_out(body, "Ref"), {"export-shape": [], "facade-signature": [[ERRORS, "Ref", "alias", ORDER]]})
+        for name, body in DECLARED_TYPES.items()
+    },
     "a value and a class whose method returns it": (
         handed_out("from typing import NewType\n\nRef = NewType('Ref', Order)\n" + MEMBER_TAKES_REF, "Ref", "Rejected"),
         REF_VALUE_AT_ERRORS,
@@ -1730,6 +1731,14 @@ CONSTANT_CASES = {
     "a conditional expression": (
         {API_FILE: "DEBUG = False\nTTL = 1 if DEBUG else 2\n\n__all__ = ['TTL']\n"},
         unknown_at_api("TTL"),
+    ),
+    # A constant with an annotation is judged by its annotation, whatever its value.
+    "annotated constants": (
+        {
+            API_FILE: IMPORTS_MODELS
+            + "ORDERS: list[models.Order] = []\nLIMIT: int = 3\n\n__all__ = ['ORDERS', 'LIMIT']\n"
+        },
+        {"export-shape": [], "facade-signature": [[API, "ORDERS", "constant", ORDER]]},
     ),
     "a call of anything else, handed out": (
         {

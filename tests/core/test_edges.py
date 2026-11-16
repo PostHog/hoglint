@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from hoglint.core.config import CoreConfig
 from hoglint.core.symbols import FUNC, TC_ELSE, TRY, TYPE_ONLY
 from hoglint.model import Context, Resolution
 from hoglint.outputs.tach_map import TachMap
@@ -169,11 +170,21 @@ def test_row_flags_give_refs_strs_and_calls_their_statement_context(kind: str) -
         .import_from("checkout.logic", "charge")
         .import_module("importlib")
         .ref("charge", chain="()", flags=TYPE_ONLY)
-        .string("checkout.logic.charge", flags=TYPE_ONLY)
+        .string("checkout.logic.charge", up="arg:0:patch expr", flags=TYPE_ONLY)
         .call("importlib.import_module", [{"s": "checkout.logic"}], [], flags=TYPE_ONLY),
     ]
     [edge] = edges_of(build(files), kind, VIEWS)
     assert edge.contexts == {Context.PROD, Context.TYPE_ONLY}
+
+
+@pytest.mark.parametrize("path_modules", [(), ("checkout.conf*",)])
+def test_a_path_module_reads_every_string_that_names_a_module_as_a_path(path_modules: tuple[str, ...]) -> None:
+    files = [
+        FileFacts("checkout/logic.py").define("charge"),
+        FileFacts("checkout/conf.py").string("checkout.logic.charge", up="elt:list assign:APPS"),
+    ]
+    edges = edges_of(build(files, CoreConfig(path_modules=path_modules)), "dotted-path", "checkout/conf.py")
+    assert [edge.surface for edge in edges] == (["checkout.logic.charge"] if path_modules else [])
 
 
 @pytest.mark.parametrize(
@@ -200,7 +211,7 @@ def test_dynamic_import_reads_the_module_name_argument(args: list, kws: list, su
         (FileFacts(VIEWS).import_from("checkout.logic", "charge", flags=TYPE_ONLY), False),
         (FileFacts(VIEWS).import_from("checkout.logic", "charge", flags=TC_ELSE), False),
         (FileFacts(VIEWS).import_from("checkout.logic", "charge", flags=TRY), True),
-        (FileFacts(VIEWS).string("checkout.logic.charge", flags=TYPE_ONLY), True),
+        (FileFacts(VIEWS).string("checkout.logic.charge", up="arg:0:patch expr", flags=TYPE_ONLY), True),
     ],
 )
 def test_tach_map_skips_imports_in_either_type_checking_branch(facts: FileFacts, counted: bool) -> None:

@@ -47,6 +47,9 @@ impl SymbolFacts {
                 bases.entry(owner).or_default().extend(names);
             }
         }
+        for (name, found) in &link.outside_bases {
+            bases.entry(name.clone()).or_insert_with(|| found.clone());
+        }
         let mut frozen_by: FxHashMap<String, Vec<String>> = FxHashMap::default();
         if let Some(decorate) = link.kind_sid("decorate") {
             for (owner, surface, names, is_frozen, _, _, _) in

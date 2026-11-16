@@ -14,6 +14,7 @@ from hoglint.ledger.cache import PACKS
 from hoglint.ledger.store import cache_root
 from hoglint.model import Edge
 from hoglint.native.graph import NativeSink
+from hoglint.packs.django.app_setup import APP_SETUP_PRODUCER, AppSetupImports
 from hoglint.packs.django.apps import AppReader, AppRegistry
 from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
 from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsItems, InstallsProducer
@@ -122,7 +123,7 @@ class MigrationItems(Items):
         cache = SummaryCache(cache_root() / PACKS)
         graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
         aliases = {app: sorted(found) for app, found in graph.aliases.items()}
-        return ItemOutput(list(MigrationEdges(graph, run.reader.external).produce()), aliases)
+        return ItemOutput(list(MigrationEdges(graph).produce()), aliases)
 
     def take(self, key: str, data: Any) -> None:
         self.run.aliases = {app: frozenset(found) for app, found in data.items()}
@@ -207,6 +208,10 @@ class DjangoRun:
         assert self.apps is not None
         return SettingNames(self.reader, self.apps.settings_modules).produce()
 
+    def app_setup_imports(self) -> list[Refinement]:
+        assert self.apps is not None
+        return AppSetupImports(self.reader, self.apps).produce()
+
     def symbols(self) -> list[Edge]:
         """Model and app symbols. Rules on model edges read them through `dst.kind`, so a failure
         here makes those edge kinds incomplete."""
@@ -254,6 +259,7 @@ class DjangoRun:
                 ),
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
                 ProducerStep(SETTINGS_PRODUCER, frozenset({"dotted-path"}), self.setting_names, (APPS_PRODUCER,)),
+                ProducerStep(APP_SETUP_PRODUCER, frozenset({"import"}), self.app_setup_imports, (APPS_PRODUCER,)),
                 ProducerStep(SYMBOLS_PRODUCER, MODEL_KINDS, self.symbols, (MODELS_PRODUCER, MIGRATION_PRODUCER)),
             ]
         )
@@ -269,6 +275,11 @@ class DjangoPack:
 
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
         return FACT_NEEDS
+
+    def path_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
+        """The settings modules: Django imports every dotted path a setting holds, wherever the
+        string stands in the module."""
+        return DjangoPackConfig.from_section(section).settings_modules
 
     def whole_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
         """The settings modules: a list one of them hands another moves the setting name the

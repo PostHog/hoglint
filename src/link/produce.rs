@@ -9,9 +9,12 @@ use super::resolve::{
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
-use super::surface::{ALL_CLAUSE, HandOut, HandedOut, star_names};
+use super::surface::{
+    ALL_CLAUSE, HandOut, Handed, HandedOut, LAZY_CLAUSE, annotated_constant, star_names,
+};
 use super::trace::{Kind, Memo};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 use std::rc::Rc;
 
 pub const KIND_NAMES: [&str; 10] = [
@@ -304,6 +307,8 @@ pub struct Producing {
     pub dataclass_bases: Vec<Sid>,
     pub patch_callees: Vec<String>,
     pub path_callees: Vec<String>,
+    /// Modules (dotted names or `*` globs) whose strings are paths wherever they stand.
+    pub path_modules: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     pub contract_surfaces: Vec<ExportPaths>,
     /// The files of every export.
@@ -371,6 +376,9 @@ struct Keys {
     staticmethod: Sid,
     fields: Sid,
     class_var: Sid,
+    constant: Sid,
+    /// The callees that declare a type variable by a call.
+    type_vars: [Sid; 2],
 }
 
 impl Producing {
@@ -454,6 +462,11 @@ impl Producing {
             staticmethod: it.intern("builtins.staticmethod"),
             fields: it.intern("fields"),
             class_var: it.intern("ClassVar"),
+            constant: it.intern("constant"),
+            type_vars: [
+                it.intern("typing.TypeVar"),
+                it.intern("typing_extensions.TypeVar"),
+            ],
         };
         Producing {
             names: LookupNames {
@@ -479,6 +492,7 @@ impl Producing {
                 .collect(),
             patch_callees: config.patch_callees.clone(),
             path_callees: config.path_callees.clone(),
+            path_modules: config.path_modules.clone(),
             contract_surfaces,
             export_surfaces,
             k,
@@ -603,17 +617,95 @@ pub fn chain_tokens(chain: &str) -> Vec<&str> {
     out
 }
 
-/// A patch target, or the first argument of a callee
-/// `path_callees` names. Only there does a string that resolves to nothing stay an edge.
-fn in_path_position(up: &str, patch: bool, path_callees: &[String]) -> bool {
-    if patch {
-        return true;
+/// Whether a text matches a glob whose only wildcard is `*`, any run of characters (as
+/// `fnmatch.fnmatchcase` reads such a pattern): `proj.settings.*`.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = text.strip_prefix(first) else {
+        return false;
+    };
+    let middle: Vec<&str> = parts.collect();
+    let Some((last, inner)) = middle.split_last() else {
+        return rest.is_empty();
+    };
+    for part in inner {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
     }
-    let first = up.split(' ').next().unwrap_or("");
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+/// Whether a callee, as the code writes it, is one `names` lists: by its last name, or, for an
+/// entry with a dot, by its last dotted parts (`patch.dict`, `subprocess.run`).
+fn names_callee(callee: &str, names: &[String]) -> bool {
+    let last = callee.rsplit('.').next().unwrap_or("");
+    names.iter().any(|name| {
+        if name.contains('.') {
+            callee == name
+                || callee
+                    .strip_suffix(name.as_str())
+                    .is_some_and(|head| head.ends_with('.'))
+        } else {
+            name == last
+        }
+    })
+}
+
+/// Where a string stands in a call that takes a dotted path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PathArgument {
+    /// No such place.
+    None,
+    /// The first argument of a path callee: a sink.
+    Sink,
+    /// The first argument of a loader, or an element of a list or tuple that is a path callee's
+    /// first argument (an argument vector, as in `python -m <module>`): a path place.
+    Place,
+}
+
+fn path_argument(up: &str, settings: &Producing) -> PathArgument {
+    let mut steps = up.split(' ');
+    let mut first = steps.next().unwrap_or("");
+    let element = first == "elt:list" || first == "elt:tuple";
+    if element {
+        first = steps.next().unwrap_or("");
+    }
     let (kind, rest) = first.split_once(':').unwrap_or((first, ""));
     let (position, callee) = rest.split_once(':').unwrap_or((rest, ""));
-    let last = callee.rsplit('.').next().unwrap_or("");
-    kind == "arg" && position == "0" && path_callees.iter().any(|name| name == last)
+    if kind != "arg" || position != "0" {
+        return PathArgument::None;
+    }
+    if names_callee(callee, &settings.path_callees) {
+        return if element {
+            PathArgument::Place
+        } else {
+            PathArgument::Sink
+        };
+    }
+    if !element && names_callee(callee, &settings.loader_last_names) {
+        return PathArgument::Place;
+    }
+    PathArgument::None
+}
+
+/// A value of the module's lazy (PEP 562) map: the entry `dict:val:<name>` of a module-level
+/// assignment, whose text is the module the module loads `<name>` from on first read.
+fn in_lazy_map(up: &str, text: &str, lazy: &[(String, String)]) -> bool {
+    let mut steps = up.split(' ');
+    let (Some(entry), Some(statement), None) = (steps.next(), steps.next(), steps.next()) else {
+        return false;
+    };
+    let Some(name) = entry.strip_prefix("dict:val:") else {
+        return false;
+    };
+    let assigned = statement.starts_with("assign:") || statement.starts_with("annassign:");
+    assigned
+        && lazy
+            .iter()
+            .any(|(lazy, module)| lazy == name && module == text)
 }
 
 fn patch_role(up: &str, patch_callees: &[String]) -> bool {
@@ -695,6 +787,53 @@ fn named_in(wanted: &[Sid], surface: Sid, target: Option<Sid>) -> bool {
 /// subscript or a union (`a | b`).
 fn alias_value(value: &V) -> bool {
     matches!(value, V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..))
+}
+
+/// The union of type expressions, as `a | b | c` reads; a part no type expression reads when
+/// there are none.
+fn union(items: &[V]) -> V {
+    items
+        .iter()
+        .cloned()
+        .reduce(|left, right| V::Bin(true, Box::new(left), Box::new(right)))
+        .unwrap_or(V::Other)
+}
+
+/// A type expression with each bare name a PEP 695 type parameter binds replaced by its bound,
+/// also inside a string annotation. A tuple of constraints reads as their union.
+fn substitute(value: &V, bounds: &[(Sid, V)]) -> V {
+    let each = |items: &[V]| items.iter().map(|item| substitute(item, bounds)).collect();
+    match value {
+        V::Chain(name) => match bounds.iter().find(|(param, _)| param == name) {
+            Some((_, V::Tuple(items))) => union(items),
+            Some((_, bound)) => bound.clone(),
+            None => value.clone(),
+        },
+        V::Str(text, Some(parsed)) => V::Str(*text, Some(Box::new(substitute(parsed, bounds)))),
+        V::Sub(inner, index) => V::Sub(
+            Box::new(substitute(inner, bounds)),
+            Box::new(substitute(index, bounds)),
+        ),
+        V::Bin(pipe, l, r) => V::Bin(
+            *pipe,
+            Box::new(substitute(l, bounds)),
+            Box::new(substitute(r, bounds)),
+        ),
+        V::Tuple(items) => V::Tuple(each(items)),
+        V::List(items) => V::List(each(items)),
+        V::Star(inner) => V::Star(Box::new(substitute(inner, bounds))),
+        _ => value.clone(),
+    }
+}
+
+/// An annotation as its PEP 695 type parameters' bounds make it (`substitute`); as written when
+/// no parameter has a bound.
+fn bounded<'v>(annotation: &'v V, bounds: &[(Sid, V)]) -> Cow<'v, V> {
+    if bounds.is_empty() {
+        Cow::Borrowed(annotation)
+    } else {
+        Cow::Owned(substitute(annotation, bounds))
+    }
 }
 
 /// Whether a class base is a call, also under a subscript: `make()`, `make()[T]`.
@@ -1250,14 +1389,47 @@ impl Producers<'_> {
             self.aliases.insert(module, found);
         }
         let (file, at) = *self.aliases[&module].get(&name)?;
-        let value = self.core.facts.files[file as usize].assigns[at as usize]
-            .value
-            .as_ref()?;
-        if !alias_value(value) {
+        if !self.stands_for_type(file, at) {
             return None;
         }
         self.alias_rows(module, name)?;
         Some((file, at))
+    }
+
+    /// Whether the module-level assignment at (file, row) is one the producer expands as a type
+    /// alias: its value is one (`alias_value`), or a `TypeVar` with a bound (`declared_type`).
+    fn stands_for_type(&mut self, file: u32, at: u32) -> bool {
+        let facts = self.core.facts.clone();
+        let Some(value) = &facts.files[file as usize].assigns[at as usize].value else {
+            return false;
+        };
+        alias_value(value) || self.declared_type(file, at).is_some()
+    }
+
+    /// The type a module-level `TypeVar` stands for, when its callee is `typing`'s: its bound, or
+    /// the union of its constraints. None for any other value, and for a `TypeVar` with neither.
+    fn declared_type(&mut self, file: u32, at: u32) -> Option<V> {
+        let facts = self.core.facts.clone();
+        let row = &facts.files[file as usize].assigns[at as usize];
+        let Some(V::Call(callee, _, Some(kept))) = &row.value else {
+            return None;
+        };
+        let V::Chain(name) = **callee else {
+            return None;
+        };
+        let lookup = SlotLookup {
+            owner: *self.scope_of_file.get(&file)? as usize,
+            scope: -1,
+            line: row.l,
+        };
+        let callee = self.lookup_at(lookup, name).surface;
+        if !self.settings.k.type_vars.contains(&callee) {
+            return None;
+        }
+        Some(match &**kept {
+            V::Tuple(constraints) => union(constraints),
+            bound => bound.clone(),
+        })
     }
 
     /// Every module-level assignment (file, row) of a name the module
@@ -1273,17 +1445,13 @@ impl Producers<'_> {
             return Some(Vec::new());
         }
         let file = table.record?;
-        let facts = self.core.facts.clone();
         let mut rows = Vec::new();
         for (_, binding, assign) in bindings {
             let at = assign?;
             if !matches!(binding, Binding::Alias(_) | Binding::Variable) {
                 return None;
             }
-            let value = facts.files[file as usize].assigns[at as usize]
-                .value
-                .as_ref()?;
-            if !alias_value(value) {
+            if !self.stands_for_type(file, at) {
                 return None;
             }
             rows.push((file, at));
@@ -1410,24 +1578,35 @@ impl Producers<'_> {
             .and_then(|(file, _)| self.scope_of_file.get(file).copied());
         let Some(owner) = owner else {
             let (file, at) = alias.row;
-            if let Some(value) = facts.files[file as usize].assigns[at as usize]
-                .value
-                .as_ref()
-            {
-                self.expand_into(value, alias.lookup, top, expansion);
-            }
+            self.expand_row(file, at, alias.lookup, top, expansion);
             return;
         };
         for (file, at) in rows {
-            let row = &facts.files[file as usize].assigns[at as usize];
-            let Some(value) = row.value.as_ref() else {
-                continue;
-            };
             let lookup = SlotLookup {
                 owner: owner as usize,
                 scope: -1,
-                line: row.l,
+                line: facts.files[file as usize].assigns[at as usize].l,
             };
+            self.expand_row(file, at, lookup, top, expansion);
+        }
+    }
+
+    /// One assignment's value into an expansion: the type a `TypeVar` call declares, else the
+    /// value as written.
+    fn expand_row(
+        &mut self,
+        file: u32,
+        at: u32,
+        lookup: SlotLookup,
+        top: bool,
+        expansion: &mut Expansion,
+    ) {
+        let declared = self.declared_type(file, at);
+        let facts = self.core.facts.clone();
+        let written = facts.files[file as usize].assigns[at as usize]
+            .value
+            .as_ref();
+        if let Some(value) = declared.as_ref().or(written) {
             self.expand_into(value, lookup, top, expansion);
         }
     }
@@ -1675,6 +1854,7 @@ impl Producers<'_> {
     /// unannotated return are no slots, and an unannotated parameter is one.
     fn expose_signature(&mut self, rows: SlotRows, lookup: SlotLookup, node: &Def, contract: bool) {
         let receiver = contract && self.has_receiver(lookup, node);
+        let bounds = self.type_param_bounds(lookup.owner, Some(node), node.s);
         for (position, param) in node.params.iter().enumerate() {
             let in_slot = contract && !(receiver && position == 0);
             if !in_slot && param.annotation.is_none() {
@@ -1684,12 +1864,42 @@ impl Producers<'_> {
                 .core
                 .it
                 .intern(&format!("param:{}", self.core.it.s(param.name)));
-            self.expose(rows, lookup, param.annotation.as_ref(), slot, in_slot);
+            let annotation = param.annotation.as_ref().map(|ann| bounded(ann, &bounds));
+            self.expose(rows, lookup, annotation.as_deref(), slot, in_slot);
         }
         if let Some(ret) = &node.ret {
             let slot = self.settings.k.ret;
-            self.expose(rows, lookup, Some(ret), slot, contract);
+            self.expose(rows, lookup, Some(&*bounded(ret, &bounds)), slot, contract);
         }
+    }
+
+    /// The PEP 695 type parameters with a bound that a def's slots see: its own (`own`), then
+    /// those of the defs and classes around it from `scope` out, the nearest first. A parameter
+    /// hides an outer one of its name. One with no bound is left out: its name stays as written,
+    /// unknown as a `TypeVar` with no bound is.
+    fn type_param_bounds(&mut self, owner: usize, own: Option<&Def>, scope: i32) -> Vec<(Sid, V)> {
+        let facts = self.core.facts.clone();
+        let defs = &facts.files[self.scopes[owner].file as usize].defs;
+        let mut around = Vec::new();
+        let mut at = scope;
+        while at >= 0 {
+            around.push(&defs[at as usize]);
+            at = defs[at as usize].s;
+        }
+        let mut seen: Vec<Sid> = Vec::new();
+        let mut out = Vec::new();
+        for node in own.into_iter().chain(around) {
+            for (name, bound) in &node.type_params {
+                if seen.contains(name) {
+                    continue;
+                }
+                seen.push(*name);
+                if let Some(bound) = bound {
+                    out.push((*name, bound.clone()));
+                }
+            }
+        }
+        out
     }
 
     /// Whether an annotation is `ClassVar[...]`, by the last name of what it subscripts.
@@ -1750,7 +1960,9 @@ impl Producers<'_> {
                 line: row.l,
                 ..field.lookup
             };
-            self.expose(line_rows, line_lookup, Some(annotation), slot, in_slot);
+            let bounds = self.type_param_bounds(field.lookup.owner, None, field.lookup.scope);
+            let annotation = bounded(annotation, &bounds);
+            self.expose(line_rows, line_lookup, Some(&*annotation), slot, in_slot);
         }
     }
 
@@ -2498,9 +2710,9 @@ impl Producers<'_> {
     }
 
     /// The line and column of a module-level value the producer expands as a type alias:
-    /// a subscript, a `|` union, or the bare name of a
-    /// builtin type. Another name or attribute chain is left out, so a member past a class stays
-    /// unknown.
+    /// a subscript, a `|` union, the bare name of a builtin type, or a call that declares a type
+    /// (`declared_type`). Another name or attribute chain is left out, so a member past a class
+    /// stays unknown.
     fn type_alias(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
         let (file, at) = self.alias(module, name)?;
         let owner = *self.scope_of_file.get(&file)? as usize;
@@ -2508,6 +2720,7 @@ impl Producers<'_> {
         let row = &facts.files[file as usize].assigns[at as usize];
         match row.value.as_ref()? {
             V::Sub(..) | V::Bin(true, ..) => Some((row.l, row.c)),
+            V::Call(..) => self.declared_type(file, at).map(|_| (row.l, row.c)),
             V::Chain(chain) if !self.core.it.s(*chain).contains('.') => {
                 let lookup = SlotLookup {
                     owner,
@@ -2521,25 +2734,59 @@ impl Producers<'_> {
         }
     }
 
-    /// The rows a handed-out type alias expands to, as a slot `alias` of the name it is handed
-    /// out by, at the line that hands it out.
-    fn expose_alias(&mut self, owner: usize, bound: Sid, clause: Sid, line: u32, col: u32) {
-        let rows = SlotRows {
-            site: self.module_site(owner, line, col),
-            callable: bound,
-            handed: clause,
-        };
+    /// The annotation of a module constant (`annotated_constant`) and where its names are looked
+    /// up: the module that assigns it, at its line.
+    fn constant_annotation(&mut self, module: Sid, name: Sid) -> Option<(V, SlotLookup)> {
+        let (file, at) = annotated_constant(self.core, module, name)?;
+        let facts = self.core.facts.clone();
+        let row = &facts.files[file as usize].assigns[at as usize];
         let lookup = SlotLookup {
-            owner,
+            owner: *self.scope_of_file.get(&file)? as usize,
             scope: -1,
-            line,
+            line: row.l,
         };
-        let slot = self.settings.k.alias;
-        self.expose(rows, lookup, Some(&V::Chain(bound)), slot, true);
+        Some((row.ann.clone()?, lookup))
     }
 
-    /// Writes the rows of every listed or handed-out value that is a type alias, and takes those
-    /// values out of what the hand-out record leaves unknown.
+    /// The rows of a handed-out or listed name whose value the producer reads as a type, at the
+    /// line that hands the name out: a type alias's expansion as a slot `alias`, else a module
+    /// constant's annotation as a slot `constant`. `origin` is where the value is assigned. A
+    /// lazy name, which the module binds by no statement, is looked up there. False when the
+    /// value is neither, so the name stays unknown.
+    fn expose_value(&mut self, owner: usize, item: &Handed, origin: Ent) -> bool {
+        let rows = SlotRows {
+            site: self.module_site(owner, item.line, item.col),
+            callable: item.bound,
+            handed: self.core.it.intern(item.clause),
+        };
+        if let Some((line, _)) = self.type_alias(origin.m, origin.s) {
+            let (name, lookup) = if item.clause == LAZY_CLAUSE {
+                let Some(lookup) = self.assigned_lookup(origin, line) else {
+                    return false;
+                };
+                (origin.s, lookup)
+            } else {
+                let lookup = SlotLookup {
+                    owner,
+                    scope: -1,
+                    line: item.line,
+                };
+                (item.bound, lookup)
+            };
+            let slot = self.settings.k.alias;
+            self.expose(rows, lookup, Some(&V::Chain(name)), slot, true);
+            return true;
+        }
+        let Some((annotation, lookup)) = self.constant_annotation(origin.m, origin.s) else {
+            return false;
+        };
+        let slot = self.settings.k.constant;
+        self.expose(rows, lookup, Some(&annotation), slot, true);
+        true
+    }
+
+    /// Writes the rows of every listed or handed-out value the producer reads as a type
+    /// (`expose_value`), and takes those values out of what the hand-out record leaves unknown.
     fn expose_aliases(
         &mut self,
         owner: usize,
@@ -2550,10 +2797,22 @@ impl Producers<'_> {
         let module = self.scopes[owner].module;
         let mut names: Vec<Sid> = found.unknown.iter().copied().collect();
         names.sort_by(|a, b| self.core.it.s(*a).cmp(self.core.it.s(*b)));
-        let all = self.core.it.intern(ALL_CLAUSE);
         for name in names {
-            if let Some((line, col)) = self.type_alias(module, name) {
-                self.expose_alias(owner, name, all, line, col);
+            let assigned = self
+                .type_alias(module, name)
+                .or_else(|| self.annotated_at(module, name));
+            let Some((line, col)) = assigned else {
+                continue;
+            };
+            let item = Handed {
+                bound: name,
+                target: self.core.it.join(module, name),
+                clause: ALL_CLAUSE,
+                line,
+                col,
+            };
+            let origin = Ent { m: module, s: name };
+            if self.expose_value(owner, &item, origin) {
                 found.unknown.remove(&name);
             }
         }
@@ -2565,19 +2824,148 @@ impl Producers<'_> {
             };
             let origin = self.core.origin(hit);
             let symbol = self.core.ent_sid(origin);
-            if !values.contains(&symbol) || self.type_alias(origin.m, origin.s).is_none() {
-                continue;
+            if values.contains(&symbol) && self.expose_value(owner, &item, origin) {
+                found.unknown_values.remove(&symbol);
             }
-            let clause = self.core.it.intern(item.clause);
-            self.expose_alias(owner, item.bound, clause, item.line, item.col);
-            found.unknown_values.remove(&symbol);
         }
     }
 
+    /// The module scope of the file that assigns a module-level type alias, at `line`.
+    fn assigned_lookup(&mut self, origin: Ent, line: u32) -> Option<SlotLookup> {
+        let (file, _) = self.alias(origin.m, origin.s)?;
+        let owner = *self.scope_of_file.get(&file)? as usize;
+        Some(SlotLookup {
+            owner,
+            scope: -1,
+            line,
+        })
+    }
+
+    /// The line and column of a module constant's annotated assignment (`annotated_constant`).
+    fn annotated_at(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
+        let (file, at) = annotated_constant(self.core, module, name)?;
+        let row = &self.core.facts.files[file as usize].assigns[at as usize];
+        Some((row.l, row.c))
+    }
+
+    /// The module's lazy (PEP 562) entries: each name it loads on first read, and the module it
+    /// loads it from.
+    fn lazy_entries(&mut self, owner: usize) -> Vec<(String, String)> {
+        let (file, module) = (self.scopes[owner].file, self.scopes[owner].module);
+        let Some(table) = self.core.table(module) else {
+            return Vec::new();
+        };
+        let table = self.core.table_at(table);
+        if table.record != Some(file) {
+            return Vec::new();
+        }
+        let entries: Vec<(Sid, Sid)> = table
+            .lazy_entries
+            .iter()
+            .map(|entry| (entry.name, entry.module))
+            .collect();
+        let it = &self.core.it;
+        entries
+            .into_iter()
+            .map(|(name, module)| (it.s(name).to_string(), it.s(module).to_string()))
+            .collect()
+    }
+
+    /// Whether a call takes a path as its first argument: a loader, a path callee or a patch callee.
+    fn takes_path(&self, callee: &str) -> bool {
+        let settings = self.settings;
+        let takes = names_callee(callee, &settings.path_callees)
+            || names_callee(callee, &settings.loader_last_names)
+            || names_callee(callee, &settings.patch_callees);
+        takes && !callee.starts_with('?')
+    }
+
+    /// The literal first arguments of the file's calls that take a path. A loop over a literal
+    /// sequence gives such a call one row per value, so the sequence's strings are what it takes.
+    fn taken_literals(&self, owner: usize) -> FxHashSet<String> {
+        let file = self.scopes[owner].file as usize;
+        let facts = self.core.facts.clone();
+        let mut taken = FxHashSet::default();
+        for row in &facts.files[file].calls {
+            if let Argument::Literal(text) = &row.argument
+                && self.takes_path(&row.callee)
+            {
+                taken.insert(text.to_string());
+            }
+        }
+        taken
+    }
+
+    /// Whether the file hands a computed path (an f-string, a `+`, or a name it does not bind to a
+    /// class, a function or an import) to a loader, a path callee or a patch callee: then every
+    /// string it holds that names a module may be what it loads or patches. The facts hold no flow
+    /// from a name to where it is used.
+    fn hands_computed_path(&mut self, owner: usize) -> bool {
+        let (file, module) = (self.scopes[owner].file as usize, self.scopes[owner].module);
+        let facts = self.core.facts.clone();
+        let table = self.core.table(module);
+        for row in &facts.files[file].calls {
+            if !self.takes_path(&row.callee) {
+                continue;
+            }
+            let computed = match &row.argument {
+                Argument::Opaque(what) => matches!(&**what, "JoinedStr" | "BinOp"),
+                Argument::Name(chain) => !self.binds_object(table, chain),
+                _ => false,
+            };
+            if computed {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether the module binds a chain's head to a class, a function or an import: an object,
+    /// not a path (`monkeypatch.setattr(module, "name", value)`).
+    fn binds_object(&self, table: Option<u32>, chain: &str) -> bool {
+        let Some(table) = table else {
+            return false;
+        };
+        let head = chain.split('.').next().unwrap_or("");
+        let Some(head) = self.core.it.get(head) else {
+            return false;
+        };
+        let names = &self.core.table_at(table).names;
+        names
+            .get(&head)
+            .is_some_and(|binding| !matches!(binding, Binding::Variable | Binding::Alias(_)))
+    }
+
+    /// A string is a dotted-path edge only where the code holds a path. In a sink (a patch target,
+    /// the first argument of a path callee) it is one whether or not it names a module. In a path
+    /// place (a loader's first argument, an element of a path callee's argument vector, a path
+    /// module such as a settings module, a lazy map's value, a string whose text such a call takes
+    /// through a loop, any string of a file that hands a computed path to one of those callees) it
+    /// is one when it names a module. Anywhere else a string is text, whatever it names.
     fn strings(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
+        let module = self.core.it.s(self.scopes[owner].module);
+        let path_module =
+            (self.settings.path_modules.iter()).any(|pattern| glob_matches(pattern, module));
+        let lazy = self.lazy_entries(owner);
+        let computed = self.hands_computed_path(owner);
+        let taken = self.taken_literals(owner);
         for row in &facts.files[file].strs {
+            let patch = patch_role(&row.up, &self.settings.patch_callees);
+            let argument = path_argument(&row.up, self.settings);
+            let sink = patch || argument == PathArgument::Sink;
+            let lazy_value = row.scope == -1
+                && (row.value.as_deref()).is_some_and(|text| in_lazy_map(&row.up, text, &lazy));
+            let taken_value = (row.value.as_deref()).is_some_and(|text| taken.contains(text));
+            let place = argument == PathArgument::Place
+                || path_module
+                || lazy_value
+                || taken_value
+                || computed;
+            if !sink && !place {
+                continue;
+            }
             let k = &self.settings.k;
             let mut candidates: Vec<(&str, Sid)> = Vec::new();
             match &row.parts {
@@ -2597,8 +2985,6 @@ impl Producers<'_> {
                     }
                 }
             }
-            let patch = patch_role(&row.up, &self.settings.patch_callees);
-            let path_position = in_path_position(&row.up, patch, &self.settings.path_callees);
             let role = if patch {
                 k.patch_target
             } else {
@@ -2610,7 +2996,7 @@ impl Producers<'_> {
                 let Some((resolved, rest)) = core.string_dotted(dotted) else {
                     continue;
                 };
-                if resolved.res == Res::Unresolved && !path_position {
+                if resolved.res == Res::Unresolved && !sink {
                     continue;
                 }
                 let k = &self.settings.k;

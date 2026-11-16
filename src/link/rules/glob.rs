@@ -353,4 +353,13 @@ impl ExportPaths {
     pub fn covers(&self, path: &str) -> bool {
         self.covered_root(path).is_some()
     }
+
+    /// Whether the path lies inside `within`, whatever `paths` say: the package the export is a
+    /// door of. An empty `within` is the repo root, which holds every path.
+    pub fn holds(&self, path: &str) -> bool {
+        match &self.within {
+            None => true,
+            Some((_, glob)) => glob.is_match(path),
+        }
+    }
 }

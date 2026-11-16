@@ -2,5 +2,9 @@ from django.db import models
 
 
 class ReportRun(models.Model):
+    class Status:
+        DONE = "done"
+        FAILED = "failed"
+
     team = models.ForeignKey("posthog.Team", on_delete=models.CASCADE, related_name="+")
     entry = models.ForeignKey("catalog.CatalogEntry", on_delete=models.CASCADE, related_name="+")

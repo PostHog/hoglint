@@ -17,8 +17,9 @@ pub enum V {
     /// `{"s": text}`, with `sa` (the parsed text of a string annotation) when the key is there.
     Str(Sid, Option<Box<V>>),
     /// `{"call": callee, ...}`, also the over-budget form `{"call": callee, "o": "big"}`; true
-    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example); the one
-    /// positional argument, when the call has exactly one (`sorted(_LAZY)`).
+    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example); the
+    /// argument a reader needs: the one positional argument of a copy or a builtin constructor
+    /// (`sorted(_LAZY)`), or what a `TypeVar` call declares (`type_argument`).
     Call(Box<V>, bool, Option<Box<V>>),
     Attr(Box<V>, Sid),
     Sub(Box<V>, Box<V>),
@@ -83,6 +84,14 @@ pub struct Param {
     pub positional: bool,
 }
 
+/// An attribute a method assigns on its first parameter: `Def::attrs`.
+pub struct SelfAttr {
+    pub line: u32,
+    pub name: Sid,
+    pub value: V,
+    pub ann: Option<V>,
+}
+
 pub struct Def {
     pub s: i32,
     pub l: u32,
@@ -95,6 +104,10 @@ pub struct Def {
     pub params: Vec<Param>,
     pub ret: Option<V>,
     pub stub: bool,
+    /// A method's assignments to attributes of its first parameter, in source order.
+    pub attrs: Vec<SelfAttr>,
+    /// The PEP 695 type parameters, each with its bound or its tuple of constraints.
+    pub type_params: Vec<(Sid, Option<V>)>,
 }
 
 impl Def {
@@ -414,6 +427,36 @@ fn frozen_keyword(keywords: Option<&J>) -> bool {
     })
 }
 
+/// The argument a call that declares a type keeps, by the callee's last name: a `TypeVar`'s
+/// `bound`, else its constraints as a tuple. Whether the callee is `typing`'s is the reader's to
+/// tell.
+fn type_argument(
+    it: &mut Interner,
+    callee: &str,
+    args: Option<&J>,
+    kws: Option<&J>,
+) -> Option<Box<V>> {
+    let args = args.and_then(J::as_array).map_or(&[][..], Vec::as_slice);
+    let kept = match callee.rsplit('.').next()? {
+        "TypeVar" => {
+            let bound = kws
+                .and_then(J::as_array)
+                .into_iter()
+                .flatten()
+                .find(|pair| row(pair, 0).as_str() == Some("bound"));
+            match bound {
+                Some(pair) => value(it, row(pair, 1)),
+                None if args.len() > 1 => {
+                    V::Tuple(args[1..].iter().map(|a| value(it, a)).collect())
+                }
+                None => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(Box::new(kept))
+}
+
 pub fn value(it: &mut Interner, json: &J) -> V {
     match json {
         J::Null => V::Null,
@@ -437,7 +480,10 @@ pub fn value(it: &mut Interner, json: &J) -> V {
                     Some(J::Array(args)) if (copy || constructor) && args.len() == 1 => {
                         Some(Box::new(value(it, &args[0])))
                     }
-                    _ => None,
+                    _ => match callee {
+                        J::String(name) => type_argument(it, name, map.get("args"), map.get("kw")),
+                        _ => None,
+                    },
                 };
                 return V::Call(
                     Box::new(value(it, callee)),
@@ -644,6 +690,34 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 J::Null => None,
                 other => Some(value(it, other)),
             };
+            let attrs = rows(&d["attrs"])
+                .iter()
+                .map(|a| {
+                    let ann = row(a, 3);
+                    SelfAttr {
+                        line: int(row(a, 0)) as u32,
+                        name: it.intern(text(row(a, 1))),
+                        value: value(it, row(a, 2)),
+                        ann: if ann.is_null() {
+                            None
+                        } else {
+                            Some(value(it, ann))
+                        },
+                    }
+                })
+                .collect();
+            let type_params = rows(&d["tp"])
+                .iter()
+                .map(|t| {
+                    let bound = row(t, 1);
+                    let bound = if bound.is_null() {
+                        None
+                    } else {
+                        Some(value(it, bound))
+                    };
+                    (it.intern(text(row(t, 0))), bound)
+                })
+                .collect();
             let kind = match text(&d["k"]) {
                 "class" => DefKind::Class,
                 "async" => DefKind::Async,
@@ -661,6 +735,8 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 params,
                 ret,
                 stub: d["stub"].as_bool().unwrap_or(false),
+                attrs,
+                type_params,
             }
         })
         .collect();

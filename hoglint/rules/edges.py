@@ -40,11 +40,12 @@ class EntrypointPrimitive(EdgeRule):
     """Did a cross-package edge name a public surface? Judges the surface the caller wrote.
 
     With `uses_at_import = true` a coupling is judged once, at its import: a `reference` edge is
-    not seen when its module has an `import` edge with the same surface that the rule reports (a
-    finding, or an item it cannot tell about). A use whose import the rule judges clean or does not
-    select is still seen, since the rule may tell the two apart (by `edge.kind`, `edge.context` or a
-    field of the source symbol); so is a use with no such import (a name reached as an attribute of
-    an imported module).
+    not seen when its module has an `import` edge that the rule reports (a finding, or an item it
+    cannot tell about) with the same surface or a dotted prefix of it, so a name reached as an
+    attribute of a reported module import (`module.Name`) is judged there too. A use whose import
+    the rule judges clean or does not select is still seen, since the rule may tell the two apart
+    (by `edge.kind`, `edge.context` or a field of the source symbol); so is a use with no such
+    import.
     """
 
     PRIMITIVE = MODE = "entrypoint"

@@ -637,7 +637,8 @@ ATTACKS: dict[str, tuple[Files, Verdict]] = {
         {f"{D}/errors.py": src(BARE_FORMS), f"{D}/facade/errors.py": hand("errors", "Rejected")},
         ES,
     ),
-    "the bare dict and object forms, in the facade": ({f"{D}/facade/contracts.py": src(BARE_FORMS)}, {SIGNATURE: 8}),
+    # `e: dict[str, object]` in a parameter is an opaque payload, as `dict[str, Any]` is.
+    "the bare dict and object forms, in the facade": ({f"{D}/facade/contracts.py": src(BARE_FORMS)}, {SIGNATURE: 7}),
     # Trails: a class a slot reaches.
     "two trails, the first a slot left to the signature rule": (
         {
@@ -868,6 +869,13 @@ MEMBER_FORMS: dict[str, tuple[str, Verdict, Verdict]] = {
     "a class-form TypedDict with a model": (
         src(
             "class Props(TypedDict):\n    order: Order\n\n\nclass Rejected(Exception):\n    def item(self) -> Props:\n        raise ValueError\n"
+        ),
+        ES,
+        BOTH,
+    ),
+    "a functional TypedDict with a model": (
+        src(
+            "Props = TypedDict('Props', {'order': Order})\n\n\nclass Rejected(Exception):\n    def item(self) -> Props:\n        raise ValueError\n"
         ),
         ES,
         BOTH,

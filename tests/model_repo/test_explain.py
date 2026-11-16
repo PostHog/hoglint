@@ -53,8 +53,9 @@ SAMPLE_MODULES = [
 ]
 # Edges by (kind, source module, surface); one names every edge it matches.
 SAMPLE_EDGES = [
-    ("import", "posthog.api.widget_report", "products.legacy.backend.logic.widgets"),  # PS01: two findings
-    ("reference", "products.legacy.backend.logic.widgets", "products.inventory.backend.models.StockItem"),  # MC01, MC03
+    ("import", "posthog.api.widget_report", "products.legacy.backend.logic.widgets"),  # PS01: a finding
+    # PS08: a use-shape finding, judged at the origin
+    ("reference", "products.reports.backend.logic.build", "products.catalog.backend.facade.models.CatalogEntry"),
     ("exposes", "products.catalog.backend.facade.api", "typing.Any"),  # FS06, TM01: unknown types and a clean slot
     ("import", "products.catalog.backend.facade.api", "posthog.models.ghost.Ghost"),  # CR03: an unresolved import
     ("import", "products.legacy.backend.logic.widgets", "scripts.helpers.slug"),  # WK04: incomplete
@@ -268,9 +269,9 @@ def test_explain_edge_judges_each_edge_as_the_run_reported_it(explained: tuple[C
     reported = result_rows(run, {spec.id for spec in judged.values()})
     assert [described(key) for key in seen.rows - reported] == []
     assert [described(key) for key in reported - seen.rows] == []
-    # Each judgment but an unknown violation is met, so the agreement is no vacuous one. No case
-    # of the model repository gives a predicate an unknown on a selected destination.
-    assert {row[-1] for row in seen.truths.judgments} - set(seen.judgments) == {"unknown-violation"}, seen.judgments
+    # Every judgment the table names is met, so the agreement is no vacuous one (an unknown
+    # violation: `TA01`, `DO06`).
+    assert {row[-1] for row in seen.truths.judgments} <= set(seen.judgments), seen.judgments
 
 
 def test_a_judged_finding_is_named_by_what_edge_values_reads_at_its_edge(explained: tuple[Commands, Run]) -> None:

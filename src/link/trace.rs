@@ -395,6 +395,11 @@ impl<'a> Digest<'a> {
             self.option(param.annotation.as_ref());
         }
         self.option(node.ret.as_ref());
+        self.number(node.type_params.len() as u64);
+        for (name, bound) in &node.type_params {
+            self.sid(*name);
+            self.option(bound.as_ref());
+        }
     }
 
     fn assign(&mut self, row: &Assign) {

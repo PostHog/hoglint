@@ -125,6 +125,14 @@ def give_payload(entry_id: int) -> dict[str, Any]:
     return {"id": entry_id}
 
 
+def take_object_payload(value: dict[str, object]) -> int:
+    return len(value)
+
+
+def give_object_payload(entry_id: int) -> dict[str, object]:
+    return {"id": entry_id}
+
+
 def take_unannotated(value) -> int:
     return 0
 

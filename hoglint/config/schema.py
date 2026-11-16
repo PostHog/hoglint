@@ -196,6 +196,8 @@ ENTITY_FIELDS: dict[str, FieldInfo] = {
     "lifecycle": FieldInfo(FieldType.ENUM, LIFECYCLES),
     # The zones of the modules whose names a module hands out by import.
     "handed_zones": FieldInfo(FieldType.SET),
+    # Whether an export's `within` holds the module: it is in a package with a declared door.
+    "door": FieldInfo(FieldType.BOOL),
 }
 # Endpoint-only attributes: where the edge names it from, and what the edge says about it.
 ENDPOINT_FIELDS: dict[str, FieldInfo] = {
@@ -206,7 +208,7 @@ ENDPOINT_FIELDS: dict[str, FieldInfo] = {
 BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
 CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles", "conditions")
 # The roots of an edge selector's names (`src.x`, `dst.x`, `edge.x`).
-SELECTOR_ROOTS = ("src", "dst", "edge")
+SELECTOR_ROOTS = ("src", "dst", "edge", "surface")
 
 
 def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
@@ -324,6 +326,8 @@ class SchemaBuilder:
             "src": self.endpoint_fields(dst=False),
             "dst": self.endpoint_fields(dst=True),
             "edge": self.edge_fields(),
+            # The module the code named, whatever endpoint `dst` reads (`endpoint`).
+            "surface": self.endpoint_fields(dst=True),
         }
         return Catalog({root: all_roots[root] for root in roots}, open_roots=frozenset({"edge"}) & set(roots))
 

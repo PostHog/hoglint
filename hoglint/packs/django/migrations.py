@@ -91,14 +91,18 @@ class MigrationSummary:
         cls = next((i for i in bodies.children(-1) if defs[i]["k"] == "class" and defs[i]["n"] == "Migration"), None)
         if cls is None:
             return {"class": False}
-        summary: Summary = {"class": True, "line": defs[cls]["l"], "lists": []}
+        summary: Summary = {"class": True, "line": defs[cls]["l"], "lists": [], "unread": []}
         for row in bodies.assigns(cls):
-            if row["op"] not in ("=", ":"):
-                continue
             target = row["t"][0]
             if not isinstance(target, str) or "." in target:
                 continue
             value = row.get("v")
+            if row["op"] not in ("=", ":"):
+                # An augmented key list (`dependencies += [...]`) adds keys this reading cannot
+                # place: the migration's parents are unknown, never silently the plain list's.
+                if target in KEY_LISTS:
+                    summary["unread"].append(f"{target} {row['op']} {value_text(value)}")
+                continue
             if target in KEY_LISTS:
                 summary["lists"].append([target, self.keys(value)])
             elif target == "initial" and is_const(value):
@@ -214,6 +218,7 @@ class MigrationParser:
         decl.line = summary["line"]
         for target, items in summary["lists"]:
             setattr(decl, target, self.keys(items, decl))
+        decl.unresolved.extend(summary["unread"])
         initial = summary.get("initial")
         if initial is not None:
             decl.initial = initial[1] if initial[0] == "value" else NO_CONST
@@ -271,12 +276,17 @@ class MigrationParser:
 
 
 class StaticGraph:
-    """Replay MigrationLoader.build_graph() with nothing applied."""
+    """Replay MigrationLoader.build_graph() with nothing applied. The migrations of a third-party
+    app are not read (D117: the monorepo's Django test is the authority for them), so a key into
+    such an app makes no node and no edge."""
 
-    def __init__(self, decls: dict[Key, MigrationDecl], migrated: set[str], unmigrated: set[str]) -> None:
+    def __init__(
+        self, decls: dict[Key, MigrationDecl], migrated: set[str], unmigrated: set[str], third_party: set[str]
+    ) -> None:
         self.decls = decls
         self.migrated = migrated
         self.unmigrated = unmigrated
+        self.third_party = third_party
         self.nodes: set[Key] = set(decls)
         self.app_nodes: dict[str, set[Key]] = defaultdict(set)
         for key in decls:
@@ -323,6 +333,8 @@ class StaticGraph:
         return found
 
     def check_key(self, key: Key, current_app: str, origin: Key) -> Key | None:
+        if key[0] in self.third_party:
+            return None
         if key[1] not in (FIRST, LATEST) or key in self.nodes:
             return key
         if key[0] == current_app or key[0] in self.unmigrated:
@@ -448,16 +460,20 @@ class MigrationReader:
         decls: dict[Key, MigrationDecl] = {}
         migrated: set[str] = set()
         unmigrated: set[str] = set()
+        third_party: set[str] = set()
         for app in self.apps.apps:
             module = f"{app.name}.migrations"
             if not (self.reader.index.is_file_module(module) and self.reader.index.is_package(module)):
                 unmigrated.add(app.label)
                 continue
+            if self.reader.index.path_of[module] in self.reader.external:
+                third_party.add(app.label)
+                continue
             migrated.add(app.label)
             for path in self.files(module):
                 decls[(app.label, PurePosixPath(path).stem)] = self.parse(app.label, path)
         self.cache.save()
-        graph = StaticGraph(decls, migrated, unmigrated)
+        graph = StaticGraph(decls, migrated, unmigrated, third_party)
         graph.build()
         aliases = {app: projection.aliases(app) for app in {a for a, _ in graph.nodes} | migrated | unmigrated}
         return MigrationGraph(decls, graph, aliases)
@@ -470,9 +486,8 @@ MIGRATION_CONTEXT = frozenset({Context.MIGRATION})
 class MigrationEdges:
     """One `migration-parent` edge per resolved parent, and one unresolved edge per unread key."""
 
-    def __init__(self, migrations: MigrationGraph, external: dict[str, str]) -> None:
+    def __init__(self, migrations: MigrationGraph) -> None:
         self.migrations = migrations
-        self.external = external
 
     def aliases_text(self, app: str) -> str:
         return ",".join(sorted(self.migrations.aliases.get(app, frozenset())))
@@ -487,7 +502,7 @@ class MigrationEdges:
             resolution = Resolution.UNRESOLVED
         else:
             targets = (EntityId(LANGUAGE_PYTHON, found.module),)
-            resolution = Resolution.EXTERNAL if found.path in self.external else Resolution.RESOLVED
+            resolution = Resolution.RESOLVED
         how = self.migrations.graph.how.get(((child.app_label, child.name), parent), "dependency")
         return Edge(
             kind="migration-parent",
@@ -526,8 +541,6 @@ class MigrationEdges:
             if decl is not None:
                 out.append(self.parent_edge(decl, parent))
         for decl in self.migrations.decls.values():
-            if decl.path in self.external:
-                continue
             out.extend(self.unresolved_edge(decl, text) for text in decl.unresolved)
         for origin, key in graph.unresolved_keys:
             decl = self.migrations.decls.get(origin)

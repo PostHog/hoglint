@@ -1250,8 +1250,9 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// The rows of the type aliases a module hands out (slot `alias`), each judged as a slot of the
-    /// name it is handed out by; the marker row of the alias itself is left out.
+    /// The rows of the type aliases (slot `alias`) and the annotated constants (slot `constant`)
+    /// a module hands out, each judged as a slot of the name it is handed out by; the marker row
+    /// of an alias itself is left out.
     fn check_alias_rows(&mut self, export: usize, place: Place, module: &str, shape: usize) {
         let rules = self.cx.rules;
         let ids: Vec<u32> = self
@@ -1261,7 +1262,8 @@ impl<'a> Walk<'a> {
             .map(|rows| rows.iter().map(|&(_, id)| id).collect())
             .unwrap_or_default();
         for id in ids {
-            if self.cx.attr(id, self.keys.slot) != "alias"
+            let slot = self.cx.attr(id, self.keys.slot);
+            if !matches!(slot, "alias" | "constant")
                 || self.cx.attr(id, self.keys.alias) == "expanded"
             {
                 continue;

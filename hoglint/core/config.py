@@ -125,9 +125,17 @@ class CoreConfig:
     - frozen_dataclass_decorators: those of them that always make a frozen dataclass; any other
       freezes it only when its call passes `frozen=True`.
     - patch_callees: last names of callees whose first argument is a dotted patch target.
-    - path_callees: last names of other callees whose first argument is a dotted path (an import
-      by name, a URL include). There, and at a patch target, a string that resolves to nothing
-      stays an unresolved edge; anywhere else it is no edge.
+    - path_callees: callees whose first argument is a dotted path (an import by name, a URL
+      include), by last name, or by last dotted parts for an entry with a dot (`patch.dict`).
+      There, in an element of a list or tuple there, at a loader's first argument and at a patch
+      target, a string is a dotted-path edge, and one that resolves to nothing stays an
+      unresolved edge.
+    - path_modules: modules (dotted names or `*` globs) whose strings are paths wherever they
+      stand, such as settings modules; packs declare them (`Pack.path_modules`). There, in the
+      values of a module's lazy (PEP 562) map, where its text is what one of the callees above
+      takes through a loop over a literal sequence, and anywhere in a file that hands a computed
+      value to one of those callees, a string that names a module is a dotted-path edge. Anywhere
+      else a string is text, whatever it names.
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
       they hand out from other modules.
@@ -147,6 +155,7 @@ class CoreConfig:
     dataclass_bases: tuple[str, ...] = ()
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
     path_callees: tuple[str, ...] = ()
+    path_modules: tuple[str, ...] = ()
     contract_surfaces: tuple[ExportPaths, ...] = ()
     export_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False
@@ -157,6 +166,7 @@ class CoreConfig:
         discovery: Mapping[str, Any],
         contract_surfaces: tuple[ExportPaths, ...] = (),
         export_surfaces: tuple[ExportPaths, ...] = (),
+        path_modules: tuple[str, ...] = (),
     ) -> CoreConfig:
         """A config's `[discovery]`, parsed: a bare string is a list of one name, and a key it
         does not set keeps core's default."""
@@ -176,7 +186,9 @@ class CoreConfig:
         ):
             if key in discovery:
                 fields[field_name] = as_tuple(discovery[key])
-        return cls(**fields, contract_surfaces=contract_surfaces, export_surfaces=export_surfaces)
+        return cls(
+            **fields, contract_surfaces=contract_surfaces, export_surfaces=export_surfaces, path_modules=path_modules
+        )
 
     @cached_property
     def dataclass_kinds(self) -> DataclassDecorators:
@@ -203,6 +215,8 @@ class CoreConfig:
         """Whether an export surface covers a path."""
         return any(surface.covered_root(path) is not None for surface in self.export_surfaces)
 
-    def loader_callee_names(self) -> tuple[str, ...]:
-        """Last dotted parts of the dynamic loaders; the extractor records calls to these."""
-        return tuple(sorted({loader.rpartition(".")[2] for loader in self.dynamic_loaders}))
+    def watched_callee_names(self) -> tuple[str, ...]:
+        """Last dotted parts of the dynamic loaders, the path callees and the patch callees; the
+        extractor records calls to these, so the link sees which files hand one a computed name."""
+        names = (*self.dynamic_loaders, *self.path_callees, *self.patch_callees)
+        return tuple(sorted({name.rpartition(".")[2] for name in names}))

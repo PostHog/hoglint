@@ -3,11 +3,14 @@
 use crate::config::{ExtractConfig, Kind};
 use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
-use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status};
+use crate::facts::flags::CLASS;
+use crate::facts::{Assign, Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status, TypeParam};
+use crate::loops::Sequences;
+use crate::self_attrs::self_attrs;
 use crate::source::{LineIndex, parse_py314, source_text};
 use crate::value::{Encoder, Keyword, MAX_HEADER_NODES, Value, keyword_name};
-use crate::walker::{Counts, Walk, Walker};
-use ruff_python_ast::{Expr, Parameters};
+use crate::walker::{Counts, TypedDictClass, Walk, Walker};
+use ruff_python_ast::{self as ast, Expr, Parameters};
 use ruff_python_parser::Mode;
 use std::collections::HashSet;
 
@@ -64,7 +67,16 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         } else {
             HashSet::new()
         };
-        let walker = Walker::new(self.src, &self.lines, &defs, &bound, &stored, self.config);
+        let sequences = Sequences::of(if kinds.has(Kind::Calls) { suite } else { &[] }, &defs);
+        let walker = Walker::new(
+            self.src,
+            &self.lines,
+            &defs,
+            &bound,
+            &stored,
+            &sequences,
+            self.config,
+        );
         let mut walk = walker.run(suite);
         let derived = if kinds.has(Kind::Derived) {
             let candidates = std::mem::take(&mut walk.candidates);
@@ -72,17 +84,59 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         } else {
             Vec::new()
         };
-        let def_rows = if kinds.has(Kind::Defs) {
+        let mut def_rows: Vec<Def> = if kinds.has(Kind::Defs) {
             (0..defs.entries.len())
                 .map(|idx| self.def_record(&defs, &walk.def_flags, idx))
                 .collect()
         } else {
             Vec::new()
         };
+        for declared in std::mem::take(&mut walk.typed_dicts) {
+            Self::declare_typed_dict(declared, &mut def_rows, &mut walk.assigns);
+        }
         let mut facts = Self::facts_of(walk, def_rows, derived);
         facts.keep(kinds);
         facts.sort();
         facts
+    }
+
+    /// A functional `TypedDict` as the class form records it: a class def after the file's own
+    /// defs, so their scope ids stay, and one annotated field per key in its body.
+    fn declare_typed_dict(
+        declared: TypedDictClass,
+        defs: &mut Vec<Def>,
+        assigns: &mut Vec<Assign>,
+    ) {
+        let scope = defs.len() as i64;
+        for (name, ann, l, c) in declared.fields {
+            assigns.push(Assign {
+                ann: Some(ann),
+                c,
+                f: declared.flags | CLASS,
+                l,
+                op: ":".to_string(),
+                s: scope,
+                t: vec![Value::Chain(name)],
+                v: Value::Null,
+            });
+        }
+        defs.push(Def {
+            attrs: Vec::new(),
+            bases: vec![declared.base],
+            c: declared.c,
+            dec: Vec::new(),
+            e: declared.e,
+            f: declared.flags,
+            k: DefKind::Class,
+            kw: declared.kw,
+            l: declared.l,
+            n: declared.name,
+            params: Vec::new(),
+            ret: Value::Null,
+            s: declared.scope,
+            stub: false,
+            tp: Vec::new(),
+        });
     }
 
     fn facts_of(walk: Walk, defs: Vec<Def>, derived: Vec<Ref>) -> Facts {
@@ -118,6 +172,28 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             .collect()
     }
 
+    /// The PEP 695 type parameters, each with its bound or its tuple of constraints.
+    fn type_params(&self, enc: &mut Encoder, params: Option<&ast::TypeParams>) -> Vec<TypeParam> {
+        let Some(params) = params else {
+            return Vec::new();
+        };
+        params
+            .type_params
+            .iter()
+            .map(|param| {
+                let (name, bound) = match param {
+                    ast::TypeParam::TypeVar(t) => (&t.name, t.bound.as_deref()),
+                    ast::TypeParam::ParamSpec(t) => (&t.name, None),
+                    ast::TypeParam::TypeVarTuple(t) => (&t.name, None),
+                };
+                TypeParam {
+                    name: name.to_string(),
+                    bound: self.header_value(enc, bound, true),
+                }
+            })
+            .collect()
+    }
+
     fn default_value(&self, enc: &Encoder, default: Option<&Expr>) -> Value {
         default
             .map(|d| enc.shallow(d, self.src))
@@ -128,6 +204,7 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         let entry = &defs.entries[idx];
         let mut enc = Encoder::default();
         let mut def = Def {
+            attrs: Vec::new(),
             bases: Vec::new(),
             c: entry.c,
             dec: entry
@@ -146,7 +223,9 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             ret: Value::Null,
             s: entry.parent,
             stub: is_stub_body(entry.node.body()),
+            tp: Vec::new(),
         };
+        def.tp = self.type_params(&mut enc, entry.node.type_params());
         match entry.node {
             DefNode::Func(f) => {
                 def.n = f.name.to_string();
@@ -157,6 +236,9 @@ impl<'s, 'c> FileFacts<'s, 'c> {
                 };
                 def.params = self.params(&mut enc, &f.parameters);
                 def.ret = self.header_value(&mut enc, f.returns.as_deref(), true);
+                if defs.is_class(entry.parent) {
+                    def.attrs = self_attrs(f, self.src, &self.lines);
+                }
             }
             DefNode::Class(c) => {
                 def.n = c.name.to_string();

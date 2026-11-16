@@ -118,6 +118,48 @@ pub fn binds_constant(
     constant
 }
 
+/// The (file, row) of a module constant whose annotation says what it holds: a bare name the
+/// module binds once, by an annotated assignment with a value. Its annotation, not its value,
+/// is judged. A bare `Final` or `TypeAlias` names no type.
+pub fn annotated_constant(core: &mut Core, module: Sid, name: Sid) -> Option<(u32, u32)> {
+    core.rec.read(Kind::Alias, module, name);
+    let table = core.table(module)?;
+    let table = core.table_at(table);
+    if table
+        .bindings
+        .get(&name)
+        .is_none_or(|found| found.len() != 1)
+    {
+        return None;
+    }
+    let file = table.record?;
+    let facts = core.facts.clone();
+    let (at, row) = facts.files[file as usize]
+        .assigns
+        .iter()
+        .enumerate()
+        .rfind(|(_, row)| {
+            is_module_assign(row)
+                && row
+                    .targets
+                    .iter()
+                    .any(|target| matches!(target, V::Chain(bound) if *bound == name))
+        })?;
+    if row.op != Op::Annotated || row.value.is_none() {
+        return None;
+    }
+    let annotation = row.ann.as_ref().filter(|ann| !ann.is_null())?;
+    if let V::Chain(chain) = annotation
+        && matches!(
+            core.it.s(*chain).rsplit('.').next(),
+            Some("Final" | "TypeAlias")
+        )
+    {
+        return None;
+    }
+    Some((file, at as u32))
+}
+
 /// Whether a name resolves, whole, to a first-party module-level constant.
 fn names_constant(
     core: &mut Core,
@@ -700,8 +742,9 @@ impl HandedOut {
     }
 
     /// The first-party module-level assignments the handed-out names resolve to, as symbols, when
-    /// the value is no literal constant: a `NewType`, a `TypeVar`, a
-    /// type alias, a value a call makes. What they hand out is unknown.
+    /// the value is no literal constant (a `NewType`, a `TypeVar`, a type alias, a value a call
+    /// makes) or the constant's annotation decides (`annotated_constant`). What they hand out is
+    /// unknown until the producer reads it as a type.
     fn unknown_values(
         &self,
         core: &mut Core,
@@ -721,7 +764,9 @@ impl HandedOut {
             if origin.s == EMPTY || core.is_external(origin.m) {
                 continue;
             }
-            if binds_constant(core, origin.m, origin.s, 0, &mut Vec::new()) {
+            if annotated_constant(core, origin.m, origin.s).is_none()
+                && binds_constant(core, origin.m, origin.s, 0, &mut Vec::new())
+            {
                 continue;
             }
             out.insert(core.ent_sid(origin));
@@ -757,8 +802,9 @@ impl HandedOut {
     }
 
     /// The names a readable `__all__` lists that the module binds by no def, no import, no other
-    /// edge of what it hands out and no literal constant: what they hand
-    /// out is unknown.
+    /// edge of what it hands out and no literal constant without an annotation that decides
+    /// (`annotated_constant`): what they hand out is unknown until the producer reads it as a
+    /// type.
     fn unaccounted(
         &self,
         core: &mut Core,
@@ -779,7 +825,10 @@ impl HandedOut {
             if bound {
                 continue;
             }
-            if binding.is_some() && binds_constant(core, scope.module, name, 0, &mut Vec::new()) {
+            if binding.is_some()
+                && annotated_constant(core, scope.module, name).is_none()
+                && binds_constant(core, scope.module, name, 0, &mut Vec::new())
+            {
                 continue;
             }
             out.insert(name);

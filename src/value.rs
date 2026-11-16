@@ -514,10 +514,21 @@ impl Encoder {
             }),
             Expr::Call(call) => {
                 let callee = self.boxed(&call.func, false, d, src);
-                let args = self.list(&call.arguments.args, false, d, src);
+                // A `TypeVar`'s constraints and bound are type expressions, a string one too.
+                let last = match &*callee {
+                    Value::Chain(name) => name.rsplit('.').next(),
+                    _ => None,
+                };
+                let declares = last == Some("TypeVar");
+                let mut args = Vec::new();
+                for (at, arg) in call.arguments.args.iter().enumerate() {
+                    args.push(self.tree(arg, declares && at > 0, d, src));
+                }
                 let mut kw = Vec::new();
                 for k in call.arguments.keywords.iter() {
-                    kw.push(Keyword(keyword_name(k), self.tree(&k.value, false, d, src)));
+                    let name = keyword_name(k);
+                    let typed = declares && name.as_deref() == Some("bound");
+                    kw.push(Keyword(name, self.tree(&k.value, typed, d, src)));
                 }
                 Value::Call(Call {
                     args,

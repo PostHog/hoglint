@@ -6,11 +6,13 @@ use crate::facts::flags::{BLOCK, CLASS, FUNC, IF, TC_ELSE, TRY, TYPE_ONLY};
 use crate::facts::{
     Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
 };
+use crate::loops::{Sequences, literal_elements, rebinds};
 use crate::path::{Frame, climb};
 use crate::source::LineIndex;
 use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
 use crate::value::{
-    Encoder, MAX_NODES, StrValue, Value, binop, boolop, callee_text, cmpop, unaryop,
+    Encoder, Keyword, MAX_NODES, StrValue, Value, binop, boolop, callee_text, cmpop, keyword_name,
+    unaryop,
 };
 use ruff_python_ast::{self as ast, Expr, ExprContext, InterpolatedStringElement, Pattern, Stmt};
 use ruff_text_size::{Ranged, TextSize};
@@ -96,6 +98,35 @@ pub struct Walk {
     pub names: Counts<TextKey>,
     /// Statement flags by def index.
     pub def_flags: Vec<u32>,
+    /// The functional `TypedDict`s the walk read as class declarations.
+    pub typed_dicts: Vec<TypedDictClass>,
+}
+
+/// A functional `TypedDict` (`Name = TypedDict("Name", {"key": type})`): the class it declares,
+/// as the class form would, with one annotated field per key. Where and how it is written (its
+/// assignment's scope, flags and lines), the callee as its base and the call's keywords.
+pub struct TypedDictClass {
+    pub scope: i64,
+    pub flags: u32,
+    pub l: i64,
+    pub c: i64,
+    pub e: i64,
+    pub name: String,
+    pub base: Value,
+    pub kw: Vec<Keyword>,
+    /// Each field: its key, its type, and the key's line and column.
+    pub fields: Vec<(String, Value, i64, i64)>,
+}
+
+/// The most `calls` rows one call becomes over the values of the loops around it.
+const MAX_LOOP_ROWS: usize = 64;
+
+/// A `for` around the code being walked whose variable takes the values of a literal sequence:
+/// the scope of the loop, the variable and each value as a shallow value.
+struct LoopValues<'a> {
+    scope: i64,
+    name: &'a str,
+    values: Vec<Value>,
 }
 
 pub struct Walker<'a, 'w> {
@@ -104,6 +135,8 @@ pub struct Walker<'a, 'w> {
     defs: &'w DefTable<'a>,
     bound: &'w Bound<'a>,
     stored: &'w HashSet<&'a str>,
+    sequences: &'w Sequences<'a>,
+    loops: Vec<LoopValues<'a>>,
     config: &'w ExtractConfig,
     /// Whether any requested kind needs the expression walk.
     exprs: bool,
@@ -119,6 +152,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         defs: &'w DefTable<'a>,
         bound: &'w Bound<'a>,
         stored: &'w HashSet<&'a str>,
+        sequences: &'w Sequences<'a>,
         config: &'w ExtractConfig,
     ) -> Self {
         let out = Walk {
@@ -131,6 +165,8 @@ impl<'a, 'w> Walker<'a, 'w> {
             defs,
             bound,
             stored,
+            sequences,
+            loops: Vec::new(),
             config,
             exprs: config.kinds.any(&EXPRESSION_KINDS),
             enc: Encoder::default(),
@@ -192,9 +228,141 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// The values a `for` binds its variable to, when it is a plain name the body does not bind
+    /// again and the iterable is a literal sequence (`loops.rs`).
+    fn loop_values(&self, f: &'a ast::StmtFor, at: At) -> Option<LoopValues<'a>> {
+        if !self.wants(Kind::Calls) {
+            return None;
+        }
+        let Expr::Name(target) = &*f.target else {
+            return None;
+        };
+        let elts = match &*f.iter {
+            Expr::Name(seq) => {
+                let start = f.range.start().to_u32();
+                self.sequences.visible(seq.id.as_str(), at.scope, start)?
+            }
+            iter => literal_elements(iter)?,
+        };
+        let name = target.id.as_str();
+        if elts.is_empty() || rebinds(&f.body, name, self.defs) {
+            return None;
+        }
+        let values = elts.iter().map(|e| self.enc.shallow(e, self.src)).collect();
+        Some(LoopValues {
+            scope: at.scope,
+            name,
+            values,
+        })
+    }
+
+    /// Whether the node being walked runs later than the statement around it: in a lambda or
+    /// a comprehension.
+    fn deferred(&self) -> bool {
+        self.path.iter().any(|frame| {
+            matches!(frame, Frame::Step(step) if *step == "lambda" || step.starts_with("comp:"))
+        })
+    }
+
+    /// `row` once per combination of the values of the loops around it whose variable it
+    /// passes as a whole argument; `row` alone when there is none, or too many combinations.
+    fn loop_rows(&self, row: WatchedCall, scope: i64) -> Vec<WatchedCall> {
+        if self.loops.is_empty() || self.deferred() {
+            return vec![row];
+        }
+        let passes = |name: &str| {
+            let chain = |v: &Value| matches!(v, Value::Chain(c) if c == name);
+            row.args.iter().any(chain) || row.kws.iter().any(|k| chain(&k.1))
+        };
+        let used: Vec<&LoopValues> = self
+            .loops
+            .iter()
+            .filter(|l| l.scope == scope && passes(l.name))
+            .collect();
+        let combinations = used.iter().map(|l| l.values.len()).product::<usize>();
+        if used.is_empty() || combinations > MAX_LOOP_ROWS {
+            return vec![row];
+        }
+        let mut rows = vec![row];
+        for bound in used {
+            let swap = |v: &mut Value, value: &Value| {
+                if matches!(v, Value::Chain(c) if c == bound.name) {
+                    *v = value.clone();
+                }
+            };
+            rows = rows
+                .iter()
+                .flat_map(|row| {
+                    bound.values.iter().map(move |value| {
+                        let mut one = row.clone();
+                        one.args.iter_mut().for_each(|v| swap(v, value));
+                        one.kws.iter_mut().for_each(|k| swap(&mut k.1, value));
+                        one
+                    })
+                })
+                .collect();
+        }
+        rows
+    }
+
     /// Assignments get a row at module and class scope only.
     fn emits_assign(&self, scope: i64) -> bool {
         self.wants(Kind::Assigns) && (scope == -1 || self.defs.is_class(scope))
+    }
+
+    /// A functional `TypedDict` where the walk records assignments, read as the class it declares:
+    /// one target name, a callee whose last name is `TypedDict`, and fields that are a dict literal
+    /// of string keys with no dot. Any other form stays an assignment.
+    fn typed_dict(&mut self, a: &'a ast::StmtAssign, at: At) -> Option<TypedDictClass> {
+        if !self.emits_assign(at.scope) || !self.wants(Kind::Defs) {
+            return None;
+        }
+        let [Expr::Name(target)] = a.targets.as_slice() else {
+            return None;
+        };
+        let Expr::Call(call) = &*a.value else {
+            return None;
+        };
+        let last = match &*call.func {
+            Expr::Name(name) => name.id.as_str(),
+            Expr::Attribute(attr) => attr.attr.as_str(),
+            _ => return None,
+        };
+        let [_, Expr::Dict(dict)] = &*call.arguments.args else {
+            return None;
+        };
+        if last != "TypedDict" {
+            return None;
+        }
+        let mut fields = Vec::new();
+        for item in dict.items.iter() {
+            let Some(Expr::StringLiteral(key)) = &item.key else {
+                return None;
+            };
+            let key = key.value.to_str();
+            if key.contains('.') {
+                return None;
+            }
+            let (l, c) = self.lines.pos(item.key.as_ref()?.range().start());
+            let ann = self.value(Some(&item.value), true);
+            fields.push((key.to_string(), ann, l, c));
+        }
+        let mut kw = Vec::new();
+        for k in call.arguments.keywords.iter() {
+            kw.push(Keyword(keyword_name(k), self.value(Some(&k.value), false)));
+        }
+        let (l, c) = self.lines.pos(a.range.start());
+        Some(TypedDictClass {
+            scope: at.scope,
+            flags: at.flags,
+            l,
+            c,
+            e: self.lines.line(a.range.end()),
+            name: target.id.to_string(),
+            base: self.value(Some(&call.func), false),
+            kw,
+            fields,
+        })
     }
 
     fn stmt(&mut self, stmt: &'a Stmt, at: At) {
@@ -214,7 +382,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             Stmt::Assign(a) => {
-                if self.emits_assign(at.scope) {
+                if let Some(declared) = self.typed_dict(a, at) {
+                    self.out.typed_dicts.push(declared);
+                } else if self.emits_assign(at.scope) {
                     let t = a
                         .targets
                         .iter()
@@ -275,7 +445,13 @@ impl<'a, 'w> Walker<'a, 'w> {
             Stmt::For(f) => {
                 self.child(Frame::Terminal("for-target"), &f.target, at);
                 self.child(Frame::Terminal("for-iter"), &f.iter, at);
+                let bound = self.loop_values(f, at);
+                let pushed = bound.is_some();
+                self.loops.extend(bound);
                 self.body(&f.body, Self::inner(at, BLOCK));
+                if pushed {
+                    self.loops.pop();
+                }
                 self.body(&f.orelse, Self::inner(at, BLOCK));
             }
             Stmt::While(w) => {
@@ -689,7 +865,8 @@ impl<'a, 'w> Walker<'a, 'w> {
             kws: self.enc.shallow_keywords(call, self.src),
             callee,
         };
-        self.out.calls.push(row);
+        let rows = self.loop_rows(row, at.scope);
+        self.out.calls.extend(rows);
     }
 
     fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, at: At) {
