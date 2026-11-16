@@ -247,7 +247,9 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
         "posthog/test/test_x.py": 'PATCH = "products.shop.backend.patched.boto3.client"\nNAME = "products.shop.backend.named.gone"\n',
         "products/shop/backend/patched.py": "import boto3\n",
         "products/shop/backend/named.py": "def here():\n    pass\n",
-        "products/shop/backend/apps.py": "class Config:\n    def ready(self):\n        from . import audit\n",
+        "products/shop/backend/apps.py": (
+            "if TYPE_CHECKING:\n    from . import audit\n\n\nclass Config:\n    def ready(self):\n        from . import audit\n"
+        ),
     }
 
     comparison = watched.compare(requirements, hoglint, sources.__getitem__, lambda directory: False)

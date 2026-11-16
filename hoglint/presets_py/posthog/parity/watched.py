@@ -228,9 +228,20 @@ def module_of_location(product: str, location: str) -> str:
     return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
 
 
+def is_type_checking(node: ast.AST) -> bool:
+    """`if TYPE_CHECKING:`: its body never runs."""
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
 def imported_only_in_functions(apps_source: str, module: str, package: str) -> bool:
     """Whether every import of `module` (or a name of it) in an AppConfig module of `package`
-    sits inside a function, and there is at least one."""
+    that runs sits inside a function, and there is at least one. An import under `if
+    TYPE_CHECKING:` never runs."""
     tree = ast.parse(apps_source)
     inside: list[bool] = []
 
@@ -245,6 +256,11 @@ def imported_only_in_functions(apps_source: str, module: str, package: str) -> b
 
     def visit(node: ast.AST, in_function: bool) -> None:
         for child in ast.iter_child_nodes(node):
+            if is_type_checking(child):
+                assert isinstance(child, ast.If)
+                for branch in child.orelse:
+                    visit(branch, in_function)
+                continue
             if isinstance(child, (ast.Import, ast.ImportFrom)) and module in names(child):
                 inside.append(in_function)
             visit(child, in_function or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)))
