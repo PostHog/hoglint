@@ -1001,16 +1001,22 @@ verdict = "incomplete"
 identity = ["products.catalog.backend.facade.api|reference|posthog.models.ghost.Ghost"]
 
 [[row]]
-case = "ME02"
+case = "CY01"
 rule = "no-new-package-cycles"
-verdict = "incomplete"
-identity = ["products.catalog.backend.logic.errors|import|products.catalog.backend.logic.nowhere.MissingFailure"]
+verdict = "finding"
+identity = ["catalog", "reports"]
 
 [[row]]
-case = "ME02"
+case = "CY01"
+rule = "no-new-package-cycles"
+verdict = "finding"
+identity = ["reports", "catalog"]
+
+[[row]]
+case = "CY03"
 rule = "no-new-package-cycles"
 verdict = "incomplete"
-identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 
 [[row]]
 case = "HZ06"
@@ -1025,22 +1031,16 @@ verdict = "incomplete"
 identity = ["products.legacy.backend.facade.lazygoneworkers|import|products.legacy.backend.temporal.gone.run_gone"]
 
 [[row]]
-case = "CY03"
+case = "ME02"
 rule = "no-new-package-cycles"
 verdict = "incomplete"
-identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+identity = ["products.catalog.backend.logic.errors|import|products.catalog.backend.logic.nowhere.MissingFailure"]
 
 [[row]]
-case = "CY01"
+case = "ME02"
 rule = "no-new-package-cycles"
-verdict = "finding"
-identity = ["catalog", "reports"]
-
-[[row]]
-case = "CY01"
-rule = "no-new-package-cycles"
-verdict = "finding"
-identity = ["reports", "catalog"]
+verdict = "incomplete"
+identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
 
 [[row]]
 case = "UK01"

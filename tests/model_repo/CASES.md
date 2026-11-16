@@ -182,6 +182,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `RA02` | `products/legacy/backend/models.py` | An unsealed relation into a core model | reverse-accessor finding | |
 | `RA03` | `posthog/models/sharing.py` | A core model with an unsealed relation into a product | reverse-accessor finding | |
 | `RA04` | `products/inventory/backend/models.py`, `products/reports/backend/models.py`, `posthog/models/organization.py` | Sealed relations and core-to-core relations | clean | |
+| `GM05` | `posthog/rbac/migrations/rbac_widget_migration.py` | A data migration under `posthog/rbac/migrations/` (run by hand) names a product model with `apps.get_model` | clean | `posthog/rbac/migrations/` takes the migration context: frozen history (Nov 16) |
 | `RD01` | `products/legacy/backend/receivers.py` | A receiver on another product's sender, in a watched module | receiver-direction finding; public-surface finding for the import; model-crossings clean (`sender`); wiring-watched clean | Cross-check of Nov 12; Nov 12 |
 | `RD02` | `products/legacy/backend/stock_listeners.py` | The same in an unwatched module | the same, and a wiring-watched finding | |
 | `RD03` | `products/legacy/backend/tests/test_stock_signals.py` | The same in a product's test file | public-surface finding for the import; receiver-direction and wiring-watched clean | A receiver in a test is no wiring (Nov 12) |

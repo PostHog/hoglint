@@ -26,10 +26,13 @@ path_callees = [
   "run_module", "importorskip", "register_assert_rewrite", "set_forkserver_preload",
   "setattr", "patch.dict", "patch.multiple", "_patch", "mock_patch",
 ]
-# Django migration packages: their files get the `migration` context. ClickHouse
-# (`posthog/clickhouse/migrations`), async migrations and `posthog/rbac/migrations` are not Django
-# migrations and stay prod.
-migrations = ["ee/migrations/**", "posthog/migrations/**", "posthog/session/migrations/**", "products/*/backend/migrations/**"]
+# Migration packages: their files get the `migration` context. `posthog/rbac/migrations` holds
+# frozen data migrations run by hand. ClickHouse (`posthog/clickhouse/migrations`) and async
+# migrations stay prod, labelled as history below.
+migrations = [
+  "ee/migrations/**", "posthog/migrations/**", "posthog/session/migrations/**", "products/*/backend/migrations/**",
+  "posthog/rbac/migrations/**",
+]
 
 # The cross-package relation, named once (D97, D105): a first-party destination in another package.
 # A third-party end reads no package, so it is no crossing.
