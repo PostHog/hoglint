@@ -890,41 +890,6 @@ text = "posthog.settings.web reaches products.gatekeeper.backend.logic.session.t
 
 [[finding]]
 rule = "no-new-package-cycles"
-identity = ["catalog", "?"]
-text = "import 'posthog.models.ghost.Ghost' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
-identity = ["catalog", "?"]
-text = "import 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
-identity = ["legacy", "?"]
-text = "import '......gone' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
-identity = ["legacy", "?"]
-text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
-identity = ["catalog", "?"]
-text = "reference 'posthog.models.ghost.Ghost' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
-identity = ["catalog", "?"]
-text = "reference 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
-identity = ["legacy", "?"]
-text = "model-label 'apps.get_model' did not resolve"
-
-[[finding]]
-rule = "no-new-package-cycles"
 identity = ["catalog", "reports"]
 text = "catalog -> reports closes a cycle (1 edges)"
 
@@ -1495,6 +1460,11 @@ text = "dynamic-import '' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
+identity = ["products.catalog.backend.facade.api|import|posthog.models.ghost.Ghost"]
+text = "import 'posthog.models.ghost.Ghost' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.facade.handout|import|sandbox.shapes.SandboxView"]
 text = "selection reads an unknown value"
 
@@ -1502,6 +1472,21 @@ text = "selection reads an unknown value"
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.facade.handout|import|scripts.shapes.ExternalView"]
 text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.catalog.backend.logic.errors|import|products.catalog.backend.logic.nowhere.MissingFailure"]
+text = "import 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.legacy.backend.facade.aboveworkers|import|......gone"]
+text = "import '......gone' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.legacy.backend.facade.lazygoneworkers|import|products.legacy.backend.temporal.gone.run_gone"]
+text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
@@ -1525,6 +1510,16 @@ text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
+identity = ["products.catalog.backend.facade.api|reference|posthog.models.ghost.Ghost"]
+text = "reference 'posthog.models.ghost.Ghost' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
+text = "reference 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
 identity = ["sandbox.shapes|reference|products.inventory.backend.models.StockItem"]
 text = "selection reads an unknown value"
 
@@ -1532,6 +1527,11 @@ text = "selection reads an unknown value"
 rule = "no-new-package-cycles"
 identity = ["scripts.shapes|reference|products.inventory.backend.models.StockItem"]
 text = "selection reads an unknown value"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+text = "model-label 'apps.get_model' did not resolve"
 
 [[incomplete]]
 rule = "no-product-lists-in-core"

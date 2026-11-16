@@ -757,7 +757,9 @@ doc        = "No new dependency may close a cycle between products. A sealed FK 
 view       = "packages"
 kinds      = ["import", "reference", "dotted-path", "model-label", "relation"]
 select     = "src.tier == 'product' and dst.tier == 'product'"
-contexts   = { exclude = ["test", "type_only"] }
+# A migration's historical model labels name models as they were, not today's packages.
+contexts   = { exclude = ["test", "type_only", "migration"] }
+on_unresolved = "incomplete"
 identity   = "package-pair"
 growth_key = ["src.package", "dst.package"]
 
@@ -768,6 +770,7 @@ view       = "packages"
 from       = "src.role == 'foundation'"
 deny       = "dst.role == 'feature'"
 contexts   = { exclude = ["test", "type_only"] }
+on_unresolved = "incomplete"
 identity   = "package-pair"
 growth_key = ["src.package", "dst.package"]
 

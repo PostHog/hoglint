@@ -763,16 +763,16 @@ identity = ["posthog.schema_enums"]
 # get-model
 
 [[row]]
-case = "GM03"
-rule = "get-model"
-verdict = "incomplete"
-identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
-
-[[row]]
 case = "GM01"
 rule = "get-model"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "get_model"]
+
+[[row]]
+case = "GM03"
+rule = "get-model"
+verdict = "incomplete"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 
 # has-facade
 
@@ -991,9 +991,44 @@ identity = ["products.legacy.backend.models.Widget", "posthog.models.resource_tr
 [[row]]
 case = "CR03"
 rule = "no-new-package-cycles"
-verdict = "unknown"
-identity = ["catalog", "?"]
-count = 4
+verdict = "incomplete"
+identity = ["products.catalog.backend.facade.api|import|posthog.models.ghost.Ghost"]
+
+[[row]]
+case = "CR03"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.catalog.backend.facade.api|reference|posthog.models.ghost.Ghost"]
+
+[[row]]
+case = "ME02"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.catalog.backend.logic.errors|import|products.catalog.backend.logic.nowhere.MissingFailure"]
+
+[[row]]
+case = "ME02"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
+
+[[row]]
+case = "HZ06"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.aboveworkers|import|......gone"]
+
+[[row]]
+case = "HZ10"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.lazygoneworkers|import|products.legacy.backend.temporal.gone.run_gone"]
+
+[[row]]
+case = "CY03"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 
 [[row]]
 case = "CY01"
@@ -1006,13 +1041,6 @@ case = "CY01"
 rule = "no-new-package-cycles"
 verdict = "finding"
 identity = ["reports", "catalog"]
-
-[[row]]
-case = "CY03"
-rule = "no-new-package-cycles"
-verdict = "unknown"
-identity = ["legacy", "?"]
-count = 3
 
 [[row]]
 case = "UK01"

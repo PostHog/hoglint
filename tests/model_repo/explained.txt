@@ -6838,8 +6838,6 @@ rule     request-path (endpoint origin, django.db.migrations)
            from: src.settings == true or src.request_seed == true -> false
            select: (src.settings == true and edge.kind == 'dotted-path' and not (setting-registers-apps or setting-mounts-views or setting-static-files or setting-api-schema or setting-logging or setting-caches or setting-login-flow)) or (src.settings != true and edge.kind == 'import' and 'function_local' not in edge.context) -> true
            deny: dst.tier == 'product' -> false
-rule     no-new-package-cycles (endpoint origin, django.db.migrations)
-           select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, django.db.migrations)
            from: src.role == 'foundation' -> false
            deny: dst.role == 'feature' -> false
@@ -8215,7 +8213,6 @@ rule     health-checks-no-dags (endpoint origin, products.catalog.backend.logic.
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> unknown
 finding  [new] prod-imports-test products.catalog.backend.logic.errors ?
-finding  [new] no-new-package-cycles catalog ?
 edge     import products/catalog/backend/logic/views_out.py:1 pydantic.BaseModel -> ['pydantic.BaseModel']
          resolution=external contexts=['prod']
 rule     public-surface (endpoint surface, pydantic.BaseModel)
@@ -8301,8 +8298,6 @@ rule     request-path (endpoint origin, django.db.migrations)
            from: src.settings == true or src.request_seed == true -> false
            select: (src.settings == true and edge.kind == 'dotted-path' and not (setting-registers-apps or setting-mounts-views or setting-static-files or setting-api-schema or setting-logging or setting-caches or setting-login-flow)) or (src.settings != true and edge.kind == 'import' and 'function_local' not in edge.context) -> true
            deny: dst.tier == 'product' -> false
-rule     no-new-package-cycles (endpoint origin, django.db.migrations)
-           select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, django.db.migrations)
            from: src.role == 'foundation' -> false
            deny: dst.role == 'feature' -> false
@@ -9248,8 +9243,6 @@ rule     request-path (endpoint origin, django.db.migrations)
            from: src.settings == true or src.request_seed == true -> false
            select: (src.settings == true and edge.kind == 'dotted-path' and not (setting-registers-apps or setting-mounts-views or setting-static-files or setting-api-schema or setting-logging or setting-caches or setting-login-flow)) or (src.settings != true and edge.kind == 'import' and 'function_local' not in edge.context) -> true
            deny: dst.tier == 'product' -> false
-rule     no-new-package-cycles (endpoint origin, django.db.migrations)
-           select: src.tier == 'product' and dst.tier == 'product' -> false
 rule     foundation-direction (endpoint origin, django.db.migrations)
            from: src.role == 'foundation' -> false
            deny: dst.role == 'feature' -> false
@@ -10435,7 +10428,6 @@ rule     foundation-direction (endpoint origin, products.catalog.backend.logic.n
 rule     infrastructure-direction (endpoint origin, products.catalog.backend.logic.nowhere.MissingFailure)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> unknown
-finding  [new] no-new-package-cycles catalog ?
 edge     reference products/catalog/backend/logic/pricing.py:8 products.catalog.backend.models.CatalogEntry -> ['products.catalog.backend.models.CatalogEntry']
          resolution=resolved contexts=['prod']
 rule     public-surface (endpoint surface, products.catalog.backend.models.CatalogEntry)
