@@ -125,7 +125,10 @@ In a method, `self.family.register(...)` names the member `register` of the one 
 The extractor records what each method assigns to attributes of its first parameter; the class is read from the attribute's annotations (in the class body or on an assignment), else from every value the class assigns it: a call of a class, or an item of a module-level container whose annotation (`dict[K, V]`, `list[V]`, `tuple[V, ...]` and their `typing` and `collections.abc` names) or literal items give one class.
 Only the class's own body and methods count, never a base class or code outside the class.
 Anything else stays unresolved, and so incomplete: a static or class method, a nested function's `self`, two classes, a value it cannot type (a function's result, an assignment by unpacking, `+=`, a loop or `with` target, one in a function the method defines), an attribute the class also defines as a method or property.
-A member is named by its class (`Family.register`); a hook the config names through a module-level instance (`registry.console.register_moved_page`) is not matched by a call through an attribute that holds that instance's class.
+A member is named by its class (`Family.register`).
+A hook the config names through a module-level instance (`registry.console.register_moved_page`, `console = ConsoleRegistry()`) is a method of the instance's class: a call that resolves to that member of that class is a call of the hook.
+A call that resolves to the member of a class the instance's class inherits, or of any class when the instance is no call of a class hoglint can tell, may reach the hook too: it is an unresolved `installs` edge, so incomplete, never clean.
+A same-named member of an unrelated class is no hook call.
 
 **A receiver with no sender listens to its signal** (the architect, Nov 16).
 `@receiver(signal)` or `signal.connect(fn)` with no `sender` is a `signal` edge to the signal itself: the module that defines a signal is what fires it, so `receiver-direction` and `wiring-watched` read the signal's package as the sender's.

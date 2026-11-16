@@ -523,6 +523,42 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
+case = "TA02"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "entry_note", "param:props", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "first_entry", "param:entries", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "first_entry", "return", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "newest", "param:entries", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA03"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "newest", "return", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA04"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.lazy_types", "EntryRef", "alias", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
 case = "AC01"
 rule = "facade-signature"
 verdict = "finding"
@@ -533,6 +569,30 @@ case = "AC01"
 rule = "facade-signature"
 verdict = "finding"
 identity = ["products.catalog.backend.facade.limits", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA01"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.generics", "echo", "param:value", "products.catalog.backend.facade.generics.AnyT"]
+
+[[row]]
+case = "TA01"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.generics", "echo", "return", "products.catalog.backend.facade.generics.AnyT"]
+
+[[row]]
+case = "TA03"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.generics", "same", "param:value", "products.catalog.backend.facade.generics.V"]
+
+[[row]]
+case = "TA03"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.generics", "same", "return", "products.catalog.backend.facade.generics.V"]
 
 [[row]]
 case = "CM01"
@@ -721,66 +781,6 @@ verdict = "finding"
 identity = ["products.catalog.backend.facade.named", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 
 [[row]]
-case = "TA01"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "first_entry", "param:entries", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "TA01"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "first_entry", "return", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "TA01"
-rule = "facade-signature"
-verdict = "unknown"
-identity = ["products.catalog.backend.facade.generics", "echo", "param:value", "products.catalog.backend.facade.generics.AnyT"]
-
-[[row]]
-case = "TA01"
-rule = "facade-signature"
-verdict = "unknown"
-identity = ["products.catalog.backend.facade.generics", "echo", "return", "products.catalog.backend.facade.generics.AnyT"]
-
-[[row]]
-case = "TA02"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "entry_note", "param:props", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "TA03"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "newest", "param:entries", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "TA03"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "newest", "return", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "TA03"
-rule = "facade-signature"
-verdict = "unknown"
-identity = ["products.catalog.backend.facade.generics", "same", "param:value", "products.catalog.backend.facade.generics.V"]
-
-[[row]]
-case = "TA03"
-rule = "facade-signature"
-verdict = "unknown"
-identity = ["products.catalog.backend.facade.generics", "same", "return", "products.catalog.backend.facade.generics.V"]
-
-[[row]]
-case = "TA04"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.lazy_types", "EntryRef", "alias", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
 case = "TM01"
 rule = "facade-signature"
 verdict = "unknown"
@@ -937,6 +937,12 @@ verdict = "finding"
 identity = ["kafka_client", "billing"]
 
 # installs
+
+[[row]]
+case = "IN06"
+rule = "installs"
+verdict = "incomplete"
+identity = ["products.reports.backend.logic.console_pages|installs|self.registry.register_moved_action"]
 
 [[row]]
 case = "UI01"
@@ -1982,6 +1988,12 @@ identity = ["products/reports/backend/temporal/workflows.py"]
 # receiver-direction
 
 [[row]]
+case = "RD05"
+rule = "receiver-direction"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.count_signals.stock_counted", "reports", "products.reports.backend.count_watch"]
+
+[[row]]
 case = "RD01"
 rule = "receiver-direction"
 verdict = "finding"
@@ -1992,12 +2004,6 @@ case = "RD02"
 rule = "receiver-direction"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
-
-[[row]]
-case = "RD05"
-rule = "receiver-direction"
-verdict = "finding"
-identity = ["products.inventory.backend.facade.count_signals.stock_counted", "reports", "products.reports.backend.count_watch"]
 
 [[row]]
 case = "WW22"
@@ -2196,6 +2202,30 @@ identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backen
 # wiring-watched
 
 [[row]]
+case = "RD04"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/rotation_listeners.py"]
+
+[[row]]
+case = "RD05"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/count_watch.py"]
+
+[[row]]
+case = "IN06"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/logic/console_pages.py"]
+
+[[row]]
+case = "IN06"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.reports.backend.logic.console_pages|self.registry.register_moved_action"]
+
+[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"
@@ -2242,18 +2272,6 @@ case = "RD02"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/legacy/backend/stock_listeners.py"]
-
-[[row]]
-case = "RD04"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/legacy/backend/rotation_listeners.py"]
-
-[[row]]
-case = "RD05"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/count_watch.py"]
 
 [[row]]
 case = "UI01"

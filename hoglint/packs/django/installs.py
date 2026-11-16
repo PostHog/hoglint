@@ -8,6 +8,12 @@ resolves to a hook names the callback itself. A call or decorator whose last nam
 name but that resolves to nothing, or to a value, is an unresolved edge. A callee that resolves
 to a class or a module is no hook and makes no edge.
 
+A hook the config names through a module-level instance (`registry.console.register`) is a
+method of the instance's class: a call that resolves to that member of that class, such as one
+through an attribute the class types, is a call of the hook. One that resolves to the member of
+a class the instance's class inherits, or of any class when hoglint cannot tell the instance's
+class, may reach the hook too, so it is an unresolved edge.
+
 Candidates come from queries: callee rows by their spelled last name, and defs whose decorator
 text names a hook. A hook imported under another name (`import ... as add_hook`) is found by
 origin: the `import` edge that binds it and the `decorate` edge that applies it. A candidate
@@ -23,7 +29,8 @@ from dataclasses import dataclass, field
 from hoglint.core.harness import FileItems, failure_edge
 from hoglint.core.memo import ItemOutput, PerFileRead
 from hoglint.core.sites import FileScope, Lookup
-from hoglint.model import Context, Edge, Resolution, Site
+from hoglint.core.symbols import Hit
+from hoglint.model import Context, Edge, EntityId, Resolution, Site
 from hoglint.native.queries import Words, entities_named
 from hoglint.packs.django.signals import CONNECT, SignalValues, handing_hook
 from hoglint.plugins import PackReader
@@ -40,6 +47,16 @@ class Aliases:
 
     names: set[str] = field(default_factory=set)
     decorated: set[tuple[int, int]] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class InstanceHook:
+    """A hook named through a module-level instance: the hook as an entity, its method's name,
+    and the instance's class (None when the instance is no call of a class hoglint can tell)."""
+
+    entity: EntityId
+    method: str
+    cls: EntityId | None
 
 
 def decorator_callees(d: dict) -> set[str]:
@@ -68,6 +85,40 @@ class InstallsProducer:
         self.hooks = frozenset(hooks)
         self.hook_names = frozenset(hook.rpartition(".")[2] for hook in hooks)
         self.hook_words = Words.ending(self.hook_names)
+        found = (self.instance_hook(hook) for hook in sorted(hooks))
+        self.instance_hooks = [hook for hook in found if hook is not None]
+
+    def instance_hook(self, hook: str) -> InstanceHook | None:
+        """The hook as a method of a module-level instance, when the config names it so."""
+        owner, _, method = hook.rpartition(".")
+        hit, rest = self.reader.resolver.resolve_dotted(owner)
+        if hit is None or rest or hit.kind != "variable":
+            return None
+        origin = hit.origin
+        table = self.reader.tables.get(origin.module)
+        value = table.values.get(origin.symbol) if table is not None else None
+        callee = value.get("call") if isinstance(value, dict) else None
+        cls = self.reader.resolver.resolve_class(origin.module, callee) if callee is not None else None
+        entity = EntityId(origin.language, origin.module, f"{origin.symbol}.{method}")
+        return InstanceHook(entity, method, cls)
+
+    def member_hook(self, hit: Hit) -> tuple[InstanceHook, bool] | None:
+        """The instance-named hook a call that resolves to a class member may reach, and whether
+        it reaches it: the member's class is the instance's class. A class the instance's class
+        inherits, or an instance whose class hoglint cannot tell, may hold the hook too."""
+        if hit.kind != "member":
+            return None
+        owner, _, method = hit.origin.symbol.rpartition(".")
+        cls = EntityId(hit.origin.language, hit.origin.module, owner)
+        maybe = None
+        for hook in self.instance_hooks:
+            if hook.method != method:
+                continue
+            if hook.cls == cls:
+                return hook, True
+            if hook.cls is None or cls in self.reader.classes.mro(hook.cls):
+                maybe = maybe or hook
+        return (maybe, False) if maybe is not None else None
 
     def names_a_hook(self, callee: str) -> bool:
         return not callee.startswith("?") and callee.rpartition(".")[2] in self.hook_names
@@ -77,12 +128,17 @@ class InstallsProducer:
     ) -> Edge | None:
         """None when the callee resolves to a function that is no hook."""
         hit = found.hit if found.hit is not None and found.hit.kind in HOOK_KINDS else None
+        target = hit.origin if hit is not None else None
         if hit is not None and str(hit.origin) not in self.hooks:
-            return None
+            matched = self.member_hook(hit)
+            if matched is None:
+                return None
+            hook, reaches = matched
+            target = hook.entity if reaches else None
         attrs = [("form", form)]
         if callback:
             attrs.append(("callback", callback))
-        if hit is None:
+        if hit is None or target is None:
             return Edge(
                 "installs",
                 site,
@@ -98,8 +154,8 @@ class InstallsProducer:
             "installs",
             site,
             found.surface,
-            (hit.origin,),
-            self.reader.first_party.resolution(hit.origin.module),
+            (target,),
+            self.reader.first_party.resolution(target.module),
             contexts,
             INSTALLS_PRODUCER,
             via=hit.via,

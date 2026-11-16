@@ -1450,6 +1450,11 @@ text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotte
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/reports/backend/logic/console_pages.py"]
+text = "products/reports/backend/logic/console_pages.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/reports/backend/stock_watch.py"]
 text = "products/reports/backend/stock_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
 
@@ -1622,6 +1627,11 @@ text = "installs 'self.registry.register_post_delete_hook' did not resolve"
 rule = "installs"
 identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
 text = "installs 'registry.register_post_delete_hook' did not resolve"
+
+[[incomplete]]
+rule = "installs"
+identity = ["products.reports.backend.logic.console_pages|installs|self.registry.register_moved_action"]
+text = "installs 'self.registry.register_moved_action' did not resolve"
 
 [[incomplete]]
 rule = "dynamic-imports"
@@ -1817,6 +1827,11 @@ text = "cannot place 'self.registry.register_post_delete_hook' for coverage"
 rule = "wiring-watched"
 identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.reports.backend.logic.console_pages|self.registry.register_moved_action"]
+text = "cannot place 'self.registry.register_moved_action' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"

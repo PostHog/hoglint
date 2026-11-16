@@ -16,6 +16,8 @@ db_alias_template   = "{database}_db_writer"
 receiver_decorators = ["django.dispatch.dispatcher.receiver", "posthog.models.signals.mutable_receiver"]
 oracles             = ["registry", "migration-loader"]
 hooks = [
+  "posthog.admin.console.registry.actions.register_moved_action",
+  "posthog.admin.console.registry.console.register_moved_page",
   "posthog.api.file_system.deletion.register_post_delete_hook",
   "posthog.models.resource_transfer.registered_models.register_model",
   "products.inventory.backend.facade.hooks.register_restock_hook",
