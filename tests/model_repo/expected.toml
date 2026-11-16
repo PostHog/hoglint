@@ -1790,6 +1790,18 @@ identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
 # reached-watched
 
 [[row]]
+case = "LE12"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/events.py"]
+
+[[row]]
+case = "OR04"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/stock_labels.py"]
+
+[[row]]
 case = "OR07"
 rule = "reached-watched"
 verdict = "finding"
