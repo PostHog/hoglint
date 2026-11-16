@@ -528,7 +528,7 @@ kinds        = ["reference"]
 select       = "dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none"
 endpoint     = "origin"
 allow_shapes = [
-  "annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch", "sender",
+  "annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "sender",
   "passed-as-class(cast)", "passed-as-class(get_or_create_team_extension)",
 ]
 contexts     = { exclude = ["test", "migration"] }

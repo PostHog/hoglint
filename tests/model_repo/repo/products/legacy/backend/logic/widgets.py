@@ -68,3 +68,11 @@ def stock_extension(team):
 
 def widget_slug(name: str) -> str:
     return slug(name)
+
+
+def widgets_with_stock(team_id: int):
+    from django.db.models import Prefetch
+
+    return Widget.objects.filter(team_id=team_id).prefetch_related(
+        Prefetch("stock_items", queryset=StockItem.objects.filter(team_id=team_id))
+    )

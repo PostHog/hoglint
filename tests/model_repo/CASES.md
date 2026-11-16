@@ -156,6 +156,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `PT02` | `products/catalog/backend/facade/testing.py` | `facade/testing.py` imports the product's test factory | clean | Test support (Nov 12) |
 | `PT03` | `products/legacy/backend/tests/test_widgets.py` | A test imports a test factory | clean | |
 | `MC01` | `products/legacy/backend/logic/widgets.py` | A product queries another product's model; next to it an annotation, `DoesNotExist`, `cast`, a `values()` chain and the team-extension registry | model-crossings finding for the query; clean for the others | The use shapes of Nov 12 |
+| `MC03` | `products/legacy/backend/logic/widgets.py` | A product prefetches another product's model (`Prefetch(..., queryset=Model.objects...)`) | model-crossings finding (`prefetch`) | The prefetched rows are instances on the consumer's objects; no decision allowed the shape (Nov 16) |
 | `MC02` | `posthog/test/test_auth.py`, `products/legacy/backend/migrations/0001_initial.py` | A crossing in a test and in a migration | clean | |
 | `GM01` | `products/legacy/backend/logic/widgets.py` | `apps.get_model` names another product's model | get-model finding | |
 | `GM02` | `products/legacy/backend/logic/widgets.py` | `apps.get_model` names its own model | clean | |

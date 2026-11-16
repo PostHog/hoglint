@@ -715,6 +715,11 @@ text = "products.legacy.backend.logic.widgets uses products.inventory.backend.mo
 
 [[finding]]
 rule = "model-crossings"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "prefetch"]
+text = "products.legacy.backend.logic.widgets uses products.inventory.backend.models.StockItem as prefetch"
+
+[[finding]]
+rule = "model-crossings"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
 text = "products.reports.backend.logic.build uses products.catalog.backend.models.CatalogEntry as instance-many(filter)"
 

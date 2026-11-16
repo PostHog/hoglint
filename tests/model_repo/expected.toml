@@ -927,6 +927,12 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
 
 [[row]]
+case = "MC03"
+rule = "model-crossings"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "prefetch"]
+
+[[row]]
 case = "ME08"
 rule = "model-crossings"
 verdict = "finding"
