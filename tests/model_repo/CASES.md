@@ -176,7 +176,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `MC02` | `posthog/test/test_auth.py`, `products/legacy/backend/migrations/0001_initial.py` | A crossing in a test and in a migration | clean | |
 | `GM01` | `products/legacy/backend/logic/widgets.py` | `apps.get_model` names another product's model | get-model finding | |
 | `GM02` | `products/legacy/backend/logic/widgets.py` | `apps.get_model` names its own model | clean | |
-| `GM03` | `products/legacy/backend/logic/widgets.py` | `apps.get_model` with a variable label | get-model unknown; a cycle unknown onto `?` (`CY03`) | Open: unknown finding or incomplete |
+| `GM03` | `products/legacy/backend/logic/widgets.py` | `apps.get_model` with a variable label | get-model incomplete; a cycle unknown onto `?` (`CY03`) | Incomplete, not a finding (Nov 16) |
 | `GM04` | `products/legacy/backend/migrations/0001_initial.py` | `apps.get_model` in a migration | clean | |
 | `RA01` | `products/legacy/backend/models.py` | An unsealed relation into another product's model | reverse-accessor finding | |
 | `RA02` | `products/legacy/backend/models.py` | An unsealed relation into a core model | reverse-accessor finding | |

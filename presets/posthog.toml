@@ -639,6 +639,8 @@ doc        = "apps.get_model naming another package's model is counted."
 kinds      = ["model-label"]
 select     = "edge.shape == 'get_model' and dst.tier == 'product' and crosses-package"
 contexts   = { exclude = ["test", "migration"] }
+# A label held in a variable, or one no model answers for, is an item, not a finding.
+on_unresolved = "incomplete"
 identity   = "crossing"
 counted    = true
 growth_key = ["dst.symbol", "edge.label", "src.package"]

@@ -763,16 +763,16 @@ identity = ["posthog.schema_enums"]
 # get-model
 
 [[row]]
+case = "GM03"
+rule = "get-model"
+verdict = "incomplete"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+
+[[row]]
 case = "GM01"
 rule = "get-model"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "get_model"]
-
-[[row]]
-case = "GM03"
-rule = "get-model"
-verdict = "unknown"
-identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolved-model-label"]
 
 # has-facade
 
@@ -1844,12 +1844,6 @@ identity = ["products/reports/backend/temporal/workflows.py"]
 # receiver-direction
 
 [[row]]
-case = "RD04"
-rule = "receiver-direction"
-verdict = "incomplete"
-identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
-
-[[row]]
 case = "RD01"
 rule = "receiver-direction"
 verdict = "finding"
@@ -1860,6 +1854,12 @@ case = "RD02"
 rule = "receiver-direction"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
+
+[[row]]
+case = "RD04"
+rule = "receiver-direction"
+verdict = "incomplete"
+identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
 
 # registry-slots
 
@@ -2052,12 +2052,6 @@ identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backen
 # wiring-watched
 
 [[row]]
-case = "RD04"
-rule = "wiring-watched"
-verdict = "incomplete"
-identity = ["products.reports.backend.stock_receivers|<Call>"]
-
-[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"
@@ -2104,6 +2098,12 @@ case = "RD02"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/legacy/backend/stock_listeners.py"]
+
+[[row]]
+case = "RD04"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.reports.backend.stock_receivers|<Call>"]
 
 [[row]]
 case = "UI01"

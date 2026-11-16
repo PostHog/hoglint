@@ -799,11 +799,6 @@ identity = ["products.inventory.backend.models.StockItem", "products.legacy.back
 text = "products.legacy.backend.logic.widgets -> products.inventory.backend.models.StockItem (model-label)"
 
 [[finding]]
-rule = "get-model"
-identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolved-model-label"]
-text = "model-label 'apps.get_model' did not resolve"
-
-[[finding]]
 rule = "reverse-accessor"
 identity = ["products.legacy.backend.models.Widget", "posthog.models.sharing.SharingConfiguration", "widget", "sharingconfiguration_set"]
 text = "posthog.models.sharing -> products.legacy.backend.models.Widget (reverse-accessor)"
@@ -1467,6 +1462,11 @@ text = "selection reads unknown src.handed_zones"
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
 text = "selection reads unknown src.handed_zones"
+
+[[incomplete]]
+rule = "get-model"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+text = "model-label 'apps.get_model' did not resolve"
 
 [[incomplete]]
 rule = "receiver-direction"
