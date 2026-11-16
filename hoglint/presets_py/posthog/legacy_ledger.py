@@ -61,7 +61,7 @@ CARVE_OUTS = frozenset(
 )
 REEXPORT_DUNDERS = frozenset({"__getattr__", "__dir__"})
 ANY = ("typing", "Any")
-ALLOWED_SHAPES = ("annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery", "prefetch")
+ALLOWED_SHAPES = ("annotation", "exception", "nested-class-attr", "_meta", "scalar-chain", "subquery")
 OUT_OF_SCOPE = frozenset({Context.TEST, Context.MIGRATION})
 ROOT_CONFIG = "hoglint.toml"
 # The roots today's scanner treats as repo code.

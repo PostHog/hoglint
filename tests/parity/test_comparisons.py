@@ -119,8 +119,12 @@ def test_an_import_linter_violation_matches_a_finding_on_any_line_of_its_stateme
     comparison = import_linter.compare(contracts, facts(findings=[finding]), lambda path: source)
 
     assert len(comparison.matches) == 1
-    assert list(reasons(comparison).values()) == [import_linter.ALLOWED_BY_PATTERN, None, import_linter.NO_RULE]
-    assert any("webhook consumers" in line for line in comparison.not_compared)
+    assert list(reasons(comparison).values()) == [
+        import_linter.ALLOWED_BY_PATTERN,
+        None,
+        import_linter.ALLOWED_BY_SHAPE,
+    ]
+    assert comparison.not_compared == []
 
 
 def test_a_crossings_line_only_one_side_has_needs_the_use_hoglint_reads_there() -> None:
@@ -128,7 +132,6 @@ def test_a_crossings_line_only_one_side_has_needs_the_use_hoglint_reads_there() 
     baseline = [
         f"shop.Order {module} instance-many(annotate) 1",
         f"shop.Order {module} other(keyword) 1",
-        f"shop.Order {module} prefetch 1",
         f"shop.Cart {module} instance-single 1",
         "shop.Order posthog.gone instance-single 1",
     ]
@@ -136,7 +139,6 @@ def test_a_crossings_line_only_one_side_has_needs_the_use_hoglint_reads_there() 
     uses = {
         (module, "Order"): [
             crossings.Use(4, "scalar-chain", "values", ".objects.filter().values().annotate()"),
-            crossings.Use(9, "prefetch"),
         ],
         (module, "Cart"): [crossings.Use(7, "instance-single", "", ".objects.get()")],
     }
@@ -146,7 +148,6 @@ def test_a_crossings_line_only_one_side_has_needs_the_use_hoglint_reads_there() 
     assert reasons(comparison) == {
         f"shop.Order {module} instance-many(annotate) 1": crossings.VALUE_ROWS,
         f"shop.Order {module} other(keyword) 1": crossings.SENDER,
-        f"shop.Order {module} prefetch 1": crossings.PREFETCH,
         f"shop.Cart {module} instance-single 1": None,
         "shop.Order posthog.gone instance-single 1": crossings.STALE,
         f"shop.Order {module} sender 1": crossings.SENDER,

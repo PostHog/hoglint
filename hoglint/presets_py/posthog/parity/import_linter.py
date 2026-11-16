@@ -26,11 +26,11 @@ TOOL = "import-linter"
 CONTRACT_RULES: dict[str, frozenset[str]] = {
     "packages/owners-yaml is a leaf": frozenset({"leaves-stay-leaves"}),
     "packages/personhog-proto is a leaf": frozenset({"leaves-stay-leaves"}),
-    "sources vendors import shared code only from the sources SDK": frozenset(),
-    "sources vendors do not import each other": frozenset(),
+    "sources vendors import shared code only from the sources SDK": frozenset({"sources-vendors-use-sdk"}),
+    "sources vendors do not import each other": frozenset({"sources-vendors-independent"}),
     "presentation must use facade": frozenset({"presentation-uses-facade"}),
     "routes must only import presentation": frozenset({"presentation-uses-facade"}),
-    "webhook consumers must only import facade": frozenset(),
+    "webhook consumers must only import facade": frozenset({"webhook-consumers-use-facade"}),
     "facade must not import presentation or DRF": frozenset({"facade-no-drf"}),
     "facade contracts and enums must not import Django (use posthog.enums for choices)": frozenset(
         {"contracts-no-django"}
@@ -47,6 +47,22 @@ NO_RULE = Reason(
     "contract-without-rule",
     "No hoglint rule stands in for this contract, so hoglint does not check the import.",
     Effect.LESS,
+)
+# Contracts whose ignore list holds no debt: each entry is part of the contract's shape, which the
+# stand-in rule writes as its scope and its `unless`.
+SHAPE_ONLY = frozenset(
+    {
+        "sources vendors import shared code only from the sources SDK",
+        "sources vendors do not import each other",
+        "webhook consumers must only import facade",
+    }
+)
+ALLOWED_BY_SHAPE = Reason(
+    "allowed-by-contract-shape",
+    "The ignore entry that hides it names one of the contract's own exceptions (the sources SDK may "
+    "import core), and the stand-in rule holds the same exception: no finding of the rule names "
+    "the import. The contract allows the import, and so does hoglint.",
+    Effect.SAME,
 )
 
 
@@ -107,6 +123,8 @@ def judge(
     hidden = [entry for entry in violation["hidden_by"] if entry]
     if hidden and all(is_pattern(entry) for entry in hidden):
         return Difference(item, OLD_ONLY, ALLOWED_BY_PATTERN, f"hidden by '{hidden[0]}'")
+    if hidden and contract in SHAPE_ONLY:
+        return Difference(item, OLD_ONLY, ALLOWED_BY_SHAPE, f"hidden by '{hidden[0]}'; no finding of {sorted(rules)}")
     if not rules:
         return Difference(item, OLD_ONLY, NO_RULE, f"hidden by '{hidden[0]}'" if hidden else "")
     return Difference(item, OLD_ONLY, None, f"hidden by '{hidden[0]}'" if hidden else "not hidden")

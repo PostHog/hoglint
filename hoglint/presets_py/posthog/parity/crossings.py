@@ -10,9 +10,7 @@ reads at that module for that class:
 - a type alias: the old scanner reads a class inside a union or a generic alias as a collection
   or an operator; hoglint reads it as an annotation;
 - a signal sender: the old scanner reads `sender=Model` as a keyword use; hoglint reads it as the
-  sender shape, which model-crossings allows. The two lines pair up;
-- prefetch: hoglint's model-crossings allows a model's queryset inside `Prefetch(...)`, the old
-  scanner does not.
+  sender shape, which model-crossings allows. The two lines pair up.
 
 The baseline is checked against a fresh run of the old scanner first: a line the scanner no
 longer writes is stale.
@@ -53,13 +51,6 @@ SENDER = Reason(
     "model-crossings allows; the old scanner reads a keyword use. The old line and hoglint's line "
     "name the same uses.",
     Effect.SAME,
-)
-PREFETCH = Reason(
-    "prefetch-allowed",
-    "A queryset of the model inside `Prefetch(...)`. hoglint's model-crossings lists `prefetch` "
-    "among its allowed shapes; the old scanner counts it. The prefetched rows are instances that "
-    "land on the consumer's objects.",
-    Effect.LESS,
 )
 STALE = Reason(
     "stale-baseline",
@@ -125,16 +116,7 @@ def type_alias(line: BaselineLine, uses: list[Use]) -> str | None:
     return "; ".join(f"line {use.line}: annotation" for use in found)
 
 
-def prefetch(line: BaselineLine, uses: list[Use]) -> str | None:
-    if line.kind != "prefetch":
-        return None
-    found = [use for use in uses if use.shape == "prefetch"]
-    if len(found) < line.count:
-        return None
-    return "; ".join(f"line {use.line}: prefetch" for use in found)
-
-
-CHECKS = ((VALUE_ROWS, value_rows), (TYPE_ALIAS, type_alias), (PREFETCH, prefetch))
+CHECKS = ((VALUE_ROWS, value_rows), (TYPE_ALIAS, type_alias))
 
 
 def compare(
