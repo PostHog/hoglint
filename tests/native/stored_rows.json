@@ -16293,23 +16293,6 @@
     "products.é.jobs",
     "products.billing.backend.facade"
    ]
-  ],
-  [
-   "finding",
-   0,
-   "uses",
-   [
-    "products.billing.backend.models.Invoice",
-    "core.c",
-    "reference"
-   ],
-   "core.c names products.billing.backend.models.Invoice, which is not exported to it",
-   false,
-   false,
-   [
-    "core.c",
-    "products.billing.backend.models"
-   ]
   ]
  ],
  "via": [

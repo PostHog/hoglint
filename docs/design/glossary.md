@@ -87,6 +87,7 @@ Some words have two meanings; the entry names both.
   The field that names who owns a finding, and the field whose value groups modules into packages for cycles and `compare`.
 - **`handed_zones`** (built-in attribute, as in `src.handed_zones`).
   The zones, with their ancestors, of the modules whose names a module hands out by import or by a rebind.
+  A rebind of a class's member (`Kind = Model.Kind`) hands out the member and adds no zone.
   It is unknown when one of those zones cannot be told.
 
 ## Selectors
@@ -142,6 +143,7 @@ Some words have two meanings; the entry names both.
 - **Hand-out** (`src/link/surface.rs`; `HandOut` in `hoglint/model.py`).
   A name that an export module gives to its importers: its own public definitions, and the imports that the hand-out rule passes on (`__all__`, `import x as x`, lazy names, star imports, rebinds).
   An import the module keeps to itself is "kept".
+  A kept name still reads as exported when the same export, under the same root, hands out its origin.
 - **Slot** (edge kind `exposes`, attr `slot`).
   One typed place in a contract: a parameter, a return value, a field or an attribute of a callable or a class that an export hands out.
   Each type name in a slot is one `exposes` row.

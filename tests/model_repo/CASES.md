@@ -32,7 +32,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 |---|---|---|---|---|
 | `PS01` | `posthog/api/widget_report.py` | Core imports a product's logic module and a function from it | public-surface finding (both imports); no-product-lists-in-core finding | Past the facade |
 | `PS02` | `products/legacy/backend/logic/widgets.py` | A later use of an imported model name, three times | public-surface finding on the import only | A use is judged at its import (`uses_at_import`) |
-| `PS03` | `posthog/api/widget_report.py` | A use through a module attribute (`module.CONSTANT`) | public-surface finding (reference) | The module import does not name the constant, so the use is judged on its own |
+| `PS03` | `posthog/api/widget_report.py` | A use through a module attribute (`module.CONSTANT`) of a module whose import is a finding | public-surface clean for the use | Judged at the module's import, as a use of an imported name is (Nov 16) |
 | `PS04` | `posthog/api/widget_report.py` | Later calls of an imported function | clean: a call makes no reference row | |
 | `PS05` | `posthog/api/sharing.py`, `ee/hogai/tools.py` | Core imports a product's facade | public-surface clean; no-product-lists-in-core finding | Open: whether one facade import stays out of the core rule (D104) |
 | `PS06` | `products/reports/backend/logic/build.py`, `products/legacy/backend/presentation/views.py`, `services/sync/worker.py`, `tools/loose.py` | A product, a service and a tool import a facade | clean | The facade is the public surface |
@@ -63,6 +63,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `DP06` | `products/reports/backend/restock_dispatch.py` | A Celery task sent by a name held in a module constant | public-surface finding | A file that hands a computed value to a path callee keeps its strings that name a module (the owner, Nov 16: dispatch by name is real) |
 | `DP07` | `posthog/temporal/health_checks/registry.py` | A registration point lists product modules and imports each by a computed name | no-product-lists-in-core finding; public-surface clean (a registration point names a wiring location); dynamic-imports incomplete | The same, for a loader |
 | `NS01` | `ee/hogai/tool_registry.py`, `products/__init__.py` | Core imports the namespace package all products sit in, to walk it | clean | `products/__init__.py` is package `products`, tier `core`: it names no product (Nov 16) |
+| `ST01` | `products/reports/backend/logic/stock_states.py`, `products/inventory/backend/facade/contracts.py`, `products/inventory/backend/facade/enums.py`, `products/inventory/backend/logic/notes.py` | A product imports through a facade module two names it keeps to itself: one the facade's enums module hands out, one from the product's logic | public-surface clean for the enum; finding for the logic class | A kept name is exported when the same export hands out its origin (Nov 16) |
 | `SY01` | `products/legacy/backend/api/widgets.py` | A viewset under `backend/api/` uses an access-control mixin | clean | The mixins are exported by name to zone `api` (exports `symbols`, Nov 12) |
 | `SY02` | `products/legacy/backend/api/widgets.py` | The same module imports another product's viewset that inherits the mixin | public-surface finding | By name: a subclass gets no door |
 | `ES01` | `products/catalog/backend/facade/models.py` | A facade module that only re-exports a model | export-shape finding | |
@@ -99,6 +100,8 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `FL03` | `products/legacy/backend/facade/queries.py` | A capability submodule (by name) with a body | facade-logic finding, named per definition | D94 |
 | `FL04` | `products/inventory/backend/facade/tasks.py`, `products/catalog/backend/facade/models.py` | A capability submodule that only re-exports | clean | |
 | `FL05` | `products/inventory/backend/facade/hooks.py`, `products/catalog/backend/facade/testing.py`, `products/legacy/backend/facade/backfill_command.py` | Bodies in other facade modules (a hook registration, a fixture, a class) | clean | |
+| `HZ15` | `products/reports/backend/facade/run_status.py`, `products/reports/backend/models.py` | A facade module with a body that rebinds a model's nested class (`RunStatus = ReportRun.Status`) | facade-logic clean; export-shape finding for the nested class | A rebind of a class's member hands out the member, not the model (Nov 16) |
+| `HZ16` | `products/reports/backend/facade/run_handle.py` | The same with a rebind of the model itself (`Run = ReportRun`) | facade-logic finding; export-shape finding | Neighbor of `HZ15`: a module that hands out a model is a capability |
 | `HZ01` | `products/legacy/backend/facade/workers.py`, `products/legacy/backend/temporal/jobs.py` | A facade module that hands out a name from a wiring location and has a body | facade-logic finding | A capability by what it hands out (`handed_zones`) |
 | `HZ02` | `products/legacy/backend/facade/labels.py` | A facade module that hands out a name from logic and has a body | clean | |
 | `HZ03` | `products/legacy/backend/facade/nsworkers.py` | A facade module that hands out a namespace directory under a wiring location and has a body | facade-logic finding | The directory's zone is read (Nov 12 handed_zones fix) |
@@ -285,7 +288,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks | `WW07`, `SN01` | config:stale-name incomplete |
 | Rule covers of a coverage rule | What the covered rule cannot tell (an advisory rule's own items never reach a check's output) | `WW06`, `WW08` | wiring-watched incomplete |
 | `reached-watched`'s edge cover | A source whose tier cannot be told | `UK01` | reached-watched incomplete on the source module, read by the level only (an advisory rule's items never reach a check's output); it names no product, so it blocks none (a written limit) |
-| `uses_at_import` | A use whose import the rule does not report | `PS03` | the use is a finding of its own; with this preset no import is reported clean while its use is not, so no stronger case can be built (`tests/native/test_evaluator.py` holds it) |
+| `uses_at_import` | A use whose import the rule does not report | none | with this preset no import is reported clean while its use is not, so no case can be built (`tests/native/test_evaluator.py` holds it) |
 | `leave_slots_to` | A module the signature rule cannot tell about; a second signature rule the export rule does not name | none | A file's zone is never unknown in this preset (the zone field has no domain), and `orm-independent` holds for no export module and for no class the export rule walks; `tests/native/test_facade_rules.py` holds both |
 | Namespace-directory labels | A directory whose files disagree on zone | none | Zones come from globs only here, so a directory reads one answer; a provider-set zone would be needed |
 
@@ -297,7 +300,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | Rule | Kind | Case |
 |---|---|---|
 | public-surface | A later use of a name already imported | `PS02` |
-| public-surface | A use through a module attribute whose module import is a finding | `PS03` |
+| public-surface | A use through a module attribute whose module import is a finding | `PS03`: judged at the import |
 | public-surface | A string read as a dotted path outside a path sink (host names, task names, fixtures, a lint's data) | `DP01`, `DP02`: a string is an edge only in a path sink or a path place |
 | public-surface | Settings name product paths | `PS11` |
 | public-surface | A registration point names a wiring location | `PS13` |

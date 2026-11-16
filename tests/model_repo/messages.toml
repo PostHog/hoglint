@@ -165,6 +165,11 @@ text = "products.reports.backend.logic.shelf_counts names products.shelf.backend
 
 [[finding]]
 rule = "public-surface"
+identity = ["products.inventory.backend.facade.contracts.StockLevelNote", "products.reports.backend.logic.stock_states", "import"]
+text = "products.reports.backend.logic.stock_states names products.inventory.backend.facade.contracts.StockLevelNote, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
 identity = ["products.inventory.backend.logic.stock.move_stock", "products.reports.backend.stock_names", "import"]
 text = "products.reports.backend.stock_names names products.inventory.backend.logic.stock.move_stock, which is not exported to it"
 
@@ -182,11 +187,6 @@ text = "tools.codegen.generate names products.reports.backend.logic.build.run_co
 rule = "public-surface"
 identity = ["products.inventory.backend.models.StockItem", "tools.viewkit.shapes", "import"]
 text = "tools.viewkit.shapes names products.inventory.backend.models.StockItem, which is not exported to it"
-
-[[finding]]
-rule = "public-surface"
-identity = ["products.legacy.backend.logic.widgets.WIDGET_LIMIT", "posthog.api.widget_report", "reference"]
-text = "posthog.api.widget_report names products.legacy.backend.logic.widgets.WIDGET_LIMIT, which is not exported to it"
 
 [[finding]]
 rule = "public-surface"
@@ -347,6 +347,16 @@ text = "products.legacy.backend.facade.colonlazy exports products.legacy.backend
 rule = "export-shape"
 identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
 text = "products.legacy.backend.facade.lazygoneworkers exports products.legacy.backend.temporal.gone.run_gone: unresolved-import"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.reports.backend.models.ReportRun", "products.reports.backend.facade.run_handle", "export-denied(model)"]
+text = "products.reports.backend.facade.run_handle exports products.reports.backend.models.ReportRun: export-denied(model)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.reports.backend.models.ReportRun.Status", "products.reports.backend.facade.run_status", "export-shape(class)"]
+text = "products.reports.backend.facade.run_status exports products.reports.backend.models.ReportRun.Status: export-shape(class)"
 
 [[finding]]
 rule = "export-shape"
@@ -572,6 +582,11 @@ text = "products.legacy.backend.facade.relativeworkers -> products.legacy.backen
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.workers.start", "products.legacy.backend.facade.workers"]
 text = "products.legacy.backend.facade.workers -> products.legacy.backend.facade.workers.start (declares)"
+
+[[finding]]
+rule = "facade-logic"
+identity = ["products.reports.backend.facade.run_handle.run_count", "products.reports.backend.facade.run_handle"]
+text = "products.reports.backend.facade.run_handle -> products.reports.backend.facade.run_handle.run_count (declares)"
 
 [[finding]]
 rule = "presentation-uses-facade"

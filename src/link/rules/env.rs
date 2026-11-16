@@ -763,7 +763,7 @@ impl<'a> Env<'a> {
         };
         match self.hands_out(endpoint) {
             Truth::True => {}
-            Truth::False => return Value::Bool(false),
+            Truth::False => return self.kept_origin_exported(endpoint),
             Truth::Unknown => return Value::Unknown,
         }
         let bits = cx.rules.labels.exports_of[at as usize];
@@ -788,6 +788,41 @@ impl<'a> Env<'a> {
             Truth::Unknown => Value::Unknown,
             truth => Value::Bool(truth == Truth::True),
         }
+    }
+}
+
+impl<'a> Env<'a> {
+    /// A name an export module keeps to itself is still exported when the same export, under the
+    /// same root, hands out its origin (a facade module's kept import of the facade's own enum):
+    /// the importer names a name of the door it uses. Else it is not exported.
+    fn kept_origin_exported(&self, endpoint: &Endpoint<'a>) -> Value<'a> {
+        let cx = self.cx;
+        let (Some(id), Some(path)) = (self.edge, endpoint.path) else {
+            return Value::Bool(false);
+        };
+        let mut origins = Vec::new();
+        cx.dst_endpoints(id, Role::Origin, &mut origins);
+        if origins.is_empty() {
+            return Value::Bool(false);
+        }
+        for origin in &origins {
+            let Some(origin_path) = origin.path.filter(|_| !origin.unresolved) else {
+                return Value::Bool(false);
+            };
+            let same_door = cx.rules.exports.iter().any(|export| {
+                let root = export.covered_root(path);
+                root.is_some() && root == export.covered_root(origin_path)
+            });
+            if !same_door {
+                return Value::Bool(false);
+            }
+            match self.exported(origin) {
+                Value::Bool(true) => {}
+                Value::Unknown => return Value::Unknown,
+                _ => return Value::Bool(false),
+            }
+        }
+        Value::Bool(true)
     }
 }
 

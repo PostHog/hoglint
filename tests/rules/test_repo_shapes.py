@@ -231,15 +231,12 @@ PUBLIC_SURFACE_CASES = [
         [("products.billing.backend.logic.charge", "posthog.api.thing", "import")],
     ),
     (
-        "a use through an imported module keeps its own row",
+        "a use through an imported module is judged at the module's import",
         [
             ("import", "posthog.api.thing", "products.billing.backend.logic", (Context.PROD,)),
             ("reference", "posthog.api.thing", "products.billing.backend.logic.charge", (Context.PROD,)),
         ],
-        [
-            ("products.billing.backend.logic", "posthog.api.thing", "import"),
-            ("products.billing.backend.logic.charge", "posthog.api.thing", "reference"),
-        ],
+        [("products.billing.backend.logic", "posthog.api.thing", "import")],
     ),
     (
         "a Django or ClickHouse migration is frozen history; other migration folders are not",

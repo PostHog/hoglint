@@ -235,6 +235,18 @@ identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "HZ16"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.reports.backend.models.ReportRun", "products.reports.backend.facade.run_handle", "export-denied(model)"]
+
+[[row]]
+case = "HZ15"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.reports.backend.models.ReportRun.Status", "products.reports.backend.facade.run_status", "export-shape(class)"]
+
+[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -415,6 +427,12 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.handout", "export-denied(model)"]
 
 # facade-logic
+
+[[row]]
+case = "HZ16"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.reports.backend.facade.run_handle.run_count", "products.reports.backend.facade.run_handle"]
 
 [[row]]
 case = "FL03"
@@ -1454,6 +1472,12 @@ identity = ["scripts.shapes"]
 # public-surface
 
 [[row]]
+case = "ST01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.contracts.StockLevelNote", "products.reports.backend.logic.stock_states", "import"]
+
+[[row]]
 case = "DP03"
 rule = "public-surface"
 verdict = "finding"
@@ -1530,12 +1554,6 @@ case = "PS02"
 rule = "public-surface"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "import"]
-
-[[row]]
-case = "PS03"
-rule = "public-surface"
-verdict = "finding"
-identity = ["products.legacy.backend.logic.widgets.WIDGET_LIMIT", "posthog.api.widget_report", "reference"]
 
 [[row]]
 case = "PS07"

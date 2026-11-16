@@ -69,8 +69,7 @@ impl Rules {
         }
         let reported = self.reported_imports(link, rule, &candidates);
         for (at, &id) in ids.iter().enumerate() {
-            let key = (link.module_of_edge(id), link.edges.surface_of(id));
-            if asks(id) && reported.contains(&key) {
+            if asks(id) && super::judged_at_import(link, &reported, id) {
                 seen[at] = false;
             }
         }

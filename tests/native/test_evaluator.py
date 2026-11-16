@@ -976,8 +976,9 @@ JUDGED_AT_THE_IMPORT = CORNERS["uses-judged-at-their-import"]
 # cover, because the rule tells the two apart, is judged on its own.
 USES_AT_IMPORT_CASES = {
     "every use, without the key": ({"uses_at_import": False}, EVERY_USE, True),
-    # A use of a name the module imports goes; a use through an imported module stays.
-    "the key": ({}, {(INVOICE, "core.c")}, True),
+    # A use of a name the module imports goes, and so does a use through an imported module whose
+    # import the rule reports.
+    "the key": ({}, set(), True),
     "a deny that reads the edge kind": (
         {"deny": "dst.tier == 'product' and edge.kind == 'reference'"},
         EVERY_USE,
