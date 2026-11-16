@@ -204,7 +204,7 @@ def test_posthog_preset_seals_relations_between_packages_but_not_onto_a_third_pa
     ]
 
 
-def test_posthog_preset_gives_only_django_migration_files_the_migration_context(tmp_path: Path) -> None:
+def test_posthog_preset_gives_only_migration_folders_the_migration_context(tmp_path: Path) -> None:
     config = shape_config(tmp_path, "posthog")
     globs = GraphSource.core_config(config).migration_globs
     migrations = {
@@ -214,7 +214,7 @@ def test_posthog_preset_gives_only_django_migration_files_the_migration_context(
         "products/tasks/backend/migrations/0001_initial.py": True,
         "posthog/clickhouse/migrations/0001_initial.py": False,
         "posthog/async_migrations/migrations/0005_person.py": False,
-        "posthog/rbac/migrations/rbac_team_migration.py": False,
+        "posthog/rbac/migrations/rbac_team_migration.py": True,
         "posthog/models/team/team.py": False,
     }
     assert {path: globs.matches(path) for path in migrations} == migrations
