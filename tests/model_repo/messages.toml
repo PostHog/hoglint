@@ -1469,6 +1469,11 @@ identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.le
 text = "selection reads unknown src.handed_zones"
 
 [[incomplete]]
+rule = "receiver-direction"
+identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
+text = "signal '<Call>' did not resolve"
+
+[[incomplete]]
 rule = "installs"
 identity = ["products.gatekeeper.backend.wiring|installs|registry.register_post_delete_hook"]
 text = "installs 'registry.register_post_delete_hook' did not resolve"
@@ -1672,6 +1677,11 @@ text = "cannot place 'registry.register_post_delete_hook' for coverage"
 rule = "wiring-watched"
 identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.reports.backend.stock_receivers|<Call>"]
+text = "cannot place '<Call>' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"

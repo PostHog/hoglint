@@ -185,6 +185,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `RD01` | `products/legacy/backend/receivers.py` | A receiver on another product's sender, in a watched module | receiver-direction finding; public-surface finding for the import; model-crossings clean (`sender`); wiring-watched clean | Cross-check of Nov 12; Nov 12 |
 | `RD02` | `products/legacy/backend/stock_listeners.py` | The same in an unwatched module | the same, and a wiring-watched finding | |
 | `RD03` | `products/legacy/backend/tests/test_stock_signals.py` | The same in a product's test file | public-surface finding for the import; receiver-direction and wiring-watched clean | A receiver in a test is no wiring (Nov 12) |
+| `RD04` | `products/reports/backend/stock_receivers.py` | A receiver whose sender is a call's result | receiver-direction incomplete; wiring-watched incomplete | A sender hoglint cannot place is an item, not a finding (Nov 16); placing it is the facts' work |
 | `RD03` | `products/inventory/backend/logic/stock.py` | A receiver on its own product's sender | clean | |
 | `IN01` | `products/legacy/backend/apps.py`, `products/legacy/backend/hooks.py` | A product registers a function into a core hook from an unwatched module | installs clean (a list); wiring-watched finding | `installs` is a list (Nov 12) |
 | `IN02` | `products/legacy/backend/apps.py` | A product registers a model class into a core registry | clean beyond `IN01` | D100 (wanted) |
@@ -428,7 +429,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | reverse-accessor | A relation onto a third-party app | None |
 | receiver-direction | Core listens to a product's saves | None: same edge as `RD01` from core |
 | receiver-direction | A product listens to another product's saves | `RD01`, `RD02` |
-| receiver-direction | Signals with no sender; a variable sender | None |
+| receiver-direction | Signals with no sender; a variable sender | `RD04`: incomplete |
 
 ## Adding a case
 

@@ -517,12 +517,6 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
-case = "FS13"
-rule = "facade-signature"
-verdict = "unknown"
-identity = ["products.catalog.backend.facade.api", "give_object_payload", "return", "builtins.object"]
-
-[[row]]
 case = "CM01"
 rule = "facade-signature"
 verdict = "finding"
@@ -665,6 +659,12 @@ case = "FS10"
 rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
+
+[[row]]
+case = "FS13"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "give_object_payload", "return", "builtins.object"]
 
 [[row]]
 case = "HO01"
@@ -1844,6 +1844,12 @@ identity = ["products/reports/backend/temporal/workflows.py"]
 # receiver-direction
 
 [[row]]
+case = "RD04"
+rule = "receiver-direction"
+verdict = "incomplete"
+identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
+
+[[row]]
 case = "RD01"
 rule = "receiver-direction"
 verdict = "finding"
@@ -2044,6 +2050,12 @@ verdict = "finding"
 identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backend.logic.widgets"]
 
 # wiring-watched
+
+[[row]]
+case = "RD04"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.reports.backend.stock_receivers|<Call>"]
 
 [[row]]
 case = "DR01"
