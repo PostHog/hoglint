@@ -73,6 +73,26 @@ impl Frame<'_> {
     }
 }
 
+/// Steps a value passes through on its way into a literal: awaits, conditional values, stars,
+/// boolean, binary and walrus operands.
+const INTO_LITERAL: [&str; 7] = [
+    "await",
+    "ifexp:body",
+    "ifexp:else",
+    "star",
+    "bool:",
+    "bin:",
+    "walrus:",
+];
+
+/// Whether a use with escape path `up` sits in a list, tuple, set or dict literal: its first step
+/// past the steps of `INTO_LITERAL` is one of the literal's elements, keys or values.
+pub fn listed(up: &str) -> bool {
+    let mut steps = up.split(' ');
+    let first = steps.find(|step| !INTO_LITERAL.iter().any(|into| step.starts_with(into)));
+    first.is_some_and(|step| step.starts_with("elt:") || step.starts_with("dict:"))
+}
+
 /// Use-site context of the node on top of `path`: the trailer chain directly above it
 /// (`.objects.filter()`), then the space-joined escape steps up to the first terminal step.
 pub fn climb(path: &[Frame]) -> (String, String) {

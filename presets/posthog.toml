@@ -54,6 +54,15 @@ setting-api-schema     = "edge.setting == 'SPECTACULAR_SETTINGS' or edge.setting
 setting-logging        = "edge.setting == 'LOGGING' or edge.setting startswith 'LOGGING.'"
 setting-caches         = "edge.setting == 'CACHES' or edge.setting startswith 'CACHES.'"
 setting-login-flow     = "edge.setting in ['SOCIAL_AUTH_PIPELINE', 'AXES_LOCKOUT_CALLABLE']"  # a login flow behind a URL, not the per-request pipeline
+# What a facade hands out that is defined in a product file outside the facade (T7): the facade
+# only passes the name on, so the file that defines it is what code outside reads.
+handed-out-origin = "dst.tier == 'product' and dst.zone != 'facade'"
+# A facade module that hands names out to code outside: `facade/testing.py` only to its tests.
+surface-hands-out = "surface.zone == 'facade' and (surface.zone != 'fixtures' or 'test' in edge.context) and surface.exported"
+via-hands-out     = "via.zone == 'facade' and (via.zone != 'fixtures' or 'test' in edge.context) and via.exported"
+# A registration point that only puts a hand-out into a list, tuple, set or dict literal registers
+# it; any other use, or one the facts cannot tell, reads it.
+only-registers = "src.wiring == 'registration' and edge.listed == '1'"
 # The warehouse sources tree: a package per vendor, the SDK they share and the tree's conftest (its
 # members, `source_vendor`), under the tree's own package.
 in-sources-tree = "dst.path startswith 'products/warehouse_sources/sources/'"
@@ -754,11 +763,18 @@ growth_key = ["subject"]
 
 # What the Isolated level reads of code outside the products (D108): a product file such code
 # reaches past the export is watched, as a request-path file is. A list: public-surface holds the
-# crossing as debt.
+# crossing as debt. A facade re-export does not end the reach (T7): the file that defines what a
+# facade module hands out is watched too, with every module on the name's path to it (`: chain`),
+# read at the module the code names or at one the name passes through on its way there. A facade
+# that defines the name itself ends it.
 [rules.reached-watched]
 primitive  = "coverage"
-doc        = "Every product file that code outside the products, production or test, reaches past the product's export is in the contract-check inputs, so a change there runs the full suite. The Isolated level reads it; public-surface holds the crossing as debt, so this is a list."
-covers     = ["edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface"]
+doc        = "Every product file that code outside the products, production or test, reaches past the product's export is in the contract-check inputs, so a change there runs the full suite. So is the product file that defines a name a facade module only passes on, with every module on the name's path to it, when such code reads the name, outside type checking, through that facade module or through a module that took it from one; a registration point that only puts the name into a literal does not read it. A facade that defines the name itself is the end. The Isolated level reads it; public-surface holds the crossing as debt, so this is a list."
+covers     = [
+  "edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface",
+  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and src.tier != 'product' and surface-hands-out and handed-out-origin and not only-registers: chain",
+  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and src.tier != 'product' and via-hands-out and handed-out-origin and not only-registers: chain",
+]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
 report     = "advisory"

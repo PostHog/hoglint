@@ -232,6 +232,9 @@ pub struct Facts {
     pub defs: Vec<Def>,
     pub derived: Vec<Ref>,
     pub imports: Vec<Import>,
+    /// The import-bound names every load of which in the file sits in a list, tuple, set or dict
+    /// literal: one row per name (scope and header -1), with its count of loads.
+    pub listed: Vec<Count<TextKey>>,
     pub names: Vec<Count<TextKey>>,
     pub refs: Vec<Ref>,
     pub strs: Vec<DottedStr>,
@@ -288,6 +291,7 @@ impl Facts {
         clear(&mut self.defs, kinds, Kind::Defs);
         clear(&mut self.derived, kinds, Kind::Derived);
         clear(&mut self.imports, kinds, Kind::Imports);
+        clear(&mut self.listed, kinds, Kind::Listed);
         clear(&mut self.names, kinds, Kind::Names);
         clear(&mut self.refs, kinds, Kind::Refs);
         clear(&mut self.strs, kinds, Kind::Strs);
@@ -304,6 +308,7 @@ impl Facts {
         sort_rows(&mut self.calls);
         sort_rows(&mut self.derived);
         sort_rows(&mut self.imports);
+        sort_rows(&mut self.listed);
         sort_rows(&mut self.names);
         sort_rows(&mut self.refs);
         sort_rows(&mut self.strs);

@@ -284,6 +284,22 @@ def f():
 }
 
 #[test]
+fn listed_names_are_the_imports_used_only_inside_literals() {
+    let source = r#"from app.temporal import WORKFLOWS, create_schedule, run_job, load_all
+from app import plugins
+
+schedules = [create_schedule, run_job]
+specs = [("queue", OTHER + WORKFLOWS, [*load_all])]
+run_job()
+plugins.register()
+"#;
+    assert_eq!(
+        facts(source, "listed"),
+        r#"[[-1,-1,"create_schedule",1,4,13],[-1,-1,"WORKFLOWS",1,5,27],[-1,-1,"load_all",1,5,40]]"#
+    );
+}
+
+#[test]
 fn watched_keys_and_branches() {
     let source = r#"QUERY = {"kind": "TrendsQuery", "series": []}
 if mode == "fast":
@@ -315,7 +331,7 @@ def load():
     return x.first()
 "#;
     let full = line_with(source, &config());
-    assert_eq!(full["cfg"], "2d2704ec");
+    assert_eq!(full["cfg"], "1059f4e4");
     assert_eq!(
         kinds_of(&full),
         strings(&[

@@ -4,7 +4,9 @@ use crate::config::{ExtractConfig, Kind};
 use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
 use crate::facts::flags::CLASS;
-use crate::facts::{Assign, Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status, TypeParam};
+use crate::facts::{
+    Assign, Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status, TextKey, TypeParam,
+};
 use crate::loops::Sequences;
 use crate::self_attrs::self_attrs;
 use crate::source::{LineIndex, parse_py314, source_text};
@@ -148,6 +150,7 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             defs,
             derived,
             imports: walk.imports,
+            listed: listed_rows(walk.loads, walk.listed),
             names: counts(walk.names),
             refs: walk.refs,
             strs: walk.strs,
@@ -256,6 +259,18 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         }
         def
     }
+}
+
+/// The `listed` rows: the names whose every load sits in a literal.
+fn listed_rows(loads: Counts<TextKey>, listed: Counts<TextKey>) -> Vec<Count<TextKey>> {
+    counts(listed)
+        .into_iter()
+        .filter(|row| {
+            loads
+                .get(&row.key)
+                .is_some_and(|(all, _, _)| *all == row.count)
+        })
+        .collect()
 }
 
 fn counts<K>(table: Counts<K>) -> Vec<Count<K>> {

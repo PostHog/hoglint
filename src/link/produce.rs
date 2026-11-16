@@ -13,6 +13,7 @@ use super::surface::{
     ALL_CLAUSE, HandOut, Handed, HandedOut, LAZY_CLAUSE, annotated_constant, star_names,
 };
 use super::trace::{Kind, Memo};
+use crate::path::listed;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -377,6 +378,9 @@ struct Keys {
     fields: Sid,
     class_var: Sid,
     constant: Sid,
+    /// The attr of an import or reference edge whose name sits in a list, tuple, set or dict
+    /// literal: for an import, every load of the name it binds does.
+    listed: Sid,
     /// The callees that declare a type variable by a call.
     type_vars: [Sid; 2],
 }
@@ -406,6 +410,7 @@ impl Producing {
         last_names.dedup();
         let k = Keys {
             binds: it.intern("binds"),
+            listed: it.intern("listed"),
             lazy: it.intern("lazy"),
             module: it.intern("module"),
             chain: it.intern("chain"),
@@ -1166,7 +1171,10 @@ impl Producers<'_> {
                 }
                 _ => (Some(core.module_hit(source)), source),
             };
-            let attrs = self.bound_attrs(bound, loaded);
+            let mut attrs = self.bound_attrs(bound, loaded);
+            if facts.files[file].listed.contains(&bound) {
+                attrs.push((self.settings.k.listed, self.settings.k.one));
+            }
             let resolved = self.core.classify(surface, hit);
             self.push(
                 IMPORT, owner, row.scope, row.line, row.col, ctx, surface, resolved, EMPTY, &attrs,
@@ -1207,6 +1215,9 @@ impl Producers<'_> {
             let mut attrs = vec![(k.chain, chain), (k.up, up)];
             if row.header != -1 {
                 attrs.push((k.header, scope.qualnames[row.header as usize]));
+            }
+            if remaining.is_empty() && listed(&row.up) {
+                attrs.push((k.listed, k.one));
             }
             let resolved = core.classify_lookup(found);
             let ctx = core.contexts(scope, row.flags, row.scope);

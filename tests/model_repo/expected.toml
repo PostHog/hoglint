@@ -1213,6 +1213,24 @@ verdict = "finding"
 identity = ["posthog.hogql_queries.query_runner", "products.legacy.backend.hogql_queries.audit"]
 
 [[row]]
+case = "OR06"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_cleanup"]
+
+[[row]]
+case = "OR06"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_jobs"]
+
+[[row]]
+case = "OR06"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_warmup"]
+
+[[row]]
 case = "PS13"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1818,6 +1836,60 @@ rule = "reached-watched"
 verdict = "finding"
 identity = ["products/reports/backend/temporal/workflows.py"]
 
+[[row]]
+case = "OR01"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/restock_rules.py"]
+
+[[row]]
+case = "OR02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/reorder_points.py"]
+
+[[row]]
+case = "OR03"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/shelf_life.py"]
+
+[[row]]
+case = "OR06"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/stock_cleanup.py"]
+
+[[row]]
+case = "OR06"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/stock_warmup.py"]
+
+[[row]]
+case = "OR08"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/logic/lazy_rules.py"]
+
+[[row]]
+case = "OR09"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/tests/factories.py"]
+
+[[row]]
+case = "OR10"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/__init__.py"]
+
+[[row]]
+case = "OR10"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/windows.py"]
+
 # receiver-direction
 
 [[row]]
@@ -2342,6 +2414,13 @@ decision = "A written limit (Nov 13): a public name bound by a call or a member 
 rule = "export-shape"
 verdict = "unknown"
 match = ["products.catalog.backend.facade.aliases.built"]
+
+[[wanted]]
+case = "OR07"
+decision = "T7 (D120): core calls a facade hand-out; a lower-case name read through a module alias makes no edge (a written limit, Nov 17)"
+rule = "reached-watched"
+verdict = "finding"
+match = ["products/inventory/backend/logic/stock_sweeps.py"]
 
 # Levels: the products that pass and fail each level, and the products that claim it.
 

@@ -7,7 +7,7 @@ use crate::facts::{
     Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
 };
 use crate::loops::{Sequences, literal_elements, rebinds};
-use crate::path::{Frame, climb};
+use crate::path::{Frame, climb, listed};
 use crate::source::LineIndex;
 use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
 use crate::value::{
@@ -19,10 +19,11 @@ use ruff_text_size::{Ranged, TextSize};
 use std::collections::{HashMap, HashSet};
 
 /// Kinds whose rows come from expressions. Without any of them the walk skips expressions.
-const EXPRESSION_KINDS: [Kind; 9] = [
+const EXPRESSION_KINDS: [Kind; 10] = [
     Kind::Callees,
     Kind::Calls,
     Kind::Derived,
+    Kind::Listed,
     Kind::Names,
     Kind::Refs,
     Kind::Strs,
@@ -96,6 +97,9 @@ pub struct Walk {
     pub uses: Counts<UseKey>,
     pub callees: Counts<TextKey>,
     pub names: Counts<TextKey>,
+    /// Every load of an import-bound name, by name, and the loads of it that sit in a literal.
+    pub loads: Counts<TextKey>,
+    pub listed: Counts<TextKey>,
     /// Statement flags by def index.
     pub def_flags: Vec<u32>,
     /// The functional `TypedDict`s the walk read as class declarations.
@@ -933,7 +937,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// `uses` count. Another load may be a derived local: it becomes a candidate. `derived`
     /// needs the `refs` rows too: they seed the derivation.
     fn emit_ref(&mut self, name: &'a ast::ExprName, at: At) {
-        if !self.wants_any(&[Kind::Refs, Kind::Derived, Kind::Uses]) {
+        if !self.wants_any(&[Kind::Refs, Kind::Derived, Kind::Uses, Kind::Listed]) {
             return;
         }
         let id = name.id.as_str();
@@ -955,6 +959,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             return;
         };
         let (chain, up) = climb(&self.path);
+        if self.wants(Kind::Listed) {
+            self.count_load(id, chain.is_empty() && listed(&up), l, c);
+        }
         let attr_upper = chain
             .strip_prefix('.')
             .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_uppercase()));
@@ -981,6 +988,20 @@ impl<'a, 'w> Walker<'a, 'w> {
             up,
             origin: None,
         });
+    }
+
+    /// One load of an import-bound name, for the `listed` rows: a load that is the name itself and
+    /// sits in a literal counts as listed.
+    fn count_load(&mut self, name: &str, in_literal: bool, l: i64, c: i64) {
+        let key = TextKey {
+            scope: -1,
+            header: -1,
+            text: name.to_string(),
+        };
+        if in_literal {
+            count(&mut self.out.listed, key.clone(), l, c);
+        }
+        count(&mut self.out.loads, key, l, c);
     }
 
     fn emit_watched(&mut self, dict: &'a ast::ExprDict, at: At) {

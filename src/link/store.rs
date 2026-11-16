@@ -291,6 +291,10 @@ impl Enc<'_> {
             self.u32(r.flags);
             self.sid(r.name);
         }
+        self.u32(f.listed.len() as u32);
+        for &name in &f.listed {
+            self.sid(name);
+        }
     }
 
     fn counts(&mut self, rows: &[CountRow]) {
@@ -699,6 +703,11 @@ pub fn decode_body(
             name: d.sid()?,
         });
     }
+    let n = d.u32()? as usize;
+    let mut listed = Vec::with_capacity(n);
+    for _ in 0..n {
+        listed.push(d.sid()?);
+    }
     Ok(FileFacts {
         path: path.into(),
         status,
@@ -712,6 +721,7 @@ pub fn decode_body(
         callees,
         names,
         tags,
+        listed,
         line: line_start..line_start + json_len,
         keys,
     })

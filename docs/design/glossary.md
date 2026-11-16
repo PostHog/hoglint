@@ -25,9 +25,13 @@ Some words have two meanings; the entry names both.
 - **Endpoint: surface, origin, via** (rule key `endpoint`).
   Which end of an edge a rule reads as `dst`: the module the code named, the definition it resolves to after re-exports, or the modules in between.
   The default is `origin`.
+  Whatever `dst` reads, `surface.*` reads the module the code named; in a coverage rule's edge cover, `via.*` reads a module in between, and the cover holds when its selection holds at any one of them.
 - **Use** (edge field `use`; `CORE_USES`).
   How a reference uses the name: `call`, `attribute`, `subscript`, `annotation`, `base` and others.
   Core sets it with no framework meaning.
+- **Listed** (edge attr `listed`; fact kind `listed`).
+  `listed = "1"` on a reference edge whose name sits in a list, tuple, set or dict literal (past stars, `+` and the like), and on an import edge when every load of the name it binds in the file does.
+  A name the file never loads, or loads in any other way, has no attr.
 - **Context** (rule key `contexts = { include, exclude }`).
   Where the code of an edge runs: `prod`, `test`, `type_only`, `function_local` or `migration`.
 - **Resolution, unresolved** (edge field `resolution`).
@@ -125,7 +129,7 @@ Some words have two meanings; the entry names both.
   A path each root of `within` must hold.
   An entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
 - **Cover** (coverage rule key `covers`).
-  One thing a coverage rule needs covered: another rule's column (`rules.<rule>.<column>`), the paths of an edge selection at an endpoint (`<edge selector>: src`, `: dst` or `: surface`), the files of the modules an entity selection keeps (`<entity selector>: module`), or the locations those modules stand in (`<entity selector>: location`).
+  One thing a coverage rule needs covered: another rule's column (`rules.<rule>.<column>`), the paths of an edge selection at an endpoint (`<edge selector>: src`, `: dst` or `: surface`), or the files on a name's path (`: chain`: the module the code names, every module in between, and the origin), the files of the modules an entity selection keeps (`<entity selector>: module`), or the locations those modules stand in (`<entity selector>: location`).
   A location is the outermost package or directory without `__init__.py` that the selection keeps, at or above the module, else the module's own file.
   One covered file inside a location covers it.
 - **Coverage adapter** (coverage rule key `inputs = { adapter = ... }`).

@@ -1,6 +1,6 @@
 //! The paths a coverage rule needs covered: another rule's column read off its findings'
-//! witnesses, the endpoints of an edge selection, and the modules or the locations an entity
-//! selection keeps.
+//! witnesses, the endpoints of an edge selection (or the modules on a name's path to its origin),
+//! and the modules or the locations an entity selection keeps.
 //! Whether an outside input covers each path stays with the coverage adapter, a Python plugin.
 
 use super::env::{Cx, Endpoint, EntityEnv, Env, Role};
@@ -28,6 +28,12 @@ pub enum Cover {
         src: bool,
         /// The destination is the one the edge names (a patch target's module), not its origin.
         surface: bool,
+        /// Every module on the name's path: the one the code names, those it passes through, and
+        /// its origin (`: chain`).
+        chain: bool,
+        /// The selection reads `via.*`: it holds when it holds at one module the name passes
+        /// through between the surface and the origin.
+        via: bool,
     },
     /// The files of the modules an entity selection keeps, in its `and` parts. With `location`,
     /// the place each such module stands in instead (`location_of`).
@@ -56,6 +62,11 @@ impl Cover {
             });
         }
         let rest = edge.nodes(&plan.rest)?;
+        let mut refs = Vec::new();
+        for node in &rest {
+            node.refs(&mut refs);
+        }
+        let via = refs.iter().any(|field| matches!(field, Ref::Via(_)));
         Ok(Cover::Edges {
             kinds: plan.kinds.clone(),
             by_edge: plan
@@ -66,6 +77,8 @@ impl Cover {
             rest: Staged::new(&rest, fields),
             src: plan.endpoint == "src",
             surface: plan.endpoint == "surface",
+            chain: plan.endpoint == "chain",
+            via,
         })
     }
 
@@ -106,6 +119,8 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     let mut out = Required::default();
     let mut found: FxHashMap<String, (u32, Option<String>)> = FxHashMap::default();
     let mut dsts: Vec<Endpoint> = Vec::with_capacity(2);
+    let mut hops: Vec<Endpoint> = Vec::new();
+    let mut named: Vec<Endpoint> = Vec::with_capacity(1);
     // A location cover's rows go in last: a directory another cover needs file by file (an empty
     // directory without `__init__.py`) keeps that need.
     let mut locations: Vec<(String, u32, String)> = Vec::new();
@@ -144,6 +159,8 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                 rest,
                 src: from_src,
                 surface,
+                chain,
+                via,
                 ..
             } => {
                 let role = if *surface {
@@ -161,31 +178,40 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         continue;
                     }
                     cx.dst_endpoints(id, role, &mut dsts);
+                    if *via || *chain {
+                        cx.dst_endpoints(id, Role::Via, &mut hops);
+                    }
+                    if *chain {
+                        cx.dst_endpoints(id, Role::Surface, &mut named);
+                    }
                     for dst in dsts.iter() {
-                        let truth =
-                            all_of([edge_truth, rest.truth(&Env::new(cx, Some(id), src, *dst))]);
+                        let held = if *via {
+                            via_truth(cx, rest, id, src, *dst, &hops)
+                        } else {
+                            rest.truth(&Env::new(cx, Some(id), src, *dst))
+                        };
+                        let truth = all_of([edge_truth, held]);
                         if truth == Truth::False {
                             continue;
                         }
+                        if truth == Truth::Unknown {
+                            out.incomplete.push(unplaced(cx, at, &src, id));
+                            continue;
+                        }
                         let endpoint = if *from_src { &src } else { dst };
-                        if endpoint.unresolved || truth == Truth::Unknown {
-                            out.incomplete.push(unplaced(cx, at, &src, id));
-                            continue;
-                        }
-                        if endpoint.external.is_some() {
-                            continue;
-                        }
-                        if let Some(path) = endpoint.path.filter(|path| !path.is_empty()) {
-                            let owner = endpoint.module.map(|module| cx.text(module).to_string());
-                            found.entry(path.to_string()).or_insert((at, owner));
-                            continue;
-                        }
-                        let Some(files) = cx.namespace_files(endpoint) else {
-                            out.incomplete.push(unplaced(cx, at, &src, id));
-                            continue;
+                        let mut need = Need {
+                            cx,
+                            at,
+                            id,
+                            src: &src,
+                            found: &mut found,
+                            out: &mut out,
                         };
-                        for path in files {
-                            found.entry(path).or_insert((at, None));
+                        need.endpoint(endpoint);
+                        if *chain {
+                            for hop in named.iter().chain(&hops) {
+                                need.endpoint(hop);
+                            }
                         }
                     }
                 }
@@ -233,6 +259,71 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
         .collect();
     paths.sort();
     out.paths = paths;
+    out
+}
+
+/// Where an edge cover puts what one endpoint of a kept edge needs: its file, the files of a
+/// namespace package, or an "unplaced" row when it cannot tell.
+struct Need<'n, 'a> {
+    cx: Cx<'a>,
+    at: u32,
+    id: u32,
+    src: &'n Endpoint<'a>,
+    found: &'n mut FxHashMap<String, (u32, Option<String>)>,
+    out: &'n mut Required,
+}
+
+impl<'a> Need<'_, 'a> {
+    fn endpoint(&mut self, endpoint: &Endpoint<'a>) {
+        let cx = self.cx;
+        if endpoint.unresolved {
+            self.out
+                .incomplete
+                .push(unplaced(cx, self.at, self.src, self.id));
+            return;
+        }
+        if endpoint.external.is_some() {
+            return;
+        }
+        if let Some(path) = endpoint.path.filter(|path| !path.is_empty()) {
+            let owner = endpoint.module.map(|module| cx.text(module).to_string());
+            self.found
+                .entry(path.to_string())
+                .or_insert((self.at, owner));
+            return;
+        }
+        let Some(files) = cx.namespace_files(endpoint) else {
+            self.out
+                .incomplete
+                .push(unplaced(cx, self.at, self.src, self.id));
+            return;
+        };
+        for path in files {
+            self.found.entry(path).or_insert((self.at, None));
+        }
+    }
+}
+
+/// A selection that reads `via.*`, judged at each module between the edge's surface and its
+/// origin: true when it holds at one, false when the name passes none.
+fn via_truth<'a>(
+    cx: Cx<'a>,
+    rest: &Staged,
+    id: u32,
+    src: Endpoint<'a>,
+    dst: Endpoint<'a>,
+    hops: &[Endpoint<'a>],
+) -> Truth {
+    let mut out = Truth::False;
+    for hop in hops {
+        let mut env = Env::new(cx, Some(id), src, dst);
+        env.via = Some(*hop);
+        match rest.truth(&env) {
+            Truth::True => return Truth::True,
+            Truth::Unknown => out = Truth::Unknown,
+            Truth::False => {}
+        }
+    }
     out
 }
 

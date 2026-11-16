@@ -558,6 +558,9 @@ pub struct Env<'a> {
     /// (shape, shape detail) a primitive sets for itself in place of the edge's (use-shape's
     /// flow shape).
     pub shape: Option<(&'a str, &'a str)>,
+    /// The module between the surface and the origin that `via.*` reads; none outside a coverage
+    /// rule's edge cover, or when the name passes no such module.
+    pub via: Option<Endpoint<'a>>,
 }
 
 impl<'a> Resolve<'a> for Env<'a> {
@@ -570,6 +573,10 @@ impl<'a> Resolve<'a> for Env<'a> {
             Ref::Src(field) => self.endpoint_value(&self.src, field),
             Ref::Dst(field) => self.endpoint_value(&self.dst, field),
             Ref::Surface(field) => self.surface_value(field),
+            Ref::Via(field) => match &self.via {
+                Some(hop) => self.endpoint_value(hop, field),
+                None => Value::None,
+            },
             Ref::Entity(_) | Ref::Unknown => Value::Unknown,
         }
     }
@@ -585,6 +592,7 @@ impl<'a> Env<'a> {
             dst,
             attrs,
             shape: None,
+            via: None,
         }
     }
 

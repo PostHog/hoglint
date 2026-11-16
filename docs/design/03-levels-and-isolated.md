@@ -12,7 +12,7 @@ hoglint expresses rungs like this one as **levels**: named sets of rules that a 
 
 **What Isolated means** (owner, Nov 16, D108).
 A product's Isolated level is blocked only by what can make its test skip miss tests, and these block even when the ledger accepts them:
-1. code that is not a product (core, `ee`, `common`, tools, `bin`; production or test) reaches a product file past the product's export, and the product's contract-check inputs leave the file out;
+1. code that is not a product (core, `ee`, `common`, tools, `bin`; production or test) reaches a product file past the product's export, or reads a name a facade module only passes on, and the product's contract-check inputs leave out the file, or a file on the name's path to the file that defines it (T7, D120);
 2. a product's own presentation reaches its own internals past its facade;
 3. unwatched wiring, with its incomplete items.
 
@@ -21,10 +21,17 @@ Everything else (loose types, shapes, model crossings, other products' imports) 
 No hand-kept list of products: the request path is a watched channel (D103).
 
 How the preset says it:
-- `reached-watched` is a `coverage` rule with one edge cover: every product file that a source outside the products reaches past the export, read at the module the code names (the surface), must be in the contract-check inputs.
+- `reached-watched` is a `coverage` rule with three edge covers. The first: every product file that a source outside the products reaches past the export, read at the module the code names (the surface), must be in the contract-check inputs.
   A watched file is fine: a change there runs the full suite anyway.
   A product that reaches another product does not count; that crossing is lint only.
   Its rows are a list (advisory, no ledger); `public-surface` holds the crossing as debt.
+- A facade re-export does not end the reach (T7, the owner's approval of Nov 16, D120, reading (a) of the facade-origin measurement with D108's reader scope).
+  When such a source reads, outside type checking, a name a facade module hands out, and a product file outside the facade defines the name, that file and every module on the name's path to it, from the one the code names, are in the inputs (`: chain`): each of them runs at import, and a change to one changes what the facade hands out.
+  The facade module may be the one the code names (`surface.*`) or one the name passes through (`via.*`), as when a test patches a name a product's view took from its facade.
+  A facade that defines the name itself (a `def`, a `class`, an assigned value) is the end: the behavior behind it is the product's own tests' (D101).
+  `facade/testing.py` hands names out to tests only, so only a test's read of it counts.
+  A registration point (`wiring = "registration"`) that only puts the hand-out into a list, tuple, set or dict literal registers it and does not read it (`edge.listed == '1'`, case 1 of the measurement); any other use counts, and so does a use the facts cannot tell (unknown is never clean).
+  A list's own file is read, not the files of what sits in it: entry modules only (Nov 9).
 - `presentation-uses-facade` is read through the level key `within_group`: a row whose subjects fall in two groups is not counted, so only a product's own presentation counts.
 - `has-facade` is a `layout` rule: `files = ["backend/facade/{contracts.py,contracts}", "backend/facade/api.py: function"]`, a list (advisory, no ledger).
   A `files` entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
@@ -34,8 +41,11 @@ How the preset says it:
 - Whether a product skips is still its own config (`package.json` and `turbo.json`); the level says whether that skip would be sound, and a product that skips must hold it (next entry).
 
 Its limits, in plain words:
-1. `reached-watched` reads the file the code names, not what that file imports, nor the `__init__.py` files above it (as the request path, D103).
+1. `reached-watched` reads the file the code names and, for a facade hand-out, the files on the name's path to its definition; not what those files import, nor the `__init__.py` files above them (as the request path, D103).
 2. An edge whose source tier cannot be told is an incomplete item of `reached-watched` on the source module, so it blocks no product.
+3. A lower-case name read through a module alias of a facade module (`from ...facade import api as x`, then `x.f()`) is not read: the facts count such a use, and no edge names `f`. A class or a constant (`x.Thing`) is read.
+4. The files of what sits in a handed-out list are not asked for; a registration point that only lists the hand-out asks for nothing.
+5. A product that reads another product's hand-out asks for nothing (D108's reader scope).
 
 **A product that narrows must pass Isolated** (Nov 16).
 A product whose own `turbo.json` narrows its contract-check inputs claims the level.
@@ -158,6 +168,9 @@ This holds for the locations `drives` names; a location run by name is watched t
 | Every file of a wiring location run by name | Each file of the location becomes a watched input; the owner takes the old lint's reading, any one watched file in it | Owner, Nov 16 | not published |
 | Only the `__init__.py` of a wiring location run by name, as for `drives` | The owner takes the old lint's reading, any one watched file in it | Owner, Nov 16 | not published |
 | The non-product reach as one more `covers` entry of `wiring-watched` | It would move that rule's rows and ledger lines and make each such file a lint obligation; a list read by the level moves none | Builder, Nov 16 | not published |
+| A facade re-export ends the reach (D108 as first built) | Core can call a function the facade only passes on; a change to the file that defines it skipped the core suite, in the merge queue too | Owner, Nov 16 (D120, T7) | not published |
+| T7 read by another product's code too (reading (a) in full) | The owner took D108's reader scope: 6 products lose the skip rather than 8 | Owner, Nov 16 (D120) | not published |
+| T7 asks for a hand-out a registration point only lists (reading (b)) | Registration is not a read; engineering_analytics would lose the skip on its worker lists | Owner, Nov 16 (D120) | not published |
 
 ## Measured state
 

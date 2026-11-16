@@ -74,6 +74,9 @@ pub enum Ref {
     Dst(EndField),
     /// The module the code named (`surface.*`), whatever endpoint `dst` reads.
     Surface(EndField),
+    /// A module the name passes through between the surface and the origin (`via.*`): a
+    /// coverage rule's edge cover holds when its selection holds at any one of them.
+    Via(EndField),
     Entity(EntityField),
     Unknown,
 }
@@ -85,6 +88,7 @@ impl Ref {
             Ref::Src(EndField::Field(at, _))
             | Ref::Dst(EndField::Field(at, _))
             | Ref::Surface(EndField::Field(at, _))
+            | Ref::Via(EndField::Field(at, _))
             | Ref::Entity(EntityField::Field(at)) => Some(at),
             _ => None,
         }
@@ -286,6 +290,7 @@ impl Compiler<'_> {
             "src" => Ref::Src(self.end_field("src", name)),
             "dst" => Ref::Dst(self.end_field("dst", name)),
             "surface" => Ref::Surface(self.end_field("surface", name)),
+            "via" => Ref::Via(self.end_field("via", name)),
             _ => Ref::Unknown,
         }
     }

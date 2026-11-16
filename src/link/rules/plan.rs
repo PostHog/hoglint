@@ -204,7 +204,8 @@ pub struct CoverPlan {
     /// conjunct of an entity selection is in `rest`.
     pub by_edge: Option<NodePlan>,
     pub rest: Vec<NodePlan>,
-    /// src, dst or surface for an edge selection, module or location for an entity selection.
+    /// src, dst, surface or chain for an edge selection, module or location for an entity
+    /// selection.
     pub endpoint: String,
 }
 

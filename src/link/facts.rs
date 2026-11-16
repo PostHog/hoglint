@@ -230,6 +230,8 @@ pub struct FileFacts {
     pub callees: Vec<CountRow>,
     pub names: Vec<CountRow>,
     pub tags: Vec<TagRow>,
+    /// The import-bound names every load of which sits in a list, tuple, set or dict literal.
+    pub listed: Vec<Sid>,
     pub line: Range<usize>,
     pub keys: Vec<(Box<str>, Range<usize>)>,
 }
@@ -597,6 +599,7 @@ struct Parsed {
     callees: J,
     names: J,
     tags: J,
+    listed: J,
 }
 
 fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
@@ -618,6 +621,7 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
         callees: J::Null,
         names: J::Null,
         tags: J::Null,
+        listed: J::Null,
     };
     for (key, raw) in &map {
         let at = raw.get().as_ptr() as usize - start;
@@ -638,6 +642,7 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
             "callees" => parsed.callees = decode(raw)?,
             "names" => parsed.names = decode(raw)?,
             "tags" => parsed.tags = decode(raw)?,
+            "listed" => parsed.listed = decode(raw)?,
             _ => {}
         }
     }
@@ -852,6 +857,10 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
             name: it.intern(text(row(r, 5))),
         })
         .collect();
+    let listed = rows(&parsed.listed)
+        .iter()
+        .map(|r| it.intern(text(row(r, 2))))
+        .collect();
     FileFacts {
         path: parsed.path.into(),
         status: parsed.status.into(),
@@ -865,6 +874,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
         callees,
         names,
         tags,
+        listed,
         line,
         keys: parsed.keys,
     }

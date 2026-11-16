@@ -1,5 +1,10 @@
 from products.inventory.backend.facade.contracts import StockLevel, StockMove
-from products.inventory.backend.logic import stock
+from products.inventory.backend.logic import restock_window as restock_window, stock
+from products.inventory.backend.logic.audit_notes import StockAuditNote as StockAuditNote
+from products.inventory.backend.logic.reorder_points import reorder_point as reorder_point
+from products.inventory.backend.logic.restock_rules import restock_threshold as restock_threshold
+from products.inventory.backend.logic.shelf_life import shelf_life_days as shelf_life_days
+from products.inventory.backend.logic.stock_labels import stock_label as stock_label
 
 
 def _to_level(item) -> StockLevel:

@@ -209,6 +209,8 @@ BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported",
 CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles", "conditions")
 # The roots of an edge selector's names (`src.x`, `dst.x`, `edge.x`).
 SELECTOR_ROOTS = ("src", "dst", "edge", "surface")
+# A coverage rule's edge cover may also read `via.x`: a module the name passes through.
+COVER_ROOTS = (*SELECTOR_ROOTS, "via")
 
 
 def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
@@ -328,6 +330,8 @@ class SchemaBuilder:
             "edge": self.edge_fields(),
             # The module the code named, whatever endpoint `dst` reads (`endpoint`).
             "surface": self.endpoint_fields(dst=True),
+            # A module between the surface and the origin: a cover holds when it holds at one.
+            "via": self.endpoint_fields(dst=True),
         }
         return Catalog({root: all_roots[root] for root in roots}, open_roots=frozenset({"edge"}) & set(roots))
 
@@ -426,7 +430,7 @@ class SchemaBuilder:
         if not isinstance(table, dict):
             self.fail("conditions", "must be a table of condition name -> selector")
             return
-        taken = {*self.raw.get("fields", {}), *BUILTIN_NAMES, *KEYWORDS, *SELECTOR_ROOTS}
+        taken = {*self.raw.get("fields", {}), *BUILTIN_NAMES, *KEYWORDS, *COVER_ROOTS}
         for name, text in table.items():
             key = f"conditions.{name}"
             # One word: with no dot it never reads as `src.x`, `dst.x` or `edge.x`.
@@ -851,15 +855,15 @@ class SchemaBuilder:
                 continue
             selector_text, _, endpoint = text.rpartition(":")
             endpoint = endpoint.strip()
-            if not selector_text or endpoint not in ("src", "dst", "surface", "module", "location"):
+            if not selector_text or endpoint not in ("src", "dst", "surface", "chain", "module", "location"):
                 self.fail(
                     key,
-                    f"covers {text!r}: expected `<edge selector>: src`, `: dst`, `: surface`, "
+                    f"covers {text!r}: expected `<edge selector>: src`, `: dst`, `: surface`, `: chain`, "
                     "or `<entity selector>: module` or `: location`",
                 )
                 continue
             entity = endpoint in ("module", "location")
-            catalog = self.entity_catalog() if entity else self.edge_catalog()
+            catalog = self.entity_catalog() if entity else self.edge_catalog(COVER_ROOTS)
             selector = self.parse(key, selector_text, catalog)
             out.append(CoverSpec(text, selector=selector, endpoint=endpoint))
         return tuple(out)
