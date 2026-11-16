@@ -117,7 +117,7 @@ Its limits, in plain words:
 **What the contract-check inputs watch, at parity with the old product lint** (Nov 16).
 Besides the drives, request-path, receiver, hook-callback and patch-target covers, `wiring-watched` asks for:
 - the model surface: every module of the `models` and `migrations` zones, since a model is reachable without an import (`apps.get_model` strings, migrations, admin);
-- every module a registry loads by name (`registry != none`): routes, scopes, data freshness, webhook consumers, health checks, integration usages and hooks, today's highlights;
+- every module a registry loads by name (`registry != none`): routes, scopes, data freshness, webhook consumers, health checks, integration usages and hooks, today's highlights, and the admin console's `console.py` pages;
 - every declared permanent interface (`permanent`);
 - each wiring location core runs by a name it reads at run time (`runs_by_name`: tasks, temporal, Max tools), as one location that any one watched file in it watches, as the old lint reads it (the owner, Nov 16); query runners stay with `drives`, which reads their channel;
 - every product module a settings module names by dotted path, under any key, not only the keys the request path follows;

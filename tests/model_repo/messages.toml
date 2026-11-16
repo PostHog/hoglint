@@ -1170,6 +1170,11 @@ text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path'
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/catalog/backend/console.py"]
+text = "products/catalog/backend/console.py is needed by registry != none and tier == 'product': module but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/catalog/backend/events.py"]
 text = "products/catalog/backend/events.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
 

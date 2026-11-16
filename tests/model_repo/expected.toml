@@ -2087,6 +2087,12 @@ identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backen
 # wiring-watched
 
 [[row]]
+case = "CO01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/console.py"]
+
+[[row]]
 case = "AD01"
 rule = "wiring-watched"
 verdict = "finding"

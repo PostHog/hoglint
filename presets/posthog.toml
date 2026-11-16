@@ -486,6 +486,14 @@ module    = "products/{product}/backend/facade/today_highlights.py"
 attribute = "HIGHLIGHT_SOURCES"
 lifecycle = "on-demand"
 
+# The admin console imports each installed app's `console` module by name when it first lists its
+# pages; the module registers its panels and tools on the `console` registry it imports.
+[registries.admin_console]
+loader    = "posthog.admin.console.registry.ConsoleRegistry.discover"
+module    = "products/{product}/backend/console.py"
+attribute = "console"
+lifecycle = "on-demand"
+
 # ── Identities: ledger columns per rule family ─────────────────
 
 [identities]

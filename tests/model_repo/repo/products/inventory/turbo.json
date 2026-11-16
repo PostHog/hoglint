@@ -10,7 +10,8 @@
         "backend/migrations/**",
         "backend/apps.py",
         "backend/health_checks.py",
-        "backend/logic/stock.py"
+        "backend/logic/stock.py",
+        "backend/console.py"
       ]
     }
   }
