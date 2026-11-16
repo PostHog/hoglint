@@ -203,6 +203,69 @@ def test_imports_in_the_ready_body_django_runs_are_app_setup_and_a_callback_s_ar
     assert marked == [("ShopBase.ready", "shop.models.Order")]
 
 
+DICT_OF_FAMILIES = {"i": {"tuple": ["str", "Family"]}, "sub": "dict"}
+
+
+def family_menu(family: object, assigns: list[dict]) -> dict[str, dict]:
+    """A `Menu` whose `refund` calls a hook's name through `self.family` (typed by `family` and
+    `assigns`) and through `self.made` (never typed), and whose static `loose` does the same."""
+    return {
+        "billing/hooks.py": HOOKS["billing/hooks.py"],
+        "shop/menus.py": {
+            "defs": [
+                class_def("Family", [], 1),
+                class_def("Other", [], 2),
+                class_def("Menu", [], 4),
+                func_def(
+                    "__init__",
+                    5,
+                    scope=2,
+                    params=[["self", "a"], ["kind", "a"]],
+                    attrs=[[6, "family", family], [7, "made", {"call": "make_family"}]],
+                ),
+                func_def("refund", 8, scope=2, params=[["self", "a"]]),
+                func_def("loose", 11, scope=2, params=[["self", "a"]], dec=["staticmethod"]),
+            ],
+            "assigns": assigns,
+            "callees": [
+                [4, -1, "self.family.register_refund_hook", 1, 9, 8],
+                [4, -1, "self.made.register_refund_hook", 1, 10, 8],
+                [5, -1, "self.family.register_refund_hook", 1, 12, 8],
+            ],
+        },
+    }
+
+
+FAMILIES = {"i": "kind", "sub": "FAMILIES"}
+ANNOTATED = {"s": -1, "l": 3, "c": 0, "op": ":", "t": ["FAMILIES"], "ann": DICT_OF_FAMILIES}
+LITERAL = assign("FAMILIES", {"dict": [[{"s": "a"}, {"call": "Family"}], [{"s": "b"}, {"call": "Family"}]]}, 3)
+MIXED = assign("FAMILIES", {"dict": [[{"s": "a"}, {"call": "Family"}], [{"s": "b"}, {"call": "Other"}]]}, 3)
+IN_BODY = {"s": 2, "l": 4, "c": 0, "op": ":", "t": ["family"], "ann": "Family", "f": 8}
+
+
+@pytest.mark.parametrize(
+    "family, assigns, typed",
+    [
+        (FAMILIES, [ANNOTATED], True),
+        (FAMILIES, [LITERAL], True),
+        ({"o": "unspelled"}, [IN_BODY], True),
+        ({"call": "Family"}, [], True),
+        (FAMILIES, [MIXED], False),
+        ({"call": "Family"}, [assign("family", {"call": "Other"}, 4, scope=2, flags=8)], False),
+    ],
+)
+def test_a_call_through_an_attribute_the_class_types_is_no_hook_call(
+    family: object, assigns: list, typed: bool
+) -> None:
+    graph = FactRepo(family_menu(family, assigns)).graph(hooks=("billing.hooks.register_refund_hook",))
+
+    unresolved = sorted((e.site.scope, e.site.line) for e in graph.by_kind("installs"))
+
+    typed_call = [] if typed else [("Menu.refund", 9)]
+    assert unresolved == sorted([("Menu.loose", 12), ("Menu.refund", 10), *typed_call])
+    assert {e.resolution for e in graph.by_kind("installs")} == {Resolution.UNRESOLVED}
+
+
 @pytest.mark.parametrize("scan_roots, installs", [((), 0), (("proj",), 3)])
 def test_first_party_code_outside_the_installed_apps_is_read_only_when_configured(
     scan_roots: tuple[str, ...], installs: int

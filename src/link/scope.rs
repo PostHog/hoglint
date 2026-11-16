@@ -459,10 +459,16 @@ impl Core {
         }
         let surface = self.it.join_all(found.surface, &rest);
         let Some(hit) = found.hit else {
+            let head = self.it.head(dotted);
+            let typed = if found.local {
+                self.instance_member(names, scope, head, &rest, at)
+            } else {
+                None
+            };
             return Lookup {
                 surface,
-                hit: None,
-                local: found.local,
+                hit: typed,
+                local: found.local && typed.is_none(),
             };
         };
         let origin = self.origin(hit);

@@ -855,6 +855,12 @@ verdict = "incomplete"
 identity = ["products.gatekeeper.backend.wiring|installs|registry.register_post_delete_hook"]
 
 [[row]]
+case = "WW21"
+rule = "installs"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.wiring|installs|self.registry.register_post_delete_hook"]
+
+[[row]]
 case = "UI02"
 rule = "installs"
 verdict = "incomplete"
@@ -2080,6 +2086,12 @@ case = "UI01"
 rule = "wiring-watched"
 verdict = "incomplete"
 identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
+
+[[row]]
+case = "WW21"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
 
 [[row]]
 case = "UI02"

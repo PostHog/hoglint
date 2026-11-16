@@ -120,7 +120,12 @@ Reading a package also gives its models and the names it re-exports to every oth
   Only a Django signal's `connect` counts; a database driver's `connect` makes no hook.
 - The `surface` endpoint of an edge that resolves to library code reads as the graph module the code names, when one names it: a patch target `products....module.client.send` is the product module's, since the test depends on that module binding `client`.
 
-Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`); the facts hold no instance-attribute type.
+**A call through an instance attribute the class types is a call of that class's member** (the architect, Nov 16).
+In a method, `self.family.register(...)` names the member `register` of the one class `self.family` holds, so a call whose last name is a hook's but that resolves to such a member is no hook call.
+The extractor records what each method assigns to attributes of its first parameter; the class is read from the attribute's annotations (in the class body or on an assignment), else from every value the class assigns it: a call of a class, or an item of a module-level container whose annotation (`dict[K, V]`, `list[V]`, `tuple[V, ...]` and their `typing` and `collections.abc` names) or literal items give one class.
+Only the class's own body and methods count, never a base class or code outside the class.
+Anything else stays unresolved, and so incomplete: a static or class method, a nested function's `self`, two classes, a value it cannot type (a function's result, an assignment by unpacking, `+=`, a loop or `with` target, one in a function the method defines), an attribute the class also defines as a method or property.
+A member is named by its class (`Family.register`); a hook the config names through a module-level instance (`registry.console.register_moved_page`) is not matched by a call through an attribute that holds that instance's class.
 
 **A loop variable bound over a literal sequence takes each of its values** (the architect, Nov 16).
 In `for model in RULE_MODELS:` the extractor gives a watched call in the loop's body one `calls` row per value, with the variable replaced where the call passes it as a whole argument, so each `post_save.connect(..., sender=model)` is one placed signal edge per sender.

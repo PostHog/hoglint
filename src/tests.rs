@@ -80,6 +80,50 @@ class Box(Base, metaclass=Meta):
 }
 
 #[test]
+fn methods_record_what_they_assign_to_their_first_parameter() {
+    let source = r#"class Menu:
+    family: Family
+
+    def __init__(self, kind):
+        self.family = FAMILIES[kind]
+        self.size: int = 3
+        self.a, other = pair()
+        if kind:
+            self.count += 1
+
+        def later():
+            self.late = Late()
+
+        def own(self):
+            self.own = Own()
+
+    @staticmethod
+    def build(kind):
+        kind.x = 1
+
+def outside(self):
+    self.free = 1
+"#;
+    let defs: Vec<String> = line_with(source, &config())["defs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| format!("{} {}", d["n"], d["attrs"]))
+        .collect();
+    assert_eq!(
+        defs,
+        [
+            r#""Menu" null"#,
+            r#""__init__" [[5,"family",{"i":"kind","sub":"FAMILIES"}],[6,"size",3,"int"],[7,"a",{"o":"unspelled"}],[9,"count",{"o":"unspelled"}],[12,"late",{"o":"unspelled"}]]"#,
+            r#""later" null"#,
+            r#""own" null"#,
+            r#""build" [[19,"x",1]]"#,
+            r#""outside" null"#,
+        ]
+    );
+}
+
+#[test]
 fn assigns_cover_module_and_class_scope_only() {
     let source = r#"LIMIT: int = 10
 ITEMS = [a, b] + EXTRA

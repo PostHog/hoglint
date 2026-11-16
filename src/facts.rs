@@ -75,9 +75,22 @@ pub struct Param {
     pub default: Value,
 }
 
+/// An attribute a method assigns on its first parameter (`self.name = value`): what an
+/// instance attribute holds. `[line, name, value, annotation?]`; a null annotation is dropped.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelfAttr {
+    pub l: i64,
+    pub name: String,
+    pub value: Value,
+    pub annotation: Value,
+}
+
 /// One def / async def / class. Its index in the record is its scope id.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Def {
+    /// A method's assignments to attributes of its first parameter, in source order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attrs: Vec<SelfAttr>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bases: Vec<Value>,
     pub c: i64,
@@ -338,6 +351,19 @@ impl Serialize for Param {
         }
         if !self.default.is_null() {
             seq.serialize_element(&self.default)?;
+        }
+        seq.end()
+    }
+}
+
+impl Serialize for SelfAttr {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(None)?;
+        seq.serialize_element(&self.l)?;
+        seq.serialize_element(&self.name)?;
+        seq.serialize_element(&self.value)?;
+        if !self.annotation.is_null() {
+            seq.serialize_element(&self.annotation)?;
         }
         seq.end()
     }

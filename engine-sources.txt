@@ -21,6 +21,7 @@
 [facts]
 src/**/*.rs
 !src/link/index.rs
+!src/link/instance.rs
 !src/link/mod.rs
 !src/link/packs/**
 !src/link/paths.rs

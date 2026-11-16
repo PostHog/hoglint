@@ -11,6 +11,7 @@ mod extract;
 mod facts;
 mod loops;
 mod path;
+mod self_attrs;
 mod source;
 mod strings;
 mod value;

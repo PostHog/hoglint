@@ -1535,6 +1535,11 @@ text = "installs 'registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
 rule = "installs"
+identity = ["products.gatekeeper.backend.wiring|installs|self.registry.register_post_delete_hook"]
+text = "installs 'self.registry.register_post_delete_hook' did not resolve"
+
+[[incomplete]]
+rule = "installs"
 identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
 text = "installs 'registry.register_post_delete_hook' did not resolve"
 
@@ -1722,6 +1727,11 @@ text = "cannot tell whether this entity is selected"
 rule = "wiring-watched"
 identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
+text = "cannot place 'self.registry.register_post_delete_hook' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
