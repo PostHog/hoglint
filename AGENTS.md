@@ -70,6 +70,9 @@ bin/prove                                   # all of the above side by side, plu
 - `bin/prove` builds first, runs every check above with a private copy of the native module and a private cache per check, and prints one line per check, with a log file each.
   With `--real <snapshot> --base <rev>` it also compares the head with the base row by row at real size; `--replay <sample>` adds the replay sample.
   `bin/prove --help` names the options and the environment variables for real-size runs.
+- `bin/parity <monorepo root>` runs each old boundary tool of the PostHog monorepo (tach, its map, the import-linter contracts, the crossings scanner, the product lint's isolation checks, the migration invariant test) and hoglint on the same tree, and prints one verdict per tool: equal, explained, or unexplained.
+  A difference is explained only by a reason that code checks for that item; the file per tool lists every difference with its reason.
+  Set `HOGLINT_PYTHON` to the monorepo's own interpreter, which holds the old tools.
 - `cargo test --workspace` cannot link the binding's test binary; test the root package.
 - `clippy` needs `--workspace`, or it never lints the binding crate.
 - The PostHog owners provider imports a package that only the PostHog monorepo has, so two of its tests fail in this repo's environment until that provider moves out.

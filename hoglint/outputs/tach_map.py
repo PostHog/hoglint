@@ -96,14 +96,19 @@ class TachMap:
             return not (TYPE_CHECKING_BRANCHES & edge.contexts) and not edge.surface.startswith(".")
         return edge.attr("literal") in STRING_LITERALS and edge.surface.count(".") >= 2
 
-    def pairs(self) -> Iterator[tuple[str, str]]:
+    def edge_pairs(self) -> Iterator[tuple[str, str, Edge]]:
+        """(importer, target, the edge that gives the pair) for every edge the map counts."""
         view = RefsView(self.graph, kinds=("import", "dotted-path"))
         for edge in view.edges():
             if not self.counts(edge):
                 continue
             target = self.resolver.resolve(edge.surface)
             if target is not None:
-                yield edge.site.path, target
+                yield edge.site.path, target, edge
+
+    def pairs(self) -> Iterator[tuple[str, str]]:
+        for importer, target, _ in self.edge_pairs():
+            yield importer, target
 
     def dependents(self) -> dict[str, list[str]]:
         return reverse_dependents(self.pairs())

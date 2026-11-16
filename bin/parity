@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Runs each comparison of hoglint with an old boundary tool of the PostHog monorepo on one tree and
+# prints one verdict table, with a file per tool that lists every difference and its reason. Exit 0
+# only when no difference is unexplained.
+#
+# Usage: bin/parity <monorepo root> [--only <tool>] [--out <dir>]
+# Env:   HOGLINT_PYTHON, the monorepo's own interpreter (default: the repo's .venv). It runs hoglint
+#        and the old tools: tach, import-linter, the product lint and Django. node and turbo come
+#        from PATH or from the tree. The usual HOGLINT_NATIVE_DIR and HOGLINT_FACTS_BIN apply.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python="${HOGLINT_PYTHON:-$root/.venv/bin/python}"
+PYTHONPATH="$root" exec "$python" -m hoglint.presets_py.posthog.parity "$@"
