@@ -315,6 +315,12 @@ def where(finding: Finding) -> str:
     return f"{finding.site.path}:{finding.site.line}"
 
 
+def policy_note(written: dict[str, str], name: str) -> str:
+    """Where a selector's text came from when the config wrote it from a shape policy, so `explain`
+    never shows text that is in no file."""
+    return f"  ({written[name]})" if name in written else ""
+
+
 def finding_line(finding: Finding) -> str:
     owners = f"  [{', '.join(finding.owners)}]" if finding.owners else ""
     return f"{finding.rule}  {' '.join(finding.identity)}\n    {finding.message}  {where(finding)}{owners}"
@@ -927,8 +933,12 @@ class Commands:
                 continue
             with engine_errors():
                 found = labeler.evaluator.explain_edge(at, edge.handle)
+            written = dict(spec.written)
             for dst_symbol, dst_module, truths in found or ():
-                parts = [f"{name.rstrip('_')}: {getattr(spec, name).source} -> {truth}" for name, truth in truths]
+                parts = [
+                    f"{name.rstrip('_')}: {getattr(spec, name).source} -> {truth}{policy_note(written, name)}"
+                    for name, truth in truths
+                ]
                 sys.stdout.write(f"rule     {spec.id} (endpoint {spec.endpoint}, {dst_symbol or dst_module})\n")
                 sys.stdout.write("".join(f"           {part}\n" for part in parts))
         for finding in run.result.findings():

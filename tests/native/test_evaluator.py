@@ -1311,6 +1311,7 @@ class Tables:
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
+            "shape": lambda: "contract",
             "slots_reported_by": lambda: [named] if named else [],
             "exports": lambda: rng.sample(["facade", "adapter"], rng.randint(1, 2)),
             "on": lambda: rng.choice(["module", "symbol"]),

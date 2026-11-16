@@ -122,7 +122,7 @@ Written limits:
 The owner decided that a preset holds a named list of future-proof core models that may cross.
 Any model that core owns is not enough, because a core model may later move into a product.
 Which models a company lists is its own policy and is not published.
-The preset keeps the list once, as a symbol label, and both contract rules read it: the signature rule (`unless`) and the shape policy (`allow_symbols`, a symbol it holds for is allowed as it stands).
+The preset keeps the list once, as a symbol label, read once by the contract policy (`allow_symbols`, a symbol it holds for is allowed as it stands), for both contract rules: the signature rule reads it through the policy it names, as its `unless`.
 So the verdict on a listed model does not depend on how deep it sits, in a slot or in a field of a class a slot names.
 
 **What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
@@ -131,6 +131,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   `object` stays unknown because a slot typed `object` would let any model cross unseen.
   A mapping given type arguments (`dict[str, str]`) is typed.
 - `Any` as an argument of a mapping (`dict[str, Any]`) is an opaque payload: allowed in a parameter and a field, a finding in a return value.
+  The policy says it once: `mappings` lists the mapping types and `opaque_payload = "except-return"` lets an unknown type that is no mapping stand as their argument outside a return value.
   `Any` in any other generic (`list[Any]`, `Optional[Any]`) stays unknown.
   The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
@@ -153,6 +154,11 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
   A lineage goes on through a third-party class whose sources the run reads (`[discovery] external`): no repo file declares it, so the link reads its bases from those sources, a builtin as `builtins.<name>` (Nov 16). A base there that does not resolve is left out, and a third-party class whose sources the run does not read still ends a lineage, read as a class: an exception whose chain starts there (temporalio's `ApplicationError` when the root config does not name `temporalio`) reads as a plain class.
+- **One policy, two reporters** (Nov 16, the architect's contract-shape design, option B).
+  `[shapes.contract]` says once what may cross a facade: the denied kinds, the symbols that pass (`allow_symbols`), the classes owned elsewhere, the unknown types and the payload reading (`mappings`, `opaque_payload`).
+  `facade-signature` names it (`shape = "contract"`): the config writes the rule's selection, `deny`, `unless` and unknown types from the policy, so the evaluator gets the plan the rule had when it spelled them out, and `explain` names the policy each written selector came from.
+  A signature rule that names a policy may not set `deny`, `unless` or `unknown_types` itself, and the policy's `deny` may name only kinds `dst.kind` reads; both are config errors.
+  The two rules differ only in where they report. A signature rule that names no policy (`orm-independent`) keeps its own keys and the default unknown types.
 - One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `slots_reported_by = ["facade-signature"]` in the preset.
   Each name must be a signature rule of the config; any other name is a config error.
   The named rule's selection must split into conditions that read only `src.*` fields (where it reads rows) and conditions that read none (which slots it judges), joined by `and`; a condition that mixes the two is a config error.
@@ -240,6 +246,9 @@ Other packages import it, so it stays in the export and its audience holds; but 
 | An alias names itself and its expansion (D62 C3) | Triage: noise when the expansion is known | Reversed by D70 | `docs/history/decision-log-3.md` |
 | Any model core owns may cross | Core may later move a model out | Owner, D65 | `docs/history/decision-log-3.md` |
 | A separate rule for 108 repeated facts | Not worth a rule; then fixed by review item 8 | Architect, Nov 11 | not published |
+| Rename only, the denied kinds and the core-model selector kept in both contract rules | Two lists kept equal by hand: `command` was missing from one until 507d1b6 | Architect, Nov 16 | not published (the contract-shape design) |
+| One contract rule in place of two | Every `facade-signature` row would change rule name and identity (D113) | Architect, Nov 16 | not published (the contract-shape design) |
+| The signature rule finds its policy from the export that covers each row's module | A per-row read of export membership the change predictor would have to learn; the stated key is plainer | Architect, Nov 16 | not published (the contract-shape design) |
 
 ## What would change the answer
 

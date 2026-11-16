@@ -259,8 +259,8 @@ match        = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
 except_paths = ["posthog/temporal/ingestion_acceptance_test/test_cases_discovery.py"]
 set          = { testcode = true }
 
-# The core models a contract may name (D65, D98): read by the facade signatures and the contract
-# shape alike, so the verdict does not depend on how deep a model sits.
+# The core models a contract may name (D65, D98): read once, by the contract policy's
+# `allow_symbols`, for both of its reporters, so the verdict does not depend on how deep a model sits.
 [[assign]]
 symbols = { names = [
   "posthog.models.organization.Organization", "posthog.models.organization.OrganizationMembership",
@@ -368,21 +368,29 @@ command  = { subclass_of = ["django.core.management.base.BaseCommand"] }
 hogql_ast = { subclass_of = ["posthog.hogql.base.AST"] }
 pydantic  = { subclass_of = ["pydantic.BaseModel", "pydantic.main.BaseModel", "pydantic.RootModel", "pydantic.root_model.RootModel"] }
 
-# A contract's signatures are part of it: an unannotated slot is unknown, and the slots of what a
-# facade hands out from elsewhere count as the facade's.
+# What may cross a product's facade, said once. export-shape walks what a facade module hands out
+# under this policy; facade-signature reports each slot of a public facade function under it
+# (`shape = "contract"`). Signatures are part of a contract: an unannotated slot is unknown, and the
+# slots of what a facade hands out from elsewhere count as the facade's.
 [shapes.contract]
-data       = ["frozen-dataclass", "enum"]
-allow      = ["protocol", "hogql_ast", "exception", "pydantic"]
-allow_symbols = "may_cross == true"
+data            = ["frozen-dataclass", "enum"]
+allow           = ["protocol", "hogql_ast", "exception", "pydantic"]
+deny            = ["model", "manager", "queryset", "command"]
+# Pass whatever their kind, and nothing inside them is read.
+allow_symbols   = "may_cross == true"
 # Core's own types (its syntax tree, its Protocols) are core's contract: a facade may hand them out as
 # they stand. Their methods and attributes are not judged here, a field is reported only for a denied
 # kind, and a class that implements an abstract base core owns is an allowed behavior class.
 owned_elsewhere = "tier == 'core'"
-behavior   = "abc"
-deny       = ["model", "manager", "queryset", "command"]
+behavior        = "abc"
 # A slot typed with one of these says nothing: it is unknown.
-unknown_types = ["typing.Any", "builtins.dict", "typing.Dict", "builtins.object"]
-signatures = true
+unknown_types   = ["typing.Any", "builtins.dict", "typing.Dict", "builtins.object"]
+# A mapping with type arguments is typed. An unknown type that is no mapping (`Any`, `object`) as a
+# mapping's argument is an opaque payload: allowed in a parameter or a field, never in a return value
+# (D93).
+mappings        = ["builtins.dict", "typing.Dict", "typing.Mapping", "typing.MutableMapping", "collections.abc.Mapping", "collections.abc.MutableMapping"]
+opaque_payload  = "except-return"
+signatures      = true
 
 # Registration modules and presentation adapters hand out classes, never ORM types.
 [shapes.registration]
@@ -522,11 +530,10 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 [rules.facade-signature]
 primitive  = "signature"
 doc        = "A public facade function neither accepts nor returns a model, manager, queryset or command. Any, object and a bare dict are unknown; a mapping with type arguments is typed, and Any or object as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
-select     = "facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
-deny       = "dst.kind in ['model', 'manager', 'queryset', 'command']"
+select     = "facade-code"
+# The policy writes the rest of the selection, `deny`, `unless` and the unknown types.
+shape      = "contract"
 on_unknown = "finding"
-# A core model on the list (`may_cross`) may be taken or returned.
-unless     = "dst.may_cross == true"
 identity   = "facade-slot"
 growth_key = ["dst.symbol", "src.package"]
 

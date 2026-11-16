@@ -652,6 +652,42 @@ def leaves(node: Node) -> Iterator[Compare | Bare]:
     yield node
 
 
+def literal_text(value: str | int | bool | None) -> str:
+    """A literal as a selector writes it."""
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return f"'{value}'" if "'" not in value else f'"{value}"'
+
+
+def operand_text(operand: Operand, root: str) -> str:
+    """An operand as a selector writes it, a field read under `root` when one is given."""
+    if isinstance(operand, Ref):
+        return ".".join((root, *operand.path)) if root else str(operand)
+    if isinstance(operand, ListLiteral):
+        return "[" + ", ".join(literal_text(item) for item in operand.items) + "]"
+    return literal_text(operand.value)
+
+
+def render(node: Node, root: str = "") -> str:
+    """A selector's text from its tree, each field read under `root` when one is given (an entity
+    selector read at an edge's end). Each part that joins others is put in parentheses, so the
+    text parses back to the same tree."""
+    if isinstance(node, (And, Or)):
+        word = " and " if isinstance(node, And) else " or "
+        return word.join(
+            f"({render(part, root)})" if isinstance(part, (And, Or)) else render(part, root) for part in node.parts
+        )
+    if isinstance(node, Not):
+        return f"not ({render(node.inner, root)})"
+    if isinstance(node, Bare):
+        return operand_text(node.operand, root)
+    return f"{operand_text(node.left, root)} {node.op} {operand_text(node.right, root)}"
+
+
 def refs(node: Node) -> list[Ref]:
     """Every field a selector reads, in order."""
     out: list[Ref] = []

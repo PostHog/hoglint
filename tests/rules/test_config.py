@@ -173,6 +173,24 @@ ledger = false
             "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \"src.handed_zones in ['x']\"\n",
             "unknown field 'src.handed_zones' (renamed 'src.handout_zones')",
         ),
+        # a signature rule that names a policy reads what the policy says, and no copy of it
+        (
+            "[shapes.c]\nallow = ['class']\n[rules.other]\nprimitive = 'signature'\nshape = 'c'\n"
+            "deny = \"dst.tier == 'core'\"\nledger = false\n",
+            "`deny` comes from the policy `shape` names",
+        ),
+        (
+            "[rules.other]\nprimitive = 'signature'\nshape = 'contract'\nledger = false\n",
+            "shape policy 'contract' is not defined under [shapes]",
+        ),
+        (
+            "[shapes.c]\ndeny = ['class']\n[rules.other]\nprimitive = 'signature'\nshape = 'c'\nledger = false\n",
+            "[shapes.c] denies class, which `dst.kind` cannot read",
+        ),
+        (
+            "[shapes.c]\nallow = ['class']\nmappings = ['builtins.dict']\n",
+            "`mappings` and `opaque_payload` are read only by a signature rule that names this policy",
+        ),
         # the named rule's selection splits into where it reads rows and which slots it judges
         (
             "[rules.mixed]\nprimitive = 'signature'\nselect = \"src.module == 'a' or edge.slot == 'return'\"\n"

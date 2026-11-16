@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from hoglint import facts
+from hoglint.config import CONFIG_FILE, load_config
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
+from hoglint.native.rules import NativeRuleContext
+from hoglint.native.source import NativeGraphSource
 from hoglint.rules import exports
+from hoglint.rules.engine import Engine
 from rules.support import PRESET
 
+from native.require import native_module
 from native.test_contract_slots import clean_dump, findings_of
+from native.test_parity import write_repo
 
 ROOT_CONFIG = """
 schema = 1
@@ -1966,3 +1974,61 @@ def test_the_engine_reads_the_one_list_of_core_shape_bases(
     left_out = "ShopError" if shape == "exception" else "Chooser"
     module = f"{SHOP}.facade.contracts"
     assert findings_of(out, "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]
+
+
+# The preset's facade-signature as it read before it named its policy: its selection, `deny`,
+# `unless` and unknown types spelled out, which the config now writes from `[shapes.contract]`.
+NAMES_POLICY = (
+    'select     = "facade-code"\n'
+    "# The policy writes the rest of the selection, `deny`, `unless` and the unknown types.\n"
+    'shape      = "contract"\n'
+)
+SPELLED_OUT = (
+    "select     = \"facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1')"
+    " and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in"
+    " ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping',"
+    " 'collections.abc.MutableMapping'])\"\n"
+    "deny       = \"dst.kind in ['model', 'manager', 'queryset', 'command']\"\n"
+    'unless     = "dst.may_cross == true"\n'
+    'unknown_types = ["typing.Any", "builtins.dict", "typing.Dict", "builtins.object"]\n'
+)
+
+
+def spelled_out(preset: str) -> str:
+    """The preset with facade-signature's policy spelled out on the rule. The policy keys only a
+    rule that names the policy reads go too."""
+    assert preset.count(NAMES_POLICY) == 1
+    lines = preset.replace(NAMES_POLICY, SPELLED_OUT).splitlines(keepends=True)
+    return "".join(line for line in lines if not line.startswith(("mappings ", "opaque_payload ")))
+
+
+def preset_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, presets: list[str]) -> list[dict[str, Any]]:
+    """The evaluator's plan of each preset over one small tree."""
+    native_module()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    write_repo(repo, BASE)
+    work = tmp_path / "work"
+    work.mkdir()
+    plans = []
+    try:
+        graph = NativeGraphSource(work).build(repo, load_config(repo, repo / CONFIG_FILE))
+        for preset in presets:
+            (repo / "tools/hoglint/presets/posthog.toml").write_text(preset)
+            config = load_config(repo, repo / CONFIG_FILE)
+            plans.append(NativeRuleContext(config, graph, Engine(config, graph, repo).labeler, repo).plan.data())
+    finally:
+        gc.enable()
+    return plans
+
+
+# One policy, two reporters: the config writes facade-signature's selection, `deny`, `unless` and
+# unknown types from the policy it names, so every rule of the preset plans as it did spelled out.
+def test_the_contract_policy_plans_every_preset_rule_as_spelled_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preset = PRESET.read_text()
+    written, spelled = preset_plans(tmp_path, monkeypatch, [preset, spelled_out(preset)])
+    moved = [ours["id"] for ours, theirs in zip(written["rules"], spelled["rules"], strict=True) if ours != theirs]
+    assert moved == []
+    assert written == spelled

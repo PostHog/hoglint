@@ -111,6 +111,11 @@ class ShapePolicy:
     owned_elsewhere: Selector | None = None
     # The types a slot's row reads as unknown when the export rule walks under this policy.
     unknown_types: tuple[str, ...] = ()
+    # Read by a signature rule that names the policy: a mapping given type arguments is typed, and
+    # with `opaque_payload = "except-return"` an unknown type as its argument is an opaque payload,
+    # clean in a parameter or a field (D93).
+    mappings: tuple[str, ...] = ()
+    opaque_payload: str = "never"  # never | except-return
     source: str = ""
 
 
@@ -219,6 +224,8 @@ class RuleSpec:
 
     slots_reported_by: tuple[str, ...] = ()  # export: the signature rules it leaves a slot to where they read its row
     producer_options: tuple[tuple[str, Any], ...] = ()
+    shape: str = ""  # signature: the shape policy its `select`, `deny`, `unless` and unknown types come from
+    written: tuple[tuple[str, str], ...] = ()  # (selector, where its text came from) for each one `shape` wrote
     source: str = ""
 
     def input(self, key: str, default: Any = None) -> Any:

@@ -627,6 +627,9 @@ def loaded(world: World, tables: Tables, mode: str, base: str) -> Family:
     """A table of `mode` that loads over `base`."""
     while True:
         table = tables.table(mode)
+        # A rule that names a shape policy reads its predicates from it, and a sibling sets them.
+        if "shape" in table:
+            continue
         try:
             judge = Judge(world, rule_table("generated", table), base)
         except ConfigError:
