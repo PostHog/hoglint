@@ -242,9 +242,12 @@ set   = { source_vendor = "conftest" }
 match = "posthog/clickhouse/migrations/**"
 set   = { history = true }
 
+# A production module named like a test (the ingestion acceptance workflow discovers its test
+# cases with it) is no test code.
 [[assign]]
-match = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
-set   = { testcode = true }
+match        = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
+except_paths = ["posthog/temporal/ingestion_acceptance_test/test_cases_discovery.py"]
+set          = { testcode = true }
 
 # The core models a contract may name (D65, D98): read by the facade signatures and the contract
 # shape alike, so the verdict does not depend on how deep a model sits.

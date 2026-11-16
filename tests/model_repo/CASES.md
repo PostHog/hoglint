@@ -163,6 +163,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `AT01` | `products/legacy/backend/presentation/views.py` | Presentation opens a transaction (`with` and decorator) | clean: no reference edge for a call, `with` or decorator | The rule cannot fire (wanted) |
 | `AT02` | `products/inventory/backend/logic/stock.py`, `products/legacy/backend/api/widgets.py` | A transaction outside presentation | clean | |
 | `PT01` | `products/legacy/backend/tasks/cleanup.py` | A production task imports a test factory | prod-imports-test finding | |
+| `PT04` | `posthog/temporal/ingestion_acceptance_test/runner.py`, `posthog/temporal/ingestion_acceptance_test/test_cases_discovery.py` | Production code imports a production module named like a test | clean | The test-code label leaves that one named file out (Nov 16) |
 | `PT02` | `products/catalog/backend/facade/testing.py` | `facade/testing.py` imports the product's test factory | clean | Test support (Nov 12) |
 | `PT03` | `products/legacy/backend/tests/test_widgets.py` | A test imports a test factory | clean | |
 | `SV00` | `products/warehouse_sources/` | A product with only a sources tree, no backend | has-facade finding (two); the level fails it | D108: the structure |
@@ -383,7 +384,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | prod-imports-test | A stale import | None |
 | prod-imports-test | A sanctioned test-support module imports test factories | `PT02` |
 | prod-imports-test | Dev scripts import test code | None |
-| prod-imports-test | A production module named `test_*.py` | None |
+| prod-imports-test | A production module named `test_*.py` | `PT04`: clean |
 | prod-imports-test | Shipped code imports test helpers | `PT01` |
 | installs | A product registers a callback into a core or facade hook | `IN01`, `IN03` |
 | installs | The hook lives in another product's internals | None |
