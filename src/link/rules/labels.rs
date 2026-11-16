@@ -353,6 +353,11 @@ impl Export {
     fn covers(&self, path: &str) -> bool {
         self.paths.covers(path)
     }
+
+    /// Whether the path lies inside the export's `within`: a module of the package it is a door of.
+    pub fn holds(&self, path: &str) -> bool {
+        self.paths.holds(path)
+    }
 }
 
 /// A file name no glob spells (`labels.NAMESPACE_PROBE`): a namespace directory is labelled by
@@ -462,6 +467,8 @@ pub struct Labels {
     pub labels: Vec<Vec<Option<Cell>>>,
     pub registry_of: Vec<Option<u16>>,
     pub exports_of: Vec<u64>,
+    /// Per module, whether an export's `within` holds its path (`door`).
+    pub door_of: Vec<bool>,
     /// Fields whose provider failed.
     pub failed: Vec<bool>,
     /// Fields the plan sent a provider column for.
@@ -517,6 +524,7 @@ impl Labels {
             registries,
             registry_of: Vec::with_capacity(paths.len()),
             exports_of: Vec::with_capacity(paths.len()),
+            door_of: Vec::with_capacity(paths.len()),
             columns: vec![false; failed.len()],
             failed,
             conflicts: Vec::new(),
@@ -620,7 +628,8 @@ impl Labels {
         out
     }
 
-    /// One module's labels (`Labeler.label_module`), its registry and exports.
+    /// One module's labels (`Labeler.label_module`), its registry, its exports and whether it is in
+    /// a door package.
     fn label_module(&mut self, module_at: u32, path: &str, module: &str, exports: &[Export]) {
         let (collected, zone_conflict) = self.path_candidates(path);
         if zone_conflict {
@@ -657,6 +666,8 @@ impl Labels {
             }
         }
         self.exports_of.push(bits);
+        self.door_of
+            .push(exports.iter().any(|export| export.holds(path)));
     }
 
     /// The label of one field from its candidates (`Labeler.resolve_candidates`): a set field

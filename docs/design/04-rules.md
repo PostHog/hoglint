@@ -122,6 +122,14 @@ Reading a package also gives its models and the names it re-exports to every oth
 
 Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`), and a sender bound by a `for` loop over a constant sequence; the facts hold no instance-attribute type and no loop binding.
 
+**A package with a declared door reads `door`** (architect, D107, Nov 12; built Nov 16).
+`door` is a built-in attribute of a module: true when an export's `within` holds its path.
+- It reads the path and the config only, as a zone does, so a change that adds or moves files needs nothing new from the change predictor.
+- A rule that guards the way into such a package selects `dst.door`; no list of package names stands in the rule.
+- The other reading, "a package that has a module an export covers", depends on which files exist anywhere in the package: rejected.
+- A directory without `__init__.py` reads it from the path that labels it; a third-party module reads `none`.
+- An export with an empty `within` holds every path, so every module reads `door` as true.
+
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
 Never `ignore` (architect default, Nov 4).

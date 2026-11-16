@@ -136,6 +136,9 @@ Some words have two meanings; the entry names both.
   A declared public surface of a package: the files, or the listed symbols, that other packages may use, with a shape policy.
   The design pages say an export is "a door plus a shape": the door is where other packages may come in, the shape is what may pass.
   The PostHog preset calls one export a "facade".
+- **`door`** (built-in attribute, as in `dst.door`).
+  True when an export's `within` holds the module's path, whatever its `paths` say: the module is in a package with a declared door.
+  It reads the path and the config only, as a zone does; an export with an empty `within` holds every path.
 - **Audience** (export key `audience`).
   A selector over the importer: who may use the export.
   It limits who uses an export, not what the export hands out.
