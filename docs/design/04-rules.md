@@ -1,7 +1,7 @@
 # 4. Rules: primitives, scoping, states
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 13, 2026.
+> Current as of Nov 16, 2026.
 
 ## Decided
 
@@ -90,6 +90,10 @@ The Django pack uses it for `setting`, the name of the setting a string of a set
 **A name the config writes out in full must exist** (Nov 12).
 A literal path of an assignment that no file has, and a symbol an assignment or an export names that no symbol has, are incomplete items of `config:stale-name`.
 The config loads before the tree is read, so only a run can tell.
+
+**A prefetched model is a model crossing** (Nov 16).
+`prefetch` is no allowed shape of the PostHog preset's `model-crossings`: the rows a `Prefetch(..., queryset=Model.objects...)` loads are instances of the model on the consumer's objects, and the old crossings scanner counts them.
+No decision had allowed the shape.
 
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
