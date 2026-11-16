@@ -344,8 +344,8 @@ def run_rows(run: Any) -> list[tuple[Any, ...]]:
 
 
 def group_name(name: str) -> str:
-    """A level's group as stored: a group of a set field is named by Python's `str()` of a
-    frozenset, whose order follows the hash seed, so its items are sorted here."""
+    """A level's group as stored: a group of a set field, named `frozenset({...})`, is stored as
+    its sorted items in braces."""
     if not name.startswith("frozenset("):
         return name
     items = ast.literal_eval(name.removeprefix("frozenset(").removesuffix(")"))
@@ -1944,6 +1944,18 @@ def test_a_level_gives_its_stored_groups(world: World) -> None:
     native = levels()
     assert_stored(world, "levels", LEVELS)
     assert all(passing or failing for passing, failing in native.values())
+
+
+# So many owners that a frozenset of them almost never iterates in sorted order, whatever the hash seed.
+OWNERS = [f"team-{letter}" for letter in "zyxwvutsrqponmlkjihgfedcba"]
+
+
+def test_a_level_grouped_by_a_set_field_names_a_group_by_its_sorted_items(world: World) -> None:
+    base = CONFIG.replace('owners = ["team-core", "team-devex"]', f"owners = {json.dumps(OWNERS)}")
+    rules = LEVELS + '\n[levels.owned]\ngroup_by = "owners"\nrequires = ["crossing"]\n'
+    level = Engine(world.config(rules, base), world.graph, world.repo).evaluate().levels["owned"]
+    items = ", ".join(repr(owner) for owner in sorted(OWNERS))
+    assert f"frozenset({{{items}}})" in [*level.passing, *level.failing]
 
 
 def problems(world: World, config: Config) -> list[str]:

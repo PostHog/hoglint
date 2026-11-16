@@ -20,7 +20,7 @@ from hoglint.labels import Labeler
 from hoglint.model import FindingStatus
 from hoglint.rules.base import RuleRun
 from hoglint.rules.findings import FindingTable
-from hoglint.selectors import Truth
+from hoglint.selectors import State, Truth
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +69,17 @@ class LevelResult:
         return Reasons(self.blocks)
 
 
+def group_name(data: object) -> str:
+    """A group's name: its value as text. A set reads as `str()` writes a frozenset, so a level
+    line in the ledger keeps its text, but with the items sorted: `str()` lists them in hash
+    order, which changes with the hash seed."""
+    if not isinstance(data, frozenset):
+        return str(data)
+    if not data:
+        return "frozenset()"
+    return "frozenset({" + ", ".join(repr(item) for item in sorted(data)) + "})"
+
+
 class LevelEvaluator:
     def __init__(self, spec: LevelSpec, labeler: Labeler, runs: dict[str, RuleRun]) -> None:
         self.spec = spec
@@ -77,7 +88,11 @@ class LevelEvaluator:
         self.group_of = Memo(self.find_group)
 
     def find_group(self, subject: str) -> str | None:
-        return self.labeler.known_text(self.labeler.module_of_symbol(subject) or subject, self.spec.group_by)
+        module = self.labeler.module_of_symbol(subject) or subject
+        value, _ = self.labeler.field_value(module, None, self.spec.group_by)
+        if value.state is not State.KNOWN:
+            return None
+        return group_name(value.data)
 
     def groups(self) -> list[str]:
         found = self.labeler.level_groups(self.spec)
