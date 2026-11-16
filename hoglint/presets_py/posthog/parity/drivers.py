@@ -55,36 +55,36 @@ def tach_check() -> dict[str, Any]:
         "ci-dependencies": tach_diagnostics(ROOT / "tach.toml", True, False, TACH_TEST_EXCLUDES),
         "ci-interfaces": tach_diagnostics(ROOT / "tach.toml", False, True, []),
     }
-    scratch = Path(tempfile.mkdtemp(prefix="parity-tach-"))
+    with tempfile.TemporaryDirectory(prefix="parity-tach-") as temporary:
+        scratch = Path(temporary)
+        without_depends = tomlkit.parse(text)
+        emptied = 0
+        for module in without_depends["modules"]:
+            if module.get("depends_on"):
+                emptied += 1
+                module["depends_on"] = []
+        deps_path = scratch / "depends" / "tach.toml"
+        deps_path.parent.mkdir()
+        deps_path.write_text(tomlkit.dumps(without_depends))
+        runs["exposed-dependencies"] = tach_diagnostics(deps_path, True, False, TACH_TEST_EXCLUDES)
 
-    without_depends = tomlkit.parse(text)
-    emptied = 0
-    for module in without_depends["modules"]:
-        if module.get("depends_on"):
-            emptied += 1
-            module["depends_on"] = []
-    deps_path = scratch / "depends" / "tach.toml"
-    deps_path.parent.mkdir()
-    deps_path.write_text(tomlkit.dumps(without_depends))
-    runs["exposed-dependencies"] = tach_diagnostics(deps_path, True, False, TACH_TEST_EXCLUDES)
-
-    without_leaks = tomlkit.parse(text)
-    blocks = list(isolation._iter_interface_blocks_raw(text))
-    tables = without_leaks["interfaces"]
-    if len(blocks) != len(tables):
-        raise RuntimeError(f"the product lint reads {len(blocks)} interface blocks, tomlkit {len(tables)}")
-    removed = []
-    for (_, from_patterns, permanent), table in zip(blocks, tables):
-        if permanent or not all(isolation.names_from_pattern(p) for p in from_patterns):
-            continue
-        patterns = [str(p) for p in table["expose"]]
-        kept = [p for p in patterns if isolation.pattern_targets_public_surface(p)]
-        removed += [f"{'|'.join(from_patterns)}: {p}" for p in patterns if p not in kept]
-        table["expose"] = kept
-    leaks_path = scratch / "interfaces" / "tach.toml"
-    leaks_path.parent.mkdir()
-    leaks_path.write_text(tomlkit.dumps(without_leaks))
-    runs["exposed-interfaces"] = tach_diagnostics(leaks_path, False, True, [])
+        without_leaks = tomlkit.parse(text)
+        blocks = list(isolation._iter_interface_blocks_raw(text))
+        tables = without_leaks["interfaces"]
+        if len(blocks) != len(tables):
+            raise RuntimeError(f"the product lint reads {len(blocks)} interface blocks, tomlkit {len(tables)}")
+        removed = []
+        for (_, from_patterns, permanent), table in zip(blocks, tables):
+            if permanent or not all(isolation.names_from_pattern(p) for p in from_patterns):
+                continue
+            patterns = [str(p) for p in table["expose"]]
+            kept = [p for p in patterns if isolation.pattern_targets_public_surface(p)]
+            removed += [f"{'|'.join(from_patterns)}: {p}" for p in patterns if p not in kept]
+            table["expose"] = kept
+        leaks_path = scratch / "interfaces" / "tach.toml"
+        leaks_path.parent.mkdir()
+        leaks_path.write_text(tomlkit.dumps(without_leaks))
+        runs["exposed-interfaces"] = tach_diagnostics(leaks_path, False, True, [])
     return {"runs": runs, "emptied_depends_on": emptied, "removed_patterns": removed}
 
 

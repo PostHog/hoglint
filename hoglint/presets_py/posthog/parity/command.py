@@ -59,12 +59,7 @@ def timed(tool: str, run: Callable[[], Comparison]) -> Comparison:
     return comparison
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parser().parse_args(argv)
-    root = args.root.resolve()
-    selected = [tool for tool in TOOLS if not args.only or tool in args.only]
-    out = args.out or Path(tempfile.mkdtemp(prefix="hoglint-parity-"))
-    work = Path(tempfile.mkdtemp(prefix="hoglint-parity-work-"))
+def run_all(root: Path, selected: list[str], work: Path) -> list[Comparison]:
     check = HoglintCheck(root, work)
     if READS_CHECK & set(selected):
         started = time.perf_counter()
@@ -79,7 +74,15 @@ def main(argv: list[str] | None = None) -> int:
         watched.TOOL: lambda: watched.run(root, check.facts),
         migrations.TOOL: lambda: migrations.run(root, check.facts),
     }
-    comparisons = [timed(tool, runs[tool]) for tool in selected]
+    return [timed(tool, runs[tool]) for tool in selected]
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    selected = [tool for tool in TOOLS if not args.only or tool in args.only]
+    out = args.out or Path(tempfile.mkdtemp(prefix="hoglint-parity-"))
+    with tempfile.TemporaryDirectory(prefix="hoglint-parity-work-") as work:
+        comparisons = run_all(args.root.resolve(), selected, Path(work))
     write_files(comparisons, out)
     sys.stdout.write(verdict_table(comparisons))
     sys.stdout.write(f"files: {out}\n")
