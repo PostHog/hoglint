@@ -847,13 +847,15 @@ class SchemaBuilder:
                 continue
             selector_text, _, endpoint = text.rpartition(":")
             endpoint = endpoint.strip()
-            if not selector_text or endpoint not in ("src", "dst", "surface", "module"):
+            if not selector_text or endpoint not in ("src", "dst", "surface", "module", "location"):
                 self.fail(
                     key,
-                    f"covers {text!r}: expected `<edge selector>: src`, `: dst`, `: surface`, or `<entity selector>: module`",
+                    f"covers {text!r}: expected `<edge selector>: src`, `: dst`, `: surface`, "
+                    "or `<entity selector>: module` or `: location`",
                 )
                 continue
-            catalog = self.entity_catalog() if endpoint == "module" else self.edge_catalog()
+            entity = endpoint in ("module", "location")
+            catalog = self.entity_catalog() if entity else self.edge_catalog()
             selector = self.parse(key, selector_text, catalog)
             out.append(CoverSpec(text, selector=selector, endpoint=endpoint))
         return tuple(out)

@@ -324,14 +324,20 @@ class HoglintCheck:
     def watched_paths(
         config: Config, engine: RecordingEngine, covered: Callable[[str], bool]
     ) -> dict[str, tuple[str, bool]]:
-        """The wiring rule's paths, asked of the rule as the check ran it."""
+        """The wiring rule's paths, asked of the rule as the check ran it. A location cover's
+        directory is one path, watched when a file in it is."""
         spec = config.rules[WIRING_RULE]
         context = engine.context
         assert context is not None
         rule = primitive_of(spec)(context, spec)
         assert isinstance(rule, CoveragePrimitive)
         out = {}
-        for location, (why, _) in sorted(rule.required().items()):
-            for path in rule.expand(location):
+        for location, (cover, _) in sorted(rule.required().items()):
+            why = rule.why(cover)
+            paths = rule.expand(location)
+            if rule.any_inside(location, cover):
+                out[location] = (why, any(covered(path) for path in paths))
+                continue
+            for path in paths:
                 out[path] = (why, covered(path))
         return out

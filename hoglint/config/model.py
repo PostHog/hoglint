@@ -166,7 +166,8 @@ class ProviderSpec:
 @dataclass(frozen=True, slots=True)
 class CoverSpec:
     """One thing a coverage rule needs covered: another rule's column, an edge selection read at
-    an endpoint (`src`, `dst`, `surface`), or an entity selection over modules (`module`)."""
+    an endpoint (`src`, `dst`, `surface`), or an entity selection over modules (`module`) or over
+    the locations they stand in (`location`)."""
 
     text: str
     rule: str = ""

@@ -1877,6 +1877,38 @@ def test_a_module_cover_needs_the_file_of_each_module_an_entity_selection_keeps(
     ]
 
 
+LOCATIONS = CONFIG.replace("[fields]\n", '[fields]\nrun = { type = "bool" }\n') + (
+    '\n[[assign]]\nmatch = ["products/*/backend/facade/**", "products/alerts/backend/queries/**", "products/alerts/jobs.py"]\n'
+    "set = { run = true }\n"
+)
+LOCATION_COVERS = rule_table(
+    "location-covered",
+    {
+        "primitive": "coverage",
+        "covers": ["run == true: location"],
+        "inputs": {"adapter": "globs", "paths": ["products/billing/backend/facade/slots.py"]},
+        "identity": ["subject"],
+        "ledger": False,
+    },
+)
+
+
+def test_a_location_cover_needs_one_watched_file_in_each_location_an_entity_selection_keeps(world: World) -> None:
+    config = world.config(LOCATION_COVERS, LOCATIONS)
+    native = world.context(config)
+    run = primitive_of(config.rules["location-covered"])(native, config.rules["location-covered"]).evaluate()
+    unwatched = {finding.identity[0]: finding.message for finding in run.findings}
+    # billing's facade package is watched through slots.py, which is not its __init__.py. A package
+    # and a directory without __init__.py are one row each, a module file stands for itself.
+    assert sorted(unwatched) == [
+        "products/alerts/backend/facade/",
+        "products/alerts/backend/queries/",
+        "products/alerts/jobs.py",
+    ]
+    assert unwatched["products/alerts/backend/queries/"].endswith("watches no file in it")
+    assert not run.incomplete
+
+
 def test_a_surface_with_a_control_character_is_worded_once(world: World) -> None:
     rules = rule_table(
         "unplaced",

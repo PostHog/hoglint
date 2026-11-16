@@ -1,5 +1,6 @@
 //! The paths a coverage rule needs covered: another rule's column read off its findings'
-//! witnesses, the endpoints of an edge selection, and the modules an entity selection keeps.
+//! witnesses, the endpoints of an edge selection, and the modules or the locations an entity
+//! selection keeps.
 //! Whether an outside input covers each path stays with the coverage adapter, a Python plugin.
 
 use super::env::{Cx, Endpoint, EntityEnv, Env, Role};
@@ -9,6 +10,7 @@ use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
 use super::staged::{Staged, class_truth};
 use super::value::{Truth, Value, all_of, render};
 use crate::link::Link;
+use crate::link::intern::Sid;
 use rustc_hash::FxHashMap;
 
 /// One thing a coverage rule needs covered (`CoverSpec`), compiled.
@@ -27,8 +29,12 @@ pub enum Cover {
         /// The destination is the one the edge names (a patch target's module), not its origin.
         surface: bool,
     },
-    /// The files of the modules an entity selection keeps, in its `and` parts.
-    Modules { selection: Vec<Node> },
+    /// The files of the modules an entity selection keeps, in its `and` parts. With `location`,
+    /// the place each such module stands in instead (`location_of`).
+    Modules {
+        selection: Vec<Node>,
+        location: bool,
+    },
 }
 
 impl Cover {
@@ -43,9 +49,10 @@ impl Cover {
                 column: edge.reference(&plan.column),
             });
         }
-        if plan.endpoint == "module" {
+        if plan.endpoint == "module" || plan.endpoint == "location" {
             return Ok(Cover::Modules {
                 selection: entity.nodes(&plan.rest)?,
+                location: plan.endpoint == "location",
             });
         }
         let rest = edge.nodes(&plan.rest)?;
@@ -70,7 +77,7 @@ impl Cover {
                     node.refs(out);
                 }
             }
-            Cover::Modules { selection } => {
+            Cover::Modules { selection, .. } => {
                 for node in selection {
                     node.refs(out);
                 }
@@ -80,10 +87,10 @@ impl Cover {
 }
 
 /// What a coverage rule's covers need, as data the rule's Python class words
-/// (`CoveragePrimitive`): every path with the cover that names it first and the module that
-/// needs it, sorted by path; and in order, what it cannot tell, (what, cover, source module,
-/// surface): "not-run" for a cover whose rule did not run, "unplaced" for an edge it cannot place,
-/// "unknown-selection" for a module an entity cover cannot tell it keeps.
+/// (`CoveragePrimitive`): every path with the cover that names it first (a location cover
+/// last) and the module that needs it, sorted by path; and in order, what it cannot tell, (what,
+/// cover, source module, surface): "not-run" for a cover whose rule did not run, "unplaced" for
+/// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps.
 #[derive(Default)]
 pub struct Required {
     pub paths: Vec<(String, u32, Option<String>)>,
@@ -99,6 +106,9 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     let mut out = Required::default();
     let mut found: FxHashMap<String, (u32, Option<String>)> = FxHashMap::default();
     let mut dsts: Vec<Endpoint> = Vec::with_capacity(2);
+    // A location cover's rows go in last: a directory another cover needs file by file (an empty
+    // directory without `__init__.py`) keeps that need.
+    let mut locations: Vec<(String, u32, String)> = Vec::new();
     for (at, (cover, ids)) in covers.iter().zip(inputs).enumerate() {
         let at = at as u32;
         match cover {
@@ -180,25 +190,42 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                     }
                 }
             }
-            Cover::Modules { selection } => {
+            Cover::Modules {
+                selection,
+                location,
+            } => {
+                let mut kept: Vec<Truth> = Vec::with_capacity(cx.rules.modules.len());
+                for (place, &module) in cx.rules.modules.iter().enumerate() {
+                    let env = EntityEnv::of(cx, Some((module, place as u32)), None, None);
+                    let truth = class_truth(selection, &env, cx.rules.touch);
+                    if truth == Truth::Unknown {
+                        let name = Some(cx.text(module).to_string());
+                        out.incomplete
+                            .push(("unknown-selection", at, name, String::new()));
+                    }
+                    kept.push(truth);
+                }
+                let mut directories = FxHashMap::default();
                 for (place, &module) in cx.rules.modules.iter().enumerate() {
                     let place = place as u32;
-                    let env = EntityEnv::of(cx, Some((module, place)), None, None);
-                    let name = || Some(cx.text(module).to_string());
-                    match class_truth(selection, &env, cx.rules.touch) {
-                        Truth::False => {}
-                        Truth::Unknown => {
-                            out.incomplete
-                                .push(("unknown-selection", at, name(), String::new()));
-                        }
-                        Truth::True => {
-                            let path = cx.rules.module_path(cx.link, place).to_string();
-                            found.entry(path).or_insert((at, name()));
-                        }
+                    if kept[place as usize] != Truth::True {
+                        continue;
                     }
+                    if *location {
+                        let (path, name) =
+                            location_of(cx, selection, &kept, &mut directories, module, place);
+                        locations.push((path, at, name));
+                        continue;
+                    }
+                    let path = cx.rules.module_path(cx.link, place).to_string();
+                    let name = Some(cx.text(module).to_string());
+                    found.entry(path).or_insert((at, name));
                 }
             }
         }
+    }
+    for (path, at, name) in locations {
+        found.entry(path).or_insert((at, Some(name)));
     }
     let mut paths: Vec<(String, u32, Option<String>)> = found
         .into_iter()
@@ -207,6 +234,62 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     paths.sort();
     out.paths = paths;
     out
+}
+
+/// Where a module a location cover keeps stands, and that place's dotted name: the outermost
+/// package or directory without `__init__.py` at or above the module that the selection keeps, as
+/// the directory with a trailing slash; else the module's own file. `kept` holds the selection's
+/// truth per graph module; `directories` remembers it per directory without `__init__.py`.
+fn location_of(
+    cx: Cx,
+    selection: &[Node],
+    kept: &[Truth],
+    directories: &mut FxHashMap<Sid, Truth>,
+    module: Sid,
+    place: u32,
+) -> (String, String) {
+    let name = cx.text(module);
+    let heads = name.match_indices('.').map(|(dot, _)| &name[..dot]);
+    for head in heads.chain([name]) {
+        if let Some(directory) = kept_directory(cx, selection, kept, directories, head) {
+            return (directory, head.to_string());
+        }
+    }
+    let path = cx.rules.module_path(cx.link, place).to_string();
+    (path, name.to_string())
+}
+
+/// The directory of package or namespace `name`, with a trailing slash, when the selection keeps
+/// it: a package by its `__init__.py`, a directory without one by its own labels.
+fn kept_directory(
+    cx: Cx,
+    selection: &[Node],
+    kept: &[Truth],
+    directories: &mut FxHashMap<Sid, Truth>,
+    name: &str,
+) -> Option<String> {
+    let sid = cx.link.core.it.get(name)?;
+    if let Some(&at) = cx.rules.module_at.get(&sid) {
+        if kept[at as usize] != Truth::True {
+            return None;
+        }
+        let path = cx.rules.module_path(cx.link, at);
+        return path
+            .strip_suffix("/__init__.py")
+            .map(|directory| format!("{directory}/"));
+    }
+    let namespace = cx.rules.labels.namespaces.get(name)?;
+    let truth = *directories.entry(sid).or_insert_with(|| {
+        let env = EntityEnv {
+            cx,
+            module: Some(sid),
+            at: None,
+            symbol: None,
+            subject: None,
+        };
+        class_truth(selection, &env, cx.rules.touch)
+    });
+    (truth == Truth::True).then(|| format!("{}/", namespace.directory))
 }
 
 /// A cover cannot place edge `id`: an "unplaced" row.

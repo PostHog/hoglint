@@ -18,7 +18,7 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from hoglint.config.model import Config, RuleSpec
+from hoglint.config.model import Config, CoverSpec, RuleSpec
 from hoglint.index import GraphIndex
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
@@ -209,9 +209,9 @@ class RuleContext:
         """The graph's (module, path) whose path `pattern` matches, by module."""
         raise NotImplementedError
 
-    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]]:
-        """The paths a coverage rule needs covered, its items that cannot be placed already in the
-        rule's run."""
+    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[CoverSpec, str | None]]:
+        """The paths a coverage rule needs covered, each with the cover that names it first and the
+        module that needs it; its items that cannot be placed already in the rule's run."""
         raise NotImplementedError
 
     def export_run(self, rule: ExportPrimitive) -> RuleRun:

@@ -288,8 +288,8 @@ class CoveragePrimitive(EntityRule):
     NATIVE_MODE = "coverage"
     READS = frozenset({"covers", "inputs"})
 
-    def required(self) -> dict[str, tuple[str, str | None]]:
-        """path -> (why, module) for every path that must be covered."""
+    def required(self) -> dict[str, tuple[CoverSpec, str | None]]:
+        """path -> (the cover that needs it, module) for every path that must be covered."""
         return self.ctx.coverage_required(self)
 
     @staticmethod
@@ -367,6 +367,12 @@ class CoveragePrimitive(EntityRule):
         inside = sorted(p for p in self.ctx.graph.modules.values() if p.startswith(location))
         return inside or [location + "__init__.py"]
 
+    @staticmethod
+    def any_inside(location: str, cover: CoverSpec) -> bool:
+        """Whether one covered file inside the location covers it, as for a location cover's
+        directory. Any other directory needs each file inside it covered."""
+        return cover.endpoint == "location" and location.endswith("/")
+
     def evaluate(self) -> RuleRun:
         repo = self.ctx.repo_root
         name = str(self.spec.input("adapter"))
@@ -382,8 +388,19 @@ class CoveragePrimitive(EntityRule):
             return self.run
         required = self.required()
         self.inherit_unknowns()
-        for location, (why, module) in sorted(required.items()):
-            for path in self.expand(location):
+        for location, (cover, module) in sorted(required.items()):
+            why = self.why(cover)
+            paths = self.expand(location)
+            if self.any_inside(location, cover):
+                if any(adapter.covered(handle, path)[0] for path in paths):
+                    continue
+                _, decided = adapter.covered(handle, paths[0])
+                resolve = self.resolver(module, None, location)
+                self.emit(
+                    location, module, f"{location} is needed by {why} but {decided} watches no file in it", resolve
+                )
+                continue
+            for path in paths:
                 covered, decided = adapter.covered(handle, path)
                 if covered:
                     continue

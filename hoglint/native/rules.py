@@ -14,7 +14,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, TypeVar
 
-from hoglint.config.model import Config
+from hoglint.config.model import Config, CoverSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, GraphIndex, Memo, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
@@ -514,10 +514,10 @@ class NativeRuleContext(RuleContext):
         with engine_errors():
             return self.evaluator.registry_modules(pattern)
 
-    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[str, str | None]]:
+    def coverage_required(self, rule: CoveragePrimitive) -> dict[str, tuple[CoverSpec, str | None]]:
         """The evaluator's paths of a coverage rule, from the witness ids of the findings its rule
-        covers name, each with why its first cover needs it; what it cannot tell goes to the rule's
-        run. The rule's class words both."""
+        covers name, each with the first cover that needs it; what it cannot tell goes to the
+        rule's run. The rule's class words both."""
         witnesses: list[bytes | None] = []
         for cover in rule.spec.covers:
             run = self.results.get(cover.rule) if cover.rule else None
@@ -534,7 +534,7 @@ class NativeRuleContext(RuleContext):
                 rule.unknown_selection(module, covers[at])
             else:
                 rule.unplaced(module, surface)
-        return {path: (rule.why(covers[at]), module) for path, at, module in paths}
+        return {path: (covers[at], module) for path, at, module in paths}
 
     def owner(self, module: str | None) -> Owners | None:
         """A finding's owners, one lookup per module: the evaluator's rows name few modules many
