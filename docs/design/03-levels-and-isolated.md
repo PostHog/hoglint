@@ -124,6 +124,8 @@ Besides the drives, request-path, receiver, hook-callback and patch-target cover
 - the modules of its own product that a product's AppConfig module (`app_config`) imports at setup: at module level, and in the body of the installed AppConfig's `ready()` (the architect, Nov 16, under the owner's parity bar).
   Django calls `ready()` once at setup in every process, and the old lint watches these modules.
   The Django pack marks such an import edge `app_setup = "ready"`; the cover reads it next to the `function_local` context.
+- a product's `admin` module that the admin app's autodiscovery imports (`autodiscover_modules("admin")`, with no import that names it; core admin tests run what it registers), a package's `__init__.py`, and the modules of its own product it imports at module level, as for the AppConfig module (the architect, Nov 16).
+  The Django pack's `loads` edge (shape `admin`) names the module, for each installed app when the admin app is installed; the pack marks the module-level import edges of that module `autodiscovered = "admin"`.
 
 A coverage rule may select modules by an entity selector: `"<entity selector>: module"` needs the file of each module the selector keeps.
 `"<entity selector>: location"` needs one watched file in each location those modules stand in: the outermost package or directory without `__init__.py` that the selector keeps, else the module's own file.
@@ -135,6 +137,7 @@ Its limits, in plain words:
    The old lint found every `load_product_modules` call by itself.
 3. The model surface is the two zones; a model class defined elsewhere in a product is not asked for.
 4. A location run by name is watched through any one file in it, so a change to another file in it does not reach the check.
+5. What an admin module's own imports import is not asked for: entry modules only, as for the AppConfig module (Nov 9). An admin module's import of another product's module is lint only.
 
 **A wiring location without `__init__.py` is watched through its files** (Nov 12).
 Each module file directly inside the directory stands for it, as `__init__.py` stands for a package: `wiring-watched` requires each of them.
@@ -171,6 +174,7 @@ This holds for the locations `drives` names; a location run by name is watched t
 | A facade re-export ends the reach (D108 as first built) | Core can call a function the facade only passes on; a change to the file that defines it skipped the core suite, in the merge queue too | Owner, Nov 16 (D120, T7) | not published |
 | T7 read by another product's code too (reading (a) in full) | The owner took D108's reader scope: 6 products lose the skip rather than 8 | Owner, Nov 16 (D120) | not published |
 | T7 asks for a hand-out a registration point only lists (reading (b)) | Registration is not a read; engineering_analytics would lose the skip on its worker lists | Owner, Nov 16 (D120) | not published |
+| Every file of an admin package, or what the admin module's imports import | Entry modules only, as for the AppConfig module and hook callbacks | Owner, Nov 9; architect, Nov 16 | not published |
 
 ## Measured state
 

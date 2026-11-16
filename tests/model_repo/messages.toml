@@ -1160,6 +1160,11 @@ text = "products.legacy.backend.logic.widgets names posthog.ingress.dispatch.rou
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/catalog/backend/admin.py"]
+text = "products/catalog/backend/admin.py is needed by edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/catalog/backend/apps.py"]
 text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/catalog/turbo.json does not watch it"
 
@@ -1172,6 +1177,11 @@ text = "products/catalog/backend/events.py is needed by edge.kind == 'import' an
 rule = "wiring-watched"
 identity = ["products/catalog/backend/hogql_queries/__init__.py"]
 text = "products/catalog/backend/hogql_queries/__init__.py is needed by rules.drives.dst.path but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/logic/refusals.py"]
+text = "products/catalog/backend/logic/refusals.py is needed by edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1222,6 +1232,16 @@ text = "products/gatekeeper/backend/token_check.py is needed by rules.request-pa
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/validator.py"]
 text = "products/gatekeeper/backend/validator.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/inventory/backend/admin/__init__.py"]
+text = "products/inventory/backend/admin/__init__.py is needed by edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst but products/inventory/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/inventory/backend/admin/stock_admin.py"]
+text = "products/inventory/backend/admin/stock_admin.py is needed by edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"

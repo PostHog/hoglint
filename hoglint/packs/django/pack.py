@@ -18,7 +18,7 @@ from hoglint.packs.django.app_setup import APP_SETUP_PRODUCER, AppSetupImports
 from hoglint.packs.django.apps import AppReader, AppRegistry
 from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
 from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsItems, InstallsProducer
-from hoglint.packs.django.loaders import LOADS_PRODUCER, AppLoads
+from hoglint.packs.django.loaders import AUTODISCOVERED_PRODUCER, LOADS_PRODUCER, AdminImports, AppLoads
 from hoglint.packs.django.migrations import (
     MIGRATION_PRODUCER,
     AliasProjection,
@@ -212,6 +212,10 @@ class DjangoRun:
         assert self.apps is not None
         return AppSetupImports(self.reader, self.apps).produce()
 
+    def admin_imports(self) -> list[Refinement]:
+        assert self.apps is not None
+        return AdminImports(self.reader, self.apps).produce()
+
     def symbols(self) -> list[Edge]:
         """Model and app symbols. Rules on model edges read them through `dst.kind`, so a failure
         here makes those edge kinds incomplete."""
@@ -260,6 +264,7 @@ class DjangoRun:
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
                 ProducerStep(SETTINGS_PRODUCER, frozenset({"dotted-path"}), self.setting_names, (APPS_PRODUCER,)),
                 ProducerStep(APP_SETUP_PRODUCER, frozenset({"import"}), self.app_setup_imports, (APPS_PRODUCER,)),
+                ProducerStep(AUTODISCOVERED_PRODUCER, frozenset({"import"}), self.admin_imports, (APPS_PRODUCER,)),
                 ProducerStep(SYMBOLS_PRODUCER, MODEL_KINDS, self.symbols, (MODELS_PRODUCER, MIGRATION_PRODUCER)),
             ]
         )

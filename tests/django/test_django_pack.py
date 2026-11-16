@@ -203,6 +203,37 @@ def test_imports_in_the_ready_body_django_runs_are_app_setup_and_a_callback_s_ar
     assert marked == [("ShopBase.ready", "shop.models.Order")]
 
 
+ADMIN_APPS = {
+    "proj/settings.py": {
+        "assigns": [
+            assign("INSTALLED_APPS", {"list": [{"s": "django.contrib.admin"}, {"s": "shop"}, {"s": "billing"}]}, 1)
+        ]
+    },
+    "shop/admin.py": {
+        "imports": [
+            import_from("shop.models", "Order"),
+            import_from("billing.models", "Invoice", line=2),
+            import_from("shop.reports", "export", scope=0, flags=FUNC, line=4),
+        ],
+        "defs": [func_def("later", 3)],
+    },
+    "billing/helpers.py": {"imports": [import_from("shop.models", "Order")]},
+}
+
+
+def test_imports_at_module_level_of_an_autodiscovered_admin_module_are_marked_and_others_are_not() -> None:
+    graph = FactRepo(ADMIN_APPS).graph()
+
+    marked = sorted(
+        (e.site.path, e.site.scope, e.surface) for e in graph.by_kind("import") if e.attr("autodiscovered") == "admin"
+    )
+
+    assert marked == [
+        ("shop/admin.py", "<module>", "billing.models.Invoice"),
+        ("shop/admin.py", "<module>", "shop.models.Order"),
+    ]
+
+
 DICT_OF_FAMILIES = {"i": {"tuple": ["str", "Family"]}, "sub": "dict"}
 
 

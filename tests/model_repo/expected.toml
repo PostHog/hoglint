@@ -2081,6 +2081,30 @@ identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backen
 # wiring-watched
 
 [[row]]
+case = "AD01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/admin.py"]
+
+[[row]]
+case = "AD01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/logic/refusals.py"]
+
+[[row]]
+case = "AD02"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/admin/__init__.py"]
+
+[[row]]
+case = "AD02"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/admin/stock_admin.py"]
+
+[[row]]
 case = "DR01"
 rule = "wiring-watched"
 verdict = "finding"

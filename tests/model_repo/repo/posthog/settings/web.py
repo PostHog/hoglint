@@ -1,6 +1,7 @@
 DEBUG = False
 
 INSTALLED_APPS = [
+    "django.contrib.admin.apps.SimpleAdminConfig",
     "posthog",
     "ee",
     "products.access_control.backend.apps.AccessControlConfig",
