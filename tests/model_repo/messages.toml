@@ -1224,6 +1224,21 @@ identity = []
 text = "products.reports.backend.health_checks reaches posthog.dags.backfill.backfill_partition: products.reports.backend.health_checks -> posthog.dags.backfill.backfill_partition"
 
 [[finding]]
+rule = "core-door"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
+text = "import '......gone' did not resolve"
+
+[[finding]]
+rule = "core-door"
+identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
+text = "products.legacy.backend.logic.payloads names posthog.ingress.handlers, which is not exported to it; cannot tell, unassigned: dst.exported"
+
+[[finding]]
+rule = "core-door"
+identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
+text = "products.legacy.backend.logic.widgets names posthog.ingress.dispatch.route_payload, which is not exported to it"
+
+[[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/apps.py"]
 text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/catalog/turbo.json does not watch it"
