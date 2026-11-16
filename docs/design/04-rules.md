@@ -89,7 +89,7 @@ The preset has no `off` key yet: a rule that is off is a commented-out table wit
 - `object` as a mapping's value is an opaque payload in a facade parameter or field, as `Any` is; never in a return value.
 - An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
 - `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
-- `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. The architect keeps or drops it from the measured rows.
+- `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. Kept (the architect, Nov 16): a re-route through a facade drawer shows again as a `model-crossings` row, and `export-shape` flags the drawer.
 
 **A reach stops at a denied module, unless it says otherwise** (Nov 12).
 A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.
