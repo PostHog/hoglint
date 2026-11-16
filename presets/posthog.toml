@@ -68,8 +68,6 @@ stage     = { type = "enum", values = ["proto-product"] }
 django    = { type = "ordered", values = ["settings", "framework", "orm"] }
 testcode  = { type = "bool" }
 database  = { type = "string", on = "symbol", required_on = "kind == 'model'" }
-generated = { type = "bool", required_on = ["posthog/schema.py", "posthog/schema_enums.py"] }
-producer  = { type = "set" }
 # Frozen history outside the `migration` context: migration files nobody rewrites.
 history   = { type = "bool" }
 # Django settings modules: they must name product paths (installed apps, middleware, loggers).
@@ -849,7 +847,7 @@ require    = "database != 'default'"
 identity   = "package-file"
 growth_key = ["package"]
 
-# ── Layout, registries, generated code ─────────────────────────
+# ── Layout ─────────────────────────────────────────────────────
 
 [rules.product-code-at-home]
 primitive  = "layout"
@@ -866,22 +864,6 @@ files     = ["backend/facade/{contracts.py,contracts}", "backend/facade/api.py: 
 identity  = "entity"
 report    = "advisory"
 ledger    = false
-
-[rules.registry-slots]
-primitive  = "layout"
-doc        = "A file in a registry slot defines the slot's attribute, and its members subclass the slot's base."
-registry   = ["routes", "webhook_consumers", "health_checks"]
-identity   = "entity"
-growth_key = ["subject"]
-
-[rules.generated-producer]
-primitive   = "inventory"
-doc         = "Each generated file has exactly one producer."
-select      = "generated == true"
-exactly_one = "producer"
-on          = "module"
-identity    = "entity"
-growth_key  = ["subject"]
 
 [rules.health-checks-no-dags]
 primitive = "reach"

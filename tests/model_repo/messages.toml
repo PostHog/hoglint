@@ -1659,41 +1659,6 @@ identity = ["scripts.shapes"]
 text = "cannot tell whether this entity is selected"
 
 [[incomplete]]
-rule = "registry-slots"
-identity = ["products.catalog.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
-text = "no producer records module-level assignments"
-
-[[incomplete]]
-rule = "registry-slots"
-identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
-text = "no producer records module-level assignments"
-
-[[incomplete]]
-rule = "registry-slots"
-identity = ["products.inventory.backend.health_checks.HEALTH_CHECKS"]
-text = "no producer records module-level assignments"
-
-[[incomplete]]
-rule = "registry-slots"
-identity = ["products.legacy.backend.health_checks.HEALTH_CHECKS"]
-text = "no producer records module-level assignments"
-
-[[incomplete]]
-rule = "registry-slots"
-identity = ["products.reports.backend.health_checks.HEALTH_CHECKS"]
-text = "no producer records module-level assignments"
-
-[[incomplete]]
-rule = "generated-producer"
-identity = ["posthog.schema"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
-rule = "generated-producer"
-identity = ["posthog.schema_enums"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
 rule = "wiring-watched"
 identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
 text = "cannot place 'registry.register_post_delete_hook' for coverage"

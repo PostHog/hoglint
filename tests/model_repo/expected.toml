@@ -764,20 +764,6 @@ rule = "foundation-direction"
 verdict = "finding"
 identity = ["access_control", "gatekeeper"]
 
-# generated-producer
-
-[[row]]
-case = "GP01"
-rule = "generated-producer"
-verdict = "incomplete"
-identity = ["posthog.schema"]
-
-[[row]]
-case = "GP01"
-rule = "generated-producer"
-verdict = "incomplete"
-identity = ["posthog.schema_enums"]
-
 # get-model
 
 [[row]]
@@ -1919,38 +1905,6 @@ rule = "receiver-direction"
 verdict = "incomplete"
 identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
 
-# registry-slots
-
-[[row]]
-case = "RS01"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.catalog.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
-
-[[row]]
-case = "RS01"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.inventory.backend.health_checks.HEALTH_CHECKS"]
-
-[[row]]
-case = "RS01"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.reports.backend.health_checks.HEALTH_CHECKS"]
-
-[[row]]
-case = "RS02"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.legacy.backend.health_checks.HEALTH_CHECKS"]
-
-[[row]]
-case = "RS03"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
-
 # request-path
 
 [[row]]
@@ -2346,20 +2300,6 @@ decision = "B10; Nov 12: the rule gets the edge it needs or goes off"
 rule = "atomic-outside-views"
 verdict = "finding"
 match = ["products.legacy.backend.presentation.views"]
-
-[[wanted]]
-case = "RS02"
-decision = "registry-slots: a slot file defines the attribute (needs its producer)"
-rule = "registry-slots"
-verdict = "finding"
-match = ["products.legacy.backend.health_checks"]
-
-[[wanted]]
-case = "RS03"
-decision = "registry-slots: members subclass the base (needs its producer)"
-rule = "registry-slots"
-verdict = "finding"
-match = ["products.legacy.backend.webhook_consumers"]
 
 [[wanted]]
 case = "CN03"

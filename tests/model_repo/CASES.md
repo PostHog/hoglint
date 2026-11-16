@@ -248,10 +248,10 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `OD01` | `products/inventory/backend/models.py` | Every product model | own-database incomplete | No producer sets `database` |
 | `PH01` | `posthog/temporal/ai_observability/summarize.py` | Product code under `posthog/` | product-code-at-home finding, one per file | |
 | `PH02` | `posthog/temporal/common/worker.py` | Core code next to it | clean | |
-| `RS01` | `products/inventory/backend/health_checks.py`, `products/catalog/backend/webhook_consumers.py` | Well-formed registry slot files | registry-slots incomplete | No producer records module-level assignments |
-| `RS02` | `products/legacy/backend/health_checks.py` | A slot file without its attribute | registry-slots incomplete | Wanted as a finding |
-| `RS03` | `products/legacy/backend/webhook_consumers.py` | A slot member that does not subclass the base | registry-slots incomplete | Wanted as a finding |
-| `GP01` | `posthog/schema.py`, `posthog/schema_enums.py` | Generated files | generated-producer incomplete | No producer sets `generated` |
+| `RS01` | `products/inventory/backend/health_checks.py`, `products/catalog/backend/webhook_consumers.py` | Well-formed registry slot files | clean: no rule | registry-slots left the preset: the loader checks the registry contract at run time (D118) |
+| `RS02` | `products/legacy/backend/health_checks.py` | A slot file without its attribute | clean: no rule | The same (D118) |
+| `RS03` | `products/legacy/backend/webhook_consumers.py` | A slot member that does not subclass the base | clean: no rule | The same (D118) |
+| `GP01` | `posthog/schema.py`, `posthog/schema_enums.py` | Generated files | clean: no rule | generated-producer left the preset: the monorepo's own generated-files test stays (D118) |
 | `HD01` | `products/reports/backend/health_checks.py` | A health check imports `posthog.dags` | health-checks-no-dags finding (advisory) | |
 | `HD02` | `products/inventory/backend/health_checks.py` | A health check without it | clean | |
 | `DO01` | `products/legacy/backend/logic/widgets.py`, `posthog/ingress/dispatch.py` | A product imports a core package past its door | clean | D107 (wanted) |
