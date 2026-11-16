@@ -833,10 +833,10 @@ growth_key = ["dst.symbol", "src.package"]
 
 [rules.migration-database]
 primitive     = "edge"
-doc           = "A migration depends only on migrations that run on the same databases."
+doc           = "A migration of the repo depends only on migrations that run on the same databases. The Django test stays the authority (D117): a third-party app's migrations are not read, and a dependency list hoglint cannot read (computed or augmented) is incomplete."
 kinds         = ["migration-parent"]
 require       = "edge.child_databases subset_of edge.parent_databases"
-on_unresolved = "block"
+on_unresolved = "incomplete"
 identity      = "migration-pair"
 growth_key    = ["edge.child", "edge.parent"]
 

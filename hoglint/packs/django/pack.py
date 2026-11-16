@@ -122,7 +122,7 @@ class MigrationItems(Items):
         cache = SummaryCache(cache_root() / PACKS)
         graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
         aliases = {app: sorted(found) for app, found in graph.aliases.items()}
-        return ItemOutput(list(MigrationEdges(graph, run.reader.external).produce()), aliases)
+        return ItemOutput(list(MigrationEdges(graph).produce()), aliases)
 
     def take(self, key: str, data: Any) -> None:
         self.run.aliases = {app: frozenset(found) for app, found in data.items()}

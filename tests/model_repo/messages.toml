@@ -1074,11 +1074,6 @@ identity = ["legacy.0001_initial", "posthog.0001_initial"]
 text = "products.legacy.backend.migrations.0001_initial -> posthog.migrations.0001_initial (migration-parent)"
 
 [[finding]]
-rule = "migration-database"
-identity = ["tokens.0001_initial", "posthog.0001_initial"]
-text = "tokens.migrations.0001_initial -> posthog.migrations.0001_initial (migration-parent)"
-
-[[finding]]
 rule = "product-code-at-home"
 identity = ["ai_observability", "posthog.temporal.ai_observability"]
 text = "posthog.temporal.ai_observability"
@@ -1612,6 +1607,11 @@ text = "selection reads unknown src.tier"
 rule = "orm-independent"
 identity = ["posthog.egress.client|exposes|typing.Any"]
 text = "posthog.egress.client.forward: param:kwargs has no usable type (typing.Any)"
+
+[[incomplete]]
+rule = "migration-database"
+identity = ["products.reports.backend.migrations.0002_extend|migration-parent|dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}"]
+text = "migration-parent 'dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}' did not resolve"
 
 [[incomplete]]
 rule = "product-code-at-home"

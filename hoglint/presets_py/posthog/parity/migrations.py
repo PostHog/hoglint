@@ -9,8 +9,9 @@ database server is needed, and the router for each app's aliases). Three things 
   `migration-parent` edges, which the Django pack builds without Django;
 - each app's database aliases, against the databases hoglint gives the app's migrations.
 
-An edge hoglint lacks is explained when the app's migrations live in a third-party package
-hoglint does not read (`[discovery] external` names the packages it reads).
+An edge or a crossing hoglint lacks is explained when its child or its parent migration belongs to
+a third-party app: hoglint reads only the repo's own migrations (D117), and the Django test stays
+the authority for the rest.
 """
 
 from __future__ import annotations
@@ -32,11 +33,12 @@ from hoglint.presets_py.posthog.parity.verdict import (
 
 TOOL = "migration-databases"
 RULE = "migration-database"
-UNREAD_PACKAGE = Reason(
-    "unread-third-party-app",
-    "The app's migrations sit in a third-party package hoglint does not read: hoglint reads the "
-    "first-party tree and the packages `[discovery] external` names, so it has no migration of "
-    "this app. A dependency of such an app on a routed app would not be judged.",
+THIRD_PARTY_APP = Reason(
+    "third-party-app",
+    "The child or the parent migration belongs to a third-party app (its app module is no "
+    "first-party module or package). hoglint keeps migration-database for the repo's own "
+    "migrations and reads no third-party app's migrations (D117): the Django test stays the "
+    "authority for them.",
     Effect.LESS,
 )
 
@@ -45,16 +47,34 @@ def app_of(key: str) -> str:
     return key.split(".", 1)[0]
 
 
+def first_party_modules(facts: HoglintFacts) -> set[str]:
+    """Every first-party module hoglint knows, and each package above one."""
+    out: set[str] = set()
+    for module in facts.package_of_module:
+        parts = module.split(".")
+        out.update(".".join(parts[:end]) for end in range(1, len(parts) + 1))
+    return out
+
+
 def compare(old: dict, facts: HoglintFacts) -> Comparison:
     comparison = Comparison(TOOL)
+    modules = old.get("app_modules", {})
     findings = {(row.identity[0], row.identity[1]) for row in facts.findings if row.rule == RULE}
+
+    first_party = first_party_modules(facts)
+
+    def reason_for(child: str, parent: str) -> Reason | None:
+        apps = (app_of(child), app_of(parent))
+        third_party = any(modules.get(app, "") not in first_party for app in apps)
+        return THIRD_PARTY_APP if third_party else None
+
     for crossing in old["crossings"]:
         comparison.old_items += 1
         child, parent = crossing.split(" -> ")
         if (child, parent) in findings:
             comparison.matches.append(Match(f"crossing {crossing}", RULE))
         else:
-            comparison.differences.append(Difference(f"crossing {crossing}", OLD_ONLY))
+            comparison.differences.append(Difference(f"crossing {crossing}", OLD_ONLY, reason_for(child, parent)))
     crossings = {tuple(c.split(" -> ")) for c in old["crossings"]}
     for child, parent in sorted(findings - crossings):
         comparison.differences.append(Difference(f"crossing {child} -> {parent}", HOGLINT_ONLY))
@@ -64,15 +84,11 @@ def compare(old: dict, facts: HoglintFacts) -> Comparison:
     comparison.old_items += len(theirs)
     comparison.hoglint_items = len(ours)
     comparison.unlisted_matches = len(theirs & ours)
-    read_apps = {app_of(key) for pair in ours for key in pair}
-    modules = old.get("app_modules", {})
     for child, parent in sorted(theirs - ours):
-        app = app_of(child)
-        module = modules.get(app, "")
-        reason = None
-        if app not in read_apps and facts.module_of(module) is None:
-            reason = UNREAD_PACKAGE
-        comparison.differences.append(Difference(f"edge {child} -> {parent}", OLD_ONLY, reason, f"app module {module}"))
+        modules_of = f"app modules {modules.get(app_of(child), '')}, {modules.get(app_of(parent), '')}"
+        comparison.differences.append(
+            Difference(f"edge {child} -> {parent}", OLD_ONLY, reason_for(child, parent), modules_of)
+        )
     for child, parent in sorted(ours - theirs):
         comparison.differences.append(Difference(f"edge {child} -> {parent}", HOGLINT_ONLY))
 

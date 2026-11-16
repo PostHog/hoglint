@@ -109,11 +109,13 @@ Their limits, in plain words:
    A chain that leaves the tree starts with a finding of `sources-vendors-use-sdk`.
 2. A webhook consumers module that imports a test module of a product is `prod-imports-test`'s finding, not this rule's.
 
-**`migration-database` reads the migrations an installed third-party app ships** (Nov 16).
-The Django pack reads an installed app's migrations wherever the run has its sources, so the graph holds the edges Django's own loader holds.
-A package's sources are read from the interpreter's site-packages when `[discovery] external` names it, as for `django` and `rest_framework`.
-So the root config lists every distribution that ships an installed app with migrations; an app it leaves out has no migration edges, and a routing change that splits it from its parents goes unseen.
-Reading a package also gives its models and the names it re-exports to every other rule.
+**`migration-database` is slim: the repo's own migrations only** (owner, Nov 16, D117; it replaces the stage 2c reading of third-party migrations).
+The monorepo's Django test stays the authority for the migration graph; hoglint's rule is early feedback.
+- The Django pack reads no migration of an installed third-party app, even where `[discovery] external` gives the run its sources; a dependency key into such an app makes no node and no edge.
+- A key list in a `Migration` class body that hoglint cannot read (`dependencies += [...]`, a computed value) is an unresolved edge, and the rule reads an unresolved edge as incomplete: never silent, never a block.
+- `bin/parity` explains an edge or a crossing of the Django test that has a third-party app at either end by D117, checked per item: the app's module is no first-party module or package.
+
+Reading a package from `[discovery] external` still gives its models and the names it re-exports to every other rule.
 
 **Two couplings the engine places** (Nov 16).
 - A module-level function that hands one of its parameters on to `<signal>.connect(...)` is a hook, found in the code like the configured ones: a call of it is an `installs` edge from the caller's module, the callback's entry module.
