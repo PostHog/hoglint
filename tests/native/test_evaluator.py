@@ -2003,6 +2003,42 @@ def test_a_level_reads_a_within_group_rule_only_inside_one_group(world: World, w
     assert any(reason.startswith("inside: ") for reason in result.failing["billing"])
 
 
+CLAIMED = (
+    '\n[levels.own]\ngroup_by = "package"\nrequires = ["crossing"]\nstrict = ["crossing"]\n'
+    'claimed_by = { adapter = "globs", narrowed = ["products/billing", "products/alerts/backend/facade"] }\n'
+)
+
+
+@pytest.mark.parametrize("rewrite_ledger", [False, True])
+def test_a_group_that_claims_a_level_it_fails_fails_the_run_whatever_the_ledger(
+    world: World, rewrite_ledger: bool
+) -> None:
+    config = world.config(WITHIN_GROUP + CLAIMED)
+    result = Engine(config, world.graph, world.repo).evaluate(rewrite_ledger=rewrite_ledger)
+    level = result.levels["own"]
+    # One narrowed path of a package is enough for the package to claim the level.
+    assert level.claims == {"alerts": "inputs.narrowed", "billing": "inputs.narrowed"}
+    failed = dict(level.failed_claims())
+    assert sorted(failed) == sorted(set(level.claims) - set(level.passing)) and failed
+    assert all(failed[group] == level.failing[group] for group in failed)
+    assert result.claims_failed()
+
+
+def test_a_group_that_claims_a_level_it_passes_and_a_group_that_claims_nothing_fail_no_run(world: World) -> None:
+    rules = rule_table("crossing", {**EDGE, "kinds": ["import"], "deny": "false"})
+    claimed = CLAIMED.replace('"products/billing", ', "")
+    result = Engine(world.config(rules + claimed), world.graph, world.repo).evaluate(rewrite_ledger=True)
+    level = result.levels["own"]
+    assert level.claims == {"alerts": "inputs.narrowed"} and "billing" in level.blocks
+    assert level.failed_claims() == [] and not result.claims_failed()
+
+
+def test_a_level_claimed_through_an_input_the_run_cannot_read_fails_the_run(world: World) -> None:
+    config = world.config(WITHIN_GROUP + CLAIMED)
+    result = Engine(config, world.graph, None).evaluate(rewrite_ledger=True)
+    assert "no repo root" in result.levels["own"].claim_error and result.claims_failed()
+
+
 FACADE_FILES = {
     "primitive": "layout",
     "within": "products/{product}",

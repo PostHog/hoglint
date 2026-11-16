@@ -149,9 +149,14 @@ class RunResult:
             item for item in self.incomplete() if item.cause in (IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR)
         ]
 
+    def claims_failed(self) -> bool:
+        """A group claims a level it fails, or a level's claims cannot be read."""
+        return any(level.claim_failed for level in self.levels.values())
+
     def failed(self) -> bool:
         equality_failed = self.equality is not None and not self.equality.equal
-        return bool(self.violations() or equality_failed or self.exceptions.stale or self.exceptions.problems)
+        exceptions_failed = self.exceptions.stale or self.exceptions.problems
+        return bool(self.violations() or equality_failed or exceptions_failed or self.claims_failed())
 
     def exit_code(self) -> int:
         if self.blocking_incomplete():
@@ -295,7 +300,7 @@ class Engine:
         if ledger is not None:
             self.mark_accepted(result, ledger.lines if not rewrite_ledger else result.scan)
         for name, spec in self.config.levels.items():
-            level = LevelEvaluator(spec, self.labeler, result.runs).evaluate()
+            level = LevelEvaluator(spec, self.labeler, result.runs, self.repo_root).evaluate()
             result.levels[name] = level
             for group in level.passing:
                 result.scan[level_line(name, group)] = 1

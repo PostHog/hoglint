@@ -53,7 +53,7 @@ WANTED_HEADER = """\
 # row of `rule` ("*" for any rule) with `verdict` ("*" for any: a finding or an incomplete row)
 # whose identity holds every string of `match`.
 """
-LEVELS_HEADER = "# Levels: the products that pass and fail each level.\n"
+LEVELS_HEADER = "# Levels: the products that pass and fail each level, and the products that claim it.\n"
 TABLES_HEADER = """\
 # The ten parity tables of the model repository as the native engine dumps them: per table the
 # row count and a digest of its bytes. A change that moves any row of any table changes a digest.
@@ -167,8 +167,10 @@ class Dumps:
         for item in read_lines(out / "incomplete.jsonl"):
             rows[Row(item[0], "incomplete", (item[1],))] += 1
         levels = {}
-        for name, (passing, failing) in json.loads((out / "levels.json").read_text()).items():
+        for name, (passing, failing, *claims) in json.loads((out / "levels.json").read_text()).items():
             levels[name] = {"passing": sorted(passing), "failing": sorted(product for product, _ in failing)}
+            if claims:
+                levels[name]["claimed"] = sorted(group for group, _ in claims[0])
         return Result(rows, levels)
 
 
@@ -340,6 +342,8 @@ class Expected:
             expected.wanted.append(wanted)
         for name, level in data.get("levels", {}).items():
             expected.levels[name] = {"passing": level["passing"], "failing": level["failing"]}
+            if "claimed" in level:
+                expected.levels[name]["claimed"] = level["claimed"]
         return expected
 
     def counter(self) -> Counter[Row]:
@@ -368,6 +372,8 @@ class Expected:
         for name, level in sorted(self.levels.items()):
             out.append(f"\n[levels.{name}]\npassing = {quoted_list(level['passing'])}\n")
             out.append(f"failing = {quoted_list(level['failing'])}\n")
+            if "claimed" in level:
+                out.append(f"claimed = {quoted_list(level['claimed'])}\n")
         return "".join(out)
 
 

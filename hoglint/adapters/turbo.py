@@ -11,6 +11,10 @@
 
 A path is watched when some package that runs the task includes it and does not exclude it.
 
+A package narrows the task when its own turbo.json gives the task an `inputs` list without
+`$TURBO_DEFAULT$`: a change outside the list then leaves the task's hash alone. Inputs a package
+inherits from the root config narrow nothing of its own.
+
 Coverage asks a different question: does a change to the path reach the task? A path in a package
 that has no script for the task, or outside every package, is covered: CI runs the full suite for
 any change there. A path is not covered only when its package runs the task and its inputs leave
@@ -280,6 +284,16 @@ class TurboInputs:
             found = self.answers[path] = self.find_covered(path)
         return found
 
+    def narrowed(self, directory: str) -> str | None:
+        """The package turbo.json that narrows the task's inputs for the files in `directory` (""
+        for the repo root), or None when their package does not narrow them or runs no task."""
+        holder = self.holder(f"{directory}/" if directory else "")
+        task = self.task_by_directory.get(holder)
+        own = f"{holder}/turbo.json" if holder else "turbo.json"
+        if task is None or task.default or task.decided_by != own:
+            return None
+        return own
+
     def find_covered(self, path: str) -> tuple[bool, str]:
         for task in self.table.tasks:
             if self.watches(task, path):
@@ -328,6 +342,9 @@ class TurboAdapter:
 
     def covered(self, handle: TurboInputs, path: str) -> tuple[bool, str]:
         return handle.covered(path)
+
+    def narrowed(self, handle: TurboInputs, directory: str) -> str | None:
+        return handle.narrowed(directory)
 
 
 REGISTRY.add_coverage_adapter(TurboAdapter())

@@ -124,7 +124,7 @@ Some words have two meanings; the entry names both.
   A path each root of `within` must hold.
   An entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
 - **Coverage adapter** (coverage rule key `inputs = { adapter = ... }`).
-  A plugin that reads an outside list of covered paths, such as a build tool's task inputs, for a `coverage` rule.
+  A plugin that reads an outside list of covered paths, such as a build tool's task inputs, for a `coverage` rule, and for a level's `claimed_by`.
 
 ## Exports and contracts
 
@@ -178,7 +178,7 @@ Some words have two meanings; the entry names both.
 - **Attribution, move admission** (`hoglint/ledger/growth.py`).
   Attribution runs the base engine and policy on head code to tell growth from code from growth from a rule change.
   Move admission lets a move pass only when the same couplings existed before, with the same counts.
-- **Level** (`[levels.<name>]`, keys `group_by`, `select`, `requires`, `strict`, `within_group`; `hoglint/rules/levels.py`).
+- **Level** (`[levels.<name>]`, keys `group_by`, `select`, `requires`, `strict`, `within_group`, `claimed_by`; `hoglint/rules/levels.py`).
   A named set of rules that each group, such as a product, passes or fails.
   A group passes when every required rule ran for it and none of its findings is new.
   The PostHog preset's level is `isolated`: a product on it may skip other products' test suites.
@@ -186,6 +186,12 @@ Some words have two meanings; the entry names both.
   The rules whose findings block the level even when the ledger accepts them.
 - **`within_group`** (level key).
   The required rules whose rows count only inside one group: a row whose subjects fall in two or more groups does not count for the level.
+- **`claimed_by`, claim** (level key; adapter method `narrowed`).
+  The outside input in which a group claims a level, as a coverage adapter and its options.
+  A group claims the level when one of its module files sits where the adapter says the inputs are narrowed; a claiming group that fails the level fails `check`, and no ledger line or exception accepts that.
+- **Narrowed** (coverage adapter).
+  Inputs that leave files of their package out, so a change there does not run the task.
+  For turbo: a package's own `turbo.json` lists the task's inputs without `$TURBO_DEFAULT$`.
 
 ## Engine and checks
 

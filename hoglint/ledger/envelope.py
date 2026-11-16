@@ -43,7 +43,7 @@ from hoglint.ledger.errors import EngineError
 from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
-PROTOCOL = 4
+PROTOCOL = 5
 # The engine's name: the prefix of every engine id, and what `--engine` accepts.
 ENGINE_NATIVE = "native"
 ENGINE_SOURCES = "engine-sources.txt"
@@ -326,12 +326,14 @@ class Framework:
     @staticmethod
     def packages_of(config: Config) -> tuple[str, ...]:
         """`[discovery] external`, and the distributions the config's packs, providers and
-        coverage adapters import."""
+        coverage adapters (a level's claiming input too) import."""
         packages = set(as_tuple(config.discovery.get("external")))
         plugins: list[object] = [REGISTRY.packs.get(name) for name in config.pack_sections]
         plugins += [REGISTRY.providers.get(spec.use) for spec in config.providers.values()]
         coverage = [spec for spec in config.rules.values() if spec.primitive == "coverage"]
         plugins += [REGISTRY.coverage_adapters.get(str(spec.input("adapter"))) for spec in coverage]
+        claimed = [level for level in config.levels.values() if level.claimed_by]
+        plugins += [REGISTRY.coverage_adapters.get(str(level.claim_option("adapter"))) for level in claimed]
         for plugin in plugins:
             packages.update(getattr(plugin, "distributions", ()))
         return tuple(sorted(packages))

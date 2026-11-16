@@ -2286,8 +2286,9 @@ rule = "export-shape"
 verdict = "unknown"
 match = ["products.catalog.backend.facade.aliases.built"]
 
-# Levels: the products that pass and fail each level.
+# Levels: the products that pass and fail each level, and the products that claim it.
 
 [levels.isolated]
 passing = ["shelf"]
 failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]
+claimed = ["catalog", "gatekeeper", "inventory", "legacy", "reports", "shelf"]

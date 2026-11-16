@@ -36,9 +36,9 @@ rows = 1187
 digest = "fef9386e1defc26c7ad79ac77529982f"
 
 ["stored-summary"]
-rows = 1301
-digest = "dba129da2f72b1d8ce11fd2e347d0c37"
+rows = 1302
+digest = "bdb087e0aae0ae7eab3079dce64548f1"
 
 ["levels"]
 rows = 1
-digest = "1ae1d8d57f05f88b9dee507ec6f25106"
+digest = "a49bff15781ac27a9d7ce8b23b3d2cd5"

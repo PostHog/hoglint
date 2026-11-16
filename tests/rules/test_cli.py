@@ -199,6 +199,47 @@ def test_explain_edge_lists_rules_that_read_every_edge_kind(tmp_path: Path, caps
     assert "select: edge.resolution == 'unresolved' -> false" in out
 
 
+CLAIMED_CONFIG = CONFIG.replace(
+    'requires = ["crossings"]\n',
+    'requires = ["crossings"]\nstrict = ["crossings"]\n'
+    'claimed_by = { adapter = "globs", narrowed = ["products/alerts"] }\n',
+)
+
+
+def test_a_group_that_claims_a_level_it_fails_fails_check_whatever_the_ledger_live_and_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    built = graph()
+
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        return native_graph(built)
+
+    monkeypatch.setattr(GraphSource, "build", build)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    write_config(repo, CLAIMED_CONFIG, {"products/alerts/logic.py": "", "products/billing/logic.py": ""})
+    git_in(repo, "init", "-q")
+    check_once(repo, tmp_path / "work", DAY, memo=False, staged=False, write_ledger=True)
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    capsys.readouterr()
+    claims = []
+    runs = count_runs(monkeypatch)
+    # The second check reads the summary the first one stored.
+    for memo in (True, True, False):
+        assert check_once(repo, tmp_path / "work", DAY, memo=memo, staged=False) == 1
+        printed = capsys.readouterr().out
+        assert "violations (0)" in printed
+        claims.append(printed[printed.index("claimed levels") : printed.index(" findings accepted")])
+    assert len(runs) == 2 and claims[0] == claims[1] == claims[2]
+    printed = claims[0]
+    assert "claimed levels that fail (1)\n  isolated  alerts  (claimed in inputs.narrowed)\n" in printed
+    assert "    crossings: strict, so the ledger does not excuse it: " in printed
+    # billing fails the level too, but claims nothing
+    assert "billing  (claimed" not in printed
+    assert "drop the narrowing" in printed
+
+
 MEMO_CONFIG = """
 schema = 1
 
@@ -318,13 +359,15 @@ def count_runs(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     return runs
 
 
-def check_once(repo: Path, work: Path, today: datetime.date, memo: bool, staged: bool) -> int:
+def check_once(
+    repo: Path, work: Path, today: datetime.date, memo: bool, staged: bool, write_ledger: bool = False
+) -> int:
     key = repo.resolve()
     WorktreeStatus.taken.pop(key, None)
     work.mkdir(exist_ok=True)
     commands = Commands(repo, work, today=today, memo=memo)
     try:
-        return commands.check(index=staged, write_ledger=False, changed=False)
+        return commands.check(index=staged, write_ledger=write_ledger, changed=False)
     finally:
         commands.snapshots.close()
 

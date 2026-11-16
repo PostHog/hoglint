@@ -267,7 +267,11 @@ class CoverageAdapter(Protocol):
     `inputs`, a source pattern or another declared input covers, so the answer is in the run's
     key; any other question fails the run. An adapter may also have `open_run(options, run_root)`,
     which the rule calls in place of `open` with the run's root, so the adapter can answer from an
-    answer stored under `PLUGIN_ROOTS.key` before `PLUGIN_ROOTS.of` writes the files it reads."""
+    answer stored under `PLUGIN_ROOTS.key` before `PLUGIN_ROOTS.of` writes the files it reads.
+
+    `narrowed` answers a level's `claimed_by`: the file that narrows the inputs which decide for
+    the files in `directory` ("" for the repo root), or None where they watch every file or no
+    input list applies."""
 
     name: str
     allowed_options: frozenset[str]
@@ -277,6 +281,16 @@ class CoverageAdapter(Protocol):
     def open(self, options: Mapping[str, Any], root: Path) -> Any: ...
 
     def covered(self, handle: Any, path: str) -> tuple[bool, str]: ...
+
+    def narrowed(self, handle: Any, directory: str) -> str | None: ...
+
+
+def open_coverage(adapter: CoverageAdapter, options: Mapping[str, Any], repo: Path) -> Any:
+    """The adapter's handle for a run whose root is `repo`, through `open_run` when it has one."""
+    open_run = getattr(adapter, "open_run", None)
+    if open_run is not None:
+        return open_run(options, repo)
+    return adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
 
 
 def declared_inputs(plugin: object, options: Mapping[str, Any]) -> tuple[str, ...]:

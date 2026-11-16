@@ -238,6 +238,15 @@ class LevelSpec:
     source: str = ""
     # The required rules whose rows count only when all their subjects fall in one group.
     within_group: tuple[str, ...] = ()
+    # The outside input where a group claims the level, as a coverage adapter and its options; a
+    # claiming group that fails the level fails the run. Empty: nothing claims the level.
+    claimed_by: tuple[tuple[str, Any], ...] = ()
+
+    def claim_option(self, key: str, default: Any = None) -> Any:
+        for name, value in self.claimed_by:
+            if name == key:
+                return value
+        return default
 
 
 @dataclass(frozen=True, slots=True)

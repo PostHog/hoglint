@@ -117,6 +117,15 @@ ledger = false
             "needs a shape policy",
         ),
         ("[levels.isolated]\ngroup_by = 'package'\nrequires = ['crosss']\n", "requires unknown rule 'crosss'"),
+        (
+            "[levels.isolated]\ngroup_by = 'package'\nrequires = ['cross']\nclaimed_by = { adapter = 'turbos' }\n",
+            "unknown coverage adapter 'turbos'",
+        ),
+        (
+            "[levels.isolated]\ngroup_by = 'package'\nrequires = ['cross']\n"
+            "claimed_by = { adapter = 'turbo', tsk = 'x' }\n",
+            "unknown key 'tsk'",
+        ),
         # an export rule leaves a slot only to a signature rule it names
         (
             "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['crosss']\nledger = false\n",

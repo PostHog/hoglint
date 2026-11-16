@@ -31,11 +31,30 @@ How the preset says it:
 - `wiring-watched` stays as it was.
 - The level requires these four rules and makes all four strict.
   Its `select` reads `path startswith 'products/'`: a product is judged where its facade and its contract-check config live.
-- Whether a product skips is still its own config (`package.json` and `turbo.json`); the level says whether that skip would be sound.
+- Whether a product skips is still its own config (`package.json` and `turbo.json`); the level says whether that skip would be sound, and a product that skips must hold it (next entry).
 
 Its limits, in plain words:
 1. `reached-watched` reads the file the code names, not what that file imports, nor the `__init__.py` files above it (as the request path, D103).
 2. An edge whose source tier cannot be told is an incomplete item of `reached-watched` on the source module, so it blocks no product.
+
+**A product that narrows must pass Isolated** (Nov 16).
+A product whose own `turbo.json` narrows its contract-check inputs claims the level.
+If it fails the level, `check` fails, and no ledger line or exception can accept that: an unsound skip is never debt.
+`check` names the level's reasons for the product and the two ways out: fix the reasons, or drop the narrowing.
+- In core words, a level may name the outside input in which a group claims it: `claimed_by`, a coverage adapter and its options, the table a coverage rule's `inputs` takes.
+  The adapter tells, per directory, whether the inputs that decide there are narrowed, and by which file (`narrowed(handle, directory)`).
+  A group claims the level when one of its module files sits in such a directory.
+- A claiming group that fails the level fails `check` and `compare` (exit 1), and so does a level whose claims cannot be read (no repo root, an input that does not read, a narrowed file whose group cannot be told): unknown is never clean.
+  A claiming group that the level's `select` leaves out fails too: it cannot pass the level it claims.
+- The turbo adapter: a package narrows a task when its own `turbo.json` gives the task an `inputs` list without `$TURBO_DEFAULT$`.
+  Inputs a package inherits from the root config narrow nothing of its own; that is how the monorepo's test selection reads the skip.
+- The preset: `[levels.isolated] claimed_by = { adapter = "turbo", task = "backend:contract-check" }`.
+- The adapter's files are part of the run's key, as a coverage rule's are, and the stored run summary keeps each level's claims (protocol 5), so a check that a stored summary answers fails the same way.
+
+Why a level key and not a rule that reads a level's result:
+- Rules run before levels, and a level reads rules; a rule that reads a level would need a second order between rules, and its findings would sit next to the level they help to judge (selectors that depend on the level they help compute were turned down on Nov 11).
+- A rule's finding is a ledger line or an advisory row, so "no ledger accepts it" would need an exemption; a failed claim is no finding at all, like a stale exception.
+- The claim lives in the outside input the coverage rules already read, so the level needs no new field, provider or rule.
 
 **The linter carries the skip's safety** (owner, Nov 4).
 Rules that feed the skip block, and unknowns count against the product.

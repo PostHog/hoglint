@@ -199,6 +199,16 @@ def stored_summary(result: RunResult, graph: Graph, roots: tuple[Path, ...], exc
     return summary_rows(summary.to_sections())
 
 
+def level_row(result: RunResult, name: str) -> list[Any]:
+    """A level's passing groups and the reasons of the failing ones; for a level that names a
+    claiming input, also each claim and why the claims cannot be read."""
+    level = result.levels[name]
+    row: list[Any] = [level.passing, sorted(level.failing.items())]
+    if result.config.levels[name].claimed_by:
+        row += [sorted(level.claims.items()), level.claim_error]
+    return row
+
+
 class Tables:
     """The normalized files of one check's graph and rule results, in `out`. `summary` is the
     run's stored summary as rows (`stored_summary`), built before any file is written, so a
@@ -222,7 +232,7 @@ class Tables:
         self.write_lines("modules", [[module, path] for module, path in graph.modules.items()])
         failed = [[name, failure.reason, sorted(failure.kinds)] for name, failure in graph.failed_producers.items()]
         self.write_lines("failed", failed)
-        levels = {name: [level.passing, sorted(level.failing.items())] for name, level in result.levels.items()}
+        levels = {name: level_row(result, name) for name in result.levels}
         (self.out / "levels.json").write_text(json.dumps(levels, ensure_ascii=False))
         self.write_lines("stored-summary", summary)
         self.write_lines("couplings", coupling_rows(graph))

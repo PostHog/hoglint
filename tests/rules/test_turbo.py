@@ -89,3 +89,23 @@ def turbo(tmp_path_factory: pytest.TempPathFactory) -> TurboInputs:
 def test_turbo_inputs_follow_turbo_semantics(turbo: TurboInputs, path: str, watched: bool, covered: bool) -> None:
     assert any(turbo.watches(task, path) for task in turbo.table.tasks) is watched
     assert turbo.covered(path)[0] is covered
+
+
+@pytest.mark.parametrize(
+    "directory, narrowed",
+    [
+        # The root's inputs decide: no package narrows the task itself.
+        ("products/plain/backend", None),
+        ("products/default", None),
+        ("products/extends/backend", "products/extends/turbo.json"),
+        ("products/noscript/backend", None),
+        ("products/rooted", "products/rooted/turbo.json"),
+        ("products/narrow/sub", "products/narrow/turbo.json"),
+        ("posthog", None),
+        ("", None),
+    ],
+)
+def test_a_package_narrows_a_task_only_in_its_own_turbo_json(
+    turbo: TurboInputs, directory: str, narrowed: str | None
+) -> None:
+    assert turbo.narrowed(directory) == narrowed

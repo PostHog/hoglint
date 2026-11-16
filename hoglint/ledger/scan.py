@@ -15,7 +15,8 @@ refuses any other protocol instead of guessing. It holds:
 - triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;
 - couplings and witnesses: what move admission reads, cut to `scope`, the modules a rename touches;
 - levels: the groups that pass each level, and why the others fail (a blocking finding by its
-  key, not its message);
+  key, not its message); the groups that claim a level, with the reasons of each one that fails
+  it, and why a level's claims cannot be read;
 - what else `check` prints: ledger equality, stale exceptions with every review date, exception
   problems, advisory rules, and the module of each path for `--changed`;
 - ledger: the `source` of the ledger file the run read, so a summary stands in for a `check` run
@@ -66,7 +67,7 @@ SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
     "incompletes": ("incomplete",),
     "findings": ("findings", "lines", "labels", "equality", "exceptions", "modules"),
     "couplings": ("triples", "couplings", "witnesses"),
-    "levels": ("levels", "level_failures"),
+    "levels": ("levels", "level_failures", "level_claims", "claim_errors"),
 }
 ALL_SECTIONS = frozenset(SUMMARY_SECTIONS)
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
@@ -190,6 +191,9 @@ class ScanSummary:
     witnesses: dict[LineKey, list[Coupling]] = field(default_factory=dict)
     levels: dict[str, list[str]] = field(default_factory=dict)
     level_failures: dict[str, dict[str, list[BlockRecord]]] = field(default_factory=dict)
+    # level -> group -> (the file that claims the level, why the group fails it; empty when it passes)
+    level_claims: dict[str, dict[str, tuple[str, list[str]]]] = field(default_factory=dict)
+    claim_errors: dict[str, str] = field(default_factory=dict)  # level -> why its claims cannot be read
     equality: EqualityResult | None = None
     exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
     advisory: frozenset[str] = frozenset()
@@ -234,6 +238,14 @@ class ScanSummary:
             }
             for name, level in result.levels.items()
         }
+        for name, level in result.levels.items():
+            failed = dict(level.failed_claims())
+            summary.level_claims[name] = {
+                group: (where, [portable.text(reason) for reason in failed.get(group, [])])
+                for group, where in sorted(level.claims.items())
+            }
+            if level.claim_error:
+                summary.claim_errors[name] = portable.text(level.claim_error)
         summary.equality = result.equality
         summary.exceptions = ExceptionsRecord.of(result.exceptions, exceptions)
         summary.advisory = frozenset(rule for rule in config.rules if result.advisory(rule))
@@ -249,6 +261,16 @@ class ScanSummary:
     def finding_keys(self) -> set[LineKey]:
         """The ledger key of every finding that no exception allows."""
         return self.findings.keys()
+
+    def failed_claims(self) -> list[tuple[str, str, str, list[str]]]:
+        """(level, group, where it claims the level, why it fails it) of each group that claims a
+        level it does not pass, by level and group."""
+        out = []
+        for name, claims in sorted(self.level_claims.items()):
+            for group, (where, reasons) in sorted(claims.items()):
+                if reasons:
+                    out.append((name, group, where, reasons))
+        return out
 
     @property
     def unread(self) -> list[str]:
@@ -296,6 +318,11 @@ class ScanSummary:
                 name: {group: [block.to_json() for block in blocks] for group, blocks in failing.items()}
                 for name, failing in self.level_failures.items()
             },
+            "level_claims": {
+                name: {group: [where, list(reasons)] for group, (where, reasons) in claims.items()}
+                for name, claims in self.level_claims.items()
+            },
+            "claim_errors": self.claim_errors,
             "equality": equality_to_json(self.equality),
             "exceptions": self.exceptions.to_json(),
             "advisory": sorted(self.advisory),
@@ -336,6 +363,11 @@ class ScanSummary:
                 name: {group: [BlockRecord.from_json(block) for block in blocks] for group, blocks in failing.items()}
                 for name, failing in data.get("level_failures", {}).items()
             },
+            level_claims={
+                name: {group: (str(where), list(reasons)) for group, (where, reasons) in claims.items()}
+                for name, claims in data.get("level_claims", {}).items()
+            },
+            claim_errors={name: str(error) for name, error in data.get("claim_errors", {}).items()},
             equality=equality_from_json(data.get("equality")),
             exceptions=ExceptionsRecord.from_json(data.get("exceptions", {})),
             advisory=frozenset(data.get("advisory", [])),

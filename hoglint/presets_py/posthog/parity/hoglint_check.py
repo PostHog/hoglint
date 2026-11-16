@@ -22,7 +22,7 @@ from hoglint.labels import Labeler
 from hoglint.ledger.envelope import PolicyFiles
 from hoglint.model import Context, Edge, Finding, Graph, Resolution
 from hoglint.native.source import NativeGraphSource, batch_mode
-from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
+from hoglint.plugins import REGISTRY, open_coverage
 from hoglint.rules.base import RuleContext
 from hoglint.rules.engine import Engine, primitive_of
 from hoglint.rules.entities import CoveragePrimitive
@@ -317,11 +317,7 @@ class HoglintCheck:
         repo = context.repo_root
         adapter = REGISTRY.coverage_adapters[str(spec.input("adapter"))]
         options = {key: value for key, value in spec.inputs if key != "adapter"}
-        open_run = getattr(adapter, "open_run", None)
-        if open_run is not None:
-            handle = open_run(options, repo)
-        else:
-            handle = adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
+        handle = open_coverage(adapter, options, repo)
         return lambda path: adapter.covered(handle, path)[0]
 
     @staticmethod

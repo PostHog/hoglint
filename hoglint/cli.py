@@ -325,6 +325,11 @@ WAY_OUT = (
     "the way out: change the code so the finding goes, or record a reviewed exception with its reason"
     " and review date; rewriting the ledger to pass hides new debt from review"
 )
+# What `check` tells the reader of a group that claims a level it fails.
+CLAIM_WAY_OUT = (
+    "the way out: fix each reason, or drop the narrowing in the file that claims the level;"
+    " no ledger line or exception accepts a claim on a level the group fails"
+)
 # The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
 
@@ -453,9 +458,26 @@ class CheckReport:
         out.extend(f"exceptions: {problem}" for problem in summary.exceptions.problems)
         for name, passing in summary.levels.items():
             out.append(f"level {name}: {len(passing)} pass, {len(summary.level_failures.get(name, {}))} fail")
+        out.extend(self.claim_lines())
         accepted_count = summary.findings.count(FindingStatus.ACCEPTED)
         out.append(f"{accepted_count} findings accepted by the ledger")
         return "\n".join(out) + "\n"
+
+    def claim_lines(self) -> list[str]:
+        """Each group that claims a level it fails, with the level's reasons, and each level whose
+        claims cannot be read."""
+        summary = self.summary
+        failed = summary.failed_claims()
+        if not failed and not summary.claim_errors:
+            return []
+        out = [f"claimed levels that fail ({len(failed) + len(summary.claim_errors)})"]
+        for name, group, where, reasons in failed:
+            out.append(f"  {name}  {group}  (claimed in {where})")
+            out.extend(f"    {reason}" for reason in reasons)
+        for name, error in sorted(summary.claim_errors.items()):
+            out.append(f"  {name}  cannot read its claims: {error}")
+        out.append(f"  {CLAIM_WAY_OUT}")
+        return out
 
     def exit_code(self) -> int:
         """`check` without `--changed`: 2 for a blocking incomplete result, 1 when the run failed."""
@@ -465,7 +487,9 @@ class CheckReport:
         if any(item.cause in BLOCKING_CAUSES for item in summary.incomplete):
             return 2
         unequal = summary.equality is not None and not summary.equality.equal
-        failed = self.violations() or unequal or summary.exceptions.stale or summary.exceptions.problems
+        exceptions_failed = summary.exceptions.stale or summary.exceptions.problems
+        claims_failed = summary.failed_claims() or summary.claim_errors
+        failed = self.violations() or unequal or exceptions_failed or claims_failed
         return 1 if failed else 0
 
 

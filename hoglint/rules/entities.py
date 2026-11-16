@@ -8,7 +8,7 @@ from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.config.schema import required_file
 from hoglint.globs import alternatives
-from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
+from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, open_coverage
 from hoglint.rules.base import EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, RuleType, Seen, project
 from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import Node, Ref, Resolver, Truth, Value, conjuncts, joined, refs
@@ -373,11 +373,7 @@ class CoveragePrimitive(EntityRule):
             return self.run
         options = {key: value for key, value in self.spec.inputs if key != "adapter"}
         try:
-            open_run = getattr(adapter, "open_run", None)
-            if open_run is not None:
-                handle = open_run(options, repo)
-            else:
-                handle = adapter.open(options, PLUGIN_ROOTS.of(repo, adapter, options))
+            handle = open_coverage(adapter, options, repo)
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
             self.everywhere("inputs", f"cannot read the {name} inputs: {error}")
             return self.run

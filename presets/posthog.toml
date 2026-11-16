@@ -834,3 +834,6 @@ requires     = ["reached-watched", "wiring-watched", "presentation-uses-facade",
 strict       = ["reached-watched", "wiring-watched", "presentation-uses-facade", "has-facade"]
 # Presentation that reaches another product past its door is lint only.
 within_group = ["presentation-uses-facade"]
+# A product whose own turbo.json narrows its contract-check inputs claims the level: if it fails
+# the level, check fails, and no ledger line accepts it. An unsound skip is never debt.
+claimed_by   = { adapter = "turbo", task = "backend:contract-check" }

@@ -75,7 +75,8 @@ class RunInputs:
         return found
 
     def declared(self) -> tuple[str, ...]:
-        """What each provider and coverage adapter declares: the files a plugin reads."""
+        """What each provider and coverage adapter declares: the files a plugin reads, a level's
+        claiming input too."""
         patterns: set[str] = set()
         for spec in self.config.providers.values():
             patterns.update(declared_inputs(REGISTRY.providers.get(spec.use), dict(spec.options)))
@@ -83,6 +84,11 @@ class RunInputs:
             if spec.primitive == "coverage":
                 adapter = REGISTRY.coverage_adapters.get(str(spec.input("adapter")))
                 options = {key: value for key, value in spec.inputs if key != "adapter"}
+                patterns.update(declared_inputs(adapter, options))
+        for level in self.config.levels.values():
+            if level.claimed_by:
+                adapter = REGISTRY.coverage_adapters.get(str(level.claim_option("adapter")))
+                options = {key: value for key, value in level.claimed_by if key != "adapter"}
                 patterns.update(declared_inputs(adapter, options))
         return tuple(sorted(patterns))
 

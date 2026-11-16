@@ -162,7 +162,7 @@ SHAPE_KEYS = frozenset(
 )
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
-LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group"})
+LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by"})
 LEDGER_KEYS = frozenset({"file", "exceptions"})
 ROLE_KEYS = frozenset({"owner", "group"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
@@ -1062,6 +1062,7 @@ class SchemaBuilder:
             for rule_id in within_group:
                 if rule_id not in requires:
                     self.fail(key, f"within_group rule {rule_id!r} must also be in `requires`")
+            claimed_by = self.read_claim(f"{key}.claimed_by", table.get("claimed_by"))
             out[name] = LevelSpec(
                 name,
                 group_by,
@@ -1071,8 +1072,15 @@ class SchemaBuilder:
                 strict,
                 self.source(key),
                 within_group,
+                claimed_by,
             )
         return out
+
+    def read_claim(self, key: str, raw: Any) -> tuple[tuple[str, Any], ...]:
+        """`claimed_by`: a coverage adapter and its options, as a coverage rule's `inputs`."""
+        if raw is None:
+            return ()
+        return tuple(self.read_inputs(key, raw).items())
 
     def read_ledger(self) -> LedgerSpec:
         table = self.raw.get("ledger", {})
