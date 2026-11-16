@@ -91,7 +91,7 @@ def test_installed_app_without_facts_is_a_gap_and_the_rest_still_loads() -> None
     assert [e.resolution for e in graph.by_kind("loads") if e.attr("app") == "ghost"] == [Resolution.UNRESOLVED]
 
 
-def test_signal_edges_resolve_class_and_label_senders_and_keep_the_rest_unresolved() -> None:
+def test_signal_edges_resolve_senders_place_a_senderless_receiver_at_its_signal() -> None:
     graph = FactRepo(RECEIVERS).graph()
 
     edges = {e.site.scope: e for e in graph.by_kind("signal")}
@@ -99,7 +99,7 @@ def test_signal_edges_resolve_class_and_label_senders_and_keep_the_rest_unresolv
     assert {scope: (str(e.target), e.resolution, e.attr("reason")) for scope, e in edges.items()} == {
         "on_order": ("shop.models.Order", Resolution.RESOLVED, ""),
         "on_label": ("shop.models.Order", Resolution.RESOLVED, ""),
-        "on_any": ("None", Resolution.UNRESOLVED, "no-sender"),
+        "on_any": ("django.db.models.signals.post_save", Resolution.EXTERNAL, "no-sender"),
         "on_variable": ("None", Resolution.UNRESOLVED, "variable-sender"),
     }
     assert {e.attr("signal") for e in edges.values()} == {"django.db.models.signals.post_save"}

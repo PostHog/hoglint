@@ -1994,6 +1994,12 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
 
 [[row]]
+case = "RD05"
+rule = "receiver-direction"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.count_signals.stock_counted", "reports", "products.reports.backend.count_watch"]
+
+[[row]]
 case = "WW22"
 rule = "receiver-direction"
 verdict = "unknown"
@@ -2236,6 +2242,18 @@ case = "RD02"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/legacy/backend/stock_listeners.py"]
+
+[[row]]
+case = "RD04"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/rotation_listeners.py"]
+
+[[row]]
+case = "RD05"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/count_watch.py"]
 
 [[row]]
 case = "UI01"

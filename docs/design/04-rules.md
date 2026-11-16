@@ -1,7 +1,7 @@
 # 4. Rules: primitives, scoping, states
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 16, 2026.
+> Current as of Nov 16, 2026 (evening).
 
 ## Decided
 
@@ -126,6 +126,12 @@ The extractor records what each method assigns to attributes of its first parame
 Only the class's own body and methods count, never a base class or code outside the class.
 Anything else stays unresolved, and so incomplete: a static or class method, a nested function's `self`, two classes, a value it cannot type (a function's result, an assignment by unpacking, `+=`, a loop or `with` target, one in a function the method defines), an attribute the class also defines as a method or property.
 A member is named by its class (`Family.register`); a hook the config names through a module-level instance (`registry.console.register_moved_page`) is not matched by a call through an attribute that holds that instance's class.
+
+**A receiver with no sender listens to its signal** (the architect, Nov 16).
+`@receiver(signal)` or `signal.connect(fn)` with no `sender` is a `signal` edge to the signal itself: the module that defines a signal is what fires it, so `receiver-direction` and `wiring-watched` read the signal's package as the sender's.
+A receiver on Django's or Celery's own signals goes to third-party code and crosses no package; one on a core or another product's custom signal crosses.
+A signal that does not resolve leaves the edge unresolved, as a variable sender does.
+A `connect` in a hook's own body (a module-level function that hands its parameter on to it) has the attr `hook`; `wiring-watched` does not ask for that module, since the hook's callers are placed as `installs` edges.
 
 **A loop variable bound over a literal sequence takes each of its values** (the architect, Nov 16).
 In `for model in RULE_MODELS:` the extractor gives a watched call in the loop's body one `calls` row per value, with the variable replaced where the call passes it as a whole argument, so each `post_save.connect(..., sender=model)` is one placed signal edge per sender.

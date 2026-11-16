@@ -25,7 +25,7 @@ from hoglint.core.memo import ItemOutput, PerFileRead
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
 from hoglint.native.queries import Words, entities_named
-from hoglint.packs.django.signals import CONNECT, SignalValues
+from hoglint.packs.django.signals import CONNECT, SignalValues, handing_hook
 from hoglint.plugins import PackReader
 
 INSTALLS_PRODUCER = "django.installs@1"
@@ -53,16 +53,9 @@ def connect_helpers(reader: PackReader, signals: SignalValues, files: list[FileS
     found: set[str] = set()
     for scope, rows in reader.calls_named(files, "calls", (CONNECT,)):
         for at_scope, _, line, _, _, callee, args, kws in rows:
-            if at_scope < 0:
-                continue
-            d = scope.defs[at_scope]
-            if d["k"] == "class" or d["s"] != -1 or d["n"] == CONNECT:
-                continue
-            handed = args[0] if args else next((value for key, value in kws if key == "receiver"), None)
-            if not isinstance(handed, str) or handed not in {param[0] for param in d.get("params", ())}:
-                continue
-            if signals.connected_signal(scope, callee, at_scope, line) is not None:
-                found.add(f"{scope.module}.{scope.qualnames[at_scope]}")
+            hook = handing_hook(scope, at_scope, args, kws)
+            if hook and signals.connected_signal(scope, callee, at_scope, line) is not None:
+                found.add(hook)
     return tuple(sorted(found))
 
 

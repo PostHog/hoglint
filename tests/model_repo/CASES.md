@@ -184,6 +184,9 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `RD02` | `products/legacy/backend/stock_listeners.py` | The same in an unwatched module | the same, and a wiring-watched finding | |
 | `RD03` | `products/legacy/backend/tests/test_stock_signals.py` | The same in a product's test file | public-surface finding for the import; receiver-direction and wiring-watched clean | A receiver in a test is no wiring (Nov 12) |
 | `RD03` | `products/inventory/backend/logic/stock.py` | A receiver on its own product's sender | clean | |
+| `RD04` | `posthog/models/stock_events.py`, `products/legacy/backend/rotation_listeners.py`, `products/legacy/backend/signals.py` | Receivers with no sender in an unwatched module: on a core signal, on the product's own signal, on Django's `request_started` (a stub in `site/`) | wiring-watched finding for the core signal's receiver; clean for the other two | A receiver with no sender is placed at its signal: the signal's module is what fires it (Nov 16) |
+| `RD05` | `products/inventory/backend/facade/count_signals.py`, `products/reports/backend/count_watch.py` | A receiver with no sender on another product's signal, in an unwatched module | receiver-direction finding (the signal's product as the sender's); wiring-watched finding | The same (Nov 16) |
+| `RD06` | `products/legacy/backend/signals.py`, `products/inventory/backend/logic/rotation.py` | A hook's own body connects its parameter: to its module's signal, and to a core signal from an unwatched module | clean | The hook's callers are placed as installs, so its body is not asked again (`hook` attr; Nov 16) |
 | `IN01` | `products/legacy/backend/apps.py`, `products/legacy/backend/hooks.py` | A product registers a function into a core hook from an unwatched module | installs clean (a list); wiring-watched finding | `installs` is a list (Nov 12) |
 | `IN02` | `products/legacy/backend/apps.py` | A product registers a model class into a core registry | clean beyond `IN01` | D100 (wanted) |
 | `IN03` | `products/reports/backend/apps.py`, `products/inventory/backend/facade/hooks.py` | A product registers into another product's facade hook | wiring-watched finding | |
@@ -429,7 +432,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | reverse-accessor | A relation onto a third-party app | None |
 | receiver-direction | Core listens to a product's saves | None: same edge as `RD01` from core |
 | receiver-direction | A product listens to another product's saves | `RD01`, `RD02` |
-| receiver-direction | Signals with no sender; a variable sender | None |
+| receiver-direction | Signals with no sender; a variable sender | `RD04` to `RD06` (no sender); a variable sender: `WW22` |
 
 ## Adding a case
 

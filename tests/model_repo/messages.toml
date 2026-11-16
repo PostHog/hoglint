@@ -869,6 +869,11 @@ identity = ["products.inventory.backend.models.StockItem", "legacy", "products.l
 text = "products.legacy.backend.stock_listeners -> products.inventory.backend.models.StockItem (signal)"
 
 [[finding]]
+rule = "receiver-direction"
+identity = ["products.inventory.backend.facade.count_signals.stock_counted", "reports", "products.reports.backend.count_watch"]
+text = "products.reports.backend.count_watch -> products.inventory.backend.facade.count_signals.stock_counted (signal)"
+
+[[finding]]
 rule = "drives"
 identity = ["reports:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(WidgetQuery)"]
 text = "posthog.test.test_widget_query -> products.reports.backend.hogql_queries (drives)"
@@ -1366,7 +1371,7 @@ text = "products/inventory/backend/tasks/ is needed by runs_by_name == true and 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/apps.py"]
-text = "products/legacy/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/legacy/turbo.json does not watch it"
+text = "products/legacy/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/legacy/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1385,13 +1390,18 @@ text = "products/legacy/backend/logic/widgets.py is needed by edge.kind == 'dott
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/legacy/backend/rotation_listeners.py"]
+text = "products/legacy/backend/rotation_listeners.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/legacy/backend/routes.py"]
 text = "products/legacy/backend/routes.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/stock_listeners.py"]
-text = "products/legacy/backend/stock_listeners.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/legacy/turbo.json does not watch it"
+text = "products/legacy/backend/stock_listeners.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/legacy/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1411,7 +1421,12 @@ text = "products/legacy/backend/webhook_consumers.py is needed by registry != no
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/apps.py"]
-text = "products/reports/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/reports/turbo.json does not watch it"
+text = "products/reports/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/count_watch.py"]
+text = "products/reports/backend/count_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1436,7 +1451,7 @@ text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotte
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/stock_watch.py"]
-text = "products/reports/backend/stock_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/reports/turbo.json does not watch it"
+text = "products/reports/backend/stock_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"

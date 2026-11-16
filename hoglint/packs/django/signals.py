@@ -2,7 +2,12 @@
 
 Sources: `@receiver(<signal>, sender=X)` (and configured wrappers of it) on a def, and
 `<signal>.connect(fn, sender=X)`. A string sender resolves through the model label table.
-No sender, or a sender that is not a class, gives an unresolved edge: unknown is never clean.
+A receiver with no sender listens to whatever fires the signal, so its edge goes to the signal
+itself: the module that defines a signal is what fires it. A sender that is not a class gives an
+unresolved edge, and so does a signal that does not resolve: unknown is never clean.
+
+A `connect` in the body of a hook (a module-level function that hands one of its parameters on
+to it) has attr `hook`: the receivers are the hook's callers', placed by their `installs` edges.
 
 Candidates come from queries: decorators by their `decorate` edge (by origin) or by a spelled
 receiver name in the file, and `connect` calls by spelling. Each one then resolves here.
@@ -49,6 +54,21 @@ class FileCandidates:
     callees: list[list] = field(default_factory=list)
 
 
+def handing_hook(scope: FileScope, at_scope: int, args: list, kws: list) -> str:
+    """The module-level function a `connect` call hands one of its parameters on to as the
+    receiver, qualified; "" for any other call. A method is left out, and so is a function named
+    `connect`: every `.connect` call would name it."""
+    if at_scope < 0:
+        return ""
+    d = scope.defs[at_scope]
+    if d["k"] == "class" or d["s"] != -1 or d["n"] == CONNECT:
+        return ""
+    handed = args[0] if args else next((value for key, value in kws if key == "receiver"), None)
+    if not isinstance(handed, str) or handed not in {param[0] for param in d.get("params", ())}:
+        return ""
+    return f"{scope.module}.{scope.qualnames[at_scope]}"
+
+
 class SignalValues:
     """Which names are signals: module-level values built by calling a Signal subclass."""
 
@@ -92,13 +112,22 @@ class SignalProducer(SignalValues):
         self.receivers = frozenset(config.receiver_decorators)
         self.receiver_words = Words.ending(name.rpartition(".")[2] for name in self.receivers)
 
-    def signal_name(self, scope: FileScope, value: object, at_scope: int, line: int) -> str:
+    def signal_name(self, scope: FileScope, value: object, at_scope: int, line: int) -> tuple[str, Hit | None]:
+        """A signal argument's name (the signal's origin when it is one), and what it resolves to."""
         if not isinstance(value, str):
-            return UNKNOWN
+            return UNKNOWN, None
         hit = self.lookup(scope, value, at_scope, line)
         if hit is not None and self.is_signal(hit):
-            return str(hit.origin)
-        return value
+            return str(hit.origin), hit
+        return value, hit
+
+    def at_signal(self, hit: Hit | None) -> Sender:
+        """The sender of a receiver with no sender: the signal itself, which its defining module
+        fires. A signal that does not resolve leaves the edge unresolved."""
+        if hit is None:
+            return Sender("", (), Resolution.UNRESOLVED, "no-sender")
+        origin = hit.origin
+        return Sender(str(origin), (origin,), self.reader.first_party.resolution(origin.module), "no-sender")
 
     def sender(self, scope: FileScope, kws: list, at_scope: int, line: int) -> Sender:
         value = next((v for k, v in kws if k == "sender"), None)
@@ -121,11 +150,21 @@ class SignalProducer(SignalValues):
         return Sender(value, (hit.origin,), self.reader.first_party.resolution(hit.origin.module))
 
     def edge(
-        self, scope: FileScope, site: Site, flags: int, sender: Sender, signal: str, receiver: str, how: str
+        self,
+        scope: FileScope,
+        site: Site,
+        flags: int,
+        sender: Sender,
+        signal: str,
+        receiver: str,
+        how: str,
+        hook: str = "",
     ) -> Edge:
         attrs = [("signal", signal), ("receiver", receiver), ("how", how)]
         if sender.reason:
             attrs.append(("reason", sender.reason))
+        if hook:
+            attrs.append(("hook", hook))
         return Edge(
             kind="signal",
             site=site,
@@ -138,32 +177,35 @@ class SignalProducer(SignalValues):
             attrs=tuple(attrs),
         )
 
-    def header_signals(self, scope: FileScope, idx: int) -> list[str]:
+    def header_signals(self, scope: FileScope, idx: int) -> list[tuple[str, Hit | None]]:
         """Signals named anywhere in the header of def `idx`, in source order."""
         enclosing = scope.defs[idx]["s"]
-        found: list[tuple[int, int, str]] = []
+        found: list[tuple[int, int, str, Hit]] = []
         for _, header, root, attrs, count, line, column in scope.record.get("uses", ()):
             if header != idx or not PLAIN_ATTRS.fullmatch(attrs):
                 continue
             hit = self.lookup(scope, root + attrs, enclosing, line)
             if hit is not None and self.is_signal(hit):
-                found.extend([(line, column, str(hit.origin))] * count)
+                found.extend([(line, column, str(hit.origin), hit)] * count)
         for _, header, line, column, _, root, chain, _ in scope.record.get("refs", ()):
             if header != idx or not PLAIN_ATTRS.fullmatch(chain):
                 continue
             hit = self.lookup(scope, root + chain, enclosing, line)
             if hit is not None and self.is_signal(hit):
-                found.append((line, column, str(hit.origin)))
-        return [qualified for _, _, qualified in sorted(found)]
+                found.append((line, column, str(hit.origin), hit))
+        found.sort(key=lambda item: item[:3])
+        return [(qualified, hit) for _, _, qualified, hit in found]
 
-    def decorator_signals(self, scope: FileScope, idx: int, receivers: list[dict]) -> list[list[str]]:
+    def decorator_signals(
+        self, scope: FileScope, idx: int, receivers: list[dict]
+    ) -> list[list[tuple[str, Hit | None]]]:
         """The signals of each receiver decorator on one def.
 
         `@receiver([a, b])` arrives as an opaque list argument. Its names still show up as uses
         in the def header, so a lone opaque list takes the header signals no other decorator names.
         """
         d = scope.defs[idx]
-        out: list[list[str]] = []
+        out: list[list[tuple[str, Hit | None]]] = []
         opaque: list[int] = []
         for position, dec in enumerate(receivers):
             args = dec.get("args", [])
@@ -172,14 +214,14 @@ class SignalProducer(SignalValues):
             if items is not None:
                 out.append([self.signal_name(scope, item, d["s"], d["l"]) for item in items])
             elif isinstance(first, dict) and first.get("o") in OPAQUE_SEQUENCES:
-                out.append([UNKNOWN])
+                out.append([(UNKNOWN, None)])
                 opaque.append(position)
             else:
-                out.append([self.signal_name(scope, first, d["s"], d["l"])] if args else [UNKNOWN])
+                out.append([self.signal_name(scope, first, d["s"], d["l"])] if args else [(UNKNOWN, None)])
         if len(opaque) != 1:
             return out
-        named = {signal for position, signals in enumerate(out) if position not in opaque for signal in signals}
-        listed = [signal for signal in self.header_signals(scope, idx) if signal not in named]
+        named = {name for position, signals in enumerate(out) if position not in opaque for name, _ in signals}
+        listed = [signal for signal in self.header_signals(scope, idx) if signal[0] not in named]
         if listed:
             out[opaque[0]] = listed
         return out
@@ -204,7 +246,9 @@ class SignalProducer(SignalValues):
             flags = d.get("f", 0)
             for dec, signals in zip(receivers, self.decorator_signals(scope, idx, receivers), strict=True):
                 sender = self.sender(scope, dec.get("kw", []), d["s"], d["l"])
-                out.extend(self.edge(scope, site, flags, sender, signal, receiver, "decorator") for signal in signals)
+                for signal, hit in signals:
+                    placed = self.at_signal(hit) if sender.reason == "no-sender" else sender
+                    out.append(self.edge(scope, site, flags, placed, signal, receiver, "decorator"))
         return out
 
     def receiver_name(self, scope: FileScope, at_scope: int, value: object, line: int) -> str:
@@ -230,7 +274,10 @@ class SignalProducer(SignalValues):
             receiver = self.receiver_name(scope, at_scope, args[0], line) if args else UNKNOWN
             site = scope.site(at_scope, line, column)
             sender = self.sender(scope, kws, at_scope, line)
-            out.append(self.edge(scope, site, flags, sender, str(signal.origin), receiver, "connect"))
+            if sender.reason == "no-sender":
+                sender = self.at_signal(signal)
+            hook = handing_hook(scope, at_scope, args, kws)
+            out.append(self.edge(scope, site, flags, sender, str(signal.origin), receiver, "connect", hook))
         for at_scope, _, callee, count, line, column in callees:
             if (at_scope, callee) in with_args:
                 continue
