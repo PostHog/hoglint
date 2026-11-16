@@ -779,12 +779,12 @@ growth_key = ["src.package", "dst.package"]
 
 [rules.no-product-lists-in-core]
 primitive  = "edge"
-doc        = "Core names a product only through a registry or the registration export (B14)."
+doc        = "Core names a product only through a registry or the registration export (B14). Migrations are frozen history and are not judged; Django settings may name product paths as strings; core production code may name a declared permanent interface."
 kinds      = ["import", "dotted-path"]
-from       = "src.tier == 'core' and src.registry == none"
+from       = "src.tier == 'core' and src.registry == none and src.history != true"
 deny       = "dst.tier == 'product'"
-unless     = "src.zone == 'composition' and dst.exported"
-contexts   = { exclude = ["test", "type_only"] }
+unless     = "(src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true"
+contexts   = { exclude = ["test", "type_only", "migration"] }
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 

@@ -221,16 +221,16 @@ identity = ["legacy:backend/hogql_queries/", "posthog.test.test_widget_query", "
 # dynamic-imports
 
 [[row]]
-case = "DP07"
-rule = "dynamic-imports"
-verdict = "incomplete"
-identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
-
-[[row]]
 case = "DI01"
 rule = "dynamic-imports"
 verdict = "incomplete"
 identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
+
+[[row]]
+case = "DP07"
+rule = "dynamic-imports"
+verdict = "incomplete"
+identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
 
 # export-shape
 
@@ -1108,66 +1108,6 @@ verdict = "finding"
 identity = ["posthog.api.sharing", "products.inventory.backend.facade.api"]
 
 [[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.access_control.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.catalog.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.inventory.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.legacy.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.notifications.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.reports.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.reports.backend.logic.build"]
-
-[[row]]
-case = "PS12"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.migrations.0002_entry_table", "products.catalog.backend.sql"]
-
-[[row]]
 case = "PS13"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1184,12 +1124,6 @@ case = "PS13"
 rule = "no-product-lists-in-core"
 verdict = "finding"
 identity = ["posthog.management.commands.start_temporal_worker", "products.reports.backend.temporal.workflows"]
-
-[[row]]
-case = "PS14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.clickhouse.schema", "products.batch_exports.backend.sql"]
 
 [[row]]
 case = "PS14"
@@ -1294,52 +1228,10 @@ verdict = "finding"
 identity = ["posthog.permissions", "products.access_control.backend.facade.api"]
 
 [[row]]
-case = "WW04"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
-
-[[row]]
-case = "WW05"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
-
-[[row]]
-case = "WW06"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.throttles"]
-
-[[row]]
 case = "WW08"
 rule = "no-product-lists-in-core"
 verdict = "unknown"
 identity = ["posthog.request_log", "?"]
-
-[[row]]
-case = "WW11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
-
-[[row]]
-case = "WW12"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
-
-[[row]]
-case = "WW13"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
-
-[[row]]
-case = "WW14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
 
 # orm-independent
 
@@ -1528,10 +1420,10 @@ identity = ["scripts.shapes"]
 # public-surface
 
 [[row]]
-case = "DP05"
+case = "DP03"
 rule = "public-surface"
 verdict = "finding"
-identity = ["products.inventory.backend.logic.stock", "products.reports.backend.skill_build", "dotted-path"]
+identity = ["products.inventory.backend.models.StockItem", "posthog.models.team.team", "dotted-path"]
 
 [[row]]
 case = "DP04"
@@ -1546,10 +1438,10 @@ verdict = "finding"
 identity = ["products.inventory.backend.logic.stock.move_stock", "products.reports.backend.stock_names", "import"]
 
 [[row]]
-case = "DP03"
+case = "DP05"
 rule = "public-surface"
 verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "posthog.models.team.team", "dotted-path"]
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.skill_build", "dotted-path"]
 
 [[row]]
 case = "DP06"

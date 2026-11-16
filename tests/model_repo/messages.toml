@@ -990,11 +990,6 @@ text = "posthog.auth -> products.gatekeeper.backend.facade.api (import)"
 
 [[finding]]
 rule = "no-product-lists-in-core"
-identity = ["posthog.clickhouse.schema", "products.batch_exports.backend.sql"]
-text = "posthog.clickhouse.schema -> products.batch_exports.backend.sql.EXPORT_TABLE_SQL (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
 identity = ["posthog.clickhouse.schema", "products.catalog.backend.sql"]
 text = "posthog.clickhouse.schema -> products.catalog.backend.sql.ENTRY_TABLE_SQL (import)"
 
@@ -1022,11 +1017,6 @@ text = "posthog.hogql_queries.query_runner -> products.legacy.backend.hogql_quer
 rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.reports.backend.temporal.workflows"]
 text = "posthog.management.commands.start_temporal_worker -> products.reports.backend.temporal.workflows.BuildReportWorkflow (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.migrations.0002_entry_table", "products.catalog.backend.sql"]
-text = "posthog.migrations.0002_entry_table -> products.catalog.backend.sql.ENTRY_TABLE_SQL (import)"
 
 [[finding]]
 rule = "no-product-lists-in-core"
@@ -1075,88 +1065,8 @@ text = "posthog.urls -> products.legacy.backend.api.widgets.WidgetViewSet (impor
 
 [[finding]]
 rule = "no-product-lists-in-core"
-identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
-text = "ee.settings -> products.gatekeeper.backend.admin_gate.AdminGateMiddleware (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
 identity = ["posthog.models.team.team", "products.inventory.backend.models"]
 text = "posthog.models.team.team -> products.inventory.backend.models.StockItem (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.access_control.backend.apps"]
-text = "posthog.settings.web -> products.access_control.backend.apps.AccessControlConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.notifications.backend.apps"]
-text = "posthog.settings.web -> products.notifications.backend.apps.NotificationsConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.inventory.backend.apps"]
-text = "posthog.settings.web -> products.inventory.backend.apps.InventoryConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.catalog.backend.apps"]
-text = "posthog.settings.web -> products.catalog.backend.apps.CatalogConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.legacy.backend.apps"]
-text = "posthog.settings.web -> products.legacy.backend.apps.LegacyConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.reports.backend.apps"]
-text = "posthog.settings.web -> products.reports.backend.apps.ReportsConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.apps"]
-text = "posthog.settings.web -> products.gatekeeper.backend.apps.GatekeeperConfig (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
-text = "posthog.settings.web -> products.gatekeeper.backend.debug_gate.DebugGateMiddleware (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
-text = "posthog.settings.web -> products.gatekeeper.backend.middleware.GateSessionMiddleware (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.throttles"]
-text = "posthog.settings.web -> products.gatekeeper.backend.throttles.GateThrottle (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.reports.backend.logic.build"]
-text = "posthog.settings.web -> products.reports.backend.logic.build (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
-text = "posthog.settings.web -> products.gatekeeper.backend.session_gate.SessionGateBackend (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
-text = "posthog.settings.web -> products.gatekeeper.backend.token_check.TokenCheck (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
-text = "posthog.settings.web -> products.gatekeeper.backend.validator.GateValidator (dotted-path)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
-text = "posthog.settings.web -> products.gatekeeper.backend.login_flow.check_login (dotted-path)"
 
 [[finding]]
 rule = "no-product-lists-in-core"
