@@ -1,7 +1,7 @@
 # 3. Levels and the Isolated test skip
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 12, 2026.
+> Current as of Nov 16, 2026.
 
 Background: in the PostHog monorepo, a product on the Isolated rung skips other products' test suites when only that product changes.
 The skip is sound only if no coupling is missed.
@@ -9,6 +9,33 @@ The doctrine is in the monorepo's `products/architecture.md` ("What makes the sk
 hoglint expresses rungs like this one as **levels**: named sets of rules that a product passes or fails.
 
 ## Decided
+
+**What Isolated means** (owner, Nov 16, D108).
+A product's Isolated level is blocked only by what can make its test skip miss tests, and these block even when the ledger accepts them:
+1. code that is not a product (core, `ee`, `common`, tools, `bin`; production or test) reaches a product file past the product's export, and the product's contract-check inputs leave the file out;
+2. a product's own presentation reaches its own internals past its facade;
+3. unwatched wiring, with its incomplete items.
+
+A product also earns the level only with the structure: a facade with `backend/facade/contracts.py` (or a `contracts/` package) and a `backend/facade/api.py` that defines a function.
+Everything else (loose types, shapes, model crossings, other products' imports) is a lint matter only and does not count for the level.
+No hand-kept list of products: the request path is a watched channel (D103).
+
+How the preset says it:
+- `reached-watched` is a `coverage` rule with one edge cover: every product file that a source outside the products reaches past the export, read at the module the code names (the surface), must be in the contract-check inputs.
+  A watched file is fine: a change there runs the full suite anyway.
+  A product that reaches another product does not count; that crossing is lint only.
+  Its rows are a list (advisory, no ledger); `public-surface` holds the crossing as debt.
+- `presentation-uses-facade` is read through the level key `within_group`: a row whose subjects fall in two groups is not counted, so only a product's own presentation counts.
+- `has-facade` is a `layout` rule: `files = ["backend/facade/{contracts.py,contracts}", "backend/facade/api.py: function"]`, a list (advisory, no ledger).
+  A `files` entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
+- `wiring-watched` stays as it was.
+- The level requires these four rules and makes all four strict.
+  Its `select` reads `path startswith 'products/'`: a product is judged where its facade and its contract-check config live.
+- Whether a product skips is still its own config (`package.json` and `turbo.json`); the level says whether that skip would be sound.
+
+Its limits, in plain words:
+1. `reached-watched` reads the file the code names, not what that file imports, nor the `__init__.py` files above it (as the request path, D103).
+2. An edge whose source tier cannot be told is an incomplete item of `reached-watched` on the source module, so it blocks no product.
 
 **The linter carries the skip's safety** (owner, Nov 4).
 Rules that feed the skip block, and unknowns count against the product.
@@ -69,6 +96,8 @@ A directory with no file directly inside falls back to every file under it.
   Ledgered debt says "accepted", not "covered" (the second opinion's first ranked change, Nov 9).
 - Blocking a PR on a gap it did not cause repeats a known failure (Coverity, Google's static analysis experience).
 - Entry modules match how facades and signal receivers are treated.
+- D108: a loose type or a shape does not make a skip miss tests, so it is the wrong lever for the level; the safety setting blocks exactly what can, and every product it blocks can pass by watching files.
+  Of the settings the owner weighed (no findings at all; the preset as first built; safety plus imports inside functions; a seal on every import past the door; safety), safety keeps the most skips that are sound.
 
 ## Considered and rejected
 
@@ -81,6 +110,10 @@ A directory with no file directly inside falls back to every file under it.
 | Rules disabled below a level | Products below the level can get worse, and can stay just below forever | Second opinion; owner, Nov 11 | `docs/research/second-opinion-ledger.md` |
 | Selectors that depend on the level they help compute | "Fails isolation" turns into "the rules no longer apply" | Second opinion, Nov 11 | `docs/research/second-opinion-ledger.md` |
 | Hook callbacks with their import closure | About 170 more watched files | Owner, Nov 9 | not published |
+| A level blocked by every unknown type of twelve rules | A loose type does not make a skip miss tests | Owner, Nov 16 (D108) | not published |
+| A level blocked by every import past the door, from anywhere | Counts imports between products, which the owner left to lint | Owner, Nov 16 (D108) | not published |
+| A hand-kept list of products that may not skip | The request path is a watched channel (D103) | Owner, Nov 12 and Nov 16 | not published |
+| The non-product reach as one more `covers` entry of `wiring-watched` | It would move that rule's rows and ledger lines and make each such file a lint obligation; a list read by the level moves none | Builder, Nov 16 | not published |
 
 ## Measured state
 
@@ -99,8 +132,7 @@ A directory with no file directly inside falls back to every file under it.
 ## Open
 
 - **The published `requires` list.**
-  Agreed on Nov 9.
-  The preset is to hold it; the list was not found written down in the notes.
+  Agreed on Nov 9; the preset holds it since D108 (Nov 16).
 - **Selecting a rule by a product's level or claimed maturity** is not built (architect, Nov 11).
 - **A level ratchet** (a product that holds a level cannot drop).
   It works through the ledger's level lines and the equality check.

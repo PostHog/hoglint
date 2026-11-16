@@ -120,6 +120,9 @@ Some words have two meanings; the entry names both.
 - **Report: blocking, advisory** (rule key `report`).
   A blocking rule's new findings fail a check; an advisory rule's findings are a list that blocks nothing.
   `ledger = false` keeps no ledger lines for a rule.
+- **Required file** (layout rule keys `within`, `files`).
+  A path each root of `within` must hold.
+  An entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
 - **Coverage adapter** (coverage rule key `inputs = { adapter = ... }`).
   A plugin that reads an outside list of covered paths, such as a build tool's task inputs, for a `coverage` rule.
 
@@ -175,12 +178,14 @@ Some words have two meanings; the entry names both.
 - **Attribution, move admission** (`hoglint/ledger/growth.py`).
   Attribution runs the base engine and policy on head code to tell growth from code from growth from a rule change.
   Move admission lets a move pass only when the same couplings existed before, with the same counts.
-- **Level** (`[levels.<name>]`, keys `group_by`, `select`, `requires`, `strict`; `hoglint/rules/levels.py`).
+- **Level** (`[levels.<name>]`, keys `group_by`, `select`, `requires`, `strict`, `within_group`; `hoglint/rules/levels.py`).
   A named set of rules that each group, such as a product, passes or fails.
   A group passes when every required rule ran for it and none of its findings is new.
   The PostHog preset's level is `isolated`: a product on it may skip other products' test suites.
 - **`strict`** (level key).
   The rules whose findings block the level even when the ledger accepts them.
+- **`within_group`** (level key).
+  The required rules whose rows count only inside one group: a row whose subjects fall in two or more groups does not count for the level.
 
 ## Engine and checks
 
@@ -218,4 +223,5 @@ These belong to the PostHog preset, not to the engine.
 - **Watched** (two meanings).
   In the preset, a watched file is one that a product's contract-check inputs hold.
   The `wiring-watched` rule checks that the wiring locations other packages drive, the receivers and hook callbacks, and the modules the request pipeline reaches are watched.
+  The `reached-watched` rule checks the same for every product file that code outside the products reaches past the export.
   In the extractor, a `watched` row is a dict entry whose key is one of the `--watch-keys` strings.
