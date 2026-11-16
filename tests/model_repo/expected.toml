@@ -8,6 +8,90 @@
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
+identity = ["posthog/temporal/codec_server.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/conftest.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/oauth.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/__init__.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/conftest.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_asyncify.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_clickhouse.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_codec_server.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_encryption_codec.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_oauth.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_schedule.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_shutdown.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/tests/test_slo_interceptor.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/utils.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
 identity = ["posthog/api/rest_router.py"]
 
 [[row]]
@@ -63,6 +147,7 @@ case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
 identity = ["posthog/temporal/schedule.py"]
+count = 2
 
 [[row]]
 case = "SN01"
@@ -2055,6 +2140,14 @@ case = "SV03"
 rule = "sources-vendors-use-sdk"
 verdict = "finding"
 identity = ["products.warehouse_sources.sources.conftest", "posthog.models.team.team"]
+
+# temporal-placement
+
+[[row]]
+case = "TP01"
+rule = "temporal-placement"
+verdict = "finding"
+identity = ["alerts", "posthog.temporal.alerts.checks"]
 
 # thin-commands
 
