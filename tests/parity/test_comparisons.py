@@ -206,6 +206,7 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
                 {"location": "backend/models.py", "kind": "model-surface"},
                 {"location": "backend/apps.py", "kind": "channel:settings-path", "source": "posthog/settings/web.py"},
                 {"location": "backend/enums.py", "kind": "channel:settings-path", "source": "posthog/settings/web.py"},
+                {"location": "backend/guard.py", "kind": "channel:settings-path", "source": "posthog/settings/web.py"},
                 {
                     "location": "backend/callbacks.py",
                     "kind": "channel:hook-callback",
@@ -226,7 +227,11 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
             "products/shop/backend/apps.py": ("edge.kind in ['signal', 'installs'] and x: src", True),
             "products/shop/backend/logic.py": ("rules.request-path.dst.path", False),
         },
-        settings_names={"products.shop.backend.enums": [("posthog/settings/web.py", "SPECTACULAR_SETTINGS.ENUMS")]},
+        settings_names={
+            "products.shop.backend.enums": [("posthog/settings/web.py", "SPECTACULAR_SETTINGS.ENUMS")],
+            # A key the request path follows: hoglint should have reached the module, so no reason fits.
+            "products.shop.backend.guard": [("posthog/settings/web.py", "MIDDLEWARE")],
+        },
         unfollowed_settings=(("in", ("INSTALLED_APPS",)), ("startswith", ("SPECTACULAR_SETTINGS.",))),
         installs=[Wiring("products/shop/backend/apps.py", "posthog.hooks.register")],
         hooks=frozenset({"posthog.hooks.register"}),
@@ -242,6 +247,7 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
     assert list(reasons(comparison).values()) == [
         watched.LINT_ONLY["model-surface"],
         watched.SETTINGS_KEY,
+        None,
         watched.ENTRY_MODULE,
         watched.HOOK_NOT_LISTED,
         watched.UNRESOLVED_PATCH,
