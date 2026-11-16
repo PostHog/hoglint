@@ -132,8 +132,9 @@ class CoreConfig:
       unresolved edge.
     - path_modules: modules (dotted names or `*` globs) whose strings are paths wherever they
       stand, such as settings modules; packs declare them (`Pack.path_modules`). There, in the
-      values of a module's lazy (PEP 562) map, and anywhere in a file that hands a computed value
-      to one of the callees above, a string that names a module is a dotted-path edge. Anywhere
+      values of a module's lazy (PEP 562) map, where its text is what one of the callees above
+      takes through a loop over a literal sequence, and anywhere in a file that hands a computed
+      value to one of those callees, a string that names a module is a dotted-path edge. Anywhere
       else a string is text, whatever it names.
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
