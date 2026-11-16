@@ -2143,6 +2143,15 @@ def test_a_conflict_only_a_level_meets_stops_the_run(world: World, level: str) -
     assert native and all("field 'lead' set differently" in problem for problem in native)
 
 
+def test_a_selection_part_reads_every_field_it_names_before_it_is_judged(world: World) -> None:
+    # One part that reads the edge and the source: `edge.kind` alone decides the `or` on every edge
+    # the rule sees, yet `src.lead` is read first, so its conflict on core modules is met
+    # (src/link/rules/staged.rs).
+    rule = {**EDGE, "kinds": ["import"], "select": "edge.kind == 'import' or src.lead == 'someone'"}
+    found = outcome(world, world.config(rule_table("reads", rule), LEAD_SET_TWO_WAYS))
+    assert found and all("field 'lead' set differently" in problem for problem in found)
+
+
 EXPECTED_KINDS = CONFIG.replace(
     'model = { subclass_of = "products.billing.backend.models.Base" }',
     'model = { subclass_of = "products.billing.backend.models.Base", expected = true }\n'
