@@ -1250,16 +1250,6 @@ text = "products/catalog/backend/migrations/__init__.py is needed by zone in ['m
 
 [[finding]]
 rule = "wiring-watched"
-identity = ["products/catalog/backend/tasks/__init__.py"]
-text = "products/catalog/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/catalog/turbo.json does not watch it"
-
-[[finding]]
-rule = "wiring-watched"
-identity = ["products/catalog/backend/tasks/reindex.py"]
-text = "products/catalog/backend/tasks/reindex.py is needed by runs_by_name == true and testcode != true: module but products/catalog/turbo.json does not watch it"
-
-[[finding]]
-rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/admin_gate.py"]
 text = "products/gatekeeper/backend/admin_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
 
@@ -1300,13 +1290,8 @@ text = "products/gatekeeper/backend/validator.py is needed by rules.request-path
 
 [[finding]]
 rule = "wiring-watched"
-identity = ["products/inventory/backend/tasks/__init__.py"]
-text = "products/inventory/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/inventory/turbo.json does not watch it"
-
-[[finding]]
-rule = "wiring-watched"
-identity = ["products/inventory/backend/tasks/restock.py"]
-text = "products/inventory/backend/tasks/restock.py is needed by runs_by_name == true and testcode != true: module but products/inventory/turbo.json does not watch it"
+identity = ["products/inventory/backend/tasks/"]
+text = "products/inventory/backend/tasks/ is needed by runs_by_name == true and testcode != true: location but products/inventory/turbo.json watches no file in it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1335,18 +1320,13 @@ text = "products/legacy/backend/stock_listeners.py is needed by edge.kind in ['s
 
 [[finding]]
 rule = "wiring-watched"
-identity = ["products/legacy/backend/tasks/__init__.py"]
-text = "products/legacy/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/legacy/turbo.json does not watch it"
+identity = ["products/legacy/backend/tasks/"]
+text = "products/legacy/backend/tasks/ is needed by runs_by_name == true and testcode != true: location but products/legacy/turbo.json watches no file in it"
 
 [[finding]]
 rule = "wiring-watched"
-identity = ["products/legacy/backend/tasks/cleanup.py"]
-text = "products/legacy/backend/tasks/cleanup.py is needed by runs_by_name == true and testcode != true: module but products/legacy/turbo.json does not watch it"
-
-[[finding]]
-rule = "wiring-watched"
-identity = ["products/legacy/backend/temporal/jobs.py"]
-text = "products/legacy/backend/temporal/jobs.py is needed by runs_by_name == true and testcode != true: module but products/legacy/turbo.json does not watch it"
+identity = ["products/legacy/backend/temporal/"]
+text = "products/legacy/backend/temporal/ is needed by runs_by_name == true and testcode != true: location but products/legacy/turbo.json watches no file in it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1380,23 +1360,13 @@ text = "products/reports/backend/stock_watch.py is needed by edge.kind in ['sign
 
 [[finding]]
 rule = "wiring-watched"
-identity = ["products/reports/backend/tasks/__init__.py"]
-text = "products/reports/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
+identity = ["products/reports/backend/tasks/"]
+text = "products/reports/backend/tasks/ is needed by runs_by_name == true and testcode != true: location but products/reports/turbo.json watches no file in it"
 
 [[finding]]
 rule = "wiring-watched"
-identity = ["products/reports/backend/tasks/nightly.py"]
-text = "products/reports/backend/tasks/nightly.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
-
-[[finding]]
-rule = "wiring-watched"
-identity = ["products/reports/backend/temporal/__init__.py"]
-text = "products/reports/backend/temporal/__init__.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
-
-[[finding]]
-rule = "wiring-watched"
-identity = ["products/reports/backend/temporal/workflows.py"]
-text = "products/reports/backend/temporal/workflows.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
+identity = ["products/reports/backend/temporal/"]
+text = "products/reports/backend/temporal/ is needed by runs_by_name == true and testcode != true: location but products/reports/turbo.json watches no file in it"
 
 [[finding]]
 rule = "reached-watched"

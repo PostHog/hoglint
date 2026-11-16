@@ -2169,67 +2169,31 @@ identity = ["products/reports/backend/health_checks.py"]
 case = "WW17"
 rule = "wiring-watched"
 verdict = "finding"
-identity = ["products/catalog/backend/tasks/__init__.py"]
+identity = ["products/inventory/backend/tasks/"]
 
 [[row]]
 case = "WW17"
 rule = "wiring-watched"
 verdict = "finding"
-identity = ["products/catalog/backend/tasks/reindex.py"]
+identity = ["products/legacy/backend/tasks/"]
 
 [[row]]
 case = "WW17"
 rule = "wiring-watched"
 verdict = "finding"
-identity = ["products/inventory/backend/tasks/__init__.py"]
+identity = ["products/legacy/backend/temporal/"]
 
 [[row]]
 case = "WW17"
 rule = "wiring-watched"
 verdict = "finding"
-identity = ["products/inventory/backend/tasks/restock.py"]
+identity = ["products/reports/backend/tasks/"]
 
 [[row]]
 case = "WW17"
 rule = "wiring-watched"
 verdict = "finding"
-identity = ["products/legacy/backend/tasks/__init__.py"]
-
-[[row]]
-case = "WW17"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/legacy/backend/tasks/cleanup.py"]
-
-[[row]]
-case = "WW17"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/legacy/backend/temporal/jobs.py"]
-
-[[row]]
-case = "WW17"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/tasks/__init__.py"]
-
-[[row]]
-case = "WW17"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/tasks/nightly.py"]
-
-[[row]]
-case = "WW17"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/temporal/__init__.py"]
-
-[[row]]
-case = "WW17"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/temporal/workflows.py"]
+identity = ["products/reports/backend/temporal/"]
 
 [[row]]
 case = "WW18"

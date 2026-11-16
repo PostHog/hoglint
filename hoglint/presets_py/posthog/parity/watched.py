@@ -5,8 +5,9 @@ Only products with a `backend:contract-check` script are compared: for the other
 the whole suite, and neither tool asks for anything. The product lint asks for locations (a file,
 or a directory with a trailing slash), each for a reason it names: a wiring location, the model
 surface, a permanent exposure, a carve-out, a channel module, routes, webhook consumers. hoglint
-asks for files, each for the cover that needs it. A location is asked by both when hoglint asks
-for a file inside it.
+asks for files, each for the cover that needs it, and for the wiring locations core runs by name,
+each a directory one watched file in it watches. A location is asked by both when hoglint asks for
+a file or a directory inside it.
 """
 
 from __future__ import annotations
@@ -123,8 +124,8 @@ REGISTRY_SLOT = Reason(
 )
 NAMED_WIRING = Reason(
     "wiring-run-by-name",
-    "A file of a wiring location core runs by name that the product lint's list leaves out "
-    "(a `max_tools/` package; the lint lists `max_tools.py` only).",
+    "A wiring location core runs by name that the product lint's list leaves out (a `max_tools/` "
+    "directory; the lint lists `max_tools.py` only).",
     Effect.MORE,
 )
 MODEL_FILE = Reason(

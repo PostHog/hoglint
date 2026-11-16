@@ -109,11 +109,12 @@ Besides the drives, request-path, receiver, hook-callback and patch-target cover
 - the model surface: every module of the `models` and `migrations` zones, since a model is reachable without an import (`apps.get_model` strings, migrations, admin);
 - every module a registry loads by name (`registry != none`): routes, scopes, data freshness, webhook consumers, health checks, integration usages and hooks, today's highlights;
 - every declared permanent interface (`permanent`);
-- every module of a wiring location core runs by a name it reads at run time (`runs_by_name`: tasks, temporal, Max tools); query runners stay with `drives`, which reads their channel;
+- each wiring location core runs by a name it reads at run time (`runs_by_name`: tasks, temporal, Max tools), as one location that any one watched file in it watches, as the old lint reads it (the owner, Nov 16); query runners stay with `drives`, which reads their channel;
 - every product module a settings module names by dotted path, under any key, not only the keys the request path follows;
 - the modules of its own product that a product's AppConfig module (`app_config`) imports at module level.
 
 A coverage rule may select modules by an entity selector: `"<entity selector>: module"` needs the file of each module the selector keeps.
+`"<entity selector>: location"` needs one watched file in each location those modules stand in: the outermost package or directory without `__init__.py` that the selector keeps, else the module's own file.
 A module it cannot tell it keeps is an incomplete item.
 
 Its limits, in plain words:
@@ -121,11 +122,13 @@ Its limits, in plain words:
 2. A registry the preset does not declare is not known, so a new loader call needs a registry entry.
    The old lint found every `load_product_modules` call by itself.
 3. The model surface is the two zones; a model class defined elsewhere in a product is not asked for.
+4. A location run by name is watched through any one file in it, so a change to another file in it does not reach the check.
 
 **A wiring location without `__init__.py` is watched through its files** (Nov 12).
 Each module file directly inside the directory stands for it, as `__init__.py` stands for a package: `wiring-watched` requires each of them.
 Files further down and the tests under it are not asked for.
 A directory with no file directly inside falls back to every file under it.
+This holds for the locations `drives` names; a location run by name is watched through any one file in it (Nov 16, above).
 
 ## Why
 
@@ -150,6 +153,8 @@ A directory with no file directly inside falls back to every file under it.
 | A level blocked by every unknown type of twelve rules | A loose type does not make a skip miss tests | Owner, Nov 16 (D108) | not published |
 | A level blocked by every import past the door, from anywhere | Counts imports between products, which the owner left to lint | Owner, Nov 16 (D108) | not published |
 | A hand-kept list of products that may not skip | The request path is a watched channel (D103) | Owner, Nov 12 and Nov 16 | not published |
+| Every file of a wiring location run by name | Each file of the location becomes a watched input; the owner takes the old lint's reading, any one watched file in it | Owner, Nov 16 | not published |
+| Only the `__init__.py` of a wiring location run by name, as for `drives` | The owner takes the old lint's reading, any one watched file in it | Owner, Nov 16 | not published |
 | The non-product reach as one more `covers` entry of `wiring-watched` | It would move that rule's rows and ledger lines and make each such file a lint obligation; a list read by the level moves none | Builder, Nov 16 | not published |
 
 ## Measured state
