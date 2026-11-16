@@ -265,6 +265,11 @@ text = "products.catalog.backend.facade.errors exports products.catalog.backend.
 
 [[finding]]
 rule = "export-shape"
+identity = ["products.catalog.backend.logic.exporters.CatalogFlush", "products.catalog.backend.facade.exporters", "export-shape(class)"]
+text = "products.catalog.backend.facade.exporters exports products.catalog.backend.logic.exporters.CatalogFlush: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
 identity = ["products.catalog.backend.facade.generics.EntryProps", "products.catalog.backend.facade.generics", "export-shape(class)"]
 text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryProps: export-shape(class)"
 

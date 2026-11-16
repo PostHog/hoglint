@@ -249,6 +249,12 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "BH01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.exporters.CatalogFlush", "products.catalog.backend.facade.exporters", "export-shape(class)"]
+
+[[row]]
 case = "AC01"
 rule = "export-shape"
 verdict = "unknown"

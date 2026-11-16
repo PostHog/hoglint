@@ -150,6 +150,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `WK02` | `tools/viewkit/shapes.py`, `products/catalog/backend/facade/handout.py` | The same class defined in a tool package | facade-signature finding | `walk_where` true for tier `tool` |
 | `WK03` | `sandbox/shapes.py`, `products/catalog/backend/facade/handout.py` | The same class in a first-party top folder no assignment claims (tier unknown) | facade-signature finding (walked); incomplete rows for every edge of the folder | `walk_where` unknown walks (Nov 12 review) |
 | `WK04` | `scripts/shapes.py`, `products/catalog/backend/facade/handout.py` | The same class in a top folder outside `[discovery] first_party` | incomplete rows for the folder's edges and the facade's import; the field is not walked | Defect: read as third-party with no facts (wanted) |
+| `BH01` | `posthog/exporters.py`, `products/catalog/backend/logic/exporters.py`, `products/catalog/backend/facade/exporters.py` | Handed-out classes that implement an abstract base: one core defines, one the product defines | clean for the core base; export-shape finding (`export-shape(class)`) for the product base | `behavior`: a class whose abstract base core owns is an allowed behavior class, and its own members are judged (Nov 16) |
 | `CN01` | `products/legacy/backend/facade/contracts.py`, `products/catalog/backend/events.py`, `posthog/kafka_client/client.py` | A contract reaches Django through a chain of module-level imports | contracts-no-django finding | |
 | `CN02` | `products/catalog/backend/facade/enums.py` | An enum module imports Django inside a function | clean | Only what runs on import (Nov 12) |
 | `CN03` | `products/inventory/backend/facade/contracts.py`, `posthog/__init__.py`, `posthog/celery.py` | A contract imports a core module whose package `__init__` loads Django | clean | Known gap (wanted) |
@@ -353,7 +354,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | export-shape | A product model handed out by a re-export module | `ES01` |
 | export-shape | A Django `TextChoices` handed out | None: the stub has no `TextChoices` |
 | export-shape | An auth object crosses a facade | None |
-| export-shape | A behavior class handed out | None |
+| export-shape | A behavior class handed out | `BH01` |
 | export-shape | A mutable data shape | `ES09` |
 | export-shape | A management command in a facade | `ES11` |
 | facade-signature | The core model list | `FS04` |
