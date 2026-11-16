@@ -441,7 +441,6 @@ UNEXPANDED_NAMES = {
 # Names a call declares that the producer expands as a type alias, by what they stand for.
 DECLARED_TYPES = {
     "a TypeVar with a bound": "from typing import TypeVar\n\nRef = TypeVar('Ref', bound=Order)\n",
-    "a functional TypedDict": "from typing import TypedDict\n\nRef = TypedDict('Ref', {'order': Order})\n",
 }
 MEMBER_TAKES_REF = "\n\nclass Rejected(Exception):\n    def item(self) -> Ref:\n        raise ValueError\n"
 # An allowed class, and an attribute that names a class-body alias of the same spelling.
@@ -1045,12 +1044,6 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
     "a NewType next to an alias in one slot": (
         handed_out(UNEXPANDED_NAMES["a NewType"] + "Ids = list[int]\n" + returns_in_rejected("Ids | Ref"), "Rejected"),
         REF_UNKNOWN_AT_ERRORS,
-    ),
-    "a functional TypedDict inside an alias's value": (
-        handed_out(
-            DECLARED_TYPES["a functional TypedDict"] + "Many = list[Ref]\n" + returns_in_rejected("Many"), "Rejected"
-        ),
-        DENIED_AT_ERRORS,
     ),
     "a TypeVar inside an alias of an alias": (
         handed_out(

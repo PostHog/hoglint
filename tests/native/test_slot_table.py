@@ -872,6 +872,13 @@ MEMBER_FORMS: dict[str, tuple[str, Verdict, Verdict]] = {
         ES,
         BOTH,
     ),
+    "a functional TypedDict with a model": (
+        src(
+            "Props = TypedDict('Props', {'order': Order})\n\n\nclass Rejected(Exception):\n    def item(self) -> Props:\n        raise ValueError\n"
+        ),
+        ES,
+        BOTH,
+    ),
     "a typed mapping whose argument is a model": (
         src("class Rejected(Exception):\n    def item(self, orders: dict[str, Order]) -> None:\n        pass\n"),
         ES,

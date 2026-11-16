@@ -19,7 +19,7 @@ pub enum V {
     /// `{"call": callee, ...}`, also the over-budget form `{"call": callee, "o": "big"}`; true
     /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example); the
     /// argument a reader needs: the one positional argument of a copy or a builtin constructor
-    /// (`sorted(_LAZY)`), or what a `TypeVar` or a `TypedDict` call declares (`type_argument`).
+    /// (`sorted(_LAZY)`), or what a `TypeVar` call declares (`type_argument`).
     Call(Box<V>, bool, Option<Box<V>>),
     Attr(Box<V>, Sid),
     Sub(Box<V>, Box<V>),
@@ -428,8 +428,8 @@ fn frozen_keyword(keywords: Option<&J>) -> bool {
 }
 
 /// The argument a call that declares a type keeps, by the callee's last name: a `TypeVar`'s
-/// `bound`, else its constraints as a tuple; a `TypedDict`'s fields, its second argument. Whether
-/// the callee is the `typing` one is the reader's to tell.
+/// `bound`, else its constraints as a tuple. Whether the callee is `typing`'s is the reader's to
+/// tell.
 fn type_argument(
     it: &mut Interner,
     callee: &str,
@@ -452,7 +452,6 @@ fn type_argument(
                 None => return None,
             }
         }
-        "TypedDict" => value(it, args.get(1)?),
         _ => return None,
     };
     Some(Box::new(kept))

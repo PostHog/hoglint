@@ -3,12 +3,13 @@
 use crate::config::{ExtractConfig, Kind};
 use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
-use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status, TypeParam};
+use crate::facts::flags::CLASS;
+use crate::facts::{Assign, Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status, TypeParam};
 use crate::loops::Sequences;
 use crate::self_attrs::self_attrs;
 use crate::source::{LineIndex, parse_py314, source_text};
 use crate::value::{Encoder, Keyword, MAX_HEADER_NODES, Value, keyword_name};
-use crate::walker::{Counts, Walk, Walker};
+use crate::walker::{Counts, TypedDictClass, Walk, Walker};
 use ruff_python_ast::{self as ast, Expr, Parameters};
 use ruff_python_parser::Mode;
 use std::collections::HashSet;
@@ -83,17 +84,59 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         } else {
             Vec::new()
         };
-        let def_rows = if kinds.has(Kind::Defs) {
+        let mut def_rows: Vec<Def> = if kinds.has(Kind::Defs) {
             (0..defs.entries.len())
                 .map(|idx| self.def_record(&defs, &walk.def_flags, idx))
                 .collect()
         } else {
             Vec::new()
         };
+        for declared in std::mem::take(&mut walk.typed_dicts) {
+            Self::declare_typed_dict(declared, &mut def_rows, &mut walk.assigns);
+        }
         let mut facts = Self::facts_of(walk, def_rows, derived);
         facts.keep(kinds);
         facts.sort();
         facts
+    }
+
+    /// A functional `TypedDict` as the class form records it: a class def after the file's own
+    /// defs, so their scope ids stay, and one annotated field per key in its body.
+    fn declare_typed_dict(
+        declared: TypedDictClass,
+        defs: &mut Vec<Def>,
+        assigns: &mut Vec<Assign>,
+    ) {
+        let scope = defs.len() as i64;
+        for (name, ann, l, c) in declared.fields {
+            assigns.push(Assign {
+                ann: Some(ann),
+                c,
+                f: declared.flags | CLASS,
+                l,
+                op: ":".to_string(),
+                s: scope,
+                t: vec![Value::Chain(name)],
+                v: Value::Null,
+            });
+        }
+        defs.push(Def {
+            attrs: Vec::new(),
+            bases: vec![declared.base],
+            c: declared.c,
+            dec: Vec::new(),
+            e: declared.e,
+            f: declared.flags,
+            k: DefKind::Class,
+            kw: declared.kw,
+            l: declared.l,
+            n: declared.name,
+            params: Vec::new(),
+            ret: Value::Null,
+            s: declared.scope,
+            stub: false,
+            tp: Vec::new(),
+        });
     }
 
     fn facts_of(walk: Walk, defs: Vec<Def>, derived: Vec<Ref>) -> Facts {

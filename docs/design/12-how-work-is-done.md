@@ -53,7 +53,7 @@ A hole whose fix is decided and not built is a strict expected failure with its 
 `tests/native/test_slot_exactly_once.py` builds its trees from three lists: where a slot sits, how its type is written, and how a facade hands the name out.
 Each tree runs with a model of the product in the slot, with `int`, with a name that does not resolve, and, under the bare wrapper, with `Any`.
 - **The invariant:** the model gives exactly one finding, from the rule the table of [09](09-contract-surfaces.md) names, and it names the model; `int` gives none; the unresolved name and `Any` give exactly one, from that rule. It reads the native engine's tables through the shared harness (`clean_dump`), which also requires that no producer fails.
-  A wrapper the page reads as unknown (`NewType`, a `TypeVar`, a functional `TypedDict`, a class-body alias) gives one finding that names it, with every probe; a member of a class core defines gives none.
+  A wrapper the page reads as unknown (`NewType`, a `TypeVar` with no bound, a class-body alias) gives one finding that names it, with every probe; a member of a class core defines gives none. A `TypeVar` with a bound is judged by its bound; a functional `TypedDict` is a class, as its class form is, and the slot table holds the two side by side.
 - **Named limits:** a tree that does not meet the invariant today is in `LIMITS`, a row per cause: the trees it holds for, what they give, why, and the page sentence that states it (or "not written").
   The test asserts the row still gives exactly that, so a fix makes the row fail; remove the row then.
 - **A new form** is one more entry in one of the three lists.

@@ -12,8 +12,8 @@ The invariant, on the native engine's tables (`clean_dump`):
 - the unresolved name and `Any` give exactly one finding each, from that rule.
 
 A wrapper the design page reads as unknown (a `NewType`, a class-body alias) gives one finding
-that names the wrapper, with every probe. A `TypeVar` bound to the probe and a functional `TypedDict`
-with a field of it are judged by what they stand for, as an alias is. A member of a class
+that names the wrapper, with every probe. A `TypeVar` bound to the probe is judged by its bound, as
+an alias is. A functional `TypedDict` is a class, as its class form is (`test_slot_table.py`). A member of a class
 core defines gives no finding: it is core's contract. A field of a class core defines that a slot
 names gives a finding for a denied kind only: the model, where the wrapper lets it be read.
 
@@ -146,7 +146,6 @@ WRAPPERS = (
     Wrapper("a class-body alias", class_body_alias, opaque="Ref", in_class_only=True),
     Wrapper("NewType", aliased("Ref = NewType('Ref', {X})\n"), opaque="Ref"),
     Wrapper("a TypeVar with the bound", aliased("T = TypeVar('T', bound={X})\n", "T")),
-    Wrapper("a functional TypedDict", aliased("Props = TypedDict('Props', {{'x': {X}}})\n", "Props")),
 )
 
 

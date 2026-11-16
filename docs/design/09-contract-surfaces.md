@@ -104,8 +104,8 @@ The reasoning matches D63: where something is defined must not change the verdic
 
 **A name declared by a call or a type parameter is judged by what it stands for** (the architect, Nov 16).
 - A `TypeVar` (of `typing` or `typing_extensions`) stands for its bound, else the union of its constraints; one with neither stays unknown.
-- A functional `TypedDict` stands for the typed mapping of its fields, `dict[str, A | B]`: each field's type is read through `Required`, `NotRequired` and `ReadOnly`, and an entry that is no literal key (`**other`) or fields that are no dict literal are unknown. A class-form `TypedDict` stays a class.
-- Both are expanded as a type alias is, wherever they are assigned, imported ones included.
+- A `TypeVar` is expanded as a type alias is, wherever it is assigned, imported ones included; one bound to a `TypedDict` stands for that class.
+- A functional `TypedDict` (`Props = TypedDict("Props", {"key": T})`) declares a class, as the class form does: the extractor records it as a class with one annotated field per key, so every rule reads the two forms alike, their fields included. The doctrine makes a named record type a contract question, and the two forms are the same thing at run time. Its callee is read by its last name, as a base is spelled; a field list that is no dict literal of string keys, or a key with a dot, stays an assignment, unknown. A plain `dict[str, X]` stays a typed mapping.
 - A PEP 695 type parameter (`def f[T: Bound]`, `class C[T: (A, B)]`) stands for its bound or the union of its constraints in the slots of its def or class and of what they hold; the nearest parameter of a name hides an outer one. One with no bound stays as written, unknown as before.
 - A `TypeVar`'s bound and constraints are read as type expressions, a string one too.
 - Written limits: a type parameter with no bound does not hide a module-level name of its spelling; a `TypeVar`'s default is not read.

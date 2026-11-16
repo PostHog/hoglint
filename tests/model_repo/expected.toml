@@ -235,6 +235,18 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "TA02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics.EntryProps", "products.catalog.backend.facade.generics", "export-shape(class)"]
+
+[[row]]
+case = "TA02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics.EntryRecord", "products.catalog.backend.facade.generics", "export-shape(class)"]
+
+[[row]]
 case = "AC01"
 rule = "export-shape"
 verdict = "unknown"
@@ -523,16 +535,16 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
-case = "TA01"
+case = "TA02"
 rule = "facade-signature"
 verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "first_note", "param:notes", "products.catalog.backend.models.CatalogEntry"]
+identity = ["products.catalog.backend.facade.generics", "EntryProps", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
 
 [[row]]
-case = "TA01"
+case = "TA02"
 rule = "facade-signature"
 verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "first_note", "return", "products.catalog.backend.models.CatalogEntry"]
+identity = ["products.catalog.backend.facade.generics", "EntryRecord", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
 
 [[row]]
 case = "AC01"
@@ -747,6 +759,18 @@ identity = ["products.catalog.backend.facade.generics", "first_entry", "return",
 [[row]]
 case = "TA01"
 rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "first_note", "param:notes", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA01"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "first_note", "return", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA01"
+rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.catalog.backend.facade.generics", "echo", "param:value", "products.catalog.backend.facade.generics.AnyT"]
 
@@ -755,12 +779,6 @@ case = "TA01"
 rule = "facade-signature"
 verdict = "unknown"
 identity = ["products.catalog.backend.facade.generics", "echo", "return", "products.catalog.backend.facade.generics.AnyT"]
-
-[[row]]
-case = "TA02"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "entry_note", "param:props", "products.catalog.backend.models.CatalogEntry"]
 
 [[row]]
 case = "TA03"

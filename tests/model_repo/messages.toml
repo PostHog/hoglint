@@ -240,6 +240,16 @@ text = "products.catalog.backend.facade.errors exports products.catalog.backend.
 
 [[finding]]
 rule = "export-shape"
+identity = ["products.catalog.backend.facade.generics.EntryProps", "products.catalog.backend.facade.generics", "export-shape(class)"]
+text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryProps: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.catalog.backend.facade.generics.EntryRecord", "products.catalog.backend.facade.generics", "export-shape(class)"]
+text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryRecord: export-shape(class)"
+
+[[finding]]
+rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.handout", "export-denied(model)"]
 text = "products.catalog.backend.facade.handout exports scripts.shapes.ExternalView -> products.inventory.backend.models.StockItem: export-denied(model)"
 
@@ -430,6 +440,11 @@ text = "products.catalog.backend.facade.api.import_command exposes products.cata
 
 [[finding]]
 rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "EntryRecord", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.EntryRecord exposes products.catalog.backend.models.CatalogEntry in attr:entry"
+
+[[finding]]
+rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "first_entry", "param:entries", "products.catalog.backend.models.CatalogEntry"]
 text = "products.catalog.backend.facade.generics.first_entry exposes products.catalog.backend.models.CatalogEntry in param:entries"
 
@@ -460,11 +475,6 @@ text = "products.catalog.backend.facade.generics.echo exposes products.catalog.b
 
 [[finding]]
 rule = "facade-signature"
-identity = ["products.catalog.backend.facade.generics", "entry_note", "param:props", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.entry_note exposes products.catalog.backend.models.CatalogEntry in param:props"
-
-[[finding]]
-rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "newest", "param:entries", "products.catalog.backend.models.CatalogEntry"]
 text = "products.catalog.backend.facade.generics.newest exposes products.catalog.backend.models.CatalogEntry in param:entries"
 
@@ -482,6 +492,11 @@ text = "exposes 'products.catalog.backend.facade.generics.V' did not resolve"
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "same", "return", "products.catalog.backend.facade.generics.V"]
 text = "exposes 'products.catalog.backend.facade.generics.V' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "EntryProps", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.EntryProps exposes products.catalog.backend.models.CatalogEntry in attr:entry"
 
 [[finding]]
 rule = "facade-signature"

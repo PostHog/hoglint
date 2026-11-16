@@ -7,7 +7,11 @@ NoteT = TypeVar("NoteT", bound="CatalogEntry")
 LabelT = TypeVar("LabelT", str, bytes)
 AnyT = TypeVar("AnyT")
 EntryProps = TypedDict("EntryProps", {"entry": CatalogEntry, "note": str})
-LabelProps = TypedDict("LabelProps", {"label": str, "item-count": int})
+
+
+class EntryRecord(TypedDict):
+    entry: CatalogEntry
+    note: str
 
 
 def first_entry(entries: list[EntryT]) -> EntryT:
@@ -30,8 +34,8 @@ def entry_note(props: EntryProps) -> str:
     return props["note"]
 
 
-def label_props(props: LabelProps) -> LabelProps:
-    return props
+def record_note(record: EntryRecord) -> str:
+    return record["note"]
 
 
 def newest[E: CatalogEntry](entries: list[E]) -> E:

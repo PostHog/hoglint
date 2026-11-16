@@ -375,13 +375,8 @@ struct Keys {
     fields: Sid,
     class_var: Sid,
     constant: Sid,
-    /// The callees that declare a type variable or a typed dict by a call.
+    /// The callees that declare a type variable by a call.
     type_vars: [Sid; 2],
-    typed_dicts: [Sid; 2],
-    /// The last names of the wrappers a typed dict's field type is read through.
-    field_wrappers: [Sid; 3],
-    dict_name: Sid,
-    str_name: Sid,
 }
 
 impl Producing {
@@ -470,17 +465,6 @@ impl Producing {
                 it.intern("typing.TypeVar"),
                 it.intern("typing_extensions.TypeVar"),
             ],
-            typed_dicts: [
-                it.intern("typing.TypedDict"),
-                it.intern("typing_extensions.TypedDict"),
-            ],
-            field_wrappers: [
-                it.intern("Required"),
-                it.intern("NotRequired"),
-                it.intern("ReadOnly"),
-            ],
-            dict_name: it.intern("dict"),
-            str_name: it.intern("str"),
         };
         Producing {
             names: LookupNames {
@@ -1332,7 +1316,7 @@ impl Producers<'_> {
     }
 
     /// Whether the module-level assignment at (file, row) is one the producer expands as a type
-    /// alias: its value is one (`alias_value`), or a call that declares a type (`declared_type`).
+    /// alias: its value is one (`alias_value`), or a `TypeVar` with a bound (`declared_type`).
     fn stands_for_type(&mut self, file: u32, at: u32) -> bool {
         let facts = self.core.facts.clone();
         let Some(value) = &facts.files[file as usize].assigns[at as usize].value else {
@@ -1341,9 +1325,8 @@ impl Producers<'_> {
         alias_value(value) || self.declared_type(file, at).is_some()
     }
 
-    /// The type a module-level `TypeVar` or functional `TypedDict` stands for, when its callee is
-    /// `typing`'s: the `TypeVar`'s bound, or the union of its constraints; the `TypedDict` as the
-    /// typed mapping of its fields. None for any other value, and for a `TypeVar` with neither.
+    /// The type a module-level `TypeVar` stands for, when its callee is `typing`'s: its bound, or
+    /// the union of its constraints. None for any other value, and for a `TypeVar` with neither.
     fn declared_type(&mut self, file: u32, at: u32) -> Option<V> {
         let facts = self.core.facts.clone();
         let row = &facts.files[file as usize].assigns[at as usize];
@@ -1359,55 +1342,13 @@ impl Producers<'_> {
             line: row.l,
         };
         let callee = self.lookup_at(lookup, name).surface;
-        let k = &self.settings.k;
-        if k.type_vars.contains(&callee) {
-            return Some(match &**kept {
-                V::Tuple(constraints) => union(constraints),
-                bound => bound.clone(),
-            });
+        if !self.settings.k.type_vars.contains(&callee) {
+            return None;
         }
-        if k.typed_dicts.contains(&callee) {
-            return Some(self.typed_mapping(kept));
-        }
-        None
-    }
-
-    /// A functional `TypedDict`'s fields as the mapping they stand for, `dict[str, A | B]`, each
-    /// field's type read through `Required`, `NotRequired` and `ReadOnly`. Fields that are no
-    /// literal dict, or an entry with no key (`**other`), are a part no type expression reads.
-    fn typed_mapping(&mut self, fields: &V) -> V {
-        let types: Vec<V> = match fields {
-            V::Dict(pairs) => pairs
-                .iter()
-                .map(|(key, value)| match key {
-                    Some(_) => self.field_type(value),
-                    None => V::Other,
-                })
-                .collect(),
-            _ => vec![V::Other],
-        };
-        let k = &self.settings.k;
-        let mut index = vec![V::Chain(k.str_name)];
-        if !types.is_empty() {
-            index.push(union(&types));
-        }
-        V::Sub(Box::new(V::Chain(k.dict_name)), Box::new(V::Tuple(index)))
-    }
-
-    /// A typed dict field's type, read through the wrappers that only say whether the key is
-    /// required or read-only.
-    fn field_type(&mut self, value: &V) -> V {
-        if let V::Sub(inner, index) = value
-            && let V::Chain(chain) = **inner
-            && self
-                .settings
-                .k
-                .field_wrappers
-                .contains(&self.core.it.last(chain))
-        {
-            return self.field_type(index);
-        }
-        value.clone()
+        Some(match &**kept {
+            V::Tuple(constraints) => union(constraints),
+            bound => bound.clone(),
+        })
     }
 
     /// Every module-level assignment (file, row) of a name the module
@@ -1569,8 +1510,8 @@ impl Producers<'_> {
         }
     }
 
-    /// One assignment's value into an expansion: the type a `TypeVar` or `TypedDict` call
-    /// declares, else the value as written.
+    /// One assignment's value into an expansion: the type a `TypeVar` call declares, else the
+    /// value as written.
     fn expand_row(
         &mut self,
         file: u32,

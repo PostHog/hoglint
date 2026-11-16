@@ -11,7 +11,8 @@ use crate::path::{Frame, climb};
 use crate::source::LineIndex;
 use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
 use crate::value::{
-    Encoder, MAX_NODES, StrValue, Value, binop, boolop, callee_text, cmpop, unaryop,
+    Encoder, Keyword, MAX_NODES, StrValue, Value, binop, boolop, callee_text, cmpop, keyword_name,
+    unaryop,
 };
 use ruff_python_ast::{self as ast, Expr, ExprContext, InterpolatedStringElement, Pattern, Stmt};
 use ruff_text_size::{Ranged, TextSize};
@@ -97,6 +98,24 @@ pub struct Walk {
     pub names: Counts<TextKey>,
     /// Statement flags by def index.
     pub def_flags: Vec<u32>,
+    /// The functional `TypedDict`s the walk read as class declarations.
+    pub typed_dicts: Vec<TypedDictClass>,
+}
+
+/// A functional `TypedDict` (`Name = TypedDict("Name", {"key": type})`): the class it declares,
+/// as the class form would, with one annotated field per key. Where and how it is written (its
+/// assignment's scope, flags and lines), the callee as its base and the call's keywords.
+pub struct TypedDictClass {
+    pub scope: i64,
+    pub flags: u32,
+    pub l: i64,
+    pub c: i64,
+    pub e: i64,
+    pub name: String,
+    pub base: Value,
+    pub kw: Vec<Keyword>,
+    /// Each field: its key, its type, and the key's line and column.
+    pub fields: Vec<(String, Value, i64, i64)>,
 }
 
 /// The most `calls` rows one call becomes over the values of the loops around it.
@@ -291,6 +310,61 @@ impl<'a, 'w> Walker<'a, 'w> {
         self.wants(Kind::Assigns) && (scope == -1 || self.defs.is_class(scope))
     }
 
+    /// A functional `TypedDict` where the walk records assignments, read as the class it declares:
+    /// one target name, a callee whose last name is `TypedDict`, and fields that are a dict literal
+    /// of string keys with no dot. Any other form stays an assignment.
+    fn typed_dict(&mut self, a: &'a ast::StmtAssign, at: At) -> Option<TypedDictClass> {
+        if !self.emits_assign(at.scope) || !self.wants(Kind::Defs) {
+            return None;
+        }
+        let [Expr::Name(target)] = a.targets.as_slice() else {
+            return None;
+        };
+        let Expr::Call(call) = &*a.value else {
+            return None;
+        };
+        let last = match &*call.func {
+            Expr::Name(name) => name.id.as_str(),
+            Expr::Attribute(attr) => attr.attr.as_str(),
+            _ => return None,
+        };
+        let [_, Expr::Dict(dict)] = &*call.arguments.args else {
+            return None;
+        };
+        if last != "TypedDict" {
+            return None;
+        }
+        let mut fields = Vec::new();
+        for item in dict.items.iter() {
+            let Some(Expr::StringLiteral(key)) = &item.key else {
+                return None;
+            };
+            let key = key.value.to_str();
+            if key.contains('.') {
+                return None;
+            }
+            let (l, c) = self.lines.pos(item.key.as_ref()?.range().start());
+            let ann = self.value(Some(&item.value), true);
+            fields.push((key.to_string(), ann, l, c));
+        }
+        let mut kw = Vec::new();
+        for k in call.arguments.keywords.iter() {
+            kw.push(Keyword(keyword_name(k), self.value(Some(&k.value), false)));
+        }
+        let (l, c) = self.lines.pos(a.range.start());
+        Some(TypedDictClass {
+            scope: at.scope,
+            flags: at.flags,
+            l,
+            c,
+            e: self.lines.line(a.range.end()),
+            name: target.id.to_string(),
+            base: self.value(Some(&call.func), false),
+            kw,
+            fields,
+        })
+    }
+
     fn stmt(&mut self, stmt: &'a Stmt, at: At) {
         match stmt {
             Stmt::FunctionDef(f) => self.visit_def(DefNode::Func(f), at),
@@ -308,7 +382,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             Stmt::Assign(a) => {
-                if self.emits_assign(at.scope) {
+                if let Some(declared) = self.typed_dict(a, at) {
+                    self.out.typed_dicts.push(declared);
+                } else if self.emits_assign(at.scope) {
                     let t = a
                         .targets
                         .iter()
