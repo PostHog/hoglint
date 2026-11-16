@@ -138,13 +138,31 @@ Reading a package from `[discovery] external` still gives its models and the nam
   Only a Django signal's `connect` counts; a database driver's `connect` makes no hook.
 - The `surface` endpoint of an edge that resolves to library code reads as the graph module the code names, when one names it: a patch target `products....module.client.send` is the product module's, since the test depends on that module binding `client`.
 
-Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`), and a sender bound by a `for` loop over a constant sequence; the facts hold no instance-attribute type and no loop binding.
+**A call through an instance attribute the class types is a call of that class's member** (the architect, Nov 16).
+In a method, `self.family.register(...)` names the member `register` of the one class `self.family` holds, so a call whose last name is a hook's but that resolves to such a member is no hook call.
+The extractor records what each method assigns to attributes of its first parameter; the class is read from the attribute's annotations (in the class body or on an assignment), else from every value the class assigns it: a call of a class, or an item of a module-level container whose annotation (`dict[K, V]`, `list[V]`, `tuple[V, ...]` and their `typing` and `collections.abc` names) or literal items give one class.
+Only the class's own body and methods count, never a base class or code outside the class.
+Anything else stays unresolved, and so incomplete: a static or class method, a nested function's `self`, two classes, a value it cannot type (a function's result, an assignment by unpacking, `+=`, a loop or `with` target, one in a function the method defines), an attribute the class also defines as a method or property.
+A member is named by its class (`Family.register`); a hook the config names through a module-level instance (`registry.console.register_moved_page`) is not matched by a call through an attribute that holds that instance's class.
+
+**A loop variable bound over a literal sequence takes each of its values** (the architect, Nov 16).
+In `for model in RULE_MODELS:` the extractor gives a watched call in the loop's body one `calls` row per value, with the variable replaced where the call passes it as a whole argument, so each `post_save.connect(..., sender=model)` is one placed signal edge per sender.
+The sequence is a tuple or list literal, written in the `for` or bound to a name the file binds exactly once, in the module or in the loop's own scope.
+Anything else stays as written, and so unknown: a name bound twice or by anything but that assignment, a list whose attributes the file uses (`X.append(...)` can change it), a starred element, a loop variable the body binds again, a call in a lambda or a comprehension (it runs later), an empty sequence, and more than 64 rows for one call.
+
+**A package with a declared door reads `door`** (architect, D107, Nov 12; built Nov 16).
+`door` is a built-in attribute of a module: true when an export's `within` holds its path.
+- It reads the path and the config only, as a zone does, so a change that adds or moves files needs nothing new from the change predictor.
+- A rule that guards the way into such a package selects `dst.door`; no list of package names stands in the rule.
+- The other reading, "a package that has a module an export covers", depends on which files exist anywhere in the package: rejected.
+- A directory without `__init__.py` reads it from the path that labels it; a third-party module reads `none`.
+- An export with an empty `within` holds every path, so every module reads `door` as true.
 
 **A string is a path only where the code holds one** (Nov 16, from the first-ledger triage).
 A string that names a module is a `dotted-path` edge in a sink or a path place, and text anywhere else.
 - Sinks: a patch target; the first argument of a loader or of a callee `[discovery] path_callees` names (by last name, or by last dotted parts such as `patch.dict`), and an element of a list or tuple there (an argument vector, as in `python -m`).
   A string there is an edge also when it names nothing.
-- Path places: a module a pack names as one whose strings are all paths (the Django pack's settings modules, from `[django] settings`), a value of a module's lazy (PEP 562) map, and any string of a file that hands a computed value (a name, an f-string) to a sink's callee.
+- Path places: a module a pack names as one whose strings are all paths (the Django pack's settings modules, from `[django] settings`), a value of a module's lazy (PEP 562) map, a string whose text a loader or a sink's callee takes as its first argument through a loop over a literal sequence (`for path in MODULES: import_module(path)`), and any string of a file that hands a computed value (a name, an f-string) to a sink's callee.
   A string there is an edge when it names a module.
 - Why: the old product lint's data and its tests (`frozenset({"products.warehouse_sources"})`, parametrized product names) read as couplings and failed two products' level.
 - The written limit: the facts hold no flow from a name to where the code uses it, so a file that patches or loads through a name keeps every string of it that names a module, data too.

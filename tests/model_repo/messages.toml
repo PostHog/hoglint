@@ -1034,6 +1034,21 @@ identity = []
 text = "products.reports.backend.health_checks reaches posthog.dags.backfill.backfill_partition: products.reports.backend.health_checks -> posthog.dags.backfill.backfill_partition"
 
 [[finding]]
+rule = "core-door"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
+text = "import '......gone' did not resolve"
+
+[[finding]]
+rule = "core-door"
+identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
+text = "products.legacy.backend.logic.payloads names posthog.ingress.handlers, which is not exported to it; cannot tell, unassigned: dst.exported"
+
+[[finding]]
+rule = "core-door"
+identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
+text = "products.legacy.backend.logic.widgets names posthog.ingress.dispatch.route_payload, which is not exported to it"
+
+[[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/apps.py"]
 text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/catalog/turbo.json does not watch it"
@@ -1041,7 +1056,7 @@ text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path'
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/events.py"]
-text = "products/catalog/backend/events.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and 'function_local' not in edge.context and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/backend/events.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1115,6 +1130,11 @@ text = "products/legacy/backend/health_checks.py is needed by registry != none a
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/legacy/backend/hooks.py"]
+text = "products/legacy/backend/hooks.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/legacy/backend/logic/widgets.py"]
 text = "products/legacy/backend/logic/widgets.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/legacy/turbo.json does not watch it"
 
@@ -1157,6 +1177,11 @@ text = "products/reports/backend/health_checks.py is needed by registry != none 
 rule = "wiring-watched"
 identity = ["products/reports/backend/hogql_queries/widget.py"]
 text = "products/reports/backend/hogql_queries/widget.py is needed by rules.drives.dst.path but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/listeners.py"]
+text = "products/reports/backend/listeners.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1335,6 +1360,11 @@ text = "model-label 'apps.get_model' did not resolve"
 
 [[incomplete]]
 rule = "receiver-direction"
+identity = ["products.gatekeeper.backend.apps|signal|label"]
+text = "signal 'label' did not resolve"
+
+[[incomplete]]
+rule = "receiver-direction"
 identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
 text = "signal '<Call>' did not resolve"
 
@@ -1345,13 +1375,13 @@ text = "installs 'registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
 rule = "installs"
-identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
-text = "installs 'registry.register_post_delete_hook' did not resolve"
+identity = ["products.gatekeeper.backend.wiring|installs|self.registry.register_post_delete_hook"]
+text = "installs 'self.registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
-rule = "dynamic-imports"
-identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
-text = "dynamic-import '' did not resolve"
+rule = "installs"
+identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
+text = "installs 'registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
 rule = "dynamic-imports"
@@ -1495,8 +1525,18 @@ text = "cannot place 'registry.register_post_delete_hook' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
+text = "cannot place 'self.registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
 identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.apps|label"]
+text = "cannot place 'label' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"

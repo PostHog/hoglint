@@ -7,6 +7,7 @@
 
 pub mod facts;
 pub mod index;
+pub mod instance;
 pub mod intern;
 pub mod packs;
 pub mod paths;

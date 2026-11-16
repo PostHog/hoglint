@@ -8,7 +8,7 @@
 
 use super::facts::{
     Argument, Assign, CallRow, CountRow, Def, DefKind, FileFacts, Import, Op, Param, RefRow,
-    StrRow, TagRow, UseRow, V,
+    SelfAttr, StrRow, TagRow, UseRow, V,
 };
 use super::intern::{Interner, Sid};
 use rustc_hash::FxHashMap;
@@ -192,6 +192,13 @@ impl Enc<'_> {
             }
             self.ov(d.ret.as_ref());
             self.u8(d.stub as u8);
+            self.u32(d.attrs.len() as u32);
+            for a in &d.attrs {
+                self.u32(a.line);
+                self.sid(a.name);
+                self.v(&a.value);
+                self.ov(a.ann.as_ref());
+            }
         }
         self.u32(f.assigns.len() as u32);
         for a in &f.assigns {
@@ -538,6 +545,16 @@ pub fn decode_body(
         }
         let ret = d.ov()?;
         let stub = d.u8()? == 1;
+        let na = d.u32()? as usize;
+        let mut attrs = Vec::with_capacity(na);
+        for _ in 0..na {
+            attrs.push(SelfAttr {
+                line: d.u32()?,
+                name: d.sid()?,
+                value: d.v()?,
+                ann: d.ov()?,
+            });
+        }
         defs.push(Def {
             s,
             l,
@@ -550,6 +567,7 @@ pub fn decode_body(
             params,
             ret,
             stub,
+            attrs,
         });
     }
     let n = d.u32()? as usize;

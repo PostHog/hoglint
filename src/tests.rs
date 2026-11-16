@@ -80,6 +80,50 @@ class Box(Base, metaclass=Meta):
 }
 
 #[test]
+fn methods_record_what_they_assign_to_their_first_parameter() {
+    let source = r#"class Menu:
+    family: Family
+
+    def __init__(self, kind):
+        self.family = FAMILIES[kind]
+        self.size: int = 3
+        self.a, other = pair()
+        if kind:
+            self.count += 1
+
+        def later():
+            self.late = Late()
+
+        def own(self):
+            self.own = Own()
+
+    @staticmethod
+    def build(kind):
+        kind.x = 1
+
+def outside(self):
+    self.free = 1
+"#;
+    let defs: Vec<String> = line_with(source, &config())["defs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| format!("{} {}", d["n"], d["attrs"]))
+        .collect();
+    assert_eq!(
+        defs,
+        [
+            r#""Menu" null"#,
+            r#""__init__" [[5,"family",{"i":"kind","sub":"FAMILIES"}],[6,"size",3,"int"],[7,"a",{"o":"unspelled"}],[9,"count",{"o":"unspelled"}],[12,"late",{"o":"unspelled"}]]"#,
+            r#""later" null"#,
+            r#""own" null"#,
+            r#""build" [[19,"x",1]]"#,
+            r#""outside" null"#,
+        ]
+    );
+}
+
+#[test]
 fn assigns_cover_module_and_class_scope_only() {
     let source = r#"LIMIT: int = 10
 ITEMS = [a, b] + EXTRA
@@ -163,6 +207,38 @@ def load():
     );
     let unwatched = ExtractConfig::new(strings(&["app"]));
     assert!(line_with(source, &unwatched).get("calls").is_none());
+}
+
+#[test]
+fn a_loop_over_a_literal_sequence_gives_one_call_row_per_value() {
+    let source = r#"LABELS = ("app.Thing", "app.Other")
+GROWN = ["app.Thing"]
+GROWN.append("app.More")
+TWICE = ("app.Thing",)
+TWICE = ("app.Other",)
+
+def wire():
+    local = ["app.Local"]
+    for label in LABELS:
+        apps.get_model(label)
+        register_later(lambda: apps.get_model(label))
+    for label in local:
+        apps.get_model(label)
+    for label in ("app.Inline",):
+        for kind in (a.b, c):
+            register_kind(label, kind=kind)
+    for label in GROWN:
+        apps.get_model(label)
+    for label in TWICE:
+        apps.get_model(label)
+    for label in LABELS:
+        label = label.lower()
+        apps.get_model(label)
+"#;
+    assert_eq!(
+        facts(source, "calls"),
+        r#"[[0,-1,10,8,68,"apps.get_model",[{"s":"app.Other"}],[]],[0,-1,10,8,68,"apps.get_model",[{"s":"app.Thing"}],[]],[0,-1,11,8,68,"register_later",[{"o":"Lambda"}],[]],[0,-1,11,31,68,"apps.get_model",["label"],[]],[0,-1,13,8,68,"apps.get_model",[{"s":"app.Local"}],[]],[0,-1,16,12,68,"register_kind",[{"s":"app.Inline"}],[["kind","a.b"]]],[0,-1,16,12,68,"register_kind",[{"s":"app.Inline"}],[["kind","c"]]],[0,-1,18,8,68,"apps.get_model",["label"],[]],[0,-1,20,8,68,"apps.get_model",["label"],[]],[0,-1,23,8,68,"apps.get_model",["label"],[]]]"#
+    );
 }
 
 #[test]

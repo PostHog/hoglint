@@ -200,3 +200,8 @@ class ExportPaths:
 
     def covers(self, path: str) -> bool:
         return self.covered_root(path) is not None
+
+    def holds(self, path: str) -> bool:
+        """Whether the path lies inside `within`, whatever `paths` say: the package the export is a
+        door of. An empty `within` is the repo root, which holds every path."""
+        return not self.within or glob_match(self.within + "/**", path) is not None

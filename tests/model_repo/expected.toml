@@ -198,6 +198,26 @@ rule = "contracts-no-django"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.contracts", "django.conf"]
 
+# core-door
+
+[[row]]
+case = "DO01"
+rule = "core-door"
+verdict = "finding"
+identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
+
+[[row]]
+case = "DO06"
+rule = "core-door"
+verdict = "unknown"
+identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
+
+[[row]]
+case = "DO07"
+rule = "core-door"
+verdict = "unknown"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
+
 # drives
 
 [[row]]
@@ -225,12 +245,6 @@ case = "DI01"
 rule = "dynamic-imports"
 verdict = "incomplete"
 identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
-
-[[row]]
-case = "DP07"
-rule = "dynamic-imports"
-verdict = "incomplete"
-identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
 
 # export-shape
 
@@ -893,6 +907,12 @@ case = "UI02"
 rule = "installs"
 verdict = "incomplete"
 identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
+
+[[row]]
+case = "WW21"
+rule = "installs"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.wiring|installs|self.registry.register_post_delete_hook"]
 
 # leaves-stay-leaves
 
@@ -1687,6 +1707,12 @@ identity = ["products/reports/backend/temporal/workflows.py"]
 # receiver-direction
 
 [[row]]
+case = "WW22"
+rule = "receiver-direction"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.apps|signal|label"]
+
+[[row]]
 case = "RD01"
 rule = "receiver-direction"
 verdict = "finding"
@@ -2066,6 +2092,30 @@ rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/catalog/backend/events.py"]
 
+[[row]]
+case = "WW21"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
+
+[[row]]
+case = "WW22"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.apps|label"]
+
+[[row]]
+case = "WW23"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/hooks.py"]
+
+[[row]]
+case = "WW23"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/listeners.py"]
+
 
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
 # is an expected failure of test_model_repo.py until the rule gives it. A wanted row matches a
@@ -2085,13 +2135,6 @@ decision = "D100: a model class registered into another package is a crossing"
 rule = "*"
 verdict = "finding"
 match = ["products.legacy.backend.models.Widget", "registered_models"]
-
-[[wanted]]
-case = "DO01"
-decision = "D107: an inbound rule for a core package with a declared door (dst.door)"
-rule = "*"
-verdict = "finding"
-match = ["posthog.ingress.dispatch", "products.legacy.backend.logic.widgets"]
 
 [[wanted]]
 case = "AT01"

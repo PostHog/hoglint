@@ -196,6 +196,8 @@ ENTITY_FIELDS: dict[str, FieldInfo] = {
     "lifecycle": FieldInfo(FieldType.ENUM, LIFECYCLES),
     # The zones of the modules whose names a module hands out by import.
     "handed_zones": FieldInfo(FieldType.SET),
+    # Whether an export's `within` holds the module: it is in a package with a declared door.
+    "door": FieldInfo(FieldType.BOOL),
 }
 # Endpoint-only attributes: where the edge names it from, and what the edge says about it.
 ENDPOINT_FIELDS: dict[str, FieldInfo] = {

@@ -83,6 +83,14 @@ pub struct Param {
     pub positional: bool,
 }
 
+/// An attribute a method assigns on its first parameter: `Def::attrs`.
+pub struct SelfAttr {
+    pub line: u32,
+    pub name: Sid,
+    pub value: V,
+    pub ann: Option<V>,
+}
+
 pub struct Def {
     pub s: i32,
     pub l: u32,
@@ -95,6 +103,8 @@ pub struct Def {
     pub params: Vec<Param>,
     pub ret: Option<V>,
     pub stub: bool,
+    /// A method's assignments to attributes of its first parameter, in source order.
+    pub attrs: Vec<SelfAttr>,
 }
 
 impl Def {
@@ -644,6 +654,22 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 J::Null => None,
                 other => Some(value(it, other)),
             };
+            let attrs = rows(&d["attrs"])
+                .iter()
+                .map(|a| {
+                    let ann = row(a, 3);
+                    SelfAttr {
+                        line: int(row(a, 0)) as u32,
+                        name: it.intern(text(row(a, 1))),
+                        value: value(it, row(a, 2)),
+                        ann: if ann.is_null() {
+                            None
+                        } else {
+                            Some(value(it, ann))
+                        },
+                    }
+                })
+                .collect();
             let kind = match text(&d["k"]) {
                 "class" => DefKind::Class,
                 "async" => DefKind::Async,
@@ -661,6 +687,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 params,
                 ret,
                 stub: d["stub"].as_bool().unwrap_or(false),
+                attrs,
             }
         })
         .collect();

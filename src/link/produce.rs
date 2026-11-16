@@ -2678,6 +2678,31 @@ impl Producers<'_> {
             .collect()
     }
 
+    /// Whether a call takes a path as its first argument: a loader, a path callee or a patch callee.
+    fn takes_path(&self, callee: &str) -> bool {
+        let settings = self.settings;
+        let takes = names_callee(callee, &settings.path_callees)
+            || names_callee(callee, &settings.loader_last_names)
+            || names_callee(callee, &settings.patch_callees);
+        takes && !callee.starts_with('?')
+    }
+
+    /// The literal first arguments of the file's calls that take a path. A loop over a literal
+    /// sequence gives such a call one row per value, so the sequence's strings are what it takes.
+    fn taken_literals(&self, owner: usize) -> FxHashSet<String> {
+        let file = self.scopes[owner].file as usize;
+        let facts = self.core.facts.clone();
+        let mut taken = FxHashSet::default();
+        for row in &facts.files[file].calls {
+            if let Argument::Literal(text) = &row.argument
+                && self.takes_path(&row.callee)
+            {
+                taken.insert(text.to_string());
+            }
+        }
+        taken
+    }
+
     /// Whether the file hands a computed path (an f-string, a `+`, or a name it does not bind to a
     /// class, a function or an import) to a loader, a path callee or a patch callee: then every
     /// string it holds that names a module may be what it loads or patches. The facts hold no flow
@@ -2687,11 +2712,7 @@ impl Producers<'_> {
         let facts = self.core.facts.clone();
         let table = self.core.table(module);
         for row in &facts.files[file].calls {
-            let settings = self.settings;
-            let takes = names_callee(&row.callee, &settings.path_callees)
-                || names_callee(&row.callee, &settings.loader_last_names)
-                || names_callee(&row.callee, &settings.patch_callees);
-            if !takes || row.callee.starts_with('?') {
+            if !self.takes_path(&row.callee) {
                 continue;
             }
             let computed = match &row.argument {
@@ -2725,9 +2746,9 @@ impl Producers<'_> {
     /// A string is a dotted-path edge only where the code holds a path. In a sink (a patch target,
     /// the first argument of a path callee) it is one whether or not it names a module. In a path
     /// place (a loader's first argument, an element of a path callee's argument vector, a path
-    /// module such as a settings module, a lazy map's value, any string of a file that hands a
-    /// computed path to one of those callees) it is one when it names a module. Anywhere else a
-    /// string is text, whatever it names.
+    /// module such as a settings module, a lazy map's value, a string whose text such a call takes
+    /// through a loop, any string of a file that hands a computed path to one of those callees) it
+    /// is one when it names a module. Anywhere else a string is text, whatever it names.
     fn strings(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
@@ -2736,13 +2757,19 @@ impl Producers<'_> {
             (self.settings.path_modules.iter()).any(|pattern| glob_matches(pattern, module));
         let lazy = self.lazy_entries(owner);
         let computed = self.hands_computed_path(owner);
+        let taken = self.taken_literals(owner);
         for row in &facts.files[file].strs {
             let patch = patch_role(&row.up, &self.settings.patch_callees);
             let argument = path_argument(&row.up, self.settings);
             let sink = patch || argument == PathArgument::Sink;
             let lazy_value = row.scope == -1
                 && (row.value.as_deref()).is_some_and(|text| in_lazy_map(&row.up, text, &lazy));
-            let place = argument == PathArgument::Place || path_module || lazy_value || computed;
+            let taken_value = (row.value.as_deref()).is_some_and(|text| taken.contains(text));
+            let place = argument == PathArgument::Place
+                || path_module
+                || lazy_value
+                || taken_value
+                || computed;
             if !sink && !place {
                 continue;
             }

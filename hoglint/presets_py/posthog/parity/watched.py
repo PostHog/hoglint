@@ -140,7 +140,8 @@ PERMANENT_FILE = Reason(
 )
 APP_CONFIG_IMPORT = Reason(
     "app-config-import",
-    "A module the AppConfig module imports at module level that the product lint does not ask for.",
+    "A module the AppConfig module imports at setup (at module level or in the body of `ready()`) "
+    "that the product lint does not ask for.",
     Effect.MORE,
 )
 # The wiring rule's covers that the preset writes as selections, by the start of their text. A
@@ -215,12 +216,12 @@ ABSENT_LOCATION = Reason(
 )
 APP_SETUP_IN_FUNCTION = Reason(
     "app-setup-import-in-function",
-    "`backend/apps.py` imports the module only inside a function (`ready()` or a callback it "
-    "installs). The product lint reads every import in the file; hoglint's AppConfig cover reads "
-    "module-level imports only, and a receiver or hook such a module connects is its own entry "
-    "module.",
+    "`backend/apps.py` imports the module only inside a function that does not run at setup (a "
+    "callback `ready()` defines or hands on, or another function). The product lint reads every "
+    "import in the file; hoglint's AppConfig cover reads the imports at module level and in the "
+    "body of `ready()`, and a receiver or hook such a module connects is its own entry module.",
     Effect.LESS,
-    decided="the architect's brief, Nov 16 (module-level imports)",
+    decided="the architect, Nov 16 (imports at module level and in the body of `ready()`)",
 )
 
 
@@ -239,12 +240,13 @@ def is_type_checking(node: ast.AST) -> bool:
     )
 
 
-def imported_only_in_functions(apps_source: str, module: str, package: str) -> bool:
+def imported_only_in_callbacks(apps_source: str, module: str, package: str) -> bool:
     """Whether every import of `module` (or a name of it) in an AppConfig module of `package`
-    that runs sits inside a function, and there is at least one. An import under `if
-    TYPE_CHECKING:` never runs."""
+    that runs sits inside a function that does not run at setup, and there is at least one. The
+    module body, a class body and the body of a module-level class's `ready()` run at setup. An
+    import under `if TYPE_CHECKING:` never runs."""
     tree = ast.parse(apps_source)
-    inside: list[bool] = []
+    later: list[bool] = []
 
     def names(node: ast.Import | ast.ImportFrom) -> list[str]:
         if isinstance(node, ast.Import):
@@ -255,19 +257,25 @@ def imported_only_in_functions(apps_source: str, module: str, package: str) -> b
             base = f"{parent}.{base}" if base else parent
         return [base, *(f"{base}.{alias.name}" for alias in node.names)]
 
-    def visit(node: ast.AST, in_function: bool) -> None:
+    def runs_later(parent: ast.AST, child: ast.AST, in_callback: bool) -> bool:
+        if in_callback or not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return in_callback
+        ready = child.name == "ready" and isinstance(parent, ast.ClassDef) and parent in tree.body
+        return not ready
+
+    def visit(node: ast.AST, in_callback: bool) -> None:
         for child in ast.iter_child_nodes(node):
             if is_type_checking(child):
                 assert isinstance(child, ast.If)
                 for branch in child.orelse:
-                    visit(branch, in_function)
+                    visit(branch, in_callback)
                 continue
             if isinstance(child, (ast.Import, ast.ImportFrom)) and module in names(child):
-                inside.append(in_function)
-            visit(child, in_function or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)))
+                later.append(in_callback)
+            visit(child, runs_later(node, child, in_callback))
 
     visit(tree, False)
-    return bool(inside) and all(inside)
+    return bool(later) and all(later)
 
 
 def names_nothing(value: str, module: str, module_source: str) -> bool:
@@ -298,8 +306,8 @@ def channel_reason(
     home = f"products/{product}/"
     if kind == "channel:app-setup":
         apps = f"{home}backend/apps.py"
-        if imported_only_in_functions(read_source(apps), module, f"products.{product}.backend"):
-            return APP_SETUP_IN_FUNCTION, f"{apps} imports {module} only inside a function"
+        if imported_only_in_callbacks(read_source(apps), module, f"products.{product}.backend"):
+            return APP_SETUP_IN_FUNCTION, f"{apps} imports {module} only inside a function that runs later"
         return None
     if kind == "channel:settings-path":
         named = facts.settings_names.get(module, [])

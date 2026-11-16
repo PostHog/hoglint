@@ -726,11 +726,12 @@ ledger        = false
 # The covers after the first four are where core runs a product's code with no import a rule
 # follows: its models and migrations, a module a registry loads by name, a declared permanent
 # interface, a wiring location run by name, a module settings name under any key, and what the
-# AppConfig module imports at module level. A location run by name is one row, watched by any one
-# watched file in it, as the product lint reads it (the owner, Nov 16).
+# AppConfig module imports at setup: at module level and in the body of `ready()` (the Django pack's
+# `app_setup` attr), not in a function `ready()` defines or hands on. A location run by name is one
+# row, watched by any one watched file in it, as the product lint reads it (the owner, Nov 16).
 [rules.wiring-watched]
 primitive  = "coverage"
-doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback outside tests, and every module outside tests patch is in the contract-check inputs; so are a product's models and migrations, the modules a registry loads by name, its permanent interfaces, each wiring location run by name (one watched file in it watches it), the modules settings name, and the product modules its AppConfig module imports at module level."
+doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback outside tests, and every module outside tests patch is in the contract-check inputs; so are a product's models and migrations, the modules a registry loads by name, its permanent interfaces, each wiring location run by name (one watched file in it watches it), the modules settings name, and the product modules its AppConfig module imports at setup (at module level or in the body of `ready()`)."
 covers     = [
   "rules.drives.dst.path",
   "rules.request-path.dst.path",
@@ -741,7 +742,7 @@ covers     = [
   "permanent == true and testcode != true: module",
   "runs_by_name == true and testcode != true: location",
   "edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface",
-  "edge.kind == 'import' and src.app_config == true and dst.package == src.package and 'function_local' not in edge.context and 'type_only' not in edge.context: surface",
+  "edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface",
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"

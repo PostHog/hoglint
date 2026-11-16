@@ -23,6 +23,7 @@ from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Tr
 
 REGISTRY_FIELD = "registry"
 HANDED_ZONES = "handed_zones"
+DOOR = "door"
 # Entity attributes the labeler answers itself; every other name is a declared field.
 BUILTIN_ENTITY_NAMES = frozenset({*ENTITY_FIELDS, "kind", "subject"})
 # A type-only or test import hands nothing out (the export primitive's default exclude).
@@ -694,6 +695,8 @@ class Labeler:
             return self.kind(symbol)[0] if symbol else NONE
         if name == HANDED_ZONES:
             return self.handed_zones(module) if module else NONE
+        if name == DOOR:
+            return self.door(module) if module else NONE
         label = self.module_labels(module).get(REGISTRY_FIELD) if module else None
         if label is None:
             return NONE
@@ -701,6 +704,15 @@ class Labeler:
             return Value.known(str(label.value))
         lifecycle = self.config.registries[str(label.value)].lifecycle
         return Value.known(lifecycle) if lifecycle else NONE
+
+    def door(self, module: str) -> Value:
+        """Whether an export's `within` holds the path that labels the module: it is in a package
+        with a declared door. It reads the path and the config only, as a zone does. None for a
+        module with no path."""
+        path = self.labelled_path(module)
+        if path is None:
+            return NONE
+        return Value.known(any(spec.files.holds(path) for spec in self.config.exports.values()))
 
     def handed_imports(self, module: str) -> list[Edge]:
         """The module-scope imports of the names a module hands out (`Graph.hand_outs`), then its

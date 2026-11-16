@@ -249,7 +249,8 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
         "products/shop/backend/patched.py": "import boto3\n",
         "products/shop/backend/named.py": "def here():\n    pass\n",
         "products/shop/backend/apps.py": (
-            "if TYPE_CHECKING:\n    from . import audit\n\n\nclass Config:\n    def ready(self):\n        from . import audit\n"
+            "if TYPE_CHECKING:\n    from . import audit\n\n\nclass Config:\n    def ready(self):\n"
+            "        def later():\n            from . import audit\n"
         ),
     }
 
@@ -272,6 +273,18 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
         watched.SETTINGS_NAMED,
         watched.HOGLINT_ONLY_REASONS["rules.request-path.dst.path"],
     ]
+
+
+@pytest.mark.parametrize(
+    "body, later",
+    [
+        ("class Config:\n    def ready(self):\n        from . import audit\n", False),
+        ("class Config:\n    def ready(self):\n        def later():\n            from . import audit\n", True),
+        ("class Config:\n    def helper(self):\n        from . import audit\n", True),
+    ],
+)
+def test_an_app_config_import_runs_later_only_outside_the_ready_body(body: str, later: bool) -> None:
+    assert watched.imported_only_in_callbacks(body, "products.shop.backend.audit", "products.shop.backend") is later
 
 
 def test_a_migration_edge_hoglint_lacks_is_explained_only_when_a_third_party_app_is_an_end() -> None:
