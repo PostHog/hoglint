@@ -1,5 +1,5 @@
 //! The walk's parent stack, and the `chain` / `up` use-site context read from it
-//! (schema.md section 6). Mirrors `FileWalker.path` and `FileWalker.step` in reference_l1.py.
+//! (schema.md section 6).
 
 use crate::value::callee_text;
 use ruff_python_ast::{self as ast, Expr};

@@ -139,7 +139,7 @@ class Condition:
 
 KEYWORDS = frozenset({"and", "or", "not", "in", "startswith", "subset_of", "true", "false", "none"})
 # The deepest a selector nests, in its text (parentheses, `not`) and in its tree: a limit of the
-# config, so both engines judge every selector that loads.
+# config, so the evaluator and the Python selector code both judge every selector that loads.
 MAX_DEPTH = 32
 
 # One dotted part of a name: a condition's whole name, or a segment of `src.zone`.

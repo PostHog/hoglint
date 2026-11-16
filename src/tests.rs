@@ -1,5 +1,4 @@
-//! One small Python snippet per fact kind. Expected rows and `cfg` ids come from the
-//! reference extractor.
+//! One small Python snippet per fact kind, with the rows and `cfg` ids it must give.
 
 use crate::{ExtractConfig, FileRecord, Kind, Kinds, Status, extract, record_line, sha256_hex};
 

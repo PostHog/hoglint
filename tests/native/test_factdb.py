@@ -338,7 +338,7 @@ def test_a_database_opened_after_the_prune_listed_it_stays(tmp_path: Path, monke
 
 
 def records_directory(facts: Path, name: str, written_days_ago: float) -> Path:
-    """A directory of the Python engine's per-file records, last written `written_days_ago`."""
+    """A directory of the extractor's cached per-file records, last written `written_days_ago`."""
     directory = facts / name
     directory.mkdir()
     entry = directory / "0123.json"

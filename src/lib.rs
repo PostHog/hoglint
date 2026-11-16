@@ -3,7 +3,6 @@
 //! `extract` turns one file's bytes into a typed `FileRecord`; `record_line` encodes it.
 //! Nothing here reads files, the clock or global state. The `hoglint-facts` binary is the
 //! shell: arguments, file reading, the content-hash cache, output and the thread pool.
-//! Output matches reference_l1.py byte for byte, line for line.
 
 mod defs;
 mod derive;

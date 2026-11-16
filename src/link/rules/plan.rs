@@ -258,12 +258,12 @@ pub struct RulePlan {
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ModePlan {
-    /// `EdgeRule.decide` per edge, findings as rows (edge, entrypoint, signature, use-shape and
+    /// `decide` per destination, findings as rows (edge, entrypoint, signature, use-shape and
     /// edge inventory rules).
     Judge(JudgePlan),
     /// The search of a reach rule.
     Reach(ReachPlan),
-    /// The group pairs of a cycle rule: what `CyclePrimitive.consider` reads.
+    /// The group pairs of a cycle rule.
     Cycle(CyclePlan),
     /// The whole check of an export rule.
     Export(ExportModePlan),
@@ -300,13 +300,11 @@ pub struct JudgePlan {
     pub identified: Vec<String>,
     /// The refs a message names where the judgment reads them unknown.
     pub unknown_refs: UnknownRefsPlan,
-    /// An entrypoint rule that judges a later use of an imported name at its import
-    /// (`EntrypointPrimitive.sees`).
+    /// An entrypoint rule that judges a later use of an imported name at its import.
     pub uses_at_import: bool,
 }
 
-/// Per selector, the paths of the refs it reads, each once, in its order
-/// (`EdgeRule.unknown_refs`).
+/// Per selector, the paths of the refs it reads, each once, in its order.
 #[derive(Deserialize)]
 pub struct UnknownRefsPlan {
     /// `from`, then `select`.
@@ -321,7 +319,7 @@ pub struct SignaturePlan {
     pub unknown_types: Vec<String>,
 }
 
-/// How a judged rule decides a selected destination (`EdgeRule.violation` and its overrides).
+/// How a judged rule decides a selected destination.
 // Decoded once per rule: the size of the largest variant costs nothing.
 #[allow(clippy::large_enum_variant)]
 #[derive(Deserialize)]

@@ -158,9 +158,8 @@ PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
 
 
 def without_export_rule(preset: str) -> str:
-    """The preset without its export rule. These tests run the Python rule engine over hand-built
-    graphs, and only the native evaluator walks what an export hands out (its tests are under
-    tests/native), so the rule and the level's requirement of it go."""
+    """The preset without its export rule. These tests build their graphs by hand, and the export
+    rule's tests are under tests/native, so the rule and the level's requirement of it go."""
     start = preset.index("[rules.export-shape]\n")
     end = preset.index("\n[", start + 1) + 1
     required = '"export-shape", '

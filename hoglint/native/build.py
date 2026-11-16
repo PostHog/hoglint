@@ -297,7 +297,7 @@ class Entities:
 
 
 class NativeResolver:
-    """The Resolver methods packs call, answered by the link."""
+    """The resolver packs call (`PackReader.resolver`), answered by the link."""
 
     def __init__(self, link: Any, entities: Entities) -> None:
         self.entities = entities

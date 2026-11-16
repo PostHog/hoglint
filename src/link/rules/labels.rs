@@ -349,7 +349,7 @@ impl Export {
         self.paths.covered_root(path)
     }
 
-    /// Whether the path lies inside the export's `within` and `paths` (`Labeler.export_covers`).
+    /// Whether the path lies inside the export's `within` and `paths`.
     fn covers(&self, path: &str) -> bool {
         self.paths.covers(path)
     }
@@ -781,8 +781,8 @@ impl Rules {
 
     /// `values` of every module field (`Labeler.compute_value`): the label, else unknown where
     /// the provider failed, else what the domain says. A value whose domain read provider labels
-    /// that are set two ways is tainted: reading it meets that conflict, as in Python, where the
-    /// domain is read only when the value is.
+    /// that are set two ways is tainted: reading it meets that conflict, since the domain is read
+    /// only when the value is.
     pub(super) fn module_values(&mut self, link: &Link) -> Vec<Vec<Cell>> {
         let cx = Cx { link, rules: self };
         let count = self.modules.len();
@@ -939,7 +939,7 @@ impl Rules {
     /// A module field's value on every graph module (`Labeler.field_value`), for Python to read
     /// instead of labelling each module again: the distinct values, and each module's place
     /// among them. A module whose value reads provider labels set two ways has `NO_PLACE`:
-    /// Python reads that one itself, to meet the conflict where the Python engine meets it.
+    /// Python reads that one itself, so the conflict is met where the value is read.
     pub fn value_column(&self, name: &str) -> Result<(Vec<&Cell>, Vec<u32>), String> {
         let field = self
             .labels

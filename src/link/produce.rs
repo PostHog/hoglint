@@ -101,7 +101,7 @@ pub struct EdgeStore {
     pub attrs: Vec<(Sid, Sid)>,
     /// Targets of pack rows.
     pub targets: Vec<Ent>,
-    /// Refinements by edge id. Python checks that two producers never set one field apart.
+    /// Refinements by edge id. `packs/refined.rs` refuses a batch that sets a field apart.
     pub refined: FxHashMap<u32, Refinement>,
     /// The interned name and producer of each core kind code (`KIND_NAMES`).
     pub kind_names: Vec<Sid>,
@@ -202,8 +202,7 @@ impl EdgeStore {
         }
     }
 
-    /// Whether edge `id`'s contexts meet `include` (any, when it is empty) and avoid `exclude`
-    /// (`rules.base.context_ok`).
+    /// Whether edge `id`'s contexts meet `include` (any, when it is empty) and avoid `exclude`.
     pub fn context_ok(&self, id: u32, include: u8, exclude: u8) -> bool {
         let ctx = self.seen_ctx(id);
         (include == 0 || ctx & include != 0) && ctx & exclude == 0

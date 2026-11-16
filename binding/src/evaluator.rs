@@ -162,9 +162,8 @@ impl Rules {
         Ok(Rules { link, inner })
     }
 
-    /// Every destination of every candidate edge rule `rule` does not judge clean, in the order
-    /// the Python engine judges them, as columns (`JudgedColumns`). A judgment travels by its
-    /// name (`rules.base.Judgment`).
+    /// Every destination of every candidate edge rule `rule` does not judge clean, in rule order,
+    /// as columns (`JudgedColumns`). A judgment travels by its name (`rules.base.Judgment`).
     fn judge<'py>(&self, py: Python<'py>, rule: usize) -> PyResult<JudgedColumns<'py>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let rows = self
@@ -237,7 +236,7 @@ impl Rules {
         ))
     }
 
-    /// What cycle rule `rule` makes of each destination it cannot leave alone, in judging order:
+    /// What cycle rule `rule` makes of each destination it cannot leave alone, in rule order:
     /// (edge id, destination index, judgment name, (source group, destination group) of a pair or
     /// None). Judgments: unresolved, unknown selection, a violation for a pair.
     fn pairs(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<PairTuple>> {
@@ -329,7 +328,7 @@ impl Rules {
     }
 
     /// The search of reach rule `rule`, from every start module its `from` selects, in the order
-    /// the Python search finds things.
+    /// the search finds things.
     fn reach(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<FoundTuple>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let found = self
@@ -381,7 +380,7 @@ impl Rules {
             .collect())
     }
 
-    /// What export rule `rule` reports, in the order the Python primitive reports it.
+    /// What export rule `rule` reports, in order.
     fn export(&self, py: Python<'_>, rule: usize) -> PyResult<Vec<ExportTuple>> {
         let mut bound = self.link.bind(py).borrow_mut();
         let rows = self
@@ -539,8 +538,8 @@ impl Rules {
             .collect()
     }
 
-    /// The labels set two ways that the rules met while they ran: what the Python engine meets
-    /// lazily, where a rule reads them.
+    /// The labels set two ways that the rules met while they ran: those met only where a rule
+    /// reads them.
     fn met(&self, py: Python<'_>) -> Vec<ConflictTuple> {
         let bound = self.link.bind(py).borrow();
         self.inner

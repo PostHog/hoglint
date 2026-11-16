@@ -1,7 +1,6 @@
-//! The paths a coverage rule needs covered (hoglint/rules/entities.py
-//! `CoveragePrimitive.required`): another rule's column read off its findings' witnesses, and the
-//! endpoints of an edge selection. Whether an outside input covers each path stays with the
-//! coverage adapter, a Python plugin.
+//! The paths a coverage rule needs covered: another rule's column read off its findings'
+//! witnesses, and the endpoints of an edge selection. Whether an outside input covers each path
+//! stays with the coverage adapter, a Python plugin.
 
 use super::env::{Cx, Endpoint, Env, Role};
 use super::labels::Field;
@@ -77,7 +76,7 @@ pub struct Required {
 /// when that rule did not run; every edge of the cover's kinds for an edge selection.
 pub type CoverInputs = Vec<Option<Vec<u32>>>;
 
-/// `CoveragePrimitive.required` over the inputs Python gathered (`CoverInputs`).
+/// What the covers need, over the inputs Python gathered (`CoverInputs`).
 pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     let mut out = Required::default();
     let mut found: FxHashMap<String, (u32, Option<String>)> = FxHashMap::default();
@@ -174,7 +173,7 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     out
 }
 
-/// A cover cannot place edge `id` (`CoveragePrimitive.unplaced`).
+/// A cover cannot place edge `id`: an "unplaced" row.
 fn unplaced(
     cx: Cx,
     at: u32,
@@ -186,7 +185,7 @@ fn unplaced(
     ("unplaced", at, module, surface)
 }
 
-/// The edges an edge cover reads, in the order Python reads them: kind by kind, or every edge.
+/// The edges an edge cover reads, in order: kind by kind, or every edge.
 pub fn cover_edges(link: &mut Link, cover: &Cover) -> Vec<u32> {
     let Cover::Edges { kinds, .. } = cover else {
         return Vec::new();

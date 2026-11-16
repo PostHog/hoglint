@@ -5,7 +5,7 @@ use super::plan::{LiteralPlan, NodePlan, OperandPlan};
 use super::value::{Truth, Value, all_of, any_of, contained, equals, starts, subset, truthy};
 use crate::link::intern::{Interner, Sid};
 
-/// A field of the edge itself (`EdgeEnv.edge_value`).
+/// A field of the edge itself (`Env::edge_value`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EdgeField {
     Kind,
@@ -21,7 +21,7 @@ pub enum EdgeField {
     Attr(Option<Sid>),
 }
 
-/// A field of one endpoint (`EdgeEnv.endpoint_value`, then `read_endpoint`).
+/// A field of one endpoint (`Env::endpoint_value`, then `Env::read_endpoint`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EndField {
     Symbol,
@@ -328,7 +328,7 @@ impl Compiler<'_> {
 mod tests {
     use super::*;
 
-    /// The table both engines read (`tests/rules/test_selectors.py` reads it too).
+    /// The table the Python selectors are held to as well (`tests/rules/test_selectors.py`).
     const MISSING_SIDE: &str = include_str!("../../../tests/rules/missing_side.txt");
 
     /// The two sides of one row: `src.left` and `dst.right`.
@@ -455,7 +455,7 @@ mod tests {
                 "and" => {
                     let parts = vec![part(left), part(right)];
                     let staged = super::super::staged::class_truth(&parts, &Unknowns, false);
-                    // A selection's top-level `and` is judged part by part (`StagedSelection`).
+                    // A selection's top-level `and` is judged part by part (`Staged`).
                     assert_eq!(staged, expected, "staged {line}");
                     assert_eq!(evaluate(&Node::And(parts), &Unknowns), expected, "{line}");
                 }

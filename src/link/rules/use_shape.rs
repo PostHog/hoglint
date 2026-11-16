@@ -14,8 +14,7 @@ pub struct UseShape {
 }
 
 impl UseShape {
-    /// `UseShapePrimitive.env`: the flow shape, written `kind` or `kind(detail)`, replaces the
-    /// edge's shape.
+    /// The flow shape, written `kind` or `kind(detail)`, which replaces the edge's shape.
     pub(super) fn shape<'a>(&self, cx: &Cx<'a>, id: u32) -> Option<(&'a str, &'a str)> {
         let name = (*self.flow.as_ref()?)?;
         let refined = cx.attr(id, Some(name));
@@ -26,7 +25,8 @@ impl UseShape {
         Some((shape, detail.strip_suffix(')').unwrap_or(detail)))
     }
 
-    /// `UseShapePrimitive.violation`.
+    /// Whether the shape is a violation: one `allow` does not name when it names any, or one
+    /// `deny` names. An edge with no shape reads as its use, else `other`.
     pub(super) fn violation(&self, env: &Env) -> Truth {
         let Some(id) = env.edge else {
             return Truth::False;

@@ -212,7 +212,7 @@ impl SymbolFacts {
         out
     }
 
-    /// `SymbolFacts.is_dataclass`.
+    /// Whether a dataclass decorator makes the class, or its facts say it is a dataclass.
     pub fn is_dataclass(&self, link: &Link, name: &str) -> bool {
         let make = &link.dataclass_kinds.make;
         self.decorators(link, name)
@@ -221,8 +221,8 @@ impl SymbolFacts {
             || Self::fact(link, name, "dataclass") == "true"
     }
 
-    /// `SymbolFacts.is_frozen`: a dataclass decorator call passes `frozen=True`, or a decorator
-    /// that always freezes makes the class.
+    /// Whether a dataclass decorator call passes `frozen=True`, or a decorator that always
+    /// freezes makes the class.
     pub fn is_frozen(&self, link: &Link, name: &str) -> bool {
         if Self::fact(link, name, "frozen") == "true" {
             return true;

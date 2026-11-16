@@ -12,8 +12,7 @@ pub struct Signature {
     pub annotation: Option<Sid>,
 }
 
-/// A callable is private when any part of its qualname starts with `_`, dunders excepted
-/// (`edges.is_private`).
+/// A callable is private when any part of its qualname starts with `_`, dunders excepted.
 pub fn is_private(callable: &str) -> bool {
     callable
         .split('.')
@@ -29,7 +28,7 @@ pub fn callable_of(link: &Link, id: u32, attr: Option<Sid>) -> Sid {
 }
 
 impl Signature {
-    /// `SignaturePrimitive.sees` past what every edge rule sees: the edges whose callable is
+    /// What a signature rule sees past what every edge rule sees: the edges whose callable is
     /// public, but not the row of a type alias whose expansion core wrote. Keeps the order of
     /// `ids`.
     pub fn seen(&self, link: &Link, ids: Vec<u32>) -> Vec<u32> {
@@ -46,8 +45,7 @@ impl Signature {
             .collect()
     }
 
-    /// `SignaturePrimitive.unknown_type`: the slot has no annotation, or its type is one the rule
-    /// reads as unknown.
+    /// Whether the slot has no annotation, or its type is one the rule reads as unknown.
     pub fn unknown_type(&self, cx: &Cx, id: u32, dst: &Endpoint) -> bool {
         if cx.attr(id, self.annotation) == "missing" {
             return true;

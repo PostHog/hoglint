@@ -1,5 +1,4 @@
 //! One traversal of a parsed module that collects every row list of an L1 record.
-//! Mirrors `FileWalker` in reference_l1.py.
 
 use crate::config::{ExtractConfig, Kind};
 use crate::defs::{Bound, DefNode, DefTable};

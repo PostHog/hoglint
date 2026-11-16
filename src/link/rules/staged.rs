@@ -1,11 +1,10 @@
-//! The order in which the Python engine reads a rule's selectors (`rules.base.StagedSelection`
-//! and `selectors.ClassSelection`), so the evaluator reads the labels Python reads.
+//! The order in which the evaluator reads a rule's selectors.
 //!
 //! A selector's truth never depends on this order. Which labels a run reads does: a label set two
 //! ways is a config error only where something reads it (a provider's labels of a module, the
-//! labels of a symbol outside the graph's symbols). So the evaluator judges parts in Python's
-//! order, and in a config that has such a label (`Rules::touch`) it reads every field a part names
-//! before it judges the part, as `ClassSelection` reads them all.
+//! labels of a symbol outside the graph's symbols). So the order is part of the output, and the
+//! stored runs hold it. A selection is judged in parts (`Staged`), and in a config that has such a
+//! label (`Rules::touch`) every field a part names is read before the part is judged.
 
 use super::env::{Cx, Endpoint, Env};
 use super::labels::Field;
@@ -16,7 +15,7 @@ use crate::link::Link;
 use crate::link::intern::Sid;
 
 /// The endpoint a conjunct of a selection reads alone (`selectors.endpoint_only`), in the order
-/// `StagedSelection` judges them.
+/// they are judged.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Class {
     Src = 0,
@@ -44,7 +43,7 @@ fn class_of(node: &Node) -> Class {
     found.unwrap_or(Class::Rest)
 }
 
-/// Whether a ref reads only its endpoint's module (`Labeler.module_level`).
+/// Whether a ref reads only its endpoint's module.
 fn module_level(field: Ref, fields: &[Field]) -> bool {
     let (Ref::Src(end) | Ref::Dst(end)) = field else {
         return false;
@@ -61,7 +60,7 @@ fn module_level(field: Ref, fields: &[Field]) -> bool {
     }
 }
 
-/// The `and` parts of a node, or the node itself: what `ClassSelection` judges one by one.
+/// The `and` parts of a node, or the node itself: what is judged one by one.
 pub fn parts(node: &Node) -> &[Node] {
     match node {
         Node::And(parts) => parts,
@@ -78,9 +77,8 @@ pub fn touch<'a>(node: &Node, env: &impl Resolve<'a>) {
     }
 }
 
-/// `ClassSelection.truth` over any environment: the parts in order, false at the first false one,
-/// else unknown when one is unknown. With `touching` (`Rules::touch`), every field a part names is
-/// read first.
+/// The parts in order over any environment: false at the first false one, else unknown when one
+/// is unknown. With `touching` (`Rules::touch`), every field a part names is read first.
 pub fn class_truth<'n, 'a>(
     parts: impl IntoIterator<Item = &'n Node>,
     env: &impl Resolve<'a>,
@@ -111,20 +109,20 @@ where
     class_truth(parts, env, env.cx.rules.touch)
 }
 
-/// A predicate (`deny`, `allow`, `require`, `unless`, a reach rule's `from`) as `ClassSelection`
-/// judges it.
+/// A predicate (`deny`, `allow`, `require`, `unless`, a reach rule's `from`), judged by its `and`
+/// parts.
 pub fn truth<'a>(node: &'a Node, env: &Env<'a>) -> Truth {
     parts_truth(parts(node), env)
 }
 
-/// A rule's selection as `StagedSelection` reads it: the parts that read only `src`, then only
-/// `dst`, then the rest. A class of one conjunct is judged by its `and` parts.
+/// A rule's selection in the order it is read: the parts that read only `src`, then only `dst`,
+/// then the rest. A class of one conjunct is judged by its `and` parts.
 pub struct Staged {
     pub parts: Vec<Node>,
     /// How many of the first parts read only `src`.
     pub src_parts: usize,
-    /// Whether those parts read only module fields (`StagedSelection.module_level`): Python then
-    /// judges them once per source module of the rule, before any edge.
+    /// Whether those parts read only module fields: they are then judged once per source module
+    /// of the rule, before any edge (`Rules::read_sources`).
     pub src_module_level: bool,
 }
 
@@ -160,7 +158,7 @@ impl Staged {
         }
     }
 
-    /// The selection's truth (`StagedSelection.truth`).
+    /// The selection's truth.
     pub fn truth<'a>(&'a self, env: &Env<'a>) -> Truth {
         parts_truth(&self.parts, env)
     }
@@ -174,7 +172,7 @@ impl Staged {
 impl Rules {
     /// In a config with labels that conflict only where read: the `src` parts of a rule that
     /// reads only module fields there, judged once per source module of its kinds, edges seen or
-    /// not, as `StagedSelection.module_false` judges them before any edge.
+    /// not, before any edge.
     pub(super) fn read_sources(&self, link: &mut Link, rule: &Edges) {
         if !self.touch || !rule.staged.src_module_level {
             return;
@@ -190,7 +188,7 @@ impl Rules {
     }
 
     /// In a config with labels that conflict only where read: the `src` parts of an edge with no
-    /// destination, which `EdgeRule.edge_envs` reads before it reads any destination.
+    /// destination, read as they would be before any destination.
     pub(super) fn touch_sources<'a>(
         &self,
         cx: &Cx<'a>,
@@ -204,7 +202,7 @@ impl Rules {
         }
     }
 
-    /// `StagedSelection.module_false` of one module, for the reads it makes.
+    /// The `src` parts judged on one module, for the reads they make.
     pub(super) fn read_source(&self, cx: &Cx, rule: &Edges, module: Sid) {
         let endpoint = cx.module_endpoint(module);
         parts_truth(rule.staged.src(), &Env::new(*cx, None, endpoint, endpoint));

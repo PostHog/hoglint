@@ -1,6 +1,6 @@
-//! The group pairs of a cycle rule (hoglint/rules/graphs.py `CyclePrimitive.consider`): what each
-//! candidate destination makes of the rule, in the order the Python engine judges them, with what
-//! its message names. Python finds the strongly connected parts.
+//! The group pairs of a cycle rule: what each candidate destination makes of the rule, in rule
+//! order, with what its message names. Python finds the strongly connected parts
+//! (hoglint/rules/graphs.py `strongly_connected`).
 
 use super::env::Env;
 use super::value::{Truth, Value, render};
@@ -23,9 +23,9 @@ pub struct PairRow {
 }
 
 impl Rules {
-    /// What a cycle rule makes of every candidate destination (`CyclePrimitive.consider`), in
-    /// the order the Python engine judges them: unresolved ones, ones whose selection is
-    /// unknown, and the ones whose two groups are known and differ, with the groups.
+    /// What a cycle rule makes of every candidate destination, in rule order: unresolved ones,
+    /// ones whose selection is unknown, and the ones whose two groups are known and differ, with
+    /// the groups.
     pub fn pairs(&self, link: &mut Link, index: usize) -> Result<Vec<PairRow>, String> {
         let (rule_id, rule) = self.rule_as(index, "cycle", |kind| match kind {
             RuleKind::Cycle(found) => Some(found),
@@ -98,7 +98,7 @@ impl Rules {
     }
 
     /// The identity of each destination `steps` names, an (edge, place) of cycle rule `index`:
-    /// the first rows of the pairs inside a cycle (`CyclePrimitive.evaluate`).
+    /// the first rows of the pairs inside a cycle, which Python finds.
     pub fn cycle_identities(
         &self,
         link: &Link,

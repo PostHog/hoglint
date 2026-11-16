@@ -19,7 +19,7 @@ pub struct EntityRule {
     require: Option<Node>,
     on_symbol: bool,
     /// The kinds a `select` pins, so on symbols only their members and the symbols of unknown
-    /// kind are read (`EntityRule.entities`).
+    /// kind are read.
     wanted: Option<Vec<String>>,
     /// An inventory's `exactly_one` field.
     exactly_one: Option<Ref>,
@@ -70,8 +70,8 @@ type Entity = (Option<Sid>, Option<u32>, Option<String>, String);
 pub type EntityRow = (&'static str, String, Option<String>, u32, Vec<String>);
 
 impl Rules {
-    /// `EntityRule.entities`: (module, its place, symbol, subject) of every entity the rule
-    /// looks at, in the Python rule's order.
+    /// (module, its place, symbol, subject) of every entity the rule looks at: the graph's
+    /// modules or the symbols, sorted by name.
     fn entities(&self, link: &Link, rule: &EntityRule) -> Vec<Entity> {
         let cx = Cx { link, rules: self };
         let it = &link.core.it;
@@ -111,8 +111,7 @@ impl Rules {
             .collect()
     }
 
-    /// `Labeler.kind_candidates`: the symbols with facts whose kind is not known to be outside
-    /// `wanted`.
+    /// The symbols with facts whose kind is not known to be outside `wanted`.
     fn kind_candidates(&self, link: &Link, wanted: &[String]) -> Vec<String> {
         let wanted: Vec<usize> = self
             .kind_names
@@ -133,8 +132,7 @@ impl Rules {
         out
     }
 
-    /// What layout rule or entity inventory `index` reports on its entities
-    /// (`LayoutPrimitive.check_entities`, `EntityInventory.evaluate`).
+    /// What layout rule or entity inventory `index` reports on its entities.
     pub fn entity_rows(&self, link: &Link, index: usize) -> Result<Vec<EntityRow>, String> {
         let (_, entities) = self.rule_as(index, "entities", |kind| match kind {
             RuleKind::Entities(found) => Some(found),
@@ -220,7 +218,7 @@ impl Rules {
         Ok(out)
     }
 
-    /// `LayoutPrimitive.roots`: the roots `within` names among the graph's module paths, sorted.
+    /// The roots `within` names among the graph's module paths, sorted.
     pub fn layout_roots(&self, link: &Link, within: &str) -> Result<Vec<String>, String> {
         let glob = Glob::new(&format!("{within}/**"))?;
         let mut out: Vec<String> = (0..self.modules.len() as u32)

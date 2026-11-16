@@ -310,7 +310,7 @@ class RuleResult:
 
 @dataclass(frozen=True, slots=True)
 class HandOut:
-    """What one export module binds by import, split by the hand-out rule (`core.surfaces`): the
+    """What one export module binds by import, split by the hand-out rule (src/link/surface.rs): the
     names it hands out, the names it keeps to itself, whether its `__all__` cannot be read, and the
     names a readable `__all__` lists that the module binds by no def, no hand-out edge and no
     literal constant (`unknown`), and the names with a leading `_` it lists and defines

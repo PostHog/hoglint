@@ -103,7 +103,7 @@ ledger = false
         ),
         ("[[assign]]\nmatch = 'x/**'\nset = { tier = 'leaf' }\n", "'leaf' is not a value of field 'tier'"),
         ("[[assign]]\nmatch = 'x/**'\nset = { package = '{pkg}' }\n", "`{pkg}` is not captured"),
-        # a set holds strings in both engines: 1 and true have no one text form
+        # a set holds strings: 1 and true have no one text form
         (
             "[fields]\nowners = { type = 'set' }\n[[assign]]\nmatch = 'x/**'\nset = { owners = ['a', 1, true] }\n",
             "field 'owners' is a set of strings; 1 is not a string",
@@ -132,7 +132,7 @@ ledger = false
             "ledger = false\n[rules.other]\nprimitive = 'export'\nleave_slots_to = ['mixed']\nledger = false\n",
             "mixes the source with the edge or the destination",
         ),
-        # limits of the config, which both engines judge alike
+        # limits of the config
         (
             "[shapes.c]\nallow = ['class']\n"
             + "".join(f"[exports.e{at}]\npaths = ['x{at}/**']\nshape = 'c'\n" for at in range(65)),
@@ -157,7 +157,7 @@ ledger = false
             + '"\n',
             "nested more than 32 deep",
         ),
-        # a key the rule's mode never reads: each engine would give it a meaning of its own
+        # a key the rule's mode never reads has no meaning (D52)
         (
             "[rules.other]\nprimitive = 'inventory'\non = 'module'\nexactly_one = 'package'\n"
             "from = \"src.module == 'a'\"\nledger = false\n",

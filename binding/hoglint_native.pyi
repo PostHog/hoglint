@@ -217,13 +217,13 @@ class Rules:
         """The module fields a Python provider sets that the plan's compiled rules, audiences,
         shapes, domains and levels read: the columns the plan given to `Rules` must hold."""
     def judge(self, rule: int) -> JudgedColumns:
-        """Every destination an edge, entrypoint or signature rule does not judge clean, in judging
+        """Every destination an edge, entrypoint or signature rule does not judge clean, in rule
         order, as columns."""
     def pairs(self, rule: int) -> list[PairRow]:
-        """What a cycle rule makes of each destination it cannot leave alone, in judging order."""
+        """What a cycle rule makes of each destination it cannot leave alone, in rule order."""
     def reach(self, rule: int) -> list[Found]:
-        """The search of a reach rule from every start its `from` selects, in the order the Python
-        search finds things."""
+        """The search of a reach rule from every start its `from` selects, in the order the search
+        finds things."""
     def export(self, rule: int) -> list[tuple[str, str, str, str, list[str], int | None, bool, bool, list[str], str]]:
         """What an export rule reports, in order, as data the rule words: findings ("finding",
         symbol, module, label, trail, witness edge, ledgerable, unknown, identity, subject),

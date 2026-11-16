@@ -1,6 +1,6 @@
-//! The export primitive (hoglint/rules/exports.py `ExportPrimitive`): does a public door hand
-//! out a denied shape? Every member of an export is checked, recursively through the types its
-//! signatures, fields and bases name, in the order the Python primitive checks them.
+//! The export primitive: does an export hand out a denied shape? Every member of an export is
+//! checked, recursively through the types its signatures, fields and bases name. The rule's
+//! Python class (hoglint/rules/exports.py `ExportPrimitive`) writes the plan and words the rows.
 
 use super::Rules;
 use super::env::{Cx, EntityEnv, Env, Role, attr_sid};
@@ -61,7 +61,7 @@ impl Shape {
     }
 }
 
-/// One identity column of an export finding, as `ExportPrimitive.resolver` reads it.
+/// One identity column of an export finding: what a ref of the rule's `identity` reads.
 #[derive(Clone, Copy)]
 enum Column {
     /// `edge.label`: the finding's label.
@@ -80,7 +80,7 @@ enum Column {
     Src(EntityField),
 }
 
-/// `SlotRule`, a signature rule of `leave_slots_to`: where it reads rows (the parts of its
+/// A signature rule of `leave_slots_to`: where it reads rows (the parts of its
 /// selection that read only the source; None for every module), which slots it judges (the other
 /// parts; None for every slot), the endpoint it reads a row's destination by, and the contexts it
 /// reads and leaves out.
@@ -181,8 +181,8 @@ impl ExportRule {
     }
 }
 
-/// What an export rule reports, in the order the Python primitive reports it, as data: the
-/// rule's Python class words every message and reason (`ExportPrimitive`).
+/// What an export rule reports, in order, as data: the rule's Python class words every message
+/// and reason.
 pub enum ExportRow {
     Finding {
         symbol: String,
@@ -237,7 +237,7 @@ pub struct ExportInputs {
     imports: FxHashMap<Sid, Vec<u32>>,
     /// (callable, edge) of every `exposes` edge, per module.
     exposes: FxHashMap<Sid, Vec<(Sid, u32)>>,
-    /// Every symbol name, sorted, for `TopLevel`.
+    /// Every symbol name, sorted, for `top_level`.
     symbols: Vec<String>,
 }
 
@@ -300,7 +300,7 @@ impl ExportInputs {
     }
 }
 
-/// `SlotRead`: how a member's slot reached a symbol, left to a named rule or judged here. An
+/// How a member's slot reached a symbol, left to a named rule or judged here. An
 /// exported symbol is reached by none.
 #[derive(Clone, Copy)]
 struct SlotRead {
@@ -329,7 +329,7 @@ type Shapes = (FxHashSet<String>, bool);
 /// (module, public name) of each hand-out of a symbol by the files of one export and root.
 type Handing = FxHashMap<String, Vec<(Place, String)>>;
 
-/// One run of an export rule (`ExportPrimitive.evaluate`).
+/// One run of an export rule.
 pub struct Walk<'a> {
     cx: Cx<'a>,
     rule: &'a ExportRule,
@@ -345,15 +345,15 @@ pub struct Walk<'a> {
     walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
     top_level: FxHashMap<Sid, Vec<String>>,
-    /// `ExportPrimitive.holding`: the named rules whose source part holds for a module.
+    /// The named rules whose source part holds for a module.
     holding: FxHashMap<Sid, Vec<usize>>,
     keys: Keys,
-    /// `ExportPrimitive.handing`: (module, public name) of every hand-out of a symbol by the files
-    /// of the export and root of the module in hand.
+    /// (module, public name) of every hand-out of a symbol by the files of the export and root of
+    /// the module in hand.
     handing: Rc<Handing>,
-    /// `ExportPrimitive.slot_policy_answers`, per row.
+    /// The answers of `slot_policy_leaves_out`, per row.
     slot_policy_answers: FxHashMap<u32, bool>,
-    /// `ExportPrimitive.copy_index`: per module, its exposes rows by their exact callable.
+    /// Per module, its exposes rows by their exact callable.
     copy_index: FxHashMap<Sid, FxHashMap<Sid, Vec<u32>>>,
 }
 
@@ -458,8 +458,8 @@ impl<'a> Walk<'a> {
             .is_some_and(|sid| found.unknown_values.contains(&sid))
     }
 
-    /// `ExportPrimitive.listed_unknown`: the names `__all__` lists that the module binds by
-    /// nothing the engine can tell, as symbols, sorted.
+    /// The names `__all__` lists that the module binds by nothing the engine can tell, as symbols,
+    /// sorted.
     fn listed_unknown(&self, module: Sid) -> Vec<String> {
         let link = self.cx.link;
         let Some(found) = link.hand_outs.get(&module) else {
@@ -475,8 +475,8 @@ impl<'a> Walk<'a> {
         out
     }
 
-    /// `ExportPrimitive.judges`: whether the rule judges what a module exports, by its `from`
-    /// read of the module alone. A module it cannot tell about is judged.
+    /// Whether the rule judges what a module exports, by its `from` read of the module alone. A
+    /// module it cannot tell about is judged.
     fn judges(&self, module: Sid) -> bool {
         let Some(start) = &self.rule.start else {
             return true;
@@ -484,7 +484,7 @@ impl<'a> Walk<'a> {
         evaluate(start, &self.cx.module_env(module)) != Truth::False
     }
 
-    /// `TopLevel.of`: the module's public top-level symbols, sorted.
+    /// The module's public top-level symbols, sorted.
     fn top_level(&mut self, module: Sid) -> Vec<String> {
         if let Some(found) = self.top_level.get(&module) {
             return found.clone();
@@ -525,9 +525,9 @@ impl<'a> Walk<'a> {
         rules.exports[export].covered_root(path).unwrap_or_default()
     }
 
-    /// `ExportPrimitive.hand_out_index`: per captured root of an export, (module, name) of every
-    /// public name a file of that root binds a handed-out import's symbol to, in module order.
-    /// Every file counts, also one the rule does not judge.
+    /// Per captured root of an export, (module, name) of every public name a file of that root
+    /// binds a handed-out import's symbol to, in module order. Every file counts, also one the rule
+    /// does not judge.
     fn hand_out_index(&self, export: usize) -> FxHashMap<String, Rc<Handing>> {
         let edges = &self.cx.link.edges;
         let mut out: FxHashMap<String, Handing> = FxHashMap::default();
@@ -587,10 +587,9 @@ impl<'a> Walk<'a> {
             .is_some_and(|found| found.handed.contains(&link.core.star()))
     }
 
-    /// `ExportPrimitive.exported_symbols`: top-level symbols and the private ones `__all__` lists,
-    /// then the imports the module hands
-    /// out; an import that did not resolve is reported on the way, and so is a star import whose
-    /// names cannot be read.
+    /// The top-level symbols and the private ones `__all__` lists, then the imports the module
+    /// hands out; an import that did not resolve is reported on the way, and so is a star import
+    /// whose names cannot be read.
     fn exported_symbols(&mut self, module: Sid) -> Vec<(String, Option<u32>)> {
         let mut out: Vec<(String, Option<u32>)> = self
             .top_level(module)
@@ -659,7 +658,9 @@ impl<'a> Walk<'a> {
         found
     }
 
-    /// `ExportPrimitive.find_shapes`.
+    /// The shape names of a symbol: its kind, what it declares, dataclass and frozen-dataclass,
+    /// and the core shapes its lineage or metaclass gives; and whether the facts were enough to
+    /// be sure.
     fn find_shapes(&self, symbol: &str) -> Shapes {
         let cx = self.cx;
         let rules = cx.rules;
@@ -709,16 +710,15 @@ impl<'a> Walk<'a> {
         (names, complete && !kind_unknown)
     }
 
-    /// `ExportPrimitive.symbol_truth`: a `[shapes]` entity selector, read of a symbol in the
-    /// module that defines it.
+    /// A `[shapes]` entity selector, read of a symbol in the module that defines it.
     fn symbol_truth(&self, node: &Node, symbol: &str) -> Truth {
         let owner = self.cx.module_of_symbol(symbol);
         evaluate(node, &EntityEnv::of(self.cx, owner, Some(symbol), None))
     }
 
-    /// `ExportPrimitive.walks`: whether what an allowed class's members name is judged: always
-    /// the fields of a data shape and of a class with a base of `dataclass_bases`, whoever defines
-    /// it. Where `walk_where` cannot be told, the class is walked.
+    /// Whether what an allowed class's members name is judged: always the fields of a data shape
+    /// and of a class with a base of `dataclass_bases`, whoever defines it. Where `walk_where`
+    /// cannot be told, the class is walked.
     fn walks(&mut self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
         let policy = &self.cx.rules.shapes[shape];
         let dataclass_like = shapes.contains("dataclass") || shapes.contains("frozen-dataclass");
@@ -740,7 +740,7 @@ impl<'a> Walk<'a> {
         self.walk_holds(symbol, shape)
     }
 
-    /// `ExportPrimitive.walk_holds`: whether `walk_where` holds for a class, or cannot be told.
+    /// Whether `walk_where` holds for a class, or cannot be told.
     fn walk_holds(&mut self, symbol: &str, shape: usize) -> bool {
         let Some(node) = &self.cx.rules.shapes[shape].walk_where else {
             return true;
@@ -754,14 +754,14 @@ impl<'a> Walk<'a> {
         found
     }
 
-    /// `ExportPrimitive.constructor_slot`: whether a row is a field of a dataclass-like class's
-    /// generated `__init__`, or the marker of a base whose fields are unknown.
+    /// Whether a row is a field of a dataclass-like class's generated `__init__`, or the marker of
+    /// a base whose fields are unknown.
     fn constructor_slot(&self, id: u32) -> bool {
         let slot = self.cx.attr(id, self.keys.slot);
         slot.starts_with("field:") || slot == "fields"
     }
 
-    /// `ExportPrimitive.allowed_as_is`: whether the policy's `allow_where` holds for a symbol.
+    /// Whether the policy's `allow_where` holds for a symbol.
     fn allowed_as_is(&mut self, symbol: &str, shape: usize) -> bool {
         let rules = self.cx.rules;
         let Some(node) = &rules.shapes[shape].allow_where else {
@@ -801,11 +801,11 @@ impl<'a> Walk<'a> {
         false
     }
 
-    /// `ExportPrimitive.check`. A check that may report less than a check of a slot judged here (a
-    /// slot left to a named rule, or a hand-out with no slot) marks only a class or a function,
-    /// whose walk a full check would repeat: a later full check may still report anything else.
-    /// Nor does an unknown type in a slot judged here (`edge` is its row) that every
-    /// named rule's policy leaves out mark it.
+    /// Checks an exported symbol, or one a slot names, and what it names in turn. A check that may
+    /// report less than a check of a slot judged here (a slot left to a named rule, or a hand-out
+    /// with no slot) marks only a class or a function, whose walk a full check would repeat: a
+    /// later full check may still report anything else. Nor does an unknown type in a slot judged
+    /// here (`edge` is its row) that every named rule's policy leaves out mark it.
     fn check(
         &mut self,
         symbol: &str,
@@ -946,8 +946,8 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// `ExportPrimitive.unexpanded_assignment`: whether a slot judged here names an assignment the
-    /// producer did not expand, at the top of a module or in a class body.
+    /// Whether a slot judged here names an assignment the producer did not expand, at the top of a
+    /// module or in a class body.
     fn unexpanded_assignment(
         &self,
         symbol: &str,
@@ -966,8 +966,8 @@ impl<'a> Walk<'a> {
         self.place_of(symbol).is_some()
     }
 
-    /// `ExportPrimitive.place_of`: the graph module a symbol lies in and its qualname there; None
-    /// for a module itself or a name no graph module holds.
+    /// The graph module a symbol lies in and its qualname there; None for a module itself or a name
+    /// no graph module holds.
     fn place_of<'s>(&self, symbol: &'s str) -> Option<(Place, &'s str)> {
         let owner = self.cx.module_of_symbol(symbol)?;
         let owner_name = self.cx.text(owner.0);
@@ -977,7 +977,7 @@ impl<'a> Walk<'a> {
         Some((owner, &symbol[owner_name.len() + 1..]))
     }
 
-    /// `ExportPrimitive.exposes_under`.
+    /// A module's exposes rows whose callable is `qualname` or lies inside it.
     fn exposes_under(&mut self, module: Sid, qualname: &str) -> Vec<u32> {
         if !self.exposes_by_name.contains_key(&module) {
             let mut found: FxHashMap<String, Vec<u32>> = FxHashMap::default();
@@ -1000,11 +1000,11 @@ impl<'a> Walk<'a> {
             .unwrap_or_default()
     }
 
-    /// `ExportPrimitive.member_edges`: the rows that are judged, each with the module (as a place)
-    /// and the qualname length of the class or callable it belongs to, and whether it is a field of
-    /// a class `walk_where` is false for, read while such a class is walked; the marker row of an
-    /// expanded alias is left out. Of a class `walk_where` is false for, the handed-out class or
-    /// an ancestor, only the constructor fields are read.
+    /// The rows that are judged, each with the module (as a place) and the qualname length of the
+    /// class or callable it belongs to, and whether it is a field of a class `walk_where` is false
+    /// for, read while such a class is walked; the marker row of an expanded alias is left out. Of
+    /// a class `walk_where` is false for, the handed-out class or an ancestor, only the constructor
+    /// fields are read.
     fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize, bool)> {
         let is_class = self.cx.rules.symbol_decl(self.cx.link, symbol) == "class";
         let walked = !is_class || self.walk_holds(symbol, shape);
@@ -1034,7 +1034,7 @@ impl<'a> Walk<'a> {
         out
     }
 
-    /// `ExportPrimitive.copies`: a module's exposes rows of a callable's slot.
+    /// A module's exposes rows of a callable's slot.
     fn copies(&mut self, module: Sid, callable_name: &str, slot: Option<Sid>) -> Vec<u32> {
         let link = self.cx.link;
         let keys = self.keys;
@@ -1061,10 +1061,10 @@ impl<'a> Walk<'a> {
             .collect()
     }
 
-    /// `ExportPrimitive.copy_places`: (module, name) of each place the producer may hold a copy
-    /// of the walked symbol's slots, among the surfaces of the walk's shape policy: each file of
-    /// the export and root of the module in hand under each public name it hands the symbol out
-    /// by, and the module that defines the symbol under its own name.
+    /// (module, name) of each place the producer may hold a copy of the walked symbol's slots,
+    /// among the surfaces of the walk's shape policy: each file of the export and root of the
+    /// module in hand under each public name it hands the symbol out by, and the module that
+    /// defines the symbol under its own name.
     fn copy_places(&self, symbol: &str, shape: usize) -> Vec<(Place, String)> {
         let mut out = self.handing.get(symbol).cloned().unwrap_or_default();
         if let Some((owner, qualname)) = self.place_of(symbol) {
@@ -1074,8 +1074,7 @@ impl<'a> Walk<'a> {
         out
     }
 
-    /// `ExportPrimitive.under_policy`: whether an export of shape policy `shape` covers the module
-    /// at place `at`.
+    /// Whether an export of shape policy `shape` covers the module at place `at`.
     fn under_policy(&self, at: u32, shape: usize) -> bool {
         let rules = self.cx.rules;
         let bits = rules.labels.exports_of[at as usize];
@@ -1083,14 +1082,14 @@ impl<'a> Walk<'a> {
             .any(|export| bits & (1 << export) != 0 && rules.export_shapes[export] == shape)
     }
 
-    /// `ExportPrimitive.reads_under`: whether a signature rule reads a module's rows for this
-    /// walk: it holds for the module, which is a surface of the walk's shape policy.
+    /// Whether a signature rule reads a module's rows for this walk: it holds for the module, which
+    /// is a surface of the walk's shape policy.
     fn reads_under(&mut self, module: Place, shape: usize, id: u32) -> bool {
         self.under_policy(module.1, shape) && self.signature_sees(module.0, id)
     }
 
-    /// `ExportPrimitive.leaves_slot`: whether a slot is left to a signature rule, a public
-    /// callable's slot whose row that rule reads.
+    /// Whether a slot is left to a signature rule, a public callable's slot whose row that rule
+    /// reads.
     fn leaves_slot(
         &mut self,
         id: u32,
@@ -1106,7 +1105,7 @@ impl<'a> Walk<'a> {
         if !is_private(row_callable) && self.reads_under(owner, shape, id) {
             return true;
         }
-        // A row with no `callable` attr is indexed by its site scope; Python's slice gives "".
+        // A row with no `callable` attr is indexed by its site scope: its rest is then empty.
         let rest = row_callable.get(qualname_len..).unwrap_or("");
         let slot = attr_sid(link, id, self.keys.slot);
         for (place, name) in places {
@@ -1123,8 +1122,8 @@ impl<'a> Walk<'a> {
         false
     }
 
-    /// `ExportPrimitive.holding_rules`: the named rules, by place, whose source part holds for a
-    /// module. A module a rule cannot tell about is not held.
+    /// The named rules, by place, whose source part holds for a module. A module a rule cannot tell
+    /// about is not held.
     fn holding_rules(&mut self, module: Sid) -> &[usize] {
         if !self.holding.contains_key(&module) {
             let env = self.cx.module_env(module);
@@ -1139,8 +1138,8 @@ impl<'a> Walk<'a> {
         &self.holding[&module]
     }
 
-    /// `ExportPrimitive.signature_sees`: whether a named rule reads row `id` in a module: its
-    /// source part holds for the module and its contexts take the row's.
+    /// Whether a named rule reads row `id` in a module: its source part holds for the module and
+    /// its contexts take the row's.
     fn signature_sees(&mut self, module: Sid, id: u32) -> bool {
         let link = self.cx.link;
         let rule = self.rule;
@@ -1149,8 +1148,8 @@ impl<'a> Walk<'a> {
             .any(|&at| rule.slot_rules[at].reads(link, id))
     }
 
-    /// `ExportPrimitive.slot_policy_leaves_out`: whether every named signature rule's slot policy is
-    /// false for row `id`. Unknown counts as true.
+    /// Whether every named signature rule's slot policy is false for row `id`. Unknown counts as
+    /// true.
     fn slot_policy_leaves_out(&mut self, id: u32) -> bool {
         if let Some(&found) = self.slot_policy_answers.get(&id) {
             return found;
@@ -1184,9 +1183,9 @@ impl<'a> Walk<'a> {
         true
     }
 
-    /// `ExportPrimitive.judge_row`: the types one slot row names, judged in full or, where a
-    /// signature rule reads the row, by their shape only. A field of a class core defines reports
-    /// no missing or unread annotation and no unresolved name.
+    /// The types one slot row names, judged in full or, where a signature rule reads the row, by
+    /// their shape only. A field of a class core defines reports no missing or unread annotation
+    /// and no unresolved name.
     fn judge_row(
         &mut self,
         symbol: &str,
@@ -1242,8 +1241,7 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// `ExportPrimitive.check_members`: a name a file of the same export and root hands the
-    /// symbol out by names the copy of a slot.
+    /// A name a file of the same export and root hands the symbol out by names the copy of a slot.
     fn check_members(&mut self, symbol: &str, module: &str, shape: usize, trail: &[String]) {
         let places = self.copy_places(symbol, shape);
         for (id, owner, qualname_len, core) in self.member_edges(symbol, shape) {
@@ -1252,9 +1250,8 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// `ExportPrimitive.check_alias_rows`: the rows of the type aliases a module hands out (slot
-    /// `alias`), each judged as a slot of the name it is handed out by; the marker row of the
-    /// alias itself is left out.
+    /// The rows of the type aliases a module hands out (slot `alias`), each judged as a slot of the
+    /// name it is handed out by; the marker row of the alias itself is left out.
     fn check_alias_rows(&mut self, export: usize, place: Place, module: &str, shape: usize) {
         let rules = self.cx.rules;
         let ids: Vec<u32> = self
@@ -1287,7 +1284,7 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// One identity column (`ExportPrimitive.resolver`), rendered.
+    /// One identity column, rendered.
     fn column(&self, column: Column, symbol: &str, module: &str, label: &str) -> String {
         let cx = self.cx;
         let entity = |field: EntityField, owner: Option<(Sid, u32)>, symbol: Option<&str>| {
@@ -1343,7 +1340,8 @@ impl<'a> Walk<'a> {
         });
     }
 
-    /// `ExportPrimitive.unknown`; `why` is the reason's code and the name it holds.
+    /// A symbol the rule cannot tell about: an incomplete item where the shape policy or
+    /// `on_unknown` says so, else a finding; `why` is the reason's code and the name it holds.
     fn unknown(
         &mut self,
         symbol: &str,
@@ -1377,7 +1375,7 @@ impl<'a> Walk<'a> {
         );
     }
 
-    /// `ExportPrimitive.unresolved`.
+    /// An import that did not resolve: an incomplete item or a finding, as `on_unresolved` says.
     fn unresolved(&mut self, id: u32, module: &str) {
         let edges = &self.cx.link.edges;
         let surface = self.cx.text(edges.surface_of(id)).to_string();

@@ -215,7 +215,7 @@ class EdgeInventory(EdgeRule):
     READS = frozenset({"kinds", "contexts", "from", "select", "classify", "remedy", "on_unresolved"})
 
     def unclassified(self, identity: tuple[str, ...]) -> str:
-        """The message of an identity the classification file lacks: the words of both engines."""
+        """The message of an identity the classification file lacks."""
         return f"{' '.join(identity)} has no classification in {self.spec.classify}"
 
     @staticmethod
@@ -299,7 +299,7 @@ class CoveragePrimitive(EntityRule):
 
     @staticmethod
     def why(cover: CoverSpec) -> str:
-        """Why a cover needs a path, as a finding's message names it: the words of both engines."""
+        """Why a cover needs a path, as a finding's message names it."""
         return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
 
     def everywhere(self, key: str, reason: str) -> None:

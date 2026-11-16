@@ -1,7 +1,7 @@
 //! What a rule over edges reads of one edge, for `explain edge:` and the couplings a rename
 //! scope keeps (hoglint/cli.py `explain_edge`, hoglint/ledger/couplings.py `CouplingScan`): which
-//! edges the rule sees (`EdgeRule.sees`), and per destination the truth of each selector or the
-//! values of some columns.
+//! edges the rule sees, and per destination the truth of each selector or the values of some
+//! columns.
 
 use super::env::{Cx, Endpoint, Env};
 use super::plan::check_columns;
@@ -45,7 +45,7 @@ impl Rules {
         }
     }
 
-    /// Whether the rule sees each edge of `ids` (`EdgeRule.sees` and its overrides).
+    /// Whether the rule sees each edge of `ids`, with what a signature or entrypoint rule adds.
     fn sees(&self, link: &mut Link, seeing: &Seeing, ids: &[u32]) -> Vec<bool> {
         let candidates = self.candidates(link, seeing.edges);
         let mut seen: Vec<bool> = ids
@@ -78,7 +78,7 @@ impl Rules {
     }
 
     /// The (module, surface) of each import edge the rule judges other than clean for some
-    /// destination (`EntrypointPrimitive.import_reported`).
+    /// destination.
     fn reported_imports(
         &self,
         link: &Link,
@@ -127,7 +127,7 @@ impl Rules {
     }
 
     /// Each destination's environment of each edge of `ids` the rule sees, None for an edge it
-    /// does not see (`EdgeRule.envs_of`).
+    /// does not see.
     fn seen_envs<T>(
         &self,
         link: &mut Link,

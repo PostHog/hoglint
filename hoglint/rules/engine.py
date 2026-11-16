@@ -224,8 +224,8 @@ class Engine:
 
     def raise_conflicts(self, ctx: RuleContext) -> None:
         """Stops the run with every label set two ways that it met so far: what the labeler met,
-        and what the rule context met outside it, worded by the labeler (D44). The Python engine
-        meets a conflict where it reads the label, in a rule or a level, and stops after each."""
+        and what the rule context met outside it, worded by the labeler (D44). A conflict is met
+        only where something reads the label, so this runs after each rule and after the levels."""
         ctx.met_conflicts()
         if self.labeler.conflicts:
             raise ConfigError(sorted(set(self.labeler.conflicts)))

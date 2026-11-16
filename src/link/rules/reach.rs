@@ -1,7 +1,7 @@
-//! The search of a reach rule (hoglint/rules/graphs.py `ReachPrimitive`): from each selected
-//! start module, breadth first through the edges the rule follows, with each hop's selection and
-//! each (start, hop) verdict judged by the evaluator. Hops are taken in the order the Python
-//! search takes them, so a start reports the same targets through the same witness paths.
+//! The search of a reach rule: from each selected start module, breadth first through the edges
+//! the rule follows, with each hop's selection and each (start, hop) verdict judged by the
+//! evaluator. Hops are taken in a fixed order (`Hops`), so a start reports the same targets
+//! through the same witness paths in every run.
 
 use super::env::{Cx, Endpoint, Env};
 use super::staged::truth;
@@ -23,8 +23,8 @@ struct Hop<'a> {
 /// A step of a witness path: an edge and the place of the destination followed.
 pub type Step = (u32, u32);
 
-/// What the search found, in the order the Python search finds it. A hop's row holds what its
-/// message names, seen from the start module.
+/// What the search found, in the order it finds it. A hop's row holds what its message names,
+/// seen from the start module.
 pub enum Found {
     /// A start module whose `from` is unknown: the rule cannot tell whether to search from it.
     UnknownStart { module: Sid },
@@ -49,9 +49,9 @@ pub enum Found {
     },
 }
 
-/// The hops out of each module, made when a search first reads them, as `ReachPrimitive.hops`
-/// makes them: the module's candidate edges kind by kind in graph order, each destination the
-/// selection does not rule out, stably sorted by destination module, symbol and surface.
+/// The hops out of each module, made when a search first reads them: the module's candidate
+/// edges kind by kind in graph order, each destination the selection does not rule out, stably
+/// sorted by destination module, symbol and surface.
 struct Hops<'a> {
     cx: Cx<'a>,
     rule: &'a Reach,
@@ -112,7 +112,7 @@ impl<'a> Hops<'a> {
 }
 
 impl Rules {
-    /// The search of reach rule `index` (`ReachPrimitive.sources` and `search`).
+    /// The search of reach rule `index` from each start module, in module name order.
     pub fn reach(&self, link: &mut Link, index: usize) -> Result<Vec<Found>, String> {
         let (_, rule) = self.rule_as(index, "reach", |kind| match kind {
             RuleKind::Reach(found) => Some(found),
@@ -161,7 +161,7 @@ impl Rules {
         truth(start, &cx.module_env(module))
     }
 
-    /// `ReachPrimitive.search` from one start module.
+    /// The search from one start module.
     fn search<'a>(
         &self,
         cx: &Cx<'a>,

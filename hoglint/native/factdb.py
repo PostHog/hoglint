@@ -6,9 +6,9 @@ last read it. Every run that opens a database touches its `.opened` mark first.
 
 A database is one unit: the main file, its `-wal` and `-shm` files and its marks. A unit is
 deleted whole or not at all, because SQLite replays a stale `-wal` into a new main file and a
-live run loses its writes when its `-wal` goes. The Python engine's per-file records of one
-extractor build (the `v<schema>-b<facts id>-<cfg>` directories, one per extract config) are one
-namespace, deleted whole or not at all too.
+live run loses its writes when its `-wal` goes. The per-file records the extractor's cache mode
+writes for one build (the `v<schema>-b<facts id>-<cfg>` directories, one per extract config) are
+one namespace, deleted whole or not at all too.
 
 The first native run of each day, per database, prunes:
 - rows that no run read for 30 days;
@@ -52,7 +52,7 @@ DATABASE = ".sqlite"
 UNIT_SUFFIXES = ("", "-wal", "-shm", ".opened", ".pruned")
 EPOCH = datetime.date(1970, 1, 1)
 CORRUPT = (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
-# A directory of the Python engine's per-file records: schema version and facts id, then the
+# A directory of the extractor's cached per-file records: schema version and facts id, then the
 # extract config id.
 NAMESPACE = re.compile(r"(v\d+-b[0-9a-f]+)-.+")
 # Other databases and namespaces the prune keeps however old they are.
@@ -82,7 +82,7 @@ def database_of(path: Path) -> Path | None:
 
 
 def namespace_name(directory: Path) -> str | None:
-    """The namespace of a directory of the Python engine's records, from its name; None for any
+    """The namespace of a directory of the extractor's cached records, from its name; None for any
     other directory. It must read the names `ExtractConfig::cache_namespace` in src/config.rs makes."""
     match = NAMESPACE.fullmatch(directory.name)
     return match.group(1) if match is not None else None
@@ -119,7 +119,7 @@ class Unit:
 
 @dataclass(frozen=True)
 class Namespace:
-    """The Python engine's per-file records of one extractor build: when a file or directory of
+    """The extractor's cached per-file records of one build: when a file or directory of
     them last changed (`opened`, as for a unit), and their size."""
 
     directories: tuple[Path, ...]
@@ -187,8 +187,8 @@ class FactDatabase:
     def others(
         self, files: list[tuple[float, int, Path]]
     ) -> tuple[list[Unit], list[Namespace], list[tuple[float, int, Path]]]:
-        """The other databases among `files` (those under `facts/`) as units, the Python engine's
-        record directories as namespaces, and the files of neither. A namespace was last used
+        """The other databases among `files` (those under `facts/`) as units, the extractor's
+        cached record directories as namespaces, and the files of neither. A namespace was last used
         when its newest file or directory changed."""
         own = set(unit_files(self.path))
         members: dict[Path, list[tuple[float, int, Path]]] = {}
@@ -222,7 +222,7 @@ class FactDatabase:
         return units, namespaces, loose
 
     def namespace_of(self, path: Path) -> str | None:
-        """The namespace a file of the Python engine's records belongs to, by its directory."""
+        """The namespace a file of the extractor's cached records belongs to, by its directory."""
         if path.parent.parent != self.directory:
             return None
         return namespace_name(path.parent)

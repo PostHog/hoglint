@@ -1,4 +1,4 @@
-//! Which edges a rule reads, and in what order the Python engine judges them.
+//! Which edges a rule reads, and in what order it judges them (rule order).
 
 use crate::link::Link;
 use crate::link::intern::Sid;
@@ -6,7 +6,7 @@ use crate::link::scope::Res;
 use rustc_hash::FxHashMap;
 
 impl Link {
-    /// Edges a rule sees (`EdgeRule.sees`): kind in `kinds` (every kind when empty), resolution
+    /// Edges a rule sees: kind in `kinds` (every kind when empty), resolution
     /// not not-applicable, contexts meeting `include` (any bit) and avoiding `exclude`; in id
     /// order.
     pub fn candidates(&mut self, kinds: &[Sid], include: u8, exclude: u8) -> Vec<u32> {

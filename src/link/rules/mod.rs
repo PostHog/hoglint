@@ -4,10 +4,8 @@
 //! Python hands over a plan (`plan.rs`): the config as data. The evaluator reads the graph's
 //! modules, symbols and edges from the link, computes every module's labels once, and judges
 //! edges in parallel chunks; the output is the same at any thread count. It is the only judge:
-//! Python words the rows it gives. A comment that names Python code or "the Python engine"
-//! names the code this one was ported from, which is retired; the reading it describes is held by
-//! the stored runs and tables (`tests/native/generated_runs.jsonl`, `tests/model_repo/`) and by
-//! `tests/rules/judgment.txt`.
+//! Python words the rows it gives. The stored runs and tables (`tests/native/generated_runs.jsonl`,
+//! `tests/model_repo/`) and `tests/rules/judgment.txt` hold what it gives, row order included.
 
 pub mod conflicts;
 pub mod coverage;
@@ -266,8 +264,8 @@ impl Named {
     }
 }
 
-/// The refs a message names where a judgment reads them unknown (`EdgeRule.unknown_refs`): per
-/// selector, each ref once in the selector's order, with its dotted text.
+/// The refs a message names where a judgment reads them unknown: per selector, each ref once in
+/// the selector's order, with its dotted text.
 pub struct UnknownRefs {
     /// `from`, then `select`: an unknown selection names the first that reads an unknown.
     selection: Vec<Vec<(Ref, String)>>,
@@ -332,7 +330,7 @@ pub struct Rule {
 
 /// A rule's mode (`RuleType.NATIVE_MODE`) and what it reads.
 pub enum RuleKind {
-    /// `EdgeRule.decide` per edge, findings as rows.
+    /// `decide` per destination, findings as rows.
     Judge(Judged),
     /// The search of a reach rule.
     Reach(Reach),
@@ -346,13 +344,13 @@ pub enum RuleKind {
     Entities(EntityRule),
 }
 
-/// Which edges a rule over edges sees (`EdgeRule.sees`) and how it selects them.
+/// Which edges a rule over edges sees and how it selects them.
 pub struct Edges {
     kinds: Vec<String>,
     include: u8,
     exclude: u8,
     role: Role,
-    /// The selection in the order and parts the Python engine judges it.
+    /// The selection, in the parts and order it is read.
     staged: Staged,
 }
 
@@ -369,7 +367,7 @@ pub struct Judged {
     uses_at_import: bool,
 }
 
-/// How a judged rule decides a selected destination (`EdgeRule.violation` and its overrides).
+/// How a judged rule decides a selected destination.
 pub enum Verdict {
     /// `deny`, `allow` and `require`, all judged; with none, the selection is the finding.
     Predicates {
@@ -444,7 +442,7 @@ const CHUNK: usize = 4096;
 
 /// The tables of one run and its compiled rules.
 pub struct Rules {
-    /// The graph's modules (`graph.modules`): each one's record, and each module's place.
+    /// The graph's modules: each one's record, and each module's place.
     modules: Vec<Sid>,
     module_files: Vec<u32>,
     pub module_at: FxHashMap<Sid, u32>,
@@ -473,8 +471,8 @@ pub struct Rules {
     /// Each edge's ordinal, when something reads `edge.ordinal`.
     ordinals: Vec<u32>,
     pool: rayon::ThreadPool,
-    /// Whether the config has a label that is a conflict only where it is read: reads then
-    /// follow the Python engine's (`staged.rs`).
+    /// Whether the config has a label that is a conflict only where it is read: every field a
+    /// selector part names is then read before the part is judged (`staged.rs`).
     pub touch: bool,
     /// (field, module) whose value reads provider labels of the module that are set two ways.
     tainted: FxHashSet<(usize, u32)>,
@@ -882,7 +880,7 @@ impl Rules {
         Some(owner)
     }
 
-    /// `graph.modules`: the modules with a file of the repo, in the module index's order.
+    /// The modules with a file of the repo, in the module index's order.
     fn graph_modules(link: &Link) -> (Vec<Sid>, Vec<u32>) {
         let index = &link.core.index;
         let mut modules = Vec::new();
@@ -1028,9 +1026,8 @@ impl Rules {
         SymbolFacts::fact(link, name, key)
     }
 
-    /// Whether a symbol (none for a module) belongs to an export past its paths
-    /// (`Labeler.find_export_member`): a listed symbol when the export names them, else by class
-    /// when it decides by class, else always.
+    /// Whether a symbol (none for a module) belongs to an export past its paths: a listed symbol
+    /// when the export names them, else by class when it decides by class, else always.
     pub fn export_member(&self, link: &Link, export: &Export, symbol: Option<&str>) -> Truth {
         if !export.symbols.is_empty() {
             let listed =
@@ -1046,9 +1043,9 @@ impl Rules {
         }
     }
 
-    /// Whether a symbol belongs to an export that decides by class (`Labeler.find_export_member`
-    /// past the path test): a listed base itself or a class that inherits one; unknown when a
-    /// base on the way up did not resolve.
+    /// Whether a symbol belongs to an export that decides by class, past the path test: a listed
+    /// base itself or a class that inherits one; unknown when a base on the way up did not
+    /// resolve.
     pub fn member_by_class(&self, link: &Link, bases: &[String], symbol: &str) -> Truth {
         if bases.iter().any(|base| base == symbol) {
             return Truth::True;
@@ -1072,7 +1069,7 @@ impl Rules {
         known_kinds(link, &rule.kinds).unwrap_or_default()
     }
 
-    /// The edges a rule sees (`EdgeRule.sees`), in id order.
+    /// The edges a rule sees, in id order.
     fn candidates(&self, link: &mut Link, rule: &Edges) -> Vec<u32> {
         match known_kinds(link, &rule.kinds) {
             Some(kinds) => link.candidates(&kinds, rule.include, rule.exclude),
@@ -1133,8 +1130,8 @@ impl Rules {
         Ok(in_order(rows, &edges, &order, edge_of))
     }
 
-    /// Every destination of every candidate edge that rule `index` does not judge clean, in the
-    /// order the Python engine judges them.
+    /// Every destination of every candidate edge that rule `index` does not judge clean, in rule
+    /// order (`Link::rule_order`).
     pub fn judge(&self, link: &mut Link, index: usize) -> Result<Vec<Row>, String> {
         let (rule_id, rule) = self.rule_as(index, "judge", |kind| match kind {
             RuleKind::Judge(found) => Some(found),
@@ -1181,7 +1178,7 @@ impl Rules {
         if !matches!(rule.verdict, Verdict::Inventory) {
             return Ok(rows);
         }
-        // `EdgeInventory.evaluate` keeps the first destination with each identity.
+        // An edge inventory keeps the first destination with each identity.
         let mut seen: FxHashSet<Vec<String>> = FxHashSet::default();
         Ok(rows
             .into_iter()
@@ -1189,7 +1186,7 @@ impl Rules {
             .collect())
     }
 
-    /// What export rule `index` reports, in the order `ExportPrimitive.evaluate` reports it.
+    /// What export rule `index` reports, in order.
     pub fn export(&self, link: &mut Link, index: usize) -> Result<Vec<ExportRow>, String> {
         let (_, export) = self.rule_as(index, "export", |kind| match kind {
             RuleKind::Export(found) => Some(found),
@@ -1288,7 +1285,7 @@ impl Rules {
     }
 
     /// The edges of `kinds`, kind by kind in graph order, that `selector` does not make false,
-    /// each read with its source as both ends (`RuleContext.edges_passing`).
+    /// each read with its source as both ends.
     pub fn passing(
         &self,
         link: &mut Link,
@@ -1402,7 +1399,7 @@ fn known_kinds(link: &Link, names: &[String]) -> Option<Vec<Sid>> {
     (!out.is_empty() || names.is_empty()).then_some(out)
 }
 
-/// `EntrypointPrimitive.sees` past what every edge rule sees: `rows` less those of each
+/// What an entrypoint rule sees past what every edge rule sees: `rows` less those of each
 /// reference edge whose module has an import edge with the same surface that the rule reports
 /// (a row is reported: it is not clean). Keeps the order of `rows`.
 fn uses_at_import(link: &Link, rows: Vec<Row>) -> Vec<Row> {
@@ -1455,8 +1452,9 @@ fn evaluate_ref<'a>(field: Ref, env: &Env<'a>) -> Value<'a> {
     selector::Resolve::resolve(env, field)
 }
 
-/// `EdgeRule.decide` for one environment, and `SignaturePrimitive.decide` for a signature rule.
-/// `deny`, `allow` and `require` are all judged, as `EdgeRule.violation` judges them.
+/// The judgment of one destination of a judged rule: its selection, a signature rule's unknown
+/// type, its verdict and `unless`. `deny`, `allow` and `require` are all judged, so each one's
+/// reads are made.
 pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
     let unknown_type = || match (&rule.signature, env.edge) {
         (Some(signature), Some(id)) => signature.unknown_type(&env.cx, id, &env.dst),
@@ -1499,8 +1497,8 @@ pub fn decide<'a>(rule: &'a Judged, env: &Env<'a>) -> Judgment {
 }
 
 /// The judgment of one destination from what a rule reads of it; `tests/rules/judgment.txt`
-/// holds it. An input after `unresolved` is read only where the judgment depends on it, as the
-/// Python engine read it: a label set two ways is met only where a judgment reads it.
+/// holds it. An input after `unresolved` is read only where the judgment depends on it: a label
+/// set two ways is met only where a judgment reads it.
 pub fn judgment(
     selected: Truth,
     unresolved: bool,

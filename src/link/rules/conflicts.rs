@@ -2,8 +2,8 @@
 //! with their sources and raises the config error.
 //!
 //! Some are found before any rule runs, as `Labeler.find_conflicts` finds them. The rest are met
-//! where a rule reads them, as the Python engine meets them lazily: a symbol label outside the
-//! graph's symbols, and a module's provider labels.
+//! only where a rule reads them: a symbol label outside the graph's symbols, and a module's
+//! provider labels.
 
 use super::Rules;
 use super::env::Cx;

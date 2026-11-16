@@ -486,7 +486,7 @@ impl Link {
     }
 
     /// Judges the `django.uses@1` refinements of the analyzed files `files` (file ids, in the
-    /// producer's order) onto `models` in the link (hoglint/packs/django/uses.py), with no
+    /// producer's order) onto `models` in the link (hoglint/packs/django/native_uses.py), with no
     /// Python object per use, reading the shape code's names from `vocabulary` (the tables of
     /// hoglint/packs/django/shapes.py by name). Nothing is applied: `refine_staged` applies them.
     fn django_uses(

@@ -218,7 +218,7 @@ def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
 
 def unread_keys(rule: type[RuleType]) -> frozenset[str]:
     """The keys a rule's primitive accepts that its mode never reads: a key no rule code reads has
-    no meaning, so each engine would give it one of its own (D52)."""
+    no meaning, so a config may not set it (D52)."""
     unread = RULE_KEYS[rule.PRIMITIVE] - rule.READS - EVERY_RULE_READS
     return unread - UNREAD_ACCEPTED.get(rule.MODE, frozenset())
 
@@ -511,7 +511,7 @@ class SchemaBuilder:
         return out
 
     def check_within(self, key: str, within: str) -> None:
-        """A `within` names a directory by literal text and `{name}` captures. Both engines cut a
+        """A `within` names a directory by literal text and `{name}` captures. The labelers cut a
         path at the length of the filled pattern, which is the matched text's only when no
         wildcard stands in it."""
         wildcards = [char for char in ("*", "?") if char in CAPTURE_RE.sub("", within)]

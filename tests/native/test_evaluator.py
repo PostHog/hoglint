@@ -1,6 +1,6 @@
 """The native evaluator (src/link/rules) on one small repo: hand-written rules for the corners where
-the meaning is irregular, and seeded generated ones, held to the runs both engines gave before the
-Python rule code left the comparison (`stored_rows.json`, `generated_runs.jsonl`)."""
+the meaning is irregular, and seeded generated ones, held to stored runs (`stored_rows.json`,
+`generated_runs.jsonl`)."""
 
 from __future__ import annotations
 
@@ -374,8 +374,7 @@ def run_lines(world: World, at: int, base: str, rules: str) -> list[list[Any]]:
     return out
 
 
-# The whole runs of the hand-written cases that compared the two engines, as `run_lines` gives
-# them, by case: what both engines gave before the Python rule code left the comparison.
+# The whole runs of the hand-written cases, as `run_lines` gives them, by case.
 # `HOGLINT_REFRESH_GENERATED=1` rewrites the cases a run meets; review the diff.
 STORED_ROWS = Path(__file__).parent / "stored_rows.json"
 
@@ -671,8 +670,8 @@ def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world:
     assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]))
 
 
-# The export rule's corners, as both engines gave them before the Python walk went: per finding its
-# identity, message and unknown flag, per incomplete item its key and reason.
+# The export rule's corners, stored: per finding its identity, message and unknown flag, per
+# incomplete item its key and reason.
 EXPORT_CORNER_ROWS = {
     "export-shapes": (
         [
@@ -1707,10 +1706,9 @@ class Varied:
         return out
 
 
-# The runs of the generated configs as both engines gave them, stored: one JSON list per line, a
-# config's line (a digest of its base config and rules) before its rows. One engine judges and
-# words them now; this file holds their verdicts and words still. Rewrite it with
-# `HOGLINT_REFRESH_GENERATED=1` after a change of the generators, and review the diff.
+# The runs of the generated configs, stored: one JSON list per line, a config's line (a digest of
+# its base config and rules) before its rows. Rewrite it with `HOGLINT_REFRESH_GENERATED=1` after
+# a change of the generators, and review the diff.
 GENERATED_RUNS = Path(__file__).parent / "generated_runs.jsonl"
 
 

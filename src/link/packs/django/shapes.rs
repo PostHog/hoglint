@@ -3,7 +3,8 @@
 //! `select_for_update().count()` is `lock`.
 //!
 //! Text is split and matched as Python does it: `str.split()` whitespace, `re`'s `\w`, and
-//! `str.isidentifier`, so an unusual character gives the same answer in both engines.
+//! `str.isidentifier`, so an unusual character gives the same answer here as in shapes.py, which
+//! reads a failed file again to word its failure.
 
 use crate::link::rules::env::last_part;
 use regex::Regex;
@@ -14,7 +15,7 @@ const ESCAPE_WRAPPERS: &[&str] = &["await", "ifexp:body", "ifexp:else", "star"];
 const INSTANCE_SHAPES: &[&str] = &["instance-single", "instance-many"];
 
 /// The Django names the shape code reads: the tables of hoglint/packs/django/shapes.py, which
-/// Python hands over with each run of the producer, so the two engines read one list.
+/// Python hands over with each run of the producer, so this code and shapes.py read one list.
 pub struct Vocabulary {
     pub managers: Vec<String>,
     pub scalar_terminals: Vec<String>,

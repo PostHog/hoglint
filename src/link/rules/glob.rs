@@ -3,7 +3,7 @@
 //! that repeats must match the same text again.
 //!
 //! The matcher backtracks in the order Python's `re` tries the same regex, greedy first, so a
-//! path gets the same captures in both engines.
+//! path gets the same captures here as in the Python labeler, which still matches label globs.
 
 /// One piece of a glob.
 #[derive(Clone, PartialEq, Eq, Debug)]

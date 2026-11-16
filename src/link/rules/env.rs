@@ -1,6 +1,5 @@
-//! Endpoints and the selector environment of one edge (hoglint/rules/base.py `Endpoint`,
-//! `EdgeEnv`, `read_endpoint`), and the label environment a field's domain reads
-//! (`Labeler.label_resolver`).
+//! Endpoints and the selector environment of one edge, and the label environment a field's
+//! domain reads (`Labeler.label_resolver`).
 
 use super::conflicts::Conflict;
 use super::labels::{Cell, FieldKind, Namespace};
@@ -152,9 +151,9 @@ impl<'a> Cx<'a> {
         rules.labels.namespaces.get(self.text(module?))
     }
 
-    /// What stands for a directory without `__init__.py` an endpoint names
-    /// (`CoveragePrimitive.namespace_files`): each module file directly inside it, else the
-    /// directory itself with a trailing slash. None for an endpoint that names no such directory.
+    /// What stands for a directory without `__init__.py` an endpoint names: each module file
+    /// directly inside it, else the directory itself with a trailing slash. None for an endpoint
+    /// that names no such directory.
     pub fn namespace_files(&self, endpoint: &Endpoint<'a>) -> Option<Vec<String>> {
         if endpoint.external.is_some() {
             return None;
@@ -163,8 +162,7 @@ impl<'a> Cx<'a> {
         Some(found.files(|at| self.rules.module_path(self.link, at)))
     }
 
-    /// Whether an endpoint names a dotted name two directories without `__init__.py` hold
-    /// (`CoveragePrimitive.namespace_clash`).
+    /// Whether an endpoint names a dotted name two directories without `__init__.py` hold.
     pub fn namespace_clash(&self, endpoint: &Endpoint<'a>) -> bool {
         endpoint.module.is_some_and(|module| {
             self.rules
@@ -192,7 +190,7 @@ impl<'a> Cx<'a> {
             .or_else(|| self.namespace(module, at).map(|found| found.path.as_str()))
     }
 
-    /// The `src` endpoint of edge `id` (`RuleContext.src_endpoint`).
+    /// The `src` endpoint of edge `id`.
     pub fn src_endpoint(&self, id: u32) -> Endpoint<'a> {
         let (module, scope) = self.link.site_of(id);
         let at = self.module_at(module);
@@ -219,7 +217,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// The endpoint a module alone is (`RuleContext.module_endpoint`).
+    /// The endpoint a module alone is.
     pub fn module_endpoint(&self, module: Sid) -> Endpoint<'a> {
         let at = self.module_at(module);
         Endpoint {
@@ -233,13 +231,12 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// `RuleContext.module_env`: the environment of a module on its own, with no edge and no
-    /// destination.
+    /// The environment of a module on its own, with no edge and no destination.
     pub fn module_env(&self, module: Sid) -> Env<'a> {
         Env::new(*self, None, self.module_endpoint(module), NO_DESTINATION)
     }
 
-    /// `RuleContext.new_symbol_endpoint`: the endpoint a dotted name is.
+    /// The endpoint a dotted name is.
     fn symbol_endpoint(&self, name: Symbol, external: bool) -> Endpoint<'a> {
         let text = self.symbol_text(name).unwrap_or_default();
         if external {
@@ -283,7 +280,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// The `dst` endpoints of edge `id` as `role` reads them (`RuleContext.dst_endpoints`).
+    /// The `dst` endpoints of edge `id` as `role` reads them.
     pub fn dst_endpoints(&self, id: u32, role: Role, out: &mut Vec<Endpoint<'a>>) {
         out.clear();
         let edges = &self.link.edges;
@@ -337,7 +334,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// Whether the edge has `src.*`/`dst.*` attrs (`has_endpoint_attrs`).
+    /// Whether the edge has `src.*`/`dst.*` attrs.
     pub fn has_endpoint_attrs(&self, id: u32) -> bool {
         let keys = &self.rules.endpoint_keys;
         !keys.is_empty()
@@ -391,8 +388,8 @@ impl<'a> Cx<'a> {
         Value::None
     }
 
-    /// `Labeler.handed_zones`: the zones, each with its ancestors, of the modules whose names a
-    /// module hands out by import; unknown when one of those zones cannot be told.
+    /// The zones, each with its ancestors, of the modules whose names a module hands out by import;
+    /// unknown when one of those zones cannot be told.
     pub fn handed_zones(&self, module: Option<Sid>) -> Value<'a> {
         let rules = self.rules;
         let Some(found) = module.and_then(|module| rules.handed.get(&module)) else {
@@ -519,7 +516,7 @@ impl<'a> Cx<'a> {
     }
 }
 
-/// `Endpoint.label_symbol`: the top-level symbol that carries symbol labels.
+/// The top-level symbol that carries symbol labels.
 fn label_symbol<'s>(module: &str, symbol: &'s str) -> Cow<'s, str> {
     let Some(rest) = symbol
         .strip_prefix(module)
@@ -530,8 +527,8 @@ fn label_symbol<'s>(module: &str, symbol: &'s str) -> Cow<'s, str> {
     Cow::Owned(format!("{module}.{}", head(rest)))
 }
 
-/// The environment of one edge and one destination (`EdgeEnv`). With no edge it is the
-/// environment of two endpoints (`EndpointsEnv`): edge fields are unknown.
+/// The environment of one edge and one destination. With no edge it is the environment of two
+/// endpoints: edge fields are unknown.
 pub struct Env<'a> {
     pub cx: Cx<'a>,
     pub edge: Option<u32>,
@@ -571,7 +568,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    /// The edge's (shape, shape detail), or the ones the primitive set (`EdgeEnv.shape`).
+    /// The edge's (shape, shape detail), or the ones the primitive set.
     pub fn shape_of(&self, id: u32) -> (&'a str, &'a str) {
         if let Some(shape) = self.shape {
             return shape;
@@ -601,7 +598,8 @@ impl<'a> Env<'a> {
         }
     }
 
-    /// `EdgeEnv.label`.
+    /// The edge's label: `unresolved-<kind>` for an unresolved destination, else its shape and
+    /// shape detail, else its kind.
     fn label(&self, id: u32) -> Value<'a> {
         let cx = self.cx;
         let edges = &cx.link.edges;
@@ -631,7 +629,7 @@ impl<'a> Env<'a> {
         self.read_endpoint(endpoint, field)
     }
 
-    /// `read_endpoint`: the endpoint answers what it knows better than its module, then labels.
+    /// The endpoint answers what it knows better than its module, then labels.
     fn read_endpoint(&self, endpoint: &Endpoint<'a>, field: EndField) -> Value<'a> {
         let cx = self.cx;
         if field == EndField::Symbol {
@@ -678,7 +676,7 @@ impl<'a> Env<'a> {
                 "" => Value::Unknown,
                 raw => Value::text(raw),
             },
-            // Read through `read_endpoint`, these name no declared field (`EndpointsEnv`).
+            // With no edge to read them from, these are unknown.
             EndField::Context | EndField::Exported => Value::Unknown,
             EndField::Symbol => unreachable!("answered above"),
         }
@@ -715,9 +713,9 @@ impl<'a> Env<'a> {
         cx.field_value(field, endpoint.module, endpoint.at, symbol.as_deref())
     }
 
-    /// `Labeler.hands_out`: whether a module hands out the name a symbol in it is bound by. A name
-    /// it does not bind by import is its own definition; one it imports and keeps to itself is no
-    /// part of what it exports, unknown when its `__all__` cannot be read.
+    /// Whether a module hands out the name a symbol in it is bound by. A name it does not bind by
+    /// import is its own definition; one it imports and keeps to itself is no part of what it
+    /// exports, unknown when its `__all__` cannot be read.
     fn hands_out(&self, endpoint: &Endpoint<'a>) -> Truth {
         let cx = self.cx;
         let Some(module) = endpoint.module else {
@@ -749,8 +747,8 @@ impl<'a> Env<'a> {
         }
     }
 
-    /// `EdgeEnv.exported`, uncached: each export that holds the endpoint, with its audience
-    /// read through this environment (`Labeler.compute_exported`).
+    /// Each export that holds the endpoint, with its audience read through this environment;
+    /// uncached.
     fn exported(&self, endpoint: &Endpoint<'a>) -> Value<'a> {
         if endpoint.external.is_some() {
             return Value::None;

@@ -1,9 +1,9 @@
-"""Rules over the native graph: lazy edge tables, and rule evaluation by the native evaluator.
+"""Rules over the native graph: rule evaluation by the native evaluator, and its rows worded.
 
 The evaluator (src/link/rules) judges every edge of a rule on its own, per destination, from a
 plan of the config (`hoglint.native.plan`). Edge, entrypoint, use-shape, signature and inventory
 rules come back as rows that hold what a message names: the rule's Python class words each row
-(`EdgeRule.report`) and judges none again. Cycle and reach rules take their pairs and their search.
+(`EdgeRule.report`). Cycle and reach rules take their pairs and their search.
 """
 
 from __future__ import annotations
@@ -394,8 +394,8 @@ class NativeRuleContext(RuleContext):
             self.labeler.read_from(self.evaluator)
 
     def met_conflicts(self) -> None:
-        """The labels set two ways that the evaluator met so far, in rules and levels: what the
-        Python engine meets lazily, where it reads them."""
+        """The labels set two ways that the evaluator met so far, in rules and levels: those met
+        only where something reads them."""
         with engine_errors():
             met = self.evaluator.met()
         self.word(met)
