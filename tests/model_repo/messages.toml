@@ -440,6 +440,16 @@ text = "products.catalog.backend.facade.generics.first_entry exposes products.ca
 
 [[finding]]
 rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "first_note", "param:notes", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.first_note exposes products.catalog.backend.models.CatalogEntry in param:notes"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "first_note", "return", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.first_note exposes products.catalog.backend.models.CatalogEntry in return"
+
+[[finding]]
+rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "echo", "param:value", "products.catalog.backend.facade.generics.AnyT"]
 text = "products.catalog.backend.facade.generics.echo exposes products.catalog.backend.facade.generics.AnyT in param:value; cannot tell, unassigned: dst.kind"
 

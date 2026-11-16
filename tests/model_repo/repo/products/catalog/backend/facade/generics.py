@@ -3,6 +3,7 @@ from typing import Protocol, TypedDict, TypeVar
 from products.catalog.backend.models import CatalogEntry
 
 EntryT = TypeVar("EntryT", bound=CatalogEntry)
+NoteT = TypeVar("NoteT", bound="CatalogEntry")
 LabelT = TypeVar("LabelT", str, bytes)
 AnyT = TypeVar("AnyT")
 EntryProps = TypedDict("EntryProps", {"entry": CatalogEntry, "note": str})
@@ -11,6 +12,10 @@ LabelProps = TypedDict("LabelProps", {"label": str, "item-count": int})
 
 def first_entry(entries: list[EntryT]) -> EntryT:
     return entries[0]
+
+
+def first_note(notes: list[NoteT]) -> NoteT:
+    return notes[0]
 
 
 def pick_label(label: LabelT) -> LabelT:

@@ -107,7 +107,8 @@ The reasoning matches D63: where something is defined must not change the verdic
 - A functional `TypedDict` stands for the typed mapping of its fields, `dict[str, A | B]`: each field's type is read through `Required`, `NotRequired` and `ReadOnly`, and an entry that is no literal key (`**other`) or fields that are no dict literal are unknown. A class-form `TypedDict` stays a class.
 - Both are expanded as a type alias is, wherever they are assigned, imported ones included.
 - A PEP 695 type parameter (`def f[T: Bound]`, `class C[T: (A, B)]`) stands for its bound or the union of its constraints in the slots of its def or class and of what they hold; the nearest parameter of a name hides an outer one. One with no bound stays as written, unknown as before.
-- Written limits: a bound written as a string in a `TypeVar` call is unknown; a type parameter with no bound does not hide a module-level name of its spelling; a `TypeVar`'s default is not read.
+- A `TypeVar`'s bound and constraints are read as type expressions, a string one too.
+- Written limits: a type parameter with no bound does not hide a module-level name of its spelling; a `TypeVar`'s default is not read.
 
 **One fact, one place:** a handed-out definition is reported once, at its own surface module (N3b review item 8: -75 findings).
 This holds for a class a facade module defines.
