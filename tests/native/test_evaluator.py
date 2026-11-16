@@ -2039,12 +2039,17 @@ def test_a_required_file_may_have_alternatives_and_name_what_it_defines(world: W
     ]
 
 
-def test_a_root_without_init_is_its_namespace_directory(world: World) -> None:
-    rule = {"primitive": "layout", "within": "products/alerts/backend/{part}", "files": ["nowhere.py"], "ledger": False}
-    config = world.config(rule_table("parts", rule))
-    run = primitive_of(config.rules["parts"])(world.context(config), config.rules["parts"]).evaluate()
-    subjects = {finding.message: finding.subjects for finding in run.findings}
-    assert subjects["products/alerts/backend/queries lacks nowhere.py"] == ("products.alerts.backend.queries",)
+def test_a_level_reads_a_layout_root_without_init_as_its_own_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(SOURCES, "products/loose/tool.py", "def run():\n    pass\n")
+    loose = World(tmp_path)
+    rule = {"primitive": "layout", "within": "products/{product}", "files": ["backend/facade/api.py"], "ledger": False}
+    level = '\n[levels.faced]\ngroup_by = "package"\nrequires = ["faced"]\nstrict = ["faced"]\n'
+    result = Engine(loose.config(rule_table("faced", rule) + level), loose.graph, loose.repo).evaluate()
+    assert result.levels["faced"].failing["loose"] == [
+        "faced: strict, so the ledger does not excuse it: products/loose lacks backend/facade/api.py"
+    ]
 
 
 def problems(world: World, config: Config) -> list[str]:

@@ -79,8 +79,11 @@ class LevelEvaluator:
         self.group_of = Memo(self.find_group)
 
     def find_group(self, subject: str) -> str | None:
-        module = self.labeler.module_of_symbol(subject) or subject
-        value, _ = self.labeler.field_value(module, None, self.spec.group_by)
+        """The group of a finding's subject: a symbol's module, or a directory without
+        `__init__.py` that a layout rule names as its root, read as such."""
+        labeler = self.labeler
+        module = subject if subject in labeler.namespaces.paths else labeler.module_of_symbol(subject) or subject
+        value, _ = labeler.field_value(module, None, self.spec.group_by)
         if value.state is not State.KNOWN:
             return None
         return label_text(value.data)
