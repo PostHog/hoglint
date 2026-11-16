@@ -77,6 +77,19 @@ A rule selects on labels, never on a folder alone:
 **Which rule families block at adoption: all of them, with the existing debt in the ledger** (owner, Nov 9).
 
 **Rule states today:** enforced (blocks new debt; existing debt is in the ledger) and `off` (added by the architect, Nov 11).
+The preset has no `off` key yet: a rule that is off is a commented-out table with its reason (`own-database`, `atomic-outside-views`, D118).
+
+**The PostHog preset's rule scope** (D118, Nov 16).
+`generated-producer` and `registry-slots` left the preset: the monorepo's own generated-files test and the registry loader check the same at run time, and neither rule had a producer.
+`own-database` (no producer, a policy never decided) and `atomic-outside-views` (no edge reads `transaction.atomic`) are off for now.
+`migration-database` stays, slim (D117, below).
+
+**Rows the first-ledger triage placed elsewhere** (Nov 16; the architect's answers to the triage).
+- `no-product-lists-in-core` takes `public-surface`'s allowances: frozen migrations, settings naming product paths, a declared permanent interface for core.
+- `object` as a mapping's value is an opaque payload in a facade parameter or field, as `Any` is; never in a return value.
+- An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
+- `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
+- `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. The architect keeps or drops it from the measured rows.
 
 **A reach stops at a denied module, unless it says otherwise** (Nov 12).
 A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.
