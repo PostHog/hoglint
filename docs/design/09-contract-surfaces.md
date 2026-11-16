@@ -134,17 +134,20 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
   The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
-  A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
-  One rule decides which members of a class are read (Nov 13): `walk_where` decides the methods and attributes of a class, the handed-out class and each ancestor alike, a `ClassVar` included.
+  A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`owned_elsewhere`, in the preset `tier == 'core'`).
+  One rule decides which members of a class are read (Nov 13): the methods and attributes of a class are read where `owned_elsewhere` does not hold for it or cannot be told, the handed-out class and each ancestor alike, a `ClassVar` included.
   So the methods of a frozen dataclass core defines, handed out by a product's facade, are core's contract and are not judged, as the methods a product class inherits from a class core defines are not.
   The fields of a frozen dataclass and of a pydantic model are always read, wherever a slot names the class and whoever defines it: they are constructor slots of the class, and of a class that inherits them.
-  In a class `walk_where` is false for (a class core defines), the export rule reports a field only for a denied kind of the shape policy (`deny`: a model, a manager, a queryset, a command) (Nov 13).
+  In a class `owned_elsewhere` holds for (a class core defines), the export rule reports a field only for a denied kind of the shape policy (`deny`: a model, a manager, a queryset, a command) (Nov 13).
   An unknown type (`Any`), a missing or unread annotation (a call such as `conint(ge=0)`), a name that does not resolve (a type parameter of the class too) and a class of no allowed shape in such a field are core's: the product cannot change them.
-  The walk goes on through such a field: an allowed class `walk_where` is false for is walked on by the same rule, and a class `walk_where` holds for (a class of a product) is judged in full, so a model in its field is still reported.
-  The test reads only `walk_where` and the policy's `deny` list.
+  The walk goes on through such a field: an allowed class `owned_elsewhere` holds for is walked on by the same rule, and a class it does not hold for (a class of a product) is judged in full, so a model in its field is still reported.
+  The test reads only `owned_elsewhere` and the policy's `deny` list.
   A field a product class inherits from such a class is a constructor slot of the product class and is judged in full.
   Where a facade hands such a class out by name, the copy of its fields at the facade is the signature rule's, as any copy is.
-  A dataclass core defines that is no data shape (its query syntax tree) is core's contract as a whole: `walk_where` decides its fields too.
+  A dataclass core defines that is no data shape (its query syntax tree) is core's contract as a whole: `owned_elsewhere` decides its fields too.
+- A behavior class (`behavior = "abc"`) is allowed where an abstract base in its lineage is owned elsewhere: a product class that implements an abstract base core defines may be handed out, and its own members are judged.
+  A class whose abstract base the product defines is `export-shape(class)`.
+  `owned_elsewhere` is the one test for both readings (Nov 16): a class core owns is not walked, and its abstract base makes a behavior class; so a policy with `behavior` must set it.
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.

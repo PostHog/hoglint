@@ -94,24 +94,21 @@ class KindSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class Behavior:
-    kind: str
-    where: Selector | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class ShapePolicy:
     name: str
     data: tuple[str, ...] = ()
-    behavior: Behavior | None = None
+    # The shape that makes a class an allowed behavior class where `owned_elsewhere` holds for a
+    # class of that shape in its lineage; empty for none.
+    behavior: str = ""
     allow: tuple[str, ...] = ()
     deny: tuple[str, ...] = ()
     unknown: str = "error"  # error | incomplete
     signatures: bool = False  # the signatures of what the export hands out are part of the contract
     # An entity selector: a symbol it holds for is allowed as it stands, whatever its kind.
     allow_symbols: Selector | None = None
-    # An entity selector: an allowed class that is no data shape is walked only where it holds.
-    walk_where: Selector | None = None
+    # An entity selector: a class it holds for is its owner's contract, so an allowed class that is
+    # no data shape is walked only where it does not hold, and it makes a behavior class.
+    owned_elsewhere: Selector | None = None
     source: str = ""
 
 

@@ -1232,7 +1232,7 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
         },
         CLEAN,
     ),
-    # A `ClassVar` is no constructor slot: it is an attribute, which `walk_where` decides.
+    # A `ClassVar` is no constructor slot: it is an attribute, which `owned_elsewhere` decides.
     "a ClassVar of a frozen dataclass core defines, handed out": (
         {
             "posthog/records.py": IMPORTS_ORDER + "from typing import ClassVar\n\n\n" + CLASS_VAR_DATACLASS,
@@ -1919,8 +1919,9 @@ def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: p
     assert findings_of(out, "export-shape") == []
 
 
-# An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_symbols`
-# excuses only where it holds: a class in a file no assignment claims has an unknown tier.
+# An allowed class is walked where `owned_elsewhere` does not hold and where it cannot be told, as
+# `allow_symbols` excuses only where it holds: a class in a file no assignment claims has an unknown
+# tier.
 WALKED_CASES = {
     "a product's class": ("products/shop/backend/kit.py", "products.shop.backend.kit"),
     "a class whose tier is unknown": ("scripts/kit.py", "scripts.kit"),

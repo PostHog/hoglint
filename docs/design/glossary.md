@@ -156,15 +156,16 @@ Some words have two meanings; the entry names both.
 - **Shape** (two meanings).
   Of a symbol: the core shape names `dataclass`, `frozen-dataclass`, `abc`, `enum`, `protocol`, `exception`, `function`, `constant`, `class`, plus the config's kinds.
   Of an edge: what a pack says a use means (edge fields `shape`, `shape_detail`), such as a Django `write` or `lock`, read by `use-shape` rules.
-- **Shape policy** (`[shapes.<name>]`, keys `data`, `behavior`, `allow`, `deny`, `unknown`, `signatures`, `allow_symbols`, `walk_where`).
+- **Shape policy** (`[shapes.<name>]`, keys `data`, `behavior`, `allow`, `deny`, `unknown`, `signatures`, `allow_symbols`, `owned_elsewhere`).
   What an export may hand out: data shapes whose fields are walked, allowed and denied shapes, and what to do with a type it cannot tell.
   Each export names one with its `shape` key.
 - **`allow_symbols`** (shape policy key).
   An entity selector: a symbol it holds for is allowed as it stands and is not walked.
   The PostHog preset uses it for the core models that may cross a contract (`may_cross == true`).
-- **`walk_where`** (shape policy key).
-  An entity selector: where an allowed class that is no data shape is walked, so the types its members name are judged too.
-  In a class it is false for, such as a class core defines, only a field of a denied kind is reported.
+- **`owned_elsewhere`** (shape policy key).
+  An entity selector: a class it holds for is its owner's contract, such as a class core defines.
+  An allowed class that is no data shape is walked, so the types its members name are judged too, only where it does not hold or cannot be told; in a class it holds for, only a field of a denied kind is reported.
+  With `behavior = "abc"`, a class whose lineage holds an abstract base it holds for is an allowed behavior class.
 - **`slots_reported_by`** (export rule key).
   The signature rules that report the slots they read.
   In such a slot the export rule judges only the shape of a class, so one slot is reported by one rule.

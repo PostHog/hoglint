@@ -161,13 +161,11 @@ class RulePlan:
                     "data": list(policy.data),
                     "allow": list(policy.allow),
                     "deny": list(policy.deny),
-                    "behavior": None
-                    if policy.behavior is None
-                    else {"kind": policy.behavior.kind, "where": selector_tree(policy.behavior.where)},
+                    "behavior": policy.behavior or None,
                     "incomplete": policy.unknown == "incomplete",
                     "signatures": policy.signatures,
                     "allow_symbols": selector_tree(policy.allow_symbols),
-                    "walk_where": selector_tree(policy.walk_where),
+                    "owned_elsewhere": selector_tree(policy.owned_elsewhere),
                 }
                 for policy in config.shapes.values()
             ],

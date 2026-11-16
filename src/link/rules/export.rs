@@ -20,43 +20,39 @@ pub struct Shape {
     data: Vec<String>,
     allow: Vec<String>,
     deny: Vec<String>,
-    /// (kind, `where`) of the policy's `behavior`.
-    behavior: Option<(String, Option<Node>)>,
+    /// `behavior`: the shape that makes a behavior class where `owned_elsewhere` holds for a class
+    /// of it in the lineage.
+    behavior: Option<String>,
     /// `unknown = "incomplete"`.
     incomplete: bool,
     /// `signatures = true`: an allowed class's methods are part of the contract too.
     signatures: bool,
     /// `allow_symbols`: a symbol it holds for is allowed as it stands.
     allow_symbols: Option<Node>,
-    /// `walk_where`: where an allowed class that is no data shape is walked.
-    walk_where: Option<Node>,
+    /// `owned_elsewhere`: a class it holds for is its owner's contract, so an allowed class that
+    /// is no data shape is walked only where it does not hold.
+    owned_elsewhere: Option<Node>,
 }
 
 impl Shape {
     pub fn new(plan: &ShapePlan, entity: &Compiler) -> Result<Shape, String> {
-        let behavior = match &plan.behavior {
-            None => None,
-            Some(found) => Some((found.kind.clone(), entity.optional(&found.r#where)?)),
-        };
         Ok(Shape {
             data: plan.data.clone(),
             allow: plan.allow.clone(),
             deny: plan.deny.clone(),
-            behavior,
+            behavior: plan.behavior.clone(),
             incomplete: plan.incomplete,
             signatures: plan.signatures,
             allow_symbols: entity.optional(&plan.allow_symbols)?,
-            walk_where: entity.optional(&plan.walk_where)?,
+            owned_elsewhere: entity.optional(&plan.owned_elsewhere)?,
         })
     }
 
-    /// The entity selectors the policy reads: its behavior's `where`, `allow_symbols`, `walk_where`.
+    /// The entity selectors the policy reads: `allow_symbols` and `owned_elsewhere`.
     pub fn reads(&self) -> Vec<&Node> {
-        let behavior = self.behavior.as_ref().and_then(|(_, found)| found.as_ref());
-        behavior
-            .into_iter()
-            .chain(&self.allow_symbols)
-            .chain(&self.walk_where)
+        self.allow_symbols
+            .iter()
+            .chain(&self.owned_elsewhere)
             .collect()
     }
 }
@@ -305,8 +301,8 @@ impl ExportInputs {
 #[derive(Clone, Copy)]
 struct SlotRead {
     left: bool,
-    /// A field of a class `walk_where` is false for, read while that class is walked: only a
-    /// denied kind is reported, and the walk goes on into a class `walk_where` holds for.
+    /// A field of a class owned elsewhere (`owned_elsewhere`), read while that class is walked:
+    /// only a denied kind is reported, and the walk goes on into a class the product owns.
     core: bool,
 }
 
@@ -340,7 +336,7 @@ pub struct Walk<'a> {
     /// The types walked on through a field of a class core defines (`check_core`).
     core_visited: FxHashSet<(String, usize, String)>,
     shapes: FxHashMap<String, Shapes>,
-    /// `allow_symbols` and `walk_where` per (shape, symbol): many export modules name one type.
+    /// `allow_symbols` and the walk per (shape, symbol): many export modules name one type.
     allowed: FxHashMap<(usize, String), bool>,
     walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
@@ -717,7 +713,7 @@ impl<'a> Walk<'a> {
     }
 
     /// Whether what an allowed class's members name is judged: always the fields of a data shape
-    /// and of a class with a base of `dataclass_bases`, whoever defines it. Where `walk_where`
+    /// and of a class with a base of `dataclass_bases`, whoever defines it. Where `owned_elsewhere`
     /// cannot be told, the class is walked.
     fn walks(&mut self, symbol: &str, shapes: &FxHashSet<String>, shape: usize) -> bool {
         let policy = &self.cx.rules.shapes[shape];
@@ -740,16 +736,16 @@ impl<'a> Walk<'a> {
         self.walk_holds(symbol, shape)
     }
 
-    /// Whether `walk_where` holds for a class, or cannot be told.
+    /// Whether a class is walked: `owned_elsewhere` does not hold for it, or cannot be told.
     fn walk_holds(&mut self, symbol: &str, shape: usize) -> bool {
-        let Some(node) = &self.cx.rules.shapes[shape].walk_where else {
+        let Some(node) = &self.cx.rules.shapes[shape].owned_elsewhere else {
             return true;
         };
         let key = (shape, symbol.to_string());
         if let Some(&found) = self.walked.get(&key) {
             return found;
         }
-        let found = self.symbol_truth(node, symbol) != Truth::False;
+        let found = self.symbol_truth(node, symbol) != Truth::True;
         self.walked.insert(key, found);
         found
     }
@@ -776,9 +772,13 @@ impl<'a> Walk<'a> {
         found
     }
 
+    /// Whether a class is an allowed behavior class: a class of the policy's `behavior` shape in
+    /// its lineage, itself included, is owned elsewhere. The config requires `owned_elsewhere`
+    /// with `behavior`.
     fn behavior_ok(&mut self, symbol: &str, shape: usize) -> bool {
         let rules = self.cx.rules;
-        let Some((kind, found)) = &rules.shapes[shape].behavior else {
+        let policy = &rules.shapes[shape];
+        let (Some(kind), Some(owned)) = (&policy.behavior, &policy.owned_elsewhere) else {
             return false;
         };
         let (ancestors, _) = rules.facts.ancestors(self.cx.link, symbol);
@@ -788,13 +788,7 @@ impl<'a> Walk<'a> {
         lineage.dedup();
         for candidate in lineage {
             let (shapes, _) = self.recognize(&candidate);
-            if !shapes.contains(kind) {
-                continue;
-            }
-            let Some(node) = found else {
-                return true;
-            };
-            if self.symbol_truth(node, &candidate) == Truth::True {
+            if shapes.contains(kind) && self.symbol_truth(owned, &candidate) == Truth::True {
                 return true;
             }
         }
@@ -913,7 +907,7 @@ impl<'a> Walk<'a> {
     }
 
     /// Whether a type a field of a class core defines names is judged in full there: a symbol the
-    /// graph defines that `walk_where` holds for.
+    /// graph defines that the policy walks (`walk_holds`).
     fn judged_in_full(&mut self, symbol: &str, shape: usize) -> bool {
         self.cx.rules.has_symbol(self.cx.link, symbol) && self.walk_holds(symbol, shape)
     }
@@ -1001,10 +995,9 @@ impl<'a> Walk<'a> {
     }
 
     /// The rows that are judged, each with the module (as a place) and the qualname length of the
-    /// class or callable it belongs to, and whether it is a field of a class `walk_where` is false
-    /// for, read while such a class is walked; the marker row of an expanded alias is left out. Of
-    /// a class `walk_where` is false for, the handed-out class or an ancestor, only the constructor
-    /// fields are read.
+    /// class or callable it belongs to, and whether it is a field of a class owned elsewhere, read
+    /// while such a class is walked; the marker row of an expanded alias is left out. Of a class
+    /// owned elsewhere, the handed-out class or an ancestor, only the constructor fields are read.
     fn member_edges(&mut self, symbol: &str, shape: usize) -> Vec<(u32, Place, usize, bool)> {
         let is_class = self.cx.rules.symbol_decl(self.cx.link, symbol) == "class";
         let walked = !is_class || self.walk_holds(symbol, shape);

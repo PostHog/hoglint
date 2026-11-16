@@ -210,7 +210,8 @@ model = { subclass_of = "products.billing.backend.models.Base" }
 
 [shapes.contract]
 data = ["frozen-dataclass", "enum"]
-behavior = { kind = "abc", where = "tier == 'core'" }
+behavior = "abc"
+owned_elsewhere = "tier == 'core'"
 deny = ["model"]
 
 [exports.facade]

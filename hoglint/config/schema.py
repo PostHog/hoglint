@@ -16,7 +16,6 @@ from hoglint import adapters  # noqa: F401 - registers the builtin coverage adap
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
 from hoglint.config.model import (
     Assignment,
-    Behavior,
     Config,
     CoverSpec,
     Domain,
@@ -158,11 +157,14 @@ ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_p
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
 SHAPE_KEYS = frozenset(
-    {"data", "behavior", "allow", "allow_symbols", "walk_where", "deny", "unknown", "signatures", "doc"}
+    {"data", "behavior", "allow", "allow_symbols", "owned_elsewhere", "deny", "unknown", "signatures", "doc"}
 )
 # Keys renamed once, each with what to write now. An old key reads nothing, so it is a config error
 # that names its new form (D52), never an alias.
-RENAMED_SHAPE_KEYS = {"allow_where": "`allow_symbols`"}
+RENAMED_SHAPE_KEYS = {
+    "allow_where": "`allow_symbols`",
+    "walk_where": '`owned_elsewhere`, with the reverse sign: `walk_where = X` is `owned_elsewhere = "not (X)"`',
+}
 RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {"export": {"leave_slots_to": "`slots_reported_by`"}}
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
@@ -601,24 +603,16 @@ class SchemaBuilder:
         for name, table in self.raw.get("shapes", {}).items():
             key = f"shapes.{name}"
             self.check_keys(key, table, SHAPE_KEYS, RENAMED_SHAPE_KEYS)
-            behavior = None
-            raw_behavior = table.get("behavior")
-            if isinstance(raw_behavior, dict):
-                self.check_keys(f"{key}.behavior", raw_behavior, frozenset({"kind", "where"}))
-                behavior = Behavior(
-                    self.check_enum(f"{key}.behavior.kind", raw_behavior.get("kind"), known),
-                    self.parse(f"{key}.behavior.where", raw_behavior.get("where"), entity),
-                )
             policy = ShapePolicy(
                 name,
                 as_tuple(table.get("data")),
-                behavior,
+                self.read_behavior(key, table, known),
                 as_tuple(table.get("allow")),
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
                 signatures=self.check_bool(f"{key}.signatures", table.get("signatures", False)),
                 allow_symbols=self.parse(f"{key}.allow_symbols", table.get("allow_symbols"), entity),
-                walk_where=self.parse(f"{key}.walk_where", table.get("walk_where"), entity),
+                owned_elsewhere=self.parse(f"{key}.owned_elsewhere", table.get("owned_elsewhere"), entity),
                 source=self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):
@@ -626,6 +620,24 @@ class SchemaBuilder:
                     self.fail(key, f"unknown shape {shape!r}{suggest(shape, known)}")
             out[name] = policy
         return out
+
+    def read_behavior(self, key: str, table: dict[str, Any], known: tuple[str, ...]) -> str:
+        """`behavior`: the shape that makes a class an allowed behavior class where a class of
+        that shape in its lineage is owned elsewhere (`owned_elsewhere`). Empty for none."""
+        raw = table.get("behavior")
+        if raw is None:
+            return ""
+        if not isinstance(raw, str):
+            self.fail(
+                f"{key}.behavior",
+                '`behavior` names a shape, as `behavior = "abc"`; its `where` is now `owned_elsewhere`',
+            )
+            return ""
+        if "owned_elsewhere" not in table:
+            self.fail(
+                f"{key}.behavior", "`behavior` needs `owned_elsewhere`, which says whose base makes a behavior class"
+            )
+        return self.check_enum(f"{key}.behavior", raw, known)
 
     def read_exports(self, shapes: dict[str, ShapePolicy]) -> dict[str, ExportSpec]:
         out: dict[str, ExportSpec] = {}

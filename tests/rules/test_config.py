@@ -156,6 +156,16 @@ ledger = false
             "`leave_slots_to` is now `slots_reported_by`",
         ),
         (
+            "[shapes.c]\nallow = ['class']\nwalk_where = \"tier != 'core'\"\n",
+            "`walk_where` is now `owned_elsewhere`, with the reverse sign",
+        ),
+        (
+            "[shapes.c]\nallow = ['class']\nbehavior = { kind = 'abc', where = \"tier == 'core'\" }\n",
+            '`behavior` names a shape, as `behavior = "abc"`; its `where` is now `owned_elsewhere`',
+        ),
+        # a behavior class is allowed only where its base is owned elsewhere, so the policy says where
+        ("[shapes.c]\nallow = ['class']\nbehavior = 'abc'\n", "`behavior` needs `owned_elsewhere`"),
+        (
             "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \"src.handed_zones in ['x']\"\n",
             "unknown field 'src.handed_zones' (renamed 'src.handout_zones')",
         ),

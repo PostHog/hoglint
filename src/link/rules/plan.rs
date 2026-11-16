@@ -123,13 +123,6 @@ pub struct ExportPlan {
     pub audience: Option<NodePlan>,
 }
 
-#[derive(Deserialize)]
-pub struct BehaviorPlan {
-    pub kind: String,
-    #[serde(rename = "where")]
-    pub r#where: Option<NodePlan>,
-}
-
 /// A `[shapes]` policy (`ShapePolicy`).
 #[derive(Deserialize)]
 pub struct ShapePlan {
@@ -137,15 +130,18 @@ pub struct ShapePlan {
     pub data: Vec<String>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
-    pub behavior: Option<BehaviorPlan>,
+    /// The shape that makes a behavior class where `owned_elsewhere` holds for a class of it in
+    /// the lineage.
+    pub behavior: Option<String>,
     /// `unknown = "incomplete"`.
     pub incomplete: bool,
     /// `signatures = true`: the signatures of what the export hands out are part of it.
     pub signatures: bool,
     /// An entity selector: a symbol it holds for is allowed as it stands.
     pub allow_symbols: Option<NodePlan>,
-    /// An entity selector: an allowed class that is no data shape is walked only where it holds.
-    pub walk_where: Option<NodePlan>,
+    /// An entity selector: a class it holds for is its owner's contract, so an allowed class that
+    /// is no data shape is walked only where it does not hold.
+    pub owned_elsewhere: Option<NodePlan>,
 }
 
 /// The base classes and metaclasses that make each core shape (`exports.core_shape_bases`): the

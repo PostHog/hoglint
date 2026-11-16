@@ -374,9 +374,11 @@ pydantic  = { subclass_of = ["pydantic.BaseModel", "pydantic.main.BaseModel", "p
 data       = ["frozen-dataclass", "enum"]
 allow      = ["protocol", "hogql_ast", "exception", "pydantic"]
 allow_symbols = "may_cross == true"
-# Core's own types (its syntax tree, its Protocols) are core's contract: allowed as they stand.
-walk_where = "tier != 'core'"
-behavior   = { kind = "abc", where = "tier == 'core'" }
+# Core's own types (its syntax tree, its Protocols) are core's contract: a facade may hand them out as
+# they stand. Their methods and attributes are not judged here, a field is reported only for a denied
+# kind, and a class that implements an abstract base core owns is an allowed behavior class.
+owned_elsewhere = "tier == 'core'"
+behavior   = "abc"
 deny       = ["model", "manager", "queryset", "command"]
 signatures = true
 
