@@ -117,10 +117,12 @@ match    = "posthog/temporal/ai_observability/**"
 set      = { package = "ai_observability", tier = "product", role = "feature" }
 override = true
 
-# The namespace package all products sit in: core's loader imports it to find them.
+# The namespace package all products sit in: core's loader imports it to find them. It gets a tier and
+# no package: a layout row on a product folder without __init__.py reads its group from the folder,
+# because the package above it reads none.
 [[assign]]
 match = "products/__init__.py"
-set   = { package = "products", tier = "core" }
+set   = { tier = "core" }
 
 # ── Core, named core packages, leaves ──────────────────────────
 
