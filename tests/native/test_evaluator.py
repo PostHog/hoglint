@@ -36,7 +36,7 @@ from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules.base import subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
 from hoglint.rules.exports import ExportPrimitive, SlotRule
-from hoglint.selectors import Selector
+from hoglint.selectors import Selector, render_value
 
 from native.require import native_module
 
@@ -1735,6 +1735,44 @@ def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, ba
         for name in ("registry", "lifecycle"):
             assert native.labeler.builtin(module, None, name) == python.builtin(module, None, name)
     assert sorted(native.labeler.conflicts) == sorted(python.conflicts)
+
+
+# An edge rule that sees every edge at its origin, so the evaluator reads each destination symbol.
+READS_SYMBOLS = rule_table(
+    "reads",
+    {
+        **EDGE,
+        "kinds": ["import", "reference", "uses", "declares", "inherit", "exposes"],
+        "contexts": {"exclude": []},
+        "endpoint": "origin",
+        "identity": ["dst.symbol"],
+    },
+)
+
+
+def test_the_evaluator_reads_the_symbol_labels_the_python_labeler_reads(world: World) -> None:
+    """The labeler twin for symbol fields: each one the evaluator reads at an edge's destination
+    symbol (`edge_values`) is what the Python labeler gives that symbol, over the fixture's config
+    and every generated config that differs outside `[rules]` (symbol fields set by module and by
+    `symbols = {}` assignments)."""
+    bases = [CONFIG, *(base for (generator, _), base, _ in generated_configs(world) if generator == "varied")]
+    compared = 0
+    for base in bases:
+        config = world.config(READS_SYMBOLS, base)
+        native = world.context(config)
+        python = Labeler(config, world.graph, world.repo, native.labeler.index)
+        fields = [name for name, spec in config.fields.items() if spec.on == "symbol"]
+        columns = [["dst", "symbol"], ["dst", "module"], *(["dst", name] for name in fields)]
+        handles = [edge.handle for edge in world.graph.edges]
+        for read in native.evaluator.edge_values(native.plan.index["reads"], handles, columns):
+            for symbol, module, *values in read or []:
+                # A destination that is a module, or that does not resolve, has no symbol labels.
+                if symbol in ("-", "?", module) or module in ("-", "?"):
+                    continue
+                for name, value in zip(fields, values):
+                    assert value == render_value(python.field_value(module, symbol, name)[0]), (symbol, name, base)
+                    compared += 1
+    assert compared >= 10_000
 
 
 COVERED = rule_table("named", {**EDGE, "kinds": ["import", "uses"], "deny": "dst.package != src.package"}) + rule_table(
