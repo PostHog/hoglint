@@ -8,7 +8,8 @@
   `tests/rules/judgment.txt`. The rule has a finding with that edge as its witness, or an
   incomplete item on that edge, exactly where that judgment is not clean. What a judgment reads
   and `explain edge:` does not print comes from the edge (a slot's annotation) and from the
-  evaluator's `edge_values` (the shape a use-shape rule reads).
+  evaluator's `edge_values` (the shape a use-shape rule reads). And each such finding's identity is
+  what `edge_values`, which the couplings a rename scope keeps also read, gives at its edge.
 - Search paths: a reach or cycle rule's row comes from a search over many edges, so only its
   definite findings are checked: each holds edges `explain edge:` reads as selected, and a reach
   finding's path starts where `from` is true and ends where `deny` is true.
@@ -270,6 +271,26 @@ def test_explain_edge_judges_each_edge_as_the_run_reported_it(explained: tuple[C
     # Each judgment but an unknown violation is met, so the agreement is no vacuous one. No case
     # of the model repository gives a predicate an unknown on a selected destination.
     assert {row[-1] for row in seen.truths.judgments} - set(seen.judgments) == {"unknown-violation"}, seen.judgments
+
+
+def test_a_judged_finding_is_named_by_what_edge_values_reads_at_its_edge(explained: tuple[Commands, Run]) -> None:
+    _, run = explained
+    evaluator = evaluator_of(run)
+    index = {spec.id: at for at, spec in enumerate(run.config.rules.values())}
+    differ = []
+    checked = 0
+    for finding in run.result.findings():
+        spec = run.config.rules[finding.rule]
+        if primitive_of(spec).NATIVE_MODE != "judge":
+            continue
+        columns = [path.split(".") for path in spec.identity]
+        for edge in finding.witnesses:
+            read = evaluator.edge_values(index[finding.rule], [edge.handle], columns)[0] or []
+            checked += 1
+            if list(finding.identity) not in [list(values) for values in read]:
+                differ.append(f"{finding.rule} {finding.identity}: edge_values reads {read} at {edge.site.module}")
+    assert differ == []
+    assert checked >= 150
 
 
 def explained_as(evaluator: Any, at: int, edge: Edge, key: str) -> set[str]:
