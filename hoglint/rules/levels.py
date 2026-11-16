@@ -7,6 +7,8 @@ A level is specified apart from lint acceptance:
   `strict` forbids the level even when the ledger accepts it.
 - Exceptions make a use allowed, so an allowed finding does not count against the group. They
   never remove impact edges; test selection reads edges, not this result.
+- A row of a rule in `within_group` counts only when its subjects do not fall in two or more
+  groups: a row between two groups is a lint matter only.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from dataclasses import dataclass, field
 
 from hoglint.config.model import LevelSpec
 from hoglint.index import Memo
-from hoglint.labels import Labeler
+from hoglint.labels import Labeler, label_text
 from hoglint.model import FindingStatus
 from hoglint.rules.base import RuleRun
 from hoglint.rules.findings import FindingTable
@@ -69,17 +71,6 @@ class LevelResult:
         return Reasons(self.blocks)
 
 
-def group_name(data: object) -> str:
-    """A group's name: its value as text. A set reads as `str()` writes a frozenset, so a level
-    line in the ledger keeps its text, but with the items sorted: `str()` lists them in hash
-    order, which changes with the hash seed."""
-    if not isinstance(data, frozenset):
-        return str(data)
-    if not data:
-        return "frozenset()"
-    return "frozenset({" + ", ".join(repr(item) for item in sorted(data)) + "})"
-
-
 class LevelEvaluator:
     def __init__(self, spec: LevelSpec, labeler: Labeler, runs: dict[str, RuleRun]) -> None:
         self.spec = spec
@@ -88,11 +79,16 @@ class LevelEvaluator:
         self.group_of = Memo(self.find_group)
 
     def find_group(self, subject: str) -> str | None:
-        module = self.labeler.module_of_symbol(subject) or subject
-        value, _ = self.labeler.field_value(module, None, self.spec.group_by)
+        """The group of a finding's subject, read on the subject's module. A directory without
+        `__init__.py` whose module reads no group, such as a layout root just below a package that
+        is in no group, is read as the directory itself."""
+        labeler = self.labeler
+        value, _ = labeler.field_value(labeler.module_of_symbol(subject) or subject, None, self.spec.group_by)
+        if value.state is not State.KNOWN and subject in labeler.namespaces.paths:
+            value, _ = labeler.field_value(subject, None, self.spec.group_by)
         if value.state is not State.KNOWN:
             return None
-        return group_name(value.data)
+        return label_text(value.data)
 
     def groups(self) -> list[str]:
         found = self.labeler.level_groups(self.spec)
@@ -129,6 +125,7 @@ class LevelEvaluator:
 
     def collect(self, rule_id: str, run: RuleRun, reasons: dict[str, list[Block]]) -> None:
         strict = rule_id in self.spec.strict
+        within_group = rule_id in self.spec.within_group
         table = run.findings
         unknown = table.unknown
         # A ledgered finding blocks only when it is unknown or its rule is strict.
@@ -138,7 +135,10 @@ class LevelEvaluator:
                 continue
             why = "unknown" if unknown[row] else "strict, so the ledger does not excuse it" if strict else "new finding"
             identity = table.identity(row)
-            for group in {self.group_of(subject) for subject in table.subjects(row)}:
+            groups = {self.group_of(subject) for subject in table.subjects(row)}
+            if within_group and len(groups - {None}) > 1:
+                continue
+            for group in groups:
                 if group in reasons:
                     reasons[group].append(Block(rule_id, why, identity, table=table, row=row))
         for item in run.incomplete:

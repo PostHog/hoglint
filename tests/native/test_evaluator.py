@@ -25,6 +25,7 @@ from hoglint.config.schema import EVERY_RULE_READS, RULE_KEYS, unread_keys
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
+from hoglint.ledger.scan import group_triples, source_labels
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution, Site
 from hoglint.native.plan import RulePlan
 from hoglint.native.rules import NativeRuleContext
@@ -1956,6 +1957,99 @@ def test_a_level_grouped_by_a_set_field_names_a_group_by_its_sorted_items(world:
     level = Engine(world.config(rules, base), world.graph, world.repo).evaluate().levels["owned"]
     items = ", ".join(repr(owner) for owner in sorted(OWNERS))
     assert f"frozenset({{{items}}})" in [*level.passing, *level.failing]
+
+
+def test_the_scan_names_a_set_label_by_its_sorted_items(world: World) -> None:
+    base = CONFIG.replace('owners = ["team-core", "team-devex"]', f"owners = {json.dumps(OWNERS)}")
+    crossing = {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package", "ledger": True}
+    rules = rule_table("crossing", {**crossing, "growth_key": ["src.owners"]}) + '\n[roles]\ngroup = "owners"\n'
+    result = Engine(world.config(rules, base), world.graph, world.repo).evaluate()
+    owners = "frozenset({" + ", ".join(repr(owner) for owner in sorted(OWNERS)) + "})"
+    assert owners in source_labels(result, {})["owners"].values()
+    assert owners in {group for src, dst, _, _ in group_triples(result, world.graph) for group in (src, dst)}
+
+
+def test_a_set_a_provider_gives_a_text_field_reads_as_its_sorted_items(world: World) -> None:
+    teams = world.repo / "TEAMS"
+    teams.write_text("products/billing/ " + " ".join(f"@{owner}" for owner in OWNERS) + "\n")
+    base = CONFIG.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
+    base += '\n[providers.codeowners]\nuse = "codeowners"\nfile = "TEAMS"\nsets = ["lead"]\n'
+    rules = LEVELS + '\n[levels.led]\ngroup_by = "lead"\nrequires = ["crossing"]\n'
+    try:
+        level = Engine(world.config(rules, base), world.graph, world.repo).evaluate().levels["led"]
+    finally:
+        teams.unlink()
+    lead = "frozenset({" + ", ".join(repr(f"@{owner}") for owner in sorted(OWNERS)) + "})"
+    assert lead in [*level.passing, *level.failing]
+
+
+# Rows between two first-party packages, and rows inside one package across zones.
+WITHIN_GROUP = rule_table(
+    "crossing", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package and dst.external == none"}
+) + rule_table("inside", {**EDGE, "kinds": ["import"], "deny": "dst.package == src.package and dst.zone != src.zone"})
+
+
+@pytest.mark.parametrize("within_group", [False, True])
+def test_a_level_reads_a_within_group_rule_only_inside_one_group(world: World, within_group: bool) -> None:
+    level = '\n[levels.own]\ngroup_by = "package"\nrequires = ["crossing", "inside"]\nstrict = ["crossing", "inside"]\n'
+    if within_group:
+        level += 'within_group = ["crossing", "inside"]\n'
+    result = Engine(world.config(WITHIN_GROUP + level), world.graph, world.repo).evaluate().levels["own"]
+    reasons = [reason for found in result.failing.values() for reason in found]
+    # A row whose destination did not resolve names one group: it still counts.
+    known = {reason.split(":")[0] for reason in reasons if ": unknown: " not in reason}
+    assert known == ({"inside"} if within_group else {"crossing", "inside"})
+    assert any(reason.startswith("crossing: unknown: ") for reason in reasons)
+    assert any(reason.startswith("inside: ") for reason in result.failing["billing"])
+
+
+FACADE_FILES = {
+    "primitive": "layout",
+    "within": "products/{product}",
+    "files": [
+        "backend/{facade,nowhere}",
+        "backend/facade/{contracts.py,contracts}",
+        "backend/facade/api.py: function",
+        "backend/facade/__init__.py: function",
+        "backend/presentation/views.py: class",
+        "backend: function",
+    ],
+    "ledger": False,
+}
+
+
+def test_a_required_file_may_have_alternatives_and_name_what_it_defines(world: World) -> None:
+    rows = world.rows(world.config(rule_table("facade-files", FACADE_FILES)), "facade-files")
+    findings = sorted(message for _, message, _, _, _ in rows[: len(rows) - 3])
+    assert findings == [
+        "products/alerts lacks backend/facade/{contracts.py,contracts}",
+        "products/alerts lacks backend/presentation/views.py",
+        "products/alerts/backend/facade/__init__.py defines no function",
+        "products/billing/backend/facade/__init__.py defines no function",
+        "products/é lacks backend/facade/__init__.py",
+        "products/é lacks backend/facade/api.py",
+        "products/é lacks backend/facade/{contracts.py,contracts}",
+        "products/é lacks backend/presentation/views.py",
+        "products/é lacks backend/{facade,nowhere}",
+    ]
+    assert sorted(row[0] for row in rows[len(rows) - 3 :]) == [
+        "products/alerts/backend",
+        "products/billing/backend",
+        "products/é/backend",
+    ]
+
+
+def test_a_level_reads_a_layout_root_without_init_as_its_own_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(SOURCES, "products/loose/tool.py", "def run():\n    pass\n")
+    loose = World(tmp_path)
+    rule = {"primitive": "layout", "within": "products/{product}", "files": ["backend/facade/api.py"], "ledger": False}
+    level = '\n[levels.faced]\ngroup_by = "package"\nrequires = ["faced"]\nstrict = ["faced"]\n'
+    result = Engine(loose.config(rule_table("faced", rule) + level), loose.graph, loose.repo).evaluate()
+    assert result.levels["faced"].failing["loose"] == [
+        "faced: strict, so the ledger does not excuse it: products/loose lacks backend/facade/api.py"
+    ]
 
 
 def problems(world: World, config: Config) -> list[str]:

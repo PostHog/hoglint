@@ -15,7 +15,7 @@ from hoglint.model import LANGUAGE_PYTHON, EntityId
 if TYPE_CHECKING:
     from hoglint.native.build import NativeStore
 
-# Statement context flags; the extractor's `flags` module (src/facts.rs, schema.md section 3) is the source.
+# Statement context flags; the extractor's `flags` module (src/facts.rs) is the source.
 TYPE_ONLY = 1
 TC_ELSE = 2
 FUNC = 4

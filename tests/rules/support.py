@@ -157,14 +157,17 @@ SHAPES = Path(__file__).parent / "shapes"
 PRESET = Path(__file__).resolve().parents[2] / "presets" / "posthog.toml"
 
 
-def without_export_rule(preset: str) -> str:
-    """The preset without its export rule. These tests build their graphs by hand, and the export
-    rule's tests are under tests/native, so the rule and the level's requirement of it go."""
-    start = preset.index("[rules.export-shape]\n")
-    end = preset.index("\n[", start + 1) + 1
-    required = '"export-shape", '
-    assert preset.count(required) == 1
-    return (preset[:start] + preset[end:]).replace(required, "")
+def without_tree_rules(preset: str) -> str:
+    """The preset without the rules these tests cannot run: they build their graphs by hand, so
+    the export rule goes (its tests are under tests/native), and their trees are no git tree, so
+    the layout rule that asks which files exist goes, with the level's requirement of it."""
+    for name in ("export-shape", "has-facade"):
+        start = preset.index(f"[rules.{name}]\n")
+        end = preset.index("\n[", start + 1) + 1
+        preset = preset[:start] + preset[end:]
+        assert preset.count(f', "{name}"') in (0, 2)
+        preset = preset.replace(f', "{name}"', "")
+    return preset
 
 
 def shape_config(root: Path, name: str, files: dict[str, str] | None = None) -> Config:
@@ -173,7 +176,7 @@ def shape_config(root: Path, name: str, files: dict[str, str] | None = None) -> 
     shutil.copy(SHAPES / f"{name}.toml", root / "hoglint.toml")
     preset = root / "tools" / "hoglint" / "presets" / "posthog.toml"
     preset.parent.mkdir(parents=True)
-    preset.write_text(without_export_rule(PRESET.read_text()))
+    preset.write_text(without_tree_rules(PRESET.read_text()))
     for path, content in (files or {}).items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(content)

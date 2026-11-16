@@ -1,4 +1,4 @@
-//! Typed L1 facts of one file (schema.md section 5). Rows serialize as positional JSON arrays,
+//! Typed L1 facts of one file. Rows serialize as positional JSON arrays,
 //! defs and assigns as objects with their keys in code point order.
 
 use crate::config::{Kind, Kinds};
@@ -6,8 +6,8 @@ use crate::value::{Keyword, Value};
 use serde::Serialize;
 use serde::ser::{SerializeSeq, Serializer};
 
-/// Statement context flags. Keep in step with schema.md section 3 ("Context flags"); the
-/// Python side parses these constants in a test.
+/// Statement context flags. The Python side (`hoglint/core/symbols.py`) parses these constants
+/// in a test.
 pub mod flags {
     /// Body of `if TYPE_CHECKING:`.
     pub const TYPE_ONLY: u32 = 1;

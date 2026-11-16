@@ -236,6 +236,8 @@ class LevelSpec:
     select: Selector | None = None
     strict: tuple[str, ...] = ()
     source: str = ""
+    # The required rules whose rows count only when all their subjects fall in one group.
+    within_group: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

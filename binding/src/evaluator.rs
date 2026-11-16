@@ -503,6 +503,13 @@ impl Rules {
             .map_err(PyValueError::new_err)
     }
 
+    /// The declarations (`function`, `class`) of the symbols the module of each path defines,
+    /// sorted; None for a path that no graph module has.
+    fn defined_in(&self, py: Python<'_>, paths: Vec<String>) -> Vec<Option<Vec<String>>> {
+        let bound = self.link.bind(py).borrow();
+        self.inner.defined_in(&bound.inner, &paths)
+    }
+
     /// The graph's (module, path) whose path a registry's `module` glob matches, by module.
     fn registry_modules(&self, py: Python<'_>, pattern: &str) -> PyResult<Vec<(String, String)>> {
         let bound = self.link.bind(py).borrow();

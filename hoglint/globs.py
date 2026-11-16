@@ -131,6 +131,16 @@ def glob_match(pattern: str, path: str) -> dict[str, str] | None:
     return compile_label_glob(pattern).match(path)
 
 
+def alternatives(text: str) -> list[str]:
+    """The texts that the `{a,b}` groups of `text` spell, in order: `x/{a,b}` is `x/a`, `x/b`."""
+    start = text.find("{")
+    end = text.find("}", start)
+    if start == -1 or end == -1:
+        return [text]
+    head, choices, tail = text[:start], text[start + 1 : end].split(","), alternatives(text[end + 1 :])
+    return [head + choice + rest for choice in choices for rest in tail]
+
+
 class GlobIndex(Generic[T]):
     """Items that each carry label globs, looked up by path. A glob is filed under the directory
     its prefix spells out, and a path gets the items filed under one of its own directories (the

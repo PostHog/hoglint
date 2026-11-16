@@ -1,9 +1,10 @@
-"""The export primitive: does a public door hand out a denied shape?
+"""The export primitive: does an export hand out a denied shape?
 
 The check is recursive. An exported class must have an allowed shape, and the types in its
 fields, its bases' fields and its methods' signatures must too. An exported function's
 signature types are checked the same way. A module exports its public definitions and the
-imports it hands out; a re-export is judged at its origin, so a shim module hides nothing. Shape names are core recognizers plus the config's [kinds].
+imports it hands out; a re-export is judged at its origin, so a shim module hides nothing.
+Shape names are core recognizers plus the config's [kinds].
 
 Membership is the labeler's: an export's paths, narrowed by `subclass_of`. The audience is not
 read here: it limits who may use an export, not what the export hands out, so every member is

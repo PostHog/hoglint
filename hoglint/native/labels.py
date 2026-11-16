@@ -124,7 +124,7 @@ class NativeLabeler(Labeler):
 
     def level_groups(self, spec: LevelSpec) -> list[str] | None:
         """The evaluator's groups of a level, when its group field is not a set: a set's group is
-        named by its `frozenset(...)` text, which only Python writes (`levels.group_name`)."""
+        named by its `frozenset(...)` text, which only Python writes (`labels.label_text`)."""
         field = self.config.fields.get(spec.group_by)
         if self.evaluator is None or field is None or field.type is FieldType.SET:
             return None

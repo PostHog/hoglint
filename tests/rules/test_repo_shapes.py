@@ -74,9 +74,9 @@ def test_posthog_preset_products_zones_exports_and_isolated(tmp_path: Path) -> N
     assert found(result, "foundation-direction") == [("access_control", "alerts")]
     assert found(result, "infrastructure-direction") == [("egress", "billing")]
     assert found(result, "leaves-stay-leaves") == [("packages.owners_yaml.resolver", "django.db")]
-    # new findings forbid Isolated for both ends until the ledger accepts the debt
-    assert result.levels["isolated"].passing == []
-    assert set(result.levels["isolated"].failing) == {"access_control", "alerts", "billing"}
+    # New debt alone does not forbid Isolated (D108): no product narrows its contract-check inputs,
+    # and the presentation row runs between two products, so it counts for neither.
+    assert result.levels["isolated"].passing == ["access_control", "alerts", "billing"]
 
 
 def test_saleor_one_package_from_two_trees_and_a_cross_layer(tmp_path: Path) -> None:

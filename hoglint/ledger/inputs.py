@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import ClassVar
 
 from hoglint.config.model import Config
-from hoglint.globs import CAPTURE_RE, Braces, literal_ends, translate
+from hoglint.config.schema import required_file
+from hoglint.globs import CAPTURE_RE, Braces, alternatives, literal_ends, translate
 from hoglint.ledger.cache import INPUTS, INPUTS_STORE, RunStores, write_atomic
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import SOURCE_SUFFIXES, Listing, TreeListing
@@ -87,15 +88,16 @@ class RunInputs:
 
     def side(self) -> tuple[str, ...]:
         """What each provider and coverage adapter declares, and the paths layout rules ask
-        about. A layout rule asks only whether a path exists, so its patterns cover every file
-        under such a path too."""
+        about, each `{a,b}` alternative of them. A layout rule asks only whether a path exists, so
+        its patterns cover every file under such a path too."""
         patterns = set(self.declared())
         for spec in self.config.rules.values():
             if spec.primitive == "layout" and spec.within:
                 within = CAPTURE_RE.sub("*", spec.within)
                 for name in (*spec.files, *spec.absent):
-                    path = f"{within}/{name.strip('/')}"
-                    patterns.update((path, f"{path}/**"))
+                    for choice in alternatives(required_file(name)[0]):
+                        path = f"{within}/{choice.strip('/')}"
+                        patterns.update((path, f"{path}/**"))
         return tuple(sorted(patterns))
 
     @cached_property
