@@ -210,8 +210,8 @@ Some words have two meanings; the entry names both.
   Any change to a file of a set moves its id, a comment too, so rebuild before tests.
 - **Model repository** (`tests/model_repo/`, `bin/model-repo`).
   A small repo of planted cases, with reviewed rows, table digests and every message stored.
-- **Stored runs** (`tests/native/generated_runs.jsonl`, `tests/native/stored_rows.json`).
-  The whole output of many rule configs, stored, so a change that moves a row shows up.
+- **Stored runs** (`tests/native/stored_rows.json`, `tests/native/generated_runs.jsonl`).
+  The whole output of the hand-written rule cases and of one generated config per rule mode, stored, so a change that moves a row shows up.
 - **Parity tables** (`hoglint/native/parity.py`).
   The ten normalized tables of a check (edges, symbol facts, modules, findings, levels and others) that two builds are compared on.
 - **Named delta** (`AGENTS.md`).

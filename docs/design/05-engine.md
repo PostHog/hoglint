@@ -1,7 +1,7 @@
 # 5. The engine: Rust link, Python shell, packs
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 13, 2026.
+> Current as of Nov 16, 2026.
 
 ## Decided (current form)
 
@@ -26,9 +26,11 @@ The Python graph build that did the same is retired; `--engine native` is still 
   `explain edge:`, the couplings a rename scope keeps and `explain`'s label values come from the evaluator too.
   A graph that is not linked natively gets no rule context; hand-built test graphs are loaded into a native link first.
 - **What stands in for the comparison of the two engines:**
-  - the model repository's stored result: its reviewed rows (`tests/model_repo/expected.toml`), the row count and digest of each of the ten tables (`tests/model_repo/tables.toml`), every message and reason (`tests/model_repo/messages.toml`) and what `explain` says (`tests/model_repo/explained.txt`), checked by `bin/model-repo` and the suite;
-  - the stored runs of the generated rule configs (`tests/native/generated_runs.jsonl`) and of the hand-written rule cases (`tests/native/stored_rows.json`), written while both engines still agreed on them;
+  - the model repository's stored result: its reviewed rows (`tests/model_repo/expected.toml`), the row count and digest of each of the ten tables (`tests/model_repo/tables.toml`) and every message and reason (`tests/model_repo/messages.toml`), checked by `bin/model-repo` and the suite;
+  - what `explain` says on the model repository, held to the run it explains (`tests/model_repo/test_explain.py`): every label it prints is the value the evaluator holds; for every rule judged per destination and every edge, the truths `explain edge:` prints give a row exactly where the run has one, and each finding's identity is what the evaluator reads again at its edge; a reach or cycle finding is a path `explain edge:` reads as selected; a small stored sample (`tests/model_repo/explained.txt`) holds the wording;
+  - the stored runs of the hand-written rule cases (`tests/native/stored_rows.json`), written while both engines still agreed on them, and of one generated config per rule mode, picked by hand (`tests/native/generated_runs.jsonl`);
   - relations between sibling rules on the evaluator alone (`tests/native/test_rule_relations.py`), and the tables `tests/rules/judgment.txt`, `connectives.txt` and `missing_side.txt`, each read by a Rust test;
+  - the labeler twin (`tests/native/test_evaluator.py`): the module labels the native labeler reads equal the Python labeler's, and so do the symbol labels the evaluator reads at each edge's destination, over the fixture's config and the generated configs that differ outside `[rules]`;
   - the rule tests on hand-built graphs, the slot table test, the generated exactly-once test, and the producer and pack tests, which link hand-written records in the native engine and assert stored rows;
   - `bin/prove --real <snapshot> --base <rev>`: every row of the ten tables of the head against a base build at real size, the moved rows written out.
 - **What these cannot show:** a stored value holds the engine to its own earlier output, so an error the engine always had stays (the reason D7 amended kept an oracle).

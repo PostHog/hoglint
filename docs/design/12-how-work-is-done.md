@@ -1,7 +1,7 @@
 # 12. How the work is done: gates, verification, reviews, lessons
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 13, 2026.
+> Current as of Nov 16, 2026.
 
 ## Decided
 
@@ -36,7 +36,7 @@ The architect reruns repros, writes its own delta scripts, and does not take a b
 `tests/model_repo/` is a miniature of the PostHog monorepo's layout with one invented example per case, checked with the real preset in the native engine inside the test suite.
 - **What it is for:** the small question behind most real-size runs, "does this kind of code still give this verdict?", answered in about a second.
   Each case has a finding and a clean neighbor.
-  `CASES.md` lists the cases; `expected.toml` is the reviewed result, every row tied to a case; `tables.toml` holds the row count and a digest of each of the ten tables, so a row that moves in any table is seen; `messages.toml` holds every message and reason, so a wording that moves is named; `explained.txt` holds what `explain` says.
+  `CASES.md` lists the cases; `expected.toml` is the reviewed result, every row tied to a case; `tables.toml` holds the row count and a digest of each of the ten tables, so a row that moves in any table is seen; `messages.toml` holds every message and reason, so a wording that moves is named; `test_explain.py` holds what `explain` says to the run it explains (each label to the evaluator's value, each judged edge's truths to the rows), and `explained.txt` keeps its wording for a few modules and edges the cases name.
   Verdicts that are decided and not built yet are `[[wanted]]` entries, run as expected failures.
 - **How to use it:** `bin/model-repo` after a rule or preset change prints, per rule, the rows whose verdict changed and the case each is tied to.
   `bin/model-repo --refresh` rewrites the expected file, the tables and the messages; a reviewer then reads its diff, ties every new row (case `"?"`) to a case, and checks each gone row against the decision behind the change.

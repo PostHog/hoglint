@@ -40,7 +40,7 @@ A change that breaks one is a design change for the owner, not a refactor.
 5. **One engine; a change moves no row it does not name.**
    The native engine builds the graph and judges every rule; Python words its rows and holds the rule metadata and the steps with no Rust twin.
    A rule, label or selector change is written once, in Rust.
-   A change to rows or words is a named delta against the model repository's stored rows, tables and messages, the stored rule runs (`tests/native/generated_runs.jsonl`, `stored_rows.json`), the slot table test and the real-size compare with a base.
+   A change to rows or words is a named delta against the model repository's stored rows, tables and messages, the stored rule runs (`tests/native/stored_rows.json`, and one generated config per rule mode in `generated_runs.jsonl`), the stored sample of `explain` (`tests/model_repo/explained.txt`), the slot table test and the real-size compare with a base.
 6. **Every run is exact.**
    Any reuse of a stored answer must equal a full run, and an oracle must prove it.
 7. **The seam rule.**
