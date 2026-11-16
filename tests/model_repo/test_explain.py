@@ -194,36 +194,38 @@ class Explained:
         self.rows: Counter[tuple[str, int, str]] = Counter()
         self.judgments: Counter[str] = Counter()
 
-    def verdicts(self, at: int, spec: RuleSpec, edge: Edge, truths: dict[str, str]) -> list[str]:
-        """The verdict of each destination: a use-shape rule's from the shape it reads there, any
-        other rule's from its predicates, which `explain edge:` prints (true when it has none)."""
+    def shape_verdicts(self, at: int, spec: RuleSpec, edge: Edge) -> list[str]:
+        """A use-shape rule's verdict at each destination, from the shape it reads there."""
+        columns = [["edge", "shape"], ["edge", "label"], ["edge", "use"]]
+        found = self.evaluator.edge_values(at, [edge.handle], columns)[0]
+        return [use_shape_verdict(spec, *values) for values in found]
+
+    def predicates(self, spec: RuleSpec, truths: dict[str, str]) -> str:
+        """The verdict of a rule's predicates at one destination (true when it has none)."""
         mode = primitive_of(spec).MODE
-        if mode == "use-shape":
-            columns = [["edge", "shape"], ["edge", "label"], ["edge", "use"]]
-            found = self.evaluator.edge_values(at, [edge.handle], columns)[0]
-            return [use_shape_verdict(spec, *values) for values in found]
         assert mode in ("edge", "entrypoint", "signature"), f"{spec.id}: no verdict read for mode {mode}"
         parts = [truths["deny"]] if "deny" in truths else []
         parts += [self.truths.negate(truths[key]) for key in ("allow", "require") if key in truths]
         # An entrypoint rule with no predicate reads `dst.exported`, which `explain edge:` does not print.
         assert parts or mode != "entrypoint", f"{spec.id}: an entrypoint rule with no predicate"
-        return [self.truths.join("or", parts) if parts else "true"]
+        return self.truths.join("or", parts) if parts else "true"
 
     def judge(self, at: int, spec: RuleSpec, edge: Edge) -> None:
         found = self.evaluator.explain_edge(at, edge.handle)
         if found is None:
             return
-        signature = primitive_of(spec).MODE == "signature"
-        verdicts: list[str] = []
+        mode = primitive_of(spec).MODE
+        shapes = self.shape_verdicts(at, spec, edge) if mode == "use-shape" else None
         for place, (symbol, module, named) in enumerate(found):
             truths = dict(named)
-            verdicts = verdicts or self.verdicts(at, spec, edge, truths)
-            unknown_type = signature and (edge.attr("annotation") == "missing" or symbol in spec.unknown_types)
+            unknown_type = mode == "signature" and (
+                edge.attr("annotation") == "missing" or symbol in spec.unknown_types
+            )
             inputs = [
                 self.truths.join("and", [truths.get("from_", "true"), truths.get("select", "true")]),
                 "yes" if module is None else "no",
                 "yes" if unknown_type else "no",
-                verdicts[place] if len(verdicts) > 1 else verdicts[0],
+                shapes[place] if shapes is not None else self.predicates(spec, truths),
                 truths.get("unless", "none"),
             ]
             judgment = self.truths.judgment(inputs)
