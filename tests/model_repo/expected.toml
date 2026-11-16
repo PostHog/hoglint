@@ -1067,12 +1067,6 @@ identity = ["scripts.shapes|reference|products.inventory.backend.models.StockIte
 # no-product-lists-in-core
 
 [[row]]
-case = "DP03"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.team.team", "products.inventory.backend.models"]
-
-[[row]]
 case = "DP07"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1083,37 +1077,6 @@ case = "DR04"
 rule = "no-product-lists-in-core"
 verdict = "finding"
 identity = ["posthog.hogql_queries.query_runner", "products.legacy.backend.hogql_queries.audit"]
-
-[[row]]
-case = "IF01"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.egress.client", "products.gatekeeper.backend.facade.api"]
-
-[[row]]
-case = "LE03"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
-
-[[row]]
-case = "PS01"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
-count = 2
-
-[[row]]
-case = "PS05"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["ee.hogai.tools", "products.inventory.backend.facade.api"]
-
-[[row]]
-case = "PS05"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api.sharing", "products.inventory.backend.facade.api"]
 
 [[row]]
 case = "PS13"
@@ -1134,24 +1097,6 @@ verdict = "finding"
 identity = ["posthog.management.commands.start_temporal_worker", "products.reports.backend.temporal.workflows"]
 
 [[row]]
-case = "PS14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.clickhouse.schema", "products.catalog.backend.sql"]
-
-[[row]]
-case = "PS15"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api", "products.legacy.backend.api.widgets"]
-
-[[row]]
-case = "PS15"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.urls", "products.legacy.backend.api.widgets"]
-
-[[row]]
 case = "PS24"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1168,78 +1113,6 @@ case = "PS24"
 rule = "no-product-lists-in-core"
 verdict = "finding"
 identity = ["posthog.tasks.scheduled", "products.reports.backend.tasks.nightly"]
-
-[[row]]
-case = "PS25"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["ee.api.widgets", "products.legacy.backend.models"]
-
-[[row]]
-case = "PS26"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.resource_transfer.visitors", "products.catalog.backend.models"]
-
-[[row]]
-case = "PS26"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.resource_transfer.visitors", "products.inventory.backend.models"]
-
-[[row]]
-case = "PS26"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.resource_transfer.visitors", "products.legacy.backend.models"]
-
-[[row]]
-case = "UK01"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
-
-[[row]]
-case = "WK03"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "WK03"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["sandbox.shapes|import|pydantic.BaseModel"]
-
-[[row]]
-case = "WK04"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "WK04"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["scripts.shapes|import|pydantic.BaseModel"]
-
-[[row]]
-case = "WW01"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.auth", "products.gatekeeper.backend.facade.api"]
-
-[[row]]
-case = "WW02"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.permissions", "products.access_control.backend.facade.api"]
-
-[[row]]
-case = "WW08"
-rule = "no-product-lists-in-core"
-verdict = "unknown"
-identity = ["posthog.request_log", "?"]
 
 # orm-independent
 

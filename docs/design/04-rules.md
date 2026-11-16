@@ -86,6 +86,9 @@ The preset has no `off` key yet: a rule that is off is a commented-out table wit
 
 **Rows the first-ledger triage placed elsewhere** (Nov 16; the architect's answers to the triage).
 - `no-product-lists-in-core` takes `public-surface`'s allowances: frozen migrations, settings naming product paths, a declared permanent interface for core.
+- `no-product-lists-in-core` judges only the core registration points (the hub rule, the architect, Nov 16): the modules the preset marks `wiring = "registration"` (the Temporal worker and schedules, the query runner, the Celery schedule, `posthog/apps.py`, the Max presets).
+  Core calling a product's facade elsewhere is allowed (D93); a threshold on how many products a module names was rejected, since it reports facade calls and loses the per-product Max presets.
+  Limit: a new hard-coded product list in a core module that is not marked as a registration point is not caught.
 - `object` as a mapping's value is an opaque payload in a facade parameter or field, as `Any` is; never in a return value.
 - An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
 - `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.

@@ -805,9 +805,9 @@ growth_key = ["src.package", "dst.package"]
 
 [rules.no-product-lists-in-core]
 primitive  = "edge"
-doc        = "Core names a product only through a registry or the registration export (B14). Migrations are frozen history and are not judged; Django settings may name product paths as strings; core production code may name a declared permanent interface."
+doc        = "A core registration point (the modules the preset marks with `wiring = \"registration\"`: the Temporal worker and schedules, the query runner, the Celery schedule, the Max presets) lists products by name: each product module it names is a row (B14, D104). Core calling a product's facade anywhere else is allowed (D93). Migrations are frozen history and are not judged; Django settings may name product paths as strings; core production code may name a declared permanent interface. Not caught: a new hard-coded product list in a core module the preset does not mark as a registration point."
 kinds      = ["import", "dotted-path"]
-from       = "src.tier == 'core' and src.registry == none and src.history != true"
+from       = "src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true"
 deny       = "dst.tier == 'product'"
 unless     = "(src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true"
 contexts   = { exclude = ["test", "type_only", "migration"] }

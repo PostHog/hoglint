@@ -895,56 +895,6 @@ text = "posthog.kafka_client.client -> ee.billing.quota.over_quota (import)"
 
 [[finding]]
 rule = "no-product-lists-in-core"
-identity = ["ee.api.widgets", "products.legacy.backend.models"]
-text = "ee.api.widgets -> products.legacy.backend.models.Widget (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["ee.hogai.tools", "products.inventory.backend.facade.api"]
-text = "ee.hogai.tools -> products.inventory.backend.facade.api.get_stock (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.api", "products.legacy.backend.api.widgets"]
-text = "posthog.api -> products.legacy.backend.api.widgets.WidgetViewSet (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.api.sharing", "products.inventory.backend.facade.api"]
-text = "posthog.api.sharing -> products.inventory.backend.facade.api (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
-text = "posthog.api.shelf_labels -> products.shelf.backend.logic.labels.label_for (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
-text = "posthog.api.widget_report -> products.legacy.backend.logic.widgets (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
-text = "posthog.api.widget_report -> products.legacy.backend.logic.widgets.widget_total (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.auth", "products.gatekeeper.backend.facade.api"]
-text = "posthog.auth -> products.gatekeeper.backend.facade.api (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.clickhouse.schema", "products.catalog.backend.sql"]
-text = "posthog.clickhouse.schema -> products.catalog.backend.sql.ENTRY_TABLE_SQL (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.egress.client", "products.gatekeeper.backend.facade.api"]
-text = "posthog.egress.client -> products.gatekeeper.backend.facade.api.may_enter (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
 identity = ["posthog.hogql_queries.query_runner", "products.reports.backend.hogql_queries.widget"]
 text = "posthog.hogql_queries.query_runner -> products.reports.backend.hogql_queries.widget.WidgetQueryRunner (import)"
 
@@ -965,31 +915,6 @@ text = "posthog.management.commands.start_temporal_worker -> products.reports.ba
 
 [[finding]]
 rule = "no-product-lists-in-core"
-identity = ["posthog.models.resource_transfer.visitors", "products.catalog.backend.models"]
-text = "posthog.models.resource_transfer.visitors -> products.catalog.backend.models.CatalogEntry (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.models.resource_transfer.visitors", "products.inventory.backend.models"]
-text = "posthog.models.resource_transfer.visitors -> products.inventory.backend.models.StockItem (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.models.resource_transfer.visitors", "products.legacy.backend.models"]
-text = "posthog.models.resource_transfer.visitors -> products.legacy.backend.models.Widget (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.permissions", "products.access_control.backend.facade.api"]
-text = "posthog.permissions -> products.access_control.backend.facade.api.may_view (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.request_log", "?"]
-text = "import 'products.gatekeeper.backend.facade.trail' did not resolve"
-
-[[finding]]
-rule = "no-product-lists-in-core"
 identity = ["posthog.tasks.scheduled", "products.catalog.backend.tasks.reindex"]
 text = "posthog.tasks.scheduled -> products.catalog.backend.tasks.reindex.reindex_catalog (import)"
 
@@ -1002,16 +927,6 @@ text = "posthog.tasks.scheduled -> products.inventory.backend.tasks.restock.rest
 rule = "no-product-lists-in-core"
 identity = ["posthog.tasks.scheduled", "products.reports.backend.tasks.nightly"]
 text = "posthog.tasks.scheduled -> products.reports.backend.tasks.nightly.nightly_reports (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.urls", "products.legacy.backend.api.widgets"]
-text = "posthog.urls -> products.legacy.backend.api.widgets.WidgetViewSet (import)"
-
-[[finding]]
-rule = "no-product-lists-in-core"
-identity = ["posthog.models.team.team", "products.inventory.backend.models"]
-text = "posthog.models.team.team -> products.inventory.backend.models.StockItem (dotted-path)"
 
 [[finding]]
 rule = "no-product-lists-in-core"
@@ -1517,31 +1432,6 @@ text = "selection reads an unknown value"
 rule = "no-new-package-cycles"
 identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 text = "model-label 'apps.get_model' did not resolve"
-
-[[incomplete]]
-rule = "no-product-lists-in-core"
-identity = ["sandbox.shapes|import|pydantic.BaseModel"]
-text = "selection reads unknown src.tier"
-
-[[incomplete]]
-rule = "no-product-lists-in-core"
-identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
-text = "selection reads unknown src.tier"
-
-[[incomplete]]
-rule = "no-product-lists-in-core"
-identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
-text = "selection reads unknown src.tier"
-
-[[incomplete]]
-rule = "no-product-lists-in-core"
-identity = ["scripts.shapes|import|pydantic.BaseModel"]
-text = "selection reads unknown src.tier"
-
-[[incomplete]]
-rule = "no-product-lists-in-core"
-identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
-text = "selection reads unknown src.tier"
 
 [[incomplete]]
 rule = "leaves-stay-leaves"

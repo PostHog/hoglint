@@ -5906,7 +5906,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.log
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.logic.pricing.price_for)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.logic.pricing.price_for)
@@ -5961,7 +5961,7 @@ rule     infrastructure-direction (endpoint origin, posthog.settings.web.MIDDLEW
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.settings.web.MIDDLEWARE)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.settings.web.MIDDLEWARE)
@@ -6015,7 +6015,7 @@ rule     infrastructure-direction (endpoint origin, django.conf.settings)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.conf.settings)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.conf.settings)
@@ -6070,7 +6070,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.r
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.routes.register_routes)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> true
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.routes.register_routes)
@@ -6124,7 +6124,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.logi
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.logic.widgets)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.logic.widgets)
@@ -6134,7 +6134,6 @@ rule     health-checks-no-dags (endpoint origin, products.legacy.backend.logic.w
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> false
 finding  [new] public-surface products.legacy.backend.logic.widgets posthog.api.widget_report import
-finding  [new] no-product-lists-in-core posthog.api.widget_report products.legacy.backend.logic.widgets
 edge     import posthog/clickhouse/client/execute.py:1 common.hogvm.stl.quote -> ['common.hogvm.stl.quote']
          resolution=resolved contexts=['prod']
 rule     public-surface (endpoint surface, common.hogvm.stl.quote)
@@ -6180,7 +6179,7 @@ rule     infrastructure-direction (endpoint origin, common.hogvm.stl.quote)
            from: src.zone == 'infrastructure' -> true
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, common.hogvm.stl.quote)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, common.hogvm.stl.quote)
@@ -6234,7 +6233,7 @@ rule     infrastructure-direction (endpoint origin, dataclasses)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, dataclasses)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, dataclasses)
@@ -6285,7 +6284,7 @@ rule     infrastructure-direction (endpoint origin, products.reports.backend.hog
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.reports.backend.hogql_queries.widget.WidgetQueryRunner)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> true
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.reports.backend.hogql_queries.widget.WidgetQueryRunner)
@@ -6340,7 +6339,7 @@ rule     infrastructure-direction (endpoint origin, django.conf.settings)
            from: src.zone == 'infrastructure' -> true
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.conf.settings)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.conf.settings)
@@ -6395,7 +6394,7 @@ rule     infrastructure-direction (endpoint origin, posthog.request_log.record)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.request_log.record)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.request_log.record)
@@ -6449,7 +6448,7 @@ rule     infrastructure-direction (endpoint origin, posthog.models.integration.I
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.models.integration.Integration)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.models.integration.Integration)
@@ -6503,7 +6502,7 @@ rule     infrastructure-direction (endpoint origin, posthog.models.user.User)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.models.user.User)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.models.user.User)
@@ -6557,7 +6556,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.mod
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -6567,7 +6566,6 @@ rule     health-checks-no-dags (endpoint origin, products.catalog.backend.models
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> false
 finding  [new] public-surface products.catalog.backend.models.CatalogEntry posthog.models.resource_transfer.visitors import
-finding  [new] no-product-lists-in-core posthog.models.resource_transfer.visitors products.catalog.backend.models
 edge     import posthog/models/team/team.py:1 django.db.models -> ['django.db.models']
          resolution=external contexts=['prod']
 rule     public-surface (endpoint surface, django.db.models)
@@ -6613,7 +6611,7 @@ rule     infrastructure-direction (endpoint origin, django.db.models)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.db.models)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.db.models)
@@ -6712,7 +6710,7 @@ rule     infrastructure-direction (endpoint origin, posthog.settings.web)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.settings.web)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.settings.web)
@@ -6766,7 +6764,7 @@ rule     infrastructure-direction (endpoint origin, abc.abstractmethod)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, abc.abstractmethod)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, abc.abstractmethod)
@@ -6850,7 +6848,7 @@ rule     infrastructure-direction (endpoint origin, django.apps.config.AppConfig
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.apps.config.AppConfig)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.apps.config.AppConfig)
@@ -6904,7 +6902,7 @@ rule     infrastructure-direction (endpoint origin, django.db.models)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.db.models)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.db.models)
@@ -6958,7 +6956,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.log
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.logic.handouts)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.logic.handouts)
@@ -7012,7 +7010,7 @@ rule     infrastructure-direction (endpoint origin, typing.Any)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, typing.Any)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, typing.Any)
@@ -7066,7 +7064,7 @@ rule     infrastructure-direction (endpoint origin, posthog.models.project.Proje
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.models.project.Project)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.models.project.Project)
@@ -7120,7 +7118,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.fac
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.facade.contracts.EntryInfo)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.facade.contracts.EntryInfo)
@@ -7171,7 +7169,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.api
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.api.serializers.EntrySerializer)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.api.serializers.EntrySerializer)
@@ -7227,7 +7225,7 @@ rule     infrastructure-direction (endpoint origin, dataclasses.dataclass)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, dataclasses.dataclass)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, dataclasses.dataclass)
@@ -7281,7 +7279,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.log
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.logic.errors.EntryFlagMissing)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.logic.errors.EntryFlagMissing)
@@ -7335,7 +7333,7 @@ rule     infrastructure-direction (endpoint origin, scripts.shapes.ExternalView)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> unknown
 rule     no-product-lists-in-core (endpoint origin, scripts.shapes.ExternalView)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> unknown
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, scripts.shapes.ExternalView)
@@ -7389,7 +7387,7 @@ rule     infrastructure-direction (endpoint origin, posthog.dataclasses.frozen)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.dataclasses.frozen)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.dataclasses.frozen)
@@ -7443,7 +7441,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.log
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.logic.views_out.StockBase)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.logic.views_out.StockBase)
@@ -7497,7 +7495,7 @@ rule     infrastructure-direction (endpoint origin, typing.Protocol)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, typing.Protocol)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, typing.Protocol)
@@ -7551,7 +7549,7 @@ rule     infrastructure-direction (endpoint origin, posthog.models.organization.
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.models.organization.OrganizationMembership)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.models.organization.OrganizationMembership)
@@ -7605,7 +7603,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.m
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.models.StockItem)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.models.StockItem)
@@ -7660,7 +7658,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.log
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.logic.handouts.HandoutHolder)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.logic.handouts.HandoutHolder)
@@ -7715,7 +7713,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.mod
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -7769,7 +7767,7 @@ rule     infrastructure-direction (endpoint origin, typing.Protocol)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, typing.Protocol)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, typing.Protocol)
@@ -7823,7 +7821,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.mod
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -7877,7 +7875,7 @@ rule     infrastructure-direction (endpoint origin, posthog.dataclasses.frozen)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.dataclasses.frozen)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.dataclasses.frozen)
@@ -7931,7 +7929,7 @@ rule     infrastructure-direction (endpoint origin, django.db.models)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.db.models)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.db.models)
@@ -7985,7 +7983,7 @@ rule     infrastructure-direction (endpoint origin, posthog.ingress.contracts.We
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.ingress.contracts.WebhookConsumer)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.ingress.contracts.WebhookConsumer)
@@ -8039,7 +8037,7 @@ rule     infrastructure-direction (endpoint origin, products.gatekeeper.backend.
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.gatekeeper.backend.logic.session.touch_session)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.gatekeeper.backend.logic.session.touch_session)
@@ -8094,7 +8092,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.f
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.facade.contracts.StockLevel)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.facade.contracts.StockLevel)
@@ -8148,7 +8146,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.f
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.facade.enums.StockState)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.facade.enums.StockState)
@@ -8202,7 +8200,7 @@ rule     infrastructure-direction (endpoint origin, posthog.models.team.team.Tea
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.models.team.team.Team)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.models.team.team.Team)
@@ -8256,7 +8254,7 @@ rule     infrastructure-direction (endpoint origin, posthog.temporal.health_chec
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.temporal.health_checks.framework.HealthCheckRegistration)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.temporal.health_checks.framework.HealthCheckRegistration)
@@ -8310,7 +8308,7 @@ rule     infrastructure-direction (endpoint origin, django.core.management.base.
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.core.management.base.BaseCommand)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.core.management.base.BaseCommand)
@@ -8364,7 +8362,7 @@ rule     infrastructure-direction (endpoint origin, django.db.models)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.db.models)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.db.models)
@@ -8418,7 +8416,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.p
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.presentation.serializers.StockSerializer)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.presentation.serializers.StockSerializer)
@@ -8472,7 +8470,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.r
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.route_helpers.stock_route_name)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.route_helpers.stock_route_name)
@@ -8527,7 +8525,7 @@ rule     infrastructure-direction (endpoint origin, rest_framework.viewsets)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, rest_framework.viewsets)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, rest_framework.viewsets)
@@ -8581,7 +8579,7 @@ rule     infrastructure-direction (endpoint origin, posthog.api.file_system.dele
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.api.file_system.deletion.register_post_delete_hook)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, posthog.api.file_system.deletion.register_post_delete_hook)
@@ -8635,7 +8633,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.temp
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.temporal.jobs)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.temporal.jobs)
@@ -8689,7 +8687,7 @@ rule     infrastructure-direction (endpoint origin, django.core.management.base.
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.core.management.base.BaseCommand)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.core.management.base.BaseCommand)
@@ -8740,7 +8738,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.logi
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.logic.widgets.WIDGET_LIMIT)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.logic.widgets.WIDGET_LIMIT)
@@ -8791,7 +8789,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.temp
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.temporal.jobs.run_job)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.temporal.jobs.run_job)
@@ -8845,7 +8843,7 @@ rule     infrastructure-direction (endpoint origin, django.apps.registry.apps)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.apps.registry.apps)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.apps.registry.apps)
@@ -8899,7 +8897,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.mode
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.models.Widget)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.models.Widget)
@@ -8953,7 +8951,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.mode
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.models.Widget)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.models.Widget)
@@ -9008,7 +9006,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.draf
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.drafts)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.drafts)
@@ -9063,7 +9061,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.f
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.facade.api.get_stock)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.facade.api.get_stock)
@@ -9117,7 +9115,7 @@ rule     infrastructure-direction (endpoint origin, django.dispatch.dispatcher.r
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.dispatch.dispatcher.receiver)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.dispatch.dispatcher.receiver)
@@ -9171,7 +9169,7 @@ rule     infrastructure-direction (endpoint origin, django.db.models.signals.pos
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, django.db.models.signals.post_delete)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, django.db.models.signals.post_delete)
@@ -9283,7 +9281,7 @@ rule     infrastructure-direction (endpoint origin, products.racks.backend.logic
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.racks.backend.logic.rack_count)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.racks.backend.logic.rack_count)
@@ -9337,7 +9335,7 @@ rule     infrastructure-direction (endpoint origin, products.reports.backend.log
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.reports.backend.logic.build.run_count)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.reports.backend.logic.build.run_count)
@@ -9391,7 +9389,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.mod
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.models.CatalogEntry)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.catalog.backend.models.CatalogEntry)
@@ -9446,7 +9444,7 @@ rule     infrastructure-direction (endpoint origin, products.reports.backend.mod
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.reports.backend.models.ReportRun)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.reports.backend.models.ReportRun)
@@ -9545,7 +9543,7 @@ rule     infrastructure-direction (endpoint origin, sys)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, sys)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, sys)
@@ -9628,7 +9626,7 @@ rule     infrastructure-direction (endpoint origin, products.shelf.backend.facad
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.shelf.backend.facade.api.shelf_label)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.shelf.backend.facade.api.shelf_label)
@@ -9682,7 +9680,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.f
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.facade.api)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.facade.api)
@@ -9766,7 +9764,7 @@ rule     infrastructure-direction (endpoint origin, common.hogvm.stl.quote)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, common.hogvm.stl.quote)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, common.hogvm.stl.quote)
@@ -9820,7 +9818,7 @@ rule     infrastructure-direction (endpoint origin, products.inventory.backend.m
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.inventory.backend.models.StockItem)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> unknown
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.models.StockItem)
@@ -11249,7 +11247,7 @@ rule     infrastructure-direction (endpoint origin, products.gatekeeper.backend.
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.gatekeeper.backend.admin_gate.AdminGateMiddleware)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> true
 rule     health-checks-no-dags (endpoint origin, products.gatekeeper.backend.admin_gate.AdminGateMiddleware)
@@ -11284,7 +11282,7 @@ rule     infrastructure-direction (endpoint origin, products.catalog.backend.app
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.catalog.backend.apps.CatalogConfig)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> true
 rule     health-checks-no-dags (endpoint origin, products.catalog.backend.apps.CatalogConfig)
@@ -11318,7 +11316,7 @@ rule     infrastructure-direction (endpoint origin, posthog.middleware.TeamMiddl
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> false
 rule     no-product-lists-in-core (endpoint origin, posthog.middleware.TeamMiddleware)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> false
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> true
 rule     health-checks-no-dags (endpoint origin, posthog.middleware.TeamMiddleware)
@@ -11349,7 +11347,7 @@ rule     infrastructure-direction (endpoint origin, products.gatekeeper.backend.
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.gatekeeper.backend.token_check.TokenCheck)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> true
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> true
 rule     health-checks-no-dags (endpoint origin, products.gatekeeper.backend.token_check.TokenCheck)
@@ -11396,7 +11394,7 @@ rule     infrastructure-direction (endpoint origin, products.legacy.backend.temp
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
 rule     no-product-lists-in-core (endpoint origin, products.legacy.backend.temporal.jobs)
-           from: src.tier == 'core' and src.registry == none and src.history != true -> false
+           from: src.tier == 'core' and src.wiring == 'registration' and src.registry == none and src.history != true -> false
            deny: dst.tier == 'product' -> true
            unless: (src.zone == 'composition' and dst.exported) or (src.settings == true and edge.kind == 'dotted-path') or dst.permanent == true -> false
 rule     health-checks-no-dags (endpoint origin, products.legacy.backend.temporal.jobs)
