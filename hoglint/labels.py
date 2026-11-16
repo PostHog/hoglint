@@ -29,6 +29,17 @@ BUILTIN_ENTITY_NAMES = frozenset({*ENTITY_FIELDS, "kind", "subject"})
 NOT_HANDED_CONTEXTS = frozenset({Context.TYPE_ONLY, Context.TEST})
 
 
+def label_text(data: object) -> str:
+    """A label value as text: as `str()` writes it, but a set with its items sorted. `str()` lists
+    a set's items in hash order, which changes with the hash seed; a one-item set reads the same
+    either way."""
+    if not isinstance(data, frozenset):
+        return str(data)
+    if not data:
+        return "frozenset()"
+    return "frozenset({" + ", ".join(repr(item) for item in sorted(data)) + "})"
+
+
 @dataclass(frozen=True, slots=True)
 class Label:
     value: str | bool | frozenset[str]
@@ -591,7 +602,7 @@ class Labeler:
             return Value.known(label.value)
         if isinstance(label.value, bool):
             return Value.known(label.value)
-        return Value.known(str(label.value))
+        return Value.known(label_text(label.value))
 
     def label_of(self, module: str | None, symbol: str | None, name: str) -> Label | None:
         """The label a source set on the entity, if any: symbol labels for symbol fields."""
@@ -779,7 +790,7 @@ class Labeler:
     def known_text(self, module: str, name: str) -> str | None:
         """A module field's value as text when it is known."""
         value, _ = self.field_value(module, None, name)
-        return str(value.data) if value.state is State.KNOWN else None
+        return label_text(value.data) if value.state is State.KNOWN else None
 
     def level_groups(self, spec: LevelSpec) -> list[str] | None:
         """The groups a level judges, when a labeler that holds every module's labels finds them
