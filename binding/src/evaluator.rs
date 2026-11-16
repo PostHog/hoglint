@@ -318,9 +318,9 @@ impl Rules {
     }
 
     /// The zones `module` hands out names from, as (type, items): "set", "unknown" or "none".
-    fn handed_zones(&self, py: Python<'_>, module: &str) -> (&'static str, Vec<String>) {
+    fn handout_zones(&self, py: Python<'_>, module: &str) -> (&'static str, Vec<String>) {
         let bound = self.link.bind(py).borrow();
-        match self.inner.handed_zones(&bound.inner, module) {
+        match self.inner.handout_zones(&bound.inner, module) {
             Value::Unknown => ("unknown", Vec::new()),
             Value::Set(items) => ("set", items.iter().map(|item| item.to_string()).collect()),
             _ => ("none", Vec::new()),

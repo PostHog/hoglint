@@ -39,7 +39,7 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   A star whose source, or a source it star-imports, cannot be read hands out `*`, and the export rule reports it as an import that did not resolve.
 - A top-level assignment of one bare name to a name or an attribute chain that resolves, whole, to a class or a function (`NotFound = errors.NotFound`, `Status = Run.Status`) hands that class or function out under the new name, by the clause of a definition: when the name is public or `__all__` lists it, whether or not the module has a function (Nov 13).
   A class nested in a class counts.
-  In an export module it has an edge of the kind `rebind` (`binds` the name), so no rule that reads imports sees a second edge for one name; the export rule, the copies for the signature rule and `handed_zones` read it.
+  In an export module it has an edge of the kind `rebind` (`binds` the name), so no rule that reads imports sees a second edge for one name; the export rule, the copies for the signature rule and `handout_zones` read it.
 - Every name a readable `__all__` lists is accounted for (Nov 13): a def or a class, an import or another hand-out edge (lazy, star, `rebind`), a constant expression, or a type alias judged by its expansion.
   Any other listed name is unknown: the export rule reports `export-unknown` for it.
   A def or class with a leading `_` that `__all__` lists is handed out as a public one is: the export rule judges it, and in a contract module its slots get contract-mode rows.
@@ -122,7 +122,7 @@ Written limits:
 The owner decided that a preset holds a named list of future-proof core models that may cross.
 Any model that core owns is not enough, because a core model may later move into a product.
 Which models a company lists is its own policy and is not published.
-The preset keeps the list once, as a symbol label, and both contract rules read it: the signature rule (`unless`) and the shape policy (`allow_where`, a symbol it holds for is allowed as it stands).
+The preset keeps the list once, as a symbol label, and both contract rules read it: the signature rule (`unless`) and the shape policy (`allow_symbols`, a symbol it holds for is allowed as it stands).
 So the verdict on a listed model does not depend on how deep it sits, in a slot or in a field of a class a slot names.
 
 **What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
@@ -149,7 +149,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
   A lineage goes on through a third-party class whose sources the run reads (`[discovery] external`): no repo file declares it, so the link reads its bases from those sources, a builtin as `builtins.<name>` (Nov 16). A base there that does not resolve is left out, and a third-party class whose sources the run does not read still ends a lineage, read as a class: an exception whose chain starts there (temporalio's `ApplicationError` when the root config does not name `temporalio`) reads as a plain class.
-- One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `leave_slots_to = ["facade-signature"]` in the preset.
+- One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `slots_reported_by = ["facade-signature"]` in the preset.
   Each name must be a signature rule of the config; any other name is a config error.
   The named rule's selection must split into conditions that read only `src.*` fields (where it reads rows) and conditions that read none (which slots it judges), joined by `and`; a condition that mixes the two is a config error.
   A row is left to the rule only where its contexts take the row's, as the rule itself reads it.
@@ -207,7 +207,7 @@ Other packages import it, so it stays in the export and its audience holds; but 
 
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
-  The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from, by import or by assigning a name again).
+  The preset says which modules are one, in the condition `capability-module`: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handout_zones`, the zones of the modules a module hands out names from, by import or by assigning a name again).
   The data module of a facade and its contract, enum and fixture modules never are one.
 - Each top-level definition with a body in such a module is one finding, named by its symbol, not a count per module.
   A function in the facade's data module is never a finding of this rule: adding one is how a product offers something new.

@@ -143,7 +143,7 @@ pub struct ShapePlan {
     /// `signatures = true`: the signatures of what the export hands out are part of it.
     pub signatures: bool,
     /// An entity selector: a symbol it holds for is allowed as it stands.
-    pub allow_where: Option<NodePlan>,
+    pub allow_symbols: Option<NodePlan>,
     /// An entity selector: an allowed class that is no data shape is walked only where it holds.
     pub walk_where: Option<NodePlan>,
 }
@@ -173,10 +173,10 @@ pub struct ExportRulePlan {
     pub on_unresolved: String,
     /// Its `from`: which export modules it judges, read of the module alone.
     pub start: Option<NodePlan>,
-    /// Where each signature rule of `leave_slots_to` reads a member's rows (None: in every
+    /// Where each signature rule of `slots_reported_by` reads a member's rows (None: in every
     /// module); there only a class's shape is judged. Empty: every slot is judged in full.
     pub slot_owners: Vec<Option<NodePlan>>,
-    /// The slot policy of each signature rule of `leave_slots_to`, in the same order.
+    /// The slot policy of each signature rule of `slots_reported_by`, in the same order.
     pub slot_policies: Vec<SlotPolicyPlan>,
 }
 

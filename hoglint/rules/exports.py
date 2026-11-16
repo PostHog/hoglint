@@ -11,7 +11,7 @@ read here: it limits who may use an export, not what the export hands out, so ev
 checked whatever its audience. `from` leaves out the export modules it is false for.
 
 The rule judges only the shape of a class named in a slot of a member where a signature rule
-it names in `leave_slots_to` reads that slot's row: a denied kind, an unknown type, a
+it names in `slots_reported_by` reads that slot's row: a denied kind, an unknown type, a
 missing annotation or an unresolved name there is the signature rule's to report. A signature rule
 reads the rows of a public callable in a module its `from` and the source-only parts of its
 `select` hold for; the other parts of its selection judge the slot's type. So a slot is left to it
@@ -150,7 +150,7 @@ UNKNOWN_WHY = {
 
 @dataclass(frozen=True, slots=True)
 class SlotRule:
-    """A signature rule of `leave_slots_to`: where it reads rows (the parts of its selection that
+    """A signature rule of `slots_reported_by`: where it reads rows (the parts of its selection that
     read only the source; None for every module), which slots it judges (the other parts; None for
     every slot), the endpoint it reads a row's destination by, and the contexts it reads and
     leaves out."""
@@ -169,7 +169,9 @@ class ExportPrimitive(RuleType):
 
     PRIMITIVE = MODE = "export"
     NATIVE_MODE = "export"
-    READS = frozenset({"exports", "contexts", "from", "leave_slots_to", "on_unknown", "unknown_types", "on_unresolved"})
+    READS = frozenset(
+        {"exports", "contexts", "from", "slots_reported_by", "on_unknown", "unknown_types", "on_unresolved"}
+    )
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         self.ctx = ctx
@@ -205,11 +207,11 @@ class ExportPrimitive(RuleType):
         return [self.ctx.config.exports[name] for name in names]
 
     def named_slot_rules(self) -> list[SlotRule]:
-        """The signature rules of `leave_slots_to` that read exposes rows, each with its selection
+        """The signature rules of `slots_reported_by` that read exposes rows, each with its selection
         split into where it reads rows and which slots it judges. The config check refuses a name
         that is no signature rule."""
         out: list[SlotRule] = []
-        for name in self.spec.leave_slots_to:
+        for name in self.spec.slots_reported_by:
             rule = self.ctx.config.rules[name]
             if "exposes" not in rule_kinds(rule, self.ctx.config.views):
                 continue

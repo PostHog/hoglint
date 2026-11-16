@@ -109,7 +109,7 @@ class ShapePolicy:
     unknown: str = "error"  # error | incomplete
     signatures: bool = False  # the signatures of what the export hands out are part of the contract
     # An entity selector: a symbol it holds for is allowed as it stands, whatever its kind.
-    allow_where: Selector | None = None
+    allow_symbols: Selector | None = None
     # An entity selector: an allowed class that is no data shape is walked only where it holds.
     walk_where: Selector | None = None
     source: str = ""
@@ -218,7 +218,7 @@ class RuleSpec:
     uses_at_import: bool = False  # entrypoint: a later use of an imported name is judged at its import
     through_denied: bool = False  # reach: the search goes on through a denied target and reports what lies past it
 
-    leave_slots_to: tuple[str, ...] = ()  # export: the signature rules it leaves a slot to where they read its row
+    slots_reported_by: tuple[str, ...] = ()  # export: the signature rules it leaves a slot to where they read its row
     producer_options: tuple[tuple[str, Any], ...] = ()
     source: str = ""
 

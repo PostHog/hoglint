@@ -402,6 +402,11 @@ def literal_values(operand: Operand) -> list[str | int | bool | None]:
     return []
 
 
+# Built-in attributes renamed once. An old name reads nothing, so it is a config error that names
+# the new one (D52), never an alias.
+RENAMED_ATTRIBUTES = {"handed_zones": "handout_zones"}
+
+
 class Validator:
     """Checks names and literal values against a catalog. Typos are config errors."""
 
@@ -430,9 +435,15 @@ class Validator:
             return None
         info = self.catalog.lookup(operand)
         if info is None:
-            hint = suggest(str(operand), self.catalog.names())
-            raise self.fail(f"unknown field {str(operand)!r}{hint}")
+            raise self.fail(f"unknown field {str(operand)!r}{self.hint(operand)}")
         return info
+
+    def hint(self, operand: Ref) -> str:
+        """The new name of a renamed attribute, else the closest name the catalog knows."""
+        renamed = RENAMED_ATTRIBUTES.get(operand.path[-1])
+        if renamed is not None:
+            return f" (renamed {str(Ref((*operand.path[:-1], renamed)))!r})"
+        return suggest(str(operand), self.catalog.names())
 
     def check_compare(self, node: Compare) -> None:
         left = self.check_operand(node.left)

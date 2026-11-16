@@ -319,7 +319,7 @@ shape = "loose"
 [rules.logic]
 primitive = "edge"
 kinds = ["declares"]
-from = "src.handed_zones in ['wiring']"
+from = "src.handout_zones in ['wiring']"
 identity = ["dst.symbol"]
 ledger = false
 """
@@ -341,7 +341,7 @@ SHOP = {
     "products/shop/backend/facade/__init__.py": "",
 }
 # (the import a facade module hands a name out by, the name, the files it reads, its findings, its
-# incomplete items). A member whose zone cannot be told makes the module's handed zones unknown. A
+# incomplete items). A member whose zone cannot be told makes the module's hand-out zones unknown. A
 # directory without `__init__.py` has the zone a file directly inside it reads; a first-party name
 # that no module and no such directory answers for has none that can be told.
 HANDED_CASES = {
@@ -480,7 +480,7 @@ HANDED_CASES = {
 
 
 @pytest.mark.parametrize("case", HANDED_CASES)
-def test_a_handed_member_whose_zone_is_unknown_makes_the_handed_zones_unknown(
+def test_a_handed_member_whose_zone_is_unknown_makes_the_handout_zones_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     line, name, files, found, incomplete = HANDED_CASES[case]

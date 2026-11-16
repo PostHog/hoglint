@@ -1456,12 +1456,12 @@ text = "selection reads unknown src.package"
 [[incomplete]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
-text = "selection reads unknown src.handed_zones"
+text = "selection reads unknown src.handout_zones"
 
 [[incomplete]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
-text = "selection reads unknown src.handed_zones"
+text = "selection reads unknown src.handout_zones"
 
 [[incomplete]]
 rule = "get-model"

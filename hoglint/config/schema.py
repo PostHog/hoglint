@@ -141,7 +141,7 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "use-shape": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"allow_shapes", "deny_shapes", "flow"},
     "signature": COMMON_RULE_KEYS
     | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
-    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "leave_slots_to", "on_unknown", "unknown_types"},
+    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots_reported_by", "on_unknown", "unknown_types"},
     "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
@@ -158,8 +158,12 @@ ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_p
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
 SHAPE_KEYS = frozenset(
-    {"data", "behavior", "allow", "allow_where", "walk_where", "deny", "unknown", "signatures", "doc"}
+    {"data", "behavior", "allow", "allow_symbols", "walk_where", "deny", "unknown", "signatures", "doc"}
 )
+# Keys renamed once, each with what to write now. An old key reads nothing, so it is a config error
+# that names its new form (D52), never an alias.
+RENAMED_SHAPE_KEYS = {"allow_where": "`allow_symbols`"}
+RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {"export": {"leave_slots_to": "`slots_reported_by`"}}
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by"})
@@ -195,7 +199,7 @@ ENTITY_FIELDS: dict[str, FieldInfo] = {
     "registry": FieldInfo(FieldType.STRING),
     "lifecycle": FieldInfo(FieldType.ENUM, LIFECYCLES),
     # The zones of the modules whose names a module hands out by import.
-    "handed_zones": FieldInfo(FieldType.SET),
+    "handout_zones": FieldInfo(FieldType.SET),
     # Whether an export's `within` holds the module: it is in a package with a declared door.
     "door": FieldInfo(FieldType.BOOL),
 }
@@ -259,9 +263,14 @@ class SchemaBuilder:
     def fail(self, key: str, message: str) -> None:
         self.problems.append(f"{key}: {message}  [{self.source(key)}]")
 
-    def check_keys(self, key: str, table: dict[str, Any], allowed: frozenset[str]) -> None:
+    def check_keys(
+        self, key: str, table: dict[str, Any], allowed: frozenset[str], renamed: dict[str, str] | None = None
+    ) -> None:
         for name in table:
             if name in allowed:
+                continue
+            if renamed is not None and name in renamed:
+                self.fail(key, f"`{name}` is now {renamed[name]}")
                 continue
             self.fail(key, f"unknown key {name!r}{suggest(name, allowed)}")
 
@@ -591,7 +600,7 @@ class SchemaBuilder:
         entity = self.entity_catalog()
         for name, table in self.raw.get("shapes", {}).items():
             key = f"shapes.{name}"
-            self.check_keys(key, table, SHAPE_KEYS)
+            self.check_keys(key, table, SHAPE_KEYS, RENAMED_SHAPE_KEYS)
             behavior = None
             raw_behavior = table.get("behavior")
             if isinstance(raw_behavior, dict):
@@ -608,7 +617,7 @@ class SchemaBuilder:
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
                 signatures=self.check_bool(f"{key}.signatures", table.get("signatures", False)),
-                allow_where=self.parse(f"{key}.allow_where", table.get("allow_where"), entity),
+                allow_symbols=self.parse(f"{key}.allow_symbols", table.get("allow_symbols"), entity),
                 walk_where=self.parse(f"{key}.walk_where", table.get("walk_where"), entity),
                 source=self.source(key),
             )
@@ -865,7 +874,7 @@ class SchemaBuilder:
         return tuple(out)
 
     def read_slot_owners(self, key: str, raw: Any) -> tuple[str, ...]:
-        """`leave_slots_to`: the signature rules an export rule leaves a slot to where they read
+        """`slots_reported_by`: the signature rules an export rule leaves a slot to where they read
         its row. Each must be a signature rule of the config."""
         names = as_tuple(raw)
         rules = self.raw.get("rules", {})
@@ -902,11 +911,11 @@ class SchemaBuilder:
             if spec is not None:
                 out[rule_id] = spec
         for rule_id, spec in out.items():
-            self.check_slot_owners(f"rules.{rule_id}.leave_slots_to", spec.leave_slots_to, out)
+            self.check_slot_owners(f"rules.{rule_id}.slots_reported_by", spec.slots_reported_by, out)
         return out
 
     def check_slot_owners(self, key: str, names: tuple[str, ...], rules: dict[str, RuleSpec]) -> None:
-        """Each rule `leave_slots_to` names splits its selection into conditions that read only
+        """Each rule `slots_reported_by` names splits its selection into conditions that read only
         the source (where it reads rows) and conditions that read no source field (which slots it
         judges); the export rule reads the two parts apart, so a condition that mixes them has no
         reading there."""
@@ -941,7 +950,7 @@ class SchemaBuilder:
         if primitive not in RULE_KEYS:
             self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), RULE_KEYS)}")
             return None
-        self.check_keys(key, table, RULE_KEYS[primitive])
+        self.check_keys(key, table, RULE_KEYS[primitive], RENAMED_RULE_KEYS.get(primitive))
         classify = table.get("classify", "")
         if not isinstance(classify, str):
             self.fail(key, f"`classify` is the path of a classification file, not {classify!r}")
@@ -1045,7 +1054,7 @@ class SchemaBuilder:
             unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
             uses_at_import=self.check_bool(f"{key}.uses_at_import", table.get("uses_at_import", False)),
             through_denied=self.check_bool(f"{key}.through_denied", table.get("through_denied", False)),
-            leave_slots_to=self.read_slot_owners(f"{key}.leave_slots_to", table.get("leave_slots_to")),
+            slots_reported_by=self.read_slot_owners(f"{key}.slots_reported_by", table.get("slots_reported_by")),
             producer_options=tuple(producer_options),
             source=self.source(key),
         )

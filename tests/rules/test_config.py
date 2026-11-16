@@ -139,17 +139,30 @@ ledger = false
         ),
         # an export rule leaves a slot only to a signature rule it names
         (
-            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['crosss']\nledger = false\n",
+            "[rules.other]\nprimitive = 'export'\nslots_reported_by = ['crosss']\nledger = false\n",
             "names unknown rule 'crosss'",
         ),
         (
-            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['cross']\nledger = false\n",
+            "[rules.other]\nprimitive = 'export'\nslots_reported_by = ['cross']\nledger = false\n",
             "'cross' is no signature rule",
+        ),
+        # a renamed key or attribute reads nothing and names its new form
+        (
+            "[shapes.c]\nallow = ['class']\nallow_where = \"tier == 'core'\"\n",
+            "`allow_where` is now `allow_symbols`",
+        ),
+        (
+            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['cross']\nledger = false\n",
+            "`leave_slots_to` is now `slots_reported_by`",
+        ),
+        (
+            "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \"src.handed_zones in ['x']\"\n",
+            "unknown field 'src.handed_zones' (renamed 'src.handout_zones')",
         ),
         # the named rule's selection splits into where it reads rows and which slots it judges
         (
             "[rules.mixed]\nprimitive = 'signature'\nselect = \"src.module == 'a' or edge.slot == 'return'\"\n"
-            "ledger = false\n[rules.other]\nprimitive = 'export'\nleave_slots_to = ['mixed']\nledger = false\n",
+            "ledger = false\n[rules.other]\nprimitive = 'export'\nslots_reported_by = ['mixed']\nledger = false\n",
             "mixes the source with the edge or the destination",
         ),
         # limits of the config

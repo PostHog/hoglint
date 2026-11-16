@@ -373,7 +373,7 @@ def handed_out(body: str, *names: str) -> dict[str, str]:
     }
 
 
-# A signature rule the export rule does not name in `leave_slots_to` takes no slot from it.
+# A signature rule the export rule does not name in `slots_reported_by` takes no slot from it.
 UNNAMED_SIGNATURE_RULE = """
 [rules.routes-signature]
 primitive  = "signature"
@@ -705,7 +705,7 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
         {
             "hoglint.toml": ROOT_CONFIG
             + UNNAMED_SIGNATURE_RULE
-            + '\n[rules.export-shape]\nleave_slots_to = { add = ["routes-signature"] }\n',
+            + '\n[rules.export-shape]\nslots_reported_by = { add = ["routes-signature"] }\n',
             **handed_out(OPAQUE_INIT, "Rejected"),
         },
         ANY_AT_ERRORS,
@@ -785,7 +785,7 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
         {
             "hoglint.toml": ROOT_CONFIG
             + TEST_ONLY_SIGNATURE_RULE
-            + '\n[rules.export-shape]\nleave_slots_to = { add = ["test-signature"], remove = ["facade-signature"] }\n',
+            + '\n[rules.export-shape]\nslots_reported_by = { add = ["test-signature"], remove = ["facade-signature"] }\n',
             f"{SHOP_DIR}/facade/api.py": IMPORTS_ORDER + "def place(order: Order) -> None:\n    pass\n",
         },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "test-signature": []},
@@ -1919,7 +1919,7 @@ def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: p
     assert findings_of(out, "export-shape") == []
 
 
-# An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_where`
+# An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_symbols`
 # excuses only where it holds: a class in a file no assignment claims has an unknown tier.
 WALKED_CASES = {
     "a product's class": ("products/shop/backend/kit.py", "products.shop.backend.kit"),

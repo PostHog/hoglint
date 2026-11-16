@@ -1301,7 +1301,7 @@ class Tables:
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
-            "leave_slots_to": lambda: [named] if named else [],
+            "slots_reported_by": lambda: [named] if named else [],
             "exports": lambda: rng.sample(["facade", "adapter"], rng.randint(1, 2)),
             "on": lambda: rng.choice(["module", "symbol"]),
             "within": lambda: "products/{product}",
@@ -2282,7 +2282,7 @@ def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monke
     monkeypatch.setattr(ExportPrimitive, "named_slot_rules", lambda self: [named])
     export = {
         "primitive": "export",
-        "leave_slots_to": ["seer"],
+        "slots_reported_by": ["seer"],
         "identity": ["src.module", "dst.symbol", "edge.label"],
     }
     rules = rule_table("read", {**export, "ledger": False}) + rule_table("seer", SIGNATURE)

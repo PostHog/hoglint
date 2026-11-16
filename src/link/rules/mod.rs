@@ -52,7 +52,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::hash::Hash;
 use std::sync::{Mutex, OnceLock};
 
-/// What an export module hands out by import, as `handed_zones` reads it.
+/// What an export module hands out by import, as `handout_zones` reads it.
 pub enum Handed {
     /// Its `__all__` cannot be read, or a handed import did not resolve.
     Unknown,
@@ -480,7 +480,7 @@ pub struct Rules {
     met: Mutex<FxHashSet<Conflict>>,
     /// The link's edges every export rule reads, gathered for the first one.
     export_inputs: OnceLock<ExportInputs>,
-    /// What each export module hands out by import (`Labeler.handed_zones`).
+    /// What each export module hands out by import (`Labeler.handout_zones`).
     pub handed: FxHashMap<Sid, Handed>,
     /// The ids of the directories without `__init__.py` an endpoint can name, clashes included.
     pub directory_ids: FxHashSet<Sid>,
@@ -782,7 +782,7 @@ impl Rules {
             .collect()
     }
 
-    /// What each export module hands out, read once (`Labeler.handed_zones`): the modules its
+    /// What each export module hands out, read once (`Labeler.handout_zones`): the modules its
     /// run-time imports of handed names and its `rebind` edges come from. A type-only or test import hands
     /// nothing out, and a third-party name has no zone.
     fn handed(

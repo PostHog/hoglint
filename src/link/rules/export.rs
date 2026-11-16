@@ -26,8 +26,8 @@ pub struct Shape {
     incomplete: bool,
     /// `signatures = true`: an allowed class's methods are part of the contract too.
     signatures: bool,
-    /// `allow_where`: a symbol it holds for is allowed as it stands.
-    allow_where: Option<Node>,
+    /// `allow_symbols`: a symbol it holds for is allowed as it stands.
+    allow_symbols: Option<Node>,
     /// `walk_where`: where an allowed class that is no data shape is walked.
     walk_where: Option<Node>,
 }
@@ -45,17 +45,17 @@ impl Shape {
             behavior,
             incomplete: plan.incomplete,
             signatures: plan.signatures,
-            allow_where: entity.optional(&plan.allow_where)?,
+            allow_symbols: entity.optional(&plan.allow_symbols)?,
             walk_where: entity.optional(&plan.walk_where)?,
         })
     }
 
-    /// The entity selectors the policy reads: its behavior's `where`, `allow_where`, `walk_where`.
+    /// The entity selectors the policy reads: its behavior's `where`, `allow_symbols`, `walk_where`.
     pub fn reads(&self) -> Vec<&Node> {
         let behavior = self.behavior.as_ref().and_then(|(_, found)| found.as_ref());
         behavior
             .into_iter()
-            .chain(&self.allow_where)
+            .chain(&self.allow_symbols)
             .chain(&self.walk_where)
             .collect()
     }
@@ -80,7 +80,7 @@ enum Column {
     Src(EntityField),
 }
 
-/// A signature rule of `leave_slots_to`: where it reads rows (the parts of its
+/// A signature rule of `slots_reported_by`: where it reads rows (the parts of its
 /// selection that read only the source; None for every module), which slots it judges (the other
 /// parts; None for every slot), the endpoint it reads a row's destination by, and the contexts it
 /// reads and leaves out.
@@ -104,7 +104,7 @@ pub struct ExportRule {
     exports: Vec<usize>,
     /// Its `from`: the export modules it judges, read of the module alone.
     pub start: Option<Node>,
-    /// `leave_slots_to`: the named signature rules; a slot whose row one of them reads is judged by
+    /// `slots_reported_by`: the named signature rules; a slot whose row one of them reads is judged by
     /// its class's shape only. Empty when the rule judges every slot in full.
     slot_rules: Vec<SlotRule>,
     include: u8,
@@ -340,7 +340,7 @@ pub struct Walk<'a> {
     /// The types walked on through a field of a class core defines (`check_core`).
     core_visited: FxHashSet<(String, usize, String)>,
     shapes: FxHashMap<String, Shapes>,
-    /// `allow_where` and `walk_where` per (shape, symbol): many export modules name one type.
+    /// `allow_symbols` and `walk_where` per (shape, symbol): many export modules name one type.
     allowed: FxHashMap<(usize, String), bool>,
     walked: FxHashMap<(usize, String), bool>,
     exposes_by_name: FxHashMap<Sid, FxHashMap<String, Vec<u32>>>,
@@ -761,10 +761,10 @@ impl<'a> Walk<'a> {
         slot.starts_with("field:") || slot == "fields"
     }
 
-    /// Whether the policy's `allow_where` holds for a symbol.
+    /// Whether the policy's `allow_symbols` holds for a symbol.
     fn allowed_as_is(&mut self, symbol: &str, shape: usize) -> bool {
         let rules = self.cx.rules;
-        let Some(node) = &rules.shapes[shape].allow_where else {
+        let Some(node) = &rules.shapes[shape].allow_symbols else {
             return false;
         };
         let key = (shape, symbol.to_string());

@@ -208,9 +208,9 @@ impl Rules {
         })
     }
 
-    /// The zones module `module` hands out names from (`Labeler.handed_zones`), for `explain`.
-    pub fn handed_zones<'a>(&'a self, link: &'a Link, module: &str) -> Value<'a> {
+    /// The zones module `module` hands out names from (`Labeler.handout_zones`), for `explain`.
+    pub fn handout_zones<'a>(&'a self, link: &'a Link, module: &str) -> Value<'a> {
         let cx = Cx { link, rules: self };
-        cx.handed_zones(link.core.it.get(module))
+        cx.handout_zones(link.core.it.get(module))
     }
 }

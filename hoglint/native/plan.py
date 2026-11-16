@@ -166,7 +166,7 @@ class RulePlan:
                     else {"kind": policy.behavior.kind, "where": selector_tree(policy.behavior.where)},
                     "incomplete": policy.unknown == "incomplete",
                     "signatures": policy.signatures,
-                    "allow_where": selector_tree(policy.allow_where),
+                    "allow_symbols": selector_tree(policy.allow_symbols),
                     "walk_where": selector_tree(policy.walk_where),
                 }
                 for policy in config.shapes.values()
