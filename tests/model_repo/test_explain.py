@@ -8,8 +8,10 @@
   `tests/rules/judgment.txt`. The rule has a finding with that edge as its witness, or an
   incomplete item on that edge, exactly where that judgment is not clean. What a judgment reads
   and `explain edge:` does not print comes from the edge (a slot's annotation) and from the
-  evaluator's `edge_values` (the shape a use-shape rule reads). Reach and cycle rules are left out:
-  their rows come from a search over many edges.
+  evaluator's `edge_values` (the shape a use-shape rule reads).
+- Search paths: a reach or cycle rule's row comes from a search over many edges, so only its
+  definite findings are checked: each holds edges `explain edge:` reads as selected, and a reach
+  finding's path starts where `from` is true and ends where `deny` is true.
 - A stored sample (`explained.txt`): what `explain` prints for a few modules and edges that cases
   of CASES.md name, so a change of wording, the label sources included, is seen and reviewed.
   Rewrite it with `HOGLINT_REFRESH_GENERATED=1` and review the diff."""
@@ -266,6 +268,41 @@ def test_explain_edge_judges_each_edge_as_the_run_reported_it(explained: tuple[C
     # Each judgment but an unknown violation is met, so the agreement is no vacuous one. No case
     # of the model repository gives a predicate an unknown on a selected destination.
     assert {row[-1] for row in seen.truths.judgments} - set(seen.judgments) == {"unknown-violation"}, seen.judgments
+
+
+def explained_as(evaluator: Any, at: int, edge: Edge, key: str) -> set[str]:
+    """The truths `explain edge:` prints for selector `key` of rule `at` on `edge`, over its
+    destinations; true for a selector the rule does not have."""
+    found = evaluator.explain_edge(at, edge.handle)
+    assert found is not None, f"rule {at} does not see the edge {edge.site.module} {edge.surface}"
+    return {dict(truths).get(key, "true") for _, _, truths in found}
+
+
+def test_explain_edge_reads_each_search_path_as_the_run_found_it(explained: tuple[Commands, Run]) -> None:
+    """A definite finding of a reach rule is a path: `explain edge:` reads `from` true on its first
+    edge, `select` true on each edge and `deny` true on its last. A definite finding of a cycle rule
+    holds edges `explain edge:` reads as selected."""
+    _, run = explained
+    evaluator = evaluator_of(run)
+    index = {spec.id: at for at, spec in enumerate(run.config.rules.values())}
+    differ = []
+    paths: Counter[str] = Counter()
+    for finding in run.result.findings():
+        mode = primitive_of(run.config.rules[finding.rule]).MODE
+        if mode not in ("reach", "cycle") or finding.unknown:
+            continue
+        at, path = index[finding.rule], finding.witnesses
+        paths[mode] += 1
+        reads = [("select", edge) for edge in path]
+        if mode == "reach":
+            reads += [("from_", path[0]), ("deny", path[-1])]
+        for key, edge in reads:
+            if "true" not in explained_as(evaluator, at, edge, key):
+                differ.append(
+                    f"{finding.rule} {finding.identity}: {key} is not true on {edge.site.module} {edge.surface}"
+                )
+    assert differ == []
+    assert paths["reach"] >= 10 and paths["cycle"] >= 1, paths
 
 
 def sample_lines(commands: Commands, run: Run) -> list[str]:
