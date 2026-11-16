@@ -2256,6 +2256,18 @@ verdict = "finding"
 identity = ["products/catalog/backend/events.py"]
 
 [[row]]
+case = "PS27"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/logic/widgets.py"]
+
+[[row]]
+case = "IN05"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/stock_watch.py"]
+
+[[row]]
 case = "SV00"
 rule = "has-facade"
 verdict = "finding"

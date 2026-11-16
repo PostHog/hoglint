@@ -296,8 +296,12 @@ impl<'a> Cx<'a> {
                     out.push(self.symbol_endpoint(name, false));
                 }
             }
+            // A name the code writes through a module of the graph is that module's, though it
+            // resolves to library code: the code depends on the module binding it.
             Role::Surface => {
-                out.push(self.symbol_endpoint(Symbol::Name(surface), res == Res::External))
+                let external =
+                    res == Res::External && self.name_owner(self.text(surface)).is_none();
+                out.push(self.symbol_endpoint(Symbol::Name(surface), external))
             }
             Role::Origin => {
                 let targets = edges.targets_of(id);

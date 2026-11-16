@@ -36,7 +36,7 @@ from hoglint.packs.django.relations import (
     RelationItems,
 )
 from hoglint.packs.django.setting_names import SETTINGS_PRODUCER, SettingNames
-from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalItems, SignalProducer
+from hoglint.packs.django.signals import SIGNALS_PRODUCER, SignalItems, SignalProducer, SignalValues
 from hoglint.packs.django.uses import GET_MODEL_PRODUCER, USES_PRODUCER, GetModelItems, GetModelProducer
 from hoglint.plugins import PackReader, PackSink, ProducerFailure, Refinement
 
@@ -196,7 +196,8 @@ class DjangoRun:
         return SignalItems(SignalProducer(self.reader, self.registry, self.config), self.files)
 
     def installs_items(self) -> InstallsItems:
-        return InstallsItems(InstallsProducer(self.reader, self.config.hooks), self.files)
+        signals = SignalValues(self.reader, self.config.signal_bases)
+        return InstallsItems(InstallsProducer(self.reader, self.config.hooks), signals, self.files)
 
     def load_edges(self) -> list[Edge]:
         assert self.apps is not None

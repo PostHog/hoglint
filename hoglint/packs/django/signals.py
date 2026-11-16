@@ -49,14 +49,13 @@ class FileCandidates:
     callees: list[list] = field(default_factory=list)
 
 
-class SignalProducer:
-    def __init__(self, reader: PackReader, registry: ModelRegistry, config: DjangoPackConfig) -> None:
+class SignalValues:
+    """Which names are signals: module-level values built by calling a Signal subclass."""
+
+    def __init__(self, reader: PackReader, signal_bases: tuple[str, ...]) -> None:
         self.reader = reader
-        self.registry = registry
-        self.receivers = frozenset(config.receiver_decorators)
-        self.signal_bases = config.signal_bases
+        self.signal_bases = signal_bases
         self.signal_cache: TracedMemo[EntityId, bool] = TracedMemo(reader.tracer)
-        self.receiver_words = Words.ending(name.rpartition(".")[2] for name in self.receivers)
 
     def lookup(self, scope: FileScope, chain: str, at_scope: int, line: int) -> Hit | None:
         found = self.reader.context.value_lookup(scope, chain, at_scope, line)
@@ -76,6 +75,22 @@ class SignalProducer:
             return False
         cls = self.reader.resolver.resolve_class(origin.module, value["call"])
         return cls is not None and any(self.reader.classes.is_subclass(cls, base) for base in self.signal_bases)
+
+    def connected_signal(self, scope: FileScope, callee: str, at_scope: int, line: int) -> Hit | None:
+        """The signal a `<signal>.connect` callee names, or None."""
+        receiver_chain, _, attr = callee.rpartition(".")
+        if attr != CONNECT or not receiver_chain or receiver_chain.startswith(UNKNOWN):
+            return None
+        hit = self.lookup(scope, receiver_chain, at_scope, line)
+        return hit if self.is_signal(hit) else None
+
+
+class SignalProducer(SignalValues):
+    def __init__(self, reader: PackReader, registry: ModelRegistry, config: DjangoPackConfig) -> None:
+        super().__init__(reader, config.signal_bases)
+        self.registry = registry
+        self.receivers = frozenset(config.receiver_decorators)
+        self.receiver_words = Words.ending(name.rpartition(".")[2] for name in self.receivers)
 
     def signal_name(self, scope: FileScope, value: object, at_scope: int, line: int) -> str:
         if not isinstance(value, str):
@@ -202,13 +217,6 @@ class SignalProducer:
         if hit is not None and hit.kind == "def":
             return str(hit.origin)
         return UNKNOWN
-
-    def connected_signal(self, scope: FileScope, callee: str, at_scope: int, line: int) -> Hit | None:
-        receiver_chain, _, attr = callee.rpartition(".")
-        if attr != CONNECT or not receiver_chain or receiver_chain.startswith(UNKNOWN):
-            return None
-        hit = self.lookup(scope, receiver_chain, at_scope, line)
-        return hit if self.is_signal(hit) else None
 
     def connect_edges(self, scope: FileScope, calls: list[list], callees: list[list]) -> list[Edge]:
         """`<signal>.connect(fn, sender=X)`; without argument facts the edge stays unresolved."""

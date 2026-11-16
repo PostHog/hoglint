@@ -115,6 +115,13 @@ A package's sources are read from the interpreter's site-packages when `[discove
 So the root config lists every distribution that ships an installed app with migrations; an app it leaves out has no migration edges, and a routing change that splits it from its parents goes unseen.
 Reading a package also gives its models and the names it re-exports to every other rule.
 
+**Two couplings the engine places** (Nov 16).
+- A module-level function that hands one of its parameters on to `<signal>.connect(...)` is a hook, found in the code like the configured ones: a call of it is an `installs` edge from the caller's module, the callback's entry module.
+  Only a Django signal's `connect` counts; a database driver's `connect` makes no hook.
+- The `surface` endpoint of an edge that resolves to library code reads as the graph module the code names, when one names it: a patch target `products....module.client.send` is the product module's, since the test depends on that module binding `client`.
+
+Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`), and a sender bound by a `for` loop over a constant sequence; the facts hold no instance-attribute type and no loop binding.
+
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
 Never `ignore` (architect default, Nov 4).

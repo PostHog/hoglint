@@ -1,6 +1,8 @@
-"""`installs` edges: code that hands a callback to a declared hook function.
+"""`installs` edges: code that hands a callback to a hook function.
 
-The hook list is config: qualified names of functions. A call whose callee resolves to a hook
+The hook list is config: qualified names of functions. A module-level function that hands one of
+its parameters on to `<x>.connect(...)` is a hook too, found in the code: a call of it installs
+its argument as a receiver of whatever it connects to. A call whose callee resolves to a hook
 is an edge from the calling scope, which is the callback's entry module. A decorator that
 resolves to a hook names the callback itself. A call or decorator whose last name is a hook's
 name but that resolves to nothing, or to a value, is an unresolved edge. A callee that resolves
@@ -23,6 +25,7 @@ from hoglint.core.memo import ItemOutput, PerFileRead
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.model import Context, Edge, Resolution, Site
 from hoglint.native.queries import Words, entities_named
+from hoglint.packs.django.signals import CONNECT, SignalValues
 from hoglint.plugins import PackReader
 
 INSTALLS_PRODUCER = "django.installs@1"
@@ -43,9 +46,32 @@ def decorator_callees(d: dict) -> set[str]:
     return {dec["call"] for dec in d.get("dec", ()) if isinstance(dec, dict) and isinstance(dec.get("call"), str)}
 
 
+def connect_helpers(reader: PackReader, signals: SignalValues, files: list[FileScope]) -> tuple[str, ...]:
+    """Module-level functions that hand one of their parameters on to `<signal>.connect(...)`,
+    sorted. A method is left out, and so is a function named `connect`: every `.connect` call
+    would name it. A `connect` of anything but a signal (a database driver's) makes no helper."""
+    found: set[str] = set()
+    for scope, rows in reader.calls_named(files, "calls", (CONNECT,)):
+        for at_scope, _, line, _, _, callee, args, kws in rows:
+            if at_scope < 0:
+                continue
+            d = scope.defs[at_scope]
+            if d["k"] == "class" or d["s"] != -1 or d["n"] == CONNECT:
+                continue
+            handed = args[0] if args else next((value for key, value in kws if key == "receiver"), None)
+            if not isinstance(handed, str) or handed not in {param[0] for param in d.get("params", ())}:
+                continue
+            if signals.connected_signal(scope, callee, at_scope, line) is not None:
+                found.add(f"{scope.module}.{scope.qualnames[at_scope]}")
+    return tuple(sorted(found))
+
+
 class InstallsProducer:
     def __init__(self, reader: PackReader, hooks: tuple[str, ...]) -> None:
         self.reader = reader
+        self.set_hooks(hooks)
+
+    def set_hooks(self, hooks: tuple[str, ...]) -> None:
         self.hooks = frozenset(hooks)
         self.hook_names = frozenset(hook.rpartition(".")[2] for hook in hooks)
         self.hook_words = Words.ending(self.hook_names)
@@ -164,16 +190,21 @@ class InstallsProducer:
 
 
 class InstallsItems(FileItems):
-    """`django.installs` as one item per file. The hooks bound or applied under another name are
-    asked of the whole graph once, and each item reads its own file's part of them."""
+    """`django.installs` as one item per file. The connect helpers and the hooks bound or applied
+    under another name are asked of the whole graph once. Each item reads its own file's part of
+    the aliases, and every helper: a new one can make an edge in any file."""
 
     ALIASES = "django.installs.aliases"
+    HELPERS = "django.installs.helpers"
 
-    def __init__(self, producer: InstallsProducer, files: list[FileScope]) -> None:
+    def __init__(self, producer: InstallsProducer, signals: SignalValues, files: list[FileScope]) -> None:
+        helpers = connect_helpers(producer.reader, signals, files)
+        producer.set_hooks(tuple(sorted({*producer.hooks, *helpers})))
         super().__init__(producer.reader, files if producer.hooks else [], producer.failure)
         self.producer = producer
         aliases = producer.aliases(files) if producer.hooks else {}
         self.aliases = PerFileRead(producer.reader.tracer, self.ALIASES, aliases, self.form, Aliases())
+        self.helpers = PerFileRead(producer.reader.tracer, self.HELPERS, {}, list, helpers)
         self.calls: dict[str, list[list]] = {}
 
     @staticmethod
@@ -185,6 +216,7 @@ class InstallsItems(FileItems):
         self.calls = {scope.path: rows for scope, rows in found}
 
     def file_item(self, scope: FileScope) -> ItemOutput:
+        self.helpers.read(scope.path)
         aliases = self.aliases.read(scope.path)
         rows = self.calls.get(scope.path, [])
         return self.each_file(scope, lambda one: self.producer.file_edges(one, rows, aliases))

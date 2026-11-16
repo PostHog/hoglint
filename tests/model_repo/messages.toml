@@ -1320,6 +1320,11 @@ text = "products/legacy/backend/health_checks.py is needed by registry != none a
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/legacy/backend/logic/widgets.py"]
+text = "products/legacy/backend/logic/widgets.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/legacy/backend/routes.py"]
 text = "products/legacy/backend/routes.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
 
@@ -1367,6 +1372,11 @@ text = "products/reports/backend/hogql_queries/widget.py is needed by rules.driv
 rule = "wiring-watched"
 identity = ["products/reports/backend/logic/build.py"]
 text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/stock_watch.py"]
+text = "products/reports/backend/stock_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
