@@ -11302,33 +11302,28 @@ edge     dynamic-import products/legacy/backend/logic/widgets.py:50  -> []
 rule     dynamic-imports (endpoint origin, None)
            from: src.registry == none -> true
            deny: false -> false
-edge     relation posthog/models/organization.py:9 Organization -> ['posthog.models.organization.Organization']
+edge     migration-parent <site-packages>/tokens/migrations/0001_initial.py:4 posthog.0001_initial -> ['posthog.migrations.0001_initial']
+         resolution=resolved contexts=['migration']
+rule     migration-database (endpoint origin, posthog.migrations.0001_initial)
+           require: edge.child_databases subset_of edge.parent_databases -> false
+finding  [new] migration-database tokens.0001_initial posthog.0001_initial
+edge     relation posthog/models/sharing.py:5 'legacy.Widget' -> ['products.legacy.backend.models.Widget']
          resolution=resolved contexts=['prod']
-rule     no-new-package-cycles (endpoint origin, posthog.models.organization.Organization)
+rule     no-new-package-cycles (endpoint origin, products.legacy.backend.models.Widget)
            select: src.tier == 'product' and dst.tier == 'product' -> false
-edge     reverse-accessor posthog/models/sharing.py:5 sharingconfiguration_set -> ['products.legacy.backend.models.Widget']
-         resolution=resolved contexts=['prod']
-rule     reverse-accessor (endpoint origin, products.legacy.backend.models.Widget)
-           select: crosses-package -> true
-finding  [new] reverse-accessor products.legacy.backend.models.Widget posthog.models.sharing.SharingConfiguration widget sharingconfiguration_set
-edge     relation products/inventory/backend/models.py:5 'posthog.Team' -> ['posthog.models.team.team.Team']
+edge     relation products/catalog/backend/models.py:13 'posthog.Team' -> ['posthog.models.team.team.Team']
          resolution=resolved contexts=['prod']
 rule     no-new-package-cycles (endpoint origin, posthog.models.team.team.Team)
            select: src.tier == 'product' and dst.tier == 'product' -> false
-edge     relation products/legacy/backend/models.py:7 'inventory.StockItem' -> ['products.inventory.backend.models.StockItem']
+edge     relation products/legacy/backend/models.py:6 'posthog.User' -> ['posthog.models.user.User']
          resolution=resolved contexts=['prod']
-rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
-           select: src.tier == 'product' and dst.tier == 'product' -> true
-edge     model-label posthog/models/organization.py:10 posthog.User -> ['posthog.models.user.User']
-         resolution=resolved contexts=['prod']
-rule     get-model (endpoint origin, posthog.models.user.User)
-           select: edge.shape == 'get_model' and dst.tier == 'product' and crosses-package -> false
 rule     no-new-package-cycles (endpoint origin, posthog.models.user.User)
            select: src.tier == 'product' and dst.tier == 'product' -> false
-rule     foundation-direction (endpoint origin, posthog.models.user.User)
-           from: src.role == 'foundation' -> false
-           deny: dst.role == 'feature' -> false
-edge     model-label products/inventory/backend/models.py:5 posthog.Team -> ['posthog.models.team.team.Team']
+edge     relation products/reports/backend/models.py:6 'catalog.CatalogEntry' -> ['products.catalog.backend.models.CatalogEntry']
+         resolution=resolved contexts=['prod']
+rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.CatalogEntry)
+           select: src.tier == 'product' and dst.tier == 'product' -> true
+edge     model-label products/catalog/backend/models.py:13 posthog.Team -> ['posthog.models.team.team.Team']
          resolution=resolved contexts=['prod']
 rule     get-model (endpoint origin, posthog.models.team.team.Team)
            select: edge.shape == 'get_model' and dst.tier == 'product' and crosses-package -> false
@@ -11337,33 +11332,32 @@ rule     no-new-package-cycles (endpoint origin, posthog.models.team.team.Team)
 rule     foundation-direction (endpoint origin, posthog.models.team.team.Team)
            from: src.role == 'foundation' -> false
            deny: dst.role == 'feature' -> false
-edge     model-label products/legacy/backend/models.py:8 posthog.FeatureFlag -> ['posthog.models.feature_flag.FeatureFlag']
+edge     model-label products/legacy/backend/models.py:7 inventory.StockItem -> ['products.inventory.backend.models.StockItem']
          resolution=resolved contexts=['prod']
-rule     get-model (endpoint origin, posthog.models.feature_flag.FeatureFlag)
+rule     get-model (endpoint origin, products.inventory.backend.models.StockItem)
            select: edge.shape == 'get_model' and dst.tier == 'product' and crosses-package -> false
-rule     no-new-package-cycles (endpoint origin, posthog.models.feature_flag.FeatureFlag)
-           select: src.tier == 'product' and dst.tier == 'product' -> false
-rule     foundation-direction (endpoint origin, posthog.models.feature_flag.FeatureFlag)
+rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
+           select: src.tier == 'product' and dst.tier == 'product' -> true
+rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
            from: src.role == 'foundation' -> false
-           deny: dst.role == 'feature' -> false
-edge     model-label products/legacy/backend/logic/widgets.py:46 apps.get_model -> []
-         resolution=unresolved contexts=['function_local', 'prod']
-rule     get-model (endpoint origin, apps.get_model)
-           select: edge.shape == 'get_model' and dst.tier == 'product' and crosses-package -> unknown
-rule     no-new-package-cycles (endpoint origin, apps.get_model)
-           select: src.tier == 'product' and dst.tier == 'product' -> unknown
-rule     foundation-direction (endpoint origin, apps.get_model)
+           deny: dst.role == 'feature' -> true
+edge     model-label products/legacy/backend/logic/widgets.py:42 inventory.StockItem -> ['products.inventory.backend.models.StockItem']
+         resolution=resolved contexts=['function_local', 'prod']
+rule     get-model (endpoint origin, products.inventory.backend.models.StockItem)
+           select: edge.shape == 'get_model' and dst.tier == 'product' and crosses-package -> true
+rule     no-new-package-cycles (endpoint origin, products.inventory.backend.models.StockItem)
+           select: src.tier == 'product' and dst.tier == 'product' -> true
+rule     foundation-direction (endpoint origin, products.inventory.backend.models.StockItem)
            from: src.role == 'foundation' -> false
-           deny: dst.role == 'feature' -> unknown
-finding  [new] get-model apps.get_model products.legacy.backend.logic.widgets unresolved-model-label
-finding  [new] no-new-package-cycles legacy ?
-edge     installs products/gatekeeper/backend/wiring.py:5 registry.register_post_delete_hook -> []
+           deny: dst.role == 'feature' -> true
+finding  [new] get-model products.inventory.backend.models.StockItem products.legacy.backend.logic.widgets get_model
+edge     signal products/legacy/backend/stock_listeners.py:8 StockItem -> ['products.inventory.backend.models.StockItem']
+         resolution=resolved contexts=['prod']
+rule     receiver-direction (endpoint origin, products.inventory.backend.models.StockItem)
+           select: crosses-package and dst.tier == 'product' -> true
+finding  [new] receiver-direction products.inventory.backend.models.StockItem legacy products.legacy.backend.stock_listeners
+edge     installs products/notifications/backend/wiring.py:5 registry.register_post_delete_hook -> []
          resolution=unresolved contexts=['function_local', 'prod']
 rule     installs (endpoint origin, registry.register_post_delete_hook)
            select: crosses-package -> unknown
-           deny: false -> false
-edge     installs products/reports/backend/apps.py:13 products.inventory.backend.facade.hooks.register_restock_hook -> ['products.inventory.backend.facade.hooks.register_restock_hook']
-         resolution=resolved contexts=['function_local', 'prod']
-rule     installs (endpoint origin, products.inventory.backend.facade.hooks.register_restock_hook)
-           select: crosses-package -> true
            deny: false -> false

@@ -109,6 +109,12 @@ Their limits, in plain words:
    A chain that leaves the tree starts with a finding of `sources-vendors-use-sdk`.
 2. A webhook consumers module that imports a test module of a product is `prod-imports-test`'s finding, not this rule's.
 
+**`migration-database` reads the migrations an installed third-party app ships** (Nov 16).
+The Django pack reads an installed app's migrations wherever the run has its sources, so the graph holds the edges Django's own loader holds.
+A package's sources are read from the interpreter's site-packages when `[discovery] external` names it, as for `django` and `rest_framework`.
+So the root config lists every distribution that ships an installed app with migrations; an app it leaves out has no migration edges, and a routing change that splits it from its parents goes unseen.
+Reading a package also gives its models and the names it re-exports to every other rule.
+
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
 Never `ignore` (architect default, Nov 4).

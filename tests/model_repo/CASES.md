@@ -225,6 +225,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `OI03` | `posthog/egress/client.py` | A framework package with typed parameters | clean | |
 | `MD01` | `products/legacy/backend/migrations/0001_initial.py`, `products/db_routing.yaml` | A migration on its own database depends on a default-database migration | migration-database finding | |
 | `MD02` | `products/inventory/backend/migrations/0001_initial.py` | Both on the default database | clean | |
+| `MD03` | `posthog/settings/web.py`, `products/db_routing.yaml`, `hoglint.toml` | A third-party app installed from site-packages (`site/tokens`) ships a migration that depends on a core migration, and routes to another database | migration-database finding | The pack reads an installed app's migrations from the packages `[discovery] external` names, as Django's loader does (Nov 16) |
 | `OD01` | `products/inventory/backend/models.py` | Every product model | own-database incomplete | No producer sets `database` |
 | `PH01` | `posthog/temporal/ai_observability/summarize.py` | Product code under `posthog/` | product-code-at-home finding, one per file | |
 | `PH02` | `posthog/temporal/common/worker.py` | Core code next to it | clean | |

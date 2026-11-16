@@ -912,6 +912,12 @@ rule = "migration-database"
 verdict = "finding"
 identity = ["legacy.0001_initial", "posthog.0001_initial"]
 
+[[row]]
+case = "MD03"
+rule = "migration-database"
+verdict = "finding"
+identity = ["tokens.0001_initial", "posthog.0001_initial"]
+
 # model-crossings
 
 [[row]]

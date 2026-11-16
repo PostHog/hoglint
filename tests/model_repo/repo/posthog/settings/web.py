@@ -42,3 +42,6 @@ OAUTH2_PROVIDER = {"OAUTH2_VALIDATOR_CLASS": "products.gatekeeper.backend.valida
 
 # A key on the exclude list is not followed: a login flow behind one URL.
 SOCIAL_AUTH_PIPELINE = ["products.gatekeeper.backend.login_flow.check_login"]
+
+# A third-party app that ships its own migrations.
+INSTALLED_APPS += ["tokens"]

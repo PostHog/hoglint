@@ -1149,6 +1149,11 @@ identity = ["legacy.0001_initial", "posthog.0001_initial"]
 text = "products.legacy.backend.migrations.0001_initial -> posthog.migrations.0001_initial (migration-parent)"
 
 [[finding]]
+rule = "migration-database"
+identity = ["tokens.0001_initial", "posthog.0001_initial"]
+text = "tokens.migrations.0001_initial -> posthog.migrations.0001_initial (migration-parent)"
+
+[[finding]]
 rule = "product-code-at-home"
 identity = ["ai_observability", "posthog.temporal.ai_observability"]
 text = "posthog.temporal.ai_observability"
