@@ -774,6 +774,62 @@ rule = "get-model"
 verdict = "unknown"
 identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolved-model-label"]
 
+# has-facade
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/access_control/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/batch_exports/backend/facade/api.py"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/batch_exports/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/notifications/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE08"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/racks/backend/facade/api.py"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/reports/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/visual_review/backend/facade/api.py"]
+
+[[row]]
+case = "LE09"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/visual_review/backend/facade/{contracts.py,contracts}"]
+
 # health-checks-no-dags
 
 [[row]]
@@ -983,6 +1039,12 @@ verdict = "incomplete"
 identity = ["scripts.shapes|reference|products.inventory.backend.models.StockItem"]
 
 # no-product-lists-in-core
+
+[[row]]
+case = "LE03"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
 
 [[row]]
 case = "DR04"
@@ -1298,6 +1360,12 @@ identity = ["products.reports.backend.models.ReportRun"]
 # presentation-uses-facade
 
 [[row]]
+case = "LE06"
+rule = "presentation-uses-facade"
+verdict = "finding"
+identity = ["products.shelf.backend.presentation.views", "products.inventory.backend.logic.stock"]
+
+[[row]]
 case = "PF02"
 rule = "presentation-uses-facade"
 verdict = "finding"
@@ -1428,6 +1496,24 @@ verdict = "incomplete"
 identity = ["scripts.shapes"]
 
 # public-surface
+
+[[row]]
+case = "LE06"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock.move_stock", "products.shelf.backend.presentation.views", "import"]
+
+[[row]]
+case = "LE04"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.shelf.backend.logic.count.shelf_count", "products.reports.backend.logic.shelf_counts", "import"]
+
+[[row]]
+case = "LE03"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.shelf.backend.logic.labels.label_for", "posthog.api.shelf_labels", "import"]
 
 [[row]]
 case = "HZ06"
@@ -1662,6 +1748,134 @@ case = "WK04"
 rule = "public-surface"
 verdict = "incomplete"
 identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+
+# reached-watched
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/apps.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/hogql_queries/entries.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/logic/pricing.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/sql.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/tasks/reindex.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/admin_gate.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/debug_gate.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/login_flow.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/session_gate.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/throttles.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/token_check.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/validator.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/tasks/restock.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/api/widgets.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/apps.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/logic/widgets.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/reports/backend/apps.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/reports/backend/hogql_queries/widget.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/reports/backend/logic/build.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/reports/backend/tasks/nightly.py"]
+
+[[row]]
+case = "LE02"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/reports/backend/temporal/workflows.py"]
 
 # receiver-direction
 
@@ -2016,5 +2230,5 @@ match = ["products.catalog.backend.facade.aliases.built"]
 # Levels: the products that pass and fail each level.
 
 [levels.isolated]
-passing = ["ai_observability", "visual_review"]
-failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "reports"]
+passing = ["shelf"]
+failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "racks", "reports", "visual_review"]

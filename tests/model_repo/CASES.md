@@ -23,6 +23,8 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `gatekeeper` | The product the request pipeline asks for decisions. |
 | `access_control`, `notifications` | Foundation products; `access_control` holds the exported view mixins. |
 | `batch_exports`, `visual_review` | Paths the preset names: a declared permanent interface, a dev seeder named as test code. |
+| `shelf` | The product that passes the Isolated level: a contracts package, an api module with a function, narrowed inputs, and the reaches the level lets pass. |
+| `racks` | A facade whose api module only re-exports. |
 
 ## Cases
 
@@ -221,7 +223,15 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `HD02` | `products/inventory/backend/health_checks.py` | A health check without it | clean | |
 | `DO01` | `products/legacy/backend/logic/widgets.py`, `posthog/ingress/dispatch.py` | A product imports a core package past its door | clean | D107 (wanted) |
 | `DO02` | `products/catalog/backend/webhook_consumers.py`, `posthog/ingress/contracts.py` | A product imports the door | clean | |
-| `LE01` | `posthog/temporal/ai_observability/summarize.py` | The Isolated level | `ai_observability` passes: no rule of the level reports product code in core; `visual_review` passes; every other product fails | Open |
+| `LE01` | the preset | The Isolated level | `shelf` passes; every other product fails, each on a row of `LE02` to `LE09` or on unwatched wiring (`DR01`, `IN01`, `UI01`, `UI02`, `WW01`); `ai_observability` is not judged: it has no code under `products/` | D108 |
+| `LE02` | `posthog/settings/web.py`, `ee/settings.py`, `posthog/tasks/scheduled.py`, `posthog/hogql_queries/query_runner.py`, `posthog/management/commands/start_temporal_worker.py`, `posthog/api/widget_report.py`, `posthog/clickhouse/schema.py`, `posthog/migrations/0002_entry_table.py`, `posthog/test/test_auth.py`, `tools/codegen/generate.py`, `bin/build_types.py` | Code outside the products (settings, registrations, core production code, a migration, a core test's patch target, a tool) reaches a product file past its export, and the product's contract-check inputs leave the file out | reached-watched finding per file; the product is not Isolated | D108 |
+| `LE03` | `posthog/api/shelf_labels.py`, `products/shelf/backend/logic/labels.py` | Core reaches a product file past its export, and the file is watched | public-surface and no-product-lists-in-core findings; reached-watched clean; `shelf` stays Isolated | Clean neighbor of `LE02`: a change to a watched file runs the full suite (D108) |
+| `LE04` | `products/reports/backend/logic/shelf_counts.py`, `products/shelf/backend/logic/count.py` | Another product reaches an unwatched product file past its export | public-surface finding; reached-watched clean; `shelf` stays Isolated | Clean neighbor of `LE02`: a product that imports another is retested with it (D108) |
+| `LE05` | `products/inventory/backend/routes.py`, `products/legacy/backend/presentation/views.py`, `products/legacy/backend/presentation/review_views.py`, `products/legacy/backend/routes.py` | A product's own presentation reaches its own internals past its facade (the rows of `PF02`, `PF03`, `PF04`, `PF08`, `RG01`, `RG02`) | presentation-uses-facade finding; the product is not Isolated | D108 |
+| `LE06` | `products/shelf/backend/presentation/views.py` | Presentation reaches another product's logic (and, in `PF05`, another product's presentation) | presentation-uses-facade and public-surface findings; neither product's level counts the row; `shelf` stays Isolated | Clean neighbor of `LE05`: rows between two products are lint only (`within_group`, D108) |
+| `LE07` | `products/shelf/backend/facade/contracts/__init__.py`, `products/shelf/backend/facade/api.py` | A facade with a contracts package and an api module that defines a function | has-facade clean | D108 |
+| `LE08` | `products/racks/backend/facade/api.py` | A facade whose api module only re-exports a function | has-facade finding (`defines no function`); `racks` is not Isolated | Neighbor of `LE07` (D108) |
+| `LE09` | `products/access_control`, `products/batch_exports`, `products/gatekeeper`, `products/notifications`, `products/reports`, `products/visual_review` | A product without a contracts module, or without a facade | has-facade finding for each missing file; the product is not Isolated | D108 |
 
 ## Unknown inputs of the rule language's abilities
 
@@ -244,6 +254,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `setting` on settings edges | An entry added through a subscript (`X[...].append`) | `WW06` | the setting reads unknown: wiring-watched incomplete |
 | Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks | `WW07`, `SN01` | config:stale-name incomplete |
 | Rule covers of a coverage rule | What the covered rule cannot tell (an advisory rule's own items never reach a check's output) | `WW06`, `WW08` | wiring-watched incomplete |
+| `reached-watched`'s edge cover | A source whose tier cannot be told | `UK01` | reached-watched incomplete on the source module, read by the level only (an advisory rule's items never reach a check's output); it names no product, so it blocks none (a written limit) |
 | `uses_at_import` | A use whose import the rule does not report | `PS03` | the use is a finding of its own; with this preset no import is reported clean while its use is not, so no stronger case can be built (`tests/native/test_evaluator.py` holds it) |
 | `leave_slots_to` | A module the signature rule cannot tell about; a second signature rule the export rule does not name | none | A file's zone is never unknown in this preset (the zone field has no domain), and `orm-independent` holds for no export module and for no class the export rule walks; `tests/native/test_facade_rules.py` holds both |
 | Namespace-directory labels | A directory whose files disagree on zone | none | Zones come from globs only here, so a directory reads one answer; a provider-set zone would be needed |
@@ -364,6 +375,9 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | request-path | An unresolved import on the request path | `WW08` (incomplete) |
 | config:stale-name | A seed path that matches no file | `WW07` |
 | wiring-watched | A location without `__init__.py`, one file unwatched, one watched; all watched | `DR02`; `DR04` (clean) |
+| reached-watched | Settings, registrations, core code, a migration, a core test and a tool reach unwatched product files | `LE02` |
+| reached-watched | A watched file; a file another product reaches | `LE03`, `LE04` (clean) |
+| has-facade | A contracts package; an api module that only re-exports; no contracts module or no facade | `LE07` (clean), `LE08`, `LE09` |
 | foundation-direction | A foundation model points at a feature product | None: `FO01` shows the import form |
 | infrastructure-direction | Infrastructure imports a product | `IF01` |
 | no-product-lists-in-core | Hub files that list products | `PS24` |

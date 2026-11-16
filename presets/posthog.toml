@@ -618,6 +618,18 @@ inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
 growth_key = ["subject"]
 
+# What the Isolated level reads of code outside the products (D108): a product file such code
+# reaches past the export is watched, as a request-path file is. A list: public-surface holds the
+# crossing as debt.
+[rules.reached-watched]
+primitive  = "coverage"
+doc        = "Every product file that code outside the products, production or test, reaches past the product's export is in the contract-check inputs, so a change there runs the full suite. The Isolated level reads it; public-surface holds the crossing as debt, so this is a list."
+covers     = ["edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface"]
+inputs     = { adapter = "turbo", task = "backend:contract-check" }
+identity   = "entity"
+report     = "advisory"
+ledger     = false
+
 [rules.dynamic-imports]
 primitive     = "edge"
 doc           = "A computed import outside a declared registry loader is unknown: rules that need it go incomplete."
@@ -720,6 +732,15 @@ select     = "tier == 'product' and not path startswith 'products/'"
 identity   = "package-file"
 growth_key = ["package"]
 
+[rules.has-facade]
+primitive = "layout"
+doc       = "A product has a facade: a contracts module or package, and an api module that defines a function. The Isolated level asks for it (D108); a list, not debt."
+within    = "products/{product}"
+files     = ["backend/facade/{contracts.py,contracts}", "backend/facade/api.py: function"]
+identity  = "entity"
+report    = "advisory"
+ledger    = false
+
 [rules.registry-slots]
 primitive  = "layout"
 doc        = "A file in a registry slot defines the slot's attribute, and its members subclass the slot's base."
@@ -748,16 +769,17 @@ ledger    = false
 # Reviewed exceptions to these rules live in hoglint.exceptions.toml.
 
 # ── Levels ─────────────────────────────────────────────────────
-# Isolated is specified apart from lint acceptance. Ledgered debt may coexist; an unknown, an
-# incomplete result or unwatched wiring (strict) forbids the level even when the ledger accepts it.
+# Isolated is specified apart from lint acceptance (D108). Only what can make the skip miss tests
+# blocks, ledgered or not: an unwatched file that code outside the products reaches past the export,
+# the product's own presentation past its facade, and unwatched wiring. The product also needs its
+# facade. Every other finding is a lint matter only.
 
 [levels.isolated]
-doc      = "turbo may skip the full Django suite when only this product changes."
-group_by = "package"
-select   = "tier == 'product'"
-requires = [
-  "public-surface", "export-shape", "facade-signature", "presentation-uses-facade", "facade-no-drf",
-  "contracts-no-django", "model-crossings", "get-model", "reverse-accessor", "receiver-direction",
-  "wiring-watched", "dynamic-imports",
-]
-strict   = ["wiring-watched"]
+doc          = "turbo may skip the full Django suite when only this product changes."
+group_by     = "package"
+# A product with code under products/, where its facade and its package.json live.
+select       = "tier == 'product' and path startswith 'products/'"
+requires     = ["reached-watched", "wiring-watched", "presentation-uses-facade", "has-facade"]
+strict       = ["reached-watched", "wiring-watched", "presentation-uses-facade", "has-facade"]
+# Presentation that reaches another product past its door is lint only.
+within_group = ["presentation-uses-facade"]

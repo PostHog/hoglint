@@ -30,6 +30,11 @@ text = "posthog.api names products.legacy.backend.api.widgets.WidgetViewSet, whi
 
 [[finding]]
 rule = "public-surface"
+identity = ["products.shelf.backend.logic.labels.label_for", "posthog.api.shelf_labels", "import"]
+text = "posthog.api.shelf_labels names products.shelf.backend.logic.labels.label_for, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
 identity = ["products.legacy.backend.logic.widgets", "posthog.api.widget_report", "import"]
 text = "posthog.api.widget_report names products.legacy.backend.logic.widgets, which is not exported to it"
 
@@ -152,6 +157,16 @@ text = "products.reports.backend.logic.build names products.batch_exports.backen
 rule = "public-surface"
 identity = ["products.catalog.backend.sql.ENTRY_TABLE_SQL", "products.reports.backend.logic.build", "import"]
 text = "products.reports.backend.logic.build names products.catalog.backend.sql.ENTRY_TABLE_SQL, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.shelf.backend.logic.count.shelf_count", "products.reports.backend.logic.shelf_counts", "import"]
+text = "products.reports.backend.logic.shelf_counts names products.shelf.backend.logic.count.shelf_count, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.logic.stock.move_stock", "products.shelf.backend.presentation.views", "import"]
+text = "products.shelf.backend.presentation.views names products.inventory.backend.logic.stock.move_stock, which is not exported to it"
 
 [[finding]]
 rule = "public-surface"
@@ -569,6 +584,11 @@ identity = ["products.legacy.backend.routes", "products.legacy.backend.route_hel
 text = "products.legacy.backend.routes -> products.legacy.backend.route_helpers.widget_route_name (import)"
 
 [[finding]]
+rule = "presentation-uses-facade"
+identity = ["products.shelf.backend.presentation.views", "products.inventory.backend.logic.stock"]
+text = "products.shelf.backend.presentation.views -> products.inventory.backend.logic.stock.move_stock (import)"
+
+[[finding]]
 rule = "facade-no-drf"
 identity = ["products.catalog.backend.facade.api", "?"]
 text = "import 'posthog.models.ghost.Ghost' did not resolve"
@@ -880,6 +900,11 @@ text = "posthog.api.sharing -> products.inventory.backend.facade.api (import)"
 
 [[finding]]
 rule = "no-product-lists-in-core"
+identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
+text = "posthog.api.shelf_labels -> products.shelf.backend.logic.labels.label_for (import)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
 identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
 text = "posthog.api.widget_report -> products.legacy.backend.logic.widgets (import)"
 
@@ -1089,6 +1114,51 @@ identity = ["ai_observability", "posthog.temporal.ai_observability.summarize"]
 text = "posthog.temporal.ai_observability.summarize"
 
 [[finding]]
+rule = "has-facade"
+identity = ["products/access_control/backend/facade/{contracts.py,contracts}"]
+text = "products/access_control lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/batch_exports/backend/facade/{contracts.py,contracts}"]
+text = "products/batch_exports lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/batch_exports/backend/facade/api.py"]
+text = "products/batch_exports lacks backend/facade/api.py"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/gatekeeper/backend/facade/{contracts.py,contracts}"]
+text = "products/gatekeeper lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/notifications/backend/facade/{contracts.py,contracts}"]
+text = "products/notifications lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/reports/backend/facade/{contracts.py,contracts}"]
+text = "products/reports lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/visual_review/backend/facade/{contracts.py,contracts}"]
+text = "products/visual_review lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/visual_review/backend/facade/api.py"]
+text = "products/visual_review lacks backend/facade/api.py"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/racks/backend/facade/api.py"]
+text = "products/racks/backend/facade/api.py defines no function"
+
+[[finding]]
 rule = "health-checks-no-dags"
 identity = []
 text = "products.reports.backend.health_checks reaches posthog.dags.backfill.backfill_partition: products.reports.backend.health_checks -> posthog.dags.backfill.backfill_partition"
@@ -1152,6 +1222,111 @@ text = "products/reports/backend/hogql_queries/widget.py is needed by rules.driv
 rule = "wiring-watched"
 identity = ["products/reports/backend/logic/build.py"]
 text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/catalog/backend/apps.py"]
+text = "products/catalog/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/catalog/backend/hogql_queries/entries.py"]
+text = "products/catalog/backend/hogql_queries/entries.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/catalog/backend/logic/pricing.py"]
+text = "products/catalog/backend/logic/pricing.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/catalog/backend/sql.py"]
+text = "products/catalog/backend/sql.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/catalog/backend/tasks/reindex.py"]
+text = "products/catalog/backend/tasks/reindex.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/admin_gate.py"]
+text = "products/gatekeeper/backend/admin_gate.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/debug_gate.py"]
+text = "products/gatekeeper/backend/debug_gate.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/login_flow.py"]
+text = "products/gatekeeper/backend/login_flow.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/session_gate.py"]
+text = "products/gatekeeper/backend/session_gate.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/throttles.py"]
+text = "products/gatekeeper/backend/throttles.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/token_check.py"]
+text = "products/gatekeeper/backend/token_check.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/gatekeeper/backend/validator.py"]
+text = "products/gatekeeper/backend/validator.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/inventory/backend/tasks/restock.py"]
+text = "products/inventory/backend/tasks/restock.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/inventory/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/legacy/backend/api/widgets.py"]
+text = "products/legacy/backend/api/widgets.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/legacy/backend/apps.py"]
+text = "products/legacy/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/legacy/backend/logic/widgets.py"]
+text = "products/legacy/backend/logic/widgets.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/reports/backend/apps.py"]
+text = "products/reports/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/reports/backend/hogql_queries/widget.py"]
+text = "products/reports/backend/hogql_queries/widget.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/reports/backend/logic/build.py"]
+text = "products/reports/backend/logic/build.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/reports/backend/tasks/nightly.py"]
+text = "products/reports/backend/tasks/nightly.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/reports/backend/temporal/workflows.py"]
+text = "products/reports/backend/temporal/workflows.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
 
 [[incomplete]]
 rule = "public-surface"
