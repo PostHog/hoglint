@@ -304,6 +304,8 @@ pub struct Producing {
     pub dataclass_bases: Vec<Sid>,
     pub patch_callees: Vec<String>,
     pub path_callees: Vec<String>,
+    /// Modules (dotted names or `*` globs) whose strings are paths wherever they stand.
+    pub path_modules: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     pub contract_surfaces: Vec<ExportPaths>,
     /// The files of every export.
@@ -479,6 +481,7 @@ impl Producing {
                 .collect(),
             patch_callees: config.patch_callees.clone(),
             path_callees: config.path_callees.clone(),
+            path_modules: config.path_modules.clone(),
             contract_surfaces,
             export_surfaces,
             k,
@@ -603,17 +606,95 @@ pub fn chain_tokens(chain: &str) -> Vec<&str> {
     out
 }
 
-/// A patch target, or the first argument of a callee
-/// `path_callees` names. Only there does a string that resolves to nothing stay an edge.
-fn in_path_position(up: &str, patch: bool, path_callees: &[String]) -> bool {
-    if patch {
-        return true;
+/// Whether a text matches a glob whose only wildcard is `*`, any run of characters (as
+/// `fnmatch.fnmatchcase` reads such a pattern): `proj.settings.*`.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = text.strip_prefix(first) else {
+        return false;
+    };
+    let middle: Vec<&str> = parts.collect();
+    let Some((last, inner)) = middle.split_last() else {
+        return rest.is_empty();
+    };
+    for part in inner {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
     }
-    let first = up.split(' ').next().unwrap_or("");
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+/// Whether a callee, as the code writes it, is one `names` lists: by its last name, or, for an
+/// entry with a dot, by its last dotted parts (`patch.dict`, `subprocess.run`).
+fn names_callee(callee: &str, names: &[String]) -> bool {
+    let last = callee.rsplit('.').next().unwrap_or("");
+    names.iter().any(|name| {
+        if name.contains('.') {
+            callee == name
+                || callee
+                    .strip_suffix(name.as_str())
+                    .is_some_and(|head| head.ends_with('.'))
+        } else {
+            name == last
+        }
+    })
+}
+
+/// Where a string stands in a call that takes a dotted path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PathArgument {
+    /// No such place.
+    None,
+    /// The first argument of a path callee: a sink.
+    Sink,
+    /// The first argument of a loader, or an element of a list or tuple that is a path callee's
+    /// first argument (an argument vector, as in `python -m <module>`): a path place.
+    Place,
+}
+
+fn path_argument(up: &str, settings: &Producing) -> PathArgument {
+    let mut steps = up.split(' ');
+    let mut first = steps.next().unwrap_or("");
+    let element = first == "elt:list" || first == "elt:tuple";
+    if element {
+        first = steps.next().unwrap_or("");
+    }
     let (kind, rest) = first.split_once(':').unwrap_or((first, ""));
     let (position, callee) = rest.split_once(':').unwrap_or((rest, ""));
-    let last = callee.rsplit('.').next().unwrap_or("");
-    kind == "arg" && position == "0" && path_callees.iter().any(|name| name == last)
+    if kind != "arg" || position != "0" {
+        return PathArgument::None;
+    }
+    if names_callee(callee, &settings.path_callees) {
+        return if element {
+            PathArgument::Place
+        } else {
+            PathArgument::Sink
+        };
+    }
+    if !element && names_callee(callee, &settings.loader_last_names) {
+        return PathArgument::Place;
+    }
+    PathArgument::None
+}
+
+/// A value of the module's lazy (PEP 562) map: the entry `dict:val:<name>` of a module-level
+/// assignment, whose text is the module the module loads `<name>` from on first read.
+fn in_lazy_map(up: &str, text: &str, lazy: &[(String, String)]) -> bool {
+    let mut steps = up.split(' ');
+    let (Some(entry), Some(statement), None) = (steps.next(), steps.next(), steps.next()) else {
+        return false;
+    };
+    let Some(name) = entry.strip_prefix("dict:val:") else {
+        return false;
+    };
+    let assigned = statement.starts_with("assign:") || statement.starts_with("annassign:");
+    assigned
+        && lazy
+            .iter()
+            .any(|(lazy, module)| lazy == name && module == text)
 }
 
 fn patch_role(up: &str, patch_callees: &[String]) -> bool {
@@ -2574,10 +2655,97 @@ impl Producers<'_> {
         }
     }
 
+    /// The module's lazy (PEP 562) entries: each name it loads on first read, and the module it
+    /// loads it from.
+    fn lazy_entries(&mut self, owner: usize) -> Vec<(String, String)> {
+        let (file, module) = (self.scopes[owner].file, self.scopes[owner].module);
+        let Some(table) = self.core.table(module) else {
+            return Vec::new();
+        };
+        let table = self.core.table_at(table);
+        if table.record != Some(file) {
+            return Vec::new();
+        }
+        let entries: Vec<(Sid, Sid)> = table
+            .lazy_entries
+            .iter()
+            .map(|entry| (entry.name, entry.module))
+            .collect();
+        let it = &self.core.it;
+        entries
+            .into_iter()
+            .map(|(name, module)| (it.s(name).to_string(), it.s(module).to_string()))
+            .collect()
+    }
+
+    /// Whether the file hands a computed path (an f-string, a `+`, or a name it does not bind to a
+    /// class, a function or an import) to a loader, a path callee or a patch callee: then every
+    /// string it holds that names a module may be what it loads or patches. The facts hold no flow
+    /// from a name to where it is used.
+    fn hands_computed_path(&mut self, owner: usize) -> bool {
+        let (file, module) = (self.scopes[owner].file as usize, self.scopes[owner].module);
+        let facts = self.core.facts.clone();
+        let table = self.core.table(module);
+        for row in &facts.files[file].calls {
+            let settings = self.settings;
+            let takes = names_callee(&row.callee, &settings.path_callees)
+                || names_callee(&row.callee, &settings.loader_last_names)
+                || names_callee(&row.callee, &settings.patch_callees);
+            if !takes || row.callee.starts_with('?') {
+                continue;
+            }
+            let computed = match &row.argument {
+                Argument::Opaque(what) => matches!(&**what, "JoinedStr" | "BinOp"),
+                Argument::Name(chain) => !self.binds_object(table, chain),
+                _ => false,
+            };
+            if computed {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether the module binds a chain's head to a class, a function or an import: an object,
+    /// not a path (`monkeypatch.setattr(module, "name", value)`).
+    fn binds_object(&self, table: Option<u32>, chain: &str) -> bool {
+        let Some(table) = table else {
+            return false;
+        };
+        let head = chain.split('.').next().unwrap_or("");
+        let Some(head) = self.core.it.get(head) else {
+            return false;
+        };
+        let names = &self.core.table_at(table).names;
+        names
+            .get(&head)
+            .is_some_and(|binding| !matches!(binding, Binding::Variable | Binding::Alias(_)))
+    }
+
+    /// A string is a dotted-path edge only where the code holds a path. In a sink (a patch target,
+    /// the first argument of a path callee) it is one whether or not it names a module. In a path
+    /// place (a loader's first argument, an element of a path callee's argument vector, a path
+    /// module such as a settings module, a lazy map's value, any string of a file that hands a
+    /// computed path to one of those callees) it is one when it names a module. Anywhere else a
+    /// string is text, whatever it names.
     fn strings(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
+        let module = self.core.it.s(self.scopes[owner].module);
+        let path_module =
+            (self.settings.path_modules.iter()).any(|pattern| glob_matches(pattern, module));
+        let lazy = self.lazy_entries(owner);
+        let computed = self.hands_computed_path(owner);
         for row in &facts.files[file].strs {
+            let patch = patch_role(&row.up, &self.settings.patch_callees);
+            let argument = path_argument(&row.up, self.settings);
+            let sink = patch || argument == PathArgument::Sink;
+            let lazy_value = row.scope == -1
+                && (row.value.as_deref()).is_some_and(|text| in_lazy_map(&row.up, text, &lazy));
+            let place = argument == PathArgument::Place || path_module || lazy_value || computed;
+            if !sink && !place {
+                continue;
+            }
             let k = &self.settings.k;
             let mut candidates: Vec<(&str, Sid)> = Vec::new();
             match &row.parts {
@@ -2597,8 +2765,6 @@ impl Producers<'_> {
                     }
                 }
             }
-            let patch = patch_role(&row.up, &self.settings.patch_callees);
-            let path_position = in_path_position(&row.up, patch, &self.settings.path_callees);
             let role = if patch {
                 k.patch_target
             } else {
@@ -2610,7 +2776,7 @@ impl Producers<'_> {
                 let Some((resolved, rest)) = core.string_dotted(dotted) else {
                     continue;
                 };
-                if resolved.res == Res::Unresolved && !path_position {
+                if resolved.res == Res::Unresolved && !sink {
                     continue;
                 }
                 let k = &self.settings.k;

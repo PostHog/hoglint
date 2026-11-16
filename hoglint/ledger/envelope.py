@@ -387,9 +387,23 @@ class ConfigInputs:
 
     @cached_property
     def core(self) -> CoreConfig:
-        """`[discovery]` and the surfaces as core reads them, parsed once: the link and the rules
-        read this one value."""
-        return CoreConfig.from_discovery(self.config.discovery, self.contract_surfaces, self.export_surfaces)
+        """`[discovery]`, the surfaces and the packs' path modules as core reads them, parsed
+        once: the link and the rules read this one value."""
+        return CoreConfig.from_discovery(
+            self.config.discovery, self.contract_surfaces, self.export_surfaces, self.path_modules()
+        )
+
+    def path_modules(self) -> tuple[str, ...]:
+        """The modules whose strings are paths wherever they stand, as the active packs name them
+        (`Pack.path_modules`), sorted."""
+        out: set[str] = set()
+        for name in self.config.pack_sections:
+            pack = REGISTRY.packs.get(name)
+            section = self.config.sections.get(name)
+            hook = getattr(pack, "path_modules", None)
+            if hook is not None and isinstance(section, dict):
+                out.update(hook(section))
+        return tuple(sorted(out))
 
     def rule_files(self) -> dict[str, str]:
         return {spec.id: spec.classify for spec in self.config.rules.values() if spec.classify}

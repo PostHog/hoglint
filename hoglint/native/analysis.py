@@ -57,7 +57,7 @@ class NativeAnalysis:
 
     def needs(self) -> FactNeeds:
         config = self.options.config
-        core = FactNeeds(kinds=core_fact_kinds(config), watch_callees=frozenset(config.loader_callee_names()))
+        core = FactNeeds(kinds=core_fact_kinds(config), watch_callees=frozenset(config.watched_callee_names()))
         return core | (self.options.needs if self.options.needs is not None else registered_needs())
 
     def threads(self) -> int:

@@ -62,12 +62,6 @@ identity = ["posthog/temporal/ai/__init__.py"]
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
-identity = ["posthog/temporal/health_checks/registry.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
 identity = ["posthog/temporal/schedule.py"]
 
 [[row]]
@@ -225,6 +219,12 @@ verdict = "finding"
 identity = ["legacy:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(AuditQuery)"]
 
 # dynamic-imports
+
+[[row]]
+case = "DP07"
+rule = "dynamic-imports"
+verdict = "incomplete"
+identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
 
 [[row]]
 case = "DI01"
@@ -771,6 +771,12 @@ identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolv
 # has-facade
 
 [[row]]
+case = "LE08"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/racks/backend/facade/api.py"]
+
+[[row]]
 case = "LE09"
 rule = "has-facade"
 verdict = "finding"
@@ -801,12 +807,6 @@ verdict = "finding"
 identity = ["products/notifications/backend/facade/{contracts.py,contracts}"]
 
 [[row]]
-case = "LE08"
-rule = "has-facade"
-verdict = "finding"
-identity = ["products/racks/backend/facade/api.py"]
-
-[[row]]
 case = "LE09"
 rule = "has-facade"
 verdict = "finding"
@@ -823,6 +823,18 @@ case = "LE09"
 rule = "has-facade"
 verdict = "finding"
 identity = ["products/visual_review/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "SV00"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/warehouse_sources/backend/facade/api.py"]
+
+[[row]]
+case = "SV00"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/warehouse_sources/backend/facade/{contracts.py,contracts}"]
 
 # health-checks-no-dags
 
@@ -1047,10 +1059,16 @@ identity = ["scripts.shapes|reference|products.inventory.backend.models.StockIte
 # no-product-lists-in-core
 
 [[row]]
-case = "LE03"
+case = "DP03"
 rule = "no-product-lists-in-core"
 verdict = "finding"
-identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
+identity = ["posthog.models.team.team", "products.inventory.backend.models"]
+
+[[row]]
+case = "DP07"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.temporal.health_checks.registry", "products.legacy.backend.temporal.jobs"]
 
 [[row]]
 case = "DR04"
@@ -1063,6 +1081,12 @@ case = "IF01"
 rule = "no-product-lists-in-core"
 verdict = "finding"
 identity = ["posthog.egress.client", "products.gatekeeper.backend.facade.api"]
+
+[[row]]
+case = "LE03"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
 
 [[row]]
 case = "PS01"
@@ -1504,16 +1528,40 @@ identity = ["scripts.shapes"]
 # public-surface
 
 [[row]]
-case = "LE06"
+case = "DP05"
 rule = "public-surface"
 verdict = "finding"
-identity = ["products.inventory.backend.logic.stock.move_stock", "products.shelf.backend.presentation.views", "import"]
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.skill_build", "dotted-path"]
 
 [[row]]
-case = "LE04"
+case = "DP04"
 rule = "public-surface"
 verdict = "finding"
-identity = ["products.shelf.backend.logic.count.shelf_count", "products.reports.backend.logic.shelf_counts", "import"]
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.stock_names", "dotted-path"]
+
+[[row]]
+case = "DP04"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock.move_stock", "products.reports.backend.stock_names", "import"]
+
+[[row]]
+case = "DP03"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "posthog.models.team.team", "dotted-path"]
+
+[[row]]
+case = "DP06"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.tasks.restock.restock", "products.reports.backend.restock_dispatch", "dotted-path"]
+
+[[row]]
+case = "HZ06"
+rule = "public-surface"
+verdict = "unknown"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
 
 [[row]]
 case = "LE03"
@@ -1522,10 +1570,16 @@ verdict = "finding"
 identity = ["products.shelf.backend.logic.labels.label_for", "posthog.api.shelf_labels", "import"]
 
 [[row]]
-case = "HZ06"
+case = "LE04"
 rule = "public-surface"
-verdict = "unknown"
-identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
+verdict = "finding"
+identity = ["products.shelf.backend.logic.count.shelf_count", "products.reports.backend.logic.shelf_counts", "import"]
+
+[[row]]
+case = "LE06"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock.move_stock", "products.shelf.backend.presentation.views", "import"]
 
 [[row]]
 case = "ME01"
@@ -1756,6 +1810,12 @@ verdict = "incomplete"
 identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
 
 # reached-watched
+
+[[row]]
+case = "DP07"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/temporal/jobs.py"]
 
 [[row]]
 case = "LE02"
@@ -2011,6 +2071,52 @@ rule = "reverse-accessor"
 verdict = "finding"
 identity = ["products.legacy.backend.models.Widget", "posthog.models.sharing.SharingConfiguration", "widget", "sharingconfiguration_set"]
 
+# sources-vendors-independent
+
+[[row]]
+case = "SV04"
+rule = "sources-vendors-independent"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.lazy", "products.warehouse_sources.sources.beta.registry"]
+
+[[row]]
+case = "SV04"
+rule = "sources-vendors-independent"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.source", "products.warehouse_sources.sources.beta.registry"]
+
+[[row]]
+case = "SV05"
+rule = "sources-vendors-independent"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.sdk.catalog", "products.warehouse_sources.sources.beta.registry"]
+
+# sources-vendors-use-sdk
+
+[[row]]
+case = "SV01"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.source", "posthog.models.team.team"]
+
+[[row]]
+case = "SV01"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.alpha.source", "products.inventory.backend.facade.api"]
+
+[[row]]
+case = "SV02"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.sdk.base", "common.hogvm.stl"]
+
+[[row]]
+case = "SV03"
+rule = "sources-vendors-use-sdk"
+verdict = "finding"
+identity = ["products.warehouse_sources.sources.conftest", "posthog.models.team.team"]
+
 # thin-commands
 
 [[row]]
@@ -2030,6 +2136,14 @@ case = "TC03"
 rule = "thin-commands"
 verdict = "finding"
 identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
+
+# webhook-consumers-use-facade
+
+[[row]]
+case = "WC01"
+rule = "webhook-consumers-use-facade"
+verdict = "finding"
+identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backend.logic.widgets"]
 
 # wiring-watched
 
@@ -2058,10 +2172,22 @@ verdict = "finding"
 identity = ["products/reports/backend/apps.py"]
 
 [[row]]
+case = "IN05"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/stock_watch.py"]
+
+[[row]]
 case = "PS10"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/reports/backend/logic/build.py"]
+
+[[row]]
+case = "PS27"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/logic/widgets.py"]
 
 [[row]]
 case = "RD02"
@@ -2219,77 +2345,6 @@ rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/catalog/backend/events.py"]
 
-[[row]]
-case = "PS27"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/legacy/backend/logic/widgets.py"]
-
-[[row]]
-case = "IN05"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/reports/backend/stock_watch.py"]
-
-[[row]]
-case = "SV00"
-rule = "has-facade"
-verdict = "finding"
-identity = ["products/warehouse_sources/backend/facade/api.py"]
-
-[[row]]
-case = "SV00"
-rule = "has-facade"
-verdict = "finding"
-identity = ["products/warehouse_sources/backend/facade/{contracts.py,contracts}"]
-
-[[row]]
-case = "SV01"
-rule = "sources-vendors-use-sdk"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.alpha.source", "products.inventory.backend.facade.api"]
-
-[[row]]
-case = "SV01"
-rule = "sources-vendors-use-sdk"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.alpha.source", "posthog.models.team.team"]
-
-[[row]]
-case = "SV02"
-rule = "sources-vendors-use-sdk"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.sdk.base", "common.hogvm.stl"]
-
-[[row]]
-case = "SV03"
-rule = "sources-vendors-use-sdk"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.conftest", "posthog.models.team.team"]
-
-[[row]]
-case = "SV04"
-rule = "sources-vendors-independent"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.alpha.source", "products.warehouse_sources.sources.beta.registry"]
-
-[[row]]
-case = "SV04"
-rule = "sources-vendors-independent"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.alpha.lazy", "products.warehouse_sources.sources.beta.registry"]
-
-[[row]]
-case = "SV05"
-rule = "sources-vendors-independent"
-verdict = "finding"
-identity = ["products.warehouse_sources.sources.sdk.catalog", "products.warehouse_sources.sources.beta.registry"]
-
-[[row]]
-case = "WC01"
-rule = "webhook-consumers-use-facade"
-verdict = "finding"
-identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backend.logic.widgets"]
 
 # Wanted: verdicts that are decided and not built (or built and not firing) on this preset. Each
 # is an expected failure of test_model_repo.py until the rule gives it. A wanted row matches a

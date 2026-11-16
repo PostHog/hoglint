@@ -122,6 +122,15 @@ Reading a package also gives its models and the names it re-exports to every oth
 
 Not placed, and so incomplete: a callee reached only through an instance attribute (`self.family.register(...)`), and a sender bound by a `for` loop over a constant sequence; the facts hold no instance-attribute type and no loop binding.
 
+**A string is a path only where the code holds one** (Nov 16, from the first-ledger triage).
+A string that names a module is a `dotted-path` edge in a sink or a path place, and text anywhere else.
+- Sinks: a patch target; the first argument of a loader or of a callee `[discovery] path_callees` names (by last name, or by last dotted parts such as `patch.dict`), and an element of a list or tuple there (an argument vector, as in `python -m`).
+  A string there is an edge also when it names nothing.
+- Path places: a module a pack names as one whose strings are all paths (the Django pack's settings modules, from `[django] settings`), a value of a module's lazy (PEP 562) map, and any string of a file that hands a computed value (a name, an f-string) to a sink's callee.
+  A string there is an edge when it names a module.
+- Why: the old product lint's data and its tests (`frozenset({"products.warehouse_sources"})`, parametrized product names) read as couplings and failed two products' level.
+- The written limit: the facts hold no flow from a name to where the code uses it, so a file that patches or loads through a name keeps every string of it that names a module, data too.
+
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.
 Never `ignore` (architect default, Nov 4).

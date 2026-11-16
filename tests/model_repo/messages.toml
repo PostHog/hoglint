@@ -165,6 +165,11 @@ text = "products.reports.backend.logic.shelf_counts names products.shelf.backend
 
 [[finding]]
 rule = "public-surface"
+identity = ["products.inventory.backend.logic.stock.move_stock", "products.reports.backend.stock_names", "import"]
+text = "products.reports.backend.stock_names names products.inventory.backend.logic.stock.move_stock, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
 identity = ["products.inventory.backend.logic.stock.move_stock", "products.shelf.backend.presentation.views", "import"]
 text = "products.shelf.backend.presentation.views names products.inventory.backend.logic.stock.move_stock, which is not exported to it"
 
@@ -182,6 +187,26 @@ text = "tools.viewkit.shapes names products.inventory.backend.models.StockItem, 
 rule = "public-surface"
 identity = ["products.legacy.backend.logic.widgets.WIDGET_LIMIT", "posthog.api.widget_report", "reference"]
 text = "posthog.api.widget_report names products.legacy.backend.logic.widgets.WIDGET_LIMIT, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.models.StockItem", "posthog.models.team.team", "dotted-path"]
+text = "posthog.models.team.team names products.inventory.backend.models.StockItem, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.tasks.restock.restock", "products.reports.backend.restock_dispatch", "dotted-path"]
+text = "products.reports.backend.restock_dispatch names products.inventory.backend.tasks.restock.restock, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.skill_build", "dotted-path"]
+text = "products.reports.backend.skill_build names products.inventory.backend.logic.stock, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.stock_names", "dotted-path"]
+text = "products.reports.backend.stock_names names products.inventory.backend.logic.stock, which is not exported to it"
 
 [[finding]]
 rule = "export-shape"
@@ -1055,6 +1080,11 @@ text = "ee.settings -> products.gatekeeper.backend.admin_gate.AdminGateMiddlewar
 
 [[finding]]
 rule = "no-product-lists-in-core"
+identity = ["posthog.models.team.team", "products.inventory.backend.models"]
+text = "posthog.models.team.team -> products.inventory.backend.models.StockItem (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
 identity = ["posthog.settings.web", "products.access_control.backend.apps"]
 text = "posthog.settings.web -> products.access_control.backend.apps.AccessControlConfig (dotted-path)"
 
@@ -1127,6 +1157,11 @@ text = "posthog.settings.web -> products.gatekeeper.backend.validator.GateValida
 rule = "no-product-lists-in-core"
 identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
 text = "posthog.settings.web -> products.gatekeeper.backend.login_flow.check_login (dotted-path)"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.temporal.health_checks.registry", "products.legacy.backend.temporal.jobs"]
+text = "posthog.temporal.health_checks.registry -> products.legacy.backend.temporal.jobs (dotted-path)"
 
 [[finding]]
 rule = "leaves-stay-leaves"
@@ -1450,6 +1485,11 @@ text = "products/legacy/backend/logic/widgets.py is needed by edge.kind in ['imp
 
 [[finding]]
 rule = "reached-watched"
+identity = ["products/legacy/backend/temporal/jobs.py"]
+text = "products/legacy/backend/temporal/jobs.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
 identity = ["products/reports/backend/apps.py"]
 text = "products/reports/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and src.tier != 'product' and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
 
@@ -1522,6 +1562,11 @@ text = "installs 'registry.register_post_delete_hook' did not resolve"
 rule = "installs"
 identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
 text = "installs 'registry.register_post_delete_hook' did not resolve"
+
+[[incomplete]]
+rule = "dynamic-imports"
+identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
+text = "dynamic-import '' did not resolve"
 
 [[incomplete]]
 rule = "dynamic-imports"
@@ -1762,11 +1807,6 @@ text = "posthog/temporal/schedule.py is named by [[assign]] posthog/management/c
 rule = "config:stale-name"
 identity = ["posthog/temporal/ai/__init__.py"]
 text = "posthog/temporal/ai/__init__.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
-
-[[incomplete]]
-rule = "config:stale-name"
-identity = ["posthog/temporal/health_checks/registry.py"]
-text = "posthog/temporal/health_checks/registry.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"

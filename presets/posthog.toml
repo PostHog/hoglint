@@ -14,9 +14,18 @@ dataclass_decorators        = ["dataclasses.dataclass", "posthog.dataclasses.fro
 frozen_dataclass_decorators = ["posthog.dataclasses.frozen"]
 # A pydantic model's annotated class attributes are its fields, as a dataclass's are.
 dataclass_bases             = ["pydantic.BaseModel", "pydantic.main.BaseModel"]
-# A string that names nothing is a path edge only where the code holds a path: a patch target, or
-# the first argument of these.
-path_callees = ["import_string", "include"]
+# A string is a path edge only where the code holds a path: a patch target; the first argument of
+# a loader or of one of these, or an element of a list there; a value of a lazy map; any string of
+# a file that hands a computed value to one of those; anywhere in a settings module (the Django
+# pack names them from `[django] settings`). Elsewhere a string is text, also when it names a
+# module. These take a dotted path: an import or a run by name, a URL include, a team extension, a
+# Celery task sent by name, `python -m`, and the patch targets of `monkeypatch.setattr`,
+# `patch.dict`, `patch.multiple` and two local patch helpers.
+path_callees = [
+  "import_string", "include", "TeamExtensionDescriptor", "send_task", "subprocess.Popen", "subprocess.run",
+  "run_module", "importorskip", "register_assert_rewrite", "set_forkserver_preload",
+  "setattr", "patch.dict", "patch.multiple", "_patch", "mock_patch",
+]
 # Django migration packages: their files get the `migration` context. ClickHouse
 # (`posthog/clickhouse/migrations`), async migrations and `posthog/rbac/migrations` are not Django
 # migrations and stay prod.

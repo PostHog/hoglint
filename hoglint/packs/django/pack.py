@@ -270,6 +270,11 @@ class DjangoPack:
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
         return FACT_NEEDS
 
+    def path_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
+        """The settings modules: Django imports every dotted path a setting holds, wherever the
+        string stands in the module."""
+        return DjangoPackConfig.from_section(section).settings_modules
+
     def whole_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
         """The settings modules: a list one of them hands another moves the setting name the
         pack writes on the other's edges."""

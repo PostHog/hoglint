@@ -55,6 +55,13 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `PS25` | `ee/api/widgets.py` | `ee` queries a product's model | public-surface, no-product-lists-in-core and model-crossings findings | |
 | `PS26` | `posthog/models/resource_transfer/visitors.py` | A core file that names three products' models in a table | public-surface, no-product-lists-in-core and model-crossings (`in-collection`) findings, one per product | D104, D100 |
 | `PS27` | `posthog/test/test_auth.py`, `products/legacy/backend/logic/widgets.py` | A core test patches a library name through a product module (`...widgets.importlib.import_module`) | wiring-watched finding for the product module; public-surface clean | The test depends on the module importing the name: the product module is the watched file (Nov 16) |
+| `DP01` | `tools/lint/isolation.py` | A tool module holds product package names as data (a `frozenset`, a comparison) | clean | A string is a path only where the code holds one (Nov 16, first-ledger triage) |
+| `DP02` | `tools/lint/tests/test_isolation.py` | A test parametrizes product package names as data | clean; `shelf` stays Isolated | The strings that made two real products fail their level (Nov 16) |
+| `DP03` | `posthog/models/team/team.py`, `posthog/models/team/extensions.py` | A team extension names a product model by its dotted path | public-surface and no-product-lists-in-core findings | `TeamExtensionDescriptor` takes a path (`path_callees`) |
+| `DP04` | `products/reports/backend/stock_names.py` | A lazy map names another product's module; next to it a dict of plain text in the same module | public-surface findings (the lazy import and the map's value); clean for the text | A lazy map's value is a path place |
+| `DP05` | `products/reports/backend/skill_build.py` | `subprocess.Popen([sys.executable, "-m", <module>])` | public-surface finding | An element of a path callee's argument vector is a path |
+| `DP06` | `products/reports/backend/restock_dispatch.py` | A Celery task sent by a name held in a module constant | public-surface finding | A file that hands a computed value to a path callee keeps its strings that name a module (the owner, Nov 16: dispatch by name is real) |
+| `DP07` | `posthog/temporal/health_checks/registry.py` | A registration point lists product modules and imports each by a computed name | no-product-lists-in-core finding; public-surface clean (a registration point names a wiring location); dynamic-imports incomplete | The same, for a loader |
 | `SY01` | `products/legacy/backend/api/widgets.py` | A viewset under `backend/api/` uses an access-control mixin | clean | The mixins are exported by name to zone `api` (exports `symbols`, Nov 12) |
 | `SY02` | `products/legacy/backend/api/widgets.py` | The same module imports another product's viewset that inherits the mixin | public-surface finding | By name: a subclass gets no door |
 | `ES01` | `products/catalog/backend/facade/models.py` | A facade module that only re-exports a model | export-shape finding | |
@@ -286,7 +293,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 |---|---|---|
 | public-surface | A later use of a name already imported | `PS02` |
 | public-surface | A use through a module attribute whose module import is a finding | `PS03` |
-| public-surface | An unresolved string read as a dotted path (host names, task names, fixtures) | None: the dotted-path producer now reads only path sinks (`path_callees`) |
+| public-surface | A string read as a dotted path outside a path sink (host names, task names, fixtures, a lint's data) | `DP01`, `DP02`: a string is an edge only in a path sink or a path place |
 | public-surface | Settings name product paths | `PS11` |
 | public-surface | A registration point names a wiring location | `PS13` |
 | public-surface | An access-control mixin used from a legacy `backend/api/` viewset | `SY01` |

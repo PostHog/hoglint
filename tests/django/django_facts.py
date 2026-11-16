@@ -79,9 +79,10 @@ class FactRepo(Repo):
     def graph(
         self, hooks: tuple[str, ...] = (), routing: DatabaseRouting | None = None, scan_roots: tuple[str, ...] = ()
     ) -> Graph:
-        linked = self.link(CoreConfig(first_party=FIRST_PARTY))
         config = DjangoPackConfig(
             settings_modules=("proj.settings",), routing=routing, hooks=hooks, scan_roots=scan_roots
         )
+        # The settings modules are path modules, as the pack's `path_modules` hook names them in a run.
+        linked = self.link(CoreConfig(first_party=FIRST_PARTY, path_modules=config.settings_modules))
         DjangoPack.run(linked.reader(), config, linked.sink(), Path("."))
         return linked.graph

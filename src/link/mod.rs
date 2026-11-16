@@ -185,9 +185,13 @@ pub struct LinkConfig {
     pub dataclass_bases: Vec<String>,
     #[serde(default)]
     pub patch_callees: Vec<String>,
-    /// Last names of other callees whose first argument is a dotted path.
+    /// Callees whose first argument is a dotted path: by last name, or by last dotted parts.
     #[serde(default)]
     pub path_callees: Vec<String>,
+    /// Modules (dotted names or `*` globs) whose strings are paths wherever they stand, such as
+    /// settings modules: packs declare them.
+    #[serde(default)]
+    pub path_modules: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     #[serde(default)]
     pub contract_surfaces: Vec<SurfaceConfig>,
