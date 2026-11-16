@@ -875,6 +875,12 @@ verdict = "incomplete"
 identity = ["products.gatekeeper.backend.wiring|installs|registry.register_post_delete_hook"]
 
 [[row]]
+case = "WW21"
+rule = "installs"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.wiring|installs|self.registry.register_post_delete_hook"]
+
+[[row]]
 case = "UI02"
 rule = "installs"
 verdict = "incomplete"
@@ -1917,6 +1923,12 @@ rule = "receiver-direction"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
 
+[[row]]
+case = "WW22"
+rule = "receiver-direction"
+verdict = "unknown"
+identity = ["label", "gatekeeper", "products.gatekeeper.backend.apps"]
+
 # registry-slots
 
 [[row]]
@@ -2096,6 +2108,12 @@ verdict = "incomplete"
 identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
 
 [[row]]
+case = "WW21"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
+
+[[row]]
 case = "UI02"
 rule = "wiring-watched"
 verdict = "incomplete"
@@ -2238,6 +2256,24 @@ case = "WW19"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/catalog/backend/events.py"]
+
+[[row]]
+case = "WW23"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/hooks.py"]
+
+[[row]]
+case = "WW23"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/listeners.py"]
+
+[[row]]
+case = "WW22"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.gatekeeper.backend.apps|label"]
 
 [[row]]
 case = "PS27"

@@ -4,6 +4,8 @@ use crate::config::{ExtractConfig, Kind};
 use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
 use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status};
+use crate::loops::Sequences;
+use crate::self_attrs::self_attrs;
 use crate::source::{LineIndex, parse_py314, source_text};
 use crate::value::{Encoder, Keyword, MAX_HEADER_NODES, Value, keyword_name};
 use crate::walker::{Counts, Walk, Walker};
@@ -64,7 +66,16 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         } else {
             HashSet::new()
         };
-        let walker = Walker::new(self.src, &self.lines, &defs, &bound, &stored, self.config);
+        let sequences = Sequences::of(if kinds.has(Kind::Calls) { suite } else { &[] }, &defs);
+        let walker = Walker::new(
+            self.src,
+            &self.lines,
+            &defs,
+            &bound,
+            &stored,
+            &sequences,
+            self.config,
+        );
         let mut walk = walker.run(suite);
         let derived = if kinds.has(Kind::Derived) {
             let candidates = std::mem::take(&mut walk.candidates);
@@ -128,6 +139,7 @@ impl<'s, 'c> FileFacts<'s, 'c> {
         let entry = &defs.entries[idx];
         let mut enc = Encoder::default();
         let mut def = Def {
+            attrs: Vec::new(),
             bases: Vec::new(),
             c: entry.c,
             dec: entry
@@ -157,6 +169,9 @@ impl<'s, 'c> FileFacts<'s, 'c> {
                 };
                 def.params = self.params(&mut enc, &f.parameters);
                 def.ret = self.header_value(&mut enc, f.returns.as_deref(), true);
+                if defs.is_class(entry.parent) {
+                    def.attrs = self_attrs(f, self.src, &self.lines);
+                }
             }
             DefNode::Class(c) => {
                 def.n = c.name.to_string();
