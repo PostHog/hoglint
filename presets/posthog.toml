@@ -445,6 +445,13 @@ signatures      = true
 allow   = ["class"]
 deny    = ["model", "manager", "queryset"]
 
+# A core package's toolkit: classes and functions with their signatures, never an ORM type. Its
+# doors read this policy, not `contract`: that one reads a class core defines as owned elsewhere and
+# would judge nothing inside a core door's own classes.
+[shapes.toolkit]
+allow   = ["class"]
+deny    = ["model", "manager", "queryset", "command"]
+
 # ── Exports: the only public surface of a product ──────────────
 
 [exports.facade]
@@ -487,6 +494,26 @@ symbols  = [
 ]
 audience = "src.zone == 'api'"
 shape    = "registration"
+
+# Doors of core packages (D112), fitted to how code uses them. Tests may reach past them
+# (public-surface). egress: each vendor's package init, transport and clients, GitHub's pacing, and
+# the shared limiter's policies and outbound facade.
+[exports.egress]
+within   = "posthog/egress"
+paths    = [
+  "*/__init__.py", "*/transport.py", "*/client.py", "*/async_client.py", "github/limiter.py",
+  "limiter/policies.py", "limiter/outbound.py",
+]
+audience = "*"
+shape    = "toolkit"
+
+# ingress: the consumer contracts, the view builder, the signature schemes, each provider and the
+# statement-timeout helper webhook consumers read.
+[exports.ingress]
+within   = "posthog/ingress"
+paths    = ["contracts.py", "views.py", "verify/schemes.py", "*/provider.py", "dispatch/database.py"]
+audience = "*"
+shape    = "toolkit"
 
 # ── Registries: core finds product code by file convention ─────
 

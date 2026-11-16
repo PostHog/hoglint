@@ -274,7 +274,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `GP01` | `posthog/schema.py`, `posthog/schema_enums.py` | Generated files | clean: no rule | generated-producer left the preset: the monorepo's own generated-files test stays (D118) |
 | `HD01` | `products/reports/backend/health_checks.py` | A health check imports `posthog.dags` | health-checks-no-dags finding (advisory) | |
 | `HD02` | `products/inventory/backend/health_checks.py` | A health check without it | clean | |
-| `DO01` | `hoglint.toml`, `products/legacy/backend/logic/widgets.py`, `posthog/ingress/dispatch.py` | A product imports a core package past its door; the tree's own config declares the door (`exports.ingress-door`) | public-surface finding | D107, D112: the rule reaches a destination where an export's `within` holds the path (`dst.door`) |
+| `DO01` | `products/legacy/backend/logic/widgets.py`, `posthog/ingress/dispatch.py` | A product imports a core package past its door (`exports.ingress` in the preset) | public-surface finding | D107, D112: the rule reaches a destination where an export's `within` holds the path (`dst.door`) |
 | `DO02` | `products/catalog/backend/webhook_consumers.py`, `posthog/ingress/contracts.py` | A product imports the door | clean | |
 | `DO03` | `products/legacy/backend/tests/test_widgets.py` | A product's test imports the same module past the door | clean | D112: tests may reach into a core door package; a test that reaches another product's internals stays a public-surface finding (`PS09`, D93) |
 | `DO04` | `posthog/ingress/views.py` | A module of the door package imports its own internals | clean | Not another package |

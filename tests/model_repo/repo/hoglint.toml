@@ -32,12 +32,3 @@ exceptions = "hoglint.exceptions.toml"
 [[assign]]
 match = "posthog/api/view_base.py"
 set   = { request_seed = true }
-
-# Planted (cases DO01 to DO07): a door for a core package, which public-surface reaches through
-# `dst.door`. The preset declares no door outside the products, so the model repository declares
-# its own.
-[exports.ingress-door]
-within   = "posthog/ingress"
-paths    = ["contracts.py"]
-audience = "*"
-shape    = "registration"
