@@ -517,6 +517,12 @@ identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 # facade-signature
 
 [[row]]
+case = "FS13"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "give_object_payload", "return", "builtins.object"]
+
+[[row]]
 case = "CM01"
 rule = "facade-signature"
 verdict = "finding"

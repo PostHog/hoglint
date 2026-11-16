@@ -498,8 +498,8 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.facade-signature]
 primitive  = "signature"
-doc        = "A public facade function neither accepts nor returns a model, manager, queryset or command. Any, object and a bare dict are unknown; a mapping with type arguments is typed, and Any as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
-select     = "facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol == 'typing.Any' and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
+doc        = "A public facade function neither accepts nor returns a model, manager, queryset or command. Any, object and a bare dict are unknown; a mapping with type arguments is typed, and Any or object as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
+select     = "facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
 deny       = "dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
 on_unknown = "finding"
 # A core model on the list (`crosses`) may be taken or returned.

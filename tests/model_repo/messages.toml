@@ -420,6 +420,11 @@ text = "products.catalog.backend.facade.api.give_payload: return has no usable t
 
 [[finding]]
 rule = "facade-signature"
+identity = ["products.catalog.backend.facade.api", "give_object_payload", "return", "builtins.object"]
+text = "products.catalog.backend.facade.api.give_object_payload: return has no usable type (builtins.object)"
+
+[[finding]]
+rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "take_unannotated", "param:value", "?"]
 text = "exposes '' did not resolve"
 

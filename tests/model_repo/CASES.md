@@ -83,6 +83,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `FS04` | `products/catalog/backend/facade/api.py`, `products/catalog/backend/facade/shapes.py`, `posthog/models/team/team.py` | Each of the five core models in a parameter, a return and a field | clean | D98 |
 | `FS05` | `products/catalog/backend/facade/api.py`, `products/catalog/backend/facade/shapes.py` | `Integration` in a parameter, a return and a field | facade-signature finding (three) | D98, D104 |
 | `FS06` | `products/catalog/backend/facade/api.py` | `object`, `Any`, bare `dict` as parameters; `dict[str, Any]` as a return | facade-signature unknown (four: the return reports its `Any`) | D93 |
+| `FS13` | `products/catalog/backend/facade/api.py` | `dict[str, object]` as a parameter and as a return | clean for the parameter; facade-signature unknown for the return | `object` as a mapping's value is an opaque payload, as `Any` is (Nov 16) |
 | `FS07` | `products/catalog/backend/facade/api.py` | A parameter with no annotation | facade-signature unknown | |
 | `FS08` | `products/catalog/backend/facade/shapes.py` | A `Protocol` call that takes another product's model | facade-signature finding | |
 | `FS10` | `products/legacy/backend/facade/backfill_command.py` | A method of a class in a facade with unannotated parameters | facade-signature unknown (two) | |
@@ -328,7 +329,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | export-shape | A management command in a facade | `ES11` |
 | facade-signature | The core model list | `FS04` |
 | facade-signature | `dict[str, Any]` as a parameter or field | `FS06` |
-| facade-signature | A typed map of `object` | None |
+| facade-signature | A typed map of `object` | `FS13` |
 | facade-signature | Bare `object` | `FS06` |
 | facade-signature | The `frozen` decorator read as a facade function | None: no longer reported (`ES10`) |
 | facade-signature | A function left out of `__all__` | None |
