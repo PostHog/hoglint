@@ -1,5 +1,6 @@
 # How a rule judges one destination of one edge (`EdgeRule.decide`, and `SignaturePrimitive.decide`
-# for the unknown type). src/link/rules/mod.rs `judgment` is held to this table.
+# for the unknown type). src/link/rules/mod.rs `judgment` is held to this table, and
+# tests/model_repo/test_explain.py judges each destination `explain edge:` prints with it.
 #
 # Columns: the selection's truth, whether the destination did not resolve, whether a signature
 # slot has no usable type, the predicate's truth (`deny`, `allow`, `require`; true when the rule
