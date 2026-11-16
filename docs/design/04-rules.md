@@ -77,6 +77,22 @@ A rule selects on labels, never on a folder alone:
 **Which rule families block at adoption: all of them, with the existing debt in the ledger** (owner, Nov 9).
 
 **Rule states today:** enforced (blocks new debt; existing debt is in the ledger) and `off` (added by the architect, Nov 11).
+The preset has no `off` key yet: a rule that is off is a commented-out table with its reason (`own-database`, `atomic-outside-views`, D118).
+
+**The PostHog preset's rule scope** (D118, Nov 16).
+`generated-producer` and `registry-slots` left the preset: the monorepo's own generated-files test and the registry loader check the same at run time, and neither rule had a producer.
+`own-database` (no producer, a policy never decided) and `atomic-outside-views` (no edge reads `transaction.atomic`) are off for now.
+`migration-database` stays, slim (D117, below).
+
+**Rows the first-ledger triage placed elsewhere** (Nov 16; the architect's answers to the triage).
+- `no-product-lists-in-core` takes `public-surface`'s allowances: frozen migrations, settings naming product paths, a declared permanent interface for core.
+- `no-product-lists-in-core` judges only the core registration points (the hub rule, the architect, Nov 16): the modules the preset marks `wiring = "registration"` (the Temporal worker and schedules, the query runner, the Celery schedule, `posthog/apps.py`, the Max presets).
+  Core calling a product's facade elsewhere is allowed (D93); a threshold on how many products a module names was rejected, since it reports facade calls and loses the per-product Max presets.
+  Limit: a new hard-coded product list in a core module that is not marked as a registration point is not caught.
+- `object` as a mapping's value is an opaque payload in a facade parameter or field, as `Any` is; never in a return value.
+- An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
+- `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
+- `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. Kept (the architect, Nov 16): a re-route through a facade drawer shows again as a `model-crossings` row, and `export-shape` flags the drawer.
 
 **A reach stops at a denied module, unless it says otherwise** (Nov 12).
 A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.
@@ -109,11 +125,13 @@ Their limits, in plain words:
    A chain that leaves the tree starts with a finding of `sources-vendors-use-sdk`.
 2. A webhook consumers module that imports a test module of a product is `prod-imports-test`'s finding, not this rule's.
 
-**`migration-database` reads the migrations an installed third-party app ships** (Nov 16).
-The Django pack reads an installed app's migrations wherever the run has its sources, so the graph holds the edges Django's own loader holds.
-A package's sources are read from the interpreter's site-packages when `[discovery] external` names it, as for `django` and `rest_framework`.
-So the root config lists every distribution that ships an installed app with migrations; an app it leaves out has no migration edges, and a routing change that splits it from its parents goes unseen.
-Reading a package also gives its models and the names it re-exports to every other rule.
+**`migration-database` is slim: the repo's own migrations only** (owner, Nov 16, D117; it replaces the stage 2c reading of third-party migrations).
+The monorepo's Django test stays the authority for the migration graph; hoglint's rule is early feedback.
+- The Django pack reads no migration of an installed third-party app, even where `[discovery] external` gives the run its sources; a dependency key into such an app makes no node and no edge.
+- A key list in a `Migration` class body that hoglint cannot read (`dependencies += [...]`, a computed value) is an unresolved edge, and the rule reads an unresolved edge as incomplete: never silent, never a block.
+- `bin/parity` explains an edge or a crossing of the Django test that has a third-party app at either end by D117, checked per item: the app's module is no first-party module or package.
+
+Reading a package from `[discovery] external` still gives its models and the names it re-exports to every other rule.
 
 **Two couplings the engine places** (Nov 16).
 - A module-level function that hands one of its parameters on to `<signal>.connect(...)` is a hook, found in the code like the configured ones: a call of it is an `installs` edge from the caller's module, the callback's entry module.
@@ -140,6 +158,23 @@ A `connect` in a hook's own body (a module-level function that hands its paramet
 In `for model in RULE_MODELS:` the extractor gives a watched call in the loop's body one `calls` row per value, with the variable replaced where the call passes it as a whole argument, so each `post_save.connect(..., sender=model)` is one placed signal edge per sender.
 The sequence is a tuple or list literal, written in the `for` or bound to a name the file binds exactly once, in the module or in the loop's own scope.
 Anything else stays as written, and so unknown: a name bound twice or by anything but that assignment, a list whose attributes the file uses (`X.append(...)` can change it), a starred element, a loop variable the body binds again, a call in a lambda or a comprehension (it runs later), an empty sequence, and more than 64 rows for one call.
+
+**A package with a declared door reads `door`** (architect, D107, Nov 12; built Nov 16).
+`door` is a built-in attribute of a module: true when an export's `within` holds its path.
+- It reads the path and the config only, as a zone does, so a change that adds or moves files needs nothing new from the change predictor.
+- A rule that guards the way into such a package selects `dst.door`; no list of package names stands in the rule.
+- The other reading, "a package that has a module an export covers", depends on which files exist anywhere in the package: rejected.
+- A directory without `__init__.py` reads it from the path that labels it; a third-party module reads `none`.
+- An export with an empty `within` holds every path, so every module reads `door` as true.
+
+**A string is a path only where the code holds one** (Nov 16, from the first-ledger triage).
+A string that names a module is a `dotted-path` edge in a sink or a path place, and text anywhere else.
+- Sinks: a patch target; the first argument of a loader or of a callee `[discovery] path_callees` names (by last name, or by last dotted parts such as `patch.dict`), and an element of a list or tuple there (an argument vector, as in `python -m`).
+  A string there is an edge also when it names nothing.
+- Path places: a module a pack names as one whose strings are all paths (the Django pack's settings modules, from `[django] settings`), a value of a module's lazy (PEP 562) map, a string whose text a loader or a sink's callee takes as its first argument through a loop over a literal sequence (`for path in MODULES: import_module(path)`), and any string of a file that hands a computed value (a name, an f-string) to a sink's callee.
+  A string there is an edge when it names a module.
+- Why: the old product lint's data and its tests (`frozenset({"products.warehouse_sources"})`, parametrized product names) read as couplings and failed two products' level.
+- The written limit: the facts hold no flow from a name to where the code uses it, so a file that patches or loads through a name keeps every string of it that names a module, data too.
 
 **Unresolved names:** the default is a `finding` with an `unresolved-*` kind, after a `not-applicable` state.
 A producer failure makes the rule incomplete.

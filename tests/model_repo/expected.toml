@@ -62,12 +62,6 @@ identity = ["posthog/temporal/ai/__init__.py"]
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
-identity = ["posthog/temporal/health_checks/registry.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
 identity = ["posthog/temporal/schedule.py"]
 
 [[row]]
@@ -204,6 +198,26 @@ rule = "contracts-no-django"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.contracts", "django.conf"]
 
+# core-door
+
+[[row]]
+case = "DO01"
+rule = "core-door"
+verdict = "finding"
+identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
+
+[[row]]
+case = "DO06"
+rule = "core-door"
+verdict = "unknown"
+identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
+
+[[row]]
+case = "DO07"
+rule = "core-door"
+verdict = "unknown"
+identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
+
 # drives
 
 [[row]]
@@ -233,18 +247,6 @@ verdict = "incomplete"
 identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 
 # export-shape
-
-[[row]]
-case = "TA02"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics.EntryProps", "products.catalog.backend.facade.generics", "export-shape(class)"]
-
-[[row]]
-case = "TA02"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics.EntryRecord", "products.catalog.backend.facade.generics", "export-shape(class)"]
 
 [[row]]
 case = "AC01"
@@ -367,6 +369,18 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
 
 [[row]]
+case = "HZ15"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.reports.backend.models.ReportRun.Status", "products.reports.backend.facade.run_status", "export-shape(class)"]
+
+[[row]]
+case = "HZ16"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.reports.backend.models.ReportRun", "products.reports.backend.facade.run_handle", "export-denied(model)"]
+
+[[row]]
 case = "ME01"
 rule = "export-shape"
 verdict = "finding"
@@ -427,6 +441,18 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.inventory.backend.routes", "export-denied(model)"]
 
 [[row]]
+case = "TA02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics.EntryProps", "products.catalog.backend.facade.generics", "export-shape(class)"]
+
+[[row]]
+case = "TA02"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics.EntryRecord", "products.catalog.backend.facade.generics", "export-shape(class)"]
+
+[[row]]
 case = "WK04"
 rule = "export-shape"
 verdict = "finding"
@@ -482,6 +508,12 @@ rule = "facade-logic"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
 
+[[row]]
+case = "HZ16"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.reports.backend.facade.run_handle.run_count", "products.reports.backend.facade.run_handle"]
+
 # facade-no-drf
 
 [[row]]
@@ -533,18 +565,6 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
 # facade-signature
-
-[[row]]
-case = "TA02"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "EntryProps", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "TA02"
-rule = "facade-signature"
-verdict = "finding"
-identity = ["products.catalog.backend.facade.generics", "EntryRecord", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
 
 [[row]]
 case = "AC01"
@@ -703,6 +723,12 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
 
 [[row]]
+case = "FS13"
+rule = "facade-signature"
+verdict = "unknown"
+identity = ["products.catalog.backend.facade.api", "give_object_payload", "return", "builtins.object"]
+
+[[row]]
 case = "HO01"
 rule = "facade-signature"
 verdict = "finding"
@@ -781,6 +807,18 @@ verdict = "unknown"
 identity = ["products.catalog.backend.facade.generics", "echo", "return", "products.catalog.backend.facade.generics.AnyT"]
 
 [[row]]
+case = "TA02"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "EntryProps", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
+case = "TA02"
+rule = "facade-signature"
+verdict = "finding"
+identity = ["products.catalog.backend.facade.generics", "EntryRecord", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
+
+[[row]]
 case = "TA03"
 rule = "facade-signature"
 verdict = "finding"
@@ -848,20 +886,6 @@ rule = "foundation-direction"
 verdict = "finding"
 identity = ["access_control", "gatekeeper"]
 
-# generated-producer
-
-[[row]]
-case = "GP01"
-rule = "generated-producer"
-verdict = "incomplete"
-identity = ["posthog.schema"]
-
-[[row]]
-case = "GP01"
-rule = "generated-producer"
-verdict = "incomplete"
-identity = ["posthog.schema_enums"]
-
 # get-model
 
 [[row]]
@@ -873,8 +897,8 @@ identity = ["products.inventory.backend.models.StockItem", "products.legacy.back
 [[row]]
 case = "GM03"
 rule = "get-model"
-verdict = "unknown"
-identity = ["apps.get_model", "products.legacy.backend.logic.widgets", "unresolved-model-label"]
+verdict = "incomplete"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 
 # has-facade
 
@@ -931,6 +955,18 @@ case = "LE09"
 rule = "has-facade"
 verdict = "finding"
 identity = ["products/visual_review/backend/facade/{contracts.py,contracts}"]
+
+[[row]]
+case = "LE11"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/kiosk/backend/facade/api.py"]
+
+[[row]]
+case = "LE11"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/kiosk/backend/facade/{contracts.py,contracts}"]
 
 [[row]]
 case = "SV00"
@@ -1045,30 +1081,12 @@ verdict = "finding"
 identity = ["legacy.0001_initial", "posthog.0001_initial"]
 
 [[row]]
-case = "MD03"
+case = "MD04"
 rule = "migration-database"
-verdict = "finding"
-identity = ["tokens.0001_initial", "posthog.0001_initial"]
+verdict = "incomplete"
+identity = ["products.reports.backend.migrations.0002_extend|migration-parent|dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}"]
 
 # model-crossings
-
-[[row]]
-case = "MC01"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "instance-many(filter)"]
-
-[[row]]
-case = "MC03"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "prefetch"]
-
-[[row]]
-case = "ME08"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.logic.errors", "in-collection"]
 
 [[row]]
 case = "PS08"
@@ -1076,38 +1094,19 @@ rule = "model-crossings"
 verdict = "finding"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
 
-[[row]]
-case = "PS25"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "ee.api.widgets", "instance-many(filter)"]
-
-[[row]]
-case = "PS26"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.catalog.backend.models.CatalogEntry", "posthog.models.resource_transfer.visitors", "in-collection"]
-
-[[row]]
-case = "PS26"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.inventory.backend.models.StockItem", "posthog.models.resource_transfer.visitors", "in-collection"]
-
-[[row]]
-case = "PS26"
-rule = "model-crossings"
-verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "posthog.models.resource_transfer.visitors", "in-collection"]
-
 # no-new-package-cycles
 
 [[row]]
 case = "CR03"
 rule = "no-new-package-cycles"
-verdict = "unknown"
-identity = ["catalog", "?"]
-count = 4
+verdict = "incomplete"
+identity = ["products.catalog.backend.facade.api|import|posthog.models.ghost.Ghost"]
+
+[[row]]
+case = "CR03"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.catalog.backend.facade.api|reference|posthog.models.ghost.Ghost"]
 
 [[row]]
 case = "CY01"
@@ -1124,9 +1123,32 @@ identity = ["reports", "catalog"]
 [[row]]
 case = "CY03"
 rule = "no-new-package-cycles"
-verdict = "unknown"
-identity = ["legacy", "?"]
-count = 3
+verdict = "incomplete"
+identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+
+[[row]]
+case = "HZ06"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.aboveworkers|import|......gone"]
+
+[[row]]
+case = "HZ10"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.lazygoneworkers|import|products.legacy.backend.temporal.gone.run_gone"]
+
+[[row]]
+case = "ME02"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.catalog.backend.logic.errors|import|products.catalog.backend.logic.nowhere.MissingFailure"]
+
+[[row]]
+case = "ME02"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
 
 [[row]]
 case = "UK01"
@@ -1179,101 +1201,16 @@ identity = ["scripts.shapes|reference|products.inventory.backend.models.StockIte
 # no-product-lists-in-core
 
 [[row]]
+case = "DP07"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.temporal.health_checks.registry", "products.legacy.backend.temporal.jobs"]
+
+[[row]]
 case = "DR04"
 rule = "no-product-lists-in-core"
 verdict = "finding"
 identity = ["posthog.hogql_queries.query_runner", "products.legacy.backend.hogql_queries.audit"]
-
-[[row]]
-case = "IF01"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.egress.client", "products.gatekeeper.backend.facade.api"]
-
-[[row]]
-case = "LE03"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api.shelf_labels", "products.shelf.backend.logic.labels"]
-
-[[row]]
-case = "PS01"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api.widget_report", "products.legacy.backend.logic.widgets"]
-count = 2
-
-[[row]]
-case = "PS05"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["ee.hogai.tools", "products.inventory.backend.facade.api"]
-
-[[row]]
-case = "PS05"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api.sharing", "products.inventory.backend.facade.api"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.access_control.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.catalog.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.middleware"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.inventory.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.legacy.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.notifications.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.reports.backend.apps"]
-
-[[row]]
-case = "PS11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.reports.backend.logic.build"]
-
-[[row]]
-case = "PS12"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.migrations.0002_entry_table", "products.catalog.backend.sql"]
 
 [[row]]
 case = "PS13"
@@ -1294,30 +1231,6 @@ verdict = "finding"
 identity = ["posthog.management.commands.start_temporal_worker", "products.reports.backend.temporal.workflows"]
 
 [[row]]
-case = "PS14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.clickhouse.schema", "products.batch_exports.backend.sql"]
-
-[[row]]
-case = "PS14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.clickhouse.schema", "products.catalog.backend.sql"]
-
-[[row]]
-case = "PS15"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.api", "products.legacy.backend.api.widgets"]
-
-[[row]]
-case = "PS15"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.urls", "products.legacy.backend.api.widgets"]
-
-[[row]]
 case = "PS24"
 rule = "no-product-lists-in-core"
 verdict = "finding"
@@ -1335,120 +1248,6 @@ rule = "no-product-lists-in-core"
 verdict = "finding"
 identity = ["posthog.tasks.scheduled", "products.reports.backend.tasks.nightly"]
 
-[[row]]
-case = "PS25"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["ee.api.widgets", "products.legacy.backend.models"]
-
-[[row]]
-case = "PS26"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.resource_transfer.visitors", "products.catalog.backend.models"]
-
-[[row]]
-case = "PS26"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.resource_transfer.visitors", "products.inventory.backend.models"]
-
-[[row]]
-case = "PS26"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.models.resource_transfer.visitors", "products.legacy.backend.models"]
-
-[[row]]
-case = "UK01"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
-
-[[row]]
-case = "WK03"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "WK03"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["sandbox.shapes|import|pydantic.BaseModel"]
-
-[[row]]
-case = "WK04"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "WK04"
-rule = "no-product-lists-in-core"
-verdict = "incomplete"
-identity = ["scripts.shapes|import|pydantic.BaseModel"]
-
-[[row]]
-case = "WW01"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.auth", "products.gatekeeper.backend.facade.api"]
-
-[[row]]
-case = "WW02"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.permissions", "products.access_control.backend.facade.api"]
-
-[[row]]
-case = "WW04"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.debug_gate"]
-
-[[row]]
-case = "WW05"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["ee.settings", "products.gatekeeper.backend.admin_gate"]
-
-[[row]]
-case = "WW06"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.throttles"]
-
-[[row]]
-case = "WW08"
-rule = "no-product-lists-in-core"
-verdict = "unknown"
-identity = ["posthog.request_log", "?"]
-
-[[row]]
-case = "WW11"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.session_gate"]
-
-[[row]]
-case = "WW12"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.token_check"]
-
-[[row]]
-case = "WW13"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.validator"]
-
-[[row]]
-case = "WW14"
-rule = "no-product-lists-in-core"
-verdict = "finding"
-identity = ["posthog.settings.web", "products.gatekeeper.backend.login_flow"]
-
 # orm-independent
 
 [[row]]
@@ -1462,38 +1261,6 @@ case = "OI02"
 rule = "orm-independent"
 verdict = "incomplete"
 identity = ["posthog.egress.client|exposes|typing.Any"]
-
-# own-database
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.access_control.backend.models.AccessRule"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.legacy.backend.models.Widget"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.reports.backend.models.ReportRun"]
 
 # presentation-uses-facade
 
@@ -1636,6 +1403,36 @@ identity = ["scripts.shapes"]
 # public-surface
 
 [[row]]
+case = "DP03"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.models.StockItem", "posthog.models.team.team", "dotted-path"]
+
+[[row]]
+case = "DP04"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.stock_names", "dotted-path"]
+
+[[row]]
+case = "DP04"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock.move_stock", "products.reports.backend.stock_names", "import"]
+
+[[row]]
+case = "DP05"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.logic.stock", "products.reports.backend.skill_build", "dotted-path"]
+
+[[row]]
+case = "DP06"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.tasks.restock.restock", "products.reports.backend.restock_dispatch", "dotted-path"]
+
+[[row]]
 case = "HZ06"
 rule = "public-surface"
 verdict = "unknown"
@@ -1682,12 +1479,6 @@ case = "PS02"
 rule = "public-surface"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "import"]
-
-[[row]]
-case = "PS03"
-rule = "public-surface"
-verdict = "finding"
-identity = ["products.legacy.backend.logic.widgets.WIDGET_LIMIT", "posthog.api.widget_report", "reference"]
 
 [[row]]
 case = "PS07"
@@ -1834,6 +1625,12 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_stock_signals", "import"]
 
 [[row]]
+case = "ST01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.contracts.StockLevelNote", "products.reports.backend.logic.stock_states", "import"]
+
+[[row]]
 case = "SY02"
 rule = "public-surface"
 verdict = "finding"
@@ -1888,6 +1685,12 @@ verdict = "incomplete"
 identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
 
 # reached-watched
+
+[[row]]
+case = "DP07"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/temporal/jobs.py"]
 
 [[row]]
 case = "LE02"
@@ -2030,7 +1833,13 @@ verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
 
 [[row]]
-case = "RD05"
+case = "RD04"
+rule = "receiver-direction"
+verdict = "incomplete"
+identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
+
+[[row]]
+case = "RD06"
 rule = "receiver-direction"
 verdict = "finding"
 identity = ["products.inventory.backend.facade.count_signals.stock_counted", "reports", "products.reports.backend.count_watch"]
@@ -2038,40 +1847,8 @@ identity = ["products.inventory.backend.facade.count_signals.stock_counted", "re
 [[row]]
 case = "WW22"
 rule = "receiver-direction"
-verdict = "unknown"
-identity = ["label", "gatekeeper", "products.gatekeeper.backend.apps"]
-
-# registry-slots
-
-[[row]]
-case = "RS01"
-rule = "registry-slots"
 verdict = "incomplete"
-identity = ["products.catalog.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
-
-[[row]]
-case = "RS01"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.inventory.backend.health_checks.HEALTH_CHECKS"]
-
-[[row]]
-case = "RS01"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.reports.backend.health_checks.HEALTH_CHECKS"]
-
-[[row]]
-case = "RS02"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.legacy.backend.health_checks.HEALTH_CHECKS"]
-
-[[row]]
-case = "RS03"
-rule = "registry-slots"
-verdict = "incomplete"
-identity = ["products.legacy.backend.webhook_consumers.WEBHOOK_CONSUMERS"]
+identity = ["products.gatekeeper.backend.apps|signal|label"]
 
 # request-path
 
@@ -2294,11 +2071,17 @@ identity = ["products/legacy/backend/stock_listeners.py"]
 [[row]]
 case = "RD04"
 rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.reports.backend.stock_receivers|<Call>"]
+
+[[row]]
+case = "RD05"
+rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/legacy/backend/rotation_listeners.py"]
 
 [[row]]
-case = "RD05"
+case = "RD06"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/reports/backend/count_watch.py"]
@@ -2498,32 +2281,11 @@ verdict = "finding"
 match = ["products.legacy.backend.models.Widget", "registered_models"]
 
 [[wanted]]
-case = "DO01"
-decision = "D107: an inbound rule for a core package with a declared door (dst.door)"
-rule = "*"
-verdict = "finding"
-match = ["posthog.ingress.dispatch", "products.legacy.backend.logic.widgets"]
-
-[[wanted]]
 case = "AT01"
-decision = "B10; Nov 12: the rule gets the edge it needs or goes off"
+decision = "B10; Nov 12: the rule gets the edge it needs or goes off; off for the switch (D118)"
 rule = "atomic-outside-views"
 verdict = "finding"
 match = ["products.legacy.backend.presentation.views"]
-
-[[wanted]]
-case = "RS02"
-decision = "registry-slots: a slot file defines the attribute (needs its producer)"
-rule = "registry-slots"
-verdict = "finding"
-match = ["products.legacy.backend.health_checks"]
-
-[[wanted]]
-case = "RS03"
-decision = "registry-slots: members subclass the base (needs its producer)"
-rule = "registry-slots"
-verdict = "finding"
-match = ["products.legacy.backend.webhook_consumers"]
 
 [[wanted]]
 case = "CN03"
@@ -2585,5 +2347,5 @@ match = ["products.catalog.backend.facade.aliases.built"]
 
 [levels.isolated]
 passing = ["shelf"]
-failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]
+failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "kiosk", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]
 claimed = ["catalog", "gatekeeper", "inventory", "legacy", "reports", "shelf"]

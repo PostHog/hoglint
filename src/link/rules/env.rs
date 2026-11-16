@@ -419,6 +419,21 @@ impl<'a> Cx<'a> {
         Value::Set(names)
     }
 
+    /// Whether an export's `within` holds a module (`Labeler.door`): a graph module by its file, a
+    /// directory without `__init__.py` by the path that labels it; none for a module with neither.
+    pub fn door(&self, module: Option<Sid>, at: Option<u32>) -> Value<'a> {
+        let rules = self.rules;
+        if let Some(at) = at {
+            return Value::Bool(rules.labels.door_of[at as usize]);
+        }
+        match self.namespace(module, at) {
+            Some(found) => {
+                Value::Bool(rules.exports.iter().any(|export| export.holds(&found.path)))
+            }
+            None => Value::None,
+        }
+    }
+
     /// The registry of a graph module, and its lifecycle.
     fn registry(&self, at: Option<u32>, lifecycle: bool) -> Value<'a> {
         let Some(found) = at.and_then(|at| self.rules.labels.registry_of[at as usize]) else {
@@ -554,6 +569,7 @@ impl<'a> Resolve<'a> for Env<'a> {
             },
             Ref::Src(field) => self.endpoint_value(&self.src, field),
             Ref::Dst(field) => self.endpoint_value(&self.dst, field),
+            Ref::Surface(field) => self.surface_value(field),
             Ref::Entity(_) | Ref::Unknown => Value::Unknown,
         }
     }
@@ -621,6 +637,19 @@ impl<'a> Env<'a> {
         Value::Text(Cow::Owned(format!("{shape}({detail})")))
     }
 
+    /// A field of the module the code named, whatever endpoint `dst` reads; unknown with no edge.
+    fn surface_value(&self, field: EndField) -> Value<'a> {
+        let Some(id) = self.edge else {
+            return Value::Unknown;
+        };
+        let mut found = Vec::new();
+        self.cx.dst_endpoints(id, Role::Surface, &mut found);
+        match found.first() {
+            Some(surface) => self.endpoint_value(surface, field),
+            None => Value::Unknown,
+        }
+    }
+
     fn endpoint_value(&self, endpoint: &Endpoint<'a>, field: EndField) -> Value<'a> {
         if let Some(id) = self.edge {
             match field {
@@ -675,6 +704,7 @@ impl<'a> Env<'a> {
             EndField::Registry => cx.registry(endpoint.at, false),
             EndField::Lifecycle => cx.registry(endpoint.at, true),
             EndField::HandedZones => cx.handed_zones(endpoint.module),
+            EndField::Door => cx.door(endpoint.module, endpoint.at),
             EndField::Field(at, attr) => self.declared(endpoint, at, attr),
             EndField::Undeclared(attr) => match self.own_attr(attr) {
                 "" => Value::Unknown,
@@ -763,7 +793,7 @@ impl<'a> Env<'a> {
         };
         match self.hands_out(endpoint) {
             Truth::True => {}
-            Truth::False => return Value::Bool(false),
+            Truth::False => return self.kept_origin_exported(endpoint),
             Truth::Unknown => return Value::Unknown,
         }
         let bits = cx.rules.labels.exports_of[at as usize];
@@ -788,6 +818,41 @@ impl<'a> Env<'a> {
             Truth::Unknown => Value::Unknown,
             truth => Value::Bool(truth == Truth::True),
         }
+    }
+}
+
+impl<'a> Env<'a> {
+    /// A name an export module keeps to itself is still exported when the same export, under the
+    /// same root, hands out its origin (a facade module's kept import of the facade's own enum):
+    /// the importer names a name of the door it uses. Else it is not exported.
+    fn kept_origin_exported(&self, endpoint: &Endpoint<'a>) -> Value<'a> {
+        let cx = self.cx;
+        let (Some(id), Some(path)) = (self.edge, endpoint.path) else {
+            return Value::Bool(false);
+        };
+        let mut origins = Vec::new();
+        cx.dst_endpoints(id, Role::Origin, &mut origins);
+        if origins.is_empty() {
+            return Value::Bool(false);
+        }
+        for origin in &origins {
+            let Some(origin_path) = origin.path.filter(|_| !origin.unresolved) else {
+                return Value::Bool(false);
+            };
+            let same_door = cx.rules.exports.iter().any(|export| {
+                let root = export.covered_root(path);
+                root.is_some() && root == export.covered_root(origin_path)
+            });
+            if !same_door {
+                return Value::Bool(false);
+            }
+            match self.exported(origin) {
+                Value::Bool(true) => {}
+                Value::Unknown => return Value::Unknown,
+                _ => return Value::Bool(false),
+            }
+        }
+        Value::Bool(true)
     }
 }
 
@@ -844,6 +909,7 @@ impl<'a> Resolve<'a> for LabelEnv<'a, '_> {
             EntityField::Registry => cx.registry(self.at, false),
             EntityField::Lifecycle => cx.registry(self.at, true),
             EntityField::HandedZones => cx.handed_zones(self.module),
+            EntityField::Door => cx.door(self.module, self.at),
             EntityField::Field(field) => self.label_only(field),
             EntityField::Unknown => Value::Unknown,
         }

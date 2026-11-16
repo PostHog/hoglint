@@ -123,7 +123,7 @@ class MigrationItems(Items):
         cache = SummaryCache(cache_root() / PACKS)
         graph = MigrationReader(run.reader, run.apps, run.config, cache).read(projection)
         aliases = {app: sorted(found) for app, found in graph.aliases.items()}
-        return ItemOutput(list(MigrationEdges(graph, run.reader.external).produce()), aliases)
+        return ItemOutput(list(MigrationEdges(graph).produce()), aliases)
 
     def take(self, key: str, data: Any) -> None:
         self.run.aliases = {app: frozenset(found) for app, found in data.items()}
@@ -275,6 +275,11 @@ class DjangoPack:
 
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
         return FACT_NEEDS
+
+    def path_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
+        """The settings modules: Django imports every dotted path a setting holds, wherever the
+        string stands in the module."""
+        return DjangoPackConfig.from_section(section).settings_modules
 
     def whole_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
         """The settings modules: a list one of them hands another moves the setting name the

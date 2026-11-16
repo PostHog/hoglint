@@ -287,16 +287,17 @@ def test_an_app_config_import_runs_later_only_outside_the_ready_body(body: str, 
     assert watched.imported_only_in_callbacks(body, "products.shop.backend.audit", "products.shop.backend") is later
 
 
-def test_a_migration_edge_hoglint_lacks_is_explained_only_for_an_app_it_does_not_read() -> None:
+def test_a_migration_edge_hoglint_lacks_is_explained_only_when_a_third_party_app_is_an_end() -> None:
     old = {
         "crossings": ["shop.0002_x -> posthog.0001_initial"],
         "edges": [
             ["shop.0002_x", "posthog.0001_initial"],
             ["shop.0002_x", "shop.0001_initial"],
+            ["shop.0002_x", "vendor.0001_initial"],
             ["vendor.0002_y", "vendor.0001_initial"],
         ],
         "aliases": {"shop": ["shop_db_writer"], "posthog": ["default"]},
-        "app_modules": {"vendor": "vendor_app", "shop": "products.shop"},
+        "app_modules": {"vendor": "vendor_app", "shop": "products.shop", "posthog": "posthog"},
     }
     hoglint = facts(
         findings=[FindingRow("migration-database", ("shop.0002_x", "posthog.0001_initial"))],
@@ -307,6 +308,7 @@ def test_a_migration_edge_hoglint_lacks_is_explained_only_for_an_app_it_does_not
 
     assert reasons(comparison) == {
         "edge shop.0002_x -> shop.0001_initial": None,
-        "edge vendor.0002_y -> vendor.0001_initial": migrations.UNREAD_PACKAGE,
+        "edge shop.0002_x -> vendor.0001_initial": migrations.THIRD_PARTY_APP,
+        "edge vendor.0002_y -> vendor.0001_initial": migrations.THIRD_PARTY_APP,
     }
     assert [m.item for m in comparison.matches] == ["crossing shop.0002_x -> posthog.0001_initial"]

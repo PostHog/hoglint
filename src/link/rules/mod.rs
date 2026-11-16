@@ -822,6 +822,7 @@ impl Rules {
             .iter()
             .filter_map(|kind| link.kind_sid(kind))
             .collect();
+        let rebind = link.kind_sid("rebind");
         let ids: Vec<u32> = kinds
             .iter()
             .flat_map(|&kind| module_scope_imports(link, kind, module))
@@ -842,6 +843,11 @@ impl Rules {
                 return Handed::Unknown;
             }
             for target in edges.targets_of(id) {
+                // A rebind of a class's member (`Kind = Model.Kind`) hands out the member, not
+                // the module it is defined in: no capability by what it hands out.
+                if Some(edges.kind_of(id)) == rebind && link.core.it.s(target.s).contains('.') {
+                    continue;
+                }
                 targets.push((link.core.ent_text(*target), res == Res::External));
             }
         }
@@ -1400,8 +1406,9 @@ fn known_kinds(link: &Link, names: &[String]) -> Option<Vec<Sid>> {
 }
 
 /// What an entrypoint rule sees past what every edge rule sees: `rows` less those of each
-/// reference edge whose module has an import edge with the same surface that the rule reports
-/// (a row is reported: it is not clean). Keeps the order of `rows`.
+/// reference edge whose module has an import edge the rule reports (a row is reported: it is not
+/// clean) with the same surface or a dotted prefix of it: a use through an imported module
+/// (`module.Name`) is judged at the module's import. Keeps the order of `rows`.
 fn uses_at_import(link: &Link, rows: Vec<Row>) -> Vec<Row> {
     let (Some(import), Some(reference)) = (link.kind_sid("import"), link.kind_sid("reference"))
     else {
@@ -1415,10 +1422,29 @@ fn uses_at_import(link: &Link, rows: Vec<Row>) -> Vec<Row> {
         .collect();
     rows.into_iter()
         .filter(|row| {
-            edges.kind_of(row.edge) != reference
-                || !reported.contains(&(link.module_of_edge(row.edge), edges.surface_of(row.edge)))
+            edges.kind_of(row.edge) != reference || !judged_at_import(link, &reported, row.edge)
         })
         .collect()
+}
+
+/// Whether a reference edge's surface, or a dotted prefix of it, is the surface of a reported
+/// import of the edge's module.
+pub fn judged_at_import(link: &Link, reported: &FxHashSet<(Sid, Sid)>, id: u32) -> bool {
+    let module = link.module_of_edge(id);
+    let it = &link.core.it;
+    let mut text = it.s(link.edges.surface_of(id));
+    loop {
+        if it
+            .get(text)
+            .is_some_and(|surface| reported.contains(&(module, surface)))
+        {
+            return true;
+        }
+        match text.rsplit_once('.') {
+            Some((head, _)) => text = head,
+            None => return false,
+        }
+    }
 }
 
 /// `rows`, grouped by edge in id order (`edges` lists each edge once), with the edges put in

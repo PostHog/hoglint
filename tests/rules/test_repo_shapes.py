@@ -68,9 +68,8 @@ def test_posthog_preset_products_zones_exports_and_isolated(tmp_path: Path) -> N
     assert found(result, "presentation-uses-facade") == [
         ("products.alerts.backend.presentation.views", "products.billing.backend.logic")
     ]
-    assert found(result, "model-crossings") == [
-        ("products.billing.backend.models.Invoice", "products.alerts.backend.logic", "write(save)")
-    ]
+    # The model came in past billing's export: the coupling is public-surface's row above (A5).
+    assert found(result, "model-crossings") == []
     assert found(result, "foundation-direction") == [("access_control", "alerts")]
     assert found(result, "infrastructure-direction") == [("egress", "billing")]
     assert found(result, "leaves-stay-leaves") == [("packages.owners_yaml.resolver", "django.db")]
@@ -204,7 +203,7 @@ def test_posthog_preset_seals_relations_between_packages_but_not_onto_a_third_pa
     ]
 
 
-def test_posthog_preset_gives_only_django_migration_files_the_migration_context(tmp_path: Path) -> None:
+def test_posthog_preset_gives_only_migration_folders_the_migration_context(tmp_path: Path) -> None:
     config = shape_config(tmp_path, "posthog")
     globs = GraphSource.core_config(config).migration_globs
     migrations = {
@@ -214,7 +213,7 @@ def test_posthog_preset_gives_only_django_migration_files_the_migration_context(
         "products/tasks/backend/migrations/0001_initial.py": True,
         "posthog/clickhouse/migrations/0001_initial.py": False,
         "posthog/async_migrations/migrations/0005_person.py": False,
-        "posthog/rbac/migrations/rbac_team_migration.py": False,
+        "posthog/rbac/migrations/rbac_team_migration.py": True,
         "posthog/models/team/team.py": False,
     }
     assert {path: globs.matches(path) for path in migrations} == migrations
@@ -231,15 +230,12 @@ PUBLIC_SURFACE_CASES = [
         [("products.billing.backend.logic.charge", "posthog.api.thing", "import")],
     ),
     (
-        "a use through an imported module keeps its own row",
+        "a use through an imported module is judged at the module's import",
         [
             ("import", "posthog.api.thing", "products.billing.backend.logic", (Context.PROD,)),
             ("reference", "posthog.api.thing", "products.billing.backend.logic.charge", (Context.PROD,)),
         ],
-        [
-            ("products.billing.backend.logic", "posthog.api.thing", "import"),
-            ("products.billing.backend.logic.charge", "posthog.api.thing", "reference"),
-        ],
+        [("products.billing.backend.logic", "posthog.api.thing", "import")],
     ),
     (
         "a Django or ClickHouse migration is frozen history; other migration folders are not",
@@ -447,10 +443,13 @@ def test_posthog_preset_lets_a_model_cross_only_in_shapes_that_hold_no_instance(
         ("passed-as-class", "build"),
         ("instance-many", "filter"),
     ]
-    builder = GraphBuilder().module("products.billing.backend.models", "posthog.api.thing")
+    builder = GraphBuilder().package("products.billing.backend.facade")
+    builder.module("products.billing.backend.models", "products.billing.backend.facade.api", "posthog.api.thing")
     builder.symbol(invoice, "model", abstract="false")
+    # Through the facade, which hands the model out: a use past the export would be public-surface's (A5).
+    door = "products.billing.backend.facade.api.Invoice"
     for line, (shape, detail) in enumerate(shapes, start=1):
-        builder.edge("reference", "posthog.api.thing", invoice, shape=shape, detail=detail, line=line)
+        builder.edge("reference", "posthog.api.thing", invoice, door, shape=shape, detail=detail, line=line)
     result = run_shape(tmp_path, "posthog", builder.graph)
     assert [f.identity[2] for f in result.runs["model-crossings"].findings] == [
         "passed-as-class(build)",

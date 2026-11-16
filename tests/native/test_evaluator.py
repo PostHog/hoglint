@@ -34,7 +34,7 @@ from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules.base import subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
 from hoglint.rules.exports import ExportPrimitive, SlotRule
-from hoglint.selectors import Selector
+from hoglint.selectors import NONE, UNKNOWN, Selector
 
 from native.require import native_module
 
@@ -976,8 +976,9 @@ JUDGED_AT_THE_IMPORT = CORNERS["uses-judged-at-their-import"]
 # cover, because the rule tells the two apart, is judged on its own.
 USES_AT_IMPORT_CASES = {
     "every use, without the key": ({"uses_at_import": False}, EVERY_USE, True),
-    # A use of a name the module imports goes; a use through an imported module stays.
-    "the key": ({}, {(INVOICE, "core.c")}, True),
+    # A use of a name the module imports goes, and so does a use through an imported module whose
+    # import the rule reports.
+    "the key": ({}, set(), True),
     "a deny that reads the edge kind": (
         {"deny": "dst.tier == 'product' and edge.kind == 'reference'"},
         EVERY_USE,
@@ -1814,6 +1815,26 @@ def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, ba
         for name in ("registry", "lifecycle"):
             assert native.labeler.builtin(module, None, name) == python.builtin(module, None, name)
     assert sorted(native.labeler.conflicts) == sorted(python.conflicts)
+
+
+# A field whose domain is the door packages: the fixture's exports with `within = "products/{product}"`
+# and one more with a literal `within`, whatever their `paths` say.
+LOADER_EXPORT = '\n[exports.loader]\nwithin = "core"\npaths = ["loader.py"]\nshape = "contract"\n'
+DOORWAY = '[fields]\ndoorway = { type = "string", required_on = "door == true" }\n'
+DOOR_DOMAIN = CONFIG.replace("[fields]\n", DOORWAY) + LOADER_EXPORT
+
+
+def test_a_domain_reads_door_from_the_exports_within_in_both_labelers(world: World) -> None:
+    config = world.config("", DOOR_DOMAIN)
+    native = world.context(config)
+    native.find_conflicts()
+    python = Labeler(config, world.graph, world.repo, native.labeler.index)
+    for module, path in world.graph.modules.items():
+        # `products/__init__.py` is in no product's directory.
+        inside = path.startswith("core/") or (path.startswith("products/") and path != "products/__init__.py")
+        expected = UNKNOWN if inside else NONE
+        assert native.labeler.field_value(module, None, "doorway")[0] == expected, module
+        assert python.field_value(module, None, "doorway")[0] == expected, module
 
 
 COVERED = rule_table("named", {**EDGE, "kinds": ["import", "uses"], "deny": "dst.package != src.package"}) + rule_table(
