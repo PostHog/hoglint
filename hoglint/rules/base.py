@@ -200,6 +200,11 @@ class RuleContext:
         """The roots `within` names among the graph's module paths, sorted."""
         raise NotImplementedError
 
+    def defined_in(self, paths: list[str]) -> list[list[str] | None]:
+        """The declarations (`function`, `class`) of the symbols the module of each path defines,
+        sorted; None for a path that no graph module has."""
+        raise NotImplementedError
+
     def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
         """The graph's (module, path) whose path `pattern` matches, by module."""
         raise NotImplementedError

@@ -506,6 +506,10 @@ class NativeRuleContext(RuleContext):
         with engine_errors():
             return self.evaluator.layout_roots(within)
 
+    def defined_in(self, paths: list[str]) -> list[list[str] | None]:
+        with engine_errors():
+            return self.evaluator.defined_in(paths)
+
     def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
         with engine_errors():
             return self.evaluator.registry_modules(pattern)

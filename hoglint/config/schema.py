@@ -113,6 +113,8 @@ SELECTOR_MARKERS = ("==", "!=", " in ", "startswith", "subset_of", " and ", " or
 # The most exports a config declares: the evaluator keeps a module's exports as the bits of one
 # 64-bit word, so the schema rejects a config with more before a run starts.
 MAX_EXPORTS = 64
+# The declarations a layout rule's required file may name after a colon, as `decl` reads them.
+FILE_DECLS = ("function", "class")
 # Entity attributes that only a symbol has: a module field's domain cannot read them.
 SYMBOL_ATTRIBUTES = frozenset({"symbol", "decl", "kind"})
 
@@ -160,7 +162,7 @@ SHAPE_KEYS = frozenset(
 )
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
-LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict"})
+LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group"})
 LEDGER_KEYS = frozenset({"file", "exceptions"})
 ROLE_KEYS = frozenset({"owner", "group"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
@@ -221,6 +223,13 @@ def unread_keys(rule: type[RuleType]) -> frozenset[str]:
     no meaning, so a config may not set it (D52)."""
     unread = RULE_KEYS[rule.PRIMITIVE] - rule.READS - EVERY_RULE_READS
     return unread - UNREAD_ACCEPTED.get(rule.MODE, frozenset())
+
+
+def required_file(entry: str) -> tuple[str, str]:
+    """A layout rule's `files` entry as (path, declaration): `path`, or `path: declaration` for a
+    file that must define a symbol with that declaration. The declaration is empty for none."""
+    path, _, decl = entry.partition(":")
+    return path.strip(), decl.strip()
 
 
 class SchemaBuilder:
@@ -976,6 +985,10 @@ class SchemaBuilder:
         inputs = table.get("inputs", {})
         if primitive == "coverage":
             inputs = self.read_inputs(f"{key}.inputs", inputs)
+        for entry in as_tuple(table.get("files")):
+            _, decl = required_file(entry)
+            if decl and decl not in FILE_DECLS:
+                self.fail(key, f"files entry {entry!r} names {decl!r}; a required file defines one of {FILE_DECLS}")
         if primitive == "inventory" and not (classify or table.get("exactly_one")):
             self.fail(key, "an inventory needs `classify` (edges) or `exactly_one` (entities)")
         return RuleSpec(
@@ -1045,6 +1058,10 @@ class SchemaBuilder:
             for rule_id in strict:
                 if rule_id not in requires:
                     self.fail(key, f"strict rule {rule_id!r} must also be in `requires`")
+            within_group = as_tuple(table.get("within_group"))
+            for rule_id in within_group:
+                if rule_id not in requires:
+                    self.fail(key, f"within_group rule {rule_id!r} must also be in `requires`")
             out[name] = LevelSpec(
                 name,
                 group_by,
@@ -1053,6 +1070,7 @@ class SchemaBuilder:
                 self.parse(f"{key}.select", table.get("select"), self.entity_catalog()),
                 strict,
                 self.source(key),
+                within_group,
             )
         return out
 

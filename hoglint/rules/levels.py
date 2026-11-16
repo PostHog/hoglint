@@ -7,6 +7,8 @@ A level is specified apart from lint acceptance:
   `strict` forbids the level even when the ledger accepts it.
 - Exceptions make a use allowed, so an allowed finding does not count against the group. They
   never remove impact edges; test selection reads edges, not this result.
+- A row of a rule in `within_group` counts only when its subjects do not fall in two or more
+  groups: a row between two groups is a lint matter only.
 """
 
 from __future__ import annotations
@@ -118,6 +120,7 @@ class LevelEvaluator:
 
     def collect(self, rule_id: str, run: RuleRun, reasons: dict[str, list[Block]]) -> None:
         strict = rule_id in self.spec.strict
+        within_group = rule_id in self.spec.within_group
         table = run.findings
         unknown = table.unknown
         # A ledgered finding blocks only when it is unknown or its rule is strict.
@@ -127,7 +130,10 @@ class LevelEvaluator:
                 continue
             why = "unknown" if unknown[row] else "strict, so the ledger does not excuse it" if strict else "new finding"
             identity = table.identity(row)
-            for group in {self.group_of(subject) for subject in table.subjects(row)}:
+            groups = {self.group_of(subject) for subject in table.subjects(row)}
+            if within_group and len(groups - {None}) > 1:
+                continue
+            for group in groups:
                 if group in reasons:
                     reasons[group].append(Block(rule_id, why, identity, table=table, row=row))
         for item in run.incomplete:

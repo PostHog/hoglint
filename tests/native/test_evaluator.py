@@ -1983,6 +1983,70 @@ def test_a_set_a_provider_gives_a_text_field_reads_as_its_sorted_items(world: Wo
     assert lead in [*level.passing, *level.failing]
 
 
+# Rows between two first-party packages, and rows inside one package across zones.
+WITHIN_GROUP = rule_table(
+    "crossing", {**EDGE, "kinds": ["import"], "deny": "dst.package != src.package and dst.external == none"}
+) + rule_table("inside", {**EDGE, "kinds": ["import"], "deny": "dst.package == src.package and dst.zone != src.zone"})
+
+
+@pytest.mark.parametrize("within_group", [False, True])
+def test_a_level_reads_a_within_group_rule_only_inside_one_group(world: World, within_group: bool) -> None:
+    level = '\n[levels.own]\ngroup_by = "package"\nrequires = ["crossing", "inside"]\nstrict = ["crossing", "inside"]\n'
+    if within_group:
+        level += 'within_group = ["crossing", "inside"]\n'
+    result = Engine(world.config(WITHIN_GROUP + level), world.graph, world.repo).evaluate().levels["own"]
+    reasons = [reason for found in result.failing.values() for reason in found]
+    # A row whose destination did not resolve names one group: it still counts.
+    known = {reason.split(":")[0] for reason in reasons if ": unknown: " not in reason}
+    assert known == ({"inside"} if within_group else {"crossing", "inside"})
+    assert any(reason.startswith("crossing: unknown: ") for reason in reasons)
+    assert any(reason.startswith("inside: ") for reason in result.failing["billing"])
+
+
+FACADE_FILES = {
+    "primitive": "layout",
+    "within": "products/{product}",
+    "files": [
+        "backend/{facade,nowhere}",
+        "backend/facade/{contracts.py,contracts}",
+        "backend/facade/api.py: function",
+        "backend/facade/__init__.py: function",
+        "backend/presentation/views.py: class",
+        "backend: function",
+    ],
+    "ledger": False,
+}
+
+
+def test_a_required_file_may_have_alternatives_and_name_what_it_defines(world: World) -> None:
+    rows = world.rows(world.config(rule_table("facade-files", FACADE_FILES)), "facade-files")
+    findings = sorted(message for _, message, _, _, _ in rows[: len(rows) - 3])
+    assert findings == [
+        "products/alerts lacks backend/facade/{contracts.py,contracts}",
+        "products/alerts lacks backend/presentation/views.py",
+        "products/alerts/backend/facade/__init__.py defines no function",
+        "products/billing/backend/facade/__init__.py defines no function",
+        "products/é lacks backend/facade/__init__.py",
+        "products/é lacks backend/facade/api.py",
+        "products/é lacks backend/facade/{contracts.py,contracts}",
+        "products/é lacks backend/presentation/views.py",
+        "products/é lacks backend/{facade,nowhere}",
+    ]
+    assert sorted(row[0] for row in rows[len(rows) - 3 :]) == [
+        "products/alerts/backend",
+        "products/billing/backend",
+        "products/é/backend",
+    ]
+
+
+def test_a_root_without_init_is_its_namespace_directory(world: World) -> None:
+    rule = {"primitive": "layout", "within": "products/alerts/backend/{part}", "files": ["nowhere.py"], "ledger": False}
+    config = world.config(rule_table("parts", rule))
+    run = primitive_of(config.rules["parts"])(world.context(config), config.rules["parts"]).evaluate()
+    subjects = {finding.message: finding.subjects for finding in run.findings}
+    assert subjects["products/alerts/backend/queries lacks nowhere.py"] == ("products.alerts.backend.queries",)
+
+
 def problems(world: World, config: Config) -> list[str]:
     """The problems of the config error a whole evaluation stops with, or none."""
     try:

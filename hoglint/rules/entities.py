@@ -6,6 +6,8 @@ from typing import Any
 
 from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
+from hoglint.config.schema import required_file
+from hoglint.globs import alternatives
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY
 from hoglint.rules.base import EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, RuleType, Seen, project
 from hoglint.rules.plan import identity_paths, selector_tree, tree
@@ -93,7 +95,8 @@ class EntityRule(RuleType):
 
 
 class LayoutPrimitive(EntityRule):
-    """Required files and zones exist, moved files are gone, selected entities meet `require`."""
+    """Required files and zones exist, moved files are gone, selected entities meet `require`.
+    A required file may also have to define a function or a class."""
 
     PRIMITIVE = MODE = "layout"
     NATIVE_MODE = "entities"
@@ -116,12 +119,22 @@ class LayoutPrimitive(EntityRule):
             return subject
         return f"{subject} does not meet `{self.spec.require.source}`"
 
+    def root_module(self, root: str, namespaces: dict[str, str]) -> str | None:
+        """The module that stands for a root: its `__init__.py`, else the root as a namespace
+        directory (`namespaces`: directory -> its dotted name), so a finding there has a package."""
+        module = self.ctx.labeler.path_to_module.get(f"{root}/__init__.py")
+        return module if module is not None else namespaces.get(root)
+
     def check_files(self) -> None:
         """Whether a file exists is a question about the snapshot: in a run of a git tree the
-        tree's path list answers it, never the working tree."""
+        tree's path list answers it, never the working tree. A required file may have `{a,b}`
+        alternatives, and may name a declaration it must define, which the evaluator answers once
+        for every root."""
         repo = self.ctx.repo_root
+        namespaces = {directory: name for name, directory in self.ctx.labeler.namespaces.directory_of.items()}
+        defining: list[tuple[str, str | None, str]] = []
         for root in self.ctx.layout_roots(self.spec.within):
-            module = self.ctx.labeler.path_to_module.get(f"{root}/__init__.py")
+            module = self.root_module(root, namespaces)
             resolve = self.resolver(module, None, root)
             if self.spec.select is not None and self.spec.select.evaluate(resolve) is not Truth.TRUE:
                 continue
@@ -129,13 +142,18 @@ class LayoutPrimitive(EntityRule):
                 if repo is None:
                     self.incomplete(root, module, "no repo root to check files against")
                     break
-                if not PLUGIN_ROOTS.holds(repo, f"{root}/{required.strip('/')}"):
+                path, decl = required_file(required)
+                held = [f"{root}/{choice.strip('/')}" for choice in alternatives(path)]
+                held = [found for found in held if PLUGIN_ROOTS.holds(repo, found)]
+                if not held:
                     self.emit(
-                        f"{root}/{required}",
+                        f"{root}/{path}",
                         module,
-                        f"{root} lacks {required}",
-                        self.resolver(module, None, f"{root}/{required}"),
+                        f"{root} lacks {path}",
+                        self.resolver(module, None, f"{root}/{path}"),
                     )
+                elif decl:
+                    defining.append((held[0], module, decl))
             for forbidden in self.spec.absent:
                 if repo is not None and PLUGIN_ROOTS.holds(repo, f"{root}/{forbidden.strip('/')}"):
                     self.emit(
@@ -144,6 +162,18 @@ class LayoutPrimitive(EntityRule):
                         f"{root}/{forbidden} must be gone",
                         self.resolver(module, None, f"{root}/{forbidden}"),
                     )
+        if defining:
+            self.check_defined(defining)
+
+    def check_defined(self, defining: list[tuple[str, str | None, str]]) -> None:
+        """Each (path, root module, declaration): the file defines a symbol with that declaration.
+        A file no graph module has cannot be told."""
+        found = self.ctx.defined_in([path for path, _, _ in defining])
+        for (path, module, decl), decls in zip(defining, found, strict=True):
+            if decls is None:
+                self.incomplete(path, module, f"no module has the path {path}, so what it defines cannot be told")
+            elif decl not in decls:
+                self.emit(path, module, f"{path} defines no {decl}", self.resolver(module, None, path))
 
     def check_registry(self, registry: RegistrySpec) -> None:
         facts = self.ctx.labeler.facts

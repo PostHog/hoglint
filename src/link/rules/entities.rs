@@ -1,6 +1,6 @@
 //! Rules over entities (hoglint/rules/entities.py): a layout rule's `select` and `require` on
 //! every module or symbol, an inventory's `exactly_one`, the roots a layout rule's `within`
-//! names, and the modules a registry's glob holds.
+//! names, what a layout rule's required files define, and the modules a registry's glob holds.
 
 use super::env::{Cx, EntityEnv};
 use super::glob::{Glob, fill};
@@ -11,6 +11,8 @@ use super::value::{Truth, Value, render};
 use super::{RuleKind, Rules};
 use crate::link::Link;
 use crate::link::intern::Sid;
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 
 /// A rule over entities: a layout rule or an entity inventory.
 pub struct EntityRule {
@@ -230,6 +232,30 @@ impl Rules {
         out.sort();
         out.dedup();
         Ok(out)
+    }
+
+    /// The declarations (`function`, `class`) of the symbols the core declares in the module of
+    /// each path, sorted; None for a path that no graph module has. A layout rule's required file
+    /// that names a declaration reads it (`LayoutPrimitive.check_files`).
+    pub fn defined_in(&self, link: &Link, paths: &[String]) -> Vec<Option<Vec<String>>> {
+        let mut found: FxHashMap<&str, BTreeSet<&'static str>> = (0..self.modules.len() as u32)
+            .map(|at| (self.module_path(link, at), BTreeSet::new()))
+            .collect();
+        // The kind of a def as `graph.symbols` keeps it: 0 def, 1 async def, 2 class.
+        for &(_, kind, file) in &link.symbols.order {
+            let path: &str = &link.core.facts.files[file as usize].path;
+            if let Some(decls) = found.get_mut(path) {
+                decls.insert(if kind == 2 { "class" } else { "function" });
+            }
+        }
+        paths
+            .iter()
+            .map(|path| {
+                found
+                    .get(path.as_str())
+                    .map(|decls| decls.iter().map(|decl| decl.to_string()).collect())
+            })
+            .collect()
     }
 
     /// The graph's (module, path) whose path a registry's `module` glob matches, by module name

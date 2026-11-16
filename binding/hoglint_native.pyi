@@ -246,6 +246,9 @@ class Rules:
         """Every name a kind holds, sorted."""
     def layout_roots(self, within: str) -> list[str]:
         """The roots a layout rule's `within` names among the graph's module paths, sorted."""
+    def defined_in(self, paths: list[str]) -> list[list[str] | None]:
+        """The declarations (`function`, `class`) of the symbols the module of each path defines,
+        sorted; None for a path that no graph module has."""
     def registry_modules(self, pattern: str) -> list[tuple[str, str]]:
         """The graph's (module, path) whose path a registry's `module` glob matches, by module."""
     def passing(self, kinds: list[str], selector: str) -> bytes:
