@@ -245,6 +245,11 @@ text = "products.catalog.backend.facade.handout exports scripts.shapes.ExternalV
 
 [[finding]]
 rule = "export-shape"
+identity = ["products.catalog.backend.logic.limits.PAGE_SIZE", "products.catalog.backend.facade.limits", "export-unknown"]
+text = "products.catalog.backend.facade.limits exports products.catalog.backend.logic.limits.PAGE_SIZE: export-unknown"
+
+[[finding]]
+rule = "export-shape"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.models", "export-denied(model)"]
 text = "products.catalog.backend.facade.models exports products.catalog.backend.models.CatalogEntry: export-denied(model)"
 
@@ -425,6 +430,51 @@ text = "products.catalog.backend.facade.api.import_command exposes products.cata
 
 [[finding]]
 rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "first_entry", "param:entries", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.first_entry exposes products.catalog.backend.models.CatalogEntry in param:entries"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "first_entry", "return", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.first_entry exposes products.catalog.backend.models.CatalogEntry in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "echo", "param:value", "products.catalog.backend.facade.generics.AnyT"]
+text = "products.catalog.backend.facade.generics.echo exposes products.catalog.backend.facade.generics.AnyT in param:value; cannot tell, unassigned: dst.kind"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "echo", "return", "products.catalog.backend.facade.generics.AnyT"]
+text = "products.catalog.backend.facade.generics.echo exposes products.catalog.backend.facade.generics.AnyT in return; cannot tell, unassigned: dst.kind"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "entry_note", "param:props", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.entry_note exposes products.catalog.backend.models.CatalogEntry in param:props"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "newest", "param:entries", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.newest exposes products.catalog.backend.models.CatalogEntry in param:entries"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "newest", "return", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.generics.newest exposes products.catalog.backend.models.CatalogEntry in return"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "same", "param:value", "products.catalog.backend.facade.generics.V"]
+text = "exposes 'products.catalog.backend.facade.generics.V' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.generics", "same", "return", "products.catalog.backend.facade.generics.V"]
+text = "exposes 'products.catalog.backend.facade.generics.V' did not resolve"
+
+[[finding]]
+rule = "facade-signature"
 identity = ["products.catalog.backend.facade.handout", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 text = "products.catalog.backend.facade.handout.InternalView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
 
@@ -437,6 +487,21 @@ text = "products.catalog.backend.facade.handout.SandboxView.__init__ exposes pro
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.handout", "ToolView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
 text = "products.catalog.backend.facade.handout.ToolView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.lazy_types", "EntryRef", "alias", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.lazy_types.EntryRef exposes products.catalog.backend.models.CatalogEntry in alias"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.limits", "ENTRY_KINDS", "constant", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.limits.ENTRY_KINDS exposes products.catalog.backend.models.CatalogEntry in constant"
+
+[[finding]]
+rule = "facade-signature"
+identity = ["products.catalog.backend.facade.limits", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
+text = "products.catalog.backend.facade.limits.MaybeEntry exposes products.catalog.backend.models.CatalogEntry in alias"
 
 [[finding]]
 rule = "facade-signature"

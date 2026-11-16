@@ -17,8 +17,9 @@ pub enum V {
     /// `{"s": text}`, with `sa` (the parsed text of a string annotation) when the key is there.
     Str(Sid, Option<Box<V>>),
     /// `{"call": callee, ...}`, also the over-budget form `{"call": callee, "o": "big"}`; true
-    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example); the one
-    /// positional argument, when the call has exactly one (`sorted(_LAZY)`).
+    /// when the keywords pass `frozen=True` (a frozen dataclass decorator, for example); the
+    /// argument a reader needs: the one positional argument of a copy or a builtin constructor
+    /// (`sorted(_LAZY)`), or what a `TypeVar` or a `TypedDict` call declares (`type_argument`).
     Call(Box<V>, bool, Option<Box<V>>),
     Attr(Box<V>, Sid),
     Sub(Box<V>, Box<V>),
@@ -105,6 +106,8 @@ pub struct Def {
     pub stub: bool,
     /// A method's assignments to attributes of its first parameter, in source order.
     pub attrs: Vec<SelfAttr>,
+    /// The PEP 695 type parameters, each with its bound or its tuple of constraints.
+    pub type_params: Vec<(Sid, Option<V>)>,
 }
 
 impl Def {
@@ -424,6 +427,37 @@ fn frozen_keyword(keywords: Option<&J>) -> bool {
     })
 }
 
+/// The argument a call that declares a type keeps, by the callee's last name: a `TypeVar`'s
+/// `bound`, else its constraints as a tuple; a `TypedDict`'s fields, its second argument. Whether
+/// the callee is the `typing` one is the reader's to tell.
+fn type_argument(
+    it: &mut Interner,
+    callee: &str,
+    args: Option<&J>,
+    kws: Option<&J>,
+) -> Option<Box<V>> {
+    let args = args.and_then(J::as_array).map_or(&[][..], Vec::as_slice);
+    let kept = match callee.rsplit('.').next()? {
+        "TypeVar" => {
+            let bound = kws
+                .and_then(J::as_array)
+                .into_iter()
+                .flatten()
+                .find(|pair| row(pair, 0).as_str() == Some("bound"));
+            match bound {
+                Some(pair) => value(it, row(pair, 1)),
+                None if args.len() > 1 => {
+                    V::Tuple(args[1..].iter().map(|a| value(it, a)).collect())
+                }
+                None => return None,
+            }
+        }
+        "TypedDict" => value(it, args.get(1)?),
+        _ => return None,
+    };
+    Some(Box::new(kept))
+}
+
 pub fn value(it: &mut Interner, json: &J) -> V {
     match json {
         J::Null => V::Null,
@@ -447,7 +481,10 @@ pub fn value(it: &mut Interner, json: &J) -> V {
                     Some(J::Array(args)) if (copy || constructor) && args.len() == 1 => {
                         Some(Box::new(value(it, &args[0])))
                     }
-                    _ => None,
+                    _ => match callee {
+                        J::String(name) => type_argument(it, name, map.get("args"), map.get("kw")),
+                        _ => None,
+                    },
                 };
                 return V::Call(
                     Box::new(value(it, callee)),
@@ -670,6 +707,18 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                     }
                 })
                 .collect();
+            let type_params = rows(&d["tp"])
+                .iter()
+                .map(|t| {
+                    let bound = row(t, 1);
+                    let bound = if bound.is_null() {
+                        None
+                    } else {
+                        Some(value(it, bound))
+                    };
+                    (it.intern(text(row(t, 0))), bound)
+                })
+                .collect();
             let kind = match text(&d["k"]) {
                 "class" => DefKind::Class,
                 "async" => DefKind::Async,
@@ -688,6 +737,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 ret,
                 stub: d["stub"].as_bool().unwrap_or(false),
                 attrs,
+                type_params,
             }
         })
         .collect();

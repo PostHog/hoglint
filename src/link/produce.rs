@@ -9,9 +9,12 @@ use super::resolve::{
 };
 use super::rules::glob::ExportPaths;
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
-use super::surface::{ALL_CLAUSE, HandOut, HandedOut, star_names};
+use super::surface::{
+    ALL_CLAUSE, HandOut, Handed, HandedOut, LAZY_CLAUSE, annotated_constant, star_names,
+};
 use super::trace::{Kind, Memo};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 use std::rc::Rc;
 
 pub const KIND_NAMES: [&str; 10] = [
@@ -371,6 +374,14 @@ struct Keys {
     staticmethod: Sid,
     fields: Sid,
     class_var: Sid,
+    constant: Sid,
+    /// The callees that declare a type variable or a typed dict by a call.
+    type_vars: [Sid; 2],
+    typed_dicts: [Sid; 2],
+    /// The last names of the wrappers a typed dict's field type is read through.
+    field_wrappers: [Sid; 3],
+    dict_name: Sid,
+    str_name: Sid,
 }
 
 impl Producing {
@@ -454,6 +465,22 @@ impl Producing {
             staticmethod: it.intern("builtins.staticmethod"),
             fields: it.intern("fields"),
             class_var: it.intern("ClassVar"),
+            constant: it.intern("constant"),
+            type_vars: [
+                it.intern("typing.TypeVar"),
+                it.intern("typing_extensions.TypeVar"),
+            ],
+            typed_dicts: [
+                it.intern("typing.TypedDict"),
+                it.intern("typing_extensions.TypedDict"),
+            ],
+            field_wrappers: [
+                it.intern("Required"),
+                it.intern("NotRequired"),
+                it.intern("ReadOnly"),
+            ],
+            dict_name: it.intern("dict"),
+            str_name: it.intern("str"),
         };
         Producing {
             names: LookupNames {
@@ -695,6 +722,53 @@ fn named_in(wanted: &[Sid], surface: Sid, target: Option<Sid>) -> bool {
 /// subscript or a union (`a | b`).
 fn alias_value(value: &V) -> bool {
     matches!(value, V::Chain(_) | V::Attr(..) | V::Sub(..) | V::Bin(..))
+}
+
+/// The union of type expressions, as `a | b | c` reads; a part no type expression reads when
+/// there are none.
+fn union(items: &[V]) -> V {
+    items
+        .iter()
+        .cloned()
+        .reduce(|left, right| V::Bin(true, Box::new(left), Box::new(right)))
+        .unwrap_or(V::Other)
+}
+
+/// A type expression with each bare name a PEP 695 type parameter binds replaced by its bound,
+/// also inside a string annotation. A tuple of constraints reads as their union.
+fn substitute(value: &V, bounds: &[(Sid, V)]) -> V {
+    let each = |items: &[V]| items.iter().map(|item| substitute(item, bounds)).collect();
+    match value {
+        V::Chain(name) => match bounds.iter().find(|(param, _)| param == name) {
+            Some((_, V::Tuple(items))) => union(items),
+            Some((_, bound)) => bound.clone(),
+            None => value.clone(),
+        },
+        V::Str(text, Some(parsed)) => V::Str(*text, Some(Box::new(substitute(parsed, bounds)))),
+        V::Sub(inner, index) => V::Sub(
+            Box::new(substitute(inner, bounds)),
+            Box::new(substitute(index, bounds)),
+        ),
+        V::Bin(pipe, l, r) => V::Bin(
+            *pipe,
+            Box::new(substitute(l, bounds)),
+            Box::new(substitute(r, bounds)),
+        ),
+        V::Tuple(items) => V::Tuple(each(items)),
+        V::List(items) => V::List(each(items)),
+        V::Star(inner) => V::Star(Box::new(substitute(inner, bounds))),
+        _ => value.clone(),
+    }
+}
+
+/// An annotation as its PEP 695 type parameters' bounds make it (`substitute`); as written when
+/// no parameter has a bound.
+fn bounded<'v>(annotation: &'v V, bounds: &[(Sid, V)]) -> Cow<'v, V> {
+    if bounds.is_empty() {
+        Cow::Borrowed(annotation)
+    } else {
+        Cow::Owned(substitute(annotation, bounds))
+    }
 }
 
 /// Whether a class base is a call, also under a subscript: `make()`, `make()[T]`.
@@ -1250,14 +1324,90 @@ impl Producers<'_> {
             self.aliases.insert(module, found);
         }
         let (file, at) = *self.aliases[&module].get(&name)?;
-        let value = self.core.facts.files[file as usize].assigns[at as usize]
-            .value
-            .as_ref()?;
-        if !alias_value(value) {
+        if !self.stands_for_type(file, at) {
             return None;
         }
         self.alias_rows(module, name)?;
         Some((file, at))
+    }
+
+    /// Whether the module-level assignment at (file, row) is one the producer expands as a type
+    /// alias: its value is one (`alias_value`), or a call that declares a type (`declared_type`).
+    fn stands_for_type(&mut self, file: u32, at: u32) -> bool {
+        let facts = self.core.facts.clone();
+        let Some(value) = &facts.files[file as usize].assigns[at as usize].value else {
+            return false;
+        };
+        alias_value(value) || self.declared_type(file, at).is_some()
+    }
+
+    /// The type a module-level `TypeVar` or functional `TypedDict` stands for, when its callee is
+    /// `typing`'s: the `TypeVar`'s bound, or the union of its constraints; the `TypedDict` as the
+    /// typed mapping of its fields. None for any other value, and for a `TypeVar` with neither.
+    fn declared_type(&mut self, file: u32, at: u32) -> Option<V> {
+        let facts = self.core.facts.clone();
+        let row = &facts.files[file as usize].assigns[at as usize];
+        let Some(V::Call(callee, _, Some(kept))) = &row.value else {
+            return None;
+        };
+        let V::Chain(name) = **callee else {
+            return None;
+        };
+        let lookup = SlotLookup {
+            owner: *self.scope_of_file.get(&file)? as usize,
+            scope: -1,
+            line: row.l,
+        };
+        let callee = self.lookup_at(lookup, name).surface;
+        let k = &self.settings.k;
+        if k.type_vars.contains(&callee) {
+            return Some(match &**kept {
+                V::Tuple(constraints) => union(constraints),
+                bound => bound.clone(),
+            });
+        }
+        if k.typed_dicts.contains(&callee) {
+            return Some(self.typed_mapping(kept));
+        }
+        None
+    }
+
+    /// A functional `TypedDict`'s fields as the mapping they stand for, `dict[str, A | B]`, each
+    /// field's type read through `Required`, `NotRequired` and `ReadOnly`. Fields that are no
+    /// literal dict, or an entry with no key (`**other`), are a part no type expression reads.
+    fn typed_mapping(&mut self, fields: &V) -> V {
+        let types: Vec<V> = match fields {
+            V::Dict(pairs) => pairs
+                .iter()
+                .map(|(key, value)| match key {
+                    Some(_) => self.field_type(value),
+                    None => V::Other,
+                })
+                .collect(),
+            _ => vec![V::Other],
+        };
+        let k = &self.settings.k;
+        let mut index = vec![V::Chain(k.str_name)];
+        if !types.is_empty() {
+            index.push(union(&types));
+        }
+        V::Sub(Box::new(V::Chain(k.dict_name)), Box::new(V::Tuple(index)))
+    }
+
+    /// A typed dict field's type, read through the wrappers that only say whether the key is
+    /// required or read-only.
+    fn field_type(&mut self, value: &V) -> V {
+        if let V::Sub(inner, index) = value
+            && let V::Chain(chain) = **inner
+            && self
+                .settings
+                .k
+                .field_wrappers
+                .contains(&self.core.it.last(chain))
+        {
+            return self.field_type(index);
+        }
+        value.clone()
     }
 
     /// Every module-level assignment (file, row) of a name the module
@@ -1273,17 +1423,13 @@ impl Producers<'_> {
             return Some(Vec::new());
         }
         let file = table.record?;
-        let facts = self.core.facts.clone();
         let mut rows = Vec::new();
         for (_, binding, assign) in bindings {
             let at = assign?;
             if !matches!(binding, Binding::Alias(_) | Binding::Variable) {
                 return None;
             }
-            let value = facts.files[file as usize].assigns[at as usize]
-                .value
-                .as_ref()?;
-            if !alias_value(value) {
+            if !self.stands_for_type(file, at) {
                 return None;
             }
             rows.push((file, at));
@@ -1410,24 +1556,35 @@ impl Producers<'_> {
             .and_then(|(file, _)| self.scope_of_file.get(file).copied());
         let Some(owner) = owner else {
             let (file, at) = alias.row;
-            if let Some(value) = facts.files[file as usize].assigns[at as usize]
-                .value
-                .as_ref()
-            {
-                self.expand_into(value, alias.lookup, top, expansion);
-            }
+            self.expand_row(file, at, alias.lookup, top, expansion);
             return;
         };
         for (file, at) in rows {
-            let row = &facts.files[file as usize].assigns[at as usize];
-            let Some(value) = row.value.as_ref() else {
-                continue;
-            };
             let lookup = SlotLookup {
                 owner: owner as usize,
                 scope: -1,
-                line: row.l,
+                line: facts.files[file as usize].assigns[at as usize].l,
             };
+            self.expand_row(file, at, lookup, top, expansion);
+        }
+    }
+
+    /// One assignment's value into an expansion: the type a `TypeVar` or `TypedDict` call
+    /// declares, else the value as written.
+    fn expand_row(
+        &mut self,
+        file: u32,
+        at: u32,
+        lookup: SlotLookup,
+        top: bool,
+        expansion: &mut Expansion,
+    ) {
+        let declared = self.declared_type(file, at);
+        let facts = self.core.facts.clone();
+        let written = facts.files[file as usize].assigns[at as usize]
+            .value
+            .as_ref();
+        if let Some(value) = declared.as_ref().or(written) {
             self.expand_into(value, lookup, top, expansion);
         }
     }
@@ -1675,6 +1832,7 @@ impl Producers<'_> {
     /// unannotated return are no slots, and an unannotated parameter is one.
     fn expose_signature(&mut self, rows: SlotRows, lookup: SlotLookup, node: &Def, contract: bool) {
         let receiver = contract && self.has_receiver(lookup, node);
+        let bounds = self.type_param_bounds(lookup.owner, Some(node), node.s);
         for (position, param) in node.params.iter().enumerate() {
             let in_slot = contract && !(receiver && position == 0);
             if !in_slot && param.annotation.is_none() {
@@ -1684,12 +1842,42 @@ impl Producers<'_> {
                 .core
                 .it
                 .intern(&format!("param:{}", self.core.it.s(param.name)));
-            self.expose(rows, lookup, param.annotation.as_ref(), slot, in_slot);
+            let annotation = param.annotation.as_ref().map(|ann| bounded(ann, &bounds));
+            self.expose(rows, lookup, annotation.as_deref(), slot, in_slot);
         }
         if let Some(ret) = &node.ret {
             let slot = self.settings.k.ret;
-            self.expose(rows, lookup, Some(ret), slot, contract);
+            self.expose(rows, lookup, Some(&*bounded(ret, &bounds)), slot, contract);
         }
+    }
+
+    /// The PEP 695 type parameters with a bound that a def's slots see: its own (`own`), then
+    /// those of the defs and classes around it from `scope` out, the nearest first. A parameter
+    /// hides an outer one of its name. One with no bound is left out: its name stays as written,
+    /// unknown as a `TypeVar` with no bound is.
+    fn type_param_bounds(&mut self, owner: usize, own: Option<&Def>, scope: i32) -> Vec<(Sid, V)> {
+        let facts = self.core.facts.clone();
+        let defs = &facts.files[self.scopes[owner].file as usize].defs;
+        let mut around = Vec::new();
+        let mut at = scope;
+        while at >= 0 {
+            around.push(&defs[at as usize]);
+            at = defs[at as usize].s;
+        }
+        let mut seen: Vec<Sid> = Vec::new();
+        let mut out = Vec::new();
+        for node in own.into_iter().chain(around) {
+            for (name, bound) in &node.type_params {
+                if seen.contains(name) {
+                    continue;
+                }
+                seen.push(*name);
+                if let Some(bound) = bound {
+                    out.push((*name, bound.clone()));
+                }
+            }
+        }
+        out
     }
 
     /// Whether an annotation is `ClassVar[...]`, by the last name of what it subscripts.
@@ -1750,7 +1938,9 @@ impl Producers<'_> {
                 line: row.l,
                 ..field.lookup
             };
-            self.expose(line_rows, line_lookup, Some(annotation), slot, in_slot);
+            let bounds = self.type_param_bounds(field.lookup.owner, None, field.lookup.scope);
+            let annotation = bounded(annotation, &bounds);
+            self.expose(line_rows, line_lookup, Some(&*annotation), slot, in_slot);
         }
     }
 
@@ -2498,9 +2688,9 @@ impl Producers<'_> {
     }
 
     /// The line and column of a module-level value the producer expands as a type alias:
-    /// a subscript, a `|` union, or the bare name of a
-    /// builtin type. Another name or attribute chain is left out, so a member past a class stays
-    /// unknown.
+    /// a subscript, a `|` union, the bare name of a builtin type, or a call that declares a type
+    /// (`declared_type`). Another name or attribute chain is left out, so a member past a class
+    /// stays unknown.
     fn type_alias(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
         let (file, at) = self.alias(module, name)?;
         let owner = *self.scope_of_file.get(&file)? as usize;
@@ -2508,6 +2698,7 @@ impl Producers<'_> {
         let row = &facts.files[file as usize].assigns[at as usize];
         match row.value.as_ref()? {
             V::Sub(..) | V::Bin(true, ..) => Some((row.l, row.c)),
+            V::Call(..) => self.declared_type(file, at).map(|_| (row.l, row.c)),
             V::Chain(chain) if !self.core.it.s(*chain).contains('.') => {
                 let lookup = SlotLookup {
                     owner,
@@ -2521,25 +2712,59 @@ impl Producers<'_> {
         }
     }
 
-    /// The rows a handed-out type alias expands to, as a slot `alias` of the name it is handed
-    /// out by, at the line that hands it out.
-    fn expose_alias(&mut self, owner: usize, bound: Sid, clause: Sid, line: u32, col: u32) {
-        let rows = SlotRows {
-            site: self.module_site(owner, line, col),
-            callable: bound,
-            handed: clause,
-        };
+    /// The annotation of a module constant (`annotated_constant`) and where its names are looked
+    /// up: the module that assigns it, at its line.
+    fn constant_annotation(&mut self, module: Sid, name: Sid) -> Option<(V, SlotLookup)> {
+        let (file, at) = annotated_constant(self.core, module, name)?;
+        let facts = self.core.facts.clone();
+        let row = &facts.files[file as usize].assigns[at as usize];
         let lookup = SlotLookup {
-            owner,
+            owner: *self.scope_of_file.get(&file)? as usize,
             scope: -1,
-            line,
+            line: row.l,
         };
-        let slot = self.settings.k.alias;
-        self.expose(rows, lookup, Some(&V::Chain(bound)), slot, true);
+        Some((row.ann.clone()?, lookup))
     }
 
-    /// Writes the rows of every listed or handed-out value that is a type alias, and takes those
-    /// values out of what the hand-out record leaves unknown.
+    /// The rows of a handed-out or listed name whose value the producer reads as a type, at the
+    /// line that hands the name out: a type alias's expansion as a slot `alias`, else a module
+    /// constant's annotation as a slot `constant`. `origin` is where the value is assigned. A
+    /// lazy name, which the module binds by no statement, is looked up there. False when the
+    /// value is neither, so the name stays unknown.
+    fn expose_value(&mut self, owner: usize, item: &Handed, origin: Ent) -> bool {
+        let rows = SlotRows {
+            site: self.module_site(owner, item.line, item.col),
+            callable: item.bound,
+            handed: self.core.it.intern(item.clause),
+        };
+        if let Some((line, _)) = self.type_alias(origin.m, origin.s) {
+            let (name, lookup) = if item.clause == LAZY_CLAUSE {
+                let Some(lookup) = self.assigned_lookup(origin, line) else {
+                    return false;
+                };
+                (origin.s, lookup)
+            } else {
+                let lookup = SlotLookup {
+                    owner,
+                    scope: -1,
+                    line: item.line,
+                };
+                (item.bound, lookup)
+            };
+            let slot = self.settings.k.alias;
+            self.expose(rows, lookup, Some(&V::Chain(name)), slot, true);
+            return true;
+        }
+        let Some((annotation, lookup)) = self.constant_annotation(origin.m, origin.s) else {
+            return false;
+        };
+        let slot = self.settings.k.constant;
+        self.expose(rows, lookup, Some(&annotation), slot, true);
+        true
+    }
+
+    /// Writes the rows of every listed or handed-out value the producer reads as a type
+    /// (`expose_value`), and takes those values out of what the hand-out record leaves unknown.
     fn expose_aliases(
         &mut self,
         owner: usize,
@@ -2550,10 +2775,22 @@ impl Producers<'_> {
         let module = self.scopes[owner].module;
         let mut names: Vec<Sid> = found.unknown.iter().copied().collect();
         names.sort_by(|a, b| self.core.it.s(*a).cmp(self.core.it.s(*b)));
-        let all = self.core.it.intern(ALL_CLAUSE);
         for name in names {
-            if let Some((line, col)) = self.type_alias(module, name) {
-                self.expose_alias(owner, name, all, line, col);
+            let assigned = self
+                .type_alias(module, name)
+                .or_else(|| self.annotated_at(module, name));
+            let Some((line, col)) = assigned else {
+                continue;
+            };
+            let item = Handed {
+                bound: name,
+                target: self.core.it.join(module, name),
+                clause: ALL_CLAUSE,
+                line,
+                col,
+            };
+            let origin = Ent { m: module, s: name };
+            if self.expose_value(owner, &item, origin) {
                 found.unknown.remove(&name);
             }
         }
@@ -2565,13 +2802,28 @@ impl Producers<'_> {
             };
             let origin = self.core.origin(hit);
             let symbol = self.core.ent_sid(origin);
-            if !values.contains(&symbol) || self.type_alias(origin.m, origin.s).is_none() {
-                continue;
+            if values.contains(&symbol) && self.expose_value(owner, &item, origin) {
+                found.unknown_values.remove(&symbol);
             }
-            let clause = self.core.it.intern(item.clause);
-            self.expose_alias(owner, item.bound, clause, item.line, item.col);
-            found.unknown_values.remove(&symbol);
         }
+    }
+
+    /// The module scope of the file that assigns a module-level type alias, at `line`.
+    fn assigned_lookup(&mut self, origin: Ent, line: u32) -> Option<SlotLookup> {
+        let (file, _) = self.alias(origin.m, origin.s)?;
+        let owner = *self.scope_of_file.get(&file)? as usize;
+        Some(SlotLookup {
+            owner,
+            scope: -1,
+            line,
+        })
+    }
+
+    /// The line and column of a module constant's annotated assignment (`annotated_constant`).
+    fn annotated_at(&mut self, module: Sid, name: Sid) -> Option<(u32, u32)> {
+        let (file, at) = annotated_constant(self.core, module, name)?;
+        let row = &self.core.facts.files[file as usize].assigns[at as usize];
+        Some((row.l, row.c))
     }
 
     fn strings(&mut self, owner: usize) {

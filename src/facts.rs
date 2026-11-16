@@ -85,6 +85,15 @@ pub struct SelfAttr {
     pub annotation: Value,
 }
 
+/// A PEP 695 type parameter of a def or class (`def f[T: Bound]`, `class C[T: (A, B)]`):
+/// `[name, bound?]`. The bound is the written bound or the tuple of constraints; a null bound is
+/// dropped, and a `ParamSpec` or `TypeVarTuple` has none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: String,
+    pub bound: Value,
+}
+
 /// One def / async def / class. Its index in the record is its scope id.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Def {
@@ -113,6 +122,9 @@ pub struct Def {
     pub s: i64,
     #[serde(skip_serializing_if = "is_false")]
     pub stub: bool,
+    /// The PEP 695 type parameters, in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tp: Vec<TypeParam>,
 }
 
 /// A module-scope or class-scope assignment.
@@ -364,6 +376,17 @@ impl Serialize for SelfAttr {
         seq.serialize_element(&self.value)?;
         if !self.annotation.is_null() {
             seq.serialize_element(&self.annotation)?;
+        }
+        seq.end()
+    }
+}
+
+impl Serialize for TypeParam {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(None)?;
+        seq.serialize_element(&self.name)?;
+        if !self.bound.is_null() {
+            seq.serialize_element(&self.bound)?;
         }
         seq.end()
     }

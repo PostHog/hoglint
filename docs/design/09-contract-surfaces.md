@@ -1,7 +1,7 @@
 # 9. Contract surfaces: what an export hands out
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 13, 2026.
+> Current as of Nov 16, 2026.
 
 A PostHog facade (`products/<name>/backend/facade/`) is one export in hoglint's terms.
 The engine's word is `export`; "facade" is a name in the PostHog preset (D48).
@@ -44,7 +44,8 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   Any other listed name is unknown: the export rule reports `export-unknown` for it.
   A def or class with a leading `_` that `__all__` lists is handed out as a public one is: the export rule judges it, and in a contract module its slots get contract-mode rows.
   The signature rule reads public callables only, so the export rule judges such a def's slots in full.
-- A handed-out name whose edge resolves to a first-party module-level assignment is read the same way: a constant expression (clean), a type alias judged by its expansion, or unknown (`export-unknown` on the assigned name): a `NewType`, a `TypeVar`, a functional `TypedDict`, a value a call of anything else makes, a lambda, a container with a class in it (Nov 13).
+- A handed-out name whose edge resolves to a first-party module-level assignment is read the same way: a constant expression (clean), a type alias judged by its expansion, or unknown (`export-unknown` on the assigned name): a `NewType`, a `TypeVar` with no bound and no constraints, a value a call of anything else makes, a lambda, a container with a class in it (Nov 13).
+  A constant with an annotation is judged by its annotation, whatever its value: its rows are a slot `constant` of the name it is handed out by, judged as a type alias's are (Nov 16). The constant is a bare name the module binds once, by an annotated assignment with a value; a bare `Final` or `TypeAlias` names no type, so such a constant is read by its value as before.
   A constant expression is built only from literals; unary, binary, comparison and boolean operators; f-strings; tuples, lists, sets and dicts, starred parts too, of constants; a call of a builtin constructor (`frozenset`, `set`, `tuple`, `list`, `dict`, `str`, `int`, `float`, `bool`, `bytes`) the module does not bind, on one constant; and names of module-level constants by the same rule, followed 32 names deep, a cycle stopping.
   A type alias the producer expands (a subscript, a `|` union, the bare name of a builtin type) gets the rows of its expansion as a slot `alias` of the name it is handed out by, at the module that hands it out; the export rule judges them as any slot, and a signature rule that reads the module reads them too. A value that is both, such as `None`, is a constant.
   A name that assigns a class is followed to the class.
@@ -58,6 +59,7 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   So every rule that reads what a module hands out finds it with no special path, and every edge rule judges it as it judges any other import.
   A lazy entry whose module does not exist is an import edge that does not resolve and keeps its name, so the hand-out is unknown; only an entry whose name and value read as a name and a dotted path counts, so another dict of text is no lazy map (Nov 12).
   A relative value (`'.foo'`, read by `import_module(value, __package__)`) is anchored at the module's package, as a relative import is; one that does not resolve counts only in a dict where another entry resolves.
+  A lazy name that maps to a type alias or an annotated constant is read as that alias or constant: the module binds the name by no statement, so its rows are looked up where the value is assigned (Nov 16).
 - What a lazy map can say that hoglint does not read, in plain words:
   1. A map where no entry resolves and every value is one bare name (`{'Foo': 'foo'}`): it hands out nothing, because a dict of plain words looks the same.
   2. A value that names the attribute itself (`'pkg.mod:Name'`): it hands out nothing.
@@ -93,12 +95,19 @@ An alias the module binds more than once (`if TYPE_CHECKING: Ref = Order` / `els
 When one of the bindings is no type alias (a call, a class, an import), the name is no alias and is unknown, as a single such binding is.
 A name in a slot the export rule judges in full that is no class, no function and no alias the producer expanded is unknown, as the signature rule reads the same name in a facade function.
 That holds whatever else the module does with the name: a module that hands the name out itself does not make its slot clean.
-That holds for a name at the top of a module (a `NewType`, a `TypeVar`, a functional `TypedDict`, a value built by a call) and for a name assigned in a class body (`Ref = Order` in a class, then `-> Ref` in its method or as the type of its attribute or field): the producer does not expand a class-body alias, so it is unknown, not clean, also next to a module-level name of the same spelling.
+That holds for a name at the top of a module (a `NewType`, a `TypeVar` with no bound and no constraints, a value built by a call) and for a name assigned in a class body (`Ref = Order` in a class, then `-> Ref` in its method or as the type of its attribute or field): the producer does not expand a class-body alias, so it is unknown, not clean, also next to a module-level name of the same spelling.
 An alias nested deeper than the producer follows is one unknown row, its marker.
 The test is made for each name of the slot: an expanded alias marks only itself, so a name next to it in the slot, or inside its value, is still asked (`Maybe = Ref | None` with `Ref` a `NewType` is unknown).
 A name that one slot leaves to a signature rule is still judged where another slot reaches it and the export rule judges that slot.
 The reasoning matches D63: where something is defined must not change the verdict.
 **An alias whose expansion is known is not a finding** (D70, Nov 11; reverses D62 C3).
+
+**A name declared by a call or a type parameter is judged by what it stands for** (the architect, Nov 16).
+- A `TypeVar` (of `typing` or `typing_extensions`) stands for its bound, else the union of its constraints; one with neither stays unknown.
+- A functional `TypedDict` stands for the typed mapping of its fields, `dict[str, A | B]`: each field's type is read through `Required`, `NotRequired` and `ReadOnly`, and an entry that is no literal key (`**other`) or fields that are no dict literal are unknown. A class-form `TypedDict` stays a class.
+- Both are expanded as a type alias is, wherever they are assigned, imported ones included.
+- A PEP 695 type parameter (`def f[T: Bound]`, `class C[T: (A, B)]`) stands for its bound or the union of its constraints in the slots of its def or class and of what they hold; the nearest parameter of a name hides an outer one. One with no bound stays as written, unknown as before.
+- Written limits: a bound written as a string in a `TypeVar` call is unknown; a type parameter with no bound does not hide a module-level name of its spelling; a `TypeVar`'s default is not read.
 
 **One fact, one place:** a handed-out definition is reported once, at its own surface module (N3b review item 8: -75 findings).
 This holds for a class a facade module defines.

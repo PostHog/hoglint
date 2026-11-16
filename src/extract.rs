@@ -3,13 +3,13 @@
 use crate::config::{ExtractConfig, Kind};
 use crate::defs::{DefNode, DefTable, is_stub_body, parameter_kinds, stored_names};
 use crate::derive::Derivation;
-use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status};
+use crate::facts::{Count, Def, DefKind, Facts, FileRecord, Param, Ref, Status, TypeParam};
 use crate::loops::Sequences;
 use crate::self_attrs::self_attrs;
 use crate::source::{LineIndex, parse_py314, source_text};
 use crate::value::{Encoder, Keyword, MAX_HEADER_NODES, Value, keyword_name};
 use crate::walker::{Counts, Walk, Walker};
-use ruff_python_ast::{Expr, Parameters};
+use ruff_python_ast::{self as ast, Expr, Parameters};
 use ruff_python_parser::Mode;
 use std::collections::HashSet;
 
@@ -129,6 +129,28 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             .collect()
     }
 
+    /// The PEP 695 type parameters, each with its bound or its tuple of constraints.
+    fn type_params(&self, enc: &mut Encoder, params: Option<&ast::TypeParams>) -> Vec<TypeParam> {
+        let Some(params) = params else {
+            return Vec::new();
+        };
+        params
+            .type_params
+            .iter()
+            .map(|param| {
+                let (name, bound) = match param {
+                    ast::TypeParam::TypeVar(t) => (&t.name, t.bound.as_deref()),
+                    ast::TypeParam::ParamSpec(t) => (&t.name, None),
+                    ast::TypeParam::TypeVarTuple(t) => (&t.name, None),
+                };
+                TypeParam {
+                    name: name.to_string(),
+                    bound: self.header_value(enc, bound, true),
+                }
+            })
+            .collect()
+    }
+
     fn default_value(&self, enc: &Encoder, default: Option<&Expr>) -> Value {
         default
             .map(|d| enc.shallow(d, self.src))
@@ -158,7 +180,9 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             ret: Value::Null,
             s: entry.parent,
             stub: is_stub_body(entry.node.body()),
+            tp: Vec::new(),
         };
+        def.tp = self.type_params(&mut enc, entry.node.type_params());
         match entry.node {
             DefNode::Func(f) => {
                 def.n = f.name.to_string();

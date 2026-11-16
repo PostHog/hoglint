@@ -4,40 +4,40 @@
 # to read the rows. See docs/design/12-how-work-is-done.md, "The model repository".
 
 ["edges"]
-rows = 1433
-digest = "bcd3da1b86299ff9618935853a17521c"
+rows = 1523
+digest = "5b360b599a2a2e74def62a79c370663d"
 
 ["symbols"]
-rows = 412
-digest = "671228a9bd1f7c99baecfae016704d46"
+rows = 423
+digest = "c5ef96e1eb733c12741d99f82a318012"
 
 ["modules"]
-rows = 340
-digest = "e73aeb37d8cb9ae88fd306b577e1b241"
+rows = 345
+digest = "133051b66d4bfe1f9ab8aef3aa1f9477"
 
 ["failed"]
 rows = 0
 digest = "cae66941d9efbd404e4d88758ea67670"
 
 ["findings"]
-rows = 297
-digest = "593a1074bd6dc98bdd2752ad1ec50bbf"
+rows = 310
+digest = "a04fdc54387b82538fbd450ac4ece845"
 
 ["incomplete"]
 rows = 85
 digest = "bad4c986f1a8c945ec6bdc323a631d68"
 
 ["scan-lines"]
-rows = 249
-digest = "7ad441c719e371cff4485b6d3a98e293"
+rows = 262
+digest = "05742f01ee5f1ea4b5afdc9406389eab"
 
 ["couplings"]
-rows = 1240
-digest = "9c75a3e696fa5d9150f2027bcb7d0196"
+rows = 1298
+digest = "cc8ef2d5f975321f9d45674e4992fb69"
 
 ["stored-summary"]
-rows = 1616
-digest = "a119ed521ddbc77572c34a072d3bf0c8"
+rows = 1515
+digest = "1d090db40168357d54bad7352d7caba9"
 
 ["levels"]
 rows = 1

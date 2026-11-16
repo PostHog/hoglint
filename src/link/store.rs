@@ -199,6 +199,11 @@ impl Enc<'_> {
                 self.v(&a.value);
                 self.ov(a.ann.as_ref());
             }
+            self.u32(d.type_params.len() as u32);
+            for (name, bound) in &d.type_params {
+                self.sid(*name);
+                self.ov(bound.as_ref());
+            }
         }
         self.u32(f.assigns.len() as u32);
         for a in &f.assigns {
@@ -555,6 +560,11 @@ pub fn decode_body(
                 ann: d.ov()?,
             });
         }
+        let nt = d.u32()? as usize;
+        let mut type_params = Vec::with_capacity(nt);
+        for _ in 0..nt {
+            type_params.push((d.sid()?, d.ov()?));
+        }
         defs.push(Def {
             s,
             l,
@@ -568,6 +578,7 @@ pub fn decode_body(
             ret,
             stub,
             attrs,
+            type_params,
         });
     }
     let n = d.u32()? as usize;

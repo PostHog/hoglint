@@ -80,6 +80,11 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `FS08` | `products/catalog/backend/facade/shapes.py` | A `Protocol` call that takes another product's model | facade-signature finding | |
 | `FS10` | `products/legacy/backend/facade/backfill_command.py` | A method of a class in a facade with unannotated parameters | facade-signature unknown (two) | |
 | `FS12` | `products/inventory/backend/facade/api.py`, `products/gatekeeper/backend/facade/api.py` | Facade functions typed with scalars and contracts | clean | |
+| `TA01` | `products/catalog/backend/facade/generics.py` | `TypeVar`s in facade signatures: one bound to a model, one with two scalar constraints, one with neither | facade-signature finding for the bound's model (two slots); clean for the constraints; facade-signature unknown for the one with neither, as before | A `TypeVar` is judged by its bound or constraints (Nov 16) |
+| `TA02` | `products/catalog/backend/facade/generics.py` | A functional `TypedDict` with a model field; one with scalar fields, one of them no name (`"item-count"`) | facade-signature finding for the model; clean for the other | A functional `TypedDict` is judged as the typed mapping of its fields' types (Nov 16) |
+| `TA03` | `products/catalog/backend/facade/generics.py` | PEP 695 type parameters: a function's bound to a model, a function's with no bound, a `Protocol`'s with two constraints | facade-signature finding for the bound's model; unknown for the one with no bound, as before; clean for the constraints | A PEP 695 parameter is judged as a `TypeVar` (Nov 16) |
+| `TA04` | `products/catalog/backend/facade/lazy_types.py`, `products/catalog/backend/logic/refs.py` | A lazy map hands out two type aliases: a union with a model, a union of scalars | facade-signature finding for the model (slot `alias`); clean for the other | A lazy name is read as the alias it maps to (Nov 16) |
+| `AC01` | `products/catalog/backend/facade/limits.py`, `products/catalog/backend/logic/limits.py` | Handed-out constants whose values a call makes, annotated `int`, `Final[int]` and a mapping to a model class; one the facade assigns itself (`int`); next to them an unannotated one and a `TypeAlias` | facade-signature finding for the model class (slot `constant`); clean for the `int`s; export-shape unknown for the unannotated one, as before; facade-signature finding for the `TypeAlias`'s model, as before | A constant with an annotation is judged by its annotation (Nov 16) |
 | `TM01` | `products/catalog/backend/facade/api.py` | Typed mappings: `dict[str, str]`, `dict[str, Any]`, `Mapping[str, Any]`, `dict[str, Team]` parameters; `dict[str, Any] \| list[Any]` and a `list[Any]` return | clean for the mappings; facade-signature unknown for the `Any` of the list (two) | `argument_of`, typed mappings (D93; Nov 12) |
 | `TM02` | `products/catalog/backend/facade/api.py` | A bare `list` parameter | clean | Open since Nov 12; wanted as unknown |
 | `CR01` | `products/catalog/backend/facade/shapes.py` | A core model on the list in a field (`EntryOwners`) | clean | `crosses` on a symbol assignment |
@@ -328,7 +333,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | facade-signature | Bare `object` | `FS06` |
 | facade-signature | The `frozen` decorator read as a facade function | None: no longer reported (`ES10`) |
 | facade-signature | A function left out of `__all__` | None |
-| facade-signature | A type alias read as unknown | None |
+| facade-signature | A type alias read as unknown | `TA01` to `TA04`, `AC01` |
 | facade-signature | A typed dict read as bare `dict` | `FS06` (`dict[str, str]`) |
 | facade-signature | Fixture helpers in `facade/testing.py` | `ES12` |
 | facade-signature | A product model crosses a facade | `FS01` |
