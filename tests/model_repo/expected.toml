@@ -1297,38 +1297,6 @@ rule = "orm-independent"
 verdict = "incomplete"
 identity = ["posthog.egress.client|exposes|typing.Any"]
 
-# own-database
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.access_control.backend.models.AccessRule"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.catalog.backend.models.CatalogEntry"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.inventory.backend.models.StockItem"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.legacy.backend.models.Widget"]
-
-[[row]]
-case = "OD01"
-rule = "own-database"
-verdict = "incomplete"
-identity = ["products.reports.backend.models.ReportRun"]
-
 # presentation-uses-facade
 
 [[row]]
@@ -2296,7 +2264,7 @@ match = ["posthog.ingress.dispatch", "products.legacy.backend.logic.widgets"]
 
 [[wanted]]
 case = "AT01"
-decision = "B10; Nov 12: the rule gets the edge it needs or goes off"
+decision = "B10; Nov 12: the rule gets the edge it needs or goes off; off for the switch (D118)"
 rule = "atomic-outside-views"
 verdict = "finding"
 match = ["products.legacy.backend.presentation.views"]

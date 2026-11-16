@@ -1614,31 +1614,6 @@ identity = ["posthog.egress.client|exposes|typing.Any"]
 text = "posthog.egress.client.forward: param:kwargs has no usable type (typing.Any)"
 
 [[incomplete]]
-rule = "own-database"
-identity = ["products.access_control.backend.models.AccessRule"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
-rule = "own-database"
-identity = ["products.catalog.backend.models.CatalogEntry"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
-rule = "own-database"
-identity = ["products.inventory.backend.models.StockItem"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
-rule = "own-database"
-identity = ["products.legacy.backend.models.Widget"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
-rule = "own-database"
-identity = ["products.reports.backend.models.ReportRun"]
-text = "cannot tell whether this entity is selected"
-
-[[incomplete]]
 rule = "product-code-at-home"
 identity = ["sandbox.shapes"]
 text = "cannot tell whether this entity is selected"

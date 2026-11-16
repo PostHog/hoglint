@@ -164,7 +164,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `TC04` | `products/inventory/backend/management/commands/show_stock.py` | A command that goes through its facade | clean | |
 | `TC05` | `products/inventory/backend/management/commands/restock_now.py` | A command imports a name its facade's tasks module hands out from the product's tasks | clean | Judged at the origin, excused when the surface is the product's facade (Nov 16) |
 | `TC05` | `products/visual_review/backend/management/commands/seed_dummy_runs.py` | A dev seeder on the named list writes through its models | clean | Named as test code (D104) |
-| `AT01` | `products/legacy/backend/presentation/views.py` | Presentation opens a transaction (`with` and decorator) | clean: no reference edge for a call, `with` or decorator | The rule cannot fire (wanted) |
+| `AT01` | `products/legacy/backend/presentation/views.py` | Presentation opens a transaction (`with` and decorator) | clean: atomic-outside-views is off | The rule cannot fire: no reference edge for a call, `with` or decorator; off for now, revisited after the switch (D118; wanted) |
 | `AT02` | `products/inventory/backend/logic/stock.py`, `products/legacy/backend/api/widgets.py` | A transaction outside presentation | clean | |
 | `PT01` | `products/legacy/backend/tasks/cleanup.py` | A production task imports a test factory | prod-imports-test finding | |
 | `PT04` | `posthog/temporal/ingestion_acceptance_test/runner.py`, `posthog/temporal/ingestion_acceptance_test/test_cases_discovery.py` | Production code imports a production module named like a test | clean | The test-code label leaves that one named file out (Nov 16) |
@@ -245,7 +245,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `MD01` | `products/legacy/backend/migrations/0001_initial.py`, `products/db_routing.yaml` | A migration on its own database depends on a default-database migration | migration-database finding | |
 | `MD02` | `products/inventory/backend/migrations/0001_initial.py` | Both on the default database | clean | |
 | `MD03` | `posthog/settings/web.py`, `products/db_routing.yaml`, `hoglint.toml` | A third-party app installed from site-packages (`site/tokens`) ships a migration that depends on a core migration, and routes to another database | migration-database finding | The pack reads an installed app's migrations from the packages `[discovery] external` names, as Django's loader does (Nov 16) |
-| `OD01` | `products/inventory/backend/models.py` | Every product model | own-database incomplete | No producer sets `database` |
+| `OD01` | `products/inventory/backend/models.py` | Every product model | clean: own-database is off | Off for now: no producer, and the policy was never decided (D118) |
 | `PH01` | `posthog/temporal/ai_observability/summarize.py` | Product code under `posthog/` | product-code-at-home finding, one per file | |
 | `PH02` | `posthog/temporal/common/worker.py` | Core code next to it | clean | |
 | `RS01` | `products/inventory/backend/health_checks.py`, `products/catalog/backend/webhook_consumers.py` | Well-formed registry slot files | clean: no rule | registry-slots left the preset: the loader checks the registry contract at run time (D118) |

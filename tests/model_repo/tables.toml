@@ -24,8 +24,8 @@ rows = 282
 digest = "3676938b9736eac28986ba0b2a2e6ec5"
 
 ["incomplete"]
-rows = 85
-digest = "0f16f1ee90f3323f85e2c1c106622937"
+rows = 80
+digest = "8e4e5bb1c3b85e6979b0643e703a44c7"
 
 ["scan-lines"]
 rows = 236
@@ -36,8 +36,8 @@ rows = 1282
 digest = "66b6e4921430ef91b9008d28eb7cbf0a"
 
 ["stored-summary"]
-rows = 1828
-digest = "b207a840dc1fff2b89e73a6c2c206885"
+rows = 1755
+digest = "2dbfac8d951b936f6c7d8054c66b4543"
 
 ["levels"]
 rows = 1

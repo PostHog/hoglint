@@ -67,7 +67,8 @@ owners    = { type = "set" }
 stage     = { type = "enum", values = ["proto-product"] }
 django    = { type = "ordered", values = ["settings", "framework", "orm"] }
 testcode  = { type = "bool" }
-database  = { type = "string", on = "symbol", required_on = "kind == 'model'" }
+# Read by own-database only, which is off for now (D118).
+# database  = { type = "string", on = "symbol", required_on = "kind == 'model'" }
 # Frozen history outside the `migration` context: migration files nobody rewrites.
 history   = { type = "bool" }
 # Django settings modules: they must name product paths (installed apps, middleware, loggers).
@@ -568,15 +569,16 @@ unless     = "surface.zone == 'facade'"
 identity   = "module-pair"
 growth_key = ["dst.module", "src.package"]
 
-[rules.atomic-outside-views]
-primitive   = "use-shape"
-doc         = "Views do not open transactions (B10); counted per function."
-kinds       = ["reference"]
-select      = "src.zone == 'presentation' and dst.symbol == 'django.db.transaction.atomic'"
-deny_shapes = ["call", "with", "decorator"]
-identity    = "scope-symbol"
-counted     = true
-growth_key  = ["dst.symbol", "edge.label", "src.package"]
+# Off for now (D118): atomic-outside-views cannot fire; it is revisited after the switch.
+# [rules.atomic-outside-views]
+# primitive   = "use-shape"
+# doc         = "Views do not open transactions (B10); counted per function."
+# kinds       = ["reference"]
+# select      = "src.zone == 'presentation' and dst.symbol == 'django.db.transaction.atomic'"
+# deny_shapes = ["call", "with", "decorator"]
+# identity    = "scope-symbol"
+# counted     = true
+# growth_key  = ["dst.symbol", "edge.label", "src.package"]
 
 [rules.prod-imports-test]
 primitive  = "edge"
@@ -838,14 +840,15 @@ on_unresolved = "block"
 identity      = "migration-pair"
 growth_key    = ["edge.child", "edge.parent"]
 
-[rules.own-database]
-primitive  = "layout"
-doc        = "A product model has its own database route (B7). Incomplete until the pack sets `database` on models."
-on         = "symbol"
-select     = "kind == 'model' and tier == 'product' and database != none"
-require    = "database != 'default'"
-identity   = "package-file"
-growth_key = ["package"]
+# Off for now (D118): own-database has no producer and its policy was never decided.
+# [rules.own-database]
+# primitive  = "layout"
+# doc        = "A product model has its own database route (B7). Incomplete until the pack sets `database` on models."
+# on         = "symbol"
+# select     = "kind == 'model' and tier == 'product' and database != none"
+# require    = "database != 'default'"
+# identity   = "package-file"
+# growth_key = ["package"]
 
 # ── Layout ─────────────────────────────────────────────────────
 
