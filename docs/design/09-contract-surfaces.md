@@ -147,6 +147,7 @@ So the verdict on a listed model does not depend on how deep it sits, in a slot 
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
+  A lineage goes on through a third-party class whose sources the run reads (`[discovery] external`): no repo file declares it, so the link reads its bases from those sources, a builtin as `builtins.<name>` (Nov 16). A base there that does not resolve is left out, and a third-party class whose sources the run does not read still ends a lineage, read as a class: an exception whose chain starts there (temporalio's `ApplicationError` when the root config does not name `temporalio`) reads as a plain class.
 - One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `leave_slots_to = ["facade-signature"]` in the preset.
   Each name must be a signature rule of the config; any other name is a config error.
   The named rule's selection must split into conditions that read only `src.*` fields (where it reads rows) and conditions that read none (which slots it judges), joined by `and`; a condition that mixes the two is a config error.

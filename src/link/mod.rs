@@ -153,7 +153,7 @@ use facts::FactSet;
 use index::EdgeIndex;
 use intern::{Interner, Sid};
 use paths::{ModuleIndex, ModuleNamer, PathGlobs};
-use produce::{EdgeStore, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, Symbols};
+use produce::{EdgeStore, INHERIT, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, Symbols};
 use resolve::Core;
 use rules::glob::ExportPaths;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -270,6 +270,8 @@ pub struct Link {
     pub symbols: Symbols,
     /// What each export module hands out by import (surface.rs `HandOut`).
     pub hand_outs: FxHashMap<Sid, surface::HandOut>,
+    /// The bases of the third-party classes the inherit edges reach (`outside_bases`), by class.
+    pub outside_bases: FxHashMap<String, Vec<String>>,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
     /// `config.dataclass_decorators` and `config.frozen_dataclass_decorators`, for the rules'
@@ -397,6 +399,7 @@ impl Link {
         edges.attrs.shrink_to_fit();
         let symbols = std::mem::take(&mut producers.symbols);
         let hand_outs = std::mem::take(&mut producers.hand_outs);
+        let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
         edges.kind_names = KIND_NAMES.iter().map(|kind| core.it.intern(kind)).collect();
         edges.producers = (0..KIND_NAMES.len() as u8)
             .map(|kind| core.it.intern(&Self::producer_name(kind)))
@@ -416,6 +419,7 @@ impl Link {
             index: EdgeIndex::default(),
             symbols,
             hand_outs,
+            outside_bases,
             first_party,
             dataclass_kinds: DataclassKinds {
                 make: config.dataclass_decorators.iter().cloned().collect(),
@@ -424,6 +428,49 @@ impl Link {
             timings,
             interfaces,
         })
+    }
+
+    /// The bases of every third-party class an inherit edge reaches, read from its sources where
+    /// the run reads them (`[discovery] external`), by the class's name: no repo file declares
+    /// such a class, so no inherit edge names its bases. A base that resolves to a class counts by
+    /// its name, a builtin as `builtins.<name>`; any other base is left out, as a third-party
+    /// base whose sources the run does not read ends a lineage.
+    fn outside_bases(
+        core: &mut Core,
+        edges: &EdgeStore,
+        builtins: &FxHashSet<Sid>,
+    ) -> FxHashMap<String, Vec<String>> {
+        let mut queue: Vec<resolve::Ent> = edges
+            .rows
+            .iter()
+            .filter(|row| row.kind == INHERIT && row.res == scope::Res::External)
+            .filter_map(|row| row.target)
+            .collect();
+        let mut out: FxHashMap<String, Vec<String>> = FxHashMap::default();
+        while let Some(class) = queue.pop() {
+            let name = core.ent_text(class);
+            if out.contains_key(&name) {
+                continue;
+            }
+            let Some((file, idx)) = core.located(class) else {
+                continue;
+            };
+            let facts = core.facts.clone();
+            let mut bases = Vec::new();
+            for base in &facts.files[file as usize].defs[idx as usize].bases {
+                if let Some(found) = core.resolve_class(class.m, base) {
+                    bases.push(core.ent_text(found));
+                    queue.push(found);
+                } else if let facts::V::Chain(chain) = base
+                    && builtins.contains(chain)
+                    && core.binding_of(class.m, *chain).is_none()
+                {
+                    bases.push(format!("builtins.{}", core.it.s(*chain)));
+                }
+            }
+            out.insert(name, bases);
+        }
+        out
     }
 
     pub fn producer_name(kind: u8) -> String {

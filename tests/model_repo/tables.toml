@@ -4,16 +4,16 @@
 # to read the rows. See docs/design/12-how-work-is-done.md, "The model repository".
 
 ["edges"]
-rows = 1523
-digest = "5b360b599a2a2e74def62a79c370663d"
+rows = 1527
+digest = "5a716bb47917395734590fcff088cfe4"
 
 ["symbols"]
-rows = 423
-digest = "c5ef96e1eb733c12741d99f82a318012"
+rows = 424
+digest = "8da906413e89b58f153bc35a9b47d42b"
 
 ["modules"]
-rows = 345
-digest = "133051b66d4bfe1f9ab8aef3aa1f9477"
+rows = 347
+digest = "045901bd9357533fe1ccf09cd10c26ff"
 
 ["failed"]
 rows = 0
@@ -32,12 +32,12 @@ rows = 262
 digest = "05742f01ee5f1ea4b5afdc9406389eab"
 
 ["couplings"]
-rows = 1298
-digest = "cc8ef2d5f975321f9d45674e4992fb69"
+rows = 1302
+digest = "7a098b8b74daed3a2d182ac0de33b6ad"
 
 ["stored-summary"]
-rows = 1515
-digest = "1d090db40168357d54bad7352d7caba9"
+rows = 1682
+digest = "6b64bb6766c3a1e74e9470b40fa6690c"
 
 ["levels"]
 rows = 1
