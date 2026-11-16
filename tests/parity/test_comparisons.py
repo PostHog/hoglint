@@ -218,6 +218,9 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
                     "source": "posthog.unlisted.register",
                 },
                 {"location": "backend/patched.py", "kind": "channel:outside-test", "source": "posthog/test/test_x.py"},
+                {"location": "backend/named.py", "kind": "channel:outside-test", "source": "posthog/test/test_x.py"},
+                {"location": "backend/audit.py", "kind": "channel:app-setup", "source": "backend/apps.py"},
+                {"location": "backend/migrations/", "kind": "model-surface"},
             ],
         }
     }
@@ -226,6 +229,10 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
             "products/shop/backend/tasks/run.py": ("rules.drives.dst.path", True),
             "products/shop/backend/apps.py": ("edge.kind in ['signal', 'installs'] and x: src", True),
             "products/shop/backend/logic.py": ("rules.request-path.dst.path", False),
+            "products/shop/backend/gate.py": (
+                "edge.kind == 'dotted-path' and src.settings == true and y: surface",
+                True,
+            ),
         },
         settings_names={
             "products.shop.backend.enums": [("posthog/settings/web.py", "SPECTACULAR_SETTINGS.ENUMS")],
@@ -236,9 +243,14 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
         installs=[Wiring("products/shop/backend/apps.py", "posthog.hooks.register")],
         hooks=frozenset({"posthog.hooks.register"}),
     )
-    test_source = 'PATCH = "products.shop.backend.patched.boto3.client"\n'
+    sources = {
+        "posthog/test/test_x.py": 'PATCH = "products.shop.backend.patched.boto3.client"\nNAME = "products.shop.backend.named.gone"\n',
+        "products/shop/backend/patched.py": "import boto3\n",
+        "products/shop/backend/named.py": "def here():\n    pass\n",
+        "products/shop/backend/apps.py": "class Config:\n    def ready(self):\n        from . import audit\n",
+    }
 
-    comparison = watched.compare(requirements, hoglint, lambda path: test_source)
+    comparison = watched.compare(requirements, hoglint, sources.__getitem__, lambda directory: False)
 
     assert [m.item for m in comparison.matches] == [
         "shop: backend/tasks/ (wiring-location)",
@@ -251,6 +263,10 @@ def test_a_watched_location_is_matched_inside_or_explained_by_its_kind_or_channe
         watched.ENTRY_MODULE,
         watched.HOOK_NOT_LISTED,
         watched.UNRESOLVED_PATCH,
+        watched.NAMES_NOTHING,
+        watched.APP_SETUP_IN_FUNCTION,
+        watched.ABSENT_LOCATION,
+        watched.SETTINGS_NAMED,
         watched.HOGLINT_ONLY_REASONS["rules.request-path.dst.path"],
     ]
 

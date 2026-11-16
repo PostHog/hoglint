@@ -11,6 +11,7 @@ for a file inside it.
 
 from __future__ import annotations
 
+import ast
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
@@ -108,7 +109,51 @@ PATCH_TARGET = Reason(
     "hoglint's wiring rule finds it; the product lint's channel scan does not.",
     Effect.MORE,
 )
-COVER_STARTS = (("edge.kind in ['signal', 'installs']", RECEIVER_OR_HOOK), ("edge.kind == 'dotted-path'", PATCH_TARGET))
+SETTINGS_NAMED = Reason(
+    "settings-named-module",
+    "A product module a settings module names by dotted path. The product lint scans only "
+    "`posthog/settings/`; hoglint reads every module the preset marks as settings.",
+    Effect.MORE,
+)
+REGISTRY_SLOT = Reason(
+    "registry-slot",
+    "A file in a registry slot the preset declares, which the product lint does not find as a "
+    "`load_product_modules` name (a slot another loader reads).",
+    Effect.MORE,
+)
+NAMED_WIRING = Reason(
+    "wiring-run-by-name",
+    "A file of a wiring location core runs by name that the product lint's list leaves out "
+    "(a `max_tools/` package; the lint lists `max_tools.py` only).",
+    Effect.MORE,
+)
+MODEL_FILE = Reason(
+    "model-surface-file",
+    "A file of the models or migrations zone outside the locations the product lint names.",
+    Effect.MORE,
+)
+PERMANENT_FILE = Reason(
+    "permanent-interface-file",
+    "A file the preset declares a permanent interface that tach's marked blocks do not list.",
+    Effect.MORE,
+)
+APP_CONFIG_IMPORT = Reason(
+    "app-config-import",
+    "A module the AppConfig module imports at module level that the product lint does not ask for.",
+    Effect.MORE,
+)
+# The wiring rule's covers that the preset writes as selections, by the start of their text. A
+# longer start comes before a shorter one it begins with.
+COVER_STARTS = (
+    ("edge.kind in ['signal', 'installs']", RECEIVER_OR_HOOK),
+    ("edge.kind == 'dotted-path' and src.settings == true", SETTINGS_NAMED),
+    ("edge.kind == 'dotted-path'", PATCH_TARGET),
+    ("edge.kind == 'import' and src.app_config == true", APP_CONFIG_IMPORT),
+    ("zone in ['models', 'migrations']", MODEL_FILE),
+    ("registry != none", REGISTRY_SLOT),
+    ("permanent == true", PERMANENT_FILE),
+    ("runs_by_name == true", NAMED_WIRING),
+)
 
 
 def hoglint_reason(why: str) -> Reason | None:
@@ -154,11 +199,77 @@ UNRESOLVED_PATCH = Reason(
     "something the module lacks. hoglint keeps no first-party edge for such a string.",
     Effect.LESS,
 )
+NAMES_NOTHING = Reason(
+    "string-names-nothing",
+    "The outside test's strings name no name the module defines or imports (a task name in an "
+    "assertion, a fake module name), so they reach none of its code. The product lint matches the "
+    "string's module prefix; no coupling stands behind it.",
+    Effect.SAME,
+)
+ABSENT_LOCATION = Reason(
+    "location-absent",
+    "The product lint asks for the location although the product has no file there yet. hoglint "
+    "asks for each file once it exists, in the change that adds it.",
+    Effect.SAME,
+)
+APP_SETUP_IN_FUNCTION = Reason(
+    "app-setup-import-in-function",
+    "`backend/apps.py` imports the module only inside a function (`ready()` or a callback it "
+    "installs). The product lint reads every import in the file; hoglint's AppConfig cover reads "
+    "module-level imports only, and a receiver or hook such a module connects is its own entry "
+    "module.",
+    Effect.LESS,
+    decided="the architect's brief, Nov 16 (module-level imports)",
+)
 
 
 def module_of_location(product: str, location: str) -> str:
     parts = f"products/{product}/{location}".removesuffix(".py").split("/")
     return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def imported_only_in_functions(apps_source: str, module: str, package: str) -> bool:
+    """Whether every import of `module` (or a name of it) in an AppConfig module of `package`
+    sits inside a function, and there is at least one."""
+    tree = ast.parse(apps_source)
+    inside: list[bool] = []
+
+    def names(node: ast.Import | ast.ImportFrom) -> list[str]:
+        if isinstance(node, ast.Import):
+            return [alias.name for alias in node.names]
+        base = node.module or ""
+        if node.level:
+            parent = ".".join(package.split(".")[: len(package.split(".")) - node.level + 1])
+            base = f"{parent}.{base}" if base else parent
+        return [base, *(f"{base}.{alias.name}" for alias in node.names)]
+
+    def visit(node: ast.AST, in_function: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.Import, ast.ImportFrom)) and module in names(child):
+                inside.append(in_function)
+            visit(child, in_function or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)))
+
+    visit(tree, False)
+    return bool(inside) and all(inside)
+
+
+def names_nothing(value: str, module: str, module_source: str) -> bool:
+    """Whether a dotted string goes on from `module` into a name the module neither defines nor
+    imports, so it reaches none of its code."""
+    rest = value.removeprefix(module + ".")
+    if rest == value or not rest:
+        return False
+    first = rest.split(".", 1)[0]
+    tree = ast.parse(module_source)
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+    return first not in bound
 
 
 def channel_reason(
@@ -168,6 +279,11 @@ def channel_reason(
     kind, source = requirement["kind"], requirement.get("source", "")
     module = module_of_location(product, requirement["location"])
     home = f"products/{product}/"
+    if kind == "channel:app-setup":
+        apps = f"{home}backend/apps.py"
+        if imported_only_in_functions(read_source(apps), module, f"products.{product}.backend"):
+            return APP_SETUP_IN_FUNCTION, f"{apps} imports {module} only inside a function"
+        return None
     if kind == "channel:settings-path":
         named = facts.settings_names.get(module, [])
         if named and not any(facts.follows_setting(setting) for _, setting in named):
@@ -197,9 +313,13 @@ def channel_reason(
     if kind == "channel:outside-test":
         names = SourceNames(source, read_source(source))
         strings = [value for value, _ in names.strings if value == module or value.startswith(module + ".")]
-        if strings and not any(facts.known(value) for value in strings):
-            return UNRESOLVED_PATCH, f"{source}: " + ", ".join(sorted(set(strings)))
-        return None
+        if not strings or any(facts.known(value) for value in strings):
+            return None
+        evidence = f"{source}: " + ", ".join(sorted(set(strings)))
+        module_source = read_source(location_path(product, requirement["location"]))
+        if all(names_nothing(value, module, module_source) for value in strings):
+            return NAMES_NOTHING, evidence
+        return UNRESOLVED_PATCH, evidence
     return None
 
 
@@ -218,7 +338,13 @@ def inside(path: str, product: str, location: str) -> bool:
     return path == f"{full}.py" or path.startswith(f"{full}/")
 
 
-def compare(requirements: dict[str, dict], facts: HoglintFacts, read_source: Callable[[str], str]) -> Comparison:
+def compare(
+    requirements: dict[str, dict],
+    facts: HoglintFacts,
+    read_source: Callable[[str], str],
+    any_file: Callable[[str], bool] = lambda directory: True,
+) -> Comparison:
+    """`any_file` says whether a directory of the tree holds a file."""
     comparison = Comparison(TOOL)
     by_product: dict[str, list[tuple[str, str, bool]]] = defaultdict(list)
     for path, (why, covered) in facts.watched.items():
@@ -238,6 +364,8 @@ def compare(requirements: dict[str, dict], facts: HoglintFacts, read_source: Cal
                 comparison.matches.append(Match(item, ", ".join(sorted(asked))))
                 continue
             found = channel_reason(product, requirement, facts, read_source) if kind.startswith("channel:") else None
+            if found is None and location.endswith("/") and not any_file(location_path(product, location)):
+                found = ABSENT_LOCATION, f"no file under {location_path(product, location)}"
             reason, evidence = found if found is not None else (LINT_ONLY.get(kind), requirement.get("source", ""))
             comparison.differences.append(Difference(item, OLD_ONLY, reason, evidence))
         for path, why, covered in sorted(ours):
@@ -253,4 +381,8 @@ def compare(requirements: dict[str, dict], facts: HoglintFacts, read_source: Cal
 
 def run(root: Path, facts: HoglintFacts) -> Comparison:
     requirements = old_tools.driver(root, "watch-requirements")["products"]
-    return compare(requirements, facts, lambda path: (root / path).read_text())
+
+    def any_file(directory: str) -> bool:
+        return (root / directory).is_dir() and any(path.is_file() for path in (root / directory).rglob("*"))
+
+    return compare(requirements, facts, lambda path: (root / path).read_text(), any_file)
