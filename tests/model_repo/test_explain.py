@@ -361,8 +361,6 @@ def sample_lines(commands: Commands, run: Run) -> list[str]:
 def test_every_rule_page_says_what_the_rule_is_for_and_what_to_do(explained: tuple[Commands, Run]) -> None:
     _, run = explained
     for spec in run.config.rules.values():
-        if spec.id in ("core-door",):  # the model repository's own rule, outside the preset
-            continue
         page = RulePage(spec, run.config).render()
         assert page.startswith(f"{spec.id}  (") and "\npurpose: " in page and "\nwhy: " in page, spec.id
         assert any(f"\n{label}: " in page for label in SAFETY_LABELS.values()), spec.id

@@ -33,24 +33,11 @@ exceptions = "hoglint.exceptions.toml"
 match = "posthog/api/view_base.py"
 set   = { request_seed = true }
 
-# Planted (cases DO01 to DO07): a door for a core package and a rule that reaches it, as
-# `dst.door` reads them. The preset declares no door outside the products, so the model
-# repository declares its own.
+# Planted (cases DO01 to DO07): a door for a core package, which public-surface reaches through
+# `dst.door`. The preset declares no door outside the products, so the model repository declares
+# its own.
 [exports.ingress-door]
 within   = "posthog/ingress"
 paths    = ["contracts.py"]
 audience = "*"
 shape    = "registration"
-
-[rules.core-door]
-primitive      = "entrypoint"
-doc            = "Other packages name a core package with a declared door only through its export; its tests may reach past it."
-kinds          = ["import", "reference", "dotted-path"]
-contexts       = { exclude = ["migration"] }
-select         = "crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context"
-endpoint       = "surface"
-uses_at_import = true
-allow          = "dst.exported"
-on_unresolved  = "finding"
-identity       = ["dst.symbol", "src.module", "edge.kind"]
-growth_key     = ["dst.symbol", "edge.kind", "src.package"]

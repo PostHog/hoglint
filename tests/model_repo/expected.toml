@@ -283,26 +283,6 @@ rule = "contracts-no-django"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.contracts", "django.conf"]
 
-# core-door
-
-[[row]]
-case = "DO01"
-rule = "core-door"
-verdict = "finding"
-identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
-
-[[row]]
-case = "DO06"
-rule = "core-door"
-verdict = "unknown"
-identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
-
-[[row]]
-case = "DO07"
-rule = "core-door"
-verdict = "unknown"
-identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
-
 # drives
 
 [[row]]
@@ -1510,6 +1490,18 @@ verdict = "incomplete"
 identity = ["scripts.shapes"]
 
 # public-surface
+
+[[row]]
+case = "DO01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
+
+[[row]]
+case = "DO06"
+rule = "public-surface"
+verdict = "unknown"
+identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
 
 [[row]]
 case = "DP03"
