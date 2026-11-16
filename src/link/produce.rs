@@ -1234,6 +1234,66 @@ impl Producers<'_> {
                 &attrs,
             );
         }
+        self.alias_references(owner);
+    }
+
+    /// A lower-case name read through a module alias of an export module (`api.f()` after
+    /// `from ...facade import api`) has no `refs` row, only a `uses` count: one reference edge per
+    /// scope and attribute chain, at its first use. Elsewhere the module's import stands for it.
+    /// A `uses` row has no statement flags, so the edge's context comes from its scope alone.
+    fn alias_references(&mut self, owner: usize) {
+        let facts = self.core.facts.clone();
+        let k = &self.settings.k;
+        let file = self.scopes[owner].file as usize;
+        for row in &facts.files[file].uses {
+            if row.attrs == EMPTY {
+                continue;
+            }
+            let core = &mut *self.core;
+            let scope = &mut self.scopes[owner];
+            let first =
+                core.name_lookup(&self.settings.names, scope, row.root, row.scope, row.line);
+            let Some(module) = first.hit.filter(|&hit| core.kind(hit) == HitKind::Module) else {
+                continue;
+            };
+            let module = core.origin(module).m;
+            let export = core.module_path(module).is_some_and(|path| {
+                (self.settings.export_surfaces.iter())
+                    .any(|surface| surface.covered_root(path).is_some())
+            });
+            if !export {
+                continue;
+            }
+            let names: Vec<String> = (core.it.s(row.attrs).split('.'))
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect();
+            let leading: Vec<Sid> = names.iter().map(|name| core.it.intern(name)).collect();
+            let (found, used) = core.names_descend(first, &leading);
+            let Some(hit) = found.hit else {
+                continue;
+            };
+            if used == 0 || core.kind(hit) == HitKind::Module {
+                continue;
+            }
+            let remaining: String = names[used..].iter().map(|name| format!(".{name}")).collect();
+            let attrs = [(k.chain, core.it.intern(&remaining))];
+            let use_ = core.it.intern("attribute");
+            let resolved = core.classify_lookup(found);
+            let ctx = core.contexts(scope, 0, row.scope);
+            self.push(
+                REFERENCE,
+                owner,
+                row.scope,
+                row.line,
+                row.col,
+                ctx,
+                found.surface,
+                resolved,
+                use_,
+                &attrs,
+            );
+        }
     }
 
     /// Every dotted name in a type expression. `Annotated`

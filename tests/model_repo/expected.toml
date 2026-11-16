@@ -1705,6 +1705,12 @@ identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
 # reached-watched
 
 [[row]]
+case = "OR07"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/stock_sweeps.py"]
+
+[[row]]
 case = "DP07"
 rule = "reached-watched"
 verdict = "finding"
@@ -2438,13 +2444,6 @@ decision = "A written limit (Nov 13): a public name bound by a call or a member 
 rule = "export-shape"
 verdict = "unknown"
 match = ["products.catalog.backend.facade.aliases.built"]
-
-[[wanted]]
-case = "OR07"
-decision = "T7 (D120): core calls a facade hand-out; a lower-case name read through a module alias makes no edge (a written limit, Nov 17)"
-rule = "reached-watched"
-verdict = "finding"
-match = ["products/inventory/backend/logic/stock_sweeps.py"]
 
 # Levels: the products that pass and fail each level, and the products that claim it.
 

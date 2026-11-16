@@ -1440,6 +1440,11 @@ text = "products/inventory/backend/logic/stock_cleanup.py is needed by edge.kind
 
 [[finding]]
 rule = "reached-watched"
+identity = ["products/inventory/backend/logic/stock_sweeps.py"]
+text = "products/inventory/backend/logic/stock_sweeps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and src.tier != 'product' and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_warmup.py"]
 text = "products/inventory/backend/logic/stock_warmup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and src.tier != 'product' and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 

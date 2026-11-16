@@ -34,7 +34,8 @@ class CoreProducer:
 CORE_PRODUCERS: tuple[CoreProducer, ...] = (
     # An import edge reads `listed`: whether every load of the name it binds sits in a literal.
     CoreProducer("import", frozenset({"import"}), frozenset({"listed"})),
-    CoreProducer("reference", frozenset({"reference"}), frozenset({"refs"})),
+    # A reference edge reads `uses` too: a name read through a module alias of an export module.
+    CoreProducer("reference", frozenset({"reference"}), frozenset({"refs", "uses"})),
     CoreProducer(
         "declaration",
         frozenset({"inherit", "decorate", "exposes", "declares", "rebind"}),

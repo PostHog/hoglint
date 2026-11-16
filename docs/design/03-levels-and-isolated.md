@@ -43,7 +43,7 @@ How the preset says it:
 Its limits, in plain words:
 1. `reached-watched` reads the file the code names and, for a facade hand-out, the files on the name's path to its definition; not what those files import, nor the `__init__.py` files above them (as the request path, D103).
 2. An edge whose source tier cannot be told is an incomplete item of `reached-watched` on the source module, so it blocks no product.
-3. A lower-case name read through a module alias of a facade module (`from ...facade import api as x`, then `x.f()`) is not read: the facts count such a use, and no edge names `f`. A class or a constant (`x.Thing`) is read.
+3. A name read through a module alias of an export module (`from ...facade import api as x`, then `x.f()`) is read once per scope and attribute chain, at its first use; the use has no statement flags, so one under `if TYPE_CHECKING:` counts as a read.
 4. The files of what sits in a handed-out list are not asked for; a registration point that only lists the hand-out asks for nothing.
 5. A product that reads another product's hand-out asks for nothing (D108's reader scope).
 

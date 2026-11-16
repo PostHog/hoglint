@@ -485,6 +485,13 @@ impl Core {
         self.index.exists(module)
     }
 
+    /// The path of a module's file, the read noted as `exists` notes it; None with no file.
+    pub fn module_path(&mut self, module: Sid) -> Option<&str> {
+        self.rec.read(Kind::Module, module, EMPTY);
+        let file = *self.index.path_of.get(&module)?;
+        Some(&self.facts.files[file as usize].path)
+    }
+
     /// Third-party: loaded from site-packages, or named under a head no repo file has
     /// (`ModuleIndex::is_external`).
     pub fn is_external(&mut self, module: Sid) -> bool {
