@@ -178,6 +178,31 @@ def test_installs_edges_see_imports_only_where_they_are_bound_follow_aliases_and
     ]
 
 
+INHERITED_READY = {
+    "shop/base.py": {
+        "imports": [
+            import_from("django.apps.config", "AppConfig"),
+            import_from("shop.models", "Order", scope=1, flags=FUNC, line=4),
+            import_from("billing.models", "Invoice", scope=2, flags=FUNC, line=6),
+        ],
+        "defs": [class_def("ShopBase", ["AppConfig"], 2), func_def("ready", 3, scope=0), func_def("later", 5, scope=1)],
+    },
+    "shop/apps.py": {
+        "imports": [import_from("shop.base", "ShopBase")],
+        "defs": [class_def("ShopConfig", ["ShopBase"], 2)],
+        "assigns": [assign("name", {"s": "shop"}, 3, scope=0, flags=8)],
+    },
+}
+
+
+def test_imports_in_the_ready_body_django_runs_are_app_setup_and_a_callback_s_are_not() -> None:
+    graph = FactRepo(INHERITED_READY).graph()
+
+    marked = sorted((e.site.scope, e.surface) for e in graph.by_kind("import") if e.attr("app_setup") == "ready")
+
+    assert marked == [("ShopBase.ready", "shop.models.Order")]
+
+
 @pytest.mark.parametrize("scan_roots, installs", [((), 0), (("proj",), 3)])
 def test_first_party_code_outside_the_installed_apps_is_read_only_when_configured(
     scan_roots: tuple[str, ...], installs: int

@@ -111,14 +111,16 @@ Besides the drives, request-path, receiver, hook-callback and patch-target cover
 - every declared permanent interface (`permanent`);
 - each wiring location core runs by a name it reads at run time (`runs_by_name`: tasks, temporal, Max tools), as one location that any one watched file in it watches, as the old lint reads it (the owner, Nov 16); query runners stay with `drives`, which reads their channel;
 - every product module a settings module names by dotted path, under any key, not only the keys the request path follows;
-- the modules of its own product that a product's AppConfig module (`app_config`) imports at module level.
+- the modules of its own product that a product's AppConfig module (`app_config`) imports at setup: at module level, and in the body of the installed AppConfig's `ready()` (the architect, Nov 16, under the owner's parity bar).
+  Django calls `ready()` once at setup in every process, and the old lint watches these modules.
+  The Django pack marks such an import edge `app_setup = "ready"`; the cover reads it next to the `function_local` context.
 
 A coverage rule may select modules by an entity selector: `"<entity selector>: module"` needs the file of each module the selector keeps.
 `"<entity selector>: location"` needs one watched file in each location those modules stand in: the outermost package or directory without `__init__.py` that the selector keeps, else the module's own file.
 A module it cannot tell it keeps is an incomplete item.
 
 Its limits, in plain words:
-1. An import inside `ready()` or inside a callback is not followed: hook callbacks and receivers are watched at their entry module (Nov 9).
+1. An import inside a function that `ready()` defines or hands on, or inside any other function of the AppConfig module, is not followed: a callback runs later, if ever, and hook callbacks and receivers are watched at their entry module (Nov 9).
 2. A registry the preset does not declare is not known, so a new loader call needs a registry entry.
    The old lint found every `load_product_modules` call by itself.
 3. The model surface is the two zones; a model class defined elsewhere in a product is not asked for.

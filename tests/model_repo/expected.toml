@@ -2220,6 +2220,18 @@ verdict = "finding"
 identity = ["products/catalog/backend/events.py"]
 
 [[row]]
+case = "WW23"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/hooks.py"]
+
+[[row]]
+case = "WW23"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/listeners.py"]
+
+[[row]]
 case = "PS27"
 rule = "wiring-watched"
 verdict = "finding"
