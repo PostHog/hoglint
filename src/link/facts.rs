@@ -8,7 +8,7 @@ use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-/// A value tree (schema.md section 4), reduced to the forms resolution reads.
+/// A value tree (`src/value.rs`), reduced to the forms resolution reads.
 #[derive(Debug, Clone)]
 pub enum V {
     Null,

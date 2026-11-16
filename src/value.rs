@@ -1,4 +1,4 @@
-//! Value trees (V) and shallow values (SV), schema.md section 4.
+//! Value trees (V) and shallow values (SV).
 //!
 //! Each struct serializes to one JSON object form. Fields are declared in key order, because
 //! records sort object keys by code point.

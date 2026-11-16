@@ -1,5 +1,4 @@
-//! The walk's parent stack, and the `chain` / `up` use-site context read from it
-//! (schema.md section 6).
+//! The walk's parent stack, and the `chain` / `up` use-site context read from it.
 
 use crate::value::callee_text;
 use ruff_python_ast::{self as ast, Expr};

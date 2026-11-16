@@ -1,4 +1,4 @@
-//! Text rules for string literals and chains (schema.md section 5, `strs` and `uses`).
+//! Text rules for string literals and chains (the `strs` and `uses` facts of `src/facts.rs`).
 
 /// Longest literal, in code points, that still counts as symbolic for `strs` and `names`.
 const MAX_SYMBOLIC: usize = 1_000;

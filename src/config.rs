@@ -11,7 +11,7 @@ pub const NATIVE_ID: &str = env!("HOGLINT_NATIVE_ID");
 /// The id of the `[engine]` sources (everything, Python included), from build.rs.
 pub const ENGINE_ID: &str = env!("HOGLINT_ENGINE_ID");
 
-/// One fact list of a record (schema.md section 5).
+/// One fact list of a record (`src/facts.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Assigns,

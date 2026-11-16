@@ -252,7 +252,7 @@ def test_a_condition_reads_as_its_text_in_parentheses_and_its_text_keys_the_poli
     )
     inline_deny = inline.rules["other"].deny
     assert inline_deny is not None
-    # the evaluators receive this tree: the same tree means neither engine sees a name
+    # the evaluator receives this tree: the same tree means it never sees a condition's name
     assert named == tree(inline_deny.node)
     changed, changed_tree = named_condition(
         tmp_path / "changed", "src.package != dst.package", "not crossing or dst.tier == 'core'"

@@ -1,4 +1,4 @@
-//! L1 fact extractor (schema v3, see schema.md) on the ruff parser: the pure core.
+//! L1 fact extractor (schema v3, its facts in `src/facts.rs`) on the ruff parser: the pure core.
 //!
 //! `extract` turns one file's bytes into a typed `FileRecord`; `record_line` encodes it.
 //! Nothing here reads files, the clock or global state. The `hoglint-facts` binary is the

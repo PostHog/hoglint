@@ -1,4 +1,4 @@
-//! Locals derived from tracked uses (schema.md, `refs` rule 2), resolved with a worklist.
+//! Locals derived from tracked uses (`refs`), resolved with a worklist.
 //!
 //! A use whose escape path starts with an assignment to plain names derives those names in
 //! its scope. Loads of a derived name in that scope or a nested def are use sites too, and

@@ -1,4 +1,4 @@
-//! The record line: compact JSON with keys in code point order (schema.md section 3).
+//! The record line: compact JSON with keys in code point order.
 
 use crate::config::SCHEMA_VERSION;
 use crate::facts::{

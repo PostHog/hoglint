@@ -110,8 +110,8 @@ ENDPOINTS = ("surface", "origin", "via")
 ON_UNRESOLVED = ("finding", "block", "incomplete")
 LIFECYCLES = ("setup", "first-request", "worker-start", "on-demand")
 SELECTOR_MARKERS = ("==", "!=", " in ", "startswith", "subset_of", " and ", " or ", "not ")
-# The most exports a config declares: the native evaluator keeps a module's exports as the bits of
-# one 64-bit word, and a limit belongs to the config, not to one engine.
+# The most exports a config declares: the evaluator keeps a module's exports as the bits of one
+# 64-bit word, so the schema rejects a config with more before a run starts.
 MAX_EXPORTS = 64
 # Entity attributes that only a symbol has: a module field's domain cannot read them.
 SYMBOL_ATTRIBUTES = frozenset({"symbol", "decl", "kind"})
