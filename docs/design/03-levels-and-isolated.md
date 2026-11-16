@@ -28,7 +28,7 @@ How the preset says it:
 - `presentation-uses-facade` is read through the level key `within_group`: a row whose subjects fall in two groups is not counted, so only a product's own presentation counts.
 - `has-facade` is a `layout` rule: `files = ["backend/facade/{contracts.py,contracts}", "backend/facade/api.py: function"]`, a list (advisory, no ledger).
   A `files` entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
-- `wiring-watched` stays as it was.
+- `wiring-watched` also asks for what the old product lint kept in a narrowing product's inputs (see "What the contract-check inputs watch" below).
 - The level requires these four rules and makes all four strict.
   Its `select` reads `path startswith 'products/'`: a product is judged where its facade and its contract-check config live.
 - Whether a product skips is still its own config (`package.json` and `turbo.json`); the level says whether that skip would be sound, and a product that skips must hold it (next entry).
@@ -103,6 +103,24 @@ Its limits, in plain words:
 2. The `__init__.py` of a package above a reached module is not followed, although Python runs it.
 3. A name is followed to the module that defines it, not to the module the code wrote.
    A facade that only re-exports the name is skipped, together with what that facade imports for its own functions.
+
+**What the contract-check inputs watch, at parity with the old product lint** (Nov 16).
+Besides the drives, request-path, receiver, hook-callback and patch-target covers, `wiring-watched` asks for:
+- the model surface: every module of the `models` and `migrations` zones, since a model is reachable without an import (`apps.get_model` strings, migrations, admin);
+- every module a registry loads by name (`registry != none`): routes, scopes, data freshness, webhook consumers, health checks, integration usages and hooks, today's highlights;
+- every declared permanent interface (`permanent`);
+- every module of a wiring location core runs by a name it reads at run time (`runs_by_name`: tasks, temporal, Max tools); query runners stay with `drives`, which reads their channel;
+- every product module a settings module names by dotted path, under any key, not only the keys the request path follows;
+- the modules of its own product that a product's AppConfig module (`app_config`) imports at module level.
+
+A coverage rule may select modules by an entity selector: `"<entity selector>: module"` needs the file of each module the selector keeps.
+A module it cannot tell it keeps is an incomplete item.
+
+Its limits, in plain words:
+1. An import inside `ready()` or inside a callback is not followed: hook callbacks and receivers are watched at their entry module (Nov 9).
+2. A registry the preset does not declare is not known, so a new loader call needs a registry entry.
+   The old lint found every `load_product_modules` call by itself.
+3. The model surface is the two zones; a model class defined elsewhere in a product is not asked for.
 
 **A wiring location without `__init__.py` is watched through its files** (Nov 12).
 Each module file directly inside the directory stands for it, as `__init__.py` stands for a package: `wiring-watched` requires each of them.

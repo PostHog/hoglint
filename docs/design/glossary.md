@@ -123,6 +123,8 @@ Some words have two meanings; the entry names both.
 - **Required file** (layout rule keys `within`, `files`).
   A path each root of `within` must hold.
   An entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.
+- **Cover** (coverage rule key `covers`).
+  One thing a coverage rule needs covered: another rule's column (`rules.<rule>.<column>`), the paths of an edge selection at an endpoint (`<edge selector>: src`, `: dst` or `: surface`), or the files of the modules an entity selection keeps (`<entity selector>: module`).
 - **Coverage adapter** (coverage rule key `inputs = { adapter = ... }`).
   A plugin that reads an outside list of covered paths, such as a build tool's task inputs, for a `coverage` rule, and for a level's `claimed_by`.
 

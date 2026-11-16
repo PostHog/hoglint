@@ -2124,6 +2124,132 @@ verdict = "finding"
 identity = ["products/gatekeeper/backend/validator.py"]
 
 [[row]]
+case = "WW15"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/migrations/0001_initial.py"]
+
+[[row]]
+case = "WW15"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/migrations/__init__.py"]
+
+[[row]]
+case = "WW16"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/health_checks.py"]
+
+[[row]]
+case = "WW16"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/routes.py"]
+
+[[row]]
+case = "WW16"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/webhook_consumers.py"]
+
+[[row]]
+case = "WW16"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/health_checks.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/tasks/__init__.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/tasks/reindex.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/tasks/__init__.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/tasks/restock.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/tasks/__init__.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/tasks/cleanup.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/legacy/backend/temporal/jobs.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/tasks/__init__.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/tasks/nightly.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/temporal/__init__.py"]
+
+[[row]]
+case = "WW17"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/reports/backend/temporal/workflows.py"]
+
+[[row]]
+case = "WW18"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/apps.py"]
+
+[[row]]
+case = "WW18"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/login_flow.py"]
+
+[[row]]
+case = "WW18"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/gatekeeper/backend/throttles.py"]
+
+[[row]]
+case = "WW19"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/events.py"]
+
+[[row]]
 case = "SV00"
 rule = "has-facade"
 verdict = "finding"

@@ -530,6 +530,8 @@ class NativeRuleContext(RuleContext):
         for what, at, module, surface in incomplete:
             if what == "not-run":
                 rule.not_run(covers[at])
+            elif what == "unknown-selection":
+                rule.unknown_selection(module, covers[at])
             else:
                 rule.unplaced(module, surface)
         return {path: (rule.why(covers[at]), module) for path, at, module in paths}

@@ -121,6 +121,17 @@ ledger = false
             "[levels.isolated]\ngroup_by = 'package'\nrequires = ['cross']\nclaimed_by = { adapter = 'turbos' }\n",
             "unknown coverage adapter 'turbos'",
         ),
+        # a module cover reads one module at a time: there is no edge to read
+        (
+            "[rules.other]\nprimitive = 'coverage'\ncovers = [\"edge.kind == 'import': module\"]\n"
+            "inputs = { adapter = 'turbo', task = 'x' }\nledger = false\n",
+            "unknown field 'edge.kind'",
+        ),
+        (
+            "[rules.other]\nprimitive = 'coverage'\ncovers = [\"tier == 'core': modules\"]\n"
+            "inputs = { adapter = 'turbo', task = 'x' }\nledger = false\n",
+            "or `<entity selector>: module`",
+        ),
         (
             "[levels.isolated]\ngroup_by = 'package'\nrequires = ['cross']\n"
             "claimed_by = { adapter = 'turbo', tsk = 'x' }\n",

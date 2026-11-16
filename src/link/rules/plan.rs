@@ -194,16 +194,17 @@ pub struct SlotPolicyPlan {
 /// One thing a coverage rule needs covered (`CoverSpec`).
 #[derive(Deserialize)]
 pub struct CoverPlan {
-    /// The rule whose column it reads, or None for an edge selection.
+    /// The rule whose column it reads, or None for an edge or entity selection.
     pub rule: Option<String>,
     /// That column as a ref path.
     pub column: Vec<String>,
     /// The kinds an edge selection pins, sorted; None when it pins none.
     pub kinds: Option<Vec<String>>,
-    /// Its conjuncts that read only an edge's kind and contexts, joined, and the others.
+    /// Its conjuncts that read only an edge's kind and contexts, joined, and the others; every
+    /// conjunct of an entity selection is in `rest`.
     pub by_edge: Option<NodePlan>,
     pub rest: Vec<NodePlan>,
-    /// src or dst.
+    /// src, dst or surface for an edge selection, module for an entity selection.
     pub endpoint: String,
 }
 

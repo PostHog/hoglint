@@ -1,12 +1,12 @@
 //! The paths a coverage rule needs covered: another rule's column read off its findings'
-//! witnesses, and the endpoints of an edge selection. Whether an outside input covers each path
-//! stays with the coverage adapter, a Python plugin.
+//! witnesses, the endpoints of an edge selection, and the modules an entity selection keeps.
+//! Whether an outside input covers each path stays with the coverage adapter, a Python plugin.
 
-use super::env::{Cx, Endpoint, Env, Role};
+use super::env::{Cx, Endpoint, EntityEnv, Env, Role};
 use super::labels::Field;
 use super::plan::CoverPlan;
 use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
-use super::staged::Staged;
+use super::staged::{Staged, class_truth};
 use super::value::{Truth, Value, all_of, render};
 use crate::link::Link;
 use rustc_hash::FxHashMap;
@@ -27,13 +27,25 @@ pub enum Cover {
         /// The destination is the one the edge names (a patch target's module), not its origin.
         surface: bool,
     },
+    /// The files of the modules an entity selection keeps, in its `and` parts.
+    Modules { selection: Vec<Node> },
 }
 
 impl Cover {
-    pub fn new(plan: &CoverPlan, edge: &Compiler, fields: &[Field]) -> Result<Cover, String> {
+    pub fn new(
+        plan: &CoverPlan,
+        edge: &Compiler,
+        entity: &Compiler,
+        fields: &[Field],
+    ) -> Result<Cover, String> {
         if plan.rule.is_some() {
             return Ok(Cover::Rule {
                 column: edge.reference(&plan.column),
+            });
+        }
+        if plan.endpoint == "module" {
+            return Ok(Cover::Modules {
+                selection: entity.nodes(&plan.rest)?,
             });
         }
         let rest = edge.nodes(&plan.rest)?;
@@ -58,6 +70,11 @@ impl Cover {
                     node.refs(out);
                 }
             }
+            Cover::Modules { selection } => {
+                for node in selection {
+                    node.refs(out);
+                }
+            }
         }
     }
 }
@@ -65,7 +82,8 @@ impl Cover {
 /// What a coverage rule's covers need, as data the rule's Python class words
 /// (`CoveragePrimitive`): every path with the cover that names it first and the module that
 /// needs it, sorted by path; and in order, what it cannot tell, (what, cover, source module,
-/// surface): "not-run" for a cover whose rule did not run, "unplaced" for an edge it cannot place.
+/// surface): "not-run" for a cover whose rule did not run, "unplaced" for an edge it cannot place,
+/// "unknown-selection" for a module an entity cover cannot tell it keeps.
 #[derive(Default)]
 pub struct Required {
     pub paths: Vec<(String, u32, Option<String>)>,
@@ -158,6 +176,24 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         };
                         for path in files {
                             found.entry(path).or_insert((at, None));
+                        }
+                    }
+                }
+            }
+            Cover::Modules { selection } => {
+                for (place, &module) in cx.rules.modules.iter().enumerate() {
+                    let place = place as u32;
+                    let env = EntityEnv::of(cx, Some((module, place)), None, None);
+                    let name = || Some(cx.text(module).to_string());
+                    match class_truth(selection, &env, cx.rules.touch) {
+                        Truth::False => {}
+                        Truth::Unknown => {
+                            out.incomplete
+                                .push(("unknown-selection", at, name(), String::new()));
+                        }
+                        Truth::True => {
+                            let path = cx.rules.module_path(cx.link, place).to_string();
+                            found.entry(path).or_insert((at, name()));
                         }
                     }
                 }

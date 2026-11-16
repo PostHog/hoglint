@@ -1220,8 +1220,38 @@ text = "products.reports.backend.health_checks reaches posthog.dags.backfill.bac
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/catalog/backend/apps.py"]
+text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/events.py"]
+text = "products/catalog/backend/events.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and 'function_local' not in edge.context and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/catalog/backend/hogql_queries/__init__.py"]
 text = "products/catalog/backend/hogql_queries/__init__.py is needed by rules.drives.dst.path but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/migrations/0001_initial.py"]
+text = "products/catalog/backend/migrations/0001_initial.py is needed by zone in ['models', 'migrations']: module but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/migrations/__init__.py"]
+text = "products/catalog/backend/migrations/__init__.py is needed by zone in ['models', 'migrations']: module but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/tasks/__init__.py"]
+text = "products/catalog/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/catalog/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/catalog/backend/tasks/reindex.py"]
+text = "products/catalog/backend/tasks/reindex.py is needed by runs_by_name == true and testcode != true: module but products/catalog/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1240,8 +1270,18 @@ text = "products/gatekeeper/backend/logic/decisions.py is needed by rules.reques
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/login_flow.py"]
+text = "products/gatekeeper/backend/login_flow.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/session_gate.py"]
 text = "products/gatekeeper/backend/session_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/gatekeeper/backend/throttles.py"]
+text = "products/gatekeeper/backend/throttles.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/gatekeeper/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1255,8 +1295,28 @@ text = "products/gatekeeper/backend/validator.py is needed by rules.request-path
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/inventory/backend/tasks/__init__.py"]
+text = "products/inventory/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/inventory/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/inventory/backend/tasks/restock.py"]
+text = "products/inventory/backend/tasks/restock.py is needed by runs_by_name == true and testcode != true: module but products/inventory/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/legacy/backend/apps.py"]
 text = "products/legacy/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/health_checks.py"]
+text = "products/legacy/backend/health_checks.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/routes.py"]
+text = "products/legacy/backend/routes.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1265,8 +1325,33 @@ text = "products/legacy/backend/stock_listeners.py is needed by edge.kind in ['s
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/legacy/backend/tasks/__init__.py"]
+text = "products/legacy/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/tasks/cleanup.py"]
+text = "products/legacy/backend/tasks/cleanup.py is needed by runs_by_name == true and testcode != true: module but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/temporal/jobs.py"]
+text = "products/legacy/backend/temporal/jobs.py is needed by runs_by_name == true and testcode != true: module but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/legacy/backend/webhook_consumers.py"]
+text = "products/legacy/backend/webhook_consumers.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/reports/backend/apps.py"]
 text = "products/reports/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/health_checks.py"]
+text = "products/reports/backend/health_checks.py is needed by registry != none and tier == 'product': module but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "wiring-watched"
@@ -1277,6 +1362,26 @@ text = "products/reports/backend/hogql_queries/widget.py is needed by rules.driv
 rule = "wiring-watched"
 identity = ["products/reports/backend/logic/build.py"]
 text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/tasks/__init__.py"]
+text = "products/reports/backend/tasks/__init__.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/tasks/nightly.py"]
+text = "products/reports/backend/tasks/nightly.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/temporal/__init__.py"]
+text = "products/reports/backend/temporal/__init__.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/reports/backend/temporal/workflows.py"]
+text = "products/reports/backend/temporal/workflows.py is needed by runs_by_name == true and testcode != true: module but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"

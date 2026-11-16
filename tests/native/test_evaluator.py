@@ -1843,6 +1843,40 @@ def test_a_coverage_rule_gives_its_stored_paths(world: World) -> None:
     assert len(run.findings) > 3 and run.incomplete
 
 
+MODULE_COVERS = rule_table(
+    "module-covered",
+    {
+        "primitive": "coverage",
+        "covers": [
+            "zone == 'models' or (registry != none and tier == 'product'): module",
+            "package == 'alerts' and tier == 'product': module",
+        ],
+        "inputs": {"adapter": "globs", "paths": ["products/billing/backend/models.py"]},
+        "identity": ["subject"],
+        "ledger": False,
+    },
+)
+
+
+def test_a_module_cover_needs_the_file_of_each_module_an_entity_selection_keeps(world: World) -> None:
+    config = world.config(MODULE_COVERS)
+    native = world.context(config)
+    run = primitive_of(config.rules["module-covered"])(native, config.rules["module-covered"]).evaluate()
+    unwatched = {finding.identity[0]: finding.message for finding in run.findings}
+    assert "products/billing/backend/models.py" not in unwatched
+    assert (
+        "zone == 'models' or (registry != none and tier == 'product'): module"
+        in unwatched["products/billing/backend/routes.py"]
+    )
+    assert {"products/alerts/backend/logic.py", "products/alerts/jobs.py"} <= set(unwatched)
+    assert not any(path.startswith("core/") for path in unwatched)
+    # products/__init__.py is in the package field's domain, and nothing sets it there.
+    unknown = [item for item in run.incomplete if item.subjects == ("products",)]
+    assert [item.reason for item in unknown] == [
+        "cannot tell whether `package == 'alerts' and tier == 'product': module` selects products"
+    ]
+
+
 def test_a_surface_with_a_control_character_is_worded_once(world: World) -> None:
     rules = rule_table(
         "unplaced",

@@ -342,6 +342,9 @@ class CoveragePrimitive(EntityRule):
     def unplaced(self, module: str | None, surface: str) -> None:
         self.incomplete(f"{module}|{surface}", module, f"cannot place {surface!r} for coverage")
 
+    def unknown_selection(self, module: str | None, cover: CoverSpec) -> None:
+        self.incomplete(f"{module}|{cover.text}", module, f"cannot tell whether `{cover.text}` selects {module}")
+
     def inherit_unknowns(self) -> None:
         """What a rule a cover reads cannot tell, this rule cannot tell either: its paths may be
         missing a path. It holds even when that rule is advisory and its own items are not shown."""

@@ -986,7 +986,7 @@ impl Rules {
                 found
                     .covers
                     .iter()
-                    .map(|cover| Cover::new(cover, edge, fields))
+                    .map(|cover| Cover::new(cover, edge, entity, fields))
                     .collect::<Result<Vec<_>, String>>()?,
             ),
             ModePlan::Entities(found) => RuleKind::Entities(EntityRule::new(found, entity)?),

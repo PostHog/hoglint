@@ -73,6 +73,11 @@ crosses   = { type = "bool", on = "symbol" }
 request_seed = { type = "bool" }
 # The member of the warehouse sources tree a module belongs to: a vendor, `sdk` or `conftest`.
 source_vendor = { type = "string" }
+# A product's AppConfig module: Django imports it at setup in every process.
+app_config = { type = "bool" }
+# A wiring location core runs by a name it reads at run time (a Celery task, a Temporal workflow, a
+# Max tool), a channel no producer reads: the contract-check inputs watch it while it exists.
+runs_by_name = { type = "bool" }
 
 # Owners of a finding come from `owners`; cycles and compare's new pairs are between packages.
 [roles]
@@ -160,6 +165,18 @@ match = [
   "posthog/temporal/ai_observability/**",
 ]
 set = { wiring = "location" }
+
+# Query runners are not here: core runs them by the query's kind, which `drives` reads.
+[[assign]]
+match = [
+  "products/*/backend/temporal/**", "products/*/backend/max_tools.py", "products/*/backend/max_tools/**",
+  "products/*/backend/tasks.py", "products/*/backend/tasks/**",
+]
+set = { runs_by_name = true }
+
+[[assign]]
+match = "products/*/backend/apps.py"
+set   = { app_config = true }
 
 [[assign]]
 match = [
@@ -417,6 +434,24 @@ attribute = "HEALTH_CHECKS"
 shape     = "abc:posthog.temporal.health_checks.framework.HealthCheckRegistration"
 lifecycle = "worker-start"
 
+[registries.integration_usages]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/integration_usages.py"
+attribute = "integration_usages"
+lifecycle = "on-demand"
+
+[registries.integration_hooks]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/integration_hooks.py"
+attribute = "after_integration_saved"
+lifecycle = "on-demand"
+
+[registries.today_highlights]
+loader    = "posthog.products.load_product_modules"
+module    = "products/{product}/backend/facade/today_highlights.py"
+attribute = "HIGHLIGHT_SOURCES"
+lifecycle = "on-demand"
+
 # ── Identities: ledger columns per rule family ─────────────────
 
 [identities]
@@ -656,14 +691,24 @@ growth_key    = ["dst.module"]
 report        = "advisory"
 ledger        = false
 
+# The covers after the first four are where core runs a product's code with no import a rule
+# follows: its models and migrations, a module a registry loads by name, a declared permanent
+# interface, a wiring location run by name, a module settings name under any key, and what the
+# AppConfig module imports at module level.
 [rules.wiring-watched]
 primitive  = "coverage"
-doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback outside tests, and every module outside tests patch is in the contract-check inputs."
+doc        = "Every wiring location another package drives, every product module the request pipeline reaches, every receiver or hook callback outside tests, and every module outside tests patch is in the contract-check inputs; so are a product's models and migrations, the modules a registry loads by name, its permanent interfaces, its wiring locations run by name, the modules settings name, and the product modules its AppConfig module imports at module level."
 covers     = [
   "rules.drives.dst.path",
   "rules.request-path.dst.path",
   "edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package: src",
   "edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface",
+  "zone in ['models', 'migrations']: module",
+  "registry != none and tier == 'product': module",
+  "permanent == true and testcode != true: module",
+  "runs_by_name == true and testcode != true: module",
+  "edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface",
+  "edge.kind == 'import' and src.app_config == true and dst.package == src.package and 'function_local' not in edge.context and 'type_only' not in edge.context: surface",
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
