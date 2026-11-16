@@ -235,18 +235,6 @@ identity = ["posthog.temporal.health_checks.registry|dynamic-import|"]
 # export-shape
 
 [[row]]
-case = "HZ16"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.reports.backend.models.ReportRun", "products.reports.backend.facade.run_handle", "export-denied(model)"]
-
-[[row]]
-case = "HZ15"
-rule = "export-shape"
-verdict = "finding"
-identity = ["products.reports.backend.models.ReportRun.Status", "products.reports.backend.facade.run_status", "export-shape(class)"]
-
-[[row]]
 case = "ES01"
 rule = "export-shape"
 verdict = "finding"
@@ -361,6 +349,18 @@ verdict = "unknown"
 identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
 
 [[row]]
+case = "HZ15"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.reports.backend.models.ReportRun.Status", "products.reports.backend.facade.run_status", "export-shape(class)"]
+
+[[row]]
+case = "HZ16"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.reports.backend.models.ReportRun", "products.reports.backend.facade.run_handle", "export-denied(model)"]
+
+[[row]]
 case = "ME01"
 rule = "export-shape"
 verdict = "finding"
@@ -429,12 +429,6 @@ identity = ["products.inventory.backend.models.StockItem", "products.catalog.bac
 # facade-logic
 
 [[row]]
-case = "HZ16"
-rule = "facade-logic"
-verdict = "finding"
-identity = ["products.reports.backend.facade.run_handle.run_count", "products.reports.backend.facade.run_handle"]
-
-[[row]]
 case = "FL03"
 rule = "facade-logic"
 verdict = "finding"
@@ -481,6 +475,12 @@ case = "HZ12"
 rule = "facade-logic"
 verdict = "finding"
 identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
+
+[[row]]
+case = "HZ16"
+rule = "facade-logic"
+verdict = "finding"
+identity = ["products.reports.backend.facade.run_handle.run_count", "products.reports.backend.facade.run_handle"]
 
 # facade-no-drf
 
@@ -793,6 +793,18 @@ verdict = "incomplete"
 identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
 
 # has-facade
+
+[[row]]
+case = "LE11"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/kiosk/backend/facade/api.py"]
+
+[[row]]
+case = "LE11"
+rule = "has-facade"
+verdict = "finding"
+identity = ["products/kiosk/backend/facade/{contracts.py,contracts}"]
 
 [[row]]
 case = "LE08"
@@ -1472,12 +1484,6 @@ identity = ["scripts.shapes"]
 # public-surface
 
 [[row]]
-case = "ST01"
-rule = "public-surface"
-verdict = "finding"
-identity = ["products.inventory.backend.facade.contracts.StockLevelNote", "products.reports.backend.logic.stock_states", "import"]
-
-[[row]]
 case = "DP03"
 rule = "public-surface"
 verdict = "finding"
@@ -1698,6 +1704,12 @@ case = "RD03"
 rule = "public-surface"
 verdict = "finding"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.tests.test_stock_signals", "import"]
+
+[[row]]
+case = "ST01"
+rule = "public-surface"
+verdict = "finding"
+identity = ["products.inventory.backend.facade.contracts.StockLevelNote", "products.reports.backend.logic.stock_states", "import"]
 
 [[row]]
 case = "SY02"
@@ -2409,5 +2421,5 @@ match = ["products.catalog.backend.facade.aliases.built"]
 
 [levels.isolated]
 passing = ["shelf"]
-failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]
+failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "kiosk", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]
 claimed = ["catalog", "gatekeeper", "inventory", "legacy", "reports", "shelf"]

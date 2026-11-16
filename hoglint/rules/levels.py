@@ -111,12 +111,13 @@ class LevelEvaluator:
 
     def find_group(self, subject: str) -> str | None:
         """The group of a finding's subject, read on the subject's module. A directory without
-        `__init__.py` whose module reads no group, such as a layout root just below a package that
-        is in no group, is read as the directory itself."""
+        `__init__.py`, such as a layout root just below a package (`products/mobile` below
+        `products`), is read as the directory itself, never as the package above it."""
         labeler = self.labeler
-        value, _ = labeler.field_value(labeler.module_of_symbol(subject) or subject, None, self.spec.group_by)
-        if value.state is not State.KNOWN and subject in labeler.namespaces.paths:
+        if subject in labeler.namespaces.paths:
             value, _ = labeler.field_value(subject, None, self.spec.group_by)
+        else:
+            value, _ = labeler.field_value(labeler.module_of_symbol(subject) or subject, None, self.spec.group_by)
         if value.state is not State.KNOWN:
             return None
         return label_text(value.data)

@@ -265,6 +265,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `LE08` | `products/racks/backend/facade/api.py` | A facade whose api module only re-exports a function | has-facade finding (`defines no function`); `racks` is not Isolated | Neighbor of `LE07` (D108) |
 | `LE09` | `products/access_control`, `products/batch_exports`, `products/gatekeeper`, `products/notifications`, `products/reports`, `products/visual_review` | A product without a contracts module, or without a facade | has-facade finding for each missing file; the product is not Isolated | D108 |
 | `LE10` | `products/catalog/turbo.json`, `products/gatekeeper/turbo.json`, `products/inventory/turbo.json`, `products/legacy/turbo.json`, `products/reports/turbo.json`, `products/shelf/turbo.json` | A product's own `turbo.json` narrows its contract-check inputs; next to them products that inherit the root's inputs or run no contract-check | each narrowing product claims Isolated; the five that fail it fail `check`, whatever the ledger; `shelf` claims it and passes | An unsound skip is never debt (Nov 16) |
+| `LE11` | `products/kiosk/scripts/build_assets.py` | A product folder without `__init__.py` and with no backend (a frontend product with a build script) | has-facade finding (two); `kiosk` fails Isolated | A layout row's subject that is a folder without `__init__.py` is read as the folder itself, never as the `products` package above it (Nov 16) |
 
 ## Unknown inputs of the rule language's abilities
 

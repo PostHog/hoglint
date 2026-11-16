@@ -1110,6 +1110,16 @@ text = "products/gatekeeper lacks backend/facade/{contracts.py,contracts}"
 
 [[finding]]
 rule = "has-facade"
+identity = ["products/kiosk/backend/facade/{contracts.py,contracts}"]
+text = "products/kiosk lacks backend/facade/{contracts.py,contracts}"
+
+[[finding]]
+rule = "has-facade"
+identity = ["products/kiosk/backend/facade/api.py"]
+text = "products/kiosk lacks backend/facade/api.py"
+
+[[finding]]
+rule = "has-facade"
 identity = ["products/notifications/backend/facade/{contracts.py,contracts}"]
 text = "products/notifications lacks backend/facade/{contracts.py,contracts}"
 
