@@ -61,7 +61,7 @@ sources-member  = "src.source_vendor != none"
 [fields]
 package   = { type = "id", required_on = ["**"] }
 tier      = { type = "enum", values = ["core", "product", "leaf", "tool"], required_on = ["**"] }
-role      = { type = "enum", values = ["foundation", "feature"], required_on = ["products/**"] }
+role      = { type = "enum", values = ["foundation", "feature"], required_on = ["products/*/**"] }
 zone      = { type = "zone" }
 owners    = { type = "set" }
 stage     = { type = "enum", values = ["proto-product"] }
@@ -113,6 +113,11 @@ override = true
 match    = "posthog/temporal/ai_observability/**"
 set      = { package = "ai_observability", tier = "product", role = "feature" }
 override = true
+
+# The namespace package all products sit in: core's loader imports it to find them.
+[[assign]]
+match = "products/__init__.py"
+set   = { package = "products", tier = "core" }
 
 # ── Core, named core packages, leaves ──────────────────────────
 
