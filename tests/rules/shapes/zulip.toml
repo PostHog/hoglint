@@ -51,7 +51,7 @@ doc         = "Fetch a single message through access_message, which checks permi
 select      = "dst.symbol == 'zerver.models.Message'"
 deny_shapes = ["instance-single"]
 unless      = "src.context == 'test'"
-remedy      = "zerver.lib.message.access_message"
+ways        = [{ safety = "care", text = "Fetch the message through zerver.lib.message.access_message." }]
 identity    = "scope-symbol"
 growth_key  = ["dst.symbol"]
 
