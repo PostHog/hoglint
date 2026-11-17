@@ -263,21 +263,16 @@ def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> No
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text(textwrap.dedent(content))
 
-    def git(*args: str) -> None:
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "-c", "commit.gpgsign=false", *args], check=True, capture_output=True
-        )
-
-    git("init", "-q")
+    git_in(tmp_path, "init", "-q")
     assert hoglint(tmp_path, "check").returncode == 1
     assert hoglint(tmp_path, "check", "--write-ledger", "--record-growth").returncode == 0
-    git("add", "-A")
-    git("commit", "-qm", "base")
-    git("branch", "base")
+    git_in(tmp_path, "add", "-A")
+    git_in(tmp_path, "commit", "-qm", "base")
+    git_in(tmp_path, "branch", "base")
 
-    git("mv", "products/billing/util.py", "products/alerts/util.py")
+    git_in(tmp_path, "mv", "products/billing/util.py", "products/alerts/util.py")
     assert hoglint(tmp_path, "check", "--write-ledger", "--record-growth").returncode == 0
-    git("add", "-A")
+    git_in(tmp_path, "add", "-A")
     moved = hoglint(tmp_path, "compare", "--base", "base")
     assert moved.returncode == 0, moved.stdout + moved.stderr
     assert "admitted moves (review) (1)" in moved.stdout
