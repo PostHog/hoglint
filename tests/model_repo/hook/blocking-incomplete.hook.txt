@@ -4,7 +4,7 @@ Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hogli
 
 dynamic-imports: this place goes through a value that hoglint does not follow (a computed name, a variable or a call).
   at posthog/api/plugin_loader.py:5: dynamic-import '' did not resolve
-  why: hoglint cannot judge this new code, so the commit cannot pass (introduced).
+  why: This commit adds code that hoglint cannot judge, so the commit cannot pass.
   fix (safe): If the set of names is fixed, write each name out.
   needs a person: If the code must compute the name, stop and tell the person. The config declares such patterns.
   see: hoglint explain dynamic-imports

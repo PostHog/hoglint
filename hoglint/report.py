@@ -27,6 +27,20 @@ from hoglint.selectors import State
 
 # The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
+# The causes `blocking_unknowns` gives when a baseline labels the unknowns; without one it gives
+# `BLOCKING_CAUSES`.
+BLOCKING_LABELS = frozenset(
+    {Attribution.INTRODUCED.value, Attribution.AMBIGUOUS.value, IncompleteCause.EXTRACTOR.value}
+)
+# Why a blocking unknown blocks, by each cause `blocking_unknowns` can give. The unattributed
+# `IncompleteCause.INTRODUCED` has the same value as `Attribution.INTRODUCED`.
+CAUSE_WHY = {
+    Attribution.INTRODUCED.value: "This commit adds code that hoglint cannot judge, so the commit cannot pass.",
+    Attribution.AMBIGUOUS.value: "hoglint cannot tell if this commit added this unknown, so the commit cannot pass.",
+    IncompleteCause.EXTRACTOR.value: (
+        "A part of hoglint failed on this code, so hoglint cannot judge it. The fault is in hoglint, not in the code."
+    ),
+}
 # The most the hook's view prints, under a harness's cap on hook output. Problems stop at
 # `PROBLEMS_BUDGET`, so a first finding starts in a harness's short preview; findings stop where
 # the closing lines still fit.
@@ -221,7 +235,7 @@ class CheckReport:
         return list(zip(self.summary.incomplete, self.causes(), strict=True))
 
     def blocking_unknowns(self) -> list[tuple[IncompleteRecord, str]]:
-        blocking = {Attribution.INTRODUCED.value, Attribution.AMBIGUOUS.value, IncompleteCause.EXTRACTOR.value}
+        blocking = set(BLOCKING_LABELS)
         if self.attributed is None:
             blocking = {cause.value for cause in BLOCKING_CAUSES}
         return [(item, cause) for item, cause in self.unknowns() if cause in blocking]
@@ -305,7 +319,7 @@ class CheckReport:
             rows = [f"at {item.place() or item.key}: {item.reason}" for item in items]
             lines = [
                 *self.cut(rows, ROWS_SHOWN),
-                f"why: hoglint cannot judge this new code, so the commit cannot pass ({cause}).",
+                f"why: {CAUSE_WHY[cause]}",
                 *(f"{SAFETY_LABELS[safety]}: {text}" for safety, text in ways),
             ]
             if rule in self.policy.rules:

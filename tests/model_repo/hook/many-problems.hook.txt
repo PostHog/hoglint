@@ -12,7 +12,7 @@ dynamic-imports: each of these 12 places goes through a value that hoglint does 
   at posthog/api/plugin_loader_11.py:5: dynamic-import '' did not resolve
   at posthog/api/plugin_loader_2.py:5: dynamic-import '' did not resolve
   and 7 more: hoglint check --index --all
-  why: hoglint cannot judge this new code, so the commit cannot pass (introduced).
+  why: This commit adds code that hoglint cannot judge, so the commit cannot pass.
   fix (safe): If the set of names is fixed, write each name out.
   needs a person: If the code must compute the name, stop and tell the person. The config declares such patterns.
   see: hoglint explain dynamic-imports

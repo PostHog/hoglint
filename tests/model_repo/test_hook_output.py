@@ -22,7 +22,7 @@ import pytest
 
 from hoglint.cli import Commands
 from hoglint.ledger.listing import WorktreeStatus
-from hoglint.report import CAP, View
+from hoglint.report import BLOCKING_CAUSES, BLOCKING_LABELS, CAP, CAUSE_WHY, View
 from native.require import native_module
 
 from model_repo.harness import TREE, copy_tree, stub_site
@@ -263,6 +263,10 @@ def test_a_large_change_leads_with_what_a_reader_must_see_and_stays_under_the_ca
     assert "Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset" in preview
     assert "  see: hoglint explain public-surface\n" in preview
     assert "hoglint check --index --all" in printed and "hoglint help hook" in printed
+
+
+def test_every_cause_that_blocks_has_its_own_why() -> None:
+    assert set(CAUSE_WHY) == BLOCKING_LABELS | {cause.value for cause in BLOCKING_CAUSES}
 
 
 def test_many_problems_stay_under_the_cap_and_leave_the_first_finding_in_the_preview(outputs: dict[str, str]) -> None:
