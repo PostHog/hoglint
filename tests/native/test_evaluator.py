@@ -468,6 +468,8 @@ def render_toml(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, list):
         return "[" + ", ".join(render_toml(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key} = {render_toml(item)}" for key, item in value.items()) + " }"
     if isinstance(value, str) and "'" in value:
         return '"' + value.replace('"', '\\"') + '"'
     return f"'{value}'" if isinstance(value, str) else str(value)
