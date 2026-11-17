@@ -28,10 +28,10 @@ from hoglint.native.graph import NativeGraph, NativeSink
 from hoglint.native.queries import NativePackQueries
 from hoglint.packs.django.config import SECTION, DjangoPackConfig
 from hoglint.packs.django.pack import DjangoPack
-from hoglint.presets_py.posthog.drives import UNKNOWN_EXECUTION
-from hoglint.presets_py.posthog.facade import FACADE_KINDS, FACADE_PRODUCER, FacadeFacts
-from hoglint.presets_py.posthog.layout import CORE, backend_product, backend_rel, product_of_module, product_of_path
-from hoglint.presets_py.posthog.pack import POSTHOG_PACK
+from hoglint.packs.posthog.drives import UNKNOWN_EXECUTION
+from hoglint.packs.posthog.facade import FACADE_KINDS, FACADE_PRODUCER, FacadeFacts
+from hoglint.packs.posthog.layout import CORE, backend_product, backend_rel, product_of_module, product_of_path
+from hoglint.packs.posthog.pack import POSTHOG_PACK
 
 ISOLATION_PATH = "tools/hogli-commands/hogli_commands/product/isolation.py"
 BASELINE_PATH = "products/model_crossing_uses_baseline.txt"
@@ -472,7 +472,7 @@ class Parity:
 
 
 def main() -> None:
-    """Usage: python -m hoglint.presets_py.posthog.legacy_ledger <repo_root> [<work_dir>]"""
+    """Usage: python -m hoglint.packs.posthog.legacy_ledger <repo_root> [<work_dir>]"""
     repo_root = Path(sys.argv[1]).resolve()
     work_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(tempfile.mkdtemp(prefix="hoglint-parity-"))
     analysis = NativeAnalysis(AnalysisOptions(repo=repo_root, config=PARITY_CONFIG, work_dir=work_dir)).run()

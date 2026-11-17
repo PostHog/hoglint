@@ -49,10 +49,13 @@ Each phase landed with zero delta unless a delta is named.
 | N4a, N5a, N6 | Findings as a table; pack records released per step; record compression | up to 461ef834c48, Nov 10-11 (D56-D58) |
 | N3b | Facade facts into the engine (see `09-contract-surfaces.md`) | 7f26c49 to 4719fd5, Nov 11, in the hoglint repo (D62-D64) |
 
-**The pack API, and where PostHog's parts live** (D49; "The PostHog pack's home", Nov 10):
-- All Rust lives in the hoglint repo and ships as one abi3 wheel.
-  The consuming monorepo pins the wheel and holds config, ledger, exceptions and Python plugins.
-- `drives` (1,044 lines; PostHog's query-runner dispatch) stays a Python producer in the PostHog monorepo (owner, Nov 10).
+**The pack API, and where PostHog's parts live** (D49; "Every pack in the wheel", owner, Nov 17):
+- All Rust and every pack live in the hoglint repo and ship as one abi3 wheel.
+  The consuming monorepo pins the wheel and holds config, ledger and exceptions, and no hoglint Python.
+- A pack is a directory of `hoglint/packs/` with its `pack.toml` (vocabulary, sections).
+  A config loads it only by naming it, with `extends = ["hoglint:<name>"]`; that reads the `pack.toml` and imports the pack's module.
+  Core (the rest of `hoglint/`) imports no pack; a test holds it.
+- `drives` (1,044 lines; PostHog's query-runner dispatch) stays a Python producer (owner, Nov 10), in the PostHog pack, `hoglint/packs/posthog/` (owner, Nov 17).
 - The pack API must be stable enough for a version pin.
   It is not published as a public surface (D31 dropped).
 - `PackSink` takes new edges, refinements by edge handle, symbol facts and producer failures.
@@ -82,6 +85,7 @@ Each phase landed with zero delta unless a delta is named.
 | One Rust binary, Python plugins in a child process (D47, first version) | A preference stated as a requirement; about 0.1 s gain | Architect withdrew it, Nov 10 | `docs/history/decision-log-2.md` |
 | Publish a polished Python pack API (D31) | Packs became built-in or a monorepo plugin | Architect, Nov 10 | `docs/history/decision-log-2.md` |
 | The PostHog pack as a built-in Rust module in the hoglint repo | D47 revised removed the reason | Architect; owner, Nov 10 | `docs/history/decision-log-2.md` |
+| The PostHog pack as the monorepo's own plugin, loaded by `[discovery] plugins` ("The PostHog pack's home", Nov 10) | Packs in two places, loaded two ways. The engine id and the base pin cover a pack in the wheel, and the monorepo needs no repo root on `sys.path` | Owner, Nov 17 | not published |
 | Port `drives` to Rust | See Why | Architect, D49 | `docs/history/decision-log-3.md` |
 | `mentions_many` for installs and signals | 0.43 to 0.42 s, inside the noise | N3a build; skipped | not published |
 | A two-row compatibility view for pack copies | The parity tooling already names every delta | Architect, D22 | `docs/history/decision-log-2.md` |
@@ -99,11 +103,11 @@ Each phase landed with zero delta unless a delta is named.
 - **A contradiction in the notes, settled.**
   `docs/research/native-engine-design.md` sections 4 and 9 move the PostHog pack into the hoglint repo.
   The decision of Nov 10 ("The PostHog pack's home") reversed that.
-  The decision log is the latest.
-- The PostHog preset (`presets/posthog.toml`) and pack (`hoglint/presets_py/posthog`) still sit in the hoglint repo, to move out later (D15).
+  On Nov 17 the owner put the pack back in the hoglint repo, as Python (`hoglint/packs/posthog/`).
+- The PostHog preset (`presets/posthog.toml`) still sits in the hoglint repo, to move to the monorepo (D15).
 - One snapshot object per run, to replace process-wide registries (`PLUGIN_ROOTS`, `WorktreeStatus.taken`, `WorktreeListing.taken`, `RunInputs.taken`).
 - Proposals not yet decided by measurement: facade facts as a generic engine analysis for any repo (partly done in N3b); the PostHog pack's name lists moved into a `[posthog]` config section.
 
 ## Sources
 
-`docs/history/decision-log.md` (D1, D2, D7 original); `docs/history/decision-log-2.md` (D7 amended, D22, D29-D31, D38, D39, D42, D47, "The PostHog pack's home"); `docs/history/decision-log-3.md` (D49, D62-D64); `docs/research/native-engine-design.md`; `docs/research/engine-synthesis.md`; `docs/research/spike-n3.md`; `docs/research/data-model-2.md`; not published (the progress log).
+`docs/history/decision-log.md` (D1, D2, D7 original); `docs/history/decision-log-2.md` (D7 amended, D22, D29-D31, D38, D39, D42, D47, "The PostHog pack's home"); `docs/history/decision-log-3.md` (D49, D62-D64); `docs/research/native-engine-design.md`; `docs/research/engine-synthesis.md`; `docs/research/spike-n3.md`; `docs/research/data-model-2.md`; not published (the progress log; "Every pack in the wheel", Nov 17).

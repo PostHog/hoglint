@@ -58,7 +58,7 @@ The most used terms are below; `glossary.md` has the rest, each with where it li
 - **Finding:** an edge or entity that a rule judges a violation.
 - **Ledger:** the generated file of accepted existing findings, one line per (rule, identity).
 - **Identity:** the key of a ledger line; **growth key:** the subset of the identity that growth is judged on.
-- **Pack:** a producer of framework-specific edges (Django, or a company plugin).
+- **Pack:** a producer of framework-specific edges (Django, or a company's own, such as PostHog's), under `hoglint/packs/`.
 - **Preset:** a reusable policy file (for example `presets/posthog.toml`).
 - **Export:** a declared public surface of a package, with a shape policy; PostHog calls one kind a facade.
 - **Level:** a named set of rules that a product passes or fails.

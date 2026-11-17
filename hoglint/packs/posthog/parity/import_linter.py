@@ -17,9 +17,9 @@ from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 
-from hoglint.presets_py.posthog.parity import old_tools
-from hoglint.presets_py.posthog.parity.hoglint_check import FindingRow, HoglintFacts
-from hoglint.presets_py.posthog.parity.verdict import OLD_ONLY, Comparison, Difference, Effect, Match, Reason
+from hoglint.packs.posthog.parity import old_tools
+from hoglint.packs.posthog.parity.hoglint_check import FindingRow, HoglintFacts
+from hoglint.packs.posthog.parity.verdict import OLD_ONLY, Comparison, Difference, Effect, Match, Reason
 
 TOOL = "import-linter"
 # The rule that stands in for each contract, by the contract's name in pyproject.toml.

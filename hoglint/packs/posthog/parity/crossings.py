@@ -26,9 +26,9 @@ from pathlib import Path
 from hoglint.core.analysis import AnalysisOptions
 from hoglint.model import Graph, Resolution
 from hoglint.native.analysis import NativeAnalysis
-from hoglint.presets_py.posthog import legacy_ledger
-from hoglint.presets_py.posthog.parity import old_tools
-from hoglint.presets_py.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Comparison, Difference, Effect, Reason
+from hoglint.packs.posthog import legacy_ledger
+from hoglint.packs.posthog.parity import old_tools
+from hoglint.packs.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Comparison, Difference, Effect, Reason
 
 TOOL = "crossings"
 VALUE_METHODS = (".values(", ".values_list(")

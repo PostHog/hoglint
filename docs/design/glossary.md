@@ -44,10 +44,11 @@ Some words have two meanings; the entry names both.
   Code that writes edges or refines them.
   Core producers run in the link; pack producers run in Python or in the link.
   A producer that fails makes the rules that need its edges incomplete.
-- **Pack** (`hoglint/packs/`, `src/link/packs/`; loaded by `extends = ["hoglint:django"]`, set up in a table such as `[django]`).
-  A set of producers that add one framework's meaning to the graph, such as Django models, signals and settings.
-- **Preset** (a repo-relative path in `extends`, such as `presets/posthog.toml`; its plugin code in `hoglint/presets_py/`).
-  A reusable policy file, with the plugin code it needs.
+- **Pack** (a directory of `hoglint/packs/` with its `pack.toml`, and `src/link/packs/`; loaded only by `extends`, such as `"hoglint:django"` or `"hoglint:posthog"`; set up in a table such as `[django]`).
+  A set of producers that add one framework's or one repo's meaning to the graph, such as Django models, signals and settings, or PostHog's `drives`.
+- **Preset** (a repo-relative path in `extends`, such as `presets/posthog.toml`).
+  A reusable policy file.
+  The code it needs is a pack, which the root config extends next to it.
 - **Core** (two meanings).
   In hoglint, core is the part that names no framework or company: core producers, core shapes, core edge kinds.
   In the PostHog preset, "core" is also a value of the `tier` field: the monorepo's shared packages, as in "a class core defines".

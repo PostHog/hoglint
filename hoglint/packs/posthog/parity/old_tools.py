@@ -34,7 +34,7 @@ def run(root: Path, args: list[str], timeout: int = 1800) -> str:
 
 def driver(root: Path, name: str, *args: str) -> Any:
     """Runs one driver of `drivers.py` in `root` and returns the JSON it printed."""
-    out = run(root, [sys.executable, "-m", "hoglint.presets_py.posthog.parity.drivers", name, *args])
+    out = run(root, [sys.executable, "-m", "hoglint.packs.posthog.parity.drivers", name, *args])
     return json.loads(out)
 
 

@@ -26,8 +26,8 @@ from hoglint.facts import FactNeeds
 from hoglint.model import Edge, Graph
 from hoglint.native.analysis import NativeAnalysis
 from hoglint.outputs.tach_map import TachMap, TachResolver, is_potential_module_path
-from hoglint.presets_py.posthog.parity import old_tools
-from hoglint.presets_py.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Comparison, Difference, Effect, Reason
+from hoglint.packs.posthog.parity import old_tools
+from hoglint.packs.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Comparison, Difference, Effect, Reason
 
 TOOL = "tach-map"
 STRING_NAMES_NOTHING = Reason(

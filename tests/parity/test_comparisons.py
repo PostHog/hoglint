@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from hoglint.presets_py.posthog.parity import crossings, import_linter, isolated, migrations, tach_check, watched
-from hoglint.presets_py.posthog.parity.hoglint_check import FindingRow, HoglintFacts, MigrationEdge, Wiring, Witness
-from hoglint.presets_py.posthog.parity.verdict import Comparison, Reason, Verdict
+from hoglint.packs.posthog.parity import crossings, import_linter, isolated, migrations, tach_check, watched
+from hoglint.packs.posthog.parity.hoglint_check import FindingRow, HoglintFacts, MigrationEdge, Wiring, Witness
+from hoglint.packs.posthog.parity.verdict import Comparison, Reason, Verdict
 
 CORE = "posthog/api/views.py"
 SHOP_LOGIC = "products/shop/backend/logic.py"

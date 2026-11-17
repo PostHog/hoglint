@@ -1,9 +1,9 @@
-"""PostHog's Python plugins. Importing this module registers the `[posthog]` pack and the
+"""The PostHog pack. Importing it registers the pack for the `[posthog]` section and the
 `owners-yaml` provider."""
 
+from hoglint.packs.posthog.owners import OWNERS_YAML
+from hoglint.packs.posthog.pack import POSTHOG_PACK
 from hoglint.plugins import REGISTRY
-from hoglint.presets_py.posthog.owners import OWNERS_YAML
-from hoglint.presets_py.posthog.pack import POSTHOG_PACK
 
 REGISTRY.add_pack(POSTHOG_PACK)
 REGISTRY.add_headlines({"drives": "the test {src} runs {dst} ({label})"})

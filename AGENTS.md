@@ -35,7 +35,8 @@ A change that breaks one is a design change for the owner, not a refactor.
    It may only cost time.
    Keys come from the bytes actually read; a miss is never an error; a corrupt store is moved aside.
 4. **Core holds no framework or company name.**
-   Django lives in the Django pack, PostHog in its preset and plugin.
+   Django lives in the Django pack, PostHog in its pack and preset.
+   A pack is a directory of `hoglint/packs/` with its `pack.toml`, loaded only by a config's `extends = ["hoglint:<name>"]`; the rest of `hoglint/` imports no pack.
    The engine's word for a public surface is `export`, not "facade".
 5. **One engine; a change moves no row it does not name.**
    The native engine builds the graph and judges every rule; Python words its rows and holds the rule metadata and the steps with no Rust twin.
@@ -75,7 +76,7 @@ bin/prove                                   # all of the above side by side, plu
   Set `HOGLINT_PYTHON` to the monorepo's own interpreter, which holds the old tools.
 - `cargo test --workspace` cannot link the binding's test binary; test the root package.
 - `clippy` needs `--workspace`, or it never lints the binding crate.
-- The PostHog owners provider imports a package that only the PostHog monorepo has, so two of its tests fail in this repo's environment until that provider moves out.
+- The PostHog owners provider imports a package that only the PostHog monorepo has, so two of its tests fail in this repo's environment.
   Add no other failure.
 - Parity dumps and build directories are large.
   Delete them after a compare, and keep each run's cache root private.

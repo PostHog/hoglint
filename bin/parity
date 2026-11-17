@@ -12,4 +12,4 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python="${HOGLINT_PYTHON:-$root/.venv/bin/python}"
-PYTHONPATH="$root" exec "$python" -m hoglint.presets_py.posthog.parity "$@"
+PYTHONPATH="$root" exec "$python" -m hoglint.packs.posthog.parity "$@"

@@ -14,6 +14,7 @@ import pytest
 
 from core.support import set_modified
 from hoglint.cli import Commands, Snapshots
+from hoglint.config import load_config
 from hoglint.facts import find_binary
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
@@ -41,14 +42,14 @@ from hoglint.ledger.records import IncompleteRecord, ShownRecord, StoredFindings
 from hoglint.ledger.scan import ProtocolError, ScanSummary
 from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause, IncompleteKind
-from hoglint.presets_py.posthog.owners import OWNERS_YAML
+from hoglint.packs.posthog.owners import OWNERS_YAML
 from hoglint.report import View
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.source import GraphSource
 from native.require import native_required
 
-from rules.support import GraphBuilder, config_from, native_graph
+from rules.support import GraphBuilder, config_from, native_graph, write_config
 from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, needs_extractor, write_files
 
 DYNAMIC = ("dynamic-imports", "app.loader|dynamic-import|", "dynamic-import '' did not resolve")
@@ -965,10 +966,10 @@ def test_an_editable_install_and_a_wheel_of_the_same_code_have_one_digest(
 
 PROVIDER_CONFIG = """
 schema = 1
+extends = ["hoglint:posthog"]
 
 [discovery]
 external = ["django"]
-plugins = ["hoglint.presets_py.posthog"]
 
 [fields]
 owners = { type = "set" }
@@ -982,7 +983,7 @@ sets = ["owners"]
 def test_a_provider_declares_the_distributions_it_imports_and_fails_without_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = config_from(tmp_path, PROVIDER_CONFIG)
+    config = load_config(tmp_path, write_config(tmp_path, PROVIDER_CONFIG))
     assert Framework.packages_of(config) == ("django", "owners_yaml")
     monkeypatch.setattr(Framework, "site", staticmethod(lambda: tmp_path))
     failures = ProviderRunner(config.providers.values(), tmp_path).failures

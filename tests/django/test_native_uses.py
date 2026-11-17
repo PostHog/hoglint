@@ -20,8 +20,8 @@ from hoglint.packs.django.config import DjangoPackConfig
 from hoglint.packs.django.native_uses import NativeUses, file_id
 from hoglint.packs.django.pack import USES_KINDS, DjangoPack, DjangoRun
 from hoglint.packs.django.shapes import VOCABULARY
+from hoglint.packs.posthog.pack import PosthogPack
 from hoglint.plugins import PackSink, Refinement
-from hoglint.presets_py.posthog.pack import PosthogPack
 from test_drives import repo as drives_repo
 
 # One use per row: (model, chain, up) and the shape the link gives it: (shape, detail, flow shape).

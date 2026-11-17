@@ -14,17 +14,9 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 
-from hoglint.presets_py.posthog.parity import (
-    crossings,
-    import_linter,
-    isolated,
-    migrations,
-    tach_check,
-    tach_map,
-    watched,
-)
-from hoglint.presets_py.posthog.parity.hoglint_check import HoglintCheck
-from hoglint.presets_py.posthog.parity.verdict import Comparison, Verdict, verdict_table, write_files
+from hoglint.packs.posthog.parity import crossings, import_linter, isolated, migrations, tach_check, tach_map, watched
+from hoglint.packs.posthog.parity.hoglint_check import HoglintCheck
+from hoglint.packs.posthog.parity.verdict import Comparison, Verdict, verdict_table, write_files
 
 # In this order: each later one reads more of hoglint's rules.
 TOOLS = (

@@ -28,8 +28,8 @@ from hoglint.core.sites import FileScope
 from hoglint.core.symbols import absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.native.queries import Words
+from hoglint.packs.posthog.layout import location_module, product_of_path
 from hoglint.plugins import PackReader
-from hoglint.presets_py.posthog.layout import location_module, product_of_path
 
 QUERY_DISPATCHER = "posthog/hogql_queries/query_runner.py"
 NODE_KIND_ENUM = "posthog/schema_enums.py"

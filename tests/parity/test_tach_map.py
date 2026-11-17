@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from core.support import FileFacts, build
-from hoglint.presets_py.posthog.parity.tach_map import LAZY_NAME_MAP, STRING_NAMES_NOTHING, HoglintMap, compare
-from hoglint.presets_py.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Verdict
+from hoglint.packs.posthog.parity.tach_map import LAZY_NAME_MAP, STRING_NAMES_NOTHING, HoglintMap, compare
+from hoglint.packs.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Verdict
 
 VIEWS = "web/views.py"
 LOGIC = "checkout/logic.py"
