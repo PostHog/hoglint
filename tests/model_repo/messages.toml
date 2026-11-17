@@ -1445,6 +1445,11 @@ text = "products/inventory/backend/logic/reorder_points.py is needed by edge.kin
 
 [[finding]]
 rule = "reached-watched"
+identity = ["products/inventory/backend/logic/restock_alerts.py"]
+text = "products/inventory/backend/logic/restock_alerts.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
 identity = ["products/inventory/backend/logic/restock_rules.py"]
 text = "products/inventory/backend/logic/restock_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
@@ -1522,6 +1527,11 @@ text = "products/reports/backend/hogql_queries/widget.py is needed by edge.kind 
 rule = "reached-watched"
 identity = ["products/reports/backend/logic/build.py"]
 text = "products/reports/backend/logic/build.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+
+[[finding]]
+rule = "reached-watched"
+identity = ["products/reports/backend/logic/stock_alerts.py"]
+text = "products/reports/backend/logic/stock_alerts.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
