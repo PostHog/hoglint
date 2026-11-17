@@ -41,6 +41,7 @@ from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache
 from hoglint.ledger.cache import RunStores
+from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
     ENGINE,
     ENGINE_NATIVE,
@@ -787,17 +788,47 @@ class Commands:
             return None
         return self.module_renames("HEAD", config, tree)
 
-    def moved_lines(
-        self, policy_root: Path, head: LedgerFile | None, summary: ScanSummary, renames: Renames | None, staged: bool
-    ) -> frozenset[LineKey]:
-        """The lines of the run's scan above HEAD's ledger that only changed place, judged as
-        compare judges growth. `summary` holds the run's couplings of the renamed modules."""
-        if head is None or renames is None:
-            return frozenset()
-        base = self.baselines.head_scan(policy_root, renames.modules(), staged)
+    def attribution(
+        self,
+        policy_root: Path,
+        head: LedgerFile,
+        summary: ScanSummary,
+        renames: Renames,
+        scope: frozenset[str],
+        staged: bool,
+    ) -> AttributionCheck:
+        """Compare's growth check of the run against HEAD, with the couplings of `scope`."""
+        base = self.baselines.head_scan(policy_root, scope, staged)
         # HEAD's ledger lines stand in for HEAD's scan lines, so a line is judged against the recorded debt.
         recorded = dataclasses.replace(base, lines=head.lines)
-        return AttributionCheck(recorded, summary, summary, renames).moved()
+        return AttributionCheck(recorded, summary, summary, renames)
+
+    def moved_lines(
+        self,
+        policy_root: Path,
+        head: LedgerFile | None,
+        summary: ScanSummary,
+        renames: Renames | None,
+        staged: bool,
+        run: Run | None,
+    ) -> frozenset[LineKey]:
+        """The lines of the run's scan above HEAD's ledger that only changed place, judged as
+        compare judges growth. Growth keys judge first. Only growth that is left, with a rename,
+        needs move admission, which reads the couplings of the renamed modules in `run` and in
+        HEAD's scan: a walk over every edge of both. A check that the memo serves has no rename."""
+        if head is None or renames is None:
+            return frozenset()
+        check = self.attribution(policy_root, head, summary, renames, frozenset(), staged)
+        moved = check.moved()
+        grown = {line for lines in check.grown.values() for line in lines}
+        if moved == grown or not renames.head_to_base or run is None:
+            return moved
+        scope = renames.modules()
+        couplings = CouplingScan(run.result, run.graph, scope)
+        scoped = dataclasses.replace(
+            summary, scope=scope, couplings=couplings.counts(), witnesses=couplings.witnesses()
+        )
+        return self.attribution(policy_root, head, scoped, renames, scope, staged).moved()
 
     @staticmethod
     def ledger_growth(head: LedgerFile | None, ledger: LedgerFile, moved: frozenset[LineKey]) -> list[LineChange]:
@@ -876,7 +907,7 @@ class Commands:
             renames = None if stored is None else self.move_renames(head, ledger, stored.lines, config, tree)
             # A stored summary stands in without its couplings (`RunMemo.SECTIONS`), so a rename runs live.
             if stored is not None and (renames is None or not renames.head_to_base):
-                moved = self.moved_lines(policy_root, head, stored, renames, index)
+                moved = self.moved_lines(policy_root, head, stored, renames, index, None)
                 attributed = self.baselines.attribute(baseline, stored)
                 grown = self.ledger_growth(head, ledger, moved)
                 return self.report(
@@ -888,10 +919,9 @@ class Commands:
         summary: ScanSummary | None = None
         moved: frozenset[LineKey] = frozenset()
         if baseline is not None:
+            summary = summary_of(run, baseline.envelope, with_triples=False)
             renames = self.move_renames(head, ledger, run.result.scan, config, tree)
-            scope = renames.modules() if renames is not None else frozenset()
-            summary = summary_of(run, baseline.envelope, scope, with_triples=False)
-            moved = self.moved_lines(policy_root, head, summary, renames, index)
+            moved = self.moved_lines(policy_root, head, summary, renames, index, run)
         if write_ledger:
             if index:
                 sys.stderr.write("--write-ledger writes the working tree file, not the index\n")
