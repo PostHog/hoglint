@@ -371,6 +371,13 @@ class CoveragePrimitive(EntityRule):
     def reads_kind_and_context(node: Node) -> bool:
         return all(ref.path in KIND_AND_CONTEXT for ref in refs(node))
 
+    def record(self) -> RuleRun:
+        """A rule with no outside input list: its paths are what `hoglint watched` derives the
+        watched files from, so it emits no finding. What it cannot tell stays incomplete."""
+        self.run.required = self.required()
+        self.inherit_unknowns()
+        return self.run
+
     def expand(self, location: str) -> list[str]:
         if not location.endswith("/"):
             return [location]
@@ -384,6 +391,8 @@ class CoveragePrimitive(EntityRule):
         return cover.endpoint == "location" and location.endswith("/")
 
     def evaluate(self) -> RuleRun:
+        if not self.spec.inputs:
+            return self.record()
         repo = self.ctx.repo_root
         name = str(self.spec.input("adapter"))
         adapter = REGISTRY.coverage_adapters[name]
@@ -396,7 +405,7 @@ class CoveragePrimitive(EntityRule):
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
             self.everywhere("inputs", f"cannot read the {name} inputs: {error}")
             return self.run
-        required = self.required()
+        required = self.run.required = self.required()
         self.inherit_unknowns()
         for location, (cover, module) in sorted(required.items()):
             why = self.why(cover)

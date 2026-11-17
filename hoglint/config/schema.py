@@ -206,7 +206,7 @@ RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {
 }
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
-LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by"})
+LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by", "watch_zones"})
 LEDGER_KEYS = frozenset({"file", "exceptions"})
 ENGINE_KEYS = frozenset({"lock", "runner"})
 ROLE_KEYS = frozenset({"owner", "group"})
@@ -1220,8 +1220,12 @@ class SchemaBuilder:
             if option in table:
                 producer_options.append((option, self.check_enum(f"{key}.{option}", table[option], allowed)))
         inputs = table.get("inputs", {})
-        if primitive == "coverage":
+        # A coverage rule with no inputs records the paths it needs and judges none (`hoglint watched`).
+        if primitive == "coverage" and "inputs" in table:
             inputs = self.read_inputs(f"{key}.inputs", inputs)
+            adapter = REGISTRY.coverage_adapters.get(str(inputs.get("adapter")))
+            if getattr(adapter, "claims_only", False):
+                self.fail(f"{key}.inputs", f"the {inputs.get('adapter')} adapter answers a level's claimed_by only")
         for entry in as_tuple(table.get("files")):
             _, decl = required_file(entry)
             if decl and decl not in FILE_DECLS:
@@ -1314,6 +1318,10 @@ class SchemaBuilder:
                 if rule_id not in requires:
                     self.fail(key, f"within_group rule {rule_id!r} must also be in `requires`")
             claimed_by = self.read_claim(f"{key}.claimed_by", table.get("claimed_by"))
+            watch_zones = as_tuple(table.get("watch_zones"))
+            for zone in watch_zones:
+                if zone not in self.zone_names:
+                    self.fail(f"{key}.watch_zones", f"unknown zone {zone!r}{suggest(zone, self.zone_names)}")
             out[name] = LevelSpec(
                 name,
                 group_by,
@@ -1324,6 +1332,7 @@ class SchemaBuilder:
                 self.source(key),
                 within_group,
                 claimed_by,
+                watch_zones,
             )
         return out
 

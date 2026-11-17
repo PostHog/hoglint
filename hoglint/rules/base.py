@@ -125,6 +125,9 @@ class RuleRun:
     spec: RuleSpec
     findings: FindingTable = field(init=False)
     incomplete: list[IncompleteItem] = field(default_factory=list)
+    # A coverage rule's paths: path -> (the first cover that needs it, the module that needs it).
+    # `hoglint watched` reads them; no finding or table does.
+    required: dict[str, tuple[CoverSpec, str | None]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.findings = FindingTable(self.spec.ledger)

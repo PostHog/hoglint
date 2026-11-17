@@ -22,6 +22,7 @@ from hoglint.ledger.obligations import BLOCKING, Attribution, Labels
 from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph, IncompleteCause, IncompleteKind
+from hoglint.plugins import REGISTRY
 from hoglint.rules.page import SAFETY_LABELS, way_lines
 from hoglint.selectors import State
 
@@ -162,10 +163,17 @@ class Policy:
     ledger: str
     exceptions: str
     config: str
+    # The levels whose claim is an input list a person keeps, so a file it leaves out is added there.
+    claims_in_lists: frozenset[str] = frozenset()
 
     @staticmethod
     def of(config: Config, config_file: str) -> Policy:
-        return Policy(dict(config.rules), config.ledger.file, config.ledger.exceptions, config_file)
+        in_lists = frozenset(
+            name
+            for name, level in config.levels.items()
+            if getattr(REGISTRY.coverage_adapters.get(str(level.claim_option("adapter"))), "adds_paths", False)
+        )
+        return Policy(dict(config.rules), config.ledger.file, config.ledger.exceptions, config_file, in_lists)
 
 
 class ReadTimeOwners:
@@ -405,12 +413,22 @@ class CheckReport:
         out.extend(Problem(f"{problem}.", (person,)) for problem in summary.exceptions.problems)
         return out
 
-    def claim_ways(self, where: str) -> list[str]:
-        """Dropping the narrowing needs a person: it takes the product out of isolation, which its owners decide."""
+    def claim_ways(self, name: str, where: str) -> list[str]:
+        """Dropping the claim needs a person: it takes the product out of isolation, which its owners
+        decide. A claim that narrows an input list a person keeps can also watch the file a reason
+        names; a claim read from a key has no list, since hoglint derives the watched files."""
+        rows = f"`{self.rerun} --rule <rule>` lists the rows of a rule."
+        if name not in self.policy.claims_in_lists:
+            return [
+                f"{SAFETY_LABELS['care']}: Fix each reason in the code. {rows}",
+                f"{SAFETY_LABELS['person']}: To remove the claim in {where}, stop and tell the person. The group "
+                "then claims no level, its full test suite runs on every change, and the product is no longer isolated.",
+                "No ledger line or exception accepts a failed claim.",
+            ]
         return [
             f"{SAFETY_LABELS['safe']}: If a reason names a file that is not watched, add the file to the "
             f"watched inputs in {where}. This can only run more tests, never fewer.",
-            f"{SAFETY_LABELS['care']}: Fix each other reason in the code. `{self.rerun} --rule <rule>` lists the rows of a rule.",
+            f"{SAFETY_LABELS['care']}: Fix each other reason in the code. {rows}",
             f"{SAFETY_LABELS['person']}: To drop the narrowing in {where}, stop and tell the person. The group then "
             "claims no level, its full test suite runs on every change, and the product is no longer isolated.",
             "No ledger line or exception accepts a failed claim.",
@@ -424,7 +442,7 @@ class CheckReport:
         if self.show_all:
             for name, group, where, reasons in failed:
                 title = f"{group} claims the level {name} in {where}, and fails it ({plural(len(reasons), 'reason')})."
-                out.append(Problem(title, (*reasons, *self.claim_ways(where))))
+                out.append(Problem(title, (*reasons, *self.claim_ways(name, where))))
         elif failed:
             rows = []
             for name, group, where, reasons in failed:
@@ -434,7 +452,7 @@ class CheckReport:
             verb = "claims a level and fails it" if len(failed) == 1 else "claim a level and fail it"
             title = f"{plural(len(failed), 'group')} {verb}."
             where = failed[0][2] if len(failed) == 1 else "the file that the row of the group names"
-            out.append(Problem(title, (*self.cut(rows, GROUPS_SHOWN), *self.claim_ways(where))))
+            out.append(Problem(title, (*self.cut(rows, GROUPS_SHOWN), *self.claim_ways(failed[0][0], where))))
         for name, error in sorted(self.summary.claim_errors.items()):
             person = f"{SAFETY_LABELS['person']}: stop and tell the person."
             out.append(Problem(f"hoglint cannot read the claims of the level {name}: {error}.", (person,)))
