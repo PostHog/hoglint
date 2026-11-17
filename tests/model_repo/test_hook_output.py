@@ -163,9 +163,20 @@ def claim_fails(repo: Path) -> None:
     shutil.copy(TREE / "products/inventory/turbo.json", repo / "products/inventory/turbo.json")
 
 
+LOADER = "import importlib\n\n\ndef load(product: str):\n    return importlib.import_module(f'products.{product}.backend.facade.api')\n"
+
+
 def blocking_incomplete(repo: Path) -> None:
-    loader = "import importlib\n\n\ndef load(product: str):\n    return importlib.import_module(f'products.{product}.backend.facade.api')\n"
-    write(repo, "posthog/api/plugin_loader.py", loader)
+    write(repo, "posthog/api/plugin_loader.py", LOADER)
+
+
+def many_problems(repo: Path) -> None:
+    """Every planted claim fails and twelve new unknowns block, next to one new finding."""
+    for product in FAILING_CLAIMS:
+        shutil.copy(TREE / "products" / product / "turbo.json", repo / "products" / product / "turbo.json")
+    for number in range(12):
+        write(repo, f"posthog/api/plugin_loader_{number}.py", LOADER)
+    write(repo, *ONE_FINDING)
 
 
 def stale_ledger_line(repo: Path) -> None:
@@ -189,6 +200,7 @@ SCENARIOS: dict[str, Callable[[Path], None]] = {
     "sixty-findings": sixty,
     "claim-fails": claim_fails,
     "blocking-incomplete": blocking_incomplete,
+    "many-problems": many_problems,
     "stale-ledger-line": stale_ledger_line,
     "exception-no-reason": exception_no_reason,
     "exception-complete": exception_complete,
@@ -251,3 +263,10 @@ def test_a_large_change_leads_with_what_a_reader_must_see_and_stays_under_the_ca
     assert "Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset" in preview
     assert "  see: hoglint explain public-surface\n" in preview
     assert "hoglint check --index --all" in printed and "hoglint help hook" in printed
+
+
+def test_many_problems_stay_under_the_cap_and_leave_the_first_finding_in_the_preview(outputs: dict[str, str]) -> None:
+    printed = outputs["many-problems.hook"].split("\n", 1)[1]
+    assert len(printed) <= CAP, len(printed)
+    assert "public-surface: posthog.api.price_badge names" in printed[:PREVIEW]
+    assert "\nMore problems:\n5 groups claim a level and fail it.\n" in printed

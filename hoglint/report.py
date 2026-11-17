@@ -27,13 +27,18 @@ from hoglint.selectors import State
 
 # The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
-# The most the hook's view prints, under a harness's cap on hook output, and how much of it
-# finding blocks may take.
+# The most the hook's view prints, under a harness's cap on hook output. Problems stop at
+# `PROBLEMS_BUDGET`, so a first finding starts in a harness's short preview; findings stop where
+# the closing lines still fit.
 CAP = 8000
-FINDINGS_BUDGET = 7000
+PROBLEMS_BUDGET = 1800
+TAIL = 1000
+FINDINGS_BUDGET = CAP - TAIL
 FIRST_RULES = 6
 MORE_HEADLINES = 4
-STALE_SHOWN = 5
+ROWS_SHOWN = 5
+GROUPS_SHOWN = 10
+NOTES_SHOWN = 3
 PAGE = "What the hook checks and what to do: hoglint help hook."
 SHRINK = "run `hoglint ledger shrink`, then stage {ledger}. It removes stale lines and never adds one."
 
@@ -280,19 +285,32 @@ class CheckReport:
 
     # ── problems that are not findings ──
 
+    def cut(self, rows: list[str], shown: int) -> list[str]:
+        """The first `shown` rows in the hook's view and a line that counts the rest; every row in the full view."""
+        rows = [row.replace("\t", " ") for row in rows]
+        if self.show_all or len(rows) <= shown:
+            return rows
+        return [*rows[:shown], f"and {len(rows) - shown} more: {self.rerun} --all"]
+
     def unknown_problems(self) -> list[Problem]:
-        out = []
+        """One problem per rule, kind and cause of the blocking unknowns, a row per place: the ways
+        out are the same for each place of a kind."""
+        groups: dict[tuple[str, IncompleteKind, str], list[IncompleteRecord]] = {}
         for item, cause in self.blocking_unknowns():
-            title, ways = KIND_WORDS[item.kind]
-            place = item.place() or item.key
+            groups.setdefault((item.rule, item.kind, cause), []).append(item)
+        out = []
+        for (rule, kind, cause), items in groups.items():
+            title, ways = KIND_WORDS[kind]
+            subject = "this place" if len(items) == 1 else f"each of these {len(items)} places"
+            rows = [f"at {item.place() or item.key}: {item.reason}" for item in items]
             lines = [
-                f"reason: {item.reason}",
+                *self.cut(rows, ROWS_SHOWN),
                 f"why: hoglint cannot judge this new code, so the commit cannot pass ({cause}).",
+                *(f"{SAFETY_LABELS[safety]}: {text}" for safety, text in ways),
             ]
-            lines += [f"{SAFETY_LABELS[safety]}: {text}" for safety, text in ways]
-            if item.rule in self.policy.rules:
-                lines.append(f"see: hoglint explain {item.rule}")
-            out.append(Problem(f"{item.rule}: {place} {title}.", tuple(lines)))
+            if rule in self.policy.rules:
+                lines.append(f"see: hoglint explain {rule}")
+            out.append(Problem(f"{rule}: {subject} {title}.", tuple(lines)))
         return out
 
     def ledger_problems(self) -> list[Problem]:
@@ -305,10 +323,8 @@ class CheckReport:
                 for header in equality.header
             )
             if equality.stale:
-                shown = equality.stale if self.show_all else equality.stale[:STALE_SHOWN]
-                rows = [f"stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}".replace("\t", " ") for d in shown]
-                if len(shown) < len(equality.stale):
-                    rows.append(f"and {len(equality.stale) - len(shown)} more")
+                stale = [f"stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.stale]
+                rows = self.cut(stale, ROWS_SHOWN)
                 why = "why: the ledger must equal the scan, so a fixed finding leaves the ledger."
                 fix = f"{SAFETY_LABELS['safe']}: {SHRINK.format(ledger=ledger)}"
                 out.append(
@@ -330,7 +346,7 @@ class CheckReport:
                     )
                 )
         if self.grown:
-            rows = [change_row(change).replace("\t", " ") for change in self.grown]
+            rows = self.cut([change_row(change) for change in self.grown], ROWS_SHOWN)
             fix = f"{SAFETY_LABELS['person']}: new debt needs a person. Remove the lines and fix the findings, or stop and tell the person."
             out.append(
                 Problem(
@@ -357,25 +373,31 @@ class CheckReport:
         out.extend(Problem(f"{problem}.", (person,)) for problem in summary.exceptions.problems)
         return out
 
+    def claim_ways(self, where: str) -> list[str]:
+        return [
+            f"{SAFETY_LABELS['safe']}: drop the narrowing in {where}. The group then claims no level, and its full test suite runs.",
+            f"{SAFETY_LABELS['care']}: fix each reason. `{self.rerun} --rule <rule>` lists the rows of a rule.",
+            "No ledger line or exception accepts a failed claim.",
+        ]
+
     def claim_problems(self) -> list[Problem]:
+        """In the full view, one problem per failed claim with each reason; in the hook's view, one
+        problem for all of them, a row per group with its reasons counted by rule."""
+        failed = self.summary.failed_claims()
         out = []
-        for name, group, where, reasons in self.summary.failed_claims():
-            if self.show_all:
-                rows = list(reasons)
-            else:
+        if self.show_all:
+            for name, group, where, reasons in failed:
+                title = f"{group} claims the level {name} in {where}, and fails it ({plural(len(reasons), 'reason')})."
+                out.append(Problem(title, (*reasons, *self.claim_ways(where))))
+        elif failed:
+            rows = []
+            for name, group, where, reasons in failed:
                 counts = Counter(reason.split(":", 1)[0] for reason in reasons)
-                rows = [f"{count} x {rule}" for rule, count in counts.most_common()]
-            lines = [
-                *rows,
-                f"{SAFETY_LABELS['safe']}: drop the narrowing in {where}. The group then claims no level, and its full test suite runs.",
-                f"{SAFETY_LABELS['care']}: fix each reason. `{self.rerun} --rule <rule>` lists the rows of a rule.",
-                "No ledger line or exception accepts a failed claim.",
-            ]
-            out.append(
-                Problem(
-                    f"{group} claims the level {name} in {where}, and fails it ({len(reasons)} reasons).", tuple(lines)
-                )
-            )
+                by_rule = ", ".join(f"{count} x {rule}" for rule, count in counts.most_common())
+                rows.append(f"{group} claims {name} in {where}: {by_rule}")
+            verb = "claims a level and fails it" if len(failed) == 1 else "claim a level and fail it"
+            title = f"{plural(len(failed), 'group')} {verb}."
+            out.append(Problem(title, (*self.cut(rows, GROUPS_SHOWN), *self.claim_ways("the file that the row names"))))
         for name, error in sorted(self.summary.claim_errors.items()):
             person = f"{SAFETY_LABELS['person']}: stop and tell the person."
             out.append(Problem(f"hoglint cannot read the claims of the level {name}: {error}.", (person,)))
@@ -387,10 +409,11 @@ class CheckReport:
     def notes(self) -> list[str]:
         """What a reader should know and what blocks nothing: exceptions past their review date."""
         exceptions = self.policy.exceptions
-        return [
+        notes = [
             f"note: {exceptions}: {label} is past its review date {review_by}. A person reviews it; this does not block."
             for review_by, label in self.summary.exceptions.expired(self.today)
         ]
+        return self.cut(notes, NOTES_SHOWN)
 
     # ── views ──
 
@@ -423,8 +446,7 @@ class CheckReport:
         if violations:
             out.extend(self.by_rule(violations))
         out.extend([self.guard(), ""])
-        for problem in problems:
-            out.extend([*problem.render(), ""])
+        self.first_problems(problems, out)
         shown = self.first_findings(violations, out)
         rest = len(violations) - shown
         hidden = f"{rest} more findings, " if rest else ""
@@ -435,6 +457,23 @@ class CheckReport:
         out.extend(notes)
         out.append(PAGE)
         return "\n".join(out) + "\n"
+
+    def first_problems(self, problems: list[Problem], out: list[str]) -> None:
+        """Appends the problems in full within their budget, at least one, then the titles of a few
+        more, and a line that counts the rest."""
+        size = len("\n".join(out))
+        printed = 0
+        for problem in problems:
+            block = problem.render()
+            if printed and size + len("\n".join(block)) > PROBLEMS_BUDGET:
+                break
+            out.extend([*block, ""])
+            size += len("\n".join(block)) + 2
+            printed += 1
+        titles = [problem.title for problem in problems[printed:]]
+        if not titles:
+            return
+        out.extend(["More problems:", *self.cut(titles, MORE_HEADLINES), ""])
 
     def first_findings(self, violations: list[FindingRecord], out: list[str]) -> int:
         """Appends the first finding of each rule in full, then a few more headlines, within the
@@ -455,13 +494,18 @@ class CheckReport:
             out.extend([*block, ""])
             size += len("\n".join(block)) + 2
             printed.append(finding)
-        more = [f for f in violations if not any(f is p for p in printed)][:MORE_HEADLINES]
+        more: list[str] = []
+        added = 0
+        for finding in [f for f in violations if not any(f is p for p in printed)][:MORE_HEADLINES]:
+            block = self.finding_block(finding, full=False)
+            size += len("\n".join(block)) + 1
+            if size > FINDINGS_BUDGET:
+                break
+            more.extend(block)
+            added += 1
         if more:
-            out.append("More findings:")
-            for finding in more:
-                out.extend(self.finding_block(finding, full=False))
-            out.append("")
-        return len(printed) + len(more)
+            out.extend(["More findings:", *more, ""])
+        return len(printed) + added
 
     def render_all(self) -> str:
         """Every row, or the rows of `rule`: the findings with their rule's words once, the

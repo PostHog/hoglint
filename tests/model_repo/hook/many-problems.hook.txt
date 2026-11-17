@@ -1,0 +1,44 @@
+exit 2
+hoglint: this commit is blocked: 40 new findings, 2 other problems.
+New findings by rule:
+    39  wiring-watched
+     1  public-surface
+Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
+
+dynamic-imports: each of these 12 places goes through a value that hoglint does not follow (a computed name, a variable or a call).
+  at posthog/api/plugin_loader_0.py:5: dynamic-import '' did not resolve
+  at posthog/api/plugin_loader_1.py:5: dynamic-import '' did not resolve
+  at posthog/api/plugin_loader_10.py:5: dynamic-import '' did not resolve
+  at posthog/api/plugin_loader_11.py:5: dynamic-import '' did not resolve
+  at posthog/api/plugin_loader_2.py:5: dynamic-import '' did not resolve
+  and 7 more: hoglint check --index --all
+  why: hoglint cannot judge this new code, so the commit cannot pass (introduced).
+  fix (safe): If the set of names is fixed, write each name out.
+  needs a person: If the code must compute the name, stop and tell the person. The config declares such patterns.
+  see: hoglint explain dynamic-imports
+
+More problems:
+5 groups claim a level and fail it.
+
+The first finding of each rule (2 of 40 findings):
+public-surface: posthog.api.price_badge names products.catalog.backend.logic.pricing.price_for, which is not exported to it
+  at posthog/api/price_badge.py:1
+  why: Code outside a product must use the product only through its facade. A name from inside the product makes a coupling that the owners of the product cannot see.
+  fix (safe): If the facade of the product exports the same object, import it from the facade.
+  fix (needs care): If the code belongs to the product, move it into the product.
+  needs a person: If the facade must export a new name, stop and tell the person. The owners of the product decide what its facade exports.
+  see: hoglint explain public-surface
+
+wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/admin.py: the admin autodiscovery of Django imports this module
+  why: Core or another package runs this file without an import that turbo can see. When the file changes, the full test suite must run.
+  fix (safe): Add the file to the inputs of backend:contract-check in the turbo.json of the product. This can only run more tests, never fewer.
+  see: hoglint explain wiring-watched
+
+More findings:
+wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/apps.py: Django settings name this module
+wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/console.py: a registry loads this module by name
+wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/events.py: the AppConfig module of the product imports this module at setup
+wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/hogql_queries/__init__.py: a test outside the product runs this wiring
+
+Not shown: 34 more findings, 59 advisory rows, 96 old unknowns, 209 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+What the hook checks and what to do: hoglint help hook.

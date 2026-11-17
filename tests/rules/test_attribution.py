@@ -893,8 +893,11 @@ def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside
     for printed in outputs:
         assert "core.link names products.billing.logic.charge, which is not exported to it" in printed, printed
         assert "core/impl.py:1  [@team-a]" in printed
+        assert (
+            "source:unreadable: each of these 2 places has no facts, because hoglint cannot read the file.\n" in printed
+        )
         for path in ("core/gone.py", "core/out.py"):
-            assert f"source:unreadable: {path} has no facts, because hoglint cannot read the file.\n" in printed
+            assert f"  at {path}: {path} could not be read, so its facts are missing\n" in printed
 
 
 SITE = {

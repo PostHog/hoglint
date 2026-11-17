@@ -4,11 +4,9 @@ New findings by rule:
      3  wiring-watched
 Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
 
-inventory claims the level isolated in products/inventory/turbo.json, and fails it (16 reasons).
-  12 x reached-watched
-  3 x wiring-watched
-  1 x presentation-uses-facade
-  fix (safe): drop the narrowing in products/inventory/turbo.json. The group then claims no level, and its full test suite runs.
+1 group claims a level and fails it.
+  inventory claims isolated in products/inventory/turbo.json: 12 x reached-watched, 3 x wiring-watched, 1 x presentation-uses-facade
+  fix (safe): drop the narrowing in the file that the row names. The group then claims no level, and its full test suite runs.
   fix (needs care): fix each reason. `hoglint check --index --rule <rule>` lists the rows of a rule.
   No ledger line or exception accepts a failed claim.
 

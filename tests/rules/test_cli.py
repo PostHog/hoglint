@@ -499,9 +499,8 @@ def test_a_source_the_run_could_not_read_blocks_and_its_summary_is_never_stored(
     assert check_once(repo, tmp_path / "work", DAY, memo=True, staged=False) == 2
     printed = capsys.readouterr().out
     assert "  source:unreadable [extractor, unreadable] products/search/logic.py could not be read" in printed
-    assert (
-        "source:unreadable: products/search/logic.py has no facts, because hoglint cannot read the file.\n" in printed
-    )
+    assert "source:unreadable: this place has no facts, because hoglint cannot read the file.\n" in printed
+    assert "  at products/search/logic.py: products/search/logic.py could not be read" in printed
     stored = tmp_path / "cache" / "hoglint" / "summaries"
     assert not list(stored.rglob("*.json"))
     reads_fail.clear()
