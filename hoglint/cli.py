@@ -26,10 +26,11 @@ import subprocess
 import dataclasses
 import importlib.metadata
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
@@ -465,6 +466,30 @@ class LockPin:
             return importlib.metadata.version(DISTRIBUTION)
         except importlib.metadata.PackageNotFoundError:
             return None
+
+
+class Version(argparse.Action):
+    """`hoglint --version`. The one source is `[project] version` in pyproject.toml: a checkout
+    reads it there, an installed wheel from its metadata, as `LockPin.running` does. It is read
+    only when asked, so no other command pays for the lookup."""
+
+    @staticmethod
+    def text() -> str:
+        crate = EngineId.crate_of(PACKAGE_DIR)
+        if crate is None:
+            return f"{DISTRIBUTION} {LockPin.running() or 'unknown'}"
+        project = tomllib.loads((crate / "pyproject.toml").read_text())["project"]
+        return f"{DISTRIBUTION} {project['version']} (checkout {crate})"
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        sys.stdout.write(self.text() + "\n")
+        parser.exit()
 
 
 class BaseEngines:
@@ -1192,6 +1217,7 @@ def parser() -> argparse.ArgumentParser:
     main = argparse.ArgumentParser(
         prog="hoglint", description="Boundary linter: facts, edges, rules and a generated ledger."
     )
+    main.add_argument("--version", action=Version, nargs=0, help="print the version and exit")
     main.add_argument("--repo", type=Path, default=Path.cwd(), help="repo root that holds hoglint.toml")
     main.add_argument(
         "--engine", type=engine_name, default=ENGINE_NATIVE, help="native, the one engine; a base scan is passed it"
@@ -1314,3 +1340,11 @@ def main(argv: list[str] | None = None) -> int:
         return could_not_run(args, str(error))
     except BaseException as error:  # noqa: BLE001 - a crash or a panic must exit 3, never 1
         return could_not_run(args, f"{type(error).__name__}: {error}", traceback.format_exc())
+
+
+def entry() -> int:
+    """The `hoglint` command of the wheel, and `python -m hoglint`."""
+    code = main()
+    # The collection the interpreter runs at exit walks every live object and frees nothing an exiting process needs back.
+    gc.freeze()
+    return code
