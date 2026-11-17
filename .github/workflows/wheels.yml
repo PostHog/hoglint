@@ -1,5 +1,5 @@
-# Builds the hoglint wheels on a v* tag and on a manual run. Only a pushed v* tag publishes, to
-# PyPI through trusted publishing; a manual run is a dry run, also on a tag.
+# Builds the hoglint wheels on main, on a v* tag and on a manual run. Only a pushed v* tag
+# publishes, to PyPI through trusted publishing; every other run is a dry run.
 # Based on pixelhog's wheels.yml (from `maturin generate-ci github`). Each wheel holds the hoglint
 # package, the hoglint_native module and the hoglint-facts binary. bin/stage-facts builds the
 # binary for the same target right before maturin builds the wheel around it.
@@ -7,6 +7,8 @@ name: Build wheels
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -30,7 +32,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.14"
+          # The last one is the default; the smoke test runs the wheel on each.
+          python-version: |
+            3.15
+            3.14
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -45,14 +50,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install dist/hoglint-*.whl
-          cd "$RUNNER_TEMP"
-          venv/bin/hoglint --version
-          venv/bin/hoglint engine-id
-          module_id="$(venv/bin/python -c 'from hoglint.native import bridge; print(bridge.load().NATIVE_ID)')"
-          binary="$(venv/bin/python -c 'from hoglint.facts import find_binary; print(find_binary())')"
-          test "$module_id" = "$("$binary" --native-id)"
+          wheel="$(ls "$PWD"/dist/hoglint-*.whl)"
+          for version in 3.14 3.15; do
+            venv="$RUNNER_TEMP/venv-$version"
+            "python$version" -m venv "$venv"
+            "$venv/bin/pip" install "$wheel"
+            (
+              cd "$RUNNER_TEMP"
+              "$venv/bin/hoglint" --version
+              "$venv/bin/hoglint" engine-id
+              module_id="$("$venv/bin/python" -c 'from hoglint.native import bridge; print(bridge.load().NATIVE_ID)')"
+              binary="$("$venv/bin/python" -c 'from hoglint.facts import find_binary; print(find_binary())')"
+              test "$module_id" = "$("$binary" --native-id)"
+            )
+          done
       - name: Upload wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -76,7 +87,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.14"
+          # The last one is the default; the smoke test runs the wheel on each.
+          python-version: |
+            3.15
+            3.14
       - name: Stage the extractor binary
         run: bin/stage-facts ${{ matrix.platform.target }}
       - name: Build wheel
@@ -88,14 +102,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install dist/hoglint-*.whl
-          cd "$RUNNER_TEMP"
-          venv/bin/hoglint --version
-          venv/bin/hoglint engine-id
-          module_id="$(venv/bin/python -c 'from hoglint.native import bridge; print(bridge.load().NATIVE_ID)')"
-          binary="$(venv/bin/python -c 'from hoglint.facts import find_binary; print(find_binary())')"
-          test "$module_id" = "$("$binary" --native-id)"
+          wheel="$(ls "$PWD"/dist/hoglint-*.whl)"
+          for version in 3.14 3.15; do
+            venv="$RUNNER_TEMP/venv-$version"
+            "python$version" -m venv "$venv"
+            "$venv/bin/pip" install "$wheel"
+            (
+              cd "$RUNNER_TEMP"
+              "$venv/bin/hoglint" --version
+              "$venv/bin/hoglint" engine-id
+              module_id="$("$venv/bin/python" -c 'from hoglint.native import bridge; print(bridge.load().NATIVE_ID)')"
+              binary="$("$venv/bin/python" -c 'from hoglint.facts import find_binary; print(find_binary())')"
+              test "$module_id" = "$("$binary" --native-id)"
+            )
+          done
       - name: Upload wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -138,8 +158,10 @@ jobs:
         with:
           subject-path: "dist/*"
 
-      # The PyPA action uploads PEP 740 attestations with trusted publishing. PyPI refuses a
-      # different file under a name it already has, so a version is published once.
+      # PyPA action instead of `uv publish`: it generates and uploads PEP 740
+      # attestations (on by default with trusted publishing), uv can't yet.
+      # No skip-existing: it matches by filename only. PyPI itself accepts a
+      # byte-identical re-upload and rejects different bytes under the same name.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 

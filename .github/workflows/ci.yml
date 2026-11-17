@@ -34,16 +34,20 @@ jobs:
         run: cargo test --locked
 
   python:
-    name: Python
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.14", "3.15"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       - name: Install the dev environment
-        run: uv sync --locked
+        run: uv sync --locked --python ${{ matrix.python-version }}
       - name: Build the extractor and the native module
         run: bin/build
       - name: Ruff
