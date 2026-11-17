@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from core.support import set_modified
-from hoglint.cli import WAY_OUT, Commands, Snapshots
+from hoglint.cli import Commands, Snapshots
 from hoglint.facts import find_binary
 from hoglint.labels import ProviderRunner
 from hoglint.ledger import store as store_module
@@ -42,6 +42,7 @@ from hoglint.ledger.scan import ProtocolError, ScanSummary
 from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause, IncompleteKind
 from hoglint.presets_py.posthog.owners import OWNERS_YAML
+from hoglint.report import View
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.source import GraphSource
@@ -528,20 +529,20 @@ def test_staged_check_blocks_only_what_it_introduced_against_head_and_chains_its
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "one computed import")
 
-    inherited = hoglint(repo, "check", "--index")
+    inherited = hoglint(repo, "check", "--index", "--all")
     assert inherited.returncode == 0, inherited.stdout + inherited.stderr
     assert "this run): 0 introduced, 0 ambiguous, 1 inherited" in inherited.stdout
 
     (repo / "core/loader.py").write_text(SECOND_LOADER)
     git_in(repo, "add", "-A")
-    introduced = hoglint(repo, "check", "--index")
+    introduced = hoglint(repo, "check", "--index", "--all")
     assert introduced.returncode == 2, introduced.stdout + introduced.stderr
     assert "stored summary): 1 introduced, 0 ambiguous, 1 inherited" in introduced.stdout
 
     git_in(repo, "commit", "-qm", "a second computed import")
     (repo / "core/__init__.py").write_text("X = 1\n")
     git_in(repo, "add", "-A")
-    chained = hoglint(repo, "check", "--index")
+    chained = hoglint(repo, "check", "--index", "--all")
     assert chained.returncode == 0, chained.stdout + chained.stderr
     assert "stored summary): 0 introduced, 0 ambiguous, 2 inherited" in chained.stdout
 
@@ -598,10 +599,10 @@ def test_a_commit_that_makes_a_config_name_stale_is_blocked_as_introduced(tmp_pa
     assert clean.returncode == 0, clean.stdout + clean.stderr
 
     make_stale(repo, change)
-    stale = hoglint(repo, "check", "--index")
+    stale = hoglint(repo, "check", "--index", "--all")
     assert stale.returncode == 2, stale.stdout + stale.stderr
     assert f"stored summary): {STALE_CHANGES[change][1]}, 0 ambiguous\n" in stale.stdout
-    assert "config:stale-name [introduced]" in stale.stdout
+    assert "config:stale-name [introduced, stale-name]" in stale.stdout
 
 
 def stored_incomplete_counts(cache: Path) -> dict[str, int]:
@@ -643,7 +644,7 @@ def test_a_staged_check_reads_only_the_tree_it_captured_from_the_index(
     (tmp_path / "work").mkdir()
     commands = Commands(repo, tmp_path / "work")
     try:
-        assert commands.check(index=True, write_ledger=False, changed=False) == 2
+        assert commands.check(True, False, False, view=View("hoglint check --index", all=True)) == 2
     finally:
         commands.snapshots.close()
     assert "computed and stored): 1 introduced, 0 ambiguous, 1 inherited" in capfd.readouterr().out
@@ -694,7 +695,7 @@ def test_a_file_no_rule_reads_never_keeps_a_staged_summary_from_the_next_commit(
     git_in(repo, "commit", "-qm", "one")
     (repo / "core/__init__.py").write_text("Y = 2\n")
     git_in(repo, "add", "core/__init__.py")
-    assert "(tree " in (after := hoglint(repo, "check", "--index")).stdout
+    assert "(tree " in (after := hoglint(repo, "check", "--index", "--all")).stdout
     assert "stored summary)" in after.stdout, after.stdout + after.stderr
 
 
@@ -771,8 +772,8 @@ def test_a_staged_check_reads_side_inputs_from_the_index_not_the_working_tree(tm
     git_in(repo, "add", "-A")
     (repo / "products/billing/turbo.json").write_text(turbo_inputs("facade.py"))
     (repo / "products/billing/README.md").unlink()
-    differs = ("wiring-watched  products/billing/logic.py", "readme  products/billing/README.md")
-    staged, working = hoglint(repo, "check", "--index").stdout, hoglint(repo, "check").stdout
+    differs = ("does not watch products/billing/logic.py", "products/billing lacks README.md")
+    staged, working = hoglint(repo, "check", "--index", "--all").stdout, hoglint(repo, "check", "--all").stdout
     assert [line in staged for line in differs] == [False, False], staged
     assert [line in working for line in differs] == [True, True], working
 
@@ -844,17 +845,18 @@ def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored
     for args in (("check",), ("check", "--index")):
         shutil.rmtree(cache, ignore_errors=True)
         done = hoglint(repo, *args)
-        reports.append((done.returncode, done.stdout.replace("this run", "HEAD"), stored_manifests(cache)))
+        printed = done.stdout.replace("this run", "HEAD").replace(" --index", "")
+        reports.append((done.returncode, printed, stored_manifests(cache)))
     shutil.rmtree(cache, ignore_errors=True)
     hoglint(repo, "summary", "export", "--file", str(tmp_path / "summary"))
     assert reports[0] == reports[1], reports
     assert stored_manifests(cache) == reports[0][2] and len(reports[0][2]) == 1
-    assert "violations (1)" in reports[0][1] and "core.api" not in reports[0][1]
+    assert "blocked: 1 new finding." in reports[0][1] and "core.api" not in reports[0][1]
     (repo / "products/alerts/new.py").write_text("X = 1\n")
     dirty = hoglint(repo, "check")
-    assert "violations (1)" in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
-    # A failed check names the allowed way past a new finding, never a ledger rewrite.
-    assert WAY_OUT in dirty.stdout and "write-ledger" not in dirty.stdout
+    assert "blocked: 1 new finding." in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
+    # A failed check says to fix or to stop and tell the person, never to rewrite the ledger.
+    assert "Fix each finding, or stop and tell the person." in dirty.stdout and "write-ledger" not in dirty.stdout
     assert stored_manifests(cache) == reports[0][2]
 
 
@@ -883,15 +885,16 @@ def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside
     git_in(repo, "init", "-q")
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "links")
-    outputs = [hoglint(repo, *args).stdout for args in (("check",), ("check", "--index"))]
+    outputs = [hoglint(repo, *args, "--all").stdout for args in (("check",), ("check", "--index"))]
     assert outputs[0] == outputs[1]
     # An untracked file makes `check` read the working tree, which follows the same links.
     (repo / "core/notes.py").write_text("")
-    outputs.append(hoglint(repo, "check").stdout)
+    outputs.append(hoglint(repo, "check", "--all").stdout)
     for printed in outputs:
-        assert "products.billing.logic.charge core.link import" in printed, printed
+        assert "core.link names products.billing.logic.charge, which is not exported to it" in printed, printed
         assert "core/impl.py:1  [@team-a]" in printed
-        assert "unreadable sources, so their facts are missing (2)\n  core/gone.py\n  core/out.py\n" in printed
+        for path in ("core/gone.py", "core/out.py"):
+            assert f"source:unreadable: {path} has no facts, because hoglint cannot read the file.\n" in printed
 
 
 SITE = {

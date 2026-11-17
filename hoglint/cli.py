@@ -35,7 +35,7 @@ from hoglint.config.loader import PACK_PREFIX
 from hoglint.config.schema import as_tuple
 from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
-from hoglint.labels import CandidateCache, Labeler
+from hoglint.labels import CandidateCache
 from hoglint.ledger.cache import RunStores
 from hoglint.ledger.envelope import (
     ENGINE,
@@ -53,23 +53,22 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.errors import RepoRootError
-from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, change_row, grown_lines, render_key, shrunk_lines
+from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, change_row, grown_lines, shrunk_lines
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
-from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute
-from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
+from hoglint.ledger.obligations import attribute
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
-from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
+from hoglint.model import Finding, Graph, IncompleteCause
 from hoglint.native.bridge import engine_errors
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.source import NativeGraphSource, batch_mode
+from hoglint.report import HOOK_VIEW, Attributed, CheckReport, Policy, ReadTimeOwners, View
 from hoglint.rules.base import EdgeRule
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.rules.page import RulePage
-from hoglint.selectors import State
 from hoglint.source import GraphSource
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -335,23 +334,11 @@ def finding_line(finding: Finding) -> str:
     return f"{finding.rule}  {' '.join(finding.identity)}\n    {finding.message}  {where(finding)}{owners}"
 
 
-# What `check` tells the reader of a new finding: never to rewrite the ledger to pass.
-WAY_OUT = (
-    "the way out: change the code so the finding goes, or record a reviewed exception with its reason"
-    " and review date; rewriting the ledger to pass hides new debt from review"
-)
-# What `check` tells the reader of a group that claims a level it fails.
-CLAIM_WAY_OUT = (
-    "the way out: fix each reason, or drop the narrowing in the file that claims the level;"
-    " no ledger line or exception accepts a claim on a level the group fails"
-)
-# What `check` tells the reader of a stale ledger line, and of ledger lines a change adds by hand.
-SHRINK_WAY_OUT = "run `hoglint ledger shrink`, then stage the ledger: it removes stale lines and never adds one"
+# What `--write-ledger` tells the reader of lines it does not add without the switch.
 RECORD_GROWTH_WAY_OUT = (
     "new debt needs a person: fix the findings, or stop and tell the person; a person who accepts "
     "the debt, or a policy change that finds more, records it with --write-ledger --record-growth"
 )
-GROWTH_WAY_OUT = "new debt needs a person: remove these lines and fix the findings, or stop and tell the person"
 # What a command that could not run at all prints, in one line (D104.3, D111). The hook's command
 # lets the commit through on exit 3; CI runs the full check.
 COULD_NOT_RUN = 3
@@ -361,177 +348,6 @@ HOOK_COULD_NOT_RUN = (
 )
 COMMAND_COULD_NOT_RUN = "hoglint could not run: {reason}. To repair hoglint, see `hoglint help hook`."
 TRACEBACK_ENV = "HOGLINT_TRACEBACK"
-# The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
-BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
-
-
-@dataclass(frozen=True, slots=True)
-class Attributed:
-    """Incomplete items labelled against a baseline summary; `against` names the baseline."""
-
-    labels: Labels
-    against: str
-
-    @property
-    def blocking(self) -> bool:
-        return any(label in BLOCKING for items in self.labels.values() for label in items)
-
-    def causes(self, items: list[IncompleteRecord]) -> list[str]:
-        """Each item's owner: a producer failure stays an extractor item, the rest take their label."""
-        left = {key: list(labels) for key, labels in self.labels.items()}
-        out = []
-        for item in items:
-            labels = left.get(((item.rule, item.key, item.reason), item.mark), [])
-            if item.cause is not IncompleteCause.INHERITED or not labels:
-                out.append(item.cause.value)
-                continue
-            out.append(labels.pop(0).value)
-        return out
-
-
-class CheckReport:
-    """What `check` prints and its exit code, read from a run summary: the one a live run makes,
-    or the stored one that stands in for the run. Owners and the day are read when it renders."""
-
-    def __init__(
-        self,
-        summary: ScanSummary,
-        owners: ReadTimeOwners,
-        today: datetime.date,
-        touched: set[str] | None = None,
-        attributed: Attributed | None = None,
-        grown: list[LineChange] | None = None,
-    ) -> None:
-        self.summary = summary
-        self.owners = owners
-        self.today = today
-        self.touched = touched
-        self.attributed = attributed
-        self.grown = grown or []
-
-    def keep(self, finding: FindingRecord) -> bool:
-        if self.touched is None:
-            return True
-        return touches(self.touched, (witness.path for witness in finding.witnesses), finding.subjects)
-
-    def new(self) -> list[FindingRecord]:
-        return [f for f in self.summary.findings.with_status(FindingStatus.NEW) if self.keep(f)]
-
-    def violations(self) -> list[FindingRecord]:
-        return [f for f in self.new() if f.rule not in self.summary.advisory]
-
-    def advisory(self) -> list[FindingRecord]:
-        return [f for f in self.new() if f.rule in self.summary.advisory]
-
-    def finding_line(self, finding: FindingRecord) -> str:
-        shown = finding.shown
-        if shown is None:
-            raise ValueError(f"the summary keeps no message for {finding.rule} {' '.join(finding.identity)}")
-        site = f"{shown.path}:{shown.line}" if shown.path else ""
-        owners = self.owners.of_module(finding.owner)
-        listed = f"  [{', '.join(owners)}]" if owners else ""
-        return f"{finding.rule}  {' '.join(finding.identity)}\n    {shown.message}  {site}{listed}"
-
-    def way_out(self, violations: list[FindingRecord]) -> list[str]:
-        """What each violated rule asks for, and the allowed way past a new finding."""
-        if not violations:
-            return []
-        rules = sorted({finding.rule for finding in violations})
-        out = [f"  {rule}: {self.summary.docs[rule]}" for rule in rules if self.summary.docs.get(rule)]
-        out.append(f"  {WAY_OUT}")
-        return out
-
-    def incomplete_lines(self) -> list[str]:
-        items = self.summary.incomplete
-        if self.attributed is None:
-            causes = [item.cause.value for item in items]
-        else:
-            causes = self.attributed.causes(items)
-        out = [f"incomplete ({len(items)})"]
-        out.extend(f"  {item.rule} [{cause}]  {item.reason}" for item, cause in zip(items, causes, strict=True))
-        if self.attributed is not None:
-            counts = Counter(causes)
-            tally = ", ".join(
-                f"{counts[label.value]} {label.value}"
-                for label in Attribution
-                if counts[label.value] or label in BLOCKING
-            )
-            out.append(f"incomplete attributed against {self.attributed.against}: {tally}")
-        return out
-
-    def render(self) -> str:
-        summary = self.summary
-        out: list[str] = []
-        violations = self.violations()
-        out.append(f"violations ({len(violations)})")
-        out.extend(f"  {self.finding_line(f)}" for f in violations)
-        out.extend(self.way_out(violations))
-        advisory = self.advisory()
-        if advisory:
-            out.append(f"advisory ({len(advisory)})")
-            out.extend(f"  {self.finding_line(f)}" for f in advisory)
-        if self.touched is not None:
-            accepted = [f for f in summary.findings.with_status(FindingStatus.ACCEPTED) if self.keep(f)]
-            out.append(f"existing debt in touched files (advisory) ({len(accepted)})")
-            out.extend(f"  {self.finding_line(f)}" for f in accepted)
-        out.extend(self.incomplete_lines())
-        if summary.unread:
-            out.append(f"unreadable sources, so their facts are missing ({len(summary.unread)})")
-            out.extend(f"  {path}" for path in summary.unread)
-        equality = summary.equality
-        if equality is not None and not equality.equal:
-            out.append("ledger is not equal to the scan")
-            out.extend(f"  {problem}" for problem in equality.header)
-            out.extend(f"  new    {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.new)
-            out.extend(f"  stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.stale)
-            if equality.stale:
-                out.append(f"  {SHRINK_WAY_OUT}")
-        if self.grown:
-            out.append(f"ledger lines this change adds, with no policy change ({len(self.grown)})")
-            out.extend(f"  {change_row(change)}" for change in self.grown)
-            out.append(f"  {GROWTH_WAY_OUT}")
-        for label in summary.exceptions.stale:
-            out.append(f"stale exception: {label} matches nothing")
-        for review_by, label in summary.exceptions.expired(self.today):
-            out.append(f"exception past review_by {review_by}: {label} (reported, not blocking)")
-        out.extend(f"exceptions: {problem}" for problem in summary.exceptions.problems)
-        for name, passing in summary.levels.items():
-            out.append(f"level {name}: {len(passing)} pass, {len(summary.level_failures.get(name, {}))} fail")
-        out.extend(self.claim_lines())
-        accepted_count = summary.findings.count(FindingStatus.ACCEPTED)
-        out.append(f"{accepted_count} findings accepted by the ledger")
-        return "\n".join(out) + "\n"
-
-    def claim_lines(self) -> list[str]:
-        """Each group that claims a level it fails, with the level's reasons, and each level whose
-        claims cannot be read."""
-        summary = self.summary
-        failed = summary.failed_claims()
-        if not failed and not summary.claim_errors:
-            return []
-        out = [f"claimed levels that fail ({len(failed) + len(summary.claim_errors)})"]
-        for name, group, where, reasons in failed:
-            out.append(f"  {name}  {group}  (claimed in {where})")
-            out.extend(f"    {reason}" for reason in reasons)
-        for name, error in sorted(summary.claim_errors.items()):
-            out.append(f"  {name}  cannot read its claims: {error}")
-        out.append(f"  {CLAIM_WAY_OUT}")
-        return out
-
-    def exit_code(self) -> int:
-        """`check` without `--changed`: 2 for a blocking incomplete result, 1 when the run failed."""
-        summary = self.summary
-        if self.attributed is not None and self.attributed.blocking:
-            return 2
-        if any(item.cause in BLOCKING_CAUSES for item in summary.incomplete):
-            return 2
-        unequal = summary.equality is not None and not summary.equality.equal
-        exceptions_failed = summary.exceptions.stale or summary.exceptions.problems
-        claims_failed = summary.failed_claims() or summary.claim_errors
-        failed = self.violations() or unequal or exceptions_failed or claims_failed or self.grown
-        return 1 if failed else 0
-
-
 # ── engines and baselines ─────────────────────────────────────────
 
 
@@ -799,24 +615,6 @@ class RunMemo:
         return summary
 
 
-class ReadTimeOwners:
-    """A finding's owners, looked up when it is rendered, from the owners files under `root`.
-    Summaries never store owners (D12), so an owners file edit needs no new summary."""
-
-    def __init__(self, config: Config, modules: dict[str, str], root: Path) -> None:
-        self.field = config.roles.owner
-        self.labeler = Labeler(config, Graph(modules=dict(modules)), root)
-
-    def of_module(self, owner: str) -> tuple[str, ...]:
-        """The owners of a finding whose owner module is `owner` (empty for none)."""
-        if not self.field or not owner:
-            return ()
-        value, _ = self.labeler.field_value(owner, None, self.field)
-        if value.state is State.KNOWN and isinstance(value.data, frozenset):
-            return tuple(sorted(value.data))
-        return ()
-
-
 # ── commands ──────────────────────────────────────────────────────
 
 
@@ -897,7 +695,9 @@ class Commands:
         sys.stdout.write("".join(f"  {change_row(change)}\n" for change in removed))
         return 0
 
-    def check(self, index: bool, write_ledger: bool, changed: bool, record_growth: bool = False) -> int:
+    def check(
+        self, index: bool, write_ledger: bool, changed: bool, record_growth: bool = False, view: View = HOOK_VIEW
+    ) -> int:
         """With `index`, the index is captured once as a git tree, and the run reads everything
         from that tree: code, policy, side inputs and the owners it prints. Without it, the run
         reads HEAD's tree when the working tree holds HEAD's inputs, else the working tree."""
@@ -919,7 +719,7 @@ class Commands:
             stored = self.memo.lookup(baseline, policy_root)
             if stored is not None:
                 attributed = self.baselines.attribute(baseline, stored)
-                return self.report(stored, baseline.config, policy_root, files_root, None, attributed, grown)
+                return self.report(stored, baseline.config, policy_root, files_root, None, attributed, grown, view)
         run = self.runner.run(
             policy_root, self.repo, staged=index, rewrite_ledger=write_ledger, tree=tree, files_root=files_root
         )
@@ -934,13 +734,13 @@ class Commands:
             touched = set(self.snapshots.changed_paths(None, tree if index else ""))
             touched |= {m for m, p in run.graph.modules.items() if p in touched}
             summary = summary_of(run, Envelope(), with_triples=False, touched=touched)
-            self.report(summary, run.config, policy_root, files_root, touched, None)
+            self.report(summary, run.config, policy_root, files_root, touched, None, view=view)
             return 0
         summary = summary_of(run, baseline.envelope, with_triples=False)
         if not write_ledger:
             self.summaries.put(summary.envelope, summary)
         attributed = self.baselines.attribute(baseline, summary)
-        return self.report(summary, run.config, policy_root, files_root, None, attributed, grown)
+        return self.report(summary, run.config, policy_root, files_root, None, attributed, grown, view)
 
     def report(
         self,
@@ -951,12 +751,14 @@ class Commands:
         touched: set[str] | None,
         attributed: Attributed | None,
         grown: list[LineChange] | None = None,
+        view: View = HOOK_VIEW,
     ) -> int:
         """Prints the check report of a summary and returns its exit code. Owners are read from
         `files_root`, the run's own files."""
         owners = ReadTimeOwners(PolicyFiles(config).anchored(policy_root, self.repo), summary.modules, files_root)
         today = self.runner.today or datetime.date.today()
-        report = CheckReport(summary, owners, today, touched, attributed, grown)
+        policy = Policy.of(config, CONFIG_FILE)
+        report = CheckReport(summary, owners, today, policy, view, touched, attributed, grown)
         sys.stdout.write(report.render())
         return report.exit_code()
 
@@ -1070,7 +872,7 @@ class Commands:
 
     # ── compare ──
 
-    def compare(self, ref: str) -> int:
+    def compare(self, ref: str, view: View = HOOK_VIEW) -> int:
         base_sha = self.snapshots.merge_base(ref)
         base_tree = self.snapshots.tree_of(base_sha)
         base_root = self.snapshots.commit(base_sha)
@@ -1113,9 +915,10 @@ class Commands:
         ).report()
         owners = ReadTimeOwners(head.config, scans.head.modules, head.files_root or head.root)
         today = self.runner.today or datetime.date.today()
-        sys.stdout.write(
-            CheckReport(scans.head, owners, today, attributed=Attributed(report.labels, "the base")).render()
-        )
+        policy = Policy.of(head.config, CONFIG_FILE)
+        attributed = Attributed(report.labels, "the base")
+        head_view = dataclasses.replace(view, rerun=f"hoglint compare --base {ref}")
+        sys.stdout.write(CheckReport(scans.head, owners, today, policy, head_view, attributed=attributed).render())
         sys.stdout.write(report.render())
         return report.exit_code(head.result.failed(), bool(head.result.blocking_incomplete()))
 
@@ -1259,6 +1062,18 @@ def engine_name(value: str) -> str:
     return value
 
 
+def add_view_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--all", action="store_true", help="print every row: each finding, advisory row and unknown")
+    command.add_argument("--rule", default="", help="print the rows of one rule")
+
+
+def view_of(args: argparse.Namespace, rerun: str) -> View:
+    """The rows a report prints; `rerun` is the command, which the output names for more rows."""
+    if getattr(args, "index", False):
+        rerun += " --index"
+    return View(rerun=rerun, all=args.all, rule=args.rule)
+
+
 def parser() -> argparse.ArgumentParser:
     """Each subcommand sets `handler`, a function of (Commands, parsed args) that returns the exit code."""
     main = argparse.ArgumentParser(
@@ -1280,8 +1095,11 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--changed", action="store_true", help="advisory: only what the touched files show; always exits 0"
     )
+    add_view_arguments(check)
     check.set_defaults(
-        handler=lambda commands, args: commands.check(args.index, args.write_ledger, args.changed, args.record_growth)
+        handler=lambda commands, args: commands.check(
+            args.index, args.write_ledger, args.changed, args.record_growth, view_of(args, "hoglint check")
+        )
     )
     ledger = sub.add_parser("ledger", help="shrink: remove stale ledger lines; it never adds a line")
     ledger.add_argument("action", choices=("shrink",))
@@ -1297,7 +1115,8 @@ def parser() -> argparse.ArgumentParser:
     query.set_defaults(handler=lambda commands, args: commands.query(args.by))
     compare = sub.add_parser("compare", help="PR mode against the merge base of a ref")
     compare.add_argument("--base", required=True)
-    compare.set_defaults(handler=lambda commands, args: commands.compare(args.base))
+    add_view_arguments(compare)
+    compare.set_defaults(handler=lambda commands, args: commands.compare(args.base, view_of(args, "hoglint compare")))
     explain_config = sub.add_parser("explain-config", help="the expanded config, each key with its source")
     explain_config.set_defaults(handler=lambda commands, args: commands.explain_config())
     scan = sub.add_parser(

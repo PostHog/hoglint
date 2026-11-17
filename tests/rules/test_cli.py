@@ -13,6 +13,7 @@ from hoglint.ledger.listing import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
 from hoglint.native import bridge
 from hoglint.plugins import PLUGIN_ROOTS
+from hoglint.report import View
 from hoglint.source import GraphSource
 from native.require import native_module
 
@@ -270,14 +271,14 @@ def test_a_group_that_claims_a_level_it_fails_fails_check_whatever_the_ledger_li
     for memo in (True, True, False):
         assert check_once(repo, tmp_path / "work", DAY, memo=memo, staged=False) == 1
         printed = capsys.readouterr().out
-        assert "violations (0)" in printed
-        claims.append(printed[printed.index("claimed levels") : printed.index(" findings accepted")])
+        assert "new findings (0)" in printed
+        claims.append(printed[printed.index("alerts claims the level") : printed.index("new findings (")])
     assert len(runs) == 2 and claims[0] == claims[1] == claims[2]
     printed = claims[0]
-    assert "claimed levels that fail (1)\n  isolated  alerts  (claimed in inputs.narrowed)\n" in printed
-    assert "    crossings: strict, so the ledger does not excuse it: " in printed
+    assert printed.startswith("alerts claims the level isolated in inputs.narrowed, and fails it")
+    assert "\n  crossings: strict, so the ledger does not excuse it: " in printed
     # billing fails the level too, but claims nothing
-    assert "billing  (claimed" not in printed
+    assert "billing claims" not in printed
     assert "drop the narrowing" in printed
 
 
@@ -404,12 +405,13 @@ def count_runs(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 def check_once(
     repo: Path, work: Path, today: datetime.date, memo: bool, staged: bool, write_ledger: bool = False
 ) -> int:
+    """One check, printing every row, so a test compares the whole output."""
     key = repo.resolve()
     WorktreeStatus.taken.pop(key, None)
     work.mkdir(exist_ok=True)
     commands = Commands(repo, work, today=today, memo=memo)
     try:
-        return commands.check(index=staged, write_ledger=write_ledger, changed=False, record_growth=write_ledger)
+        return commands.check(staged, write_ledger, False, write_ledger, View("hoglint check", all=True))
     finally:
         commands.snapshots.close()
 
@@ -420,10 +422,10 @@ def check_once(
         (True, None, False, None),
         (False, "source", True, None),
         # neither file is in the tree, so only the ledger source and the policy digest see an edit
-        (False, "ledger", True, "crossings  products.alerts.logic products.billing.logic"),
-        (False, "exceptions", True, "crossings  products.alerts.views products.billing.logic"),
+        (False, "ledger", True, "crossings: products.alerts.logic imports products.billing.logic"),
+        (False, "exceptions", True, "crossings: products.alerts.views imports products.billing.logic"),
         # a stored summary keeps review dates, so the day decides what is past review
-        (False, "a day later", False, "exception past review_by 2026-06-01"),
+        (False, "a day later", False, "is past its review date 2026-06-01"),
     ],
     ids=["staged", "source edited", "ledger edited", "exceptions edited", "a day later"],
 )
@@ -486,8 +488,10 @@ def test_a_source_the_run_could_not_read_blocks_and_its_summary_is_never_stored(
     memo_repo(repo)
     assert check_once(repo, tmp_path / "work", DAY, memo=True, staged=False) == 2
     printed = capsys.readouterr().out
-    assert "  source:unreadable [extractor]  products/search/logic.py could not be read" in printed
-    assert "unreadable sources, so their facts are missing (1)\n  products/search/logic.py\n" in printed
+    assert "  source:unreadable [extractor, unreadable] products/search/logic.py could not be read" in printed
+    assert (
+        "source:unreadable: products/search/logic.py has no facts, because hoglint cannot read the file.\n" in printed
+    )
     stored = tmp_path / "cache" / "hoglint" / "summaries"
     assert not list(stored.rglob("*.json"))
     reads_fail.clear()

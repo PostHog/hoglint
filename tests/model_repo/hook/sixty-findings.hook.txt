@@ -1,0 +1,71 @@
+exit 1
+hoglint: this commit is blocked: 64 new findings.
+New findings by rule:
+    40  public-surface
+    12  presentation-uses-facade
+     5  facade-signature
+     3  model-crossings
+     2  prod-imports-test
+     2  no-new-package-cycles
+Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
+
+The first finding of each rule (6 of 64 findings):
+public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.price_for, which is not exported to it
+  at posthog/api/bulk_report.py:1
+  why: Code outside a product must use the product only through its facade. A name from inside the product makes a coupling that the owners of the product cannot see.
+  fix (safe): If the facade of the product exports the same object, import it from the facade.
+  fix (needs care): If the code belongs to the product, move it into the product.
+  needs a person: If the facade must export a new name, stop and tell the person. The owners of the product decide what its facade exports.
+  see: hoglint explain public-surface
+
+facade-signature: products.inventory.backend.facade.api.raw_item returns products.inventory.backend.models.StockItem
+  at products/inventory/backend/facade/api.py:30
+  why: A public facade function must not take or return a model, manager, queryset or command. Other products then depend on the database layer of this product.
+  fix (needs care): If the callee reads a few values, pass the values or a contract type (a frozen dataclass in contracts.py).
+  fix (needs care): If the callee loads or changes the record and does I/O anyway, pass the id.
+  note: Do not type the value as Any or object. hoglint reads Any and object as unknown, and the rule reports them.
+  needs a person: If the caller holds the model on a hot path and the model belongs to the identity root, stop and tell the person. Only a person can add a model to the list of core models.
+  see: hoglint explain facade-signature
+
+presentation-uses-facade: products.reports.backend.presentation.bulk imports products.catalog.backend.logic.pricing.price_for
+  at products/reports/backend/presentation/bulk.py:1
+  why: Views and serializers use product code only through a facade, the presentation of their own product, or an adapter that another product exports.
+  fix (safe): If the facade exports the name, import it from the facade.
+  fix (needs care): Add a facade function that returns what the view needs. Call it from the view.
+  needs a person: If the facade belongs to another team, stop and tell the person. The owners of that product decide what its facade exports.
+  see: hoglint explain presentation-uses-facade
+
+prod-imports-test: products.reports.backend.logic.fixtures_in_prod imports products.catalog.backend.tests.factories
+  at products/reports/backend/logic/fixtures_in_prod.py:1
+  why: Test code does not ship. A production import of test code fails in production, or loads test code there.
+  fix (needs care): Move the shared code out of the test tree. Import it from its new place in the test and in the production code.
+  needs a person: If the module is dev tooling that never ships, stop and tell the person. The preset marks dev tooling as test code.
+  see: hoglint explain prod-imports-test
+
+model-crossings: products.reports.backend.logic.bulk_models uses products.catalog.backend.models.CatalogEntry in the shape instance-many(filter), which the rule does not allow
+  at products/reports/backend/logic/bulk_models.py:5
+  why: Outside its product, a model may appear only as a type, a cast, value rows, a signal sender or in the team-extension registry. A query or a write from outside the product depends on the tables of that product.
+  fix (needs care): If the code reads a few values, call a facade function that returns them as values or as a contract type.
+  fix (needs care): If the code changes the record, call a facade function that makes the change. Pass the id.
+  needs a person: If no facade function fits, stop and tell the person. The owners of the product decide what its facade offers.
+  see: hoglint explain model-crossings
+
+no-new-package-cycles: the dependency legacy -> catalog closes a cycle (8 edges)
+  at products/legacy/backend/api/widgets.py:5
+  why: Products must not form a cycle. A cycle makes the products one unit for tests and for change.
+  fix (needs care): Remove the new dependency. Use a hook that the other product exports, or move the shared code to the product that owns it.
+  needs a person: If the dependency is correct, stop and tell the person.
+  see: hoglint explain no-new-package-cycles
+
+More findings:
+public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.entry, which is not exported to it
+  at posthog/api/bulk_report.py:2
+public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.entries, which is not exported to it
+  at posthog/api/bulk_report.py:3
+public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.manager, which is not exported to it
+  at posthog/api/bulk_report.py:4
+public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.owner, which is not exported to it
+  at posthog/api/bulk_report.py:5
+
+Not shown: 54 more findings, 24 advisory rows, 96 old unknowns, 209 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+What the hook checks and what to do: hoglint help hook.

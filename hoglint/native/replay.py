@@ -111,6 +111,7 @@ from hoglint.native.parity import (
 )
 from hoglint.native.predict import PairPrediction, Prediction, write_trace_dump
 from hoglint.native.source import batch_mode
+from hoglint.report import HOOK_VIEW
 from hoglint.rules.base import IncompleteItem
 
 # The tables a check writes besides the parity tables, and the ones every check writes.
@@ -272,10 +273,11 @@ class RecordingCommands(Commands):
         touched: set[str] | None,
         attributed: Any,
         grown: Any = None,
+        view: Any = HOOK_VIEW,
     ) -> int:
         self.reported = summary
         self.against = attributed.against if attributed is not None else ""
-        return super().report(summary, config, policy_root, files_root, touched, attributed, grown)
+        return super().report(summary, config, policy_root, files_root, touched, attributed, grown, view)
 
     def reuse(self) -> dict[str, Any]:
         """The state of each store of the run (`RunStores.record`), and how many stored summaries

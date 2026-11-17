@@ -313,7 +313,7 @@ def test_the_ledger_shrinks_freely_and_grows_only_with_a_person(tmp_path: Path) 
     assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
     git_in(repo, "add", "-A")
     hook = hoglint(repo, "check", "--index")
-    assert hook.returncode == 1 and "ledger lines this change adds, with no policy change (1)" in hook.stdout
+    assert hook.returncode == 1 and "This change adds 1 line to hoglint.ledger, with no policy change." in hook.stdout
 
     # A policy change in the same commit moves lines by design: compare judges them, not the hook.
     (repo / "hoglint.toml").write_text(

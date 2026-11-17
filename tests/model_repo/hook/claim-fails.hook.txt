@@ -1,0 +1,26 @@
+exit 1
+hoglint: this commit is blocked: 3 new findings, 1 other problem.
+New findings by rule:
+     3  wiring-watched
+Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
+
+inventory claims the level isolated in products/inventory/turbo.json, and fails it (16 reasons).
+  12 x reached-watched
+  3 x wiring-watched
+  1 x presentation-uses-facade
+  fix (safe): drop the narrowing in products/inventory/turbo.json. The group then claims no level, and its full test suite runs.
+  fix (needs care): fix each reason. `hoglint check --index --rule <rule>` lists the rows of a rule.
+  No ledger line or exception accepts a failed claim.
+
+The first finding of each rule (1 of 3 findings):
+wiring-watched: products/inventory/turbo.json does not watch products/inventory/backend/admin/__init__.py: the admin autodiscovery of Django imports this module
+  why: Core or another package runs this file without an import that turbo can see. When the file changes, the full test suite must run.
+  fix (safe): Add the file to the inputs of backend:contract-check in the turbo.json of the product. This can only run more tests, never fewer.
+  see: hoglint explain wiring-watched
+
+More findings:
+wiring-watched: products/inventory/turbo.json does not watch products/inventory/backend/admin/stock_admin.py: the admin module of the product imports this module
+wiring-watched: products/inventory/turbo.json watches no file in products/inventory/backend/tasks/: core runs this location by name, and one watched file in it is enough
+
+Not shown: 36 advisory rows, 96 old unknowns, 209 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+What the hook checks and what to do: hoglint help hook.

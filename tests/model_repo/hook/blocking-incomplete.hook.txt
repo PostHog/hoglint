@@ -1,0 +1,13 @@
+exit 2
+hoglint: this commit is blocked: 1 other problem.
+Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
+
+dynamic-imports: posthog/api/plugin_loader.py:5 goes through a value that hoglint does not follow (a computed name, a variable or a call).
+  reason: dynamic-import '' did not resolve
+  why: hoglint cannot judge this new code, so the commit cannot pass (introduced).
+  fix (safe): If the set of names is fixed, write each name out.
+  needs a person: If the code must compute the name, stop and tell the person. The config declares such patterns.
+  see: hoglint explain dynamic-imports
+
+Not shown: 24 advisory rows, 96 old unknowns, 209 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+What the hook checks and what to do: hoglint help hook.
