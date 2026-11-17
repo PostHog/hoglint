@@ -172,6 +172,33 @@ def test_compare_pairs_swaps_and_labels_policy_changes() -> None:
     assert [key for key, _ in report.touched_debt] == [(RULE, (INVOICE, "core.b", "write"))]
 
 
+ONE = (INVOICE, "core.a", "write")
+TWO = (INVOICE, "core.b", "write")
+
+
+@pytest.mark.parametrize(
+    "base, base_head, head_base, head, why",
+    [
+        # only the policy changes: the same two findings appear on base code and on head code
+        ({}, {ONE: 1, TWO: 1}, {}, {ONE: 1, TWO: 1}, "2 findings appear"),
+        # the code changes too: ONE appears on both snapshots, TWO on head code only
+        ({}, {ONE: 1}, {}, {ONE: 1, TWO: 1}, "2 findings appear"),
+        ({ONE: 1, TWO: 1}, {}, {ONE: 1, TWO: 1}, {}, "2 findings disappear"),
+    ],
+)
+def test_a_policy_entry_counts_each_finding_once_over_both_snapshots(
+    base: dict, base_head: dict, head_base: dict, head: dict, why: str
+) -> None:
+    scans = Scans(head=scan(head), base_head=scan(base_head), base=scan(base), head_base=scan(head_base))
+    ledger = LedgerFile(lines={}, exists=True)
+    base_policy = RawPolicy({"rules": {RULE: {"primitive": "use-shape"}}}, [])
+    head_policy = RawPolicy(
+        {"rules": {RULE: {"primitive": "use-shape", "allow_shapes": ["read"]}}, "shapes": {"toolkit": {}}}, []
+    )
+    report = Comparer(scans, ledger, ledger, base_policy, head_policy, set(), Renames({})).report()
+    assert {change.entry: change.why for change in report.policy} == {f"rules.{RULE}": why, "shapes.toolkit": why}
+
+
 def has_extractor() -> bool:
     try:
         find_binary()

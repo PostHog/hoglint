@@ -247,19 +247,18 @@ def policy_entries(policy: RawPolicy) -> dict[str, str]:
 
 @dataclass(frozen=False, slots=True)
 class Evidence:
-    """What changes when only the policy changes, on base code and on head code."""
+    """What changes when only the policy changes, on base code and on head code. Findings are kept
+    as ledger keys, so a finding that changes on both snapshots counts once."""
 
-    lost: dict[str, int] = field(default_factory=dict)
-    gained: dict[str, int] = field(default_factory=dict)
+    lost: set[LineKey] = field(default_factory=set)
+    gained: set[LineKey] = field(default_factory=set)
     levels_gained: set[str] = field(default_factory=set)
     levels_lost: set[str] = field(default_factory=set)
 
     def add(self, old: ScanSummary, new: ScanSummary) -> None:
         old_keys, new_keys = old.finding_keys(), new.finding_keys()
-        for rule, _ in old_keys - new_keys:
-            self.lost[rule] = self.lost.get(rule, 0) + 1
-        for rule, _ in new_keys - old_keys:
-            self.gained[rule] = self.gained.get(rule, 0) + 1
+        self.lost |= old_keys - new_keys
+        self.gained |= new_keys - old_keys
         for name in set(old.levels) | set(new.levels):
             before, after = set(old.levels.get(name, ())), set(new.levels.get(name, ()))
             if after - before:
@@ -286,15 +285,15 @@ class PolicyClassifier:
             return "relax", "base scanner unavailable, so the effect cannot be classified"
         if entry.startswith(RULE_SECTION):
             rule = entry.removeprefix(RULE_SECTION)
-            return self.judge(evidence.lost.get(rule, 0), evidence.gained.get(rule, 0), set(), set())
+            lost = sum(1 for key in evidence.lost if key[0] == rule)
+            gained = sum(1 for key in evidence.gained if key[0] == rule)
+            return self.judge(lost, gained, set(), set())
         if entry.startswith(LEVEL_SECTION):
             name = entry.removeprefix(LEVEL_SECTION)
             gained = {name} & evidence.levels_gained
             lost = {name} & evidence.levels_lost
             return self.judge(0, 0, gained, lost)
-        return self.judge(
-            sum(evidence.lost.values()), sum(evidence.gained.values()), evidence.levels_gained, evidence.levels_lost
-        )
+        return self.judge(len(evidence.lost), len(evidence.gained), evidence.levels_gained, evidence.levels_lost)
 
     @staticmethod
     def judge(lost: int, gained: int, levels_gained: set[str], levels_lost: set[str]) -> tuple[str, str]:
