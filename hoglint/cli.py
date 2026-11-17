@@ -77,7 +77,7 @@ from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.rules.page import RulePage
 from hoglint.source import GraphSource
-from hoglint.watched import WatchedError, pick_level, watched_answer
+from hoglint.watched import WatchedError, WatchedSets, claimed_level, pick_level, stopped_watching, watched_answer
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 # The pages `hoglint help <topic>` prints; they ship in the package, so they match its version.
@@ -1164,6 +1164,7 @@ class Commands:
                 )
             except EngineError as error:
                 scans.base_failure = str(error)
+        base_head: RunResult | None = None
         if scans.base is None or not same_policy:
             # Head policy on base code: the reference when no base scan exists, and the evidence
             # that labels each policy change.
@@ -1182,6 +1183,7 @@ class Commands:
             touched,
             renames,
         ).report()
+        report.unwatched = self.unwatched(head, head_tree, base_root, base_tree, base_head)
         owners = ReadTimeOwners(head.config, scans.head.modules, head.files_root or head.root)
         today = self.runner.today or datetime.date.today()
         policy = Policy.of(head.config, CONFIG_FILE)
@@ -1191,6 +1193,23 @@ class Commands:
         sys.stdout.write(report.render_all() if view.all else report.render(code, head_view.rerun))
         sys.stdout.write(CheckReport(scans.head, owners, today, policy, head_view, attributed=attributed).render())
         return code
+
+    def unwatched(
+        self, head: Run, head_tree: str, base_root: Path, base_tree: str, base_head: RunResult | None
+    ) -> list[str]:
+        """The files that stop being watched from the base to the head, both read under the head's
+        policy, so the rows come from code changes: what `hoglint watched` derives at each side.
+        None without a level that a group claims."""
+        level = claimed_level(head.config)
+        if level is None:
+            return []
+        if base_head is None:
+            _, base_head = self.runner.evaluate(head.config, base_root, self.repo)
+        head_tracked = GraphSource.listing_of(self.repo, head_tree).paths
+        base_tracked = GraphSource.listing_of(self.repo, base_tree).paths
+        before = WatchedSets(head.config, base_head, level, base_tracked).build()
+        after = WatchedSets(head.config, head.result, level, head_tracked).build()
+        return stopped_watching(before, after, set(head_tracked))
 
     def module_renames(self, ref: str, config: Config, tree: str = "") -> Renames:
         """The modules `tree`, else the working tree, renames against `ref`."""

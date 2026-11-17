@@ -219,6 +219,18 @@ class WatchedSets:
         return self.groups
 
 
+def stopped_watching(before: dict[str, GroupFiles], after: dict[str, GroupFiles], tracked: set[str]) -> list[str]:
+    """`group: path (was: why)` for each file still in the tree that a group watched before and
+    no longer watches. A deleted file is no row: selection counts a deletion as a change anyway."""
+    rows = []
+    for group, found in sorted(before.items()):
+        now = after.get(group, GroupFiles()).files
+        for path, why in sorted(found.files.items()):
+            if path not in now and path in tracked:
+                rows.append(f"{group}: {path} (was: {why})")
+    return rows
+
+
 def cut(reasons: list[str]) -> list[str]:
     if len(reasons) <= REASONS_SHOWN:
         return reasons
