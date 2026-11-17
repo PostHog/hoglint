@@ -715,17 +715,18 @@ def test_query_groups_by_the_package_label_of_the_source_module(tmp_path: Path) 
     git_in(repo, "commit", "-qm", "base")
     # digest.py sits in alerts, and the override moves it to reports; scripts has no package.
     # billing's own uses come from no ledgered line, so only the finding labels their modules.
+    # billing-logic-uses never blocks, so its rows are advisory; `new` holds only rows that block.
     groups = [
-        {"key": "(no package)", "counts": {"new": {"billing-logic-uses": 1, "public-surface": 1}}},
-        {"key": "alerts", "counts": {"accepted": {"public-surface": 1}, "new": {"billing-logic-uses": 1}}},
-        {"key": "billing", "counts": {"new": {"billing-logic-uses": 2}}},
-        {"key": "reports", "counts": {"accepted": {"public-surface": 1}, "new": {"billing-logic-uses": 1}}},
+        {"key": "(no package)", "counts": {"advisory": {"billing-logic-uses": 1}, "new": {"public-surface": 1}}},
+        {"key": "alerts", "counts": {"accepted": {"public-surface": 1}, "advisory": {"billing-logic-uses": 1}}},
+        {"key": "billing", "counts": {"advisory": {"billing-logic-uses": 2}}},
+        {"key": "reports", "counts": {"accepted": {"public-surface": 1}, "advisory": {"billing-logic-uses": 1}}},
     ]
     found = hoglint(repo, "query", "--by", "package", "--json").stdout
     assert found.endswith("}\n") and found.count("\n") == 1
     assert json.loads(found) == {"by": "package", "groups": groups}
     text = hoglint(repo, "query", "--by", "package").stdout
-    assert "reports  2  (accepted:public-surface 1, new:billing-logic-uses 1)\n" in text
+    assert "reports  2  (accepted:public-surface 1, advisory:billing-logic-uses 1)\n" in text
 
 
 @needs_extractor

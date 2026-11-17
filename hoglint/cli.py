@@ -66,7 +66,7 @@ from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git,
 from hoglint.ledger.obligations import attribute
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, source_columns
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
-from hoglint.model import Finding, Graph, IncompleteCause
+from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
 from hoglint.native.bridge import engine_errors
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.source import NativeGraphSource, batch_mode
@@ -358,6 +358,9 @@ HOOK_COULD_NOT_RUN = (
 )
 COMMAND_COULD_NOT_RUN = "hoglint could not run: {reason}. To repair hoglint, see `hoglint help hook`."
 TRACEBACK_ENV = "HOGLINT_TRACEBACK"
+# `query`'s status of a new row of an advisory rule: such a row never blocks, so `new` keeps only
+# the rows that do, as `check` counts them.
+ADVISORY_STATUS = "advisory"
 # ── engines and baselines ─────────────────────────────────────────
 
 
@@ -1091,8 +1094,11 @@ class Commands:
                 keys = (packages.get(source) or "(no package)",)
             else:
                 keys = (target,)
+            label = status.value
+            if status is FindingStatus.NEW and rule in summary.advisory:
+                label = ADVISORY_STATUS
             for key in keys:
-                counts.setdefault(key, Counter())[(status.value, rule)] += 1
+                counts.setdefault(key, Counter())[(label, rule)] += 1
         if as_json:
             groups = []
             for key in sorted(counts):
@@ -1380,7 +1386,12 @@ def parser() -> argparse.ArgumentParser:
         required=True,
         help="owners: of the owner module; target: the coupling's target; package: the package label of the line's source module",
     )
-    query.add_argument("--json", action="store_true", help="print one JSON object: rows per group, status and rule")
+    query.add_argument(
+        "--json",
+        action="store_true",
+        help="print one JSON object: rows per group, status and rule; a status is new (blocks), advisory "
+        "(a rule that never blocks) or accepted (in the ledger)",
+    )
     query.set_defaults(handler=lambda commands, args: commands.query(args.by, args.json))
     compare = sub.add_parser("compare", help="PR mode against the merge base of a ref")
     compare.add_argument("--base", required=True)
