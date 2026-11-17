@@ -29,6 +29,8 @@ from hoglint.ledger.scan import Obligation, ScanSummary, Triple
 EXCEPTION_ENTRY = "exception"
 FILE_ENTRY = "file"
 RULE_SECTION = "rules."
+# The rows each section of compare's short view shows.
+SHOWN_ROWS = 10
 LEVEL_SECTION = "levels."
 
 
@@ -104,7 +106,71 @@ class CompareReport:
             return 2
         return 1 if head_failed or self.growth.failed else 0
 
-    def render(self) -> str:
+    def verdict(self, code: int) -> str:
+        """What the comparison decides, and what fails in it."""
+        fails = []
+        if self.base_failure:
+            fails.append("the base scan failed")
+        if self.growth.code_growth:
+            fails.append(f"{len(self.growth.code_growth)} growth keys grew from code")
+        unknowns = len(self.incomplete(Attribution.INTRODUCED)) + len(self.incomplete(Attribution.AMBIGUOUS))
+        if unknowns:
+            fails.append(f"{unknowns} new unknowns")
+        if code and not fails:
+            fails.append("the head check below fails")
+        verdict = {0: "passes", 1: "fails", 2: "cannot be decided"}[code]
+        return f"hoglint compare: the change {verdict}" + (f": {'; '.join(fails)}." if fails else ".")
+
+    def render(self, code: int, rerun: str) -> str:
+        """The comparison as CI's reader needs it: the verdict, what fails, what a person reviews,
+        and one line of counts. Each section shows its first rows; `render_all` shows them all."""
+        out: list[str] = [self.verdict(code)]
+        if self.base_failure:
+            out.append(f"base scan failed (blocks): {self.base_failure}")
+        if self.base_source:
+            out.append(f"base summary: {self.base_source}")
+        if self.growth.skipped:
+            out.append(f"growth check skipped: {self.growth.skipped}")
+
+        def section(title: str, rows: list[str]) -> None:
+            if not rows:
+                return
+            out.append(f"{title} ({len(rows)})")
+            out.extend(f"  {row}" for row in rows[:SHOWN_ROWS])
+            if len(rows) > SHOWN_ROWS:
+                out.append(f"  and {len(rows) - SHOWN_ROWS} more: {rerun} --all")
+
+        section("code growth (fails)", [growth_row(g) for g in self.growth.code_growth])
+        for label, title in (
+            (Attribution.INTRODUCED, "incomplete, introduced (blocks)"),
+            (Attribution.AMBIGUOUS, "incomplete, ambiguous replacement (blocks)"),
+        ):
+            section(title, [f"{rule}: {reason}" for rule, _, reason in self.incomplete(label)])
+        review = [
+            ("admitted moves (review)", [growth_row(g) for g in self.growth.admitted_moves]),
+            (
+                "code growth a new exception allows (needs a person's review)",
+                [growth_row(g) for g in self.growth.excepted],
+            ),
+            ("policy entries changed", [f"{c.label:8} {c.change:8} {c.entry}  ({c.why})" for c in self.policy]),
+            (
+                "debt the new scanner, policy or environment no longer sees (review)",
+                [f"{growth_row(g)}  [{'+'.join(self.growth.shrink_causes)}]" for g in self.growth.shrink],
+            ),
+        ]
+        if any(rows for _, rows in review):
+            out.append("Needs a person's review (it passes here; the owners of the files hold the gate):")
+            for title, rows in review:
+                section(title, rows)
+        out.append(
+            f"counts: findings new {len(self.new)}, resolved {len(self.resolved)}; ledger lines added "
+            f"{len(self.ledger_added)}, removed {len(self.ledger_removed)}; zero-net swaps {len(self.swaps)}; "
+            f"rule growth {len(self.growth.rule_growth)}; new group edges {len(self.new_triples)}; old unknowns "
+            f"{len(self.incomplete(Attribution.INHERITED))}. Show every section: {rerun} --all."
+        )
+        return "\n".join(out) + "\n\n"
+
+    def render_all(self) -> str:
         out: list[str] = []
 
         def section(title: str, rows: list[str]) -> None:

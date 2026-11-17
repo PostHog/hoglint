@@ -918,9 +918,10 @@ class Commands:
         policy = Policy.of(head.config, CONFIG_FILE)
         attributed = Attributed(report.labels, "the base")
         head_view = dataclasses.replace(view, rerun=f"hoglint compare --base {ref}")
+        code = report.exit_code(head.result.failed(), bool(head.result.blocking_incomplete()))
+        sys.stdout.write(report.render_all() if view.all else report.render(code, head_view.rerun))
         sys.stdout.write(CheckReport(scans.head, owners, today, policy, head_view, attributed=attributed).render())
-        sys.stdout.write(report.render())
-        return report.exit_code(head.result.failed(), bool(head.result.blocking_incomplete()))
+        return code
 
     def module_renames(self, base_sha: str, config: Config) -> Renames:
         from hoglint.core.modules import ModuleNamer  # noqa: PLC0415 — the extractor stack loads only when needed
@@ -968,7 +969,8 @@ class Commands:
         source = f"the stored summary {base_key.key()}"
         if base is None:
             if found is not None:
-                source = f"the stored summary {base_key.key()} lacks this rename's couplings, so the full base scan ran"
+                lacks = "this rename's couplings" if not found.covers(scope) else "the group edges compare lists"
+                source = f"the stored summary {base_key.key()} lacks {lacks}, so the full base scan ran"
             else:
                 missing = "no CI summary was found" if os.environ.get("CI") else "no stored summary was found"
                 source = f"{missing} for {base_key.key()}, so the full base scan ran"

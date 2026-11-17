@@ -363,7 +363,7 @@ def test_growth_a_complete_new_exception_allows_passes_compare_for_review(
     compared = hoglint(repo, "compare", "--base", "base")
     assert compared.returncode == ci, compared.stdout + compared.stderr
     assert says in compared.stdout
-    assert "code growth (fails) (0)" in compared.stdout or ci == 1
+    assert "code growth (fails)" not in compared.stdout or ci == 1
 
 
 @needs_extractor
