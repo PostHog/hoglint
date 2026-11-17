@@ -139,17 +139,62 @@ ledger = false
         ),
         # an export rule leaves a slot only to a signature rule it names
         (
-            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['crosss']\nledger = false\n",
+            "[rules.other]\nprimitive = 'export'\nslots_reported_by = ['crosss']\nledger = false\n",
             "names unknown rule 'crosss'",
         ),
         (
-            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['cross']\nledger = false\n",
+            "[rules.other]\nprimitive = 'export'\nslots_reported_by = ['cross']\nledger = false\n",
             "'cross' is no signature rule",
+        ),
+        # a renamed key or attribute reads nothing and names its new form
+        (
+            "[shapes.c]\nallow = ['class']\nallow_where = \"tier == 'core'\"\n",
+            "`allow_where` is now `allow_symbols`",
+        ),
+        (
+            "[rules.other]\nprimitive = 'export'\nleave_slots_to = ['cross']\nledger = false\n",
+            "`leave_slots_to` is now `slots_reported_by`",
+        ),
+        (
+            "[shapes.c]\nallow = ['class']\nwalk_where = \"tier != 'core'\"\n",
+            "`walk_where` is now `owned_elsewhere`, with the reverse sign",
+        ),
+        (
+            "[shapes.c]\nallow = ['class']\nbehavior = { kind = 'abc', where = \"tier == 'core'\" }\n",
+            '`behavior` names a shape, as `behavior = "abc"`; its `where` is now `owned_elsewhere`',
+        ),
+        (
+            "[rules.other]\nprimitive = 'export'\nunknown_types = ['typing.Any']\nledger = false\n",
+            "`unknown_types` is now `unknown_types` of the shape policy each export names",
+        ),
+        # a behavior class is allowed only where its base is owned elsewhere, so the policy says where
+        ("[shapes.c]\nallow = ['class']\nbehavior = 'abc'\n", "`behavior` needs `owned_elsewhere`"),
+        (
+            "[rules.other]\nprimitive = 'edge'\nledger = false\ndeny = \"src.handed_zones in ['x']\"\n",
+            "unknown field 'src.handed_zones' (renamed 'src.handout_zones')",
+        ),
+        # a signature rule that names a policy reads what the policy says, and no copy of it
+        (
+            "[shapes.c]\nallow = ['class']\n[rules.other]\nprimitive = 'signature'\nshape = 'c'\n"
+            "deny = \"dst.tier == 'core'\"\nledger = false\n",
+            "`deny` comes from the policy `shape` names",
+        ),
+        (
+            "[rules.other]\nprimitive = 'signature'\nshape = 'contract'\nledger = false\n",
+            "shape policy 'contract' is not defined under [shapes]",
+        ),
+        (
+            "[shapes.c]\ndeny = ['class']\n[rules.other]\nprimitive = 'signature'\nshape = 'c'\nledger = false\n",
+            "[shapes.c] denies class, which `dst.kind` cannot read",
+        ),
+        (
+            "[shapes.c]\nallow = ['class']\nmappings = ['builtins.dict']\n",
+            "`mappings` and `opaque_payload` are read only by a signature rule that names this policy",
         ),
         # the named rule's selection splits into where it reads rows and which slots it judges
         (
             "[rules.mixed]\nprimitive = 'signature'\nselect = \"src.module == 'a' or edge.slot == 'return'\"\n"
-            "ledger = false\n[rules.other]\nprimitive = 'export'\nleave_slots_to = ['mixed']\nledger = false\n",
+            "ledger = false\n[rules.other]\nprimitive = 'export'\nslots_reported_by = ['mixed']\nledger = false\n",
             "mixes the source with the edge or the destination",
         ),
         # limits of the config

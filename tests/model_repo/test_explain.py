@@ -31,7 +31,7 @@ import pytest
 
 from hoglint.cli import Commands, Run
 from hoglint.config.model import RuleSpec
-from hoglint.labels import HANDED_ZONES
+from hoglint.labels import HANDOUT_ZONES
 from hoglint.model import Edge
 from hoglint.native.labels import NativeLabeler
 from hoglint.rules.engine import primitive_of
@@ -150,9 +150,9 @@ def test_explain_prints_the_labels_the_evaluator_holds(explained: tuple[Commands
             assert places[at] != no_place, f"{module}: the evaluator holds no {name}"
             kind, items = typed[places[at]]
             held[name] = held_words(kind, items, config.zones.chain(items[0]) if kind == "zone" else ())
-        zones = evaluator.handed_zones(module)
-        if HANDED_ZONES in shown or zones != ("none", []):
-            held[HANDED_ZONES] = held_words(*zones)
+        zones = evaluator.handout_zones(module)
+        if HANDOUT_ZONES in shown or zones != ("none", []):
+            held[HANDOUT_ZONES] = held_words(*zones)
         if registry_places[at] != no_place:
             registry = registries[registry_places[at]]
             held["registry"] = registry.name

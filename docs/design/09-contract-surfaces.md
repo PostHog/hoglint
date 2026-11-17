@@ -39,7 +39,7 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   A star whose source, or a source it star-imports, cannot be read hands out `*`, and the export rule reports it as an import that did not resolve.
 - A top-level assignment of one bare name to a name or an attribute chain that resolves, whole, to a class or a function (`NotFound = errors.NotFound`, `Status = Run.Status`) hands that class or function out under the new name, by the clause of a definition: when the name is public or `__all__` lists it, whether or not the module has a function (Nov 13).
   A class nested in a class counts.
-  In an export module it has an edge of the kind `rebind` (`binds` the name), so no rule that reads imports sees a second edge for one name; the export rule, the copies for the signature rule and `handed_zones` read it.
+  In an export module it has an edge of the kind `rebind` (`binds` the name), so no rule that reads imports sees a second edge for one name; the export rule, the copies for the signature rule and `handout_zones` read it.
 - Every name a readable `__all__` lists is accounted for (Nov 13): a def or a class, an import or another hand-out edge (lazy, star, `rebind`), a constant expression, or a type alias judged by its expansion.
   Any other listed name is unknown: the export rule reports `export-unknown` for it.
   A def or class with a leading `_` that `__all__` lists is handed out as a public one is: the export rule judges it, and in a contract module its slots get contract-mode rows.
@@ -122,34 +122,44 @@ Written limits:
 The owner decided that a preset holds a named list of future-proof core models that may cross.
 Any model that core owns is not enough, because a core model may later move into a product.
 Which models a company lists is its own policy and is not published.
-The preset keeps the list once, as a symbol label, and both contract rules read it: the signature rule (`unless`) and the shape policy (`allow_where`, a symbol it holds for is allowed as it stands).
+The preset keeps the list once, as a symbol label, read once by the contract policy (`allow_symbols`, a symbol it holds for is allowed as it stands), for both contract rules: the signature rule reads it through the policy it names, as its `unless`.
 So the verdict on a listed model does not depend on how deep it sits, in a slot or in a field of a class a slot names.
 
 **What a facade signature may name** (the rule-change batch of Nov 12, after the findings triage).
 - A slot type is unknown when it is `Any`, `object`, a bare `dict` or no annotation.
+  The type list is the shape policy's `unknown_types`, written out in `[shapes.contract]`; the export rule reads the list of the policy it walks under (Nov 16).
   `object` stays unknown because a slot typed `object` would let any model cross unseen.
   A mapping given type arguments (`dict[str, str]`) is typed.
 - `Any` as an argument of a mapping (`dict[str, Any]`) is an opaque payload: allowed in a parameter and a field, a finding in a return value.
+  The policy says it once: `mappings` lists the mapping types and `opaque_payload = "except-return"` lets an unknown type that is no mapping stand as their argument outside a return value.
   `Any` in any other generic (`list[Any]`, `Optional[Any]`) stays unknown.
   The slot row of a type argument names the generic it is given to (`argument_of`), so a rule can tell the two apart.
 - A contract may hand out a `Protocol` (a hook's callback type) and core's query syntax tree (the preset names its base as a kind).
   An allowed shape covers the class itself; its fields and, in a contract, its methods are still judged when the product defines the class.
-  A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`walk_where`).
-  One rule decides which members of a class are read (Nov 13): `walk_where` decides the methods and attributes of a class, the handed-out class and each ancestor alike, a `ClassVar` included.
+  A class core defines (its query syntax tree, its Protocols) is core's contract: a product's facade hands it out as it stands (`owned_elsewhere`, in the preset `tier == 'core'`).
+  One rule decides which members of a class are read (Nov 13): the methods and attributes of a class are read where `owned_elsewhere` does not hold for it or cannot be told, the handed-out class and each ancestor alike, a `ClassVar` included.
   So the methods of a frozen dataclass core defines, handed out by a product's facade, are core's contract and are not judged, as the methods a product class inherits from a class core defines are not.
   The fields of a frozen dataclass and of a pydantic model are always read, wherever a slot names the class and whoever defines it: they are constructor slots of the class, and of a class that inherits them.
-  In a class `walk_where` is false for (a class core defines), the export rule reports a field only for a denied kind of the shape policy (`deny`: a model, a manager, a queryset, a command) (Nov 13).
+  In a class `owned_elsewhere` holds for (a class core defines), the export rule reports a field only for a denied kind of the shape policy (`deny`: a model, a manager, a queryset, a command) (Nov 13).
   An unknown type (`Any`), a missing or unread annotation (a call such as `conint(ge=0)`), a name that does not resolve (a type parameter of the class too) and a class of no allowed shape in such a field are core's: the product cannot change them.
-  The walk goes on through such a field: an allowed class `walk_where` is false for is walked on by the same rule, and a class `walk_where` holds for (a class of a product) is judged in full, so a model in its field is still reported.
-  The test reads only `walk_where` and the policy's `deny` list.
+  The walk goes on through such a field: an allowed class `owned_elsewhere` holds for is walked on by the same rule, and a class it does not hold for (a class of a product) is judged in full, so a model in its field is still reported.
+  The test reads only `owned_elsewhere` and the policy's `deny` list.
   A field a product class inherits from such a class is a constructor slot of the product class and is judged in full.
   Where a facade hands such a class out by name, the copy of its fields at the facade is the signature rule's, as any copy is.
-  A dataclass core defines that is no data shape (its query syntax tree) is core's contract as a whole: `walk_where` decides its fields too.
+  A dataclass core defines that is no data shape (its query syntax tree) is core's contract as a whole: `owned_elsewhere` decides its fields too.
+- A behavior class (`behavior = "abc"`) is allowed where an abstract base in its lineage is owned elsewhere: a product class that implements an abstract base core defines may be handed out, and its own members are judged.
+  A class whose abstract base the product defines is `export-shape(class)`.
+  `owned_elsewhere` is the one test for both readings (Nov 16): a class core owns is not walked, and its abstract base makes a behavior class; so a policy with `behavior` must set it.
 
 **What an export may hand out besides data** (the same batch).
 - Exception classes (core shape `exception`: the lineage holds one of Python's own exceptions) and pydantic models (a preset kind) are allowed contract types: callers catch a facade's errors, and the doctrine allows `BaseModel` where aliases are needed.
   A lineage goes on through a third-party class whose sources the run reads (`[discovery] external`): no repo file declares it, so the link reads its bases from those sources, a builtin as `builtins.<name>` (Nov 16). A base there that does not resolve is left out, and a third-party class whose sources the run does not read still ends a lineage, read as a class: an exception whose chain starts there (temporalio's `ApplicationError` when the root config does not name `temporalio`) reads as a plain class.
-- One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `leave_slots_to = ["facade-signature"]` in the preset.
+- **One policy, two reporters** (Nov 16, the architect's contract-shape design, option B).
+  `[shapes.contract]` says once what may cross a facade: the denied kinds, the symbols that pass (`allow_symbols`), the classes owned elsewhere, the unknown types and the payload reading (`mappings`, `opaque_payload`).
+  `facade-signature` names it (`shape = "contract"`): the config writes the rule's selection, `deny`, `unless` and unknown types from the policy, so the evaluator gets the plan the rule had when it spelled them out, and `explain` names the policy each written selector came from.
+  A signature rule that names a policy may not set `deny`, `unless` or `unknown_types` itself, and the policy's `deny` may name only kinds `dst.kind` reads; both are config errors.
+  The two rules differ only in where they report. A signature rule that names no policy (`orm-independent`) keeps its own keys and the default unknown types.
+- One slot, one rule (Nov 13): the export rule names the signature rules it leaves slots to, `slots_reported_by = ["facade-signature"]` in the preset.
   Each name must be a signature rule of the config; any other name is a config error.
   The named rule's selection must split into conditions that read only `src.*` fields (where it reads rows) and conditions that read none (which slots it judges), joined by `and`; a condition that mixes the two is a config error.
   A row is left to the rule only where its contexts take the row's, as the rule itself reads it.
@@ -207,7 +217,7 @@ Other packages import it, so it stays in the export and its audience holds; but 
 
 **A capability submodule holds no body** (D94 and the port back to the old check, Nov 12).
 - A capability submodule hands out wiring: code core runs, such as tasks, workflows and query runners, or model classes.
-  The preset says which modules are one: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handed_zones`, the zones of the modules a module hands out names from, by import or by assigning a name again).
+  The preset says which modules are one, in the condition `capability-module`: a list of module names at the top of the facade, and any module whose hand-outs come from a wiring zone (`src.handout_zones`, the zones of the modules a module hands out names from, by import or by assigning a name again).
   The data module of a facade and its contract, enum and fixture modules never are one.
 - Each top-level definition with a body in such a module is one finding, named by its symbol, not a count per module.
   A function in the facade's data module is never a finding of this rule: adding one is how a product offers something new.
@@ -236,6 +246,9 @@ Other packages import it, so it stays in the export and its audience holds; but 
 | An alias names itself and its expansion (D62 C3) | Triage: noise when the expansion is known | Reversed by D70 | `docs/history/decision-log-3.md` |
 | Any model core owns may cross | Core may later move a model out | Owner, D65 | `docs/history/decision-log-3.md` |
 | A separate rule for 108 repeated facts | Not worth a rule; then fixed by review item 8 | Architect, Nov 11 | not published |
+| Rename only, the denied kinds and the core-model selector kept in both contract rules | Two lists kept equal by hand: `command` was missing from one until 507d1b6 | Architect, Nov 16 | not published (the contract-shape design) |
+| One contract rule in place of two | Every `facade-signature` row would change rule name and identity (D113) | Architect, Nov 16 | not published (the contract-shape design) |
+| The signature rule finds its policy from the export that covers each row's module | A per-row read of export membership the change predictor would have to learn; the stated key is plainer | Architect, Nov 16 | not published (the contract-shape design) |
 
 ## What would change the answer
 

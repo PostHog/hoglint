@@ -8,6 +8,60 @@
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
+identity = ["posthog/api/rest_router.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/cache_utils.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/ee_urls.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/execute_temporal_workflow.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/reset_test_clickhouse_db.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/setup_test_environment.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/management/commands/start_temporal_workflow.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/product_urls.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/ai/__init__.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
 identity = ["posthog/temporal/codec_server.py"]
 
 [[row]]
@@ -21,6 +75,13 @@ case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
 identity = ["posthog/temporal/oauth.py"]
+
+[[row]]
+case = "SN01"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog/temporal/schedule.py"]
+count = 2
 
 [[row]]
 case = "SN01"
@@ -87,67 +148,6 @@ case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
 identity = ["posthog/temporal/utils.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/api/rest_router.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/cache_utils.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/ee_urls.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/management/commands/execute_temporal_workflow.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/management/commands/reset_test_clickhouse_db.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/management/commands/setup_test_environment.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/management/commands/start_temporal_workflow.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/product_urls.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/temporal/ai/__init__.py"]
-
-[[row]]
-case = "SN01"
-rule = "config:stale-name"
-verdict = "incomplete"
-identity = ["posthog/temporal/schedule.py"]
-count = 2
 
 [[row]]
 case = "SN01"
@@ -338,6 +338,12 @@ case = "AC01"
 rule = "export-shape"
 verdict = "unknown"
 identity = ["products.catalog.backend.logic.limits.PAGE_SIZE", "products.catalog.backend.facade.limits", "export-unknown"]
+
+[[row]]
+case = "BH01"
+rule = "export-shape"
+verdict = "finding"
+identity = ["products.catalog.backend.logic.exporters.CatalogFlush", "products.catalog.backend.facade.exporters", "export-shape(class)"]
 
 [[row]]
 case = "ES01"
@@ -1790,24 +1796,6 @@ identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
 # reached-watched
 
 [[row]]
-case = "LE12"
-rule = "reached-watched"
-verdict = "finding"
-identity = ["products/catalog/backend/events.py"]
-
-[[row]]
-case = "OR04"
-rule = "reached-watched"
-verdict = "finding"
-identity = ["products/inventory/backend/logic/stock_labels.py"]
-
-[[row]]
-case = "OR07"
-rule = "reached-watched"
-verdict = "finding"
-identity = ["products/inventory/backend/logic/stock_sweeps.py"]
-
-[[row]]
 case = "DP07"
 rule = "reached-watched"
 verdict = "finding"
@@ -1940,6 +1928,12 @@ verdict = "finding"
 identity = ["products/reports/backend/temporal/workflows.py"]
 
 [[row]]
+case = "LE12"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/events.py"]
+
+[[row]]
 case = "OR01"
 rule = "reached-watched"
 verdict = "finding"
@@ -1958,6 +1952,12 @@ verdict = "finding"
 identity = ["products/inventory/backend/logic/shelf_life.py"]
 
 [[row]]
+case = "OR04"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/stock_labels.py"]
+
+[[row]]
 case = "OR06"
 rule = "reached-watched"
 verdict = "finding"
@@ -1968,6 +1968,12 @@ case = "OR06"
 rule = "reached-watched"
 verdict = "finding"
 identity = ["products/inventory/backend/logic/stock_warmup.py"]
+
+[[row]]
+case = "OR07"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/stock_sweeps.py"]
 
 [[row]]
 case = "OR08"
@@ -2192,12 +2198,6 @@ identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backen
 # wiring-watched
 
 [[row]]
-case = "CO01"
-rule = "wiring-watched"
-verdict = "finding"
-identity = ["products/catalog/backend/console.py"]
-
-[[row]]
 case = "AD01"
 rule = "wiring-watched"
 verdict = "finding"
@@ -2220,6 +2220,12 @@ case = "AD02"
 rule = "wiring-watched"
 verdict = "finding"
 identity = ["products/inventory/backend/admin/stock_admin.py"]
+
+[[row]]
+case = "CO01"
+rule = "wiring-watched"
+verdict = "finding"
+identity = ["products/catalog/backend/console.py"]
 
 [[row]]
 case = "DR01"

@@ -55,7 +55,7 @@ fn module_level(field: Ref, fields: &[Field]) -> bool {
         | EndField::External
         | EndField::Registry
         | EndField::Lifecycle
-        | EndField::HandedZones
+        | EndField::HandoutZones
         | EndField::Door => true,
         EndField::Field(at, _) => !fields[at].on_symbol,
         _ => false,

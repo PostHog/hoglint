@@ -394,7 +394,7 @@ impl<'a> Cx<'a> {
 
     /// The zones, each with its ancestors, of the modules whose names a module hands out by import;
     /// unknown when one of those zones cannot be told.
-    pub fn handed_zones(&self, module: Option<Sid>) -> Value<'a> {
+    pub fn handout_zones(&self, module: Option<Sid>) -> Value<'a> {
         let rules = self.rules;
         let Some(found) = module.and_then(|module| rules.handed.get(&module)) else {
             return Value::None;
@@ -711,7 +711,7 @@ impl<'a> Env<'a> {
             },
             EndField::Registry => cx.registry(endpoint.at, false),
             EndField::Lifecycle => cx.registry(endpoint.at, true),
-            EndField::HandedZones => cx.handed_zones(endpoint.module),
+            EndField::HandoutZones => cx.handout_zones(endpoint.module),
             EndField::Door => cx.door(endpoint.module, endpoint.at),
             EndField::Field(at, attr) => self.declared(endpoint, at, attr),
             EndField::Undeclared(attr) => match self.own_attr(attr) {
@@ -916,7 +916,7 @@ impl<'a> Resolve<'a> for LabelEnv<'a, '_> {
             },
             EntityField::Registry => cx.registry(self.at, false),
             EntityField::Lifecycle => cx.registry(self.at, true),
-            EntityField::HandedZones => cx.handed_zones(self.module),
+            EntityField::HandoutZones => cx.handout_zones(self.module),
             EntityField::Door => cx.door(self.module, self.at),
             EntityField::Field(field) => self.label_only(field),
             EntityField::Unknown => Value::Unknown,

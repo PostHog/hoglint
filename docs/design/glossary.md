@@ -89,7 +89,7 @@ Some words have two meanings; the entry names both.
   A module reads it as the built-in attributes `registry` and `lifecycle`.
 - **Roles: owner, group** (`[roles] owner`, `[roles] group`).
   The field that names who owns a finding, and the field whose value groups modules into packages for cycles and `compare`.
-- **`handed_zones`** (built-in attribute, as in `src.handed_zones`).
+- **`handout_zones`** (built-in attribute, as in `src.handout_zones`).
   The zones, with their ancestors, of the modules whose names a module hands out by import or by a rebind.
   A rebind of a class's member (`Kind = Model.Kind`) hands out the member and adds no zone.
   It is unknown when one of those zones cannot be told.
@@ -98,7 +98,7 @@ Some words have two meanings; the entry names both.
 
 - **Selector** (`hoglint/selectors.py`, `src/link/rules/selector.rs`).
   A small boolean expression over labels with three truth values (Kleene logic), and no joins, recursion or aggregation.
-  An edge selector reads `src.*`, `dst.*` and `edge.*`; an entity selector reads one module or symbol (a domain, `allow_where`, a level's `select`).
+  An edge selector reads `src.*`, `dst.*` and `edge.*`; an entity selector reads one module or symbol (a domain, `allow_symbols`, a level's `select`).
 - **`from`, `select`, `deny`, `allow`, `require`, `unless`** (rule keys).
   `from` and `select` choose what a rule looks at; `deny`, `allow` and `require` say what is a violation; `unless` excuses one.
   How these give a judgment is the table `tests/rules/judgment.txt`.
@@ -160,20 +160,24 @@ Some words have two meanings; the entry names both.
 - **Shape** (two meanings).
   Of a symbol: the core shape names `dataclass`, `frozen-dataclass`, `abc`, `enum`, `protocol`, `exception`, `function`, `constant`, `class`, plus the config's kinds.
   Of an edge: what a pack says a use means (edge fields `shape`, `shape_detail`), such as a Django `write` or `lock`, read by `use-shape` rules.
-- **Shape policy** (`[shapes.<name>]`, keys `data`, `behavior`, `allow`, `deny`, `unknown`, `signatures`, `allow_where`, `walk_where`).
+- **Shape policy** (`[shapes.<name>]`, keys `data`, `behavior`, `allow`, `deny`, `unknown`, `unknown_types`, `mappings`, `opaque_payload`, `signatures`, `allow_symbols`, `owned_elsewhere`).
   What an export may hand out: data shapes whose fields are walked, allowed and denied shapes, and what to do with a type it cannot tell.
-  Each export names one with its `shape` key.
-- **`allow_where`** (shape policy key).
+  Each export names one with its `shape` key, and so may a signature rule: the config then writes the rule's selection, `deny`, `unless` and unknown types from the policy.
+- **`allow_symbols`** (shape policy key).
   An entity selector: a symbol it holds for is allowed as it stands and is not walked.
-  The PostHog preset uses it for the core models that may cross a contract (`crosses == true`).
-- **`walk_where`** (shape policy key).
-  An entity selector: where an allowed class that is no data shape is walked, so the types its members name are judged too.
-  In a class it is false for, such as a class core defines, only a field of a denied kind is reported.
-- **`leave_slots_to`** (export rule key).
-  The signature rules that judge the slots they read.
+  The PostHog preset uses it for the core models that may cross a contract (`may_cross == true`).
+- **`owned_elsewhere`** (shape policy key).
+  An entity selector: a class it holds for is its owner's contract, such as a class core defines.
+  An allowed class that is no data shape is walked, so the types its members name are judged too, only where it does not hold or cannot be told; in a class it holds for, only a field of a denied kind is reported.
+  With `behavior = "abc"`, a class whose lineage holds an abstract base it holds for is an allowed behavior class.
+- **`slots_reported_by`** (export rule key).
+  The signature rules that report the slots they read.
   In such a slot the export rule judges only the shape of a class, so one slot is reported by one rule.
-- **`unknown_types`** (signature and export rule key).
-  The types that a rule reads as unknown in a slot, such as `typing.Any` and a bare `dict`.
+- **`mappings`, `opaque_payload`** (shape policy keys, read by a signature rule that names the policy).
+  The mapping types: one given type arguments is typed. With `opaque_payload = "except-return"`, an unknown type that is no mapping (`Any`) as a mapping's argument is an opaque payload: clean in a parameter or a field, unknown in a return value. The default, `"never"`, reads it as unknown everywhere.
+- **`unknown_types`** (shape policy key; signature rule key).
+  The types read as unknown in a slot, such as `typing.Any` and a bare `dict`.
+  The export rule reads the list of the policy it walks under; a signature rule reads its own, or its policy's (`shape`).
 - **Trail** (export finding).
   The chain of names from the exported symbol to the type that a finding reports, as in `OrderRejected -> Order`.
 

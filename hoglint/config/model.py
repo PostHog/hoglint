@@ -94,24 +94,28 @@ class KindSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class Behavior:
-    kind: str
-    where: Selector | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class ShapePolicy:
     name: str
     data: tuple[str, ...] = ()
-    behavior: Behavior | None = None
+    # The shape that makes a class an allowed behavior class where `owned_elsewhere` holds for a
+    # class of that shape in its lineage; empty for none.
+    behavior: str = ""
     allow: tuple[str, ...] = ()
     deny: tuple[str, ...] = ()
     unknown: str = "error"  # error | incomplete
     signatures: bool = False  # the signatures of what the export hands out are part of the contract
     # An entity selector: a symbol it holds for is allowed as it stands, whatever its kind.
-    allow_where: Selector | None = None
-    # An entity selector: an allowed class that is no data shape is walked only where it holds.
-    walk_where: Selector | None = None
+    allow_symbols: Selector | None = None
+    # An entity selector: a class it holds for is its owner's contract, so an allowed class that is
+    # no data shape is walked only where it does not hold, and it makes a behavior class.
+    owned_elsewhere: Selector | None = None
+    # The types a slot's row reads as unknown when the export rule walks under this policy.
+    unknown_types: tuple[str, ...] = ()
+    # Read by a signature rule that names the policy: a mapping given type arguments is typed, and
+    # with `opaque_payload = "except-return"` an unknown type as its argument is an opaque payload,
+    # clean in a parameter or a field (D93).
+    mappings: tuple[str, ...] = ()
+    opaque_payload: str = "never"  # never | except-return
     source: str = ""
 
 
@@ -218,8 +222,10 @@ class RuleSpec:
     uses_at_import: bool = False  # entrypoint: a later use of an imported name is judged at its import
     through_denied: bool = False  # reach: the search goes on through a denied target and reports what lies past it
 
-    leave_slots_to: tuple[str, ...] = ()  # export: the signature rules it leaves a slot to where they read its row
+    slots_reported_by: tuple[str, ...] = ()  # export: the signature rules it leaves a slot to where they read its row
     producer_options: tuple[tuple[str, Any], ...] = ()
+    shape: str = ""  # signature: the shape policy its `select`, `deny`, `unless` and unknown types come from
+    written: tuple[tuple[str, str], ...] = ()  # (selector, where its text came from) for each one `shape` wrote
     source: str = ""
 
     def input(self, key: str, default: Any = None) -> Any:

@@ -44,6 +44,10 @@ crosses-package = "src.package != dst.package and dst.external == none"
 public-surface-reports = "surface.tier == 'product' and surface.package != src.package and src.history != true and not (surface.exported or (src.wiring == 'registration' and surface.wiring == 'location') or (surface.permanent == true and src.tier == 'core'))"
 # A facade's own code, its fixtures left out.
 facade-code = "src.zone == 'facade' and src.zone != 'fixtures'"
+# A capability submodule hands out wiring and holds no body (D94): a module the `capability` zone
+# names, or any facade module that is no contracts, data or fixtures module and hands out a name
+# from where core runs a product's code.
+capability-module = "src.zone == 'capability' or (src.zone == 'facade' and src.zone not in ['contracts', 'data-api', 'fixtures'] and src.handout_zones in ['wiring', 'tasks', 'models', 'migrations'])"
 # The settings keys request-path does not follow (D103): what they name is not the per-request
 # pipeline (middleware, authentication, permissions, throttling, sessions, token validation). Every
 # other settings entry is followed, so a key this list lacks adds rows and never hides one.
@@ -92,7 +96,8 @@ wiring    = { type = "enum", values = ["location", "registration"] }
 # Interfaces the old boundary config (tach.toml, `isolation:permanent-interface`) declares permanent:
 # core reaches them past the facade by design, and the contract-check inputs watch them.
 permanent = { type = "bool" }
-crosses   = { type = "bool", on = "symbol" }
+# The core models a contract may name (D65, D98).
+may_cross = { type = "bool", on = "symbol" }
 # A core module the request pipeline starts from that no setting names: the class every API view inherits.
 request_seed = { type = "bool" }
 # The member of the warehouse sources tree a module belongs to: a vendor, `sdk` or `conftest`.
@@ -297,14 +302,14 @@ match        = ["**/tests/**", "**/test/**", "**/test_*.py", "**/conftest.py"]
 except_paths = ["posthog/temporal/ingestion_acceptance_test/test_cases_discovery.py"]
 set          = { testcode = true }
 
-# The core models a contract may name (D65, D98): read by the facade signatures and the contract
-# shape alike, so the verdict does not depend on how deep a model sits.
+# The core models a contract may name (D65, D98): read once, by the contract policy's
+# `allow_symbols`, for both of its reporters, so the verdict does not depend on how deep a model sits.
 [[assign]]
 symbols = { names = [
   "posthog.models.organization.Organization", "posthog.models.organization.OrganizationMembership",
   "posthog.models.project.Project", "posthog.models.team.team.Team", "posthog.models.user.User",
 ] }
-set     = { crosses = true }
+set     = { may_cross = true }
 
 # Test support and dev tooling outside a test path: it never ships, so it may import test code, and a
 # dev command is no entrypoint thin-commands guards.
@@ -406,24 +411,34 @@ command  = { subclass_of = ["django.core.management.base.BaseCommand"] }
 hogql_ast = { subclass_of = ["posthog.hogql.base.AST"] }
 pydantic  = { subclass_of = ["pydantic.BaseModel", "pydantic.main.BaseModel", "pydantic.RootModel", "pydantic.root_model.RootModel"] }
 
-# A contract's signatures are part of it: an unannotated slot is unknown, and the slots of what a
-# facade hands out from elsewhere count as the facade's.
+# What may cross a product's facade, said once. export-shape walks what a facade module hands out
+# under this policy; facade-signature reports each slot of a public facade function under it
+# (`shape = "contract"`). Signatures are part of a contract: an unannotated slot is unknown, and the
+# slots of what a facade hands out from elsewhere count as the facade's.
 [shapes.contract]
-data       = ["frozen-dataclass", "enum"]
-allow      = ["protocol", "hogql_ast", "exception", "pydantic"]
-allow_where = "crosses == true"
-# Core's own types (its syntax tree, its Protocols) are core's contract: allowed as they stand.
-walk_where = "tier != 'core'"
-behavior   = { kind = "abc", where = "tier == 'core'" }
-deny       = ["model", "manager", "queryset", "command"]
-unknown    = "error"
-signatures = true
+data            = ["frozen-dataclass", "enum"]
+allow           = ["protocol", "hogql_ast", "exception", "pydantic"]
+deny            = ["model", "manager", "queryset", "command"]
+# Pass whatever their kind, and nothing inside them is read.
+allow_symbols   = "may_cross == true"
+# Core's own types (its syntax tree, its Protocols) are core's contract: a facade may hand them out as
+# they stand. Their methods and attributes are not judged here, a field is reported only for a denied
+# kind, and a class that implements an abstract base core owns is an allowed behavior class.
+owned_elsewhere = "tier == 'core'"
+behavior        = "abc"
+# A slot typed with one of these says nothing: it is unknown.
+unknown_types   = ["typing.Any", "builtins.dict", "typing.Dict", "builtins.object"]
+# A mapping with type arguments is typed. An unknown type that is no mapping (`Any`, `object`) as a
+# mapping's argument is an opaque payload: allowed in a parameter or a field, never in a return value
+# (D93).
+mappings        = ["builtins.dict", "typing.Dict", "typing.Mapping", "typing.MutableMapping", "collections.abc.Mapping", "collections.abc.MutableMapping"]
+opaque_payload  = "except-return"
+signatures      = true
 
 # Registration modules and presentation adapters hand out classes, never ORM types.
 [shapes.registration]
 allow   = ["class"]
 deny    = ["model", "manager", "queryset"]
-unknown = "error"
 
 # ── Exports: the only public surface of a product ──────────────
 
@@ -559,7 +574,7 @@ growth_key    = ["dst.symbol", "edge.kind", "src.package"]
 [rules.export-shape]
 primitive  = "export"
 from       = "src.zone != 'fixtures'"
-leave_slots_to = ["facade-signature"]
+slots_reported_by = ["facade-signature"]
 doc        = "An export hands out only its shape policy: no model, manager, queryset or command, also not inside a field, a base or a re-export. A model or an unknown type in a slot whose row facade-signature reads (a public callable of a facade module, or the copy a facade holds of a function or a data shape's fields it hands out) is facade-signature's to report; every other slot is judged here, also a member of a class handed out from outside the facade."
 identity   = "module-symbol"
 growth_key = ["dst.symbol", "edge.label", "src.package"]
@@ -567,11 +582,10 @@ growth_key = ["dst.symbol", "edge.label", "src.package"]
 [rules.facade-signature]
 primitive  = "signature"
 doc        = "A public facade function neither accepts nor returns a model, manager, queryset or command. Any, object and a bare dict are unknown; a mapping with type arguments is typed, and Any or object as a mapping's argument is an opaque payload in a parameter or a field, never in a return value."
-select     = "facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping'])"
-deny       = "dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager']"
+select     = "facade-code"
+# The policy writes the rest of the selection, `deny`, `unless` and the unknown types.
+shape      = "contract"
 on_unknown = "finding"
-# A core model on the list (`crosses`) may be taken or returned.
-unless     = "dst.crosses == true"
 identity   = "facade-slot"
 growth_key = ["dst.symbol", "src.package"]
 
@@ -579,7 +593,7 @@ growth_key = ["dst.symbol", "src.package"]
 primitive  = "edge"
 doc        = "A capability submodule of a facade holds no body: each top-level definition there is a re-export or a stub, so the wiring lives where core runs it."
 kinds      = ["declares"]
-from       = "src.zone == 'capability' or (src.zone == 'facade' and src.zone not in ['contracts', 'data-api', 'fixtures'] and src.handed_zones in ['wiring', 'tasks', 'models', 'migrations'])"
+from       = "capability-module"
 select     = "edge.body == '1' and src.scope == none and dst.name not in ['__getattr__', '__dir__']"
 identity   = ["dst.symbol", "src.module"]
 growth_key = ["dst.symbol", "src.package"]

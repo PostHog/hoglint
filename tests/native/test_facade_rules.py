@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from hoglint import facts
+from hoglint.config import CONFIG_FILE, load_config
 from hoglint.native import analysis as native_analysis
 from hoglint.native.parity import read_lines
+from hoglint.native.rules import NativeRuleContext
+from hoglint.native.source import NativeGraphSource
 from hoglint.rules import exports
+from hoglint.rules.engine import Engine
 from rules.support import PRESET
 
+from native.require import native_module
 from native.test_contract_slots import clean_dump, findings_of
+from native.test_parity import write_repo
 
 ROOT_CONFIG = """
 schema = 1
@@ -373,7 +381,7 @@ def handed_out(body: str, *names: str) -> dict[str, str]:
     }
 
 
-# A signature rule the export rule does not name in `leave_slots_to` takes no slot from it.
+# A signature rule the export rule does not name in `slots_reported_by` takes no slot from it.
 UNNAMED_SIGNATURE_RULE = """
 [rules.routes-signature]
 primitive  = "signature"
@@ -705,7 +713,7 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
         {
             "hoglint.toml": ROOT_CONFIG
             + UNNAMED_SIGNATURE_RULE
-            + '\n[rules.export-shape]\nleave_slots_to = { add = ["routes-signature"] }\n',
+            + '\n[rules.export-shape]\nslots_reported_by = { add = ["routes-signature"] }\n',
             **handed_out(OPAQUE_INIT, "Rejected"),
         },
         ANY_AT_ERRORS,
@@ -785,7 +793,7 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
         {
             "hoglint.toml": ROOT_CONFIG
             + TEST_ONLY_SIGNATURE_RULE
-            + '\n[rules.export-shape]\nleave_slots_to = { add = ["test-signature"], remove = ["facade-signature"] }\n',
+            + '\n[rules.export-shape]\nslots_reported_by = { add = ["test-signature"], remove = ["facade-signature"] }\n',
             f"{SHOP_DIR}/facade/api.py": IMPORTS_ORDER + "def place(order: Order) -> None:\n    pass\n",
         },
         {"export-shape": [[ORDER, API, "export-denied(model)"]], "test-signature": []},
@@ -1232,7 +1240,7 @@ SLOT_OWNER_CASES: dict[str, tuple[dict[str, str], dict[str, list[list[str]]]]] =
         },
         CLEAN,
     ),
-    # A `ClassVar` is no constructor slot: it is an attribute, which `walk_where` decides.
+    # A `ClassVar` is no constructor slot: it is an attribute, which `owned_elsewhere` decides.
     "a ClassVar of a frozen dataclass core defines, handed out": (
         {
             "posthog/records.py": IMPORTS_ORDER + "from typing import ClassVar\n\n\n" + CLASS_VAR_DATACLASS,
@@ -1919,8 +1927,9 @@ def test_an_allowed_contract_type_is_still_walked(tmp_path: Path, monkeypatch: p
     assert findings_of(out, "export-shape") == []
 
 
-# An allowed class is walked where `walk_where` holds and where it cannot be told, as `allow_where`
-# excuses only where it holds: a class in a file no assignment claims has an unknown tier.
+# An allowed class is walked where `owned_elsewhere` does not hold and where it cannot be told, as
+# `allow_symbols` excuses only where it holds: a class in a file no assignment claims has an unknown
+# tier.
 WALKED_CASES = {
     "a product's class": ("products/shop/backend/kit.py", "products.shop.backend.kit"),
     "a class whose tier is unknown": ("scripts/kit.py", "scripts.kit"),
@@ -1965,3 +1974,61 @@ def test_the_engine_reads_the_one_list_of_core_shape_bases(
     left_out = "ShopError" if shape == "exception" else "Chooser"
     module = f"{SHOP}.facade.contracts"
     assert findings_of(out, "export-shape") == [[f"{module}.{left_out}", module, "export-shape(class)"]]
+
+
+# The preset's facade-signature as it read before it named its policy: its selection, `deny`,
+# `unless` and unknown types spelled out, which the config now writes from `[shapes.contract]`.
+NAMES_POLICY = (
+    'select     = "facade-code"\n'
+    "# The policy writes the rest of the selection, `deny`, `unless` and the unknown types.\n"
+    'shape      = "contract"\n'
+)
+SPELLED_OUT = (
+    "select     = \"facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1')"
+    " and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in"
+    " ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping',"
+    " 'collections.abc.MutableMapping'])\"\n"
+    "deny       = \"dst.kind in ['model', 'manager', 'queryset', 'command']\"\n"
+    'unless     = "dst.may_cross == true"\n'
+    'unknown_types = ["typing.Any", "builtins.dict", "typing.Dict", "builtins.object"]\n'
+)
+
+
+def spelled_out(preset: str) -> str:
+    """The preset with facade-signature's policy spelled out on the rule. The policy keys only a
+    rule that names the policy reads go too."""
+    assert preset.count(NAMES_POLICY) == 1
+    lines = preset.replace(NAMES_POLICY, SPELLED_OUT).splitlines(keepends=True)
+    return "".join(line for line in lines if not line.startswith(("mappings ", "opaque_payload ")))
+
+
+def preset_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, presets: list[str]) -> list[dict[str, Any]]:
+    """The evaluator's plan of each preset over one small tree."""
+    native_module()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    write_repo(repo, BASE)
+    work = tmp_path / "work"
+    work.mkdir()
+    plans = []
+    try:
+        graph = NativeGraphSource(work).build(repo, load_config(repo, repo / CONFIG_FILE))
+        for preset in presets:
+            (repo / "tools/hoglint/presets/posthog.toml").write_text(preset)
+            config = load_config(repo, repo / CONFIG_FILE)
+            plans.append(NativeRuleContext(config, graph, Engine(config, graph, repo).labeler, repo).plan.data())
+    finally:
+        gc.enable()
+    return plans
+
+
+# One policy, two reporters: the config writes facade-signature's selection, `deny`, `unless` and
+# unknown types from the policy it names, so every rule of the preset plans as it did spelled out.
+def test_the_contract_policy_plans_every_preset_rule_as_spelled_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preset = PRESET.read_text()
+    written, spelled = preset_plans(tmp_path, monkeypatch, [preset, spelled_out(preset)])
+    moved = [ours["id"] for ours, theirs in zip(written["rules"], spelled["rules"], strict=True) if ours != theirs]
+    assert moved == []
+    assert written == spelled

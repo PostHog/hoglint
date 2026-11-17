@@ -212,7 +212,8 @@ model = { subclass_of = "products.billing.backend.models.Base" }
 
 [shapes.contract]
 data = ["frozen-dataclass", "enum"]
-behavior = { kind = "abc", where = "tier == 'core'" }
+behavior = "abc"
+owned_elsewhere = "tier == 'core'"
 deny = ["model"]
 
 [exports.facade]
@@ -583,7 +584,6 @@ CORNERS = {
         "exports": ["facade"],
         "on_unknown": "incomplete",
         "on_unresolved": "incomplete",
-        "unknown_types": ["typing.Any"],
         "contexts": {"exclude": []},
         "identity": ["dst.symbol"],
         "ledger": False,
@@ -668,9 +668,17 @@ def test_a_directory_without_init_reads_the_labels_its_path_gets_in_both_engines
     }
 
 
+# The corners whose shape policy is not the fixture's: an export rule reads its policy's unknown types.
+CORNER_BASES = {
+    "export-unknowns-as-incomplete": CONFIG.replace(
+        "[shapes.contract]\n", '[shapes.contract]\nunknown_types = ["typing.Any"]\n'
+    ),
+}
+
+
 @pytest.mark.parametrize("name", sorted(CORNERS))
 def test_the_evaluator_judges_each_irregular_corner_as_the_rule_code_does(world: World, name: str) -> None:
-    assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]))
+    assert_stored(world, f"corner {name}", rule_table(name, CORNERS[name]), CORNER_BASES.get(name, CONFIG))
 
 
 # The export rule's corners, stored: per finding its identity, message and unknown flag, per
@@ -855,8 +863,10 @@ EXPORT_CORNER_ROWS = {
 }
 
 
-def export_rows(world: World, name: str, fields: dict[str, Any]) -> tuple[list[tuple[Any, ...]], list[tuple[str, str]]]:
-    config = world.config(rule_table(name, fields))
+def export_rows(
+    world: World, name: str, fields: dict[str, Any], base: str = CONFIG
+) -> tuple[list[tuple[Any, ...]], list[tuple[str, str]]]:
+    config = world.config(rule_table(name, fields), base)
     native = world.context(config)
     spec = config.rules[name]
     run = primitive_of(spec)(native, spec).evaluate()
@@ -867,7 +877,7 @@ def export_rows(world: World, name: str, fields: dict[str, Any]) -> tuple[list[t
 @pytest.mark.parametrize("name", sorted(EXPORT_CORNER_ROWS))
 def test_an_export_corner_gives_its_stored_rows(world: World, name: str) -> None:
     findings, incomplete = EXPORT_CORNER_ROWS[name]
-    assert export_rows(world, name, CORNERS[name]) == (findings, incomplete)
+    assert export_rows(world, name, CORNERS[name], CORNER_BASES.get(name, CONFIG)) == (findings, incomplete)
 
 
 # Relation R7 of the rule-half design: the order of `exports` changes no row, and `on_unknown` and
@@ -1306,7 +1316,8 @@ class Tables:
             "allow_shapes": lambda: rng.sample(["write", "write(save)", "instance-many", "call", "attribute"], 2),
             "deny_shapes": lambda: rng.sample(["write", "write(delete)", "write(save)", "instance-many"], 2),
             "unknown_types": lambda: rng.sample(UNKNOWN_TYPES, rng.randint(1, 2)),
-            "leave_slots_to": lambda: [named] if named else [],
+            "shape": lambda: "contract",
+            "slots_reported_by": lambda: [named] if named else [],
             "exports": lambda: rng.sample(["facade", "adapter"], rng.randint(1, 2)),
             "on": lambda: rng.choice(["module", "symbol"]),
             "within": lambda: "products/{product}",
@@ -1619,17 +1630,17 @@ class Varied:
 # the relations between sibling rules (`test_rule_relations.py`), the keys each rule type reads,
 # and the schema's reach.
 SAMPLED = {
-    "edge": ("tables", 77),  # `from` reads an edge field, `deny` a symbol field as a set; a strict level
-    "entrypoint": ("tables", 133),  # no predicate, so `dst.exported` decides; an unresolved edge blocks
-    "use-shape": ("tables", 112),  # `allow_shapes` with a detailed shape, at the surface, over two kinds
-    "signature": ("tables", 47),  # the default unknown types, over slots and imports; unresolved is incomplete
-    "export": ("tables", 180),  # a signature rule takes slots; unknown types, unknown and incomplete rows
-    "reach": ("tables", 27),  # a search on through denied modules from every module; unresolved findings
-    "cycle": ("varied", 19),  # provider fields, roles, symbol labels; an export and an inventory beside it
-    "layout": ("tables", 227),  # absent files, a registry and a `require`; a level that selects its groups
-    "coverage": ("tables", 96),  # covers that read a set field, next to an edge inventory; a strict level
-    "inventory-classify": ("tables", 163),  # classified identities over three kinds; incomplete unresolved edges
-    "inventory-exactly-one": ("tables", 120),  # one owner per tier, counted; a level grouped by tier
+    "edge": ("tables", 11),  # `from` reads an edge field, `deny` and `unless` a set field; a level that selects
+    "entrypoint": ("tables", 144),  # no predicate, so `dst.exported` decides; an unresolved edge blocks
+    "use-shape": ("tables", 13),  # `allow_shapes` with a detailed shape, at the surface
+    "signature": ("tables", 201),  # the default unknown types, over slots and imports; unresolved is incomplete
+    "export": ("tables", 180),  # a signature rule beside it; unknown rows are findings; a level
+    "reach": ("tables", 148),  # a search on through denied modules from every module; unresolved findings
+    "cycle": ("varied", 7),  # provider fields, roles, symbol labels; an export and an inventory beside it
+    "layout": ("tables", 150),  # absent files and a `require`, on modules; a level
+    "coverage": ("tables", 140),  # covers that read an edge inventory's columns; a strict level
+    "inventory-classify": ("tables", 174),  # classified identities over three kinds; incomplete unresolved edges
+    "inventory-exactly-one": ("tables", 131),  # one owner per tier, counted; a level grouped by tier
 }
 # The sample's whole runs, stored: one JSON list per line, a config's line (its mode and a digest of
 # its base config and rules) before its rows. Rewrite it with `HOGLINT_REFRESH_GENERATED=1` after a
@@ -2253,7 +2264,7 @@ def test_a_provider_field_a_slot_owner_reads_gets_its_column(world: World, monke
     monkeypatch.setattr(ExportPrimitive, "named_slot_rules", lambda self: [named])
     export = {
         "primitive": "export",
-        "leave_slots_to": ["seer"],
+        "slots_reported_by": ["seer"],
         "identity": ["src.module", "dst.symbol", "edge.label"],
     }
     rules = rule_table("read", {**export, "ledger": False}) + rule_table("seer", SIGNATURE)

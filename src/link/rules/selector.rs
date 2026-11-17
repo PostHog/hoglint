@@ -35,8 +35,8 @@ pub enum EndField {
     Decl,
     Registry,
     Lifecycle,
-    /// The zones of what the endpoint's module hands out (`Labeler.handed_zones`).
-    HandedZones,
+    /// The zones of what the endpoint's module hands out (`Labeler.handout_zones`).
+    HandoutZones,
     /// Whether an export's `within` holds the endpoint's module (`Labeler.door`).
     Door,
     Context,
@@ -58,7 +58,7 @@ pub enum EntityField {
     Kind,
     Registry,
     Lifecycle,
-    HandedZones,
+    HandoutZones,
     Door,
     /// A bare `subject`: what an entity rule names (`EntityRule.resolver`); elsewhere the module.
     Subject,
@@ -272,7 +272,7 @@ impl Compiler<'_> {
             "kind" => EntityField::Kind,
             "registry" => EntityField::Registry,
             "lifecycle" => EntityField::Lifecycle,
-            "handed_zones" => EntityField::HandedZones,
+            "handout_zones" => EntityField::HandoutZones,
             "door" => EntityField::Door,
             other => self
                 .field(other)
@@ -323,7 +323,7 @@ impl Compiler<'_> {
             "decl" => EndField::Decl,
             "registry" => EndField::Registry,
             "lifecycle" => EndField::Lifecycle,
-            "handed_zones" => EndField::HandedZones,
+            "handout_zones" => EndField::HandoutZones,
             "door" => EndField::Door,
             "context" => EndField::Context,
             "exported" => EndField::Exported,

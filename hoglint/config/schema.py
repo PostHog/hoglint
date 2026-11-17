@@ -16,7 +16,6 @@ from hoglint import adapters  # noqa: F401 - registers the builtin coverage adap
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
 from hoglint.config.model import (
     Assignment,
-    Behavior,
     Config,
     CoverSpec,
     Domain,
@@ -46,12 +45,14 @@ from hoglint.selectors import (
     Condition,
     FieldInfo,
     FieldType,
+    Or,
     Parser,
     Selector,
     SelectorError,
     conjuncts,
     endpoint_only,
     refs,
+    render,
     source_field,
     suggest,
 )
@@ -140,14 +141,21 @@ RULE_KEYS: dict[str, frozenset[str]] = {
     "entrypoint": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"deny", "allow", "require", "uses_at_import"},
     "use-shape": COMMON_RULE_KEYS | EDGE_SELECT_KEYS | {"allow_shapes", "deny_shapes", "flow"},
     "signature": COMMON_RULE_KEYS
-    | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types"},
-    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "leave_slots_to", "on_unknown", "unknown_types"},
+    | {"kinds", "contexts", "from", "select", "deny", "unless", "on_unknown", "unknown_types", "shape"},
+    "export": COMMON_RULE_KEYS | {"exports", "contexts", "from", "slots_reported_by", "on_unknown"},
     "reach": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied"},
     "cycle": COMMON_RULE_KEYS | {"kinds", "contexts", "view", "from", "select"},
     "layout": COMMON_RULE_KEYS | {"on", "select", "require", "within", "files", "absent", "registry"},
     "coverage": COMMON_RULE_KEYS | {"covers", "inputs"},
     "inventory": COMMON_RULE_KEYS | {"kinds", "contexts", "select", "from", "classify", "on", "exactly_one"},
 }
+# Keys the config reads itself and writes out as other keys before a rule sees them: a signature
+# rule's `shape` writes its selection, `deny`, `unless` and unknown types from that policy.
+WRITTEN_BY_CONFIG: dict[str, frozenset[str]] = {"signature": frozenset({"shape"})}
+# A signature rule that names a policy reads these from it, so it may not set them itself.
+FROM_POLICY = ("deny", "unless", "unknown_types")
+# Where a shape policy lets `Any` (an unknown type that is no mapping) stand as a mapping's argument.
+OPAQUE_PAYLOAD = ("never", "except-return")
 # Keys an edge rule accepts that no code reads: the preset's `drives` rule states its producer's
 # call resolution with `resolve_calls`. They go when the preset drops them.
 UNREAD_ACCEPTED: dict[str, frozenset[str]] = {"edge": frozenset(PRODUCER_OPTION_KEYS)}
@@ -158,8 +166,33 @@ ASSIGN_KEYS = frozenset({"match", "set", "override", "except", "only", "except_p
 ZONE_KEYS = frozenset({"parent", "paths", "override", "doc"})
 KIND_KEYS = frozenset({"subclass_of", "decorated_by", "abstract", "decl", "expected", "doc"})
 SHAPE_KEYS = frozenset(
-    {"data", "behavior", "allow", "allow_where", "walk_where", "deny", "unknown", "signatures", "doc"}
+    {
+        "data",
+        "behavior",
+        "allow",
+        "allow_symbols",
+        "owned_elsewhere",
+        "deny",
+        "unknown",
+        "unknown_types",
+        "mappings",
+        "opaque_payload",
+        "signatures",
+        "doc",
+    }
 )
+# Keys renamed once, each with what to write now. An old key reads nothing, so it is a config error
+# that names its new form (D52), never an alias.
+RENAMED_SHAPE_KEYS = {
+    "allow_where": "`allow_symbols`",
+    "walk_where": '`owned_elsewhere`, with the reverse sign: `walk_where = X` is `owned_elsewhere = "not (X)"`',
+}
+RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {
+    "export": {
+        "leave_slots_to": "`slots_reported_by`",
+        "unknown_types": "`unknown_types` of the shape policy each export names: the walk reads its policy's list",
+    }
+}
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by"})
@@ -195,7 +228,7 @@ ENTITY_FIELDS: dict[str, FieldInfo] = {
     "registry": FieldInfo(FieldType.STRING),
     "lifecycle": FieldInfo(FieldType.ENUM, LIFECYCLES),
     # The zones of the modules whose names a module hands out by import.
-    "handed_zones": FieldInfo(FieldType.SET),
+    "handout_zones": FieldInfo(FieldType.SET),
     # Whether an export's `within` holds the module: it is in a package with a declared door.
     "door": FieldInfo(FieldType.BOOL),
 }
@@ -225,7 +258,9 @@ def rule_type_of(primitive: str, classify: bool) -> type[RuleType]:
 def unread_keys(rule: type[RuleType]) -> frozenset[str]:
     """The keys a rule's primitive accepts that its mode never reads: a key no rule code reads has
     no meaning, so a config may not set it (D52)."""
-    unread = RULE_KEYS[rule.PRIMITIVE] - rule.READS - EVERY_RULE_READS
+    unread = (
+        RULE_KEYS[rule.PRIMITIVE] - rule.READS - EVERY_RULE_READS - WRITTEN_BY_CONFIG.get(rule.PRIMITIVE, frozenset())
+    )
     return unread - UNREAD_ACCEPTED.get(rule.MODE, frozenset())
 
 
@@ -234,6 +269,72 @@ def required_file(entry: str) -> tuple[str, str]:
     file that must define a symbol with that declaration. The declaration is empty for none."""
     path, _, decl = entry.partition(":")
     return path.strip(), decl.strip()
+
+
+def listed(names: tuple[str, ...] | list[str]) -> str:
+    """Names as a selector's list literal."""
+    return "[" + ", ".join(f"'{name}'" for name in names) + "]"
+
+
+class PolicySelectors:
+    """What a signature rule that names a shape policy (`shape = "<name>"`) reads, written from that
+    policy as selector text: the kinds it denies, the symbols it lets pass and its unknown types. The
+    rule then judges as if it spelled them out, so the evaluator's plan is the same; `explain`
+    names the policy each text came from."""
+
+    def __init__(self, policy: ShapePolicy) -> None:
+        self.policy = policy
+
+    def typed_mappings(self) -> list[str]:
+        """The unknown types that are mappings: typed once given type arguments."""
+        return [name for name in self.policy.unknown_types if name in self.policy.mappings]
+
+    def payloads(self) -> list[str]:
+        """The unknown types that are no mapping: an opaque payload as a mapping's argument."""
+        return [name for name in self.policy.unknown_types if name not in self.policy.mappings]
+
+    def policy_parts(self) -> list[str]:
+        """The slots the policy does not read as unknown: a mapping with type arguments, and an
+        opaque payload (an unknown type that is no mapping, as a mapping's argument) outside a
+        return value."""
+        parts = []
+        typed = self.typed_mappings()
+        if typed:
+            parts.append(f"not (dst.symbol in {listed(typed)} and edge.subscripted == '1')")
+        payloads = self.payloads()
+        if self.policy.opaque_payload == "except-return" and payloads and self.policy.mappings:
+            mappings = listed(self.policy.mappings)
+            parts.append(
+                f"not (dst.symbol in {listed(payloads)} and edge.slot != 'return' and edge.argument_of in {mappings})"
+            )
+        return parts
+
+    def select(self, own: Selector | None) -> str | None:
+        """The rule's own selection, then the policy's parts."""
+        parts = []
+        if own is not None:
+            parts.append(f"({own.source})" if isinstance(own.node, Or) else own.source)
+        return " and ".join([*parts, *self.policy_parts()]) or None
+
+    def deny(self) -> str | None:
+        """The policy's denied kinds; the config checks that each is a kind `dst.kind` reads."""
+        return f"dst.kind in {listed(self.policy.deny)}" if self.policy.deny else None
+
+    def unless(self) -> str | None:
+        """The symbols the policy lets pass, read at the slot's type."""
+        allowed = self.policy.allow_symbols
+        return render(allowed.node, "dst") if allowed is not None else None
+
+    def notes(self, name: str) -> tuple[tuple[str, str], ...]:
+        """Per selector the rule reads, where its text came from, for `explain`."""
+        out = []
+        if self.policy_parts():
+            out.append(("select", f"written from select and [shapes.{name}] unknown_types, mappings, opaque_payload"))
+        if self.policy.deny:
+            out.append(("deny", f"written from [shapes.{name}] deny"))
+        if self.policy.allow_symbols is not None:
+            out.append(("unless", f"written from [shapes.{name}] allow_symbols"))
+        return tuple(out)
 
 
 class SchemaBuilder:
@@ -261,9 +362,14 @@ class SchemaBuilder:
     def fail(self, key: str, message: str) -> None:
         self.problems.append(f"{key}: {message}  [{self.source(key)}]")
 
-    def check_keys(self, key: str, table: dict[str, Any], allowed: frozenset[str]) -> None:
+    def check_keys(
+        self, key: str, table: dict[str, Any], allowed: frozenset[str], renamed: dict[str, str] | None = None
+    ) -> None:
         for name in table:
             if name in allowed:
+                continue
+            if renamed is not None and name in renamed:
+                self.fail(key, f"`{name}` is now {renamed[name]}")
                 continue
             self.fail(key, f"unknown key {name!r}{suggest(name, allowed)}")
 
@@ -363,7 +469,7 @@ class SchemaBuilder:
         registries = self.read_registries()
         providers = self.read_providers()
         assigns = self.read_assigns()
-        rules = self.read_rules(registries, exports)
+        rules = self.read_rules(registries, exports, shapes)
         levels = self.read_levels(rules)
         ledger = self.read_ledger()
         roles = self.read_roles(rules)
@@ -595,25 +701,22 @@ class SchemaBuilder:
         entity = self.entity_catalog()
         for name, table in self.raw.get("shapes", {}).items():
             key = f"shapes.{name}"
-            self.check_keys(key, table, SHAPE_KEYS)
-            behavior = None
-            raw_behavior = table.get("behavior")
-            if isinstance(raw_behavior, dict):
-                self.check_keys(f"{key}.behavior", raw_behavior, frozenset({"kind", "where"}))
-                behavior = Behavior(
-                    self.check_enum(f"{key}.behavior.kind", raw_behavior.get("kind"), known),
-                    self.parse(f"{key}.behavior.where", raw_behavior.get("where"), entity),
-                )
+            self.check_keys(key, table, SHAPE_KEYS, RENAMED_SHAPE_KEYS)
             policy = ShapePolicy(
                 name,
                 as_tuple(table.get("data")),
-                behavior,
+                self.read_behavior(key, table, known),
                 as_tuple(table.get("allow")),
                 as_tuple(table.get("deny")),
                 self.check_enum(f"{key}.unknown", table.get("unknown", "error"), ("error", "incomplete")),
                 signatures=self.check_bool(f"{key}.signatures", table.get("signatures", False)),
-                allow_where=self.parse(f"{key}.allow_where", table.get("allow_where"), entity),
-                walk_where=self.parse(f"{key}.walk_where", table.get("walk_where"), entity),
+                allow_symbols=self.parse(f"{key}.allow_symbols", table.get("allow_symbols"), entity),
+                owned_elsewhere=self.parse(f"{key}.owned_elsewhere", table.get("owned_elsewhere"), entity),
+                unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
+                mappings=as_tuple(table.get("mappings")),
+                opaque_payload=self.check_enum(
+                    f"{key}.opaque_payload", table.get("opaque_payload", "never"), OPAQUE_PAYLOAD
+                ),
                 source=self.source(key),
             )
             for shape in (*policy.data, *policy.allow, *policy.deny):
@@ -621,6 +724,24 @@ class SchemaBuilder:
                     self.fail(key, f"unknown shape {shape!r}{suggest(shape, known)}")
             out[name] = policy
         return out
+
+    def read_behavior(self, key: str, table: dict[str, Any], known: tuple[str, ...]) -> str:
+        """`behavior`: the shape that makes a class an allowed behavior class where a class of
+        that shape in its lineage is owned elsewhere (`owned_elsewhere`). Empty for none."""
+        raw = table.get("behavior")
+        if raw is None:
+            return ""
+        if not isinstance(raw, str):
+            self.fail(
+                f"{key}.behavior",
+                '`behavior` names a shape, as `behavior = "abc"`; its `where` is now `owned_elsewhere`',
+            )
+            return ""
+        if "owned_elsewhere" not in table:
+            self.fail(
+                f"{key}.behavior", "`behavior` needs `owned_elsewhere`, which says whose base makes a behavior class"
+            )
+        return self.check_enum(f"{key}.behavior", raw, known)
 
     def read_exports(self, shapes: dict[str, ShapePolicy]) -> dict[str, ExportSpec]:
         out: dict[str, ExportSpec] = {}
@@ -869,7 +990,7 @@ class SchemaBuilder:
         return tuple(out)
 
     def read_slot_owners(self, key: str, raw: Any) -> tuple[str, ...]:
-        """`leave_slots_to`: the signature rules an export rule leaves a slot to where they read
+        """`slots_reported_by`: the signature rules an export rule leaves a slot to where they read
         its row. Each must be a signature rule of the config."""
         names = as_tuple(raw)
         rules = self.raw.get("rules", {})
@@ -898,19 +1019,66 @@ class SchemaBuilder:
         for name in sorted(unread_keys(rule) & table.keys()):
             self.fail(key, f"`{name}` is not read by {rule.mode_text()}; remove it")
 
-    def read_rules(self, registries: dict[str, RegistrySpec], exports: dict[str, ExportSpec]) -> dict[str, RuleSpec]:
+    def check_policies_named(self, shapes: dict[str, ShapePolicy], rules: dict[str, RuleSpec]) -> None:
+        """`mappings` and `opaque_payload` are read only where a signature rule names the policy
+        (`shape`): elsewhere no code reads them (D52)."""
+        named = {spec.shape for spec in rules.values()}
+        for name in shapes:
+            table = self.raw["shapes"][name]
+            if name in named or not ("mappings" in table or "opaque_payload" in table):
+                continue
+            self.fail(
+                f"shapes.{name}",
+                "`mappings` and `opaque_payload` are read only by a signature rule that names this policy "
+                "(`shape`), and none does",
+            )
+
+    def policy_selectors(
+        self, key: str, table: dict[str, Any], shapes: dict[str, ShapePolicy]
+    ) -> PolicySelectors | None:
+        """What a signature rule that names a shape policy reads from it, or None for a rule that
+        names none. A key the policy decides may not also be set on the rule."""
+        name = table.get("shape")
+        if name is None:
+            return None
+        for setting in FROM_POLICY:
+            if setting in table:
+                self.fail(key, f"`{setting}` comes from the policy `shape` names; remove it, or remove `shape`")
+        policy = shapes.get(str(name))
+        if policy is None:
+            self.fail(
+                f"{key}.shape", f"shape policy {name!r} is not defined under [shapes]{suggest(str(name), shapes)}"
+            )
+            return None
+        unread = [kind for kind in policy.deny if kind not in self.kind_names]
+        if unread:
+            self.fail(
+                f"{key}.shape",
+                f"[shapes.{name}] denies {', '.join(unread)}, which `dst.kind` cannot read: a signature rule "
+                "denies the kinds of [kinds] only",
+            )
+            return None
+        return PolicySelectors(policy)
+
+    def read_rules(
+        self,
+        registries: dict[str, RegistrySpec],
+        exports: dict[str, ExportSpec],
+        shapes: dict[str, ShapePolicy],
+    ) -> dict[str, RuleSpec]:
         out: dict[str, RuleSpec] = {}
         rule_ids = set(self.raw.get("rules", {}))
         for rule_id, table in self.raw.get("rules", {}).items():
-            spec = self.read_rule(rule_id, table, rule_ids, registries, exports)
+            spec = self.read_rule(rule_id, table, rule_ids, registries, exports, shapes)
             if spec is not None:
                 out[rule_id] = spec
         for rule_id, spec in out.items():
-            self.check_slot_owners(f"rules.{rule_id}.leave_slots_to", spec.leave_slots_to, out)
+            self.check_slot_owners(f"rules.{rule_id}.slots_reported_by", spec.slots_reported_by, out)
+        self.check_policies_named(shapes, out)
         return out
 
     def check_slot_owners(self, key: str, names: tuple[str, ...], rules: dict[str, RuleSpec]) -> None:
-        """Each rule `leave_slots_to` names splits its selection into conditions that read only
+        """Each rule `slots_reported_by` names splits its selection into conditions that read only
         the source (where it reads rows) and conditions that read no source field (which slots it
         judges); the export rule reads the two parts apart, so a condition that mixes them has no
         reading there."""
@@ -936,6 +1104,7 @@ class SchemaBuilder:
         rule_ids: set[str],
         registries: dict[str, RegistrySpec],
         exports: dict[str, ExportSpec],
+        shapes: dict[str, ShapePolicy],
     ) -> RuleSpec | None:
         key = f"rules.{rule_id}"
         primitive = table.get("primitive")
@@ -945,7 +1114,7 @@ class SchemaBuilder:
         if primitive not in RULE_KEYS:
             self.fail(key, f"unknown primitive {primitive!r}{suggest(str(primitive), RULE_KEYS)}")
             return None
-        self.check_keys(key, table, RULE_KEYS[primitive])
+        self.check_keys(key, table, RULE_KEYS[primitive], RENAMED_RULE_KEYS.get(primitive))
         classify = table.get("classify", "")
         if not isinstance(classify, str):
             self.fail(key, f"`classify` is the path of a classification file, not {classify!r}")
@@ -1005,6 +1174,16 @@ class SchemaBuilder:
                 self.fail(key, f"files entry {entry!r} names {decl!r}; a required file defines one of {FILE_DECLS}")
         if primitive == "inventory" and not (classify or table.get("exactly_one")):
             self.fail(key, "an inventory needs `classify` (edges) or `exactly_one` (entities)")
+        select = self.parse(f"{key}.select", table.get("select"), predicate_catalog)
+        deny = self.parse(f"{key}.deny", table.get("deny"), predicate_catalog)
+        unless = self.parse(f"{key}.unless", table.get("unless"), predicate_catalog)
+        unknown_types = as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES
+        written = self.policy_selectors(key, table, shapes) if primitive == "signature" else None
+        if written is not None:
+            select = self.parse(f"{key}.select", written.select(select), predicate_catalog)
+            deny = self.parse(f"{key}.deny", written.deny(), predicate_catalog)
+            unless = self.parse(f"{key}.unless", written.unless(), predicate_catalog)
+            unknown_types = written.policy.unknown_types
         return RuleSpec(
             id=rule_id,
             primitive=primitive,
@@ -1019,11 +1198,11 @@ class SchemaBuilder:
                 ENDPOINTS,
             ),
             from_=self.parse(f"{key}.from", table.get("from"), from_catalog),
-            select=self.parse(f"{key}.select", table.get("select"), predicate_catalog),
-            deny=self.parse(f"{key}.deny", table.get("deny"), predicate_catalog),
+            select=select,
+            deny=deny,
             allow=self.parse(f"{key}.allow", table.get("allow"), predicate_catalog),
             require=self.parse(f"{key}.require", table.get("require"), predicate_catalog),
-            unless=self.parse(f"{key}.unless", table.get("unless"), predicate_catalog),
+            unless=unless,
             on_unresolved=on_unresolved,
             on_unknown=self.check_enum(f"{key}.on_unknown", table.get("on_unknown", "finding"), ON_UNRESOLVED),
             identity_name=identity_name,
@@ -1046,11 +1225,13 @@ class SchemaBuilder:
             absent=as_tuple(table.get("absent")),
             registry=registry,
             exports=as_tuple(table.get("exports")),
-            unknown_types=as_tuple(table.get("unknown_types")) or DEFAULT_UNKNOWN_TYPES,
+            unknown_types=unknown_types,
             uses_at_import=self.check_bool(f"{key}.uses_at_import", table.get("uses_at_import", False)),
             through_denied=self.check_bool(f"{key}.through_denied", table.get("through_denied", False)),
-            leave_slots_to=self.read_slot_owners(f"{key}.leave_slots_to", table.get("leave_slots_to")),
+            slots_reported_by=self.read_slot_owners(f"{key}.slots_reported_by", table.get("slots_reported_by")),
             producer_options=tuple(producer_options),
+            shape=str(table.get("shape", "")),
+            written=written.notes(str(table.get("shape"))) if written is not None else (),
             source=self.source(key),
         )
 

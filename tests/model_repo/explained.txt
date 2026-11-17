@@ -52,7 +52,7 @@ labels products.legacy.backend.routes app_config = none <- outside the field's d
 labels products.legacy.backend.routes temporal_home = none <- outside the field's domain
 labels products.legacy.backend.routes temporal_subtree = none <- outside the field's domain
 labels products.legacy.backend.routes runs_by_name = none <- outside the field's domain
-labels products.legacy.backend.routes handed_zones = {} <- hand-outs
+labels products.legacy.backend.routes handout_zones = {} <- hand-outs
 labels products.legacy.backend.routes registry = routes <- registries
 labels products.legacy.backend.routes lifecycle = setup <- registries.routes.lifecycle
 labels products.catalog.backend.facade.models package = catalog <- [[assign]] products/{product}/**  (tools/hoglint/presets/posthog.toml)
@@ -73,7 +73,7 @@ labels products.catalog.backend.facade.models app_config = none <- outside the f
 labels products.catalog.backend.facade.models temporal_home = none <- outside the field's domain
 labels products.catalog.backend.facade.models temporal_subtree = none <- outside the field's domain
 labels products.catalog.backend.facade.models runs_by_name = none <- outside the field's domain
-labels products.catalog.backend.facade.models handed_zones = backend, models <- hand-outs
+labels products.catalog.backend.facade.models handout_zones = backend, models <- hand-outs
 labels products.warehouse_sources.sources.alpha.source package = warehouse_sources <- [[assign]] products/{product}/**  (tools/hoglint/presets/posthog.toml)
 labels products.warehouse_sources.sources.alpha.source tier = product <- [[assign]] products/{product}/**  (tools/hoglint/presets/posthog.toml)
 labels products.warehouse_sources.sources.alpha.source role = feature <- [[assign]] products/{product}/**  (tools/hoglint/presets/posthog.toml)
@@ -190,9 +190,9 @@ finding  [new] model-crossings products.catalog.backend.models.CatalogEntry prod
 edge     exposes products/catalog/backend/facade/api.py:108 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false
@@ -200,18 +200,18 @@ finding  [new] facade-signature products.catalog.backend.facade.api take_any par
 edge     exposes products/catalog/backend/facade/api.py:120 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> false
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> false  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false
 edge     exposes products/catalog/backend/facade/api.py:124 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false
@@ -219,18 +219,18 @@ finding  [new] facade-signature products.catalog.backend.facade.api give_payload
 edge     exposes products/catalog/backend/facade/api.py:140 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> false
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> false  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false
 edge     exposes products/catalog/backend/facade/api.py:140 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false
@@ -238,18 +238,18 @@ finding  [new] facade-signature products.catalog.backend.facade.api take_union p
 edge     exposes products/catalog/backend/facade/api.py:144 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> false
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> false  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false
 edge     exposes products/catalog/backend/facade/api.py:156 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
 rule     facade-signature (endpoint origin, typing.Any)
-           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true
-           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] or dst.symbol in ['django.db.models.QuerySet', 'django.db.models.Manager'] -> false
-           unless: dst.crosses == true -> false
+           select: facade-code and not (dst.symbol in ['builtins.dict', 'typing.Dict'] and edge.subscripted == '1') and not (dst.symbol in ['typing.Any', 'builtins.object'] and edge.slot != 'return' and edge.argument_of in ['builtins.dict', 'typing.Dict', 'typing.Mapping', 'typing.MutableMapping', 'collections.abc.Mapping', 'collections.abc.MutableMapping']) -> true  (written from select and [shapes.contract] unknown_types, mappings, opaque_payload)
+           deny: dst.kind in ['model', 'manager', 'queryset', 'command'] -> false  (written from [shapes.contract] deny)
+           unless: dst.may_cross == true -> false  (written from [shapes.contract] allow_symbols)
 rule     orm-independent (endpoint origin, typing.Any)
            select: src.django == 'framework' -> false
            deny: dst.kind in ['model', 'manager', 'queryset'] or dst.symbol == 'django.apps.apps.get_model' -> false

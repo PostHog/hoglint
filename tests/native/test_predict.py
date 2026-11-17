@@ -451,7 +451,7 @@ primitive = "edge"
 kinds = ["import"]
 endpoint = "surface"
 from = "src.module == 'app.views'"
-deny = "dst.handed_zones in ['wiring']"
+deny = "dst.handout_zones in ['wiring']"
 identity = ["dst.module"]
 ledger = false
 """
@@ -473,7 +473,7 @@ TEST_FILE = "app/jobs/test_run.py"
 # A directory without `__init__.py` has the zone its files read, so a file added to it or deleted
 # from it moves what a facade that hands the directory out hands out.
 @pytest.mark.parametrize("added", [True, False], ids=["a file is added", "a file is deleted"])
-def test_a_file_added_to_a_handed_namespace_directory_rejudges_a_row_that_reads_handed_zones(
+def test_a_file_added_to_a_handed_namespace_directory_rejudges_a_row_that_reads_handout_zones(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, added: bool
 ) -> None:
     native_module()
@@ -505,7 +505,7 @@ def hand_out_move(name: str, facade: str, child: dict[str, str | None], kinds: t
     return Case(name, {FACADE: facade}, child, "app/views.py", kinds, HANDING_BASE)
 
 
-# Each moves the zones the facade hands out names from, so a row that reads `dst.handed_zones` at
+# Each moves the zones the facade hands out names from, so a row that reads `dst.handout_zones` at
 # the facade moves.
 HAND_OUT_MOVES = [
     hand_out_move(
@@ -542,7 +542,7 @@ HAND_OUT_MOVES = [
 
 
 @pytest.mark.parametrize("case", HAND_OUT_MOVES, ids=[case.name for case in HAND_OUT_MOVES])
-def test_a_moved_hand_out_rejudges_a_row_that_reads_handed_zones_at_the_destination(
+def test_a_moved_hand_out_rejudges_a_row_that_reads_handout_zones_at_the_destination(
     case: Case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     check_reader_is_predicted(case, tmp_path, monkeypatch)

@@ -22,7 +22,7 @@ from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, Provided
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Ref, Resolver, State, Truth, Value, members
 
 REGISTRY_FIELD = "registry"
-HANDED_ZONES = "handed_zones"
+HANDOUT_ZONES = "handout_zones"
 DOOR = "door"
 # Entity attributes the labeler answers itself; every other name is a declared field.
 BUILTIN_ENTITY_NAMES = frozenset({*ENTITY_FIELDS, "kind", "subject"})
@@ -300,7 +300,7 @@ class Labeler:
         self.namespace_labels = Memo(self.label_namespace)
         self.provider_labels = Memo(self.label_provided)
         self.symbol_labels = Memo(self.label_symbol)
-        self.handed_zones = Memo(self.find_handed_zones)
+        self.handout_zones = Memo(self.find_handout_zones)
         self.kind_answers = {name: (Value.known(name), f"kinds.{name}") for name in config.kinds}
         self.module_ordinal = {module: at for at, module in enumerate(graph.modules)}
         self.columns: dict[str, list[tuple[Value, str] | None]] = {}
@@ -693,8 +693,8 @@ class Labeler:
             return Value.known(decl) if decl else NONE
         if name == "kind":
             return self.kind(symbol)[0] if symbol else NONE
-        if name == HANDED_ZONES:
-            return self.handed_zones(module) if module else NONE
+        if name == HANDOUT_ZONES:
+            return self.handout_zones(module) if module else NONE
         if name == DOOR:
             return self.door(module) if module else NONE
         label = self.module_labels(module).get(REGISTRY_FIELD) if module else None
@@ -743,7 +743,7 @@ class Labeler:
         owner = self.name_owner(name)
         return None if owner in self.namespaces.clashes else owner
 
-    def find_handed_zones(self, module: str) -> Value:
+    def find_handout_zones(self, module: str) -> Value:
         """The zones, each with its ancestors, of the modules whose names a module hands out by
         import or by assigning a name again (`Graph.hand_outs`): none for a module that is no export or when no field is a
         zone, unknown when its `__all__` cannot be read, a handed import did not resolve or a
@@ -869,7 +869,7 @@ class Labeler:
             value, source = self.field_value(module, None, name, sourced=True)
             rows.append((name, render(value), source))
         if self.zone_fields and module in self.graph.hand_outs:
-            rows.append((HANDED_ZONES, render(self.handed_zones(module)), "hand-outs"))
+            rows.append((HANDOUT_ZONES, render(self.handout_zones(module)), "hand-outs"))
         registry = self.module_labels(module).get(REGISTRY_FIELD)
         if registry is not None:
             rows.append(("registry", str(registry.value), registry.source))

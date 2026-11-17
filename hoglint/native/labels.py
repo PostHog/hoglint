@@ -11,7 +11,7 @@ from array import array
 from typing import Any
 
 from hoglint.config.model import KindSpec, LevelSpec
-from hoglint.labels import HANDED_ZONES, Labeler, render
+from hoglint.labels import HANDOUT_ZONES, Labeler, render
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.selectors import NONE, UNKNOWN, FieldType, Value
 
@@ -103,9 +103,9 @@ class NativeLabeler(Labeler):
             return rows
         out = []
         for name, value, source in rows:
-            if name == HANDED_ZONES:
+            if name == HANDOUT_ZONES:
                 with engine_errors():
-                    kind, items = self.evaluator.handed_zones(module)
+                    kind, items = self.evaluator.handout_zones(module)
                 value = render(self.value_of(kind, items))
             elif name in REGISTRY_NAMES:
                 found = self.builtin(module, None, name)
