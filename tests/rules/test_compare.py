@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import shlex
 import shutil
 import textwrap
 import subprocess
@@ -9,14 +11,16 @@ from pathlib import Path
 
 import pytest
 
+from hoglint.cli import ENGINE_LOCATORS, LockPin
 from hoglint.compare import Comparer, RawPolicy, Scans
 from hoglint.facts import find_binary
-from hoglint.ledger.envelope import NATIVE, EngineSources, Envelope
+from hoglint.ledger.envelope import NATIVE, EngineError, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.records import FindingRecord, StoredFindings
 from hoglint.ledger.scan import GrowthColumns, ScanSummary
 from hoglint.model import FindingStatus
+from hoglint.native import bridge
 from native.require import native_required
 
 RULE = "model-crossings"
@@ -450,6 +454,130 @@ def test_compare_runs_a_changed_base_engine_as_the_engine_it_was_asked_for(tmp_p
     compared = hoglint(repo, "--engine", "native", "compare", "--base", "base", package_root=repo / "tools/hoglint")
     assert "so the full base scan ran" in compared.stdout, compared.stdout + compared.stderr
     assert "base scan failed" not in compared.stdout
+
+
+@pytest.mark.parametrize(
+    "lock, error",
+    [
+        (None, ""),
+        # a lock the pin cannot be read from leaves the base engine unknown, never absent
+        ("[[package]\n", "does not read"),
+        (
+            '[[package]]\nname = "hoglint"\nversion = "0.3.0"\n[[package]]\nname = "hoglint"\nversion = "0.4.0"\n',
+            "pins",
+        ),
+    ],
+    ids=["no lock", "broken lock", "two versions"],
+)
+def test_a_lock_without_one_readable_pin_is_unknown_unless_it_is_absent(
+    tmp_path: Path, lock: str | None, error: str
+) -> None:
+    if lock is not None:
+        (tmp_path / "uv.lock").write_text(lock)
+    if not error:
+        assert LockPin.read(tmp_path / "uv.lock") is None
+        return
+    with pytest.raises(EngineError, match=error):
+        LockPin.read(tmp_path / "uv.lock")
+
+
+RUNNING_VERSION = "0.2.0"
+# Run by the runner template with the version first: it records what compare asks of the pinned
+# engine and which of this engine's locators reached it, then runs the local engine as that
+# engine, whose extractor reports another build id.
+STUB_RUNNER = """\
+import os
+import sys
+import json
+
+inherited = sorted(name for name in {locators!r} if name in os.environ)
+with open({log!r}, "a") as handle:
+    handle.write(json.dumps([*sys.argv[1:], inherited]) + "\\n")
+if {silent!r} and "scan" in sys.argv:
+    sys.exit(0)
+env = {{**os.environ, "PYTHONPATH": {site!r}, "HOGLINT_FACTS_BIN": {binary!r}, "HOGLINT_NATIVE_DIR": {native!r}}}
+os.execve(sys.executable, [sys.executable, "-m", "hoglint", *sys.argv[2:]], env)
+"""
+
+
+def installed_engine(root: Path) -> Path:
+    """The engine package as a wheel installs it: no crate next to it, and the distribution's
+    metadata. Returns the directory that holds both."""
+    site = root / "site"
+    package = Path(__file__).resolve().parents[2] / "hoglint"
+    shutil.copytree(package, site / "hoglint", ignore=shutil.ignore_patterns("__pycache__"))
+    info = site / f"hoglint-{RUNNING_VERSION}.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: hoglint\nVersion: {RUNNING_VERSION}\n")
+    return site
+
+
+def stub_runner(root: Path, site: Path, silent: bool) -> str:
+    """A runner template for `[engine] runner`, and the stub it runs; the stub logs to root/runner.log."""
+    pinned_binary = root / "pinned-facts"
+    pinned_binary.write_text(
+        f'#!/bin/sh\n[ "$1" = "--build-id" ] && echo pinned-build && exit 0\nexec {find_binary()} "$@"\n'
+    )
+    pinned_binary.chmod(0o755)
+    stub = root / "runner.py"
+    log, native = str(root / "runner.log"), str(bridge.built_module_dir())
+    stub.write_text(
+        STUB_RUNNER.format(
+            log=log, silent=silent, site=str(site), binary=str(pinned_binary), native=native, locators=ENGINE_LOCATORS
+        )
+    )
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(stub))} {{version}}"
+
+
+def runner_calls(log: Path) -> list[list[str]]:
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+@needs_extractor
+@pytest.mark.parametrize(
+    "pin, silent, code, says, asked",
+    [
+        # the base pins the running version: this process scans it, no runner runs
+        (RUNNING_VERSION, False, 1, "code growth (fails) (1)", []),
+        # another version: the runner gives its id, then scans base and head under it
+        ("0.1.0", False, 1, "code growth (fails) (1)", ["engine-id", "scan", "scan"]),
+        # no pin: the base predates hoglint
+        (None, False, 0, "growth check skipped: the base commit predates hoglint", []),
+        # a runner that prints no summary is a base engine that failed
+        ("0.1.0", True, 2, "base scan failed (blocks): the base engine failed (exit 0)", ["engine-id", "scan"]),
+    ],
+    ids=["same version", "other version", "no pin", "no summary"],
+)
+def test_an_installed_engine_scans_the_base_with_the_version_the_base_pins(
+    tmp_path: Path, pin: str | None, silent: bool, code: int, says: str, asked: list[str]
+) -> None:
+    site = installed_engine(tmp_path)
+    runner = stub_runner(tmp_path, site, silent)
+    repo = tmp_path / "repo"
+    lock = f'version = 1\n\n[[package]]\nname = "hoglint"\nversion = "{pin}"\n' if pin else "version = 1\n"
+    write_files(repo, {**FILES, "uv.lock": lock, "hoglint.toml": CONFIG + f"\n[engine]\nrunner = '{runner}'\n"})
+    git_in(repo, "init", "-q")
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth", package_root=site).returncode == 0
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+    (repo / "core" / "api.py").write_text("from products.billing.logic import charge\n")
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth", package_root=site).returncode == 0
+    git_in(repo, "commit", "-qam", "head")
+
+    compared = hoglint(repo, "compare", "--base", "base", package_root=site)
+    assert compared.returncode == code, compared.stdout + compared.stderr
+    assert says in compared.stdout
+    calls = runner_calls(tmp_path / "runner.log")
+    assert ["scan" if "scan" in call else call[1] for call in calls] == asked
+    assert all(call[0] == pin and call[-1] == [] for call in calls)
+    if asked != ["engine-id", "scan", "scan"]:
+        return
+    # The pinned engine's summaries are stored under its own id, so the next compare reads them.
+    again = hoglint(repo, "compare", "--base", "base", package_root=site)
+    assert "base summary: the stored summary" in again.stdout, again.stdout + again.stderr
+    assert runner_calls(tmp_path / "runner.log")[len(calls) :] == [[pin, "engine-id", []]]
+    assert list((repo.parent / "repo-cache").rglob("native-pinned-build"))
 
 
 @needs_extractor

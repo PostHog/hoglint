@@ -289,6 +289,8 @@ ledger = false
             "condition 'crossing' is an expression and cannot be compared",
         ),
         ("[unknown_section]\nx = 1\n", "unknown section"),
+        # a runner that cannot name the version would run some other engine as the base's
+        ("[engine]\nrunner = 'uv run --with hoglint hoglint'\n", "engine.runner: needs {version}"),
         (
             OTHER_RULE + 'ways = [{ safety = "maybe", text = "fix it" }]\n',
             "rules.other.ways[0].safety: 'maybe' is not one of",

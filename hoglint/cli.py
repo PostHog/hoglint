@@ -14,6 +14,7 @@ import gc
 import os
 import sys
 import json
+import shlex
 import shutil
 import tomllib
 import argparse
@@ -23,8 +24,10 @@ import posixpath
 import traceback
 import subprocess
 import dataclasses
+import importlib.metadata
 from collections import Counter
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
@@ -32,6 +35,7 @@ from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.loader import PACK_PREFIX
+from hoglint.config.model import VERSION_SLOT
 from hoglint.config.schema import as_tuple
 from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
@@ -406,19 +410,68 @@ class LocalEngine:
         return Envelope(self.inputs(repo, tree, config), self.id, policy, self.framework(config)), config
 
 
+# The installed distribution whose version a base commit's lock file pins.
+DISTRIBUTION = "hoglint"
+# Variables that point a process at an engine's sources, extractor or native module: passed on to
+# a pinned engine, they would run this engine's code under the pinned engine's name.
+ENGINE_LOCATORS = frozenset(
+    {"PYTHONPATH", "HOGLINT_FACTS_BIN", "HOGLINT_NATIVE_DIR", "HOGLINT_BASE_FACTS_BIN", "CARGO_TARGET_DIR"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BaseEngine:
-    """The engine of the base commit. `binary` is None when it is this process's own engine."""
+    """The engine of the base commit, and how its `scan` runs: `command` starts its `hoglint`, with
+    `env` as the whole environment and `cwd` as the directory. No command means this process's
+    own engine."""
 
     id: str
-    binary: Path | None = None
-    python_path: Path | None = None
+    command: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+    cwd: Path | None = None
+
+    @property
+    def in_process(self) -> bool:
+        return not self.command
+
+
+class LockPin:
+    """The hoglint version a lock file pins: the version of its `[[package]]` entry named hoglint."""
+
+    @staticmethod
+    def read(lock: Path) -> str | None:
+        """None when the file or its hoglint entry is absent. A file that does not read, or that
+        pins more than one version, is an EngineError: the base engine is unknown, not absent."""
+        try:
+            data = tomllib.loads(lock.read_text())
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+            raise EngineError(
+                f"{lock.name} does not read, so the {DISTRIBUTION} it pins is unknown: {error}"
+            ) from error
+        entries = [e for e in data.get("package", []) if isinstance(e, dict) and e.get("name") == DISTRIBUTION]
+        versions = sorted({str(entry.get("version", "")) for entry in entries})
+        if not versions:
+            return None
+        if len(versions) > 1 or not versions[0]:
+            raise EngineError(f"{lock.name} pins {DISTRIBUTION} at {versions}, so the base engine is unknown")
+        return versions[0]
+
+    @staticmethod
+    def running() -> str | None:
+        """The version of the installed hoglint this process runs; None when none is installed."""
+        try:
+            return importlib.metadata.version(DISTRIBUTION)
+        except importlib.metadata.PackageNotFoundError:
+            return None
 
 
 class BaseEngines:
-    """Pins the engine a base commit's scan runs: the base's own Python sources with an extractor
-    built from the base's own extractor sources. An engine that cannot run as pinned is an
-    EngineError, which compare reports as incomplete (exit 2)."""
+    """Pins the engine a base commit's scan runs. An engine inside the repo runs the base's own
+    Python sources with an extractor built from the base's own extractor sources. An installed
+    engine runs the version the base pins in its lock file (D15). An engine that cannot run as
+    pinned is an EngineError, which compare reports as incomplete (exit 2)."""
 
     def __init__(self, repo: Path, work_dir: Path, local: LocalEngine, extractors: ExtractorStore) -> None:
         self.repo = repo
@@ -431,26 +484,72 @@ class BaseEngines:
         repo = self.repo.resolve()
         return PACKAGE_DIR.relative_to(repo) if PACKAGE_DIR.is_relative_to(repo) else None
 
-    def id_of(self, base_root: Path) -> str | None:
-        """The id of the engine a checkout holds; None when it predates the in-repo engine."""
+    @staticmethod
+    def installed() -> bool:
+        """Whether this engine is installed: no crate sits next to its package. A source checkout
+        run from outside the repo has a crate, and no version a lock file could name."""
+        return EngineId.crate_of(PACKAGE_DIR) is None
+
+    @staticmethod
+    def run(engine: BaseEngine, args: list[str]) -> subprocess.CompletedProcess[str]:
+        """Runs the base engine's `hoglint` with `args`; a command that does not start is an EngineError."""
+        command = [*engine.command, *args]
+        try:
+            return subprocess.run(command, env=dict(engine.env), cwd=engine.cwd, capture_output=True, text=True)
+        except OSError as error:
+            raise EngineError(f"the base engine did not start ({' '.join(engine.command)}): {error}") from error
+
+    def pinned(self, base_root: Path, config: Config) -> BaseEngine | None:
+        """The installed engine at the version the base pins in `[engine] lock`: this process when
+        it runs that version, else `[engine] runner` with that version, which is asked for its id
+        before any scan, so its summaries are stored and found under its own id. None when the
+        base pins no version. The runner runs in the repo, without this engine's locators."""
+        version = LockPin.read(base_root / config.engine.lock)
+        if version is None:
+            return None
+        if version == LockPin.running():
+            return BaseEngine(self.local.id)
+        command = tuple(shlex.split(config.engine.runner.replace(VERSION_SLOT, version)))
+        env = {name: value for name, value in os.environ.items() if name not in ENGINE_LOCATORS}
+        engine = BaseEngine("", command, env, self.repo)
+        completed = self.run(engine, ["engine-id"])
+        printed = completed.stdout.split()
+        if completed.returncode != 0 or not printed:
+            raise EngineError(
+                f"the base engine {DISTRIBUTION}=={version} gave no engine id (exit {completed.returncode}):\n"
+                f"{completed.stderr[-2000:]}"
+            )
+        return dataclasses.replace(engine, id=printed[-1])
+
+    def id_of(self, base_root: Path, config: Config) -> str | None:
+        """The id of the engine a checkout holds or pins under its `config`; None when it predates
+        the engine."""
+        package = self.package()
+        if package is not None:
+            if not (base_root / package).is_dir():
+                return None
+            return EngineId.of(base_root / package.parent, self.local.name)
+        if not self.installed():
+            return self.local.id
+        pinned = self.pinned(base_root, config)
+        return None if pinned is None else pinned.id
+
+    def of(self, base_root: Path, config: Config) -> BaseEngine | None:
+        """None when the base predates the engine: it holds no engine package of the repo, or it
+        pins no version of the installed engine."""
         package = self.package()
         if package is None:
-            return self.local.id
-        if not (base_root / package).is_dir():
+            return self.pinned(base_root, config) if self.installed() else BaseEngine(self.local.id)
+        engine_id = self.id_of(base_root, config)
+        if engine_id is None:
             return None
-        return EngineId.of(base_root / package.parent, self.local.name)
-
-    def of(self, base_root: Path) -> BaseEngine | None:
-        """None when the base predates the in-repo engine."""
-        engine_id = self.id_of(base_root)
-        package = self.package()
-        if engine_id is None or package is None:
-            return None if engine_id is None else BaseEngine(engine_id)
         crate = package.parent
         self.check_local(crate)
         if engine_id == self.local.id:
             return BaseEngine(engine_id)
-        return BaseEngine(engine_id, self.binary(native_id_of(base_root / crate), crate), base_root / package.parent)
+        binary = self.binary(native_id_of(base_root / crate), crate)
+        env = {**os.environ, "PYTHONPATH": str(base_root / crate), "HOGLINT_FACTS_BIN": str(binary)}
+        return BaseEngine(engine_id, (sys.executable, "-m", "hoglint"), env)
 
     def check_local(self, crate: Path) -> None:
         """This checkout's extractor must be built from its own Rust sources (`[native]`; a Python
@@ -488,15 +587,14 @@ class BaseEngines:
         self, engine: BaseEngine, base_root: Path, code_root: Path, tree: str, scope: frozenset[str]
     ) -> ScanSummary:
         """Runs `hoglint scan` of the base engine in its own process and reads its summary."""
-        if engine.binary is None or engine.python_path is None:
+        if engine.in_process:
             raise EngineError("the base engine runs in this process; it has no scan command to call")
         work = Path(tempfile.mkdtemp(prefix="base-scan-", dir=self.work_dir))
         out, scope_file = work / "scan.json", work / "scope.json"
         scope_file.write_text(json.dumps(sorted(scope)))
-        command = [sys.executable, "-m", "hoglint", "--repo", str(base_root), "--engine", self.local.name, "scan"]
-        command += ["--code-root", str(code_root), "--out", str(out), "--tree", tree, "--scope", str(scope_file)]
-        env = {**os.environ, "PYTHONPATH": str(engine.python_path), "HOGLINT_FACTS_BIN": str(engine.binary)}
-        completed = subprocess.run(command, env=env, capture_output=True, text=True)
+        args = ["--repo", str(base_root), "--engine", self.local.name, "scan", "--code-root", str(code_root)]
+        args += ["--out", str(out), "--tree", tree, "--scope", str(scope_file)]
+        completed = self.run(engine, args)
         if completed.returncode != 0 or not out.is_file():
             raise EngineError(f"the base engine failed (exit {completed.returncode}):\n{completed.stderr[-2000:]}")
         try:
@@ -966,13 +1064,13 @@ class Commands:
         when the base engine cannot run. `head_tree` is HEAD's tree when the working tree holds
         HEAD's inputs, else empty. Keys name inputs under the base policy's patterns.
 
-        The base engine runs in this process when it is this engine, else in its own process. A
-        stored summary with the exact key and the needed couplings replaces either scan; head code
-        has a key only when the working tree holds HEAD's inputs, and is then read from HEAD's
-        tree. When the engine and the policy did not change, the head scan already is head code
-        under the base policy.
+        The base engine runs in this process when it is this engine, else in its own process: the
+        base's own sources, or the runner of the version the base pins. A stored summary with the
+        exact key and the needed couplings replaces either scan; head code has a key only when the
+        working tree holds HEAD's inputs, and is then read from HEAD's tree. When the engine and
+        the policy did not change, the head scan already is head code under the base policy.
         """
-        engine = self.base_engines.of(base_root)
+        engine = self.base_engines.of(base_root, base_config)
         if engine is None:
             return None, None, ""
         scope, framework = head.scope, head.envelope.framework
@@ -987,19 +1085,19 @@ class Commands:
             else:
                 missing = "no CI summary was found" if os.environ.get("CI") else "no stored summary was found"
                 source = f"{missing} for {base_key.key()}, so the full base scan ran"
-            if engine.binary is None:
+            if engine.in_process:
                 run = self.runner.run(base_root, tree=base_tree)
                 base = summary_of(run, base_key, scope)
             else:
                 base = self.base_engines.scan(engine, base_root, base_root, base_tree, scope)
             self.summaries.put(base.envelope, base)
-        if same_policy and engine.binary is None:
+        if same_policy and engine.in_process:
             return base, head, source
         head_inputs = self.engine.inputs(self.repo, head_tree, base_config)
         head_base_key = Envelope(head_inputs, engine.id, base_policy, framework)
         head_base = self.stored(head_base_key, scope)
         if head_base is None:
-            if engine.binary is None:
+            if engine.in_process:
                 run = self.runner.run(base_root, code_root=self.repo, tree=head_tree)
                 head_base = summary_of(run, head_base_key, scope, with_triples=False)
             else:
@@ -1050,17 +1148,17 @@ class Commands:
             raise EngineError(f"{ref} names no commit")
         root = self.repo if tree == self.snapshots.tree_of("HEAD") and self.snapshots.clean() else None
         root = root or self.snapshots.commit(ref)
-        engine_id = self.base_engines.id_of(root)
+        key, config = self.engine.envelope_at(root, self.repo, tree)
+        engine_id = self.base_engines.id_of(root, config)
         if engine_id is None:
             raise EngineError(f"{ref} has no hoglint engine")
-        key, _ = self.engine.envelope_at(root, self.repo, tree)
         return dataclasses.replace(key, engine=engine_id), root, tree
 
     def summarize(self, key: Envelope, root: Path, tree: str) -> ScanSummary:
-        engine = self.base_engines.of(root)
+        engine = self.base_engines.of(root, load_config(root, root / CONFIG_FILE))
         if engine is None:
             raise EngineError("the commit has no hoglint engine")
-        if engine.binary is None:
+        if engine.in_process:
             run = self.runner.run(root, tree=tree)
             summary = summary_of(run, key)
         else:
@@ -1151,6 +1249,7 @@ def parser() -> argparse.ArgumentParser:
     scan.set_defaults(
         handler=lambda commands, args: commands.scan(args.code_root.resolve(), args.out, args.tree, args.scope)
     )
+    sub.add_parser("engine-id", help="print this engine's id, which names the summaries it stores")
     summary = sub.add_parser("summary", help="the run summary cache for CI: print a commit's key, export or import")
     summary.add_argument("action", choices=("key", "export", "import"))
     summary.add_argument("--ref", default="HEAD", help="the commit whose inputs the key names (key, export)")
@@ -1192,6 +1291,13 @@ def show_page(topic: str) -> int:
     return 0
 
 
+def show_engine_id() -> int:
+    """Prints this engine's id. It needs no repo: `compare` asks a pinned engine for it before
+    that engine's scan, so it finds the summary that engine stored."""
+    sys.stdout.write(LocalEngine().id + "\n")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Exit 1 means violations, so a run that could not finish exits 3, never 1: an engine error, a
     crash, and a Rust panic, which PyO3 raises as a BaseException."""
@@ -1199,6 +1305,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "help":
         return show_page(args.topic)
     try:
+        if args.command == "engine-id":
+            return show_engine_id()
         return command(args)
     except (KeyboardInterrupt, SystemExit):
         raise

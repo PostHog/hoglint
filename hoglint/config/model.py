@@ -289,6 +289,22 @@ class LedgerSpec:
     exceptions: str = "hoglint.exceptions.toml"
 
 
+# What a runner template holds where the pinned version goes.
+VERSION_SLOT = "{version}"
+DEFAULT_LOCK = "uv.lock"
+DEFAULT_RUNNER = "uv run --no-project --with hoglint=={version} hoglint"
+
+
+@dataclass(frozen=True, slots=True)
+class EngineSpec:
+    """How `compare` finds and runs the engine a base commit pins, when hoglint runs installed:
+    `lock` is the lock file whose `hoglint` entry pins the version, and `runner` the command
+    that runs `hoglint` at the version that replaces `{version}`."""
+
+    lock: str = DEFAULT_LOCK
+    runner: str = DEFAULT_RUNNER
+
+
 @dataclass(frozen=True, slots=True)
 class Roles:
     """Fields that generic code reads by role. `owner` lists a finding's owners; `group` groups
@@ -319,6 +335,7 @@ class Config:
     rules: dict[str, RuleSpec] = field(default_factory=dict)
     levels: dict[str, LevelSpec] = field(default_factory=dict)
     ledger: LedgerSpec = LedgerSpec()
+    engine: EngineSpec = EngineSpec()
     outputs: dict[str, OutputSpec] = field(default_factory=dict)
     identities: dict[str, tuple[str, ...]] = field(default_factory=dict)
     roles: Roles = Roles()

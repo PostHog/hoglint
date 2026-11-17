@@ -15,11 +15,15 @@ from typing import TYPE_CHECKING, Any
 from hoglint import adapters  # noqa: F401 - registers the builtin coverage adapters and providers
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
 from hoglint.config.model import (
+    DEFAULT_LOCK,
+    DEFAULT_RUNNER,
+    VERSION_SLOT,
     WAY_SAFETIES,
     Assignment,
     Config,
     CoverSpec,
     Domain,
+    EngineSpec,
     ExportSpec,
     FieldSpec,
     KindSpec,
@@ -204,6 +208,7 @@ EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", 
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by"})
 LEDGER_KEYS = frozenset({"file", "exceptions"})
+ENGINE_KEYS = frozenset({"lock", "runner"})
 ROLE_KEYS = frozenset({"owner", "group"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
 DISCOVERY_KEYS = frozenset(
@@ -246,7 +251,7 @@ ENDPOINT_FIELDS: dict[str, FieldInfo] = {
     "context": FieldInfo(FieldType.ENUM, CONTEXTS),
 }
 BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
-CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "roles", "conditions")
+CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "engine", "roles", "conditions")
 # The roots of an edge selector's names (`src.x`, `dst.x`, `edge.x`).
 SELECTOR_ROOTS = ("src", "dst", "edge", "surface")
 # A coverage rule's edge cover may also read `via.x`: a module the name passes through.
@@ -479,6 +484,7 @@ class SchemaBuilder:
         rules = self.read_rules(registries, exports, shapes)
         levels = self.read_levels(rules)
         ledger = self.read_ledger()
+        engine = self.read_engine()
         roles = self.read_roles(rules)
         outputs = self.read_outputs()
         self.read_discovery()
@@ -499,6 +505,7 @@ class SchemaBuilder:
             rules=rules,
             levels=levels,
             ledger=ledger,
+            engine=engine,
             outputs=outputs,
             identities=self.identities,
             roles=roles,
@@ -1333,6 +1340,14 @@ class SchemaBuilder:
         return LedgerSpec(
             str(table.get("file", "hoglint.ledger")), str(table.get("exceptions", "hoglint.exceptions.toml"))
         )
+
+    def read_engine(self) -> EngineSpec:
+        table = self.raw.get("engine", {})
+        self.check_keys("engine", table, ENGINE_KEYS)
+        spec = EngineSpec(str(table.get("lock", DEFAULT_LOCK)), str(table.get("runner", DEFAULT_RUNNER)))
+        if VERSION_SLOT not in spec.runner:
+            self.fail("engine.runner", f"needs {VERSION_SLOT}, which compare replaces with the version the base pins")
+        return spec
 
     def read_roles(self, rules: dict[str, RuleSpec]) -> Roles:
         table = self.raw.get("roles", {})
