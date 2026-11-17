@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from hoglint.config.model import RuleSpec
-from hoglint.model import Remedy
+from hoglint.model import IncompleteKind, Remedy
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, Seen
 
 # What an edge rule reads; an entrypoint rule reads the same.
@@ -155,7 +155,7 @@ class SignaturePrimitive(EdgeRule):
             return
         message = f"{self.subject(seen)}: {seen.edge.attr('slot') or 'signature'} has no usable type ({seen.edge.surface or 'missing'})"
         if self.spec.on_unknown == "incomplete":
-            self.incomplete(seen, message)
+            self.incomplete(seen, message, IncompleteKind.UNKNOWN_LABEL)
             return
         self.emit(seen, judgment, message)
 

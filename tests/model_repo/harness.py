@@ -62,7 +62,7 @@ TABLES_HEADER = """\
 """
 MESSAGES_HEADER = """\
 # The words of the model repository's result, in the order the native engine dumps them: per
-# finding its rule, identity and message, per incomplete item its rule, key and reason. One engine
+# finding its rule, identity and message, per incomplete item its rule, key, kind and reason. One engine
 # words them; this file is what holds the wording still. `bin/model-repo --refresh` rewrites it with
 # expected.toml; review the diff of every message that moved.
 """
@@ -226,21 +226,24 @@ def changed_tables(stored: dict[str, Table], found: dict[str, Table]) -> list[st
 @dataclass(frozen=True)
 class Message:
     """The words of one result row: a finding's message by its identity, or an incomplete item's
-    reason by its key."""
+    reason and kind by its key."""
 
     rule: str
     verdict: str
     identity: tuple[str, ...]
     text: str
+    kind: str = ""
 
     def render(self) -> str:
+        kind = f"kind = {quoted(self.kind)}\n" if self.kind else ""
         return (
             f"[[{self.verdict}]]\nrule = {quoted(self.rule)}\nidentity = {quoted_list(self.identity)}\n"
-            f"text = {quoted(self.text)}\n"
+            f"{kind}text = {quoted(self.text)}\n"
         )
 
     def line(self) -> str:
-        return f"{self.rule} {self.verdict} {' | '.join(self.identity)}: {self.text}"
+        kind = f" [{self.kind}]" if self.kind else ""
+        return f"{self.rule} {self.verdict} {' | '.join(self.identity)}:{kind} {self.text}"
 
 
 def dumped_messages(out: Path) -> list[Message]:
@@ -249,7 +252,7 @@ def dumped_messages(out: Path) -> list[Message]:
         Message(finding[0], "finding", tuple(finding[1]), finding[2]) for finding in read_lines(out / "findings.jsonl")
     ]
     messages.extend(
-        Message(item[0], "incomplete", (item[1],), item[2]) for item in read_lines(out / "incomplete.jsonl")
+        Message(item[0], "incomplete", (item[1],), item[2], item[5]) for item in read_lines(out / "incomplete.jsonl")
     )
     return messages
 
@@ -257,7 +260,7 @@ def dumped_messages(out: Path) -> list[Message]:
 def read_messages(path: Path = MESSAGES) -> list[Message]:
     data = tomllib.loads(path.read_text())
     return [
-        Message(entry["rule"], verdict, tuple(entry["identity"]), entry["text"])
+        Message(entry["rule"], verdict, tuple(entry["identity"]), entry["text"], entry.get("kind", ""))
         for verdict in ("finding", "incomplete")
         for entry in data.get(verdict, [])
     ]

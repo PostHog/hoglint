@@ -24,7 +24,7 @@ from hoglint.core.memo import NOTHING, ItemOutput, PerFileRead, TracedMemo
 from hoglint.core.records import sequence_items, str_literal, value_text
 from hoglint.core.sites import FileScope
 from hoglint.core.symbols import Hit
-from hoglint.model import Edge, EntityId, Resolution, Site
+from hoglint.model import NO_LITERAL, Edge, EntityId, Resolution, Site
 from hoglint.native.queries import Words, entities_named
 from hoglint.packs.django.config import DjangoPackConfig
 from hoglint.packs.django.models import ModelRegistry
@@ -67,6 +67,10 @@ def handing_hook(scope: FileScope, at_scope: int, args: list, kws: list) -> str:
     if not isinstance(handed, str) or handed not in {param[0] for param in d.get("params", ())}:
         return ""
     return f"{scope.module}.{scope.qualnames[at_scope]}"
+
+
+# The reasons a sender is no literal name: hoglint does not follow the value.
+NOT_LITERAL_SENDERS = frozenset({"sender-kwargs", "no-sender", "variable-sender"})
 
 
 class SignalValues:
@@ -163,6 +167,8 @@ class SignalProducer(SignalValues):
         attrs = [("signal", signal), ("receiver", receiver), ("how", how)]
         if sender.reason:
             attrs.append(("reason", sender.reason))
+        if sender.resolution is Resolution.UNRESOLVED and sender.reason in NOT_LITERAL_SENDERS:
+            attrs.append(NO_LITERAL)
         if hook:
             attrs.append(("hook", hook))
         return Edge(

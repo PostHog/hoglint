@@ -161,7 +161,7 @@ def finding_row(finding: Finding) -> Row:
 
 
 def incomplete_row(item: IncompleteItem) -> Row:
-    return [item.rule, item.key, item.reason, list(item.subjects), item.cause.value]
+    return [item.rule, item.key, item.reason, list(item.subjects), item.cause.value, item.kind.value]
 
 
 def coupling_rows(graph: Graph) -> list[Row]:

@@ -8,6 +8,7 @@ from hoglint.config.loader import read_table
 from hoglint.config.model import CoverSpec, RegistrySpec, RuleSpec
 from hoglint.config.schema import required_file
 from hoglint.globs import alternatives
+from hoglint.model import IncompleteKind
 from hoglint.plugins import PLUGIN_ROOTS, REGISTRY, open_coverage
 from hoglint.rules.base import EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, RuleType, Seen, project
 from hoglint.rules.plan import identity_paths, selector_tree, tree
@@ -42,8 +43,8 @@ class EntityRule(RuleType):
         identity = project(self.spec.identity, resolve)
         self.run.findings.append(self.ctx.finding(self.spec, identity, message, module, (module or subject,)))
 
-    def incomplete(self, subject: str, module: str | None, reason: str) -> None:
-        self.run.incomplete.append(IncompleteItem(self.spec.id, subject, reason, (module or subject,)))
+    def incomplete(self, subject: str, module: str | None, reason: str, kind: IncompleteKind) -> None:
+        self.run.incomplete.append(IncompleteItem(self.spec.id, subject, reason, (module or subject,), kind=kind))
 
     def message(self, subject: str, count: int) -> str:
         """A finding's message on `subject`; `count` is an inventory's count of values."""
@@ -64,9 +65,9 @@ class EntityRule(RuleType):
                     self.ctx.finding(self.spec, tuple(identity), message, module, (module or subject,))
                 )
             elif what == "unknown-selection":
-                self.incomplete(subject, module, UNKNOWN_SELECTION)
+                self.incomplete(subject, module, UNKNOWN_SELECTION, IncompleteKind.UNKNOWN_LABEL)
             else:
-                self.incomplete(subject, module, self.value_unknown())
+                self.incomplete(subject, module, self.value_unknown(), IncompleteKind.UNKNOWN_LABEL)
 
     def wanted(self) -> frozenset[str] | None:
         """The kinds a `select` on symbols pins: it is false for a symbol whose kind is known to be
@@ -140,7 +141,7 @@ class LayoutPrimitive(EntityRule):
                 continue
             for required in self.spec.files:
                 if repo is None:
-                    self.incomplete(root, module, "no repo root to check files against")
+                    self.incomplete(root, module, "no repo root to check files against", IncompleteKind.PRODUCER_FAILED)
                     break
                 path, decl = required_file(required)
                 held = [f"{root}/{choice.strip('/')}" for choice in alternatives(path)]
@@ -171,7 +172,8 @@ class LayoutPrimitive(EntityRule):
         found = self.ctx.defined_in([path for path, _, _ in defining])
         for (path, module, decl), decls in zip(defining, found, strict=True):
             if decls is None:
-                self.incomplete(path, module, f"no module has the path {path}, so what it defines cannot be told")
+                reason = f"no module has the path {path}, so what it defines cannot be told"
+                self.incomplete(path, module, reason, IncompleteKind.UNRESOLVED)
             elif decl not in decls:
                 self.emit(path, module, f"{path} defines no {decl}", self.resolver(module, None, path))
 
@@ -182,7 +184,8 @@ class LayoutPrimitive(EntityRule):
             attribute = f"{module}.{registry.attribute}"
             resolve = self.resolver(module, None, attribute)
             if not facts.has(attribute) and not facts.any_decl("assignment"):
-                self.incomplete(attribute, module, "no producer records module-level assignments")
+                reason = "no producer records module-level assignments"
+                self.incomplete(attribute, module, reason, IncompleteKind.NOT_MODELLED)
                 continue
             if not facts.has(attribute):
                 self.emit(
@@ -200,7 +203,8 @@ class LayoutPrimitive(EntityRule):
                 if base in ancestors:
                     continue
                 if not complete:
-                    self.incomplete(member, module, f"cannot tell whether {member} subclasses {base}")
+                    reason = f"cannot tell whether {member} subclasses {base}"
+                    self.incomplete(member, module, reason, IncompleteKind.UNRESOLVED)
                     continue
                 self.emit(
                     member,
@@ -268,7 +272,7 @@ class EdgeInventory(EdgeRule):
         or whose selection reads an unknown value. A classifiable one is compared with the
         classification file instead."""
         if judgment is Judgment.UNKNOWN_SELECTION:
-            self.incomplete(seen, "selection reads an unknown value")
+            self.incomplete(seen, "selection reads an unknown value", IncompleteKind.UNKNOWN_LABEL)
             return
         super().report(seen, judgment, describe)
 
@@ -335,17 +339,20 @@ class CoveragePrimitive(EntityRule):
         return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
 
     def everywhere(self, key: str, reason: str) -> None:
-        """An item about no one module: with no subject it blocks every level group."""
-        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason))
+        """An item about no one module, an input or a rule the coverage could not read: with no
+        subject it blocks every level group."""
+        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, kind=IncompleteKind.PRODUCER_FAILED))
 
     def not_run(self, cover: CoverSpec) -> None:
         self.everywhere(f"rules.{cover.rule}", f"rule {cover.rule} did not run before this coverage rule")
 
     def unplaced(self, module: str | None, surface: str) -> None:
-        self.incomplete(f"{module}|{surface}", module, f"cannot place {surface!r} for coverage")
+        reason = f"cannot place {surface!r} for coverage"
+        self.incomplete(f"{module}|{surface}", module, reason, IncompleteKind.NOT_MODELLED)
 
     def unknown_selection(self, module: str | None, cover: CoverSpec) -> None:
-        self.incomplete(f"{module}|{cover.text}", module, f"cannot tell whether `{cover.text}` selects {module}")
+        reason = f"cannot tell whether `{cover.text}` selects {module}"
+        self.incomplete(f"{module}|{cover.text}", module, reason, IncompleteKind.UNKNOWN_LABEL)
 
     def inherit_unknowns(self) -> None:
         """What a rule a cover reads cannot tell, this rule cannot tell either: its paths may be
@@ -357,7 +364,8 @@ class CoveragePrimitive(EntityRule):
             for item in run.incomplete:
                 reason = f"rule {cover.rule} cannot tell: {item.reason}"
                 key = f"rules.{cover.rule}|{item.key}"
-                self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, item.subjects))
+                inherited = IncompleteItem(self.spec.id, key, reason, item.subjects, edge=item.edge, kind=item.kind)
+                self.run.incomplete.append(inherited)
 
     @staticmethod
     def reads_kind_and_context(node: Node) -> bool:

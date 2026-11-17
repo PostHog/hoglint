@@ -30,7 +30,7 @@ from hoglint.core.harness import FileItems, failure_edge
 from hoglint.core.memo import ItemOutput, PerFileRead
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.core.symbols import Hit
-from hoglint.model import Context, Edge, EntityId, Resolution, Site
+from hoglint.model import NO_LITERAL, Context, Edge, EntityId, Resolution, Site
 from hoglint.native.queries import Words, entities_named
 from hoglint.packs.django.signals import CONNECT, SignalValues, handing_hook
 from hoglint.plugins import PackReader
@@ -139,6 +139,7 @@ class InstallsProducer:
         if callback:
             attrs.append(("callback", callback))
         if hit is None or target is None:
+            # A hook called through a value (a variable, `self`), which hoglint does not follow.
             return Edge(
                 "installs",
                 site,
@@ -148,7 +149,7 @@ class InstallsProducer:
                 contexts,
                 INSTALLS_PRODUCER,
                 shape=form,
-                attrs=tuple(attrs),
+                attrs=(*attrs, NO_LITERAL),
             )
         return Edge(
             "installs",

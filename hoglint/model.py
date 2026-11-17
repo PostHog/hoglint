@@ -167,6 +167,23 @@ class IncompleteCause(StrEnum):
     INHERITED = "inherited"  # existed before the change: product owners, never blocks
 
 
+class IncompleteKind(StrEnum):
+    """What kind of unknown an incomplete item is, so a reader widens the right way: a name that
+    names nothing (`unresolved`) is not a channel hoglint does not follow (`not-modelled`)."""
+
+    UNRESOLVED = "unresolved"  # a literal name that names nothing hoglint knows
+    NOT_MODELLED = "not-modelled"  # a value hoglint does not follow: a computed name, a variable, a call
+    UNKNOWN_LABEL = "unknown-label"  # a value the rule reads is unknown: a label or a type that says nothing
+    PRODUCER_FAILED = "producer-failed"  # a producer or an input reader failed
+    UNREADABLE = "unreadable"  # a source file hoglint cannot read
+    STALE_NAME = "stale-name"  # the config names a file or symbol the tree does not have
+
+
+# The edge attr a producer sets to `none` on an edge whose surface is no literal name: the edge
+# did not resolve because hoglint does not follow the value, not because the name names nothing.
+NO_LITERAL = ("literal", "none")
+
+
 @dataclass(frozen=True, slots=True)
 class Remedy:
     kind: str  # permitted-destination | documented-replacement | safe-rewrite | needs-public-api | seal-relation | admit-debt

@@ -1,5 +1,5 @@
 # The words of the model repository's result, in the order the native engine dumps them: per
-# finding its rule, identity and message, per incomplete item its rule, key and reason. One engine
+# finding its rule, identity and message, per incomplete item its rule, key, kind and reason. One engine
 # words them; this file is what holds the wording still. `bin/model-repo --refresh` rewrites it with
 # expected.toml; review the diff of every message that moved.
 
@@ -1541,479 +1541,575 @@ text = "products/reports/turbo.json does not watch products/reports/backend/temp
 [[incomplete]]
 rule = "public-surface"
 identity = ["products.catalog.backend.facade.handout|import|sandbox.shapes.SandboxView"]
+kind = "unknown-label"
 text = "selection reads unknown dst.package, dst.tier"
 
 [[incomplete]]
 rule = "public-surface"
 identity = ["products.catalog.backend.facade.handout|import|scripts.shapes.ExternalView"]
+kind = "unknown-label"
 text = "selection reads unknown dst.package, dst.tier"
 
 [[incomplete]]
 rule = "public-surface"
 identity = ["products.legacy.backend.logic.widgets|import|scripts.helpers.slug"]
+kind = "unknown-label"
 text = "selection reads unknown dst.package, dst.tier"
 
 [[incomplete]]
 rule = "public-surface"
 identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads unknown src.package"
 
 [[incomplete]]
 rule = "public-surface"
 identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+kind = "unknown-label"
 text = "selection reads unknown src.package"
 
 [[incomplete]]
 rule = "public-surface"
 identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads unknown src.package"
 
 [[incomplete]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.aboveworkers|declares|products.legacy.backend.facade.aboveworkers.start_above"]
+kind = "unknown-label"
 text = "selection reads unknown src.handout_zones"
 
 [[incomplete]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.lazygoneworkers|declares|products.legacy.backend.facade.lazygoneworkers.start_gone"]
+kind = "unknown-label"
 text = "selection reads unknown src.handout_zones"
 
 [[incomplete]]
 rule = "get-model"
 identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+kind = "not-modelled"
 text = "model-label 'apps.get_model' did not resolve"
 
 [[incomplete]]
 rule = "receiver-direction"
 identity = ["products.gatekeeper.backend.apps|signal|label"]
+kind = "not-modelled"
 text = "signal 'label' did not resolve"
 
 [[incomplete]]
 rule = "receiver-direction"
 identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
+kind = "not-modelled"
 text = "signal '<Call>' did not resolve"
 
 [[incomplete]]
 rule = "installs"
 identity = ["products.gatekeeper.backend.wiring|installs|registry.register_post_delete_hook"]
+kind = "not-modelled"
 text = "installs 'registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
 rule = "installs"
 identity = ["products.gatekeeper.backend.wiring|installs|self.registry.register_post_delete_hook"]
+kind = "not-modelled"
 text = "installs 'self.registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
 rule = "installs"
 identity = ["products.notifications.backend.wiring|installs|registry.register_post_delete_hook"]
+kind = "not-modelled"
 text = "installs 'registry.register_post_delete_hook' did not resolve"
 
 [[incomplete]]
 rule = "installs"
 identity = ["products.reports.backend.logic.console_pages|installs|self.registry.register_moved_action"]
+kind = "not-modelled"
 text = "installs 'self.registry.register_moved_action' did not resolve"
 
 [[incomplete]]
 rule = "dynamic-imports"
 identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
+kind = "not-modelled"
 text = "dynamic-import '' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.facade.api|import|posthog.models.ghost.Ghost"]
+kind = "unresolved"
 text = "import 'posthog.models.ghost.Ghost' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.facade.handout|import|sandbox.shapes.SandboxView"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.facade.handout|import|scripts.shapes.ExternalView"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.logic.errors|import|products.catalog.backend.logic.nowhere.MissingFailure"]
+kind = "unresolved"
 text = "import 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.legacy.backend.facade.aboveworkers|import|......gone"]
+kind = "unresolved"
 text = "import '......gone' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.legacy.backend.facade.lazygoneworkers|import|products.legacy.backend.temporal.gone.run_gone"]
+kind = "unresolved"
 text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.legacy.backend.logic.widgets|import|scripts.helpers.slug"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.facade.api|reference|posthog.models.ghost.Ghost"]
+kind = "unresolved"
 text = "reference 'posthog.models.ghost.Ghost' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
+kind = "unresolved"
 text = "reference 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["sandbox.shapes|reference|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["scripts.shapes|reference|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads an unknown value"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
 identity = ["products.legacy.backend.logic.widgets|model-label|apps.get_model"]
+kind = "not-modelled"
 text = "model-label 'apps.get_model' did not resolve"
 
 [[incomplete]]
 rule = "leaves-stay-leaves"
 identity = ["sandbox.shapes|import|pydantic.BaseModel"]
+kind = "unknown-label"
 text = "selection reads unknown src.tier"
 
 [[incomplete]]
 rule = "leaves-stay-leaves"
 identity = ["sandbox.shapes|import|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads unknown src.tier"
 
 [[incomplete]]
 rule = "leaves-stay-leaves"
 identity = ["scripts.new_tool|import|products.legacy.backend.logic.widgets.widget_total"]
+kind = "unknown-label"
 text = "selection reads unknown src.tier"
 
 [[incomplete]]
 rule = "leaves-stay-leaves"
 identity = ["scripts.shapes|import|pydantic.BaseModel"]
+kind = "unknown-label"
 text = "selection reads unknown src.tier"
 
 [[incomplete]]
 rule = "leaves-stay-leaves"
 identity = ["scripts.shapes|import|products.inventory.backend.models.StockItem"]
+kind = "unknown-label"
 text = "selection reads unknown src.tier"
 
 [[incomplete]]
 rule = "orm-independent"
 identity = ["posthog.egress.client|exposes|typing.Any"]
+kind = "unknown-label"
 text = "posthog.egress.client.forward: param:kwargs has no usable type (typing.Any)"
 
 [[incomplete]]
 rule = "migration-database"
 identity = ["products.reports.backend.migrations.0002_extend|migration-parent|dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}"]
+kind = "not-modelled"
 text = "migration-parent 'dependencies += {\"list\": [{\"tuple\": [{\"s\": \"legacy\"}, {\"s\": \"0001_initial\"}]}]}' did not resolve"
 
 [[incomplete]]
 rule = "product-code-at-home"
 identity = ["sandbox.shapes"]
+kind = "unknown-label"
 text = "cannot tell whether this entity is selected"
 
 [[incomplete]]
 rule = "product-code-at-home"
 identity = ["scripts.helpers"]
+kind = "unknown-label"
 text = "cannot tell whether this entity is selected"
 
 [[incomplete]]
 rule = "product-code-at-home"
 identity = ["scripts.new_tool"]
+kind = "unknown-label"
 text = "cannot tell whether this entity is selected"
 
 [[incomplete]]
 rule = "product-code-at-home"
 identity = ["scripts.shapes"]
+kind = "unknown-label"
 text = "cannot tell whether this entity is selected"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
+kind = "not-modelled"
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
+kind = "not-modelled"
 text = "cannot place 'self.registry.register_post_delete_hook' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
+kind = "not-modelled"
 text = "cannot place 'registry.register_post_delete_hook' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["products.reports.backend.logic.console_pages|self.registry.register_moved_action"]
+kind = "not-modelled"
 text = "cannot place 'self.registry.register_moved_action' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["products.gatekeeper.backend.apps|label"]
+kind = "not-modelled"
 text = "cannot place 'label' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["products.reports.backend.stock_receivers|<Call>"]
+kind = "not-modelled"
 text = "cannot place '<Call>' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["rules.request-path|posthog.settings.web|dotted-path|products.gatekeeper.backend.throttles.GateThrottle"]
+kind = "unknown-label"
 text = "rule request-path cannot tell: cannot tell whether to follow dotted-path 'products.gatekeeper.backend.throttles.GateThrottle'"
 
 [[incomplete]]
 rule = "wiring-watched"
 identity = ["rules.request-path|posthog.settings.web|import|products.gatekeeper.backend.facade.trail"]
+kind = "unresolved"
 text = "rule request-path cannot tell: import 'products.gatekeeper.backend.facade.trail' did not resolve"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/cache_utils.py"]
+kind = "stale-name"
 text = "posthog/cache_utils.py is named by [[assign]] common/**, posthog/db_backends/**, posthog/redis.py, posthog/cache_utils.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/api/rest_router.py"]
+kind = "stale-name"
 text = "posthog/api/rest_router.py is named by [[assign]] posthog/api/__init__.py, posthog/api/rest_router.py, posthog/urls.py, posthog/ee_urls.py, posthog/product_urls.py, posthog/products.py, posthog/apps.py, posthog/settings/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/ee_urls.py"]
+kind = "stale-name"
 text = "posthog/ee_urls.py is named by [[assign]] posthog/api/__init__.py, posthog/api/rest_router.py, posthog/urls.py, posthog/ee_urls.py, posthog/product_urls.py, posthog/products.py, posthog/apps.py, posthog/settings/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/product_urls.py"]
+kind = "stale-name"
 text = "posthog/product_urls.py is named by [[assign]] posthog/api/__init__.py, posthog/api/rest_router.py, posthog/urls.py, posthog/ee_urls.py, posthog/product_urls.py, posthog/products.py, posthog/apps.py, posthog/settings/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/management/commands/execute_temporal_workflow.py"]
+kind = "stale-name"
 text = "posthog/management/commands/execute_temporal_workflow.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/management/commands/start_temporal_workflow.py"]
+kind = "stale-name"
 text = "posthog/management/commands/start_temporal_workflow.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/schedule.py"]
+kind = "stale-name"
 text = "posthog/temporal/schedule.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/ai/__init__.py"]
+kind = "stale-name"
 text = "posthog/temporal/ai/__init__.py is named by [[assign]] posthog/management/commands/start_temporal_worker.py, posthog/management/commands/execute_temporal_workflow.py, posthog/management/commands/start_temporal_workflow.py, posthog/temporal/schedule.py, posthog/temporal/common/worker.py, posthog/temporal/ai/__init__.py, posthog/temporal/health_checks/registry.py, posthog/hogql_queries/query_runner.py, posthog/tasks/scheduled.py, posthog/apps.py, ee/hogai/core/agent_modes/presets/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/error_tracking/backend/sql.py"]
+kind = "stale-name"
 text = "products/error_tracking/backend/sql.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/error_tracking/backend/embedding.py"]
+kind = "stale-name"
 text = "products/error_tracking/backend/embedding.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/error_tracking/backend/indexed_embedding.py"]
+kind = "stale-name"
 text = "products/error_tracking/backend/indexed_embedding.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py"]
+kind = "stale-name"
 text = "products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py is named by [[assign]] products/error_tracking/backend/sql.py, products/error_tracking/backend/sql/**, products/error_tracking/backend/embedding.py, products/error_tracking/backend/embedding/**, products/error_tracking/backend/indexed_embedding.py, products/error_tracking/backend/indexed_embedding/**, products/batch_exports/backend/sql.py, products/batch_exports/backend/sql/**, products/warehouse_sources/backend/models/**, products/warehouse_sources/backend/temporal/data_imports/sources/common/**, products/warehouse_sources/backend/temporal/data_imports/sources/generated_configs/postgres.py, products/warehouse_sources/backend/temporal/data_imports/sources/google_search_console/**, products/warehouse_sources/backend/temporal/data_imports/sources/mysql/**, products/warehouse_sources/backend/temporal/data_imports/sources/postgres/**, products/warehouse_sources/backend/temporal/data_imports/sources/redshift/**, products/warehouse_sources/backend/temporal/data_imports/sources/salesforce/**, products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**, products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/codec_server.py"]
+kind = "stale-name"
 text = "posthog/temporal/codec_server.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/conftest.py"]
+kind = "stale-name"
 text = "posthog/temporal/conftest.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/oauth.py"]
+kind = "stale-name"
 text = "posthog/temporal/oauth.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/schedule.py"]
+kind = "stale-name"
 text = "posthog/temporal/schedule.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/utils.py"]
+kind = "stale-name"
 text = "posthog/temporal/utils.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/__init__.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/__init__.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/conftest.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/conftest.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_asyncify.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_asyncify.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_clickhouse.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_clickhouse.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_codec_server.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_codec_server.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_encryption_codec.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_encryption_codec.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_oauth.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_oauth.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_schedule.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_schedule.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_shutdown.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_shutdown.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/temporal/tests/test_slo_interceptor.py"]
+kind = "stale-name"
 text = "posthog/temporal/tests/test_slo_interceptor.py is named by [[assign]] posthog/temporal/__init__.py, posthog/temporal/codec_server.py, posthog/temporal/conftest.py, posthog/temporal/oauth.py, posthog/temporal/schedule.py, posthog/temporal/utils.py, posthog/temporal/common/**, posthog/temporal/backfill_group_type_created_at/**, posthog/temporal/backfill_materialized_property/**, posthog/temporal/delete_persons/**, posthog/temporal/dlq_replay/**, posthog/temporal/ingestion_acceptance_test/**, posthog/temporal/sync_events_retention/**, posthog/temporal/delete_teams/**, posthog/temporal/health_checks/**, posthog/temporal/usage_report/**, posthog/temporal/weekly_digest/**, posthog/temporal/tests/__init__.py, posthog/temporal/tests/conftest.py, posthog/temporal/tests/test_asyncify.py, posthog/temporal/tests/test_clickhouse.py, posthog/temporal/tests/test_codec_server.py, posthog/temporal/tests/test_encryption_codec.py, posthog/temporal/tests/test_oauth.py, posthog/temporal/tests/test_schedule.py, posthog/temporal/tests/test_shutdown.py, posthog/temporal/tests/test_slo_interceptor.py, posthog/temporal/tests/common/**, posthog/temporal/tests/backfill_group_type_created_at/**, posthog/temporal/tests/backfill_materialized_property/**, posthog/temporal/tests/delete_persons/**, posthog/temporal/tests/dlq_replay/**, posthog/temporal/tests/ingestion_acceptance_test/**, posthog/temporal/tests/sync_events_retention/**, posthog/temporal/tests/delete_teams/**, posthog/temporal/tests/health_checks/**, posthog/temporal/tests/usage_report/**, posthog/temporal/tests/weekly_digest/**, posthog/temporal/tests/utils/**  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/warehouse_sources/backend/facade/_access_control_base.py"]
+kind = "stale-name"
 text = "products/warehouse_sources/backend/facade/_access_control_base.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/management/commands/setup_test_environment.py"]
+kind = "stale-name"
 text = "posthog/management/commands/setup_test_environment.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/management/commands/reset_test_clickhouse_db.py"]
+kind = "stale-name"
 text = "posthog/management/commands/reset_test_clickhouse_db.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/aeo/backend/management/commands/seed_aeo_prompts.py"]
+kind = "stale-name"
 text = "products/aeo/backend/management/commands/seed_aeo_prompts.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py"]
+kind = "stale-name"
 text = "products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py"]
+kind = "stale-name"
 text = "products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py"]
+kind = "stale-name"
 text = "products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py"]
+kind = "stale-name"
 text = "products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/signals/backend/management/commands/seed_inbox_data.py"]
+kind = "stale-name"
 text = "products/signals/backend/management/commands/seed_inbox_data.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/signals/backend/management/commands/seed_refund_test_data.py"]
+kind = "stale-name"
 text = "products/signals/backend/management/commands/seed_refund_test_data.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/tasks/backend/management/commands/bake_dev_stack_image.py"]
+kind = "stale-name"
 text = "products/tasks/backend/management/commands/bake_dev_stack_image.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/tasks/backend/management/commands/demo_mts_example.py"]
+kind = "stale-name"
 text = "products/tasks/backend/management/commands/demo_mts_example.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/visual_review/backend/management/commands/seed_snapshot_history.py"]
+kind = "stale-name"
 text = "products/visual_review/backend/management/commands/seed_snapshot_history.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products/web_analytics/backend/management/commands/generate_aeo_content.py"]
+kind = "stale-name"
 text = "products/web_analytics/backend/management/commands/generate_aeo_content.py is named by [[assign]] products/*/backend/facade/testing.py, products/warehouse_sources/backend/facade/_access_control_base.py, products/warehouse_sources/sources/sdk/testing.py, posthog/management/commands/setup_test_environment.py, posthog/management/commands/reset_test_clickhouse_db.py, products/signals/eval/**, posthog/hogql/scripts/**, products/aeo/backend/management/commands/seed_aeo_prompts.py, products/customer_analytics/backend/management/commands/seed_customer_analytics_accounts.py, products/engineering_analytics/backend/management/commands/seed_engineering_analytics.py, products/knowledge_writer/backend/management/commands/knowledge_writer_pr_smoke.py, products/mcp_analytics/backend/management/commands/seed_mcp_sessions.py, products/signals/backend/management/commands/seed_inbox_data.py, products/signals/backend/management/commands/seed_refund_test_data.py, products/tasks/backend/management/commands/bake_dev_stack_image.py, products/tasks/backend/management/commands/demo_mts_example.py, products/visual_review/backend/management/commands/seed_dummy_runs.py, products/visual_review/backend/management/commands/seed_snapshot_history.py, products/web_analytics/backend/management/commands/generate_aeo_content.py  (tools/hoglint/presets/posthog.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["posthog/api/view_base.py"]
+kind = "stale-name"
 text = "posthog/api/view_base.py is named by [[assign]] posthog/api/view_base.py  (hoglint.toml) but no file has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin"]
+kind = "stale-name"
 text = "products.access_control.backend.presentation.access_control.UserAccessControlSerializerMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin"]
+kind = "stale-name"
 text = "products.access_control.backend.presentation.access_control_settings.AccessControlSettingsViewSetMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin"]
+kind = "stale-name"
 text = "products.access_control.backend.presentation.access_control_organization_members.OrganizationMemberProjectAccessViewSetMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
 
 [[incomplete]]
 rule = "config:stale-name"
 identity = ["products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin"]
+kind = "stale-name"
 text = "products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"

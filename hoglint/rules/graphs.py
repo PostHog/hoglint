@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from hoglint.config.model import Config, RuleSpec
-from hoglint.model import Edge
+from hoglint.model import Edge, IncompleteKind
 from hoglint.rules.base import EdgeRule, IncompleteItem, Judgment, RuleContext, RuleRun, Seen, named_seen, subjects_of
 from hoglint.rules.plan import identity_paths, selector_tree
 from hoglint.selectors import Selector, Truth
@@ -54,14 +54,18 @@ class ReachPrimitive(EdgeRule):
         """What the search reports for one thing the evaluator found."""
         if found.what == "start":
             reason = f"cannot tell whether {found.source} is selected"
-            self.run.incomplete.append(IncompleteItem(self.spec.id, found.source, reason, (found.source,)))
+            item = IncompleteItem(
+                self.spec.id, found.source, reason, (found.source,), kind=IncompleteKind.UNKNOWN_LABEL
+            )
+            self.run.incomplete.append(item)
             return
         seen = found.seen
         assert seen is not None
         if found.what == "unresolved":
             self.on_unresolved(seen)
         elif found.what == "unknown":
-            self.incomplete(seen, f"cannot tell whether to follow {seen.edge.kind} {seen.edge.surface!r}")
+            reason = f"cannot tell whether to follow {seen.edge.kind} {seen.edge.surface!r}"
+            self.incomplete(seen, reason, IncompleteKind.UNKNOWN_LABEL)
         else:
             assert found.verdict is not None
             self.report(seen, list(found.path), found.verdict)
@@ -179,7 +183,7 @@ class CyclePrimitive(EdgeRule):
                 if row.judgment is Judgment.UNRESOLVED:
                     self.on_unresolved(words)
                 else:
-                    self.incomplete(words, "selection reads an unknown value")
+                    self.incomplete(words, "selection reads an unknown value", IncompleteKind.UNKNOWN_LABEL)
                 continue
             pair = pairs.setdefault(row.pair, Pair())
             if pair.first is None:

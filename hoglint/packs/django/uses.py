@@ -9,7 +9,7 @@ from hoglint.core.harness import FileItems, failure_edge
 from hoglint.core.memo import NOTHING, ItemOutput
 from hoglint.core.records import str_literal
 from hoglint.core.sites import FileScope
-from hoglint.model import Edge, Resolution
+from hoglint.model import NO_LITERAL, Edge, Resolution
 from hoglint.packs.django.models import ModelRegistry
 from hoglint.plugins import PackReader
 
@@ -77,7 +77,15 @@ class GetModelProducer:
         contexts = scope.contexts(flags, at_scope)
         if app_label is None or class_name is None:
             return Edge(
-                "model-label", site, callee, (), Resolution.UNRESOLVED, contexts, GET_MODEL_PRODUCER, shape=GET_MODEL
+                "model-label",
+                site,
+                callee,
+                (),
+                Resolution.UNRESOLVED,
+                contexts,
+                GET_MODEL_PRODUCER,
+                shape=GET_MODEL,
+                attrs=(NO_LITERAL,),
             )
         label = f"{app_label}.{class_name}"
         found = self.registry.resolve_label(label, app_label, None)

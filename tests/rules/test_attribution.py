@@ -40,7 +40,7 @@ from hoglint.ledger.obligations import Attribution, attribute, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord, StoredFindings
 from hoglint.ledger.scan import ProtocolError, ScanSummary
 from hoglint.ledger.store import CacheRoot, SummaryStore
-from hoglint.model import FindingStatus, IncompleteCause
+from hoglint.model import FindingStatus, IncompleteCause, IncompleteKind
 from hoglint.presets_py.posthog.owners import OWNERS_YAML
 from hoglint.rules.engine import Engine
 from hoglint.rules.exceptions import ExceptionsFile
@@ -57,7 +57,7 @@ INTRODUCED, AMBIGUOUS, INHERITED = Attribution.INTRODUCED, Attribution.AMBIGUOUS
 
 def records(obligations: dict[tuple[str, str, str], list[str]]) -> list[IncompleteRecord]:
     return [
-        IncompleteRecord(rule, key, reason, IncompleteCause.INHERITED, (), mark)
+        IncompleteRecord(rule, key, reason, IncompleteCause.INHERITED, (), mark, IncompleteKind.NOT_MODELLED, "", 0)
         for (rule, key, reason), marks in obligations.items()
         for mark in marks
     ]

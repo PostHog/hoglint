@@ -23,12 +23,14 @@ from hoglint.index import GraphIndex
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
 from hoglint.model import (
+    NO_LITERAL,
     Context,
     Edge,
     Finding,
     FindingDetail,
     Graph,
     IncompleteCause,
+    IncompleteKind,
     Owners,
     Remedy,
     Shown,
@@ -116,6 +118,7 @@ class IncompleteItem:
     subjects: tuple[str, ...] = ()
     cause: IncompleteCause = IncompleteCause.INHERITED
     edge: Edge | None = field(default=None, compare=False)  # the edge that raised it; compare fingerprints it
+    kind: IncompleteKind = IncompleteKind.UNKNOWN_LABEL
 
 
 @dataclass(frozen=False, slots=True)
@@ -280,6 +283,14 @@ class RuleContext:
         return ()
 
 
+def unresolved_kind(edge: Edge) -> IncompleteKind:
+    """An edge that did not resolve: a literal name that names nothing, or a value hoglint does
+    not follow, as its producer marks it."""
+    if edge.attr(NO_LITERAL[0]) == NO_LITERAL[1]:
+        return IncompleteKind.NOT_MODELLED
+    return IncompleteKind.UNRESOLVED
+
+
 def headline(edge: Edge, src: str, dst: str, label: str = "") -> str:
     """What the source of `edge` does to its destination, in words. A template that names an attr
     the edge lacks falls back to the plain form."""
@@ -378,9 +389,10 @@ class EdgeRule(RuleType):
             out.add(Judgment.UNRESOLVED)
         return frozenset(out)
 
-    def incomplete(self, seen: Seen, reason: str) -> None:
+    def incomplete(self, seen: Seen, reason: str, kind: IncompleteKind) -> None:
         key = f"{seen.src.module}|{seen.edge.kind}|{seen.edge.surface}"
-        self.run.incomplete.append(IncompleteItem(self.spec.id, key, reason, self.subjects(seen), edge=seen.edge))
+        item = IncompleteItem(self.spec.id, key, reason, self.subjects(seen), edge=seen.edge, kind=kind)
+        self.run.incomplete.append(item)
 
     def subjects(self, seen: Seen) -> tuple[str, ...]:
         return subjects_of(seen.src.module, seen.dst.module)
@@ -438,7 +450,7 @@ class EdgeRule(RuleType):
 
     def on_unresolved(self, seen: Seen) -> None:
         if self.spec.on_unresolved == "incomplete":
-            self.incomplete(seen, f"{seen.edge.kind} {seen.edge.surface!r} did not resolve")
+            self.incomplete(seen, f"{seen.edge.kind} {seen.edge.surface!r} did not resolve", unresolved_kind(seen.edge))
             return
         named = headline(seen.edge, seen.src.module or "", repr(seen.edge.surface))
         self.emit(seen, Judgment.UNRESOLVED, f"{named}, which hoglint cannot find")
@@ -449,7 +461,7 @@ class EdgeRule(RuleType):
         if judgment is Judgment.UNRESOLVED:
             self.on_unresolved(seen)
         elif judgment is Judgment.UNKNOWN_SELECTION:
-            self.incomplete(seen, f"selection reads unknown {seen.unknown or 'values'}")
+            self.incomplete(seen, f"selection reads unknown {seen.unknown or 'values'}", IncompleteKind.UNKNOWN_LABEL)
         elif judgment is Judgment.UNKNOWN_VIOLATION:
             self.emit(seen, judgment, f"{describe}; cannot tell, unassigned: {seen.unknown or 'a value'}")
         elif judgment is Judgment.VIOLATION:

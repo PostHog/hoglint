@@ -3162,6 +3162,9 @@ impl Producers<'_> {
                         _ => "expr".to_string(),
                     };
                     attrs.push((k.argument, core.it.intern(&text)));
+                    // No literal name: hoglint does not follow the value, which `literal` says to
+                    // every reader of an unresolved edge.
+                    attrs.push((k.literal, core.it.intern("none")));
                     (EMPTY, UNRESOLVED)
                 }
             };

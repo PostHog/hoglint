@@ -43,7 +43,7 @@ from hoglint.ledger.errors import EngineError
 from hoglint.plugins import REGISTRY
 
 # The version of the run summary format. A reader refuses any other; engine-sources.txt repeats it.
-PROTOCOL = 5
+PROTOCOL = 6
 # The engine's name: the prefix of every engine id, and what `--engine` accepts.
 ENGINE_NATIVE = "native"
 ENGINE_SOURCES = "engine-sources.txt"

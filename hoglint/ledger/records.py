@@ -18,7 +18,7 @@ from typing import Any
 
 from hoglint.ledger.equality import EqualityResult, LineDiff
 from hoglint.ledger.file import LineKey, parse_key, render_key
-from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause, witness_row
+from hoglint.model import Edge, Finding, FindingStatus, IncompleteCause, IncompleteKind, witness_row
 from hoglint.rules.base import IncompleteItem
 from hoglint.rules.exceptions import ExceptionReport, ExceptionsFile
 from hoglint.rules.levels import Block
@@ -287,7 +287,8 @@ class BlockRecord:
 
 @dataclass(frozen=True, slots=True)
 class IncompleteRecord:
-    """One incomplete item; `mark` is its line-free fingerprint (see `scan.fingerprint`)."""
+    """One incomplete item; `mark` is its line-free fingerprint (see `scan.fingerprint`). `path`
+    and `line` place it for a reader, from the edge that raised it; empty and 0 for none."""
 
     rule: str
     key: str
@@ -295,18 +296,33 @@ class IncompleteRecord:
     cause: IncompleteCause
     subjects: tuple[str, ...]
     mark: str
+    kind: IncompleteKind
+    path: str
+    line: int
 
     @staticmethod
     def of(item: IncompleteItem, mark: str, portable: Portable) -> IncompleteRecord:
-        return IncompleteRecord(item.rule, item.key, portable.text(item.reason), item.cause, item.subjects, mark)
+        site = item.edge.site if item.edge is not None else None
+        path, line = (site.path, site.line) if site is not None else ("", 0)
+        reason = portable.text(item.reason)
+        return IncompleteRecord(item.rule, item.key, reason, item.cause, item.subjects, mark, item.kind, path, line)
+
+    def place(self) -> str:
+        """Where a reader finds the item: its file and line, else its module, else nothing."""
+        if self.path:
+            return f"{self.path}:{self.line}" if self.line else self.path
+        return self.subjects[0] if self.subjects else ""
 
     def to_json(self) -> list[Any]:
-        return [self.rule, self.key, self.reason, self.cause.value, list(self.subjects), self.mark]
+        fields = [self.rule, self.key, self.reason, self.cause.value, list(self.subjects), self.mark]
+        return [*fields, self.kind.value, self.path, self.line]
 
     @staticmethod
     def from_json(data: list[Any]) -> IncompleteRecord:
-        rule, key, reason, cause, subjects, mark = data
-        return IncompleteRecord(rule, key, reason, IncompleteCause(cause), tuple(subjects), mark)
+        rule, key, reason, cause, subjects, mark, kind, path, line = data
+        return IncompleteRecord(
+            rule, key, reason, IncompleteCause(cause), tuple(subjects), mark, IncompleteKind(kind), path, int(line)
+        )
 
 
 def equality_to_json(equality: EqualityResult | None) -> dict[str, Any] | None:

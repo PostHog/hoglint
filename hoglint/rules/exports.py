@@ -35,7 +35,7 @@ from typing import Any
 from hoglint.config.model import ExportSpec, RuleSpec
 from hoglint.labels import NOT_HANDED_CONTEXTS
 from hoglint.ledger.errors import EngineError
-from hoglint.model import context_bits
+from hoglint.model import IncompleteKind, context_bits
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, rule_kinds
 from hoglint.rules.plan import identity_paths, selector_tree, tree
 from hoglint.selectors import Node, rest_part, source_part
@@ -135,6 +135,19 @@ def core_shape_bases() -> dict[str, list[str]]:
 
 # Why an export rule cannot tell about a symbol, by code; `{detail}` is the export's name or the
 # slot. The native evaluator reports the code (`export.rs`).
+# The kind of each code of `UNKNOWN_WHY`: a base or a name that does not resolve, an annotation
+# that says nothing, or a form hoglint does not read.
+UNKNOWN_KINDS = {
+    "not-member": IncompleteKind.UNRESOLVED,
+    "unknown-type": IncompleteKind.UNKNOWN_LABEL,
+    "no-facts": IncompleteKind.UNRESOLVED,
+    "bases": IncompleteKind.UNRESOLVED,
+    "no-annotation": IncompleteKind.UNKNOWN_LABEL,
+    "unread-annotation": IncompleteKind.NOT_MODELLED,
+    "alias": IncompleteKind.NOT_MODELLED,
+    "listed": IncompleteKind.NOT_MODELLED,
+    "value": IncompleteKind.NOT_MODELLED,
+}
 UNKNOWN_WHY = {
     "not-member": "cannot tell whether it is in export {detail}: a base did not resolve",
     "unknown-type": "a type hoglint reads as unknown",
@@ -205,12 +218,14 @@ class ExportPrimitive(RuleType):
         if why in ("no-annotation", "unread-annotation"):
             detail = detail or "a slot"
         reason = UNKNOWN_WHY[why].format(detail=detail)
-        return IncompleteItem(rule, f"{module}|{symbol}", f"{' -> '.join(trail)}: {reason}", (module,))
+        text = f"{' -> '.join(trail)}: {reason}"
+        return IncompleteItem(rule, f"{module}|{symbol}", text, (module,), kind=UNKNOWN_KINDS[why])
 
     @staticmethod
     def unresolved_item(rule: str, module: str, surface: str) -> IncompleteItem:
         """What an import that did not resolve leaves incomplete."""
-        return IncompleteItem(rule, f"{module}|{surface}", f"{surface!r} did not resolve", (module,))
+        reason = f"{surface!r} did not resolve"
+        return IncompleteItem(rule, f"{module}|{surface}", reason, (module,), kind=IncompleteKind.UNRESOLVED)
 
     def selected_exports(self) -> list[ExportSpec]:
         names = self.spec.exports or tuple(self.ctx.config.exports)

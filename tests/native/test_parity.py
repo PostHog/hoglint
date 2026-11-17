@@ -168,7 +168,9 @@ def test_grouped_findings_take_owners_and_subjects_from_their_own_edge(
 def test_a_source_the_engine_cannot_read_is_an_incomplete_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = dump_repo(tmp_path, OWNERS_REPO, monkeypatch, unreadable=("core/a.py",))
     reason = "core/a.py could not be read, so its facts are missing"
-    assert ["source:unreadable", "core/a.py", reason, [], "extractor"] in read_lines(out / "incomplete.jsonl")
+    assert ["source:unreadable", "core/a.py", reason, [], "extractor", "unreadable"] in read_lines(
+        out / "incomplete.jsonl"
+    )
 
 
 def test_an_export_that_decides_by_class_keeps_the_classes_of_one_module_apart(

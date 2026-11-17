@@ -26,7 +26,7 @@ from hoglint.core.harness import PRODUCER_ERROR, failure_text
 from hoglint.core.records import NO_CONST, RecordBodies, const_of, is_const, str_literal, value_text
 from hoglint.ledger.cache import PACKS_STORE, RunStores
 from hoglint.ledger.scan import write_atomic
-from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
+from hoglint.model import LANGUAGE_PYTHON, NO_LITERAL, Context, Edge, EntityId, Resolution, Site
 from hoglint.packs.django.apps import AppRegistry
 from hoglint.packs.django.config import DatabaseRouting, DjangoPackConfig
 from hoglint.plugins import PackReader
@@ -530,7 +530,7 @@ class MigrationEdges:
             resolution=Resolution.UNRESOLVED,
             contexts=MIGRATION_CONTEXT,
             producer=MIGRATION_PRODUCER,
-            attrs=(("child", f"{decl.app_label}.{decl.name}"),),
+            attrs=(("child", f"{decl.app_label}.{decl.name}"), NO_LITERAL),
         )
 
     def produce(self) -> list[Edge]:

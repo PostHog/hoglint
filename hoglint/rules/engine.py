@@ -17,7 +17,16 @@ from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
 from hoglint.ledger.file import LedgerFile, LineKey, level_line
-from hoglint.model import SCHEMA_VERSION, Finding, FindingStatus, Graph, IncompleteCause, Outcome, RuleResult
+from hoglint.model import (
+    SCHEMA_VERSION,
+    Finding,
+    FindingStatus,
+    Graph,
+    IncompleteCause,
+    IncompleteKind,
+    Outcome,
+    RuleResult,
+)
 from hoglint.rules.base import IncompleteItem, RuleContext, RuleRun, RuleType, context_class, labeler_class, rule_kinds
 from hoglint.rules.edges import EdgePrimitive, EntrypointPrimitive, SignaturePrimitive, UseShapePrimitive
 from hoglint.rules.entities import CoveragePrimitive, EdgeInventory, EntityInventory, LayoutPrimitive
@@ -79,7 +88,7 @@ class StaleNames:
 
     @staticmethod
     def item(key: str, reason: str) -> IncompleteItem:
-        return IncompleteItem(STALE_NAMES, key, reason)
+        return IncompleteItem(STALE_NAMES, key, reason, kind=IncompleteKind.STALE_NAME)
 
 
 # Every rule type, one per mode, in the order the test generator draws them.
@@ -257,7 +266,10 @@ class Engine:
             if failures:
                 run = RuleRun(spec)
                 run.incomplete.extend(
-                    IncompleteItem(spec.id, reason, reason, (), IncompleteCause.EXTRACTOR) for reason in failures
+                    IncompleteItem(
+                        spec.id, reason, reason, (), IncompleteCause.EXTRACTOR, kind=IncompleteKind.PRODUCER_FAILED
+                    )
+                    for reason in failures
                 )
                 ctx.results[spec.id] = run
                 continue
@@ -267,7 +279,13 @@ class Engine:
             rule_id = provider_rule(name)
             reason = f"provider {name} failed: {self.labeler.providers.failures[name]}"
             self.add_incomplete_run(
-                ctx, rule_id, [IncompleteItem(rule_id, reason, reason, (), IncompleteCause.EXTRACTOR)]
+                ctx,
+                rule_id,
+                [
+                    IncompleteItem(
+                        rule_id, reason, reason, (), IncompleteCause.EXTRACTOR, kind=IncompleteKind.PRODUCER_FAILED
+                    )
+                ],
             )
         stale = StaleNames(self.config, self.labeler).items()
         if stale:
@@ -277,7 +295,11 @@ class Engine:
             items: list[IncompleteItem] = []
             for path in unread:
                 reason = f"{path} could not be read, so its facts are missing"
-                items.append(IncompleteItem(UNREADABLE, path, reason, (), IncompleteCause.EXTRACTOR))
+                items.append(
+                    IncompleteItem(
+                        UNREADABLE, path, reason, (), IncompleteCause.EXTRACTOR, kind=IncompleteKind.UNREADABLE
+                    )
+                )
             self.add_incomplete_run(ctx, UNREADABLE, items)
         self.raise_conflicts(ctx)
         return ctx.results
