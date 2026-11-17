@@ -804,7 +804,7 @@
     "products.alerts.backend.facade.api",
     "products.billing.backend.facade.api"
    ],
-   "@team-alerts -> @team-billing closes a cycle (5 edges)",
+   "@team-alerts -> @team-billing closes a cycle (6 edges)",
    false,
    false,
    [
@@ -1715,6 +1715,22 @@
    [
     "core.b",
     "products.billing.backend.models"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "read",
+   [
+    "products.alerts.backend.logic",
+    "@team-billing"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api.charge (reference)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
    ]
   ],
   [
@@ -4140,6 +4156,38 @@
    [
     "products.billing.backend.facade.slots"
    ]
+  ],
+  [
+   "finding",
+   0,
+   "cycle-between-packages",
+   [
+    "alerts",
+    "billing"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api closes a cycle (1 edges)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "cycle-between-packages",
+   [
+    "billing",
+    "alerts"
+   ],
+   "products.billing.backend.facade.api -> products.alerts.backend.logic closes a cycle (1 edges)",
+   false,
+   false,
+   [
+    "products.billing.backend.facade.api",
+    "products.alerts.backend.logic"
+   ]
   ]
  ],
  "corner default-zone-under-within": [
@@ -5625,6 +5673,22 @@
    0,
    "list-literal-against-a-scalar",
    [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api.charge"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api.charge (reference)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "list-literal-against-a-scalar",
+   [
     "products.billing.backend.facade.slots",
     "products.billing.backend.models.Invoice"
    ],
@@ -6458,6 +6522,27 @@
    [
     "core.b",
     "products.billing.backend.models"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "read-endpoint-order",
+   [
+    "products.billing.backend.facade.api.charge",
+    "-",
+    "-",
+    "-",
+    "charge",
+    "-",
+    "function"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api.charge (reference)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
    ]
   ],
   [
@@ -9294,6 +9379,24 @@
    0,
    "symbol-fields-and-domains",
    [
+    "-",
+    "-",
+    "-",
+    "-"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api.charge (reference)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "symbol-fields-and-domains",
+   [
     "billing",
     "cell",
     "-",
@@ -10384,6 +10487,24 @@
    [
     "core.b",
     "products.billing.backend.models"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "unresolved-symbol-answers",
+   [
+    "products.billing.backend.facade.api.charge",
+    "products.billing.backend.facade.api",
+    "product",
+    "billing"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api.charge (reference)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
    ]
   ],
   [
@@ -11984,6 +12105,22 @@
    [
     "core.b",
     "products.billing.backend.models"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "zone-chain-against-a-scalar",
+   [
+    "facade",
+    "backend"
+   ],
+   "products.alerts.backend.logic -> products.billing.backend.facade.api.charge (reference)",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
    ]
   ],
   [
@@ -15225,7 +15362,7 @@
     "products.alerts.backend.facade.api",
     "products.billing.backend.facade.api"
    ],
-   "@team-alerts -> @team-billing closes a cycle (5 edges)",
+   "@team-alerts -> @team-billing closes a cycle (6 edges)",
    false,
    false,
    [
@@ -15690,6 +15827,23 @@
     "core.c",
     "products.billing.backend.models"
    ]
+  ],
+  [
+   "finding",
+   0,
+   "uses",
+   [
+    "products.billing.backend.facade.api.charge",
+    "products.alerts.backend.logic",
+    "reference"
+   ],
+   "products.alerts.backend.logic names products.billing.backend.facade.api.charge, which is not exported to it",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
+   ]
   ]
  ],
  "uses at import: a select that reads the edge kind": [
@@ -15743,6 +15897,23 @@
     "core.c",
     "products.billing.backend.models"
    ]
+  ],
+  [
+   "finding",
+   0,
+   "uses",
+   [
+    "products.billing.backend.facade.api.charge",
+    "products.alerts.backend.logic",
+    "reference"
+   ],
+   "products.alerts.backend.logic names products.billing.backend.facade.api.charge, which is not exported to it",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
+   ]
   ]
  ],
  "uses at import: an allow that reads the source symbol": [
@@ -15795,6 +15966,23 @@
    [
     "core.c",
     "products.billing.backend.models"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "uses",
+   [
+    "products.billing.backend.facade.api.charge",
+    "products.alerts.backend.logic",
+    "reference"
+   ],
+   "products.alerts.backend.logic names products.billing.backend.facade.api.charge, which is not exported to it",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
    ]
   ]
  ],
@@ -16069,6 +16257,23 @@
    [
     "core.c",
     "products.billing.backend.models"
+   ]
+  ],
+  [
+   "finding",
+   0,
+   "uses",
+   [
+    "products.billing.backend.facade.api.charge",
+    "products.alerts.backend.logic",
+    "reference"
+   ],
+   "products.alerts.backend.logic names products.billing.backend.facade.api.charge, which is not exported to it",
+   false,
+   false,
+   [
+    "products.alerts.backend.logic",
+    "products.billing.backend.facade.api"
    ]
   ]
  ],

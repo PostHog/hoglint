@@ -1013,7 +1013,10 @@ def test_an_entrypoint_rule_judges_a_use_at_its_import_in_both_engines(
     assert_stored(world, f"uses at import: {case}", rule_table("uses", spec_table))
     found = world.rows(config, "uses")
     identities = {identity for identity, *_ in found}
-    assert {(symbol, module) for symbol, module, kind in identities if kind == "reference"} == references
+    invoice_references = {
+        (symbol, module) for symbol, module, kind in identities if kind == "reference" and symbol == INVOICE
+    }
+    assert invoice_references == references
     assert ((INVOICE, "core.a", "import") in identities) is import_reported
 
 
