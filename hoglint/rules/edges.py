@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from hoglint.config.model import RuleSpec
-from hoglint.model import IncompleteKind, Remedy
+from hoglint.model import IncompleteKind
 from hoglint.rules.base import EdgeRule, Judgment, RuleContext, Seen
 
 # What an edge rule reads; an entrypoint rule reads the same.
@@ -21,7 +21,6 @@ EDGE_READS = frozenset(
         "allow",
         "require",
         "unless",
-        "remedy",
         "on_unresolved",
     }
 )
@@ -59,9 +58,6 @@ class EntrypointPrimitive(EdgeRule):
         self.uses_at_import = spec.uses_at_import
         self.reported: dict[tuple[str, str], bool] = {}
 
-    def remedies(self) -> tuple[Remedy, ...]:
-        return super().remedies() or (Remedy("needs-public-api"),)
-
     def describe(self, seen: Seen) -> str:
         return f"{seen.src.module} names {seen.edge.surface}, which is not exported to it"
 
@@ -94,7 +90,6 @@ class UseShapePrimitive(EdgeRule):
             "allow_shapes",
             "deny_shapes",
             "flow",
-            "remedy",
             "on_unresolved",
         }
     )
@@ -135,7 +130,6 @@ class SignaturePrimitive(EdgeRule):
             "unless",
             "on_unknown",
             "unknown_types",
-            "remedy",
             "on_unresolved",
         }
     )

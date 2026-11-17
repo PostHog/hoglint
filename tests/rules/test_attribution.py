@@ -216,7 +216,6 @@ kinds = ["import"]
 select = "src.package != dst.package"
 identity = ["src.module", "dst.module"]
 growth_key = ["src.module"]
-remedy = "go through the facade"
 
 [levels.isolated]
 group_by = "package"
@@ -249,8 +248,7 @@ def test_a_stored_summary_keeps_what_check_prints_and_names_other_findings_by_ke
             continue
         site = finding.site
         assert site is not None
-        remedies = tuple((remedy.kind, remedy.detail) for remedy in finding.remedies)
-        assert shown == ShownRecord(finding.message, site.path, site.line, remedies)
+        assert shown == ShownRecord(finding.message, site.path, site.line)
     assert {finding.status for finding in result.findings()} == {FindingStatus.NEW, FindingStatus.ACCEPTED}
     level = result.levels["isolated"]
     assert stored.levels["isolated"] == level.passing

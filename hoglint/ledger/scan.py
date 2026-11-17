@@ -8,8 +8,8 @@ refuses any other protocol instead of guessing. It holds:
   rule's growth-key columns; a column the identity does not hold is a label of the line's source
   module, and `labels` keeps that label, and the group field's, of every source module a line names;
 - findings: every finding with its identity, status, witnesses, owner module and subjects,
-  allowed ones included (owners themselves are read at render time), and the message, site and
-  remedies of each finding `check` prints;
+  allowed ones included (owners themselves are read at render time), and the message and site
+  of each finding `check` prints;
 - incomplete: every incomplete item in run order with its cause and a line-free fingerprint, so
   the count and a replacement under one key both survive serialization;
 - triples: (src group, dst group, edge kind, context), when `with_triples` says they were listed;
@@ -103,7 +103,7 @@ def shown_column(
     portable: Portable,
     touched: set[str] | None,
 ) -> list[Any]:
-    """The stored message, site and remedies of each row `check` prints (`is_shown`), None for any
+    """The stored message and site of each row `check` prints (`is_shown`), None for any
     other. With no `touched` set `check` prints only new rows, so only they are asked."""
     shown: list[Any] = [None] * len(statuses)
     if touched is None:
@@ -216,7 +216,7 @@ class ScanSummary:
         """`scope` names the modules whose couplings and witnesses move admission reads. `roots`
         are the run's policy and code roots, which text in the summary names relative to the repo;
         `exceptions` gives the review dates of the run's exception entries, `ledger` the ledger the
-        run read. The summary keeps the message, site and remedies of the findings `check` prints
+        run read. The summary keeps the message and site of the findings `check` prints
         (`is_shown`); `touched` names the paths and modules of a `--changed` run."""
         config = result.config
         portable = Portable.of(*roots)

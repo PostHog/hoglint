@@ -1302,7 +1302,6 @@ class Tables:
             "ledger": lambda: rng.random() < 0.2,
             "identity": lambda: self.identity(mode),
             "counted": lambda: rng.random() < 0.5,
-            "remedy": lambda: "go through the facade",
             "requires": lambda: ["flows.flow"],
             "on_unresolved": lambda: rng.choice(on_any),
             "on_unknown": lambda: rng.choice(on_any),
@@ -1482,7 +1481,7 @@ class KeysRead:
             ran: Any = Recording(spec)
             run = native.results[spec.id] = cls(native, ran).evaluate()
             for finding in run.findings:
-                assert finding.message is not None and finding.remedies is not None
+                assert finding.message is not None
             self.by_class[cls.MODE] |= ran.keys & accepted
 
     def every_key_read(self) -> bool:

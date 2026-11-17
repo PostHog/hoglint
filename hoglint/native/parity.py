@@ -151,7 +151,6 @@ def finding_row(finding: Finding) -> Row:
         finding.message,
         [site.path, site.module, site.scope, site.line, site.column] if site is not None else None,
         [edge_row(edge) for edge in finding.witnesses],
-        [[remedy.kind, remedy.detail] for remedy in finding.remedies],
         list(finding.owners),
         finding.status.value,
         list(finding.subjects),

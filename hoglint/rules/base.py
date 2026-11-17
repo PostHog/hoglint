@@ -32,7 +32,6 @@ from hoglint.model import (
     IncompleteCause,
     IncompleteKind,
     Owners,
-    Remedy,
     Shown,
     Site,
     context_bits,
@@ -254,15 +253,12 @@ class RuleContext:
         site: Site | None = None,
         ledgerable: bool = True,
         unknown: bool = False,
-        remedies: tuple[Remedy, ...] = (),
     ) -> Finding:
         """A finding of `spec`; owners come from the `owner` module, the site from the first witness."""
         return Finding(
             rule=spec.id,
             identity=identity,
-            detail=FindingDetail(
-                message, site if site is not None or not witnesses else witnesses[0].site, witnesses, remedies
-            ),
+            detail=FindingDetail(message, site if site is not None or not witnesses else witnesses[0].site, witnesses),
             owner=self.owner(owner),
             subjects=subjects,
             ledgerable=ledgerable,
@@ -434,19 +430,13 @@ class EdgeRule(RuleType):
         seen: Seen,
         judgment: Judgment,
         message: str,
-        remedies: tuple[Remedy, ...] = (),
         witnesses: tuple[Edge, ...] = (),
     ) -> Finding:
         shown = witnesses or (seen.edge,)
-        detail = FindingDetail(message, shown[0].site, shown, remedies or self.remedies())
+        detail = FindingDetail(message, shown[0].site, shown)
         finding = self.finding_of(seen, judgment, detail)
         self.run.findings.append(finding)
         return finding
-
-    def remedies(self) -> tuple[Remedy, ...]:
-        if self.spec.remedy:
-            return (Remedy("documented-replacement", self.spec.remedy),)
-        return ()
 
     def on_unresolved(self, seen: Seen) -> None:
         if self.spec.on_unresolved == "incomplete":

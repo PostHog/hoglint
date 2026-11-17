@@ -231,7 +231,6 @@ class RuleSpec:
     growth_key: tuple[str, ...] = ()
     ledger: bool = True
     report: str = "blocking"
-    remedy: str = ""
     allow_shapes: tuple[str, ...] = ()
     deny_shapes: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()

@@ -135,8 +135,7 @@ NAMED_IDENTITIES: dict[str, tuple[str, ...]] = {
 # The keys that hold a rule's words: what it is for, why a finding matters, the ways out, an example.
 TEXT_KEYS = frozenset({"doc", "why", "ways", "example"})
 COMMON_RULE_KEYS = frozenset(
-    {"primitive", "report", "ledger", "identity", "counted", "growth_key", "remedy", "requires", "on_unresolved"}
-    | TEXT_KEYS
+    {"primitive", "report", "ledger", "identity", "counted", "growth_key", "requires", "on_unresolved"} | TEXT_KEYS
 )
 # The keys the engine, the ledger and the output read for every rule, whatever its type.
 EVERY_RULE_READS = (
@@ -1263,7 +1262,6 @@ class SchemaBuilder:
             growth_key=growth_key,
             ledger=ledgered,
             report=self.check_enum(f"{key}.report", table.get("report", "blocking"), ("blocking", "advisory")),
-            remedy=str(table.get("remedy", "")),
             allow_shapes=as_tuple(table.get("allow_shapes")),
             deny_shapes=as_tuple(table.get("deny_shapes")),
             requires=as_tuple(table.get("requires")),

@@ -741,7 +741,7 @@ class DumpIndex:
             row = json.loads(text)
             files = json.loads(files_text)
             site = row[3][0] if row[3] else (files[0] if files else "")
-            out.add(json.dumps([row[0], row[1], row[7]]) if by_key else text, site, files, row[0])
+            out.add(json.dumps([row[0], row[1], row[6]]) if by_key else text, site, files, row[0])
         return out
 
     def incomplete(self) -> RowCounts:

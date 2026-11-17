@@ -245,12 +245,8 @@ ledger = false
             "`on` is not read by inventory rules with `classify`",
         ),
         (
-            "[rules.other]\nprimitive = 'layout'\nremedy = 'move it'\nledger = false\n",
-            "`remedy` is not read by layout rules",
-        ),
-        (
-            "[rules.other]\nprimitive = 'export'\nremedy = 'narrow it'\nledger = false\n",
-            "`remedy` is not read by export rules",
+            "[rules.other]\nprimitive = 'layout'\non_unresolved = 'finding'\nledger = false\n",
+            "`on_unresolved` is not read by layout rules",
         ),
         (
             "[rules.other]\nprimitive = 'use-shape'\nview = 'refs'\nledger = false\n",

@@ -39,7 +39,7 @@ CASE_ID = re.compile(r"`[A-Z]{2}[0-9]{2}`")
 ANY_RULE = "*"
 ANY_VERDICT = "*"
 # The column of a findings row that says it exists because something did not resolve.
-UNKNOWN_COLUMN = 10
+UNKNOWN_COLUMN = 9
 
 EXPECTED_HEADER = """\
 # The reviewed result of the model repository on the real preset: every finding and incomplete

@@ -39,7 +39,7 @@ class ReachPrimitive(EdgeRule):
     PRIMITIVE = MODE = "reach"
     NATIVE_MODE = "reach"
     READS = frozenset(
-        {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied", "remedy", "on_unresolved"}
+        {"kinds", "contexts", "view", "from", "select", "deny", "unless", "through_denied", "on_unresolved"}
     )
 
     def selectors(self) -> tuple[Selector | None, ...]:
@@ -138,7 +138,7 @@ class CyclePrimitive(EdgeRule):
 
     PRIMITIVE = MODE = "cycle"
     NATIVE_MODE = "cycle"
-    READS = frozenset({"kinds", "contexts", "view", "from", "select", "remedy", "on_unresolved"})
+    READS = frozenset({"kinds", "contexts", "view", "from", "select", "on_unresolved"})
 
     def __init__(self, ctx: RuleContext, spec: RuleSpec) -> None:
         super().__init__(ctx, spec)

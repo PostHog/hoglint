@@ -158,7 +158,7 @@ def test_grouped_findings_take_owners_and_subjects_from_their_own_edge(
 ) -> None:
     out = dump_repo(tmp_path, OWNERS_REPO, monkeypatch)
     findings = read_lines(out / "findings.jsonl")
-    owners = {row[3][1]: (row[6], row[8]) for row in findings}
+    owners = {row[3][1]: (row[5], row[7]) for row in findings}
     assert owners == {
         "core.a": (["team-a"], ["core.a", "products.billing.models"]),
         "core.b": (["team-b"], ["core.b", "products.billing.logic"]),
@@ -208,7 +208,7 @@ on_unresolved = "block"
 def test_grouped_findings_keep_the_flags_their_judgment_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = dump_repo(tmp_path, BLOCK_REPO, monkeypatch)
     flags = {
-        (row[1][0], row[1][1]): (row[9], row[10])
+        (row[1][0], row[1][1]): (row[8], row[9])
         for row in read_lines(out / "findings.jsonl")
         if row[0] == "core-imports"
     }

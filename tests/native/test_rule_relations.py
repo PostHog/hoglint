@@ -33,7 +33,7 @@ CONNECTIVES = Path(__file__).parents[1] / "rules" / "connectives.txt"
 JUDGED = ["edge", "entrypoint", "signature", "use-shape", "inventory-classify"]
 PREDICATE_KEYS = ("deny", "allow", "require")
 # Keys of a generated table that change no judgment; siblings drop them so each loads alone.
-UNJUDGED_KEYS = ("growth_key", "doc", "remedy", "report", "counted")
+UNJUDGED_KEYS = ("growth_key", "doc", "report", "counted")
 
 # A destination's outcome under one rule: its judgment, or "clean" where the rule gives no row.
 CLEAN = "clean"

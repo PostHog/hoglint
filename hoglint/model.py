@@ -185,12 +185,6 @@ NO_LITERAL = ("literal", "none")
 
 
 @dataclass(frozen=True, slots=True)
-class Remedy:
-    kind: str  # permitted-destination | documented-replacement | safe-rewrite | needs-public-api | seal-relation | admit-debt
-    detail: str = ""
-
-
-@dataclass(frozen=True, slots=True)
 class Owners:
     """Who owns a finding: looked up from its owner module only when output shows it, so a run
     that prints few findings reads few owners files."""
@@ -204,12 +198,11 @@ class Owners:
 
 @dataclass(frozen=True, slots=True)
 class FindingDetail:
-    """What a finding shows a reader: its message, site, witnesses and remedies."""
+    """What a finding shows a reader: its message, site and witnesses."""
 
     message: str
     site: Site | None
     witnesses: tuple[Edge, ...] = ()
-    remedies: tuple[Remedy, ...] = ()
 
     def get(self) -> FindingDetail:
         return self
@@ -297,10 +290,6 @@ class Finding:
         if witness is not None:
             return (witness,)
         return self.detail.get().witnesses
-
-    @property
-    def remedies(self) -> tuple[Remedy, ...]:
-        return self.detail.get().remedies
 
     @property
     def owners(self) -> tuple[str, ...]:

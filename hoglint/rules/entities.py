@@ -246,7 +246,7 @@ class EdgeInventory(EdgeRule):
     MODE_KEY = "classify"
     NATIVE_MODE = "judge"
     FOLDS = False
-    READS = frozenset({"kinds", "contexts", "from", "select", "classify", "remedy", "on_unresolved"})
+    READS = frozenset({"kinds", "contexts", "from", "select", "classify", "on_unresolved"})
 
     def unclassified(self, identity: tuple[str, ...]) -> str:
         """The message of an identity the classification file lacks."""

@@ -18,7 +18,7 @@ from hoglint.config.model import Config, CoverSpec
 from hoglint.index import DECL_NAMES, MODULE_SCOPE, GraphIndex, Memo, SymbolFacts
 from hoglint.labels import Labeler
 from hoglint.ledger.envelope import EngineError
-from hoglint.model import Edge, Finding, FindingDetail, Graph, Owners, Remedy, Shown, WitnessRow, owner_module
+from hoglint.model import Edge, Finding, FindingDetail, Graph, Owners, Shown, WitnessRow, owner_module
 from hoglint.native.bridge import engine_errors, import_module
 from hoglint.native.graph import SYMBOL_KINDS, NativeGraph, NativeSymbols
 from hoglint.native.labels import NativeLabeler
@@ -160,24 +160,23 @@ class RowDetail:
     """The detail of a finding whose message the evaluator's row holds: the site and witness
     are its edge's, made when something reads them."""
 
-    __slots__ = ("handle", "made", "message", "remedies")
+    __slots__ = ("handle", "made", "message")
 
-    def __init__(self, message: str, handle: EdgeHandle, remedies: tuple[Remedy, ...] = ()) -> None:
+    def __init__(self, message: str, handle: EdgeHandle) -> None:
         self.message = message
         self.handle = handle
-        self.remedies = remedies
         self.made: FindingDetail | None = None
 
     def get(self) -> FindingDetail:
         if self.made is None:
             edge = self.handle.get()
-            self.made = FindingDetail(self.message, edge.site, (edge,), self.remedies)
+            self.made = FindingDetail(self.message, edge.site, (edge,))
         return self.made
 
 
 class Worded:
     """The detail of a finding the evaluator found: the rule words it from the row when something
-    reads the message, site, witnesses or remedies."""
+    reads the message, site or witnesses."""
 
     __slots__ = ("at", "made", "rows")
 
@@ -490,7 +489,7 @@ class NativeRuleContext(RuleContext):
             finding = Finding(
                 rule=spec.id,
                 identity=identity,
-                detail=RowDetail(rule.unclassified(identity), handle, rule.remedies()),
+                detail=RowDetail(rule.unclassified(identity), handle),
                 owner=self.owner(src),
                 subjects=subjects_of(src, dst),
                 witness=handle,

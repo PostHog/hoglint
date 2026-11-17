@@ -71,12 +71,11 @@ class WitnessRecord:
 
 @dataclass(frozen=True, slots=True)
 class ShownRecord:
-    """What `check` prints of a finding besides its identity: the message, site and remedies."""
+    """What `check` prints of a finding besides its identity: the message and site."""
 
     message: str
     path: str  # empty when the finding has no site
     line: int
-    remedies: tuple[tuple[str, str], ...]
 
     @staticmethod
     def of(finding: Finding, portable: Portable) -> ShownRecord:
@@ -85,16 +84,15 @@ class ShownRecord:
             portable.text(finding.message),
             site.path if site is not None else "",
             site.line if site is not None else 0,
-            tuple((remedy.kind, remedy.detail) for remedy in finding.remedies),
         )
 
     def to_json(self) -> list[Any]:
-        return [self.message, self.path, self.line, [list(remedy) for remedy in self.remedies]]
+        return [self.message, self.path, self.line]
 
     @staticmethod
     def from_json(data: list[Any]) -> ShownRecord:
-        message, path, line, remedies = data
-        return ShownRecord(message, path, int(line), tuple((kind, detail) for kind, detail in remedies))
+        message, path, line = data
+        return ShownRecord(message, path, int(line))
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +146,7 @@ class FindingRecord:
 
 
 # The lengths of the stored lists `ShownRecord` and `WitnessRecord` write.
-SHOWN_FIELDS = 4
+SHOWN_FIELDS = 3
 WITNESS_FIELDS = 6
 STATUS_VALUES = frozenset(status.value for status in FindingStatus)
 
