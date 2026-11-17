@@ -274,10 +274,11 @@ class RecordingCommands(Commands):
         attributed: Any,
         grown: Any = None,
         view: Any = HOOK_VIEW,
+        moved: Any = frozenset(),
     ) -> int:
         self.reported = summary
         self.against = attributed.against if attributed is not None else ""
-        return super().report(summary, config, policy_root, files_root, touched, attributed, grown, view)
+        return super().report(summary, config, policy_root, files_root, touched, attributed, grown, view, moved)
 
     def reuse(self) -> dict[str, Any]:
         """The state of each store of the run (`RunStores.record`), and how many stored summaries

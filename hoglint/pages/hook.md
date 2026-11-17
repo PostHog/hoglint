@@ -10,7 +10,7 @@ A new problem blocks.
 
 - New findings of a blocking rule.
 - The ledger: it must equal the scan.
-- Ledger lines that this commit adds when the policy does not change.
+- Ledger lines that this commit adds when the policy does not change. A line of a finding that only moved is no new debt. CI judges a move the same way.
 - The exceptions: each exception must be complete and must match a finding.
 - A product that narrows its contract-check inputs claims the Isolated level. The product must pass the level.
 - New code that hoglint cannot judge (a new unknown).
@@ -32,6 +32,7 @@ A new problem blocks.
 | A new finding | Do the fix that the output gives. `hoglint explain <rule>` gives more. | As the output says. |
 | No fix fits | Stop and tell the person. | Needs a person. |
 | Stale ledger lines | Run `hoglint ledger shrink`, then stage `hoglint.ledger`. The command only removes lines. | Safe. |
+| Findings that moved | Run `hoglint check --write-ledger`, then stage `hoglint.ledger`. The command records the new places and refuses new debt. | Safe. |
 | The commit adds ledger lines | Remove them. Fix the findings, or stop and tell the person. | Needs a person. |
 | A problem in `hoglint.exceptions.toml` | Stop and tell the person. A person writes and reviews exceptions. | Needs a person. |
 | A product fails the level that it claims | If a reason names a file that the turbo.json of the product does not watch, add the file to the watched inputs. Fix each other reason in the code. To remove the narrowed inputs, stop and tell the person: the product is then no longer isolated. | Safe, needs care, or needs a person. |

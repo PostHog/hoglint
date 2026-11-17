@@ -292,7 +292,9 @@ def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> No
 @needs_extractor
 def test_the_ledger_shrinks_freely_and_grows_only_with_a_person(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    write_files(repo, FILES)
+    # Growth per product (D67), so a use that leaves alerts does not pay for a new one in core.
+    config = CONFIG.replace('growth_key = ["dst.symbol"]', 'growth_key = ["dst.symbol", "src.package"]')
+    write_files(repo, {**FILES, "hoglint.toml": config})
     git_in(repo, "init", "-q")
     assert hoglint(repo, "check", "--write-ledger").returncode == 1
     assert not (repo / "hoglint.ledger").exists()
@@ -320,9 +322,7 @@ def test_the_ledger_shrinks_freely_and_grows_only_with_a_person(tmp_path: Path) 
     assert hook.returncode == 1 and "This change adds 1 line to hoglint.ledger, with no policy change." in hook.stdout
 
     # A policy change in the same commit moves lines by design: compare judges them, not the hook.
-    (repo / "hoglint.toml").write_text(
-        CONFIG.replace('growth_key = ["dst.symbol"]', 'growth_key = ["dst.symbol"]\ndoc = "changed"')
-    )
+    (repo / "hoglint.toml").write_text(config + 'doc = "changed"\n')
     assert hoglint(repo, "check", "--write-ledger").returncode == 0
     git_in(repo, "add", "-A")
     assert hoglint(repo, "check", "--index").returncode == 0

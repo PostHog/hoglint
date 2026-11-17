@@ -1,0 +1,4 @@
+exit 1
+not written: the scan adds 1 lines to hoglint.ledger
+  public-surface	products.shelf.backend.logic.labels.label_for	products.reports.backend.logic.shelf_totals	import  0 -> 1
+  new debt needs a person: fix the findings, or stop and tell the person; a person who accepts the debt, or a policy change that finds more, records it with --write-ledger --record-growth
