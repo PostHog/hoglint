@@ -122,8 +122,24 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `HZ12` | `products/legacy/backend/facade/relativeworkers.py` | A facade module with a body whose lazy map names wiring by a relative value (`'..temporal.jobs'`) | facade-logic finding | A relative value is anchored at the module's package, as a relative import is (Nov 12) |
 | `HZ13` | `products/legacy/backend/facade/barelazy.py` | A lazy map of one bare name where no entry resolves | export-shape unknown for the name `__all__` lists; clean for `handout_zones` | A written limit: a dict of plain words looks the same for `handout_zones`; a listed name nothing binds readably is unknown (T14, Nov 13) |
 | `HZ14` | `products/legacy/backend/facade/colonlazy.py` | A lazy value that names the attribute (`'pkg.mod:Name'`) | export-shape unknown for the name `__all__` lists; clean for `handout_zones` | A written limit for `handout_zones`; a listed name nothing binds readably is unknown (T14, Nov 13) |
-| `FQ01` | `products/catalog/backend/facade/api.py` | A facade function runs an ORM query itself (`count_entries`) | clean | D95, D96 (wanted) |
+| `FQ01` | `products/catalog/backend/facade/api.py` | A facade function runs an ORM query itself (`count_entries`), a read by team | clean | A read by id, by team or by the caller's filters is allowed (D115, which replaces D95's wider rule) |
 | `FQ02` | `products/inventory/backend/facade/api.py` | A facade function maps a list that its logic returned | clean | D96 |
+| `NS01` | `products/legacy/backend/facade/api_state.py` | A facade function creates a row (`objects.create`) | facade-no-state finding (`write(create)`) | D115: a facade changes no state |
+| `NS02` | `products/legacy/backend/facade/api_state.py` | A facade function holds a queryset in a local and updates it | facade-no-state finding, labelled by the source use (`instance-many(filter)`) | The write is read through the local (`flow_shape`) |
+| `NS03` | `products/legacy/backend/facade/api_state.py` | A facade function loads a row by id into a local, sets a field and saves it | facade-no-state finding (`instance-single`) | `save` writes one instance (`instance_write`); the flow shape, which model-crossings reads, does not change |
+| `NS04` | `products/legacy/backend/facade/api_state.py` | A facade function builds an instance and saves it | facade-no-state finding (`construct`) | A built instance that is saved is a write |
+| `NS05` | `products/legacy/backend/facade/api_state.py` | A facade function reads a row with `select_for_update()` | facade-no-state finding (`lock`) | D115: a row lock |
+| `NS06` | `products/legacy/backend/facade/api_state.py` | A facade function opens `transaction.atomic()` around a call of its logic; another is decorated with it | facade-no-state finding, one row with count 2 | D115: a transaction; a use of `transaction.atomic` is a reference edge by `[discovery] reference_names` |
+| `NS07` | `products/legacy/backend/facade/api_state.py` | A facade function reads through `objects.unscoped()` | facade-no-state finding (`scalar-chain(values_list)`) | D115: a read that leaves the team scope |
+| `NS08` | `products/legacy/backend/facade/api_state.py` | A facade function reads through the `all_teams` manager | facade-no-state finding (`scalar-chain(count)`) | D115 |
+| `NS09` | `products/legacy/backend/facade/api_state.py`, `posthog/models/scoping.py` | A facade function runs a call inside the `unscoped()` context | facade-no-state finding | D115; a reference by `[discovery] reference_names` |
+| `NS10` | `products/legacy/backend/facade/api_state.py` | Facade functions read by id, by team and by the caller's filters, with the same labels as `NS03`, `NS07` and `NS08`; one maps a queryset it holds in a local | clean | D115: reads mapped to contract types stay allowed |
+| `NS11` | `products/inventory/backend/facade/api.py`, `products/inventory/backend/logic/stock.py` | The facade calls the operation its logic holds (a transaction, a read, a save) | clean | The shape the rule's message asks for |
+| `NS12` | `products/legacy/backend/facade/api_state.py` | A facade function raises on what a read returned and writes nothing | clean | A written limit (D115): a decision on what the database returned that leads to no write |
+| `NS13` | `products/legacy/backend/facade/api_state.py` | A facade function carries a definition in a read's filter (`name__startswith="live-"`) | clean | A written limit (D115) |
+| `NS14` | `products/legacy/backend/facade/api_state.py`, `products/legacy/backend/logic/widgets.py` | A facade function saves an instance a logic function returned; another saves each row of a loop over a queryset | clean | A written limit: a write on a value that came from a parameter, a helper, a loop or a related manager is not seen |
+| `NS15` | `products/legacy/backend/facade/api_state.py` | A facade function calls `unscoped()` later in a chain (`objects.filter(...).unscoped()`) | clean | A written limit: the chain is read from its start |
+| `NS16` | `products/legacy/backend/facade/api_scope_gone.py` | A facade function runs inside a scope context whose import does not resolve | facade-no-state clean (a use that resolves to no listed name makes no edge); facade-no-drf and prod-imports-test unknown; a no-new-package-cycles incomplete item | The import's own unknown rows are what the run shows |
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |
 | `FD02` | `products/legacy/backend/facade/api.py` | A facade imports a DRF exception | facade-no-drf finding | |
 | `FD03` | `products/legacy/backend/facade/api.py` | A facade imports its own presentation | facade-no-drf finding | |
@@ -171,7 +187,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `TC04` | `products/inventory/backend/management/commands/show_stock.py` | A command that goes through its facade | clean | |
 | `TC05` | `products/inventory/backend/management/commands/restock_now.py` | A command imports a name its facade's tasks module hands out from the product's tasks | clean | Judged at the origin, excused when the surface is the product's facade (Nov 16) |
 | `TC05` | `products/visual_review/backend/management/commands/seed_dummy_runs.py` | A dev seeder on the named list writes through its models | clean | Named as test code (D104) |
-| `AT01` | `products/legacy/backend/presentation/views.py` | Presentation opens a transaction (`with` and decorator) | clean: atomic-outside-views is off | The rule cannot fire: no reference edge for a call, `with` or decorator; off for now, revisited after the switch (D118; wanted) |
+| `AT01` | `products/legacy/backend/presentation/views.py` | Presentation opens a transaction (`with` and decorator) | clean | atomic-outside-views is retired with D115: facade-no-state judges transactions in facades, and no rule judges them in presentation |
 | `AT02` | `products/inventory/backend/logic/stock.py`, `products/legacy/backend/api/widgets.py` | A transaction outside presentation | clean | |
 | `PT01` | `products/legacy/backend/tasks/cleanup.py` | A production task imports a test factory | prod-imports-test finding | |
 | `PT04` | `posthog/temporal/ingestion_acceptance_test/runner.py`, `posthog/temporal/ingestion_acceptance_test/test_cases_discovery.py` | Production code imports a production module named like a test | clean | The test-code label leaves that one named file out (Nov 16) |
@@ -319,6 +335,8 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | `handout_zones` | A lazy hand-out; `import a.b as name`; a relative import above the top package | `HZ04`, `HZ05`, `HZ06` | finding, finding, incomplete |
 | `handout_zones` | A lazy map of bare names where none resolves; a `'pkg.mod:Name'` value | `HZ13`, `HZ14` | clean for `handout_zones` (written limits); export-shape unknown where `__all__` lists the name |
 | `dst.door` | An import that does not resolve | `DO07` | unknown |
+| `[discovery] reference_names` | A use whose name does not resolve | `NS16` | no reference edge; the import's own rows are unknown or incomplete |
+| `instance_write` (the Django pack) | A value that came from a helper or a loop | `NS14` | clean (a written limit) |
 | Member slots of a handed-out class | A bare `dict`, a bare `object` or no annotation outside a surface file; the same in a class nested in a surface file's class | `ME09`, `ME10` | clean (written limits, wanted) |
 | `dst.zone` | A directory two source roots place apart | none | The tree has one source root; a second would change every other case's module names |
 | `may_cross` | A slot typed with a name that does not resolve | `CR03` | unknown |
@@ -399,6 +417,9 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | facade-logic | A `facade/testing.py` helper | `FL05` |
 | facade-logic | A small helper without ORM | `FL02` |
 | facade-logic | A short ORM read in the facade | `FQ01` |
+| facade-no-state | A write, a lock or a transaction in a facade function | `NS01` to `NS06` |
+| facade-no-state | A read across teams in a facade function | `NS07` to `NS09` |
+| facade-no-state | A read with branching around it that writes nothing | `NS12`: clean (the written limit) |
 | facade-logic | A large function with ORM work | `FQ01` (small) |
 | facade-logic | A large or branching function without ORM | `FL02` (`summarize`) |
 | contracts-no-django | A chain through a function-local import | `CN02` |

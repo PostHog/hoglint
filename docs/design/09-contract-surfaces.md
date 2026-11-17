@@ -1,7 +1,7 @@
 # 9. Contract surfaces: what an export hands out
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 16, 2026.
+> Current as of Nov 17, 2026.
 
 A PostHog facade (`products/<name>/backend/facade/`) is one export in hoglint's terms.
 The engine's word is `export`; "facade" is a name in the PostHog preset (D48).
@@ -223,6 +223,25 @@ Other packages import it, so it stays in the export and its audience holds; but 
   A function in the facade's data module is never a finding of this rule: adding one is how a product offers something new.
 - Known gap: the old check also flagged a stub that carries a task or workflow decorator. The rule reads one edge at a time and does not see the decorator.
 
+**A facade changes no state** (owner, Nov 16, D115; the rule `facade-no-state`, built Nov 17).
+The owner's question was how to tell "this is logic" from "it just hands out results": not every ORM query in a facade is logic.
+A change of state, a lock and a read across teams are logic by any reading; a read mapped to contract types is not.
+- In facade code (fixtures and test code left out), each of these is a finding:
+  - a write: a model use whose Django shape is `write` (create, update, delete, the get-or-create, update-or-create and bulk forms, and their async twins), whose flow shape is one (a queryset held in a local and updated), or whose value is saved (`instance_write`, also a built instance);
+  - a transaction or a row lock: a use of `django.db.transaction.atomic` (a call, a `with`, a decorator), a model use whose shape is `lock` (`select_for_update`);
+  - a read that leaves the team scope: a chain that starts with `objects.unscoped()`, the `all_teams` manager, a use of the `unscoped()` context.
+- A read by id, by team or by the caller's filters is allowed, whatever its shape.
+- One row per use; the identity is the module, the model or name, and the label, counted, as for `model-crossings`. Today's rows go into the ledger; a new one blocks.
+- The message asks to move the whole operation, with its checks, its lock and its write, into the product's internals, and to keep the facade to calling it and mapping the result.
+  Moving only the ORM line into a helper leaves the operation in the facade: the measurement of the wider rule showed that such a fix is a pass-through.
+- Written limits:
+  - a decision on what the database returned that leads to no write (a read, a branch, a raise);
+  - a definition carried in a read's filter;
+  - a write on a value that came from a parameter, a helper, a loop or a related manager: the facts follow a use only into a local it is assigned to;
+  - a scope-leaving call later in a chain or on a local (`objects.filter(...).unscoped()`): the chain is read from its start;
+  - `transaction.on_commit` and raw SQL through a cursor: D115 names neither.
+- The model repository holds a finding and a clean neighbor for each clause, and the limits, as `NS01` to `NS16`.
+
 ## Why
 
 - Publicness by location turned Packwerk's `app/public` into a catch-all drawer.
@@ -242,6 +261,7 @@ Other packages import it, so it stays in the export and its audience holds; but 
 | Exports as a preset macro | Keep them in core, with framework meaning in packs | By exclusion Nov 9 | `docs/research/exports-and-shapes-second-opinion.md` |
 | Treat all three surfaces alike for unannotated parameters | The wrong design: adapters are subclassed, not called | Architect, Nov 10 | `docs/history/decision-log-3.md` |
 | N3b as "three additions" only | The summary of the study dropped builtins | Architect corrected it, D62 | `docs/history/decision-log-3.md` |
+| A facade function runs no ORM query itself (D95, every manager call a finding) | Most rows were plain reads whose smallest fix is a one-line pass-through into the internals; the owner chose no facade ORM rule for the switch (D109), then the narrower D115 | Owner, Nov 16 | not published (the measurement of Nov 12) |
 | Copy the old producer's alias special case into core | Core does not inherit a producer's special case | Architect, D62 C3 | `docs/history/decision-log-3.md` |
 | An alias names itself and its expansion (D62 C3) | Triage: noise when the expansion is known | Reversed by D70 | `docs/history/decision-log-3.md` |
 | Any model core owns may cross | Core may later move a model out | Owner, D65 | `docs/history/decision-log-3.md` |

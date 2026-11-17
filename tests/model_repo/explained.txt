@@ -173,6 +173,10 @@ edge     reference products/reports/backend/logic/build.py:14 products.catalog.b
 rule     public-surface (endpoint surface, products.catalog.backend.facade.models.CatalogEntry)
            select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
+rule     facade-no-state (endpoint origin, products.catalog.backend.models.CatalogEntry)
+           from: facade-code and src.testcode != true -> false
+           select: (dst.kind == 'model' and edge.shape != none) or (edge.resolution in ['resolved', 'external'] and dst.symbol in ['django.db.transaction.atomic', 'posthog.models.scoping.unscoped']) -> true
+           deny: facade-writes or facade-opens-transaction or facade-leaves-team-scope -> false
 rule     model-crossings (endpoint origin, products.catalog.backend.models.CatalogEntry)
            select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> true
 rule     no-new-package-cycles (endpoint origin, products.catalog.backend.models.CatalogEntry)

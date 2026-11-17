@@ -29,6 +29,8 @@ Some words have two meanings; the entry names both.
 - **Use** (edge field `use`; `CORE_USES`).
   How a reference uses the name: `call`, `attribute`, `subscript`, `annotation`, `base` and others.
   Core sets it with no framework meaning.
+- **Chain** (edge attr `chain` of a reference edge).
+  The attribute names, calls (`()`) and subscripts (`[]`) the code applies past the name the edge resolves to, as written: `.objects.unscoped().filter()` after a model.
 - **Reference names** (`[discovery] reference_names`).
   Full dotted names whose every use is a reference edge, one per scope and attribute chain.
   Core makes none otherwise for a third-party name or a first-party function.

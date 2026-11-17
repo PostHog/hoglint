@@ -77,11 +77,13 @@ A rule selects on labels, never on a folder alone:
 **Which rule families block at adoption: all of them, with the existing debt in the ledger** (owner, Nov 9).
 
 **Rule states today:** enforced (blocks new debt; existing debt is in the ledger) and `off` (added by the architect, Nov 11).
-The preset has no `off` key yet: a rule that is off is a commented-out table with its reason (`own-database`, `atomic-outside-views`, D118).
+The preset has no `off` key yet: a rule that is off is a commented-out table with its reason (`own-database`, D118).
 
 **The PostHog preset's rule scope** (D118, Nov 16).
 `generated-producer` and `registry-slots` left the preset: the monorepo's own generated-files test and the registry loader check the same at run time, and neither rule had a producer.
-`own-database` (no producer, a policy never decided) and `atomic-outside-views` (no edge reads `transaction.atomic`) are off for now.
+`own-database` (no producer, a policy never decided) is off for now.
+`atomic-outside-views` is retired (the architect, Nov 17, with D115): no edge read `transaction.atomic`, so it never fired, and `facade-no-state` now judges transactions in facades (`09-contract-surfaces.md`).
+No rule judges a transaction in presentation; with the reference edges below, that is one selector, and the owner's call.
 `migration-database` stays, slim (D117, below).
 
 **Rows the first-ledger triage placed elsewhere** (Nov 16; the architect's answers to the triage).
