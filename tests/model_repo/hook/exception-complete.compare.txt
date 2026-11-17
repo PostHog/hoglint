@@ -1,6 +1,6 @@
 exit 0
 hoglint compare: the change passes.
-base summary: the stored summary hoglint-summary-p6-30f154323f6e74d489b806309b55d630
+base summary: the stored summary hoglint-summary-<key>
 Needs a person's review (it passes here; the owners of the files hold the gate):
 code growth a new exception allows (needs a person's review) (1)
   public-surface products.catalog.backend.logic.pricing.price_for import core: 0 -> 1

@@ -1,6 +1,6 @@
 exit 1
 hoglint compare: the change fails: 55 growth keys grew from code.
-base summary: the stored summary hoglint-summary-p6-30f154323f6e74d489b806309b55d630 lacks the group edges compare lists, so the full base scan ran
+base summary: the stored summary hoglint-summary-<key> lacks the group edges compare lists, so the full base scan ran
 code growth (fails) (55)
   facade-signature ? inventory: 0 -> 1
   facade-signature builtins.dict inventory: 0 -> 1

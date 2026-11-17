@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import ast
 import shutil
 import datetime
@@ -31,6 +32,7 @@ DAY = datetime.date(2026, 11, 17)
 # The claims the model repository plants that fail Isolated: the base drops them, so its check is
 # clean, and one scenario brings a claim back.
 FAILING_CLAIMS = ("catalog", "gatekeeper", "inventory", "legacy", "reports")
+SUMMARY_KEY = re.compile(r"hoglint-summary-p\d+-[0-9a-f]+")
 # What the first 2,000 characters of a blocked hook output hold: a harness may show no more.
 PREVIEW = 2000
 
@@ -51,7 +53,8 @@ def run(repo: Path, work: Path, action: Callable[[Commands], int]) -> str:
             code = action(commands)
     finally:
         commands.snapshots.close()
-    return f"exit {code}\n{out.getvalue()}"
+    # A summary's key names the engine's sources, so it moves with any change to them.
+    return SUMMARY_KEY.sub("hoglint-summary-<key>", f"exit {code}\n{out.getvalue()}")
 
 
 def hook(commands: Commands) -> int:
