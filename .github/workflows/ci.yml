@@ -1,0 +1,67 @@
+# The light suite on every pull request and on main: Rust format, lint and tests, then the
+# Python lint, types and tests against a fresh native build. It never publishes; wheels.yml does.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # PyO3's build script reads the interpreter when clippy builds the binding crate.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      # cargo installs the toolchain rust-toolchain.toml pins, with rustfmt and clippy.
+      - name: Rustfmt
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # The root package only: the binding's test binary cannot link without an interpreter.
+      - name: Tests
+        run: cargo test --locked
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - name: Install the dev environment
+        run: uv sync --locked
+      - name: Build the extractor and the native module
+        run: bin/build
+      - name: Ruff
+        run: |
+          .venv/bin/ruff check .
+          .venv/bin/ruff format --check .
+      - name: ty
+        # Main has 24 diagnostics, and AGENTS.md says to add none: the step fails when the count grows.
+        run: |
+          .venv/bin/ty check --output-format concise --exit-zero > ty.txt
+          cat ty.txt
+          count="$(grep -c -E ':[0-9]+:[0-9]+: (error|warning)\[' ty.txt || true)"
+          echo "ty: $count diagnostics, at most 24 allowed"
+          test "$count" -le 24
+      - name: pytest
+        env:
+          HOGLINT_REQUIRE_NATIVE: "1"
+        # The deselected test needs owners_yaml, a package only the PostHog monorepo has.
+        run: >
+          .venv/bin/python -m pytest -q
+          --deselect tests/rules/test_attribution.py::test_the_owners_provider_reads_only_the_ownership_files_it_declares

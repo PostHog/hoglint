@@ -73,6 +73,9 @@ bin/prove                                   # all of the above side by side, plu
 - `bin/parity <monorepo root>` runs each old boundary tool of the PostHog monorepo (tach, its map, the import-linter contracts, the crossings scanner, the product lint's isolation checks, the migration invariant test) and hoglint on the same tree, and prints one verdict per tool: equal, explained, or unexplained.
   A difference is explained only by a reason that code checks for that item; the file per tool lists every difference with its reason.
   Set `HOGLINT_PYTHON` to the monorepo's own interpreter, which holds the old tools.
+- One wheel named `hoglint` ships the package, the native module and the `hoglint-facts` binary.
+  `bin/stage-facts` stages the binary, then `maturin build --release --locked` builds the wheel; `bin/build` does both and leaves the wheel in `$CARGO_TARGET_DIR/wheels`.
+  `.github/workflows/ci.yml` runs the checks above on each pull request; `.github/workflows/wheels.yml` builds the release wheels and publishes them on a `v*` tag only.
 - `cargo test --workspace` cannot link the binding's test binary; test the root package.
 - `clippy` needs `--workspace`, or it never lints the binding crate.
 - The PostHog owners provider imports a package that only the PostHog monorepo has, so two of its tests fail in this repo's environment until that provider moves out.
