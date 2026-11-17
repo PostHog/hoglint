@@ -1999,6 +1999,12 @@ rule = "reached-watched"
 verdict = "finding"
 identity = ["products/inventory/backend/logic/windows.py"]
 
+[[row]]
+case = "OR11"
+rule = "reached-watched"
+verdict = "finding"
+identity = ["products/inventory/backend/logic/restock_alerts.py"]
+
 # receiver-direction
 
 [[row]]

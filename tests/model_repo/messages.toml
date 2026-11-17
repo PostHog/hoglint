@@ -1445,6 +1445,11 @@ text = "products/inventory/turbo.json does not watch products/inventory/backend/
 
 [[finding]]
 rule = "reached-watched"
+identity = ["products/inventory/backend/logic/restock_alerts.py"]
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/restock_alerts.py: code outside the product reads a name that this file defines, through a facade"
+
+[[finding]]
+rule = "reached-watched"
 identity = ["products/inventory/backend/logic/restock_rules.py"]
 text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/restock_rules.py: code outside the product reads a name that this file defines, through a facade"
 
