@@ -21,10 +21,6 @@ def widget_count(team_id: int) -> int:
     return widget_total(team_id)
 
 
-def load_widget(team_id: int, widget_id: int) -> Widget:
-    return Widget.objects.get(team_id=team_id, pk=widget_id)
-
-
 def restock_all(team_id: int) -> None:
     for item in StockItem.objects.filter(team_id=team_id):
         item.save()

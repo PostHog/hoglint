@@ -1,7 +1,8 @@
 from django.db import transaction
 
 from posthog.models.scoping import unscoped
-from products.legacy.backend.logic.widgets import load_widget, widget_total
+from products.legacy.backend.logic.loading import load_widget
+from products.legacy.backend.logic.widgets import widget_total
 from products.legacy.backend.models import Widget
 
 

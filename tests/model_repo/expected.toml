@@ -608,12 +608,6 @@ identity = ["products.reports.backend.facade.run_handle.run_count", "products.re
 # facade-no-drf
 
 [[row]]
-case = "NS16"
-rule = "facade-no-drf"
-verdict = "unknown"
-identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
-
-[[row]]
 case = "CR03"
 rule = "facade-no-drf"
 verdict = "unknown"
@@ -661,26 +655,19 @@ rule = "facade-no-drf"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
+[[row]]
+case = "NS16"
+rule = "facade-no-drf"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
+
 # facade-no-state
 
 [[row]]
-case = "NS06"
+case = "NS01"
 rule = "facade-no-state"
 verdict = "finding"
-identity = ["django.db.transaction.atomic", "products.legacy.backend.facade.api_state", "reference"]
-count = 2
-
-[[row]]
-case = "NS09"
-rule = "facade-no-state"
-verdict = "finding"
-identity = ["posthog.models.scoping.unscoped", "products.legacy.backend.facade.api_state", "reference"]
-
-[[row]]
-case = "NS04"
-rule = "facade-no-state"
-verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "construct"]
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "write(create)"]
 
 [[row]]
 case = "NS02"
@@ -695,16 +682,23 @@ verdict = "finding"
 identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "instance-single"]
 
 [[row]]
+case = "NS04"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "construct"]
+
+[[row]]
 case = "NS05"
 rule = "facade-no-state"
 verdict = "finding"
 identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "lock"]
 
 [[row]]
-case = "NS08"
+case = "NS06"
 rule = "facade-no-state"
 verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(count)"]
+identity = ["django.db.transaction.atomic", "products.legacy.backend.facade.api_state", "reference"]
+count = 2
 
 [[row]]
 case = "NS07"
@@ -713,10 +707,16 @@ verdict = "finding"
 identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(values_list)"]
 
 [[row]]
-case = "NS01"
+case = "NS08"
 rule = "facade-no-state"
 verdict = "finding"
-identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "write(create)"]
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(count)"]
+
+[[row]]
+case = "NS09"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["posthog.models.scoping.unscoped", "products.legacy.backend.facade.api_state", "reference"]
 
 # facade-signature
 
@@ -1251,12 +1251,6 @@ identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.ba
 # no-new-package-cycles
 
 [[row]]
-case = "NS16"
-rule = "no-new-package-cycles"
-verdict = "incomplete"
-identity = ["products.legacy.backend.facade.api_scope_gone|import|posthog.models.scoping.gone_unscoped"]
-
-[[row]]
 case = "CR03"
 rule = "no-new-package-cycles"
 verdict = "incomplete"
@@ -1309,6 +1303,12 @@ case = "ME02"
 rule = "no-new-package-cycles"
 verdict = "incomplete"
 identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
+
+[[row]]
+case = "NS16"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.api_scope_gone|import|posthog.models.scoping.gone_unscoped"]
 
 [[row]]
 case = "UK01"
@@ -1499,12 +1499,6 @@ identity = ["products.inventory.backend.routes", "products.inventory.backend.rou
 # prod-imports-test
 
 [[row]]
-case = "NS16"
-rule = "prod-imports-test"
-verdict = "unknown"
-identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
-
-[[row]]
 case = "CR03"
 rule = "prod-imports-test"
 verdict = "unknown"
@@ -1527,6 +1521,12 @@ case = "ME02"
 rule = "prod-imports-test"
 verdict = "unknown"
 identity = ["products.catalog.backend.logic.errors", "?"]
+
+[[row]]
+case = "NS16"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
 
 [[row]]
 case = "PF07"

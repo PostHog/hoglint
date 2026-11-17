@@ -13,7 +13,7 @@ code growth (fails) (55)
   presentation-uses-facade products.catalog.backend.logic.exporters reports: 0 -> 1
   presentation-uses-facade products.catalog.backend.logic.pricing reports: 0 -> 1
   and 45 more: hoglint compare --base base --all
-counts: findings new 57, resolved 0; ledger lines added 0, removed 0; zero-net swaps 0; rule growth 0; new group edges 1; old unknowns 96. Show every section: hoglint compare --base base --all.
+counts: findings new 57, resolved 0; ledger lines added 0, removed 0; zero-net swaps 0; rule growth 0; new group edges 1; old unknowns 97. Show every section: hoglint compare --base base --all.
 
 hoglint: this commit is blocked: 64 new findings.
 New findings by rule:
@@ -83,5 +83,5 @@ public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pri
 public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.owner, which is not exported to it
   at posthog/api/bulk_report.py:5
 
-Not shown: 54 more findings, 24 advisory rows, 96 old unknowns, 209 old findings in the ledger. Show every row: hoglint compare --base base --all. Show one rule: hoglint compare --base base --rule <rule>.
+Not shown: 54 more findings, 24 advisory rows, 97 old unknowns, 221 old findings in the ledger. Show every row: hoglint compare --base base --all. Show one rule: hoglint compare --base base --rule <rule>.
 What the hook checks and what to do: hoglint help hook.
