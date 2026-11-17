@@ -6,6 +6,7 @@ import pytest
 
 from hoglint.core.config import CoreConfig
 from hoglint.core.symbols import FUNC, TC_ELSE, TRY, TYPE_ONLY
+from hoglint.globs import ExportPaths
 from hoglint.model import Context, Resolution
 from hoglint.outputs.tach_map import TachMap
 
@@ -98,6 +99,50 @@ def test_a_relative_import_above_the_top_package_keeps_the_name_it_binds() -> No
 def test_reference_names_surface_and_origin_with_a_use_position() -> None:
     [edge] = edges_of(build(repo()), "reference", VIEWS)
     assert (edge.surface, str(edge.target), edge.use) == ("checkout.facade.charge", "checkout.logic.charge", "call")
+
+
+@pytest.mark.parametrize(
+    "listed, expected",
+    [
+        ((), []),
+        (
+            ("checkout.logic.charge",),
+            [
+                ("checkout.facade.charge", "checkout.logic.charge", "other", ""),
+                ("checkout.logic.charge", "checkout.logic.charge", "attribute", ".retry"),
+            ],
+        ),
+    ],
+)
+def test_a_use_of_a_listed_name_is_a_reference_edge(
+    listed: tuple[str, ...], expected: list[tuple[str, str, str, str]]
+) -> None:
+    files = [
+        FileFacts("checkout/__init__.py"),
+        FileFacts("checkout/logic.py").define("charge").define("refund"),
+        FileFacts("checkout/facade.py").import_from("checkout.logic", "charge"),
+        FileFacts(VIEWS)
+        .import_from("checkout.facade", "charge")
+        .import_module("checkout.logic", asname="logic")
+        .use("charge")
+        .use("logic", "charge.retry")
+        .use("logic", "refund"),
+    ]
+    edges = edges_of(build(files, CoreConfig(reference_names=listed)), "reference", VIEWS)
+    assert [(edge.surface, str(edge.target), edge.use, edge.attr("chain")) for edge in edges] == expected
+
+
+def test_a_listed_name_read_through_a_module_alias_of_an_export_has_one_edge() -> None:
+    files = [
+        FileFacts("checkout/__init__.py"),
+        FileFacts("checkout/logic.py").define("charge"),
+        FileFacts(VIEWS).import_module("checkout.logic", asname="logic").use("logic", "charge"),
+    ]
+    config = CoreConfig(
+        reference_names=("checkout.logic.charge",), export_surfaces=(ExportPaths("", ("checkout/**",)),)
+    )
+    edges = edges_of(build(files, config), "reference", VIEWS)
+    assert [(edge.surface, str(edge.target)) for edge in edges] == [("checkout.logic.charge", "checkout.logic.charge")]
 
 
 @pytest.mark.parametrize(

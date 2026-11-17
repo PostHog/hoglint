@@ -23,6 +23,8 @@ pub struct Vocabulary {
     pub meta_managers: Vec<String>,
     pub meta_class_attrs: Vec<String>,
     pub write_methods: Vec<String>,
+    /// Methods that write one model instance and that no manager chain has (`save`).
+    pub instance_writes: Vec<String>,
     pub subquery_calls: Vec<String>,
     /// Methods after which a chain yields rows of values, never an instance.
     pub value_methods: Vec<String>,
@@ -452,6 +454,27 @@ impl Vocabulary {
         let refined = self.manager_chain(&combined, None);
         matches!(refined.kind, "lock" | "write").then_some(refined)
     }
+
+    /// The methods of `instance_writes` called on the value of a use, sorted and joined by commas:
+    /// in its own chain (`M.objects.get().save()`, `M(...).save()`) or by a later use of the
+    /// local it is assigned to (`obj = ...; obj.save()`): `OrmShapes.instance_write`. `later`
+    /// holds the method names of each later use.
+    pub fn instance_write(&self, source: &UsePosition, later: &[&[String]]) -> Option<String> {
+        let (methods, rest) = source.methods();
+        let mut found: Vec<&str> = methods
+            .into_iter()
+            .chain(called_after_subscript(rest))
+            .chain(
+                later
+                    .iter()
+                    .flat_map(|names| names.iter().map(String::as_str)),
+            )
+            .filter(|name| holds(&self.instance_writes, name))
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        (!found.is_empty()).then(|| found.join(","))
+    }
 }
 
 #[cfg(test)]
@@ -471,6 +494,7 @@ mod tests {
             meta_managers: names(&["default_manager"]),
             meta_class_attrs: names(&["model"]),
             write_methods: names(&["update"]),
+            instance_writes: names(&["save"]),
             subquery_calls: names(&["Exists"]),
             value_methods: names(&["values", "values_list"]),
             sender_keywords: names(&["sender"]),
@@ -543,6 +567,25 @@ mod tests {
             );
         }
         assert_eq!(shape("", "arg:0"), Err(Unreadable));
+    }
+
+    #[test]
+    fn an_instance_write_is_read_on_the_use_and_on_the_local_it_flows_into() {
+        let written = |chain: &str, later: &[&[String]]| {
+            vocabulary().instance_write(&UsePosition::of(chain, "expr"), later)
+        };
+        let saved = names(&["save"]);
+        let read = names(&["filter", "count"]);
+        assert_eq!(written("().save()", &[]), Some("save".to_string()));
+        assert_eq!(
+            written(".objects.filter()[].save()", &[]),
+            Some("save".to_string())
+        );
+        assert_eq!(
+            written(".objects.get()", &[&read, &saved]),
+            Some("save".to_string())
+        );
+        assert_eq!(written(".objects.filter().update()", &[&read]), None);
     }
 
     #[test]

@@ -5,6 +5,18 @@
 # config:stale-name
 
 [[row]]
+case = "NS18"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["django.db.transaction.atomik"]
+
+[[row]]
+case = "NS19"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog.models.scoping_compat.unscoped"]
+
+[[row]]
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"
@@ -635,6 +647,69 @@ rule = "facade-no-drf"
 verdict = "unknown"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 
+[[row]]
+case = "NS16"
+rule = "facade-no-drf"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
+
+# facade-no-state
+
+[[row]]
+case = "NS01"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "write(create)"]
+
+[[row]]
+case = "NS02"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "instance-many(filter)"]
+
+[[row]]
+case = "NS03"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "instance-single"]
+
+[[row]]
+case = "NS04"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "construct"]
+
+[[row]]
+case = "NS05"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "lock"]
+
+[[row]]
+case = "NS06"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["django.db.transaction.atomic", "products.legacy.backend.facade.api_state", "reference"]
+count = 2
+
+[[row]]
+case = "NS07"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(values_list)"]
+
+[[row]]
+case = "NS08"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(count)"]
+
+[[row]]
+case = "NS09"
+rule = "facade-no-state"
+verdict = "finding"
+identity = ["posthog.models.scoping.unscoped", "products.legacy.backend.facade.api_state", "reference"]
+
 # facade-signature
 
 [[row]]
@@ -1222,6 +1297,12 @@ verdict = "incomplete"
 identity = ["products.catalog.backend.logic.errors|reference|products.catalog.backend.logic.nowhere.MissingFailure"]
 
 [[row]]
+case = "NS16"
+rule = "no-new-package-cycles"
+verdict = "incomplete"
+identity = ["products.legacy.backend.facade.api_scope_gone|import|posthog.models.scoping.gone_unscoped"]
+
+[[row]]
 case = "UK01"
 rule = "no-new-package-cycles"
 verdict = "incomplete"
@@ -1432,6 +1513,12 @@ case = "ME02"
 rule = "prod-imports-test"
 verdict = "unknown"
 identity = ["products.catalog.backend.logic.errors", "?"]
+
+[[row]]
+case = "NS16"
+rule = "prod-imports-test"
+verdict = "unknown"
+identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
 
 [[row]]
 case = "PF07"
@@ -2484,25 +2571,11 @@ identity = ["products/reports/backend/listeners.py"]
 # whose identity holds every string of `match`.
 
 [[wanted]]
-case = "FQ01"
-decision = "D95, D96: a facade function runs no ORM query itself"
-rule = "*"
-verdict = "finding"
-match = ["products.catalog.backend.facade.api", "count_entries"]
-
-[[wanted]]
 case = "IN02"
 decision = "D100: a model class registered into another package is a crossing"
 rule = "*"
 verdict = "finding"
 match = ["products.legacy.backend.models.Widget", "registered_models"]
-
-[[wanted]]
-case = "AT01"
-decision = "B10; Nov 12: the rule gets the edge it needs or goes off; off for the switch (D118)"
-rule = "atomic-outside-views"
-verdict = "finding"
-match = ["products.legacy.backend.presentation.views"]
 
 [[wanted]]
 case = "CN03"

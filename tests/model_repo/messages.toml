@@ -694,6 +694,56 @@ identity = ["products.reports.backend.facade.run_handle.run_count", "products.re
 text = "products.reports.backend.facade.run_handle defines products.reports.backend.facade.run_handle.run_count"
 
 [[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "write(create)"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "instance-many(filter)"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "instance-single"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "construct"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "lock"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(values_list)"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["products.legacy.backend.models.Widget", "products.legacy.backend.facade.api_state", "scalar-chain(count)"]
+text = "products.legacy.backend.facade.api_state uses products.legacy.backend.models.Widget"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["django.db.transaction.atomic", "products.legacy.backend.facade.api_state", "reference"]
+text = "products.legacy.backend.facade.api_state uses django.db.transaction.atomic"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["django.db.transaction.atomic", "products.legacy.backend.facade.api_state", "reference"]
+text = "products.legacy.backend.facade.api_state uses django.db.transaction.atomic"
+
+[[finding]]
+rule = "facade-no-state"
+identity = ["posthog.models.scoping.unscoped", "products.legacy.backend.facade.api_state", "reference"]
+text = "products.legacy.backend.facade.api_state uses posthog.models.scoping.unscoped"
+
+[[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.inventory.backend.routes", "products.inventory.backend.route_helpers"]
 text = "products.inventory.backend.routes imports products.inventory.backend.route_helpers.stock_route_name"
@@ -775,6 +825,11 @@ text = "products.legacy.backend.facade.api imports products.legacy.backend.prese
 
 [[finding]]
 rule = "facade-no-drf"
+identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
+text = "products.legacy.backend.facade.api_scope_gone imports 'posthog.models.scoping.gone_unscoped', which hoglint cannot find"
+
+[[finding]]
+rule = "facade-no-drf"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
 text = "products.legacy.backend.facade.lazygoneworkers imports 'products.legacy.backend.temporal.gone.run_gone', which hoglint cannot find"
 
@@ -817,6 +872,11 @@ text = "products.catalog.backend.logic.errors imports 'products.catalog.backend.
 rule = "prod-imports-test"
 identity = ["products.legacy.backend.facade.aboveworkers", "?"]
 text = "products.legacy.backend.facade.aboveworkers imports '......gone', which hoglint cannot find"
+
+[[finding]]
+rule = "prod-imports-test"
+identity = ["products.legacy.backend.facade.api_scope_gone", "?"]
+text = "products.legacy.backend.facade.api_scope_gone imports 'posthog.models.scoping.gone_unscoped', which hoglint cannot find"
 
 [[finding]]
 rule = "prod-imports-test"
@@ -1661,6 +1721,12 @@ text = "import '......gone' did not resolve"
 
 [[incomplete]]
 rule = "no-new-package-cycles"
+identity = ["products.legacy.backend.facade.api_scope_gone|import|posthog.models.scoping.gone_unscoped"]
+kind = "unresolved"
+text = "import 'posthog.models.scoping.gone_unscoped' did not resolve"
+
+[[incomplete]]
+rule = "no-new-package-cycles"
 identity = ["products.legacy.backend.facade.lazygoneworkers|import|products.legacy.backend.temporal.gone.run_gone"]
 kind = "unresolved"
 text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
@@ -2108,3 +2174,15 @@ rule = "config:stale-name"
 identity = ["products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin"]
 kind = "stale-name"
 text = "products.access_control.backend.presentation.role.RestrictedMemberVisibilityMixin is named by [exports.access-control-mixins]  (tools/hoglint/presets/posthog.toml) but no symbol has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["django.db.transaction.atomik"]
+kind = "stale-name"
+text = "django.db.transaction.atomik is named by [discovery] reference_names but no symbol has it"
+
+[[incomplete]]
+rule = "config:stale-name"
+identity = ["posthog.models.scoping_compat.unscoped"]
+kind = "stale-name"
+text = "posthog.models.scoping_compat.unscoped is named by [discovery] reference_names but is a re-export of posthog.models.scoping.unscoped, which its uses resolve to"

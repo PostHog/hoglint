@@ -1,7 +1,7 @@
 # 4. Rules: primitives, scoping, states
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 16, 2026 (evening).
+> Current as of Nov 17, 2026.
 
 ## Decided
 
@@ -77,11 +77,13 @@ A rule selects on labels, never on a folder alone:
 **Which rule families block at adoption: all of them, with the existing debt in the ledger** (owner, Nov 9).
 
 **Rule states today:** enforced (blocks new debt; existing debt is in the ledger) and `off` (added by the architect, Nov 11).
-The preset has no `off` key yet: a rule that is off is a commented-out table with its reason (`own-database`, `atomic-outside-views`, D118).
+The preset has no `off` key yet: a rule that is off is a commented-out table with its reason (`own-database`, D118).
 
 **The PostHog preset's rule scope** (D118, Nov 16).
 `generated-producer` and `registry-slots` left the preset: the monorepo's own generated-files test and the registry loader check the same at run time, and neither rule had a producer.
-`own-database` (no producer, a policy never decided) and `atomic-outside-views` (no edge reads `transaction.atomic`) are off for now.
+`own-database` (no producer, a policy never decided) is off for now.
+`atomic-outside-views` is retired (the architect, Nov 17, with D115): no edge read `transaction.atomic`, so it never fired, and `facade-no-state` now judges transactions in facades (`09-contract-surfaces.md`).
+No rule judges a transaction in presentation; with the reference edges below, that is one selector, and the owner's call.
 `migration-database` stays, slim (D117, below).
 
 **Rows the first-ledger triage placed elsewhere** (Nov 16; the architect's answers to the triage).
@@ -93,6 +95,28 @@ The preset has no `off` key yet: a rule that is off is a commented-out table wit
 - An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
 - `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
 - `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. Kept (the architect, Nov 16): a re-route through a facade drawer shows again as a `model-crossings` row, and `export-shape` flags the drawer.
+
+**A use of a name the config lists is a reference edge** (the architect, Nov 17, for D115).
+`[discovery] reference_names` lists full dotted names; each use of one is a `reference` edge, one per scope and attribute chain, at its first use.
+- Why: core makes a reference edge for a use of a first-party class and for a name read through a module alias of an export, and none for a third-party function or a first-party function, since most of those no rule reads.
+  So no rule could see where `transaction.atomic` is used, and `atomic-outside-views` never fired.
+- A use counts when its name resolves to a listed one, also through an alias or a re-export.
+  A third-party name resolves only when `[discovery] external` reads its package.
+- The position of the use is not recorded: `use` is `attribute` when the code reads an attribute of the name, else `other`.
+  A decorator's use sits at its module, with the decorated function in the `header` attr.
+- A use whose name resolves to nothing makes no edge; the import's own unresolved edge is what other rules read (model repository `NS16`).
+- An entry that is no definition is a `config:stale-name` incomplete item, so the run exits 2: a name that names nothing, or a re-export, whose uses resolve to the definition behind it (the architect, Nov 17; `NS18`, `NS19`).
+  A misspelled entry would otherwise make the clause that reads it report nothing.
+  An entry that resolves and has no use is fine (`NS17`).
+  The link answers what each entry resolves to while it builds, since the rules run after it releases its fact rows.
+- An empty list makes no edge and no work, so a config without the key runs as before.
+
+**Writes the Django pack reads on a model use** (the architect, Nov 17, for D115).
+- The write vocabulary holds the async twin of each write (`abulk_update`, `aget_or_create` and `aupdate_or_create` were missing).
+- `save` and `asave` write one instance and no manager chain has them, so the flow shape (`flow_shape`) does not show them.
+  A use whose value one of them is called on, in its own chain or by a later use of the local it is assigned to, gets the attr `instance_write` (`save`).
+- Considered and rejected: `save` in the write vocabulary.
+  The flow shape is the label `model-crossings` ledgers, so a cross-package save on a local would change label and move ledger lines of another rule.
 
 **A reach stops at a denied module, unless it says otherwise** (Nov 12).
 A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.

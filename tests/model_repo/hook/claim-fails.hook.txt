@@ -21,5 +21,5 @@ More findings:
 wiring-watched: products/inventory/turbo.json does not watch products/inventory/backend/admin/stock_admin.py: the admin module of the product imports this module
 wiring-watched: products/inventory/turbo.json watches no file in products/inventory/backend/tasks/: core runs this location by name, and one watched file in it is enough
 
-Not shown: 36 advisory rows, 96 old unknowns, 208 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+Not shown: 36 advisory rows, 99 old unknowns, 220 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

@@ -225,6 +225,7 @@ DISCOVERY_KEYS = frozenset(
         "frozen_dataclass_decorators",
         "dataclass_bases",
         "path_callees",
+        "reference_names",
     }
 )
 VOCABULARY_KEYS = frozenset({"edge_kinds", "use_shapes", "sections", "views"})

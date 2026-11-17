@@ -28,6 +28,7 @@ def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping
         "patch_callees": list(config.patch_callees),
         "path_callees": list(config.path_callees),
         "path_modules": list(config.path_modules),
+        "reference_names": list(config.reference_names),
         "contract_surfaces": [
             {"within": surface.within, "paths": list(surface.paths)} for surface in config.contract_surfaces
         ],

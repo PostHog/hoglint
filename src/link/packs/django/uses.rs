@@ -17,6 +17,7 @@ use serde::de::IgnoredAny;
 
 const CORE_REFERENCE_PRODUCER: &str = "core-reference@1";
 const FLOW_SHAPE: &str = "flow_shape";
+const INSTANCE_WRITE: &str = "instance_write";
 
 /// One `derived` row: (scope, header, line, column, flags, root, chain, up, origin).
 type Derived = (
@@ -155,8 +156,9 @@ impl LocalSources {
     }
 }
 
-/// One use of a file once judged: its edge, its shape in the memo, and its flow shape.
-type Judged = (u32, usize, Option<String>);
+/// One use of a file once judged: its edge, its shape in the memo, its flow shape, and the
+/// instance writes called on its value.
+type Judged = (u32, usize, Option<String>, Option<String>);
 
 struct Judge<'l> {
     link: &'l Link,
@@ -266,17 +268,22 @@ impl<'l> Judge<'l> {
         let mut out = Vec::with_capacity(rows.len());
         for (index, (&id, &at)) in rows.iter().zip(&positions).enumerate() {
             let shaped = &self.memo.shaped[at];
-            let flow = later.get(&index).and_then(|found| {
-                let methods: Vec<&[String]> = found
+            let methods: Vec<&[String]> = later.get(&index).map_or_else(Vec::new, |found| {
+                found
                     .iter()
                     .map(|&at| self.memo.later[at].methods.as_slice())
-                    .collect();
+                    .collect()
+            });
+            let flow = if methods.is_empty() {
+                None
+            } else {
                 self.vocabulary
                     .refine(&shaped.position, &methods)
                     .filter(|refined| *refined != shaped.shape)
                     .map(|refined| refined.text())
-            });
-            out.push((id, at, flow));
+            };
+            let written = self.vocabulary.instance_write(&shaped.position, &methods);
+            out.push((id, at, flow, written));
         }
         Ok(out)
     }
@@ -322,14 +329,21 @@ impl Link {
         let memo = judge.memo;
         let it = &mut self.core.it;
         let flow_key = it.intern(FLOW_SHAPE);
+        let written_key = it.intern(INSTANCE_WRITE);
         let mut texts: Vec<Option<(Sid, Sid)>> = vec![None; memo.shaped.len()];
         let mut refinements = Refinements::default();
-        for (id, at, flow) in judged {
+        for (id, at, flow, written) in judged {
             let (shape, detail) = *texts[at].get_or_insert_with(|| {
                 let shape = &memo.shaped[at].shape;
                 (it.intern(shape.kind), it.intern(&shape.detail))
             });
-            let attrs = flow.map_or_else(Vec::new, |flow| vec![(flow_key, it.intern(&flow))]);
+            let mut attrs = Vec::new();
+            if let Some(flow) = flow {
+                attrs.push((flow_key, it.intern(&flow)));
+            }
+            if let Some(written) = written {
+                attrs.push((written_key, it.intern(&written)));
+            }
             refinements.add(id, Some(shape), Some(detail), attrs);
         }
         Uses {

@@ -128,6 +128,11 @@ class FileFacts:
         self.record["refs"].append([*self.head(scope, flags), name, chain, up])
         return self
 
+    def use(self, root: str, attrs: str = "", scope: int = -1) -> FileFacts:
+        """A `uses` row: an import-bound name core keeps no `refs` row for, read once in `scope`."""
+        self.record.setdefault("uses", []).append([scope, -1, root, attrs, 1, self.next_line(), 0])
+        return self
+
     def string(self, value: str, up: str = "expr", scope: int = -1, flags: int = 0) -> FileFacts:
         self.record["strs"].append([*self.head(scope, flags), value, "", up])
         return self

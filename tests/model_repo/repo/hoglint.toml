@@ -7,6 +7,9 @@ source_roots = ["."]
 first_party  = ["posthog", "ee", "common", "products", "tools", "services", "packages", "sandbox"]
 exclude      = ["docs/**"]
 external     = ["django", "rest_framework", "tokens"]
+# Planted (cases NS17 to NS19): a listed name that resolves and has no use, one that names nothing,
+# and one that names a re-export.
+reference_names = { add = ["posthog.models.scoping.team_scope", "django.db.transaction.atomik", "posthog.models.scoping_compat.unscoped"] }
 
 [django]
 settings            = ["posthog.settings", "posthog.settings.*", "ee.settings"]

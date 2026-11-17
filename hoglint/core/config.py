@@ -136,6 +136,12 @@ class CoreConfig:
       takes through a loop over a literal sequence, and anywhere in a file that hands a computed
       value to one of those callees, a string that names a module is a dotted-path edge. Anywhere
       else a string is text, whatever it names.
+    - reference_names: full dotted names whose every use makes a reference edge, one per scope
+      and attribute chain, at its first use. Core makes one for each use of a first-party class
+      and none for a third-party name or a first-party function, since most of those no rule
+      reads; a rule that reads where such a name is used (a transaction opened, a scope left)
+      names it here. A use counts when the name resolves to it, also through an alias or a
+      re-export. An entry that names nothing, or names a re-export, is a `config:stale-name` item.
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
       they hand out from other modules.
@@ -156,6 +162,7 @@ class CoreConfig:
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
     path_callees: tuple[str, ...] = ()
     path_modules: tuple[str, ...] = ()
+    reference_names: tuple[str, ...] = ()
     contract_surfaces: tuple[ExportPaths, ...] = ()
     export_surfaces: tuple[ExportPaths, ...] = ()
     include_hidden: bool = False
@@ -183,6 +190,7 @@ class CoreConfig:
             ("path_callees", "path_callees"),
             ("frozen_dataclass_decorators", "frozen_dataclass_decorators"),
             ("dataclass_bases", "dataclass_bases"),
+            ("reference_names", "reference_names"),
         ):
             if key in discovery:
                 fields[field_name] = as_tuple(discovery[key])
