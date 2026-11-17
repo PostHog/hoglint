@@ -12,10 +12,9 @@ A thin Python command line runs it.
 ## Install
 
 ```sh
-pip install hoglint
+uv add --dev hoglint
+uv run hoglint check
 ```
-
-Or, in a uv project, `uv add --dev hoglint`.
 
 The wheel holds the Python package, the native module and the fact extractor, so you do not need a Rust toolchain.
 Wheels exist for Linux (x86_64 and aarch64, manylinux) and macOS (arm64 and x86_64).
