@@ -130,7 +130,8 @@ def test_a_run_that_could_not_finish_exits_3_with_one_line_never_1(
     def crash(self: Commands, *args: object) -> int:
         if raised is None:
             bridge.load()
-        raise raised  # type: ignore[misc]
+            return 0
+        raise raised
 
     monkeypatch.setattr(Commands, "explain_config", crash)
     monkeypatch.setattr(Commands, "check", crash)

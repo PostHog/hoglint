@@ -504,7 +504,13 @@ def test_a_replay_that_compared_no_pair_fails() -> None:
 
 
 # Switches that pick a binary or a thread count: none turns a store or a recording on or off.
-NOT_REUSE_SWITCHES = {"HOGLINT_BASE_FACTS_BIN", "HOGLINT_FACTS_BIN", "HOGLINT_NATIVE_DIR", "HOGLINT_THREADS"}
+NOT_REUSE_SWITCHES = {
+    "HOGLINT_BASE_FACTS_BIN",
+    "HOGLINT_FACTS_BIN",
+    "HOGLINT_NATIVE_DIR",
+    "HOGLINT_THREADS",
+    "HOGLINT_TRACEBACK",
+}
 
 
 def test_a_check_takes_no_reuse_switch_from_the_callers_shell() -> None:
