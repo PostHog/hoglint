@@ -4,6 +4,11 @@
 # providers, the ledger and outputs.
 schema = 1
 
+# Also in the PostHog pack's pack.toml: rules here name `drives`, and a config may extend this preset alone.
+[vocabulary]
+edge_kinds = ["drives"]
+sections   = ["posthog"]  # the PostHog pack (hoglint:posthog): drives
+
 # These decorators make a dataclass: its fields are slots of the class's `__init__`. The house
 # `frozen` always makes it frozen; the others do when they pass `frozen=True`.
 [discovery]
