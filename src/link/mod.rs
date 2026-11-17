@@ -193,6 +193,9 @@ pub struct LinkConfig {
     /// settings modules: packs declare them.
     #[serde(default)]
     pub path_modules: Vec<String>,
+    /// Full dotted names whose every use makes a reference edge (`[discovery] reference_names`).
+    #[serde(default)]
+    pub reference_names: Vec<String>,
     /// The files of exports whose signatures are part of their contract.
     #[serde(default)]
     pub contract_surfaces: Vec<SurfaceConfig>,

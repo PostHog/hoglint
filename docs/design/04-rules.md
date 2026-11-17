@@ -1,7 +1,7 @@
 # 4. Rules: primitives, scoping, states
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 16, 2026 (evening).
+> Current as of Nov 17, 2026.
 
 ## Decided
 
@@ -93,6 +93,17 @@ The preset has no `off` key yet: a rule that is off is a commented-out table wit
 - An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
 - `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
 - `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. Kept (the architect, Nov 16): a re-route through a facade drawer shows again as a `model-crossings` row, and `export-shape` flags the drawer.
+
+**A use of a name the config lists is a reference edge** (the architect, Nov 17, for D115).
+`[discovery] reference_names` lists full dotted names; each use of one is a `reference` edge, one per scope and attribute chain, at its first use.
+- Why: core makes a reference edge for a use of a first-party class and for a name read through a module alias of an export, and none for a third-party function or a first-party function, since most of those no rule reads.
+  So no rule could see where `transaction.atomic` is used, and `atomic-outside-views` never fired.
+- A use counts when its name resolves to a listed one, also through an alias or a re-export.
+  A third-party name resolves only when `[discovery] external` reads its package.
+- The position of the use is not recorded: `use` is `attribute` when the code reads an attribute of the name, else `other`.
+  A decorator's use sits at its module, with the decorated function in the `header` attr.
+- A use whose name resolves to nothing makes no edge; the import's own unresolved edge is what other rules read (model repository `NS16`).
+- An empty list makes no edge and no work, so a config without the key runs as before.
 
 **A reach stops at a denied module, unless it says otherwise** (Nov 12).
 A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.

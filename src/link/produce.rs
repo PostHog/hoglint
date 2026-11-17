@@ -310,6 +310,8 @@ pub struct Producing {
     pub path_callees: Vec<String>,
     /// Modules (dotted names or `*` globs) whose strings are paths wherever they stand.
     pub path_modules: Vec<String>,
+    /// Full dotted names whose every use makes a reference edge (`named_references`).
+    pub reference_names: FxHashSet<Sid>,
     /// The files of exports whose signatures are part of their contract.
     pub contract_surfaces: Vec<ExportPaths>,
     /// The files of every export.
@@ -498,6 +500,11 @@ impl Producing {
             patch_callees: config.patch_callees.clone(),
             path_callees: config.path_callees.clone(),
             path_modules: config.path_modules.clone(),
+            reference_names: config
+                .reference_names
+                .iter()
+                .map(|name| it.intern(name))
+                .collect(),
             contract_surfaces,
             export_surfaces,
             k,
@@ -1235,6 +1242,7 @@ impl Producers<'_> {
             );
         }
         self.alias_references(owner);
+        self.named_references(owner);
     }
 
     /// A lower-case name read through a module alias of an export module (`api.f()` after
@@ -1283,6 +1291,89 @@ impl Producers<'_> {
             let attrs = [(k.chain, core.it.intern(&remaining))];
             let use_ = core.it.intern("attribute");
             let resolved = core.classify_lookup(found);
+            let ctx = core.contexts(scope, 0, row.scope);
+            self.push(
+                REFERENCE,
+                owner,
+                row.scope,
+                row.line,
+                row.col,
+                ctx,
+                found.surface,
+                resolved,
+                use_,
+                &attrs,
+            );
+        }
+    }
+
+    /// A use of a name `[discovery] reference_names` lists: one reference edge per scope and
+    /// attribute chain, at its first use, as `alias_references` makes one. Core has no `refs` row
+    /// for a third-party name or a first-party function, only a `uses` count, so without this no
+    /// edge says where such a name is used. A use counts when its name resolves to a listed one,
+    /// through an alias or a re-export too. The position of the use is not recorded: its `use` is
+    /// `attribute` when the code reads an attribute of the name, else `other`.
+    fn named_references(&mut self, owner: usize) {
+        if self.settings.reference_names.is_empty() {
+            return;
+        }
+        let facts = self.core.facts.clone();
+        let k = &self.settings.k;
+        let file = self.scopes[owner].file as usize;
+        for row in &facts.files[file].uses {
+            let core = &mut *self.core;
+            let scope = &mut self.scopes[owner];
+            let first =
+                core.name_lookup(&self.settings.names, scope, row.root, row.scope, row.line);
+            let Some(hit) = first.hit else {
+                continue;
+            };
+            let export_alias = core.kind(hit) == HitKind::Module && {
+                let module = core.origin(hit).m;
+                core.module_path(module).is_some_and(|path| {
+                    (self.settings.export_surfaces.iter())
+                        .any(|surface| surface.covered_root(path).is_some())
+                })
+            };
+            let names: Vec<String> = (core.it.s(row.attrs).split('.'))
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect();
+            let leading: Vec<Sid> = names.iter().map(|name| core.it.intern(name)).collect();
+            let (found, used) = core.names_descend(first, &leading);
+            // A name read through a module alias of an export has its edge already.
+            if export_alias
+                && used > 0
+                && found
+                    .hit
+                    .is_some_and(|hit| core.kind(hit) != HitKind::Module)
+            {
+                continue;
+            }
+            let resolved = core.classify_lookup(found);
+            let Some(target) = resolved.target else {
+                continue;
+            };
+            if !self
+                .settings
+                .reference_names
+                .contains(&core.ent_sid(target))
+            {
+                continue;
+            }
+            let remaining: String = names[used..]
+                .iter()
+                .map(|name| format!(".{name}"))
+                .collect();
+            let use_ = core.it.intern(if remaining.is_empty() {
+                "other"
+            } else {
+                "attribute"
+            });
+            let mut attrs = vec![(k.chain, core.it.intern(&remaining))];
+            if row.header != -1 {
+                attrs.push((k.header, scope.qualnames[row.header as usize]));
+            }
             let ctx = core.contexts(scope, 0, row.scope);
             self.push(
                 REFERENCE,

@@ -29,6 +29,9 @@ Some words have two meanings; the entry names both.
 - **Use** (edge field `use`; `CORE_USES`).
   How a reference uses the name: `call`, `attribute`, `subscript`, `annotation`, `base` and others.
   Core sets it with no framework meaning.
+- **Reference names** (`[discovery] reference_names`).
+  Full dotted names whose every use is a reference edge, one per scope and attribute chain.
+  Core makes none otherwise for a third-party name or a first-party function.
 - **Listed** (edge attr `listed`; fact kind `listed`).
   `listed = "1"` on a reference edge whose name sits in a list, tuple, set or dict literal (past stars, `+` and the like), and on an import edge when every load of the name it binds in the file does.
   A name the file never loads, or loads in any other way, has no attr.
