@@ -6,7 +6,8 @@ and process. The file carries a protocol version and its envelope (see `envelope
 refuses any other protocol instead of guessing. It holds:
 - lines and growth: the scan's ledger line counts, level lines included, and each ledgered
   rule's growth-key columns; a column the identity does not hold is a label of the line's source
-  module, and `labels` keeps that label, and the group field's, of every source module a line names;
+  module, and `labels` keeps that label, and the group field's, of every source module a line or a
+  finding names;
 - findings: every finding with its identity, status, witnesses, owner module and subjects,
   allowed ones included (owners themselves are read at render time), and the message and site
   of each finding `check` prints;
@@ -37,6 +38,7 @@ from typing import Any
 import orjson
 from compression import zstd
 
+from hoglint.config.model import RuleSpec
 from hoglint.config.schema import canonical
 from hoglint.index import Memo
 from hoglint.ledger.cache import write_atomic
@@ -156,18 +158,26 @@ def growth_columns(identity: tuple[str, ...], growth_key: tuple[str, ...]) -> Gr
     )
 
 
-def source_labels(result: RunResult, growth: dict[str, GrowthColumns]) -> ModuleLabels:
+def source_columns(rules: Iterable[RuleSpec]) -> dict[str, int]:
+    """Per rule whose identity names a source module, the index of that column."""
+    return {rule.id: rule.identity.index(SOURCE_MODULE) for rule in rules if SOURCE_MODULE in rule.identity}
+
+
+def source_labels(result: RunResult, growth: dict[str, GrowthColumns], findings: StoredFindings) -> ModuleLabels:
     """The labels a growth key reads of a line's source module: each derived field's, and the group
     field's, so a policy that starts to derive the group judges the base scan by the same key.
-    Every source module a ledgered line names gets them."""
+    Every source module a ledgered line names gets them, and the source module of every finding,
+    which `query --by` reads."""
     names = {column[0] for columns in growth.values() for column in columns if not isinstance(column, int)}
     if result.config.roles.group:
         names.add(result.config.roles.group)
+    columns = source_columns(result.config.rules.values())
     modules: set[str] = set()
     for rule, identity in result.scan:
-        spec = result.config.rules.get(rule)
-        if spec is not None and SOURCE_MODULE in spec.identity:
-            modules.add(identity[spec.identity.index(SOURCE_MODULE)])
+        if rule in columns:
+            modules.add(identity[columns[rule]])
+    modules.update(findings.source_module(row, columns) for row in findings.rows)
+    modules.discard("")
     labeler = result.labeler
     return {
         name: {module: labeler.known_text(module, name) or "" for module in sorted(modules)} for name in sorted(names)
@@ -225,9 +235,9 @@ class ScanSummary:
         for rule in config.rules.values():
             if rule.ledger and rule.identity:
                 summary.growth[rule.id] = growth_columns(rule.identity, rule.growth_key)
-        summary.labels = source_labels(result, summary.growth)
-        summary.docs = {rule.id: rule.doc for rule in config.rules.values() if rule.doc}
         summary.findings = StoredFindings(finding_rows(result, portable, touched))
+        summary.labels = source_labels(result, summary.growth, summary.findings)
+        summary.docs = {rule.id: rule.doc for rule in config.rules.values() if rule.doc}
         summary.incomplete = [
             IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
         ]
