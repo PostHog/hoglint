@@ -6,7 +6,7 @@ build-backend = "maturin"
 
 [project]
 name = "hoglint"
-version = "0.1.0"
+version = "0.2.0"
 description = "Boundary linter for large Python and Django monorepos, with a Rust engine"
 readme = "README.md"
 license = { file = "LICENSE" }
