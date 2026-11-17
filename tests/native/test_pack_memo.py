@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from hoglint.core.config import CoreConfig
-from hoglint.core.memo import FILE, ItemOutput, ItemRun, Items, PackMemo, TracedMap, Tracer, part_of
+from hoglint.core.memo import FILE, MEMO_FILL, ItemOutput, ItemRun, Items, PackMemo, TracedMap, Tracer, part_of
 from hoglint.ledger.cache import FACT_STORE, MEMO, RunStores
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site
 from hoglint.native.analysis import LITE_KINDS
@@ -83,11 +83,13 @@ def check(store: MemoStore, answers: dict[str, str]) -> tuple[World, list[Any]]:
     ],
 )
 def test_an_item_runs_again_only_when_an_answer_it_read_changed(
-    tmp_path: Path, child: dict[str, str], ran: list[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], child: dict[str, str], ran: list[str]
 ) -> None:
     store = MemoStore(tmp_path, "engine")
     check(store, {"a": "1", "b": "2"})
+    assert capsys.readouterr().err == MEMO_FILL
     warm, outputs = check(store, child)
+    assert capsys.readouterr().err == ""
     cold, expected = check(MemoStore(tmp_path / "cold", "engine"), child)
     assert warm.ran == ran
     assert outputs == expected
@@ -318,5 +320,6 @@ def test_a_pack_memo_that_cannot_open_says_so_apart_from_the_fact_cache(
     memo_error = capsys.readouterr().err
     assert "the pack memo is not usable" in memo_error
     assert "fact cache" not in memo_error
+    monkeypatch.setattr(RunStores, "warned", set())
     RunStores.of_environment().fail(FACT_STORE.name, OSError("disk full"))
     assert "the fact cache is not usable" in capsys.readouterr().err

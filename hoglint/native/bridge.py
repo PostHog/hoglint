@@ -73,6 +73,11 @@ def check_sources(module: ModuleType) -> None:
 
 
 def load() -> ModuleType:
-    module = import_module()
+    try:
+        module = import_module()
+    except ImportError as error:
+        raise EngineError(
+            f"the native module {MODULE} is missing or does not load ({error}): rebuild it with bin/build"
+        ) from error
     check_sources(module)
     return module

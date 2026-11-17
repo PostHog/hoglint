@@ -53,7 +53,7 @@ def test_the_replay_switches_are_the_views_of_the_store_list() -> None:
     assert set(STORES.switches()) == set(REUSE_SWITCHES)
 
 
-def test_a_failed_store_warns_once_with_its_own_text_and_leaves_other_warnings(
+def test_the_first_failed_store_warns_in_one_line_with_its_own_text(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(RunStores, "warned", set())
@@ -64,10 +64,9 @@ def test_a_failed_store_warns_once_with_its_own_text_and_leaves_other_warnings(
     RunStores({}).fail(FACT_STORE.name, OSError("damaged"))
     assert capsys.readouterr().err.splitlines() == [
         "hoglint: the pack memo is not usable, so this run runs every pack item and stores none: locked",
-        "hoglint: cannot use the cache (writing a summary: disk full), so this run goes on without it",
-        "hoglint: the fact cache is not usable, so this run extracts without it: damaged",
     ]
     assert stores.record()[MEMO_STORE.name] == "failed"
+    assert stores.record()[SUMMARY_STORE.name] == "failed"
     assert stores.record()[FACT_STORE.name] == "unused"
 
 

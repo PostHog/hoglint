@@ -11,6 +11,7 @@ from hoglint.config import Config, load_config
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import WorktreeStatus
 from hoglint.model import SCHEMA_VERSION, Graph, Resolution
+from hoglint.native import bridge
 from hoglint.plugins import PLUGIN_ROOTS
 from hoglint.source import GraphSource
 from native.require import native_module
@@ -92,18 +93,57 @@ def test_changed_paths_keep_a_space_in_a_file_name(tmp_path: Path, ref: str | No
     assert sorted(Snapshots(tmp_path, tmp_path).changed_paths(ref)) == changed
 
 
-def test_a_crash_is_an_internal_error_with_exit_2_never_1(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+class Panic(BaseException):
+    """A stand-in for the exception PyO3 raises when Rust panics: like SystemExit, a BaseException."""
+
+
+def missing_native_module() -> object:
+    raise ModuleNotFoundError("No module named 'hoglint_native'")
+
+
+@pytest.mark.parametrize(
+    "argv, raised, reason",
+    [
+        (["explain-config"], KeyError("boom"), "hoglint could not run: KeyError: 'boom'. To repair"),
+        (["explain-config"], Panic("called `Option::unwrap()` on a `None` value"), "could not run: Panic: called"),
+        (
+            ["explain-config"],
+            EngineError("hoglint_native was built from other Rust sources"),
+            "could not run: hoglint_native was built",
+        ),
+        (
+            ["check", "--index"],
+            None,
+            "hoglint did not check this commit, because hoglint could not run: the native module hoglint_native is missing",
+        ),
+    ],
+    ids=["crash", "rust panic", "stale build", "missing module in the hook"],
+)
+def test_a_run_that_could_not_finish_exits_3_with_one_line_never_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    raised: BaseException | None,
+    reason: str,
 ) -> None:
-    def crash(self: Commands) -> int:
-        raise KeyError("boom")
+    def crash(self: Commands, *args: object) -> int:
+        if raised is None:
+            bridge.load()
+        raise raised  # type: ignore[misc]
 
     monkeypatch.setattr(Commands, "explain_config", crash)
+    monkeypatch.setattr(Commands, "check", crash)
+    monkeypatch.setattr(bridge, "import_module", missing_native_module)
     write_config(tmp_path / "repo", CONFIG)
     git_in(tmp_path / "repo", "init", "-q")
-    assert main(["--repo", str(tmp_path / "repo"), "explain-config"]) == 2
+    assert main(["--repo", str(tmp_path / "repo"), *argv]) == 3
     printed = capsys.readouterr().err
-    assert printed.startswith("internal error:\nTraceback") and "KeyError: 'boom'" in printed
+    assert reason in printed and printed.count("\n") == 1, printed
+    if isinstance(raised, KeyError):
+        monkeypatch.setenv("HOGLINT_TRACEBACK", "1")
+        assert main(["--repo", str(tmp_path / "repo"), *argv]) == 3
+        assert "Traceback (most recent call last)" in capsys.readouterr().err
 
 
 def test_the_python_engine_is_refused_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

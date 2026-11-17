@@ -1,11 +1,12 @@
-"""Errors that end a run with exit 2 and a one-line reason, not a traceback."""
+"""Errors that end a run with a one-line reason, not a traceback."""
 
 from __future__ import annotations
 
 
 class EngineError(Exception):
-    """A run cannot go on: an engine a comparison needs cannot run as pinned, or git cannot give
-    an input the run reads."""
+    """hoglint cannot run: its native module or extractor is missing or stale, the engine failed,
+    or git cannot give an input the run reads. The command exits 3. `compare` reports a base
+    engine that cannot run as its own blocking result (exit 2) instead."""
 
 
 class RepoRootError(Exception):

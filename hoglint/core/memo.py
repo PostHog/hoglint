@@ -782,6 +782,8 @@ class MemoStore(Protocol):
 
     def save(self, written: list[Written]) -> None: ...
 
+    def state(self) -> str: ...
+
 
 @dataclass(frozen=True, slots=True)
 class Written:
@@ -948,6 +950,9 @@ class StepMemo:
         return {"reads": reads, "items": items}
 
 
+MEMO_FILL = "hoglint: the pack memo is empty, so this check fills it. This check is slower than the next ones.\n"
+
+
 class PackMemo:
     """The memo of one run's packs, and the tracer of its items' reads. A step's states are stored
     under its name and `policy`, the digest of everything outside the snapshot its items depend
@@ -964,6 +969,7 @@ class PackMemo:
         self.stats_path = stats
         self.stats: list[StepStats] = []
         self.written: list[Written] = []
+        self.found_state = False
 
     def step(self, name: str, stored: bool = True) -> StepMemo | None:
         """A step's memo. A step that is not `stored` keeps nothing, so with no stats it gets none:
@@ -982,6 +988,7 @@ class PackMemo:
         """Makes a step's new state once its items ran, so the parts it read are let go before
         the next step runs."""
         if step is not None and step.store is not None:
+            self.found_state = self.found_state or step.manifest is not None
             try:
                 self.written.append(step.written())
             except Exception as error:  # noqa: BLE001 - the memo is a cache: it never fails a run
@@ -995,8 +1002,11 @@ class PackMemo:
         self.tracer.files = None
 
     def flush(self) -> None:
-        """Writes the steps' new states, after every pack ran."""
+        """Writes the steps' new states, after every pack ran. A run that found no state of any
+        step fills an empty memo, and says so (D90)."""
         if self.store is not None:
+            if self.written and not self.found_state and self.store.state() == "open":
+                sys.stderr.write(MEMO_FILL)
             try:
                 self.store.save(self.written)
             except Exception as error:  # noqa: BLE001 - the memo is a cache: it never fails a run

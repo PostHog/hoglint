@@ -2,9 +2,10 @@
 
 Exit codes: 0 clean, 1 violations (new findings, a ledger that is not equal to the scan, code
 growth, a stale exception), 2 blocking incompleteness (a failed producer, an incomplete result
-the change introduced or cannot tell from an old one, a base engine that cannot run), a config
-error, or an internal error (a crash, with its traceback on stderr). An incomplete result never
-hides violations: both are printed.
+the change introduced or cannot tell from an old one, a base engine that cannot run) or a config
+error, 3 hoglint could not run (a missing or stale native module or extractor, an engine error,
+a crash or a Rust panic), with one line on stderr. An incomplete result never hides violations:
+both are printed.
 """
 
 from __future__ import annotations
@@ -336,6 +337,15 @@ CLAIM_WAY_OUT = (
     "the way out: fix each reason, or drop the narrowing in the file that claims the level;"
     " no ledger line or exception accepts a claim on a level the group fails"
 )
+# What a command that could not run at all prints, in one line (D104.3, D111). The hook's command
+# lets the commit through on exit 3; CI runs the full check.
+COULD_NOT_RUN = 3
+HOOK_COULD_NOT_RUN = (
+    "hoglint did not check this commit, because hoglint could not run: {reason}. The commit continues. "
+    "CI runs the full check. To repair hoglint, see `hoglint help hook`."
+)
+COMMAND_COULD_NOT_RUN = "hoglint could not run: {reason}. To repair hoglint, see `hoglint help hook`."
+TRACEBACK_ENV = "HOGLINT_TRACEBACK"
 # The causes `RunResult.blocking_incomplete` reads. Keep the two equal, or check and compare exit differently.
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
 
@@ -1216,8 +1226,7 @@ def parser() -> argparse.ArgumentParser:
     return main
 
 
-def command(argv: list[str] | None) -> int:
-    args = parser().parse_args(argv)
+def command(args: argparse.Namespace) -> int:
     repo = args.repo.resolve()
     batch_mode()
     with tempfile.TemporaryDirectory(prefix="hoglint-") as work:
@@ -1229,17 +1238,30 @@ def command(argv: list[str] | None) -> int:
         except (ConfigError, RepoRootError) as error:
             sys.stderr.write("config error:\n" + "".join(f"  {problem}\n" for problem in error.problems))
             return 2
-        except EngineError as error:
-            sys.stderr.write(f"engine error: {error}\n")
-            return 2
         finally:
             commands.snapshots.close()
 
 
+def could_not_run(args: argparse.Namespace, reason: str, trace: str = "") -> int:
+    """The one line of a command that could not run at all; the hook's command says that the
+    commit goes on. HOGLINT_TRACEBACK=1 adds the traceback of a crash."""
+    hook = args.command == "check" and getattr(args, "index", False)
+    line = (HOOK_COULD_NOT_RUN if hook else COMMAND_COULD_NOT_RUN).format(reason=" ".join(reason.split()).rstrip("."))
+    sys.stderr.write(line + "\n")
+    if trace and os.environ.get(TRACEBACK_ENV) == "1":
+        sys.stderr.write(trace)
+    return COULD_NOT_RUN
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Exit 1 means violations, so an exception nothing expected is an internal error, exit 2."""
+    """Exit 1 means violations, so a run that could not finish exits 3, never 1: an engine error, a
+    crash, and a Rust panic, which PyO3 raises as a BaseException."""
+    args = parser().parse_args(argv)
     try:
-        return command(argv)
-    except Exception:  # noqa: BLE001 - any crash must exit 2, never 1
-        sys.stderr.write("internal error:\n" + traceback.format_exc())
-        return 2
+        return command(args)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except EngineError as error:
+        return could_not_run(args, str(error))
+    except BaseException as error:  # noqa: BLE001 - a crash or a panic must exit 3, never 1
+        return could_not_run(args, f"{type(error).__name__}: {error}", traceback.format_exc())

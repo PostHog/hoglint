@@ -191,8 +191,8 @@ STORES = StoreList(
 
 class RunStores:
     """The stores of one run: built once from the environment at a command's entry and passed
-    down. Code the command cannot pass it to reads it with `current`. A failed store warns once
-    per process with its own text, and a failure of one store does not silence another."""
+    down. Code the command cannot pass it to reads it with `current`. The first failed store of a
+    process warns in one line with its own text; later failures only change their state."""
 
     warned: ClassVar[set[str]] = set()
     running: ClassVar[RunStores | None] = None
@@ -233,7 +233,7 @@ class RunStores:
     def fail(self, name: str, error: Exception, what: str = "") -> None:
         if self.states[name] != STATE_OFF:
             self.states[name] = STATE_FAILED
-        if name in RunStores.warned:
+        if RunStores.warned:
             return
         RunStores.warned.add(name)
         warning = self.listed.named(name).warning.format(what=what, error=error)
