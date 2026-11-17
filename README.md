@@ -38,6 +38,7 @@ The config can extend the built-in Django pack (`extends = ["hoglint:django"]`) 
 | `hoglint explain <rule>` | Prints the page of a rule. It also explains the labels of a path or module. |
 | `hoglint query --by owners` | Lists open findings and accepted debt, grouped by owners, by target or by package (`--by package`, the package label of the module a line comes from). `--json` prints the counts per group, status and rule as one JSON object. A status is `new` (it blocks), `advisory` (its rule never blocks) or `accepted` (in the ledger). |
 | `hoglint map` | Prints the dependents map of the repo's Python files. It runs no rule. |
+| `hoglint watched` | Prints, for each group of a level, whether it claims and passes the level and which files it watches, as one JSON object. `--map` adds the dependents map from the same run. |
 | `hoglint --version` | Prints the installed version. |
 
 ## Exit codes
