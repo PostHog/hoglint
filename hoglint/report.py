@@ -390,7 +390,7 @@ class CheckReport:
     def claim_ways(self, where: str) -> list[str]:
         """Dropping the narrowing needs a person: it takes the product out of isolation, which its owners decide."""
         return [
-            f"{SAFETY_LABELS['safe']}: If a reason names a file that {where} does not watch, add the file to the "
+            f"{SAFETY_LABELS['safe']}: If a reason names a file that is not watched, add the file to the "
             f"watched inputs in {where}. This can only run more tests, never fewer.",
             f"{SAFETY_LABELS['care']}: Fix each other reason in the code. `{self.rerun} --rule <rule>` lists the rows of a rule.",
             f"{SAFETY_LABELS['person']}: To drop the narrowing in {where}, stop and tell the person. The group then "
@@ -415,7 +415,7 @@ class CheckReport:
                 rows.append(f"{group} claims {name} in {where}: {by_rule}")
             verb = "claims a level and fails it" if len(failed) == 1 else "claim a level and fail it"
             title = f"{plural(len(failed), 'group')} {verb}."
-            where = failed[0][2] if len(failed) == 1 else "the claim file of the group"
+            where = failed[0][2] if len(failed) == 1 else "the file that the row of the group names"
             out.append(Problem(title, (*self.cut(rows, GROUPS_SHOWN), *self.claim_ways(where))))
         for name, error in sorted(self.summary.claim_errors.items()):
             person = f"{SAFETY_LABELS['person']}: stop and tell the person."
