@@ -251,6 +251,45 @@ def test_explain_edge_lists_rules_that_read_every_edge_kind(tmp_path: Path, caps
     assert "select: edge.resolution == 'unresolved' -> false" in out
 
 
+MAP_CONFIG = """
+schema = 1
+extends = ["hoglint:django"]
+
+[django]
+settings = ["core.settings"]
+
+[outputs.map]
+path = "map.json"
+"""
+MAP_FILES = {
+    "core/__init__.py": "",
+    # Only the Django pack's path modules make this string an edge.
+    "core/settings.py": 'LOGIC = "products.billing.logic"\n',
+    "core/views.py": "from products.billing.logic import charge\n",
+    "products/__init__.py": "",
+    "products/billing/__init__.py": "",
+    "products/billing/logic.py": "def charge():\n    return 1\n",
+}
+
+
+def test_map_prints_what_a_check_writes_for_a_tach_map_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    native_module()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    write_config(repo, MAP_CONFIG, MAP_FILES)
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    (tmp_path / "work").mkdir()
+    Commands(repo, tmp_path / "work", memo=False).check(False, False, False)
+    capsys.readouterr()
+    assert Commands(repo, tmp_path / "work").map(None) == 0
+    printed = capsys.readouterr().out
+    assert printed == (repo / "map.json").read_text()
+    assert '"core/settings.py"' in printed
+
+
 CLAIMED_CONFIG = CONFIG.replace(
     'requires = ["crossings"]\n',
     'requires = ["crossings"]\nstrict = ["crossings"]\n'

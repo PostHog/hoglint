@@ -13,6 +13,7 @@ from hoglint.config import Config
 from hoglint.core.analysis import AnalysisOptions
 from hoglint.core.memo import OFF, TRACE, PackMemo, digest
 from hoglint.core.reader import BuildReader
+from hoglint.facts import FactNeeds
 from hoglint.ledger.envelope import ConfigInputs
 from hoglint.ledger.listing import Listing
 from hoglint.model import Graph
@@ -62,6 +63,17 @@ class NativeGraphSource(GraphSource):
             memo.flush()
         build.release()
         return graph
+
+    def build_core(self, code_root: Path, config: Config, tree: str = "") -> Graph:
+        """Core's edges of one snapshot, extracted for core alone. No pack produces, so no pack
+        reads a provider or a policy file; the packs' path modules still shape core's edges."""
+        work = Path(tempfile.mkdtemp(dir=self.work_dir))
+        options = AnalysisOptions(
+            repo=code_root, config=self.core_config(config), work_dir=work, needs=FactNeeds(), tree=tree
+        )
+        analysis = NativeAnalysis(options).run()
+        analysis.build.release()
+        return analysis.graph
 
     def policy_digests(self, pack: Pack, section: Mapping[str, Any], listing: Listing) -> dict[str, Any]:
         """A pack's section with each policy file named by the digest of the bytes the pack reads:

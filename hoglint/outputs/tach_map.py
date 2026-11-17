@@ -6,27 +6,19 @@ tach's own file resolution, not hoglint's: a dotted name maps to `__init__.pyi`,
 at least two dots and each literal part is checked alone. tach also has its own rule for
 `if TYPE_CHECKING:`: it skips imports in both branches of that `if`, and keeps strings there.
 
-Usage: python -m hoglint.outputs.tach_map --repo <root> --out <map.json>
-           [--tach-toml <tach.toml>] [--index] [--no-cache] [--case-insensitive]
-           [--compare <oracle.json>]
+`hoglint map` prints it, and `check` writes it for an `[outputs]` table of format `tach-map`.
 """
 
 from __future__ import annotations
 
-import sys
 import json
-import tomllib
-import argparse
-import tempfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from hoglint.core.analysis import AnalysisOptions
-from hoglint.core.config import CoreConfig
+from hoglint.config.model import Config
+from hoglint.config.schema import as_tuple
 from hoglint.core.modules import normalize_root
-from hoglint.facts import FactNeeds, default_cache_dir
 from hoglint.model import Context, Edge, Graph
-from hoglint.native.analysis import NativeAnalysis
 from hoglint.views import RefsView, reverse_dependents
 
 STRING_LITERALS = frozenset({"whole", "part"})
@@ -88,6 +80,13 @@ class TachMap:
         self.graph = graph
         self.resolver = TachResolver(files, source_roots, case_insensitive)
 
+    @classmethod
+    def of(cls, graph: Graph, config: Config) -> TachMap:
+        """The map of a graph built under `config`: the graph's repo modules are the files, under
+        the config's source roots."""
+        roots = as_tuple(config.discovery.get("source_roots", ["."]))
+        return cls(graph, graph.modules.values(), roots)
+
     @staticmethod
     def counts(edge: Edge) -> bool:
         if edge.site.path.endswith(".pyi"):
@@ -113,63 +112,8 @@ class TachMap:
     def dependents(self) -> dict[str, list[str]]:
         return reverse_dependents(self.pairs())
 
-    def write(self, path: Path) -> dict[str, list[str]]:
-        mapping = self.dependents()
-        path.write_text(json.dumps(mapping, indent=2) + "\n")
-        return mapping
+    def text(self) -> str:
+        return json.dumps(self.dependents(), indent=2) + "\n"
 
-
-def config_from_tach_toml(path: Path) -> CoreConfig:
-    data = tomllib.loads(path.read_text())
-    return CoreConfig(
-        source_roots=tuple(data.get("source_roots", ["."])),
-        excludes=tuple(data.get("exclude", ())),
-    )
-
-
-def compare(mine: dict[str, list[str]], oracle_path: Path) -> dict[str, object]:
-    oracle = json.loads(oracle_path.read_text())
-    theirs = {(importer, target) for target, importers in oracle.items() for importer in importers}
-    ours = {(importer, target) for target, importers in mine.items() for importer in importers}
-    return {
-        "oracle_edges": len(theirs),
-        "edges": len(ours),
-        "missing": len(theirs - ours),
-        "extra": len(ours - theirs),
-        "missing_sample": sorted(theirs - ours)[:10],
-        "extra_sample": sorted(ours - theirs)[:10],
-    }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--tach-toml", type=Path)
-    parser.add_argument(
-        "--index", action="store_true", help="read staged blobs from the git index, never the working tree"
-    )
-    parser.add_argument("--no-cache", action="store_true")
-    parser.add_argument("--case-insensitive", action="store_true")
-    parser.add_argument("--compare", type=Path)
-    args = parser.parse_args()
-    repo = args.repo.resolve()
-    config = config_from_tach_toml(args.tach_toml or repo / "tach.toml")
-    with tempfile.TemporaryDirectory(prefix="hoglint-tach-map-") as work:
-        options = AnalysisOptions(
-            repo=repo,
-            config=config,
-            work_dir=Path(work),
-            staged=args.index,
-            needs=FactNeeds(),
-            cache_dir=None if args.no_cache else default_cache_dir(),
-        )
-        result = NativeAnalysis(options).run()
-    output = TachMap(result.graph, result.inventory.files, config.source_roots, args.case_insensitive)
-    mapping = output.write(args.out)
-    if args.compare:
-        sys.stdout.write(json.dumps(compare(mapping, args.compare), indent=1) + "\n")
-
-
-if __name__ == "__main__":
-    main()
+    def write(self, path: Path) -> None:
+        path.write_text(self.text())

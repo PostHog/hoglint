@@ -147,3 +147,8 @@ class GraphSource:
     def build_fresh(self, code_root: Path, config: Config, staged: bool, tree: str = "") -> Graph:
         """The graph of one snapshot: `NativeGraphSource` links it in Rust."""
         raise NotImplementedError
+
+    def build_core(self, code_root: Path, config: Config, tree: str = "") -> Graph:
+        """The graph of one snapshot with core's edges only: no pack runs. `NativeGraphSource`
+        links it in Rust."""
+        raise NotImplementedError

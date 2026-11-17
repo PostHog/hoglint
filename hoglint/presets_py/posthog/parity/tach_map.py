@@ -14,16 +14,18 @@ imported file). A pair only one map has is explained only by a check of that pai
 from __future__ import annotations
 
 import ast
+import tomllib
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from hoglint.core.analysis import AnalysisOptions
+from hoglint.core.config import CoreConfig
 from hoglint.facts import FactNeeds
 from hoglint.model import Edge, Graph
 from hoglint.native.analysis import NativeAnalysis
-from hoglint.outputs.tach_map import TachMap, TachResolver, config_from_tach_toml, is_potential_module_path
+from hoglint.outputs.tach_map import TachMap, TachResolver, is_potential_module_path
 from hoglint.presets_py.posthog.parity import old_tools
 from hoglint.presets_py.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Comparison, Difference, Effect, Reason
 
@@ -133,6 +135,15 @@ def compare(
         reason = LAZY_NAME_MAP if evidence is not None else None
         comparison.differences.append(Difference(f"{importer} -> {target}", HOGLINT_ONLY, reason, evidence or ""))
     return comparison
+
+
+def config_from_tach_toml(path: Path) -> CoreConfig:
+    """tach's source roots and excludes, so hoglint's side reads the files tach reads."""
+    data = tomllib.loads(path.read_text())
+    return CoreConfig(
+        source_roots=tuple(data.get("source_roots", ["."])),
+        excludes=tuple(data.get("exclude", ())),
+    )
 
 
 def filesystem_ignores_case(root: Path) -> bool:

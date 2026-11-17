@@ -1,4 +1,4 @@
-"""hoglint command line: check, explain, query, compare, explain-config.
+"""hoglint command line: check, explain, query, compare, map, explain-config.
 
 Exit codes: 0 clean, 1 violations (new findings, a ledger that is not equal to the scan, code
 growth, a stale exception), 2 blocking incompleteness (a failed producer, an incomplete result
@@ -64,6 +64,7 @@ from hoglint.model import Finding, Graph, IncompleteCause
 from hoglint.native.bridge import engine_errors
 from hoglint.native.labels import NativeLabeler
 from hoglint.native.source import NativeGraphSource, batch_mode
+from hoglint.outputs.tach_map import TachMap
 from hoglint.report import HOOK_VIEW, Attributed, CheckReport, Policy, ReadTimeOwners, View
 from hoglint.rules.base import EdgeRule
 from hoglint.rules.engine import Engine, RunResult, primitive_of
@@ -769,16 +770,26 @@ class Commands:
             path = run.root / output.path
             path.parent.mkdir(parents=True, exist_ok=True)
             if output.format == "tach-map":
-                from hoglint.outputs.tach_map import TachMap  # noqa: PLC0415 — only this output needs it
-
-                roots = as_tuple(run.config.discovery.get("source_roots", ["."]))
-                TachMap(run.graph, run.graph.modules.values(), roots).write(path)
+                TachMap.of(run.graph, run.config).write(path)
                 continue
             edges = [
                 {"kind": e.kind, "src": e.site.path, "surface": e.surface, "targets": [str(t) for t in e.targets]}
                 for e in run.graph.edges
             ]
             path.write_text(json.dumps(edges))
+
+    def map(self, out: Path | None) -> int:
+        """`map`: the dependents map in tach's JSON shape, of the tree a check would read, to stdout
+        or to `out`. It reads core's import and dotted-path edges alone, so it runs no pack, rule
+        or provider: the same map as an `[outputs]` table of format `tach-map`."""
+        config = load_config(self.repo, self.repo / CONFIG_FILE)
+        graph = self.source.build_core(self.repo, config, self.worktree_tree(config))
+        text = TachMap.of(graph, config).text()
+        if out is None:
+            sys.stdout.write(text)
+            return 0
+        out.write_text(text)
+        return 0
 
     def explain(self, target: str) -> int:
         """A rule's page by its name (D113), with no run; else the labels of a path or module, or
@@ -1123,6 +1134,11 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument("--base", required=True)
     add_view_arguments(compare)
     compare.set_defaults(handler=lambda commands, args: commands.compare(args.base, view_of(args, "hoglint compare")))
+    dependents = sub.add_parser(
+        "map", help="print the dependents map (tach map's JSON shape) of the repo's Python files; runs no rule"
+    )
+    dependents.add_argument("--out", type=Path, help="write the map to this file instead of stdout")
+    dependents.set_defaults(handler=lambda commands, args: commands.map(args.out))
     explain_config = sub.add_parser("explain-config", help="the expanded config, each key with its source")
     explain_config.set_defaults(handler=lambda commands, args: commands.explain_config())
     scan = sub.add_parser(
