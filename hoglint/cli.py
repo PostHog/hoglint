@@ -77,6 +77,7 @@ from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.rules.page import RulePage
 from hoglint.source import GraphSource
+from hoglint.watched import WatchedError, pick_level, watched_answer
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 # The pages `hoglint help <topic>` prints; they ship in the package, so they match its version.
@@ -476,12 +477,18 @@ class Version(argparse.Action):
     only when asked, so no other command pays for the lookup."""
 
     @staticmethod
+    def number() -> str:
+        crate = EngineId.crate_of(PACKAGE_DIR)
+        if crate is None:
+            return LockPin.running() or "unknown"
+        return str(tomllib.loads((crate / "pyproject.toml").read_text())["project"]["version"])
+
+    @staticmethod
     def text() -> str:
         crate = EngineId.crate_of(PACKAGE_DIR)
         if crate is None:
-            return f"{DISTRIBUTION} {LockPin.running() or 'unknown'}"
-        project = tomllib.loads((crate / "pyproject.toml").read_text())["project"]
-        return f"{DISTRIBUTION} {project['version']} (checkout {crate})"
+            return f"{DISTRIBUTION} {Version.number()}"
+        return f"{DISTRIBUTION} {Version.number()} (checkout {crate})"
 
     def __call__(
         self,
@@ -1013,6 +1020,33 @@ class Commands:
         out.write_text(text)
         return 0
 
+    def watched(self, level_name: str | None, out: Path | None, map_out: Path | None) -> int:
+        """`watched`: per group of a level, the claim, the verdict and the watched files, as JSON
+        (hoglint/watched.py). It runs every rule as `check` does and judges nothing, so it exits 0
+        whether groups pass or not. `map_out` also writes the dependents map of the same graph,
+        the bytes `map` prints, so one process builds the graph once for both."""
+        config = load_config(self.repo, self.repo / CONFIG_FILE)
+        try:
+            level = pick_level(config, level_name)
+        except WatchedError as error:
+            raise ConfigError([str(error)]) from error
+        tree = self.worktree_tree(config)
+        run = self.runner.run(self.repo, tree=tree)
+        header = {
+            "hoglint": Version.number(),
+            "engine": self.engine.id,
+            "policy": self.engine.envelope(run, tree).policy,
+        }
+        tracked = GraphSource.listing_of(self.repo, tree).paths
+        text = watched_answer(run.config, run.result, level, tracked, header).text()
+        if map_out is not None:
+            map_out.write_text(TachMap.of(run.graph, run.config).text())
+        if out is None:
+            sys.stdout.write(text)
+        else:
+            out.write_text(text)
+        return 0
+
     def explain(self, target: str) -> int:
         """A rule's page by its name (D113), with no run; else the labels of a path or module, or
         why an edge was selected."""
@@ -1363,6 +1397,22 @@ def parser() -> argparse.ArgumentParser:
     )
     dependents.add_argument("--out", type=Path, help="write the map to this file instead of stdout")
     dependents.set_defaults(handler=lambda commands, args: commands.map(args.out))
+    watched = sub.add_parser(
+        "watched",
+        help="per group of a level: the claim, the verdict and the watched files, as JSON; judges nothing",
+        description=(
+            "Prints one JSON object (format 1): per group of the level, the file that claims it (or null), "
+            "whether the group passes it at this tree, its reasons, and its watched files, each with the first "
+            "reason that asks for it. The files are what the level's coverage rules need, every file under its "
+            "`watch_zones`, and the package __init__.py files above them. `complete` is false when an unknown "
+            "can make a set too small; `problems` says why. The same tree, policy and engine give the same bytes. "
+            "Exit 0 when it printed an answer, 2 on a config error, 3 when it could not run."
+        ),
+    )
+    watched.add_argument("--level", help="the level; default: the one level with `claimed_by`")
+    watched.add_argument("--out", type=Path, help="write the JSON to this file instead of stdout")
+    watched.add_argument("--map", type=Path, help="also write the dependents map (as `map` prints it) to this file")
+    watched.set_defaults(handler=lambda commands, args: commands.watched(args.level, args.out, args.map))
     explain_config = sub.add_parser("explain-config", help="the expanded config, each key with its source")
     explain_config.set_defaults(handler=lambda commands, args: commands.explain_config())
     scan = sub.add_parser(
