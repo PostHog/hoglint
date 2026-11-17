@@ -51,13 +51,14 @@ jobs:
           .venv/bin/ruff check .
           .venv/bin/ruff format --check .
       - name: ty
-        # Main has 24 diagnostics, and AGENTS.md says to add none: the step fails when the count grows.
+        # Main has some diagnostics; a change adds none. The baseline is bin/prove's TY_BASELINE.
         run: |
+          baseline="$(sed -n 's/^TY_BASELINE = \([0-9]*\)$/\1/p' tests/prove/local.py)"
           .venv/bin/ty check --output-format concise --exit-zero > ty.txt
           cat ty.txt
           count="$(grep -c -E ':[0-9]+:[0-9]+: (error|warning)\[' ty.txt || true)"
-          echo "ty: $count diagnostics, at most 24 allowed"
-          test "$count" -le 24
+          echo "ty: $count diagnostics, baseline $baseline"
+          test "$count" -le "$baseline"
       - name: pytest
         env:
           HOGLINT_REQUIRE_NATIVE: "1"
