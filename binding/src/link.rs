@@ -420,6 +420,12 @@ impl Link {
         (names, PyBytes::new(py, &kinds), ids_bytes(py, &files))
     }
 
+    /// Each `[discovery] reference_names` entry with the definition it resolves to, or None when
+    /// it names nothing (the link's `reference_definitions`), in config order.
+    fn reference_definitions(&self) -> Vec<(String, Option<String>)> {
+        self.inner.reference_definitions.clone()
+    }
+
     /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
     /// kept names, whether its `__all__` cannot be read, listed names it binds by nothing the
     /// engine can tell, private names it lists and defines, the assignments of no literal constant

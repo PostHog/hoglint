@@ -5,6 +5,18 @@
 # config:stale-name
 
 [[row]]
+case = "NS18"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["django.db.transaction.atomik"]
+
+[[row]]
+case = "NS19"
+rule = "config:stale-name"
+verdict = "incomplete"
+identity = ["posthog.models.scoping_compat.unscoped"]
+
+[[row]]
 case = "SN01"
 rule = "config:stale-name"
 verdict = "incomplete"

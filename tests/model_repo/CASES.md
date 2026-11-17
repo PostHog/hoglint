@@ -139,6 +139,9 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `NS13` | `products/legacy/backend/facade/api_state.py` | A facade function carries a definition in a read's filter (`name__startswith="live-"`) | clean | A written limit (D115) |
 | `NS14` | `products/legacy/backend/facade/api_state.py`, `products/legacy/backend/logic/loading.py` | A facade function saves an instance a logic function returned; another saves each row of a loop over a queryset | clean | A written limit: a write on a value that came from a parameter, a helper, a loop or a related manager is not seen |
 | `NS15` | `products/legacy/backend/facade/api_state.py` | A facade function calls `unscoped()` later in a chain (`objects.filter(...).unscoped()`) | clean | A written limit: the chain is read from its start |
+| `NS17` | `hoglint.toml` (planted line), `posthog/models/scoping.py` | A `reference_names` entry that resolves and that nothing uses (`team_scope`) | clean | A listed name with no use is fine |
+| `NS18` | `hoglint.toml` (planted line) | A `reference_names` entry that names nothing (`django.db.transaction.atomik`) | config:stale-name incomplete | A misspelled name would make its clause report nothing: incomplete, never silent |
+| `NS19` | `hoglint.toml` (planted line), `posthog/models/scoping_compat.py` | A `reference_names` entry that names a re-export of `unscoped` | config:stale-name incomplete | Uses resolve to the definition, so a re-export's name would match no use |
 | `NS16` | `products/legacy/backend/facade/api_scope_gone.py` | A facade function runs inside a scope context whose import does not resolve | facade-no-state clean (a use that resolves to no listed name makes no edge); facade-no-drf and prod-imports-test unknown; a no-new-package-cycles incomplete item | The import's own unknown rows are what the run shows |
 | `FD01` | `products/legacy/backend/facade/api.py` | A facade imports `django.http` | facade-no-drf finding | |
 | `FD02` | `products/legacy/backend/facade/api.py` | A facade imports a DRF exception | facade-no-drf finding | |
@@ -344,7 +347,7 @@ Each ability has a case where its input cannot be told; the verdict there must n
 | Namespace-directory labels | A drives location without `__init__.py` | `DR02` | wiring-watched finding for the file directly inside |
 | `through_denied` (reach) | An import on the request path that does not resolve | `WW08` | request-path incomplete, carried into wiring-watched |
 | `setting` on settings edges | An entry added through a subscript (`X[...].append`) | `WW06` | the setting reads unknown: wiring-watched incomplete |
-| Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks | `WW07`, `SN01` | config:stale-name incomplete |
+| Literal paths and named symbols of the config | A seed path that matches no file; the preset's paths this miniature lacks; a `reference_names` entry that names nothing or a re-export | `WW07`, `SN01`, `NS18`, `NS19` | config:stale-name incomplete |
 | Rule covers of a coverage rule | What the covered rule cannot tell (an advisory rule's own items never reach a check's output) | `WW06`, `WW08` | wiring-watched incomplete |
 | `reached-watched`'s edge cover | A source whose tier cannot be told | `UK01` | reached-watched incomplete on the source module, read by the level only (an advisory rule's items never reach a check's output); it names no product, so it blocks none (a written limit) |
 | `edge.listed` (`only-registers`) | A registration point imports a hand-out and never loads it: nothing tells that it only registers it | `OR06` | reached-watched finding for `stock_cleanup.py` |
@@ -472,6 +475,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | request-path | A key on the exclude list | `WW14` (not followed) |
 | request-path | An unresolved import on the request path | `WW08` (incomplete) |
 | config:stale-name | A seed path that matches no file | `WW07` |
+| config:stale-name | A `reference_names` entry that names nothing or a re-export; one that resolves with no use | `NS18`, `NS19`; `NS17` (clean) |
 | wiring-watched | A location without `__init__.py`, one file unwatched, one watched; all watched | `DR02`; `DR04` (clean) |
 | reached-watched | Settings, registrations, core code, a migration, a core test and a tool reach unwatched product files | `LE02` |
 | reached-watched | Another product reaches an unwatched product file | `LE12` |

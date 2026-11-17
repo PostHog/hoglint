@@ -16,6 +16,7 @@ from hoglint.config.model import Config, RuleSpec
 from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache, Labeler
 from hoglint.ledger.equality import EqualityResult, check_equality
+from hoglint.ledger.errors import EngineError
 from hoglint.ledger.file import LedgerFile, LineKey, level_line
 from hoglint.model import (
     SCHEMA_VERSION,
@@ -41,7 +42,9 @@ UNREADABLE = "source:unreadable"
 READ_ERROR = ("status", "read_error")
 
 # Every literal path of an assignment that no file has, and every symbol an assignment or an export
-# names that no symbol has, is an incomplete item of this rule: the labels it sets are missing.
+# names that no symbol has, is an incomplete item of this rule: the labels it sets are missing. So is
+# a `[discovery] reference_names` entry that is no definition the link can resolve: no use of it
+# would ever be an edge.
 STALE_NAMES = "config:stale-name"
 GLOB_CHARACTERS = frozenset("*?[{")
 
@@ -64,6 +67,7 @@ class StaleNames:
     def __init__(self, config: Config, labeler: Labeler) -> None:
         self.config = config
         self.paths = labeler.path_to_module
+        self.graph = labeler.graph
         self.modules = labeler.graph.modules
         self.facts = labeler.facts
 
@@ -81,10 +85,26 @@ class StaleNames:
             for name in export.symbols:
                 if not self.known(name):
                     out.append(self.item(name, f"{name} is named by {export.label()} but no symbol has it"))
+        for name, found in self.reference_definitions():
+            if found is None:
+                out.append(self.item(name, f"{name} is named by [discovery] reference_names but no symbol has it"))
+            elif found != name:
+                reason = f"{name} is named by [discovery] reference_names but is a re-export of {found}, which its uses resolve to"
+                out.append(self.item(name, reason))
         return out
 
     def known(self, name: str) -> bool:
         return self.facts.has(name) or name in self.modules
+
+    def reference_definitions(self) -> list[tuple[str, str | None]]:
+        """Each `[discovery] reference_names` entry with the definition the link resolves it to
+        (behind any re-export), or None when it names nothing. A third-party name resolves when
+        `[discovery] external` reads its package."""
+        link = getattr(self.graph, "link", None)
+        if link is None:
+            raise EngineError("rules run in the native evaluator only: link the graph natively first")
+        found: list[tuple[str, str | None]] = link.reference_definitions()
+        return found
 
     @staticmethod
     def item(key: str, reason: str) -> IncompleteItem:

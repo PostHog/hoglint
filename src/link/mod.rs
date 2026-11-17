@@ -279,6 +279,9 @@ pub struct Link {
     pub hand_outs: FxHashMap<Sid, surface::HandOut>,
     /// The bases of the third-party classes the inherit edges reach (`outside_bases`), by class.
     pub outside_bases: FxHashMap<String, Vec<String>>,
+    /// Each `[discovery] reference_names` entry with the definition it resolves to, or None when it
+    /// names nothing (`reference_definitions`).
+    pub reference_definitions: Vec<(String, Option<String>)>,
     /// `config.first_party` or, when empty, every repo top-level module.
     pub first_party: FxHashSet<Sid>,
     /// `config.dataclass_decorators` and `config.frozen_dataclass_decorators`, for the rules'
@@ -407,6 +410,7 @@ impl Link {
         let symbols = std::mem::take(&mut producers.symbols);
         let hand_outs = std::mem::take(&mut producers.hand_outs);
         let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
+        let reference_definitions = Self::reference_definitions(&mut core, &config.reference_names);
         edges.kind_names = KIND_NAMES.iter().map(|kind| core.it.intern(kind)).collect();
         edges.producers = (0..KIND_NAMES.len() as u8)
             .map(|kind| core.it.intern(&Self::producer_name(kind)))
@@ -427,6 +431,7 @@ impl Link {
             symbols,
             hand_outs,
             outside_bases,
+            reference_definitions,
             first_party,
             dataclass_kinds: DataclassKinds {
                 make: config.dataclass_decorators.iter().cloned().collect(),
@@ -435,6 +440,26 @@ impl Link {
             timings,
             interfaces,
         })
+    }
+
+    /// What each listed reference name resolves to, as `named_references` reads a use of it: the
+    /// definition behind any re-export, None when the name names nothing. The rules run after the
+    /// fact rows are released, so the link answers this while it still has them.
+    fn reference_definitions(core: &mut Core, names: &[String]) -> Vec<(String, Option<String>)> {
+        names
+            .iter()
+            .map(|name| {
+                let dotted = core.it.intern(name);
+                let found = match core.resolve_dotted(dotted) {
+                    (Some(hit), rest) if rest.is_empty() => core
+                        .classify(dotted, Some(hit))
+                        .target
+                        .map(|target| core.ent_text(target)),
+                    _ => None,
+                };
+                (name.clone(), found)
+            })
+            .collect()
     }
 
     /// The bases of every third-party class an inherit edge reaches, read from its sources where

@@ -105,6 +105,10 @@ No rule judges a transaction in presentation; with the reference edges below, th
 - The position of the use is not recorded: `use` is `attribute` when the code reads an attribute of the name, else `other`.
   A decorator's use sits at its module, with the decorated function in the `header` attr.
 - A use whose name resolves to nothing makes no edge; the import's own unresolved edge is what other rules read (model repository `NS16`).
+- An entry that is no definition is a `config:stale-name` incomplete item, so the run exits 2: a name that names nothing, or a re-export, whose uses resolve to the definition behind it (the architect, Nov 17; `NS18`, `NS19`).
+  A misspelled entry would otherwise make the clause that reads it report nothing.
+  An entry that resolves and has no use is fine (`NS17`).
+  The link answers what each entry resolves to while it builds, since the rules run after it releases its fact rows.
 - An empty list makes no edge and no work, so a config without the key runs as before.
 
 **Writes the Django pack reads on a model use** (the architect, Nov 17, for D115).

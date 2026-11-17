@@ -141,7 +141,7 @@ class CoreConfig:
       and none for a third-party name or a first-party function, since most of those no rule
       reads; a rule that reads where such a name is used (a transaction opened, a scope left)
       names it here. A use counts when the name resolves to it, also through an alias or a
-      re-export.
+      re-export. An entry that names nothing, or names a re-export, is a `config:stale-name` item.
     - contract_surfaces: the files of exports whose signatures are part of their contract. Their
       callables expose every slot: unannotated ones and builtin types too, and the slots of what
       they hand out from other modules.

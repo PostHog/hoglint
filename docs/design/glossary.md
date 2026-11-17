@@ -34,6 +34,7 @@ Some words have two meanings; the entry names both.
 - **Reference names** (`[discovery] reference_names`).
   Full dotted names whose every use is a reference edge, one per scope and attribute chain.
   Core makes none otherwise for a third-party name or a first-party function.
+  An entry must name a definition, not a re-export; otherwise it is a `config:stale-name` item.
 - **Flow shape, instance write** (edge attrs `flow_shape`, `instance_write`; the Django pack).
   The flow shape is the shape of a manager chain together with the later uses of the local it is assigned to (`qs = ...; qs.update()` is `write(update)`).
   The instance write names `save` or `asave` when the code calls it on the use's value, in its own chain or through such a local.
