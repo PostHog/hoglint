@@ -201,11 +201,17 @@ class Engine:
         self.labeler = labeler_class(index)(config, graph, repo_root, index, candidates)
 
     def failed_producers(self, spec: RuleSpec) -> list[str]:
-        """A producer named in `requires` (any version), or one that would have made an edge kind the rule reads."""
+        """A producer named in `requires` (any version), or one that would have made an edge kind the
+        rule reads, a coverage rule's edge covers included."""
         kinds = set(rule_kinds(spec, self.config.views))
+        every_kind = False
+        if spec.primitive == "coverage":
+            covered = CoveragePrimitive.cover_kinds(spec)
+            every_kind = covered is None
+            kinds |= covered or set()
         out = []
         for name, failure in sorted(self.graph.failed_producers.items()):
-            if name.partition("@")[0] in spec.requires or failure.kinds & kinds:
+            if name.partition("@")[0] in spec.requires or every_kind or failure.kinds & kinds:
                 out.append(f"producer {name} failed: {failure.reason}")
         return out
 

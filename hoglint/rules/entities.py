@@ -296,6 +296,20 @@ class CoveragePrimitive(EntityRule):
         """path -> (the cover that needs it, module) for every path that must be covered."""
         return self.ctx.coverage_required(self)
 
+    @classmethod
+    def cover_kinds(cls, spec: RuleSpec) -> set[str] | None:
+        """The edge kinds the rule's edge covers read; None when one reads every kind. A failed
+        producer of one of them leaves the rule's paths short, so the rule is incomplete."""
+        out: set[str] = set()
+        for cover in spec.covers:
+            if cover.rule or cover.endpoint in ("module", "location"):
+                continue
+            kinds, _, _ = cls.split(cover)
+            if kinds is None:
+                return None
+            out |= kinds
+        return out
+
     @staticmethod
     def column_path(cover: CoverSpec) -> tuple[str, ...]:
         """The ref of a rule cover's column: `edge.<column>` when it names no root."""
