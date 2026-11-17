@@ -1276,7 +1276,10 @@ impl Producers<'_> {
             if used == 0 || core.kind(hit) == HitKind::Module {
                 continue;
             }
-            let remaining: String = names[used..].iter().map(|name| format!(".{name}")).collect();
+            let remaining: String = names[used..]
+                .iter()
+                .map(|name| format!(".{name}"))
+                .collect();
             let attrs = [(k.chain, core.it.intern(&remaining))];
             let use_ = core.it.intern("attribute");
             let resolved = core.classify_lookup(found);
