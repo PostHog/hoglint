@@ -1,6 +1,8 @@
 """The native evaluator (src/link/rules) on one small repo: hand-written rules for the corners where
-the meaning is irregular, and seeded generated ones, held to stored runs (`stored_rows.json`,
-`generated_runs.jsonl`)."""
+the meaning is irregular, held to their stored runs (`stored_rows.json`), and seeded generated ones.
+The generated rules are held to properties (the keys each rule type reads, the schema's reach, and
+the relations between sibling rules in `test_rule_relations.py`); one generated config per rule
+mode, picked by hand, is held to its stored run (`generated_runs.jsonl`)."""
 
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ from hoglint.plugins import REGISTRY, PackReader, PackSink, Refinement
 from hoglint.rules.base import subjects_of
 from hoglint.rules.engine import RULE_TYPES, Engine, primitive_of
 from hoglint.rules.exports import ExportPrimitive, SlotRule
-from hoglint.selectors import NONE, UNKNOWN, Selector
+from hoglint.selectors import NONE, UNKNOWN, Selector, render_value
 
 from native.require import native_module
 
@@ -354,7 +356,7 @@ def group_name(name: str) -> str:
     return "{" + ", ".join(sorted(items)) + "}"
 
 
-def run_lines(world: World, at: int, base: str, rules: str) -> list[list[Any]]:
+def run_lines(world: World, at: int | str, base: str, rules: str) -> list[list[Any]]:
     """A whole run of one config as stored lines: each rule's findings (identity, message, flags,
     subjects) and incomplete items (key, reason, subjects), the levels, or the config error."""
     try:
@@ -1403,7 +1405,7 @@ def schema_gaps(drawn: list[tuple[str, frozenset[str], bool]]) -> list[str]:
 def test_the_generated_rules_reach_every_key_of_the_schema(world: World) -> None:
     tables = Tables(random.Random(20261111))
     drawn: list[tuple[str, frozenset[str], bool]] = []
-    # Every mode in turn, until a table of it loads, as the stored runs draw them.
+    # Every mode in turn, until a table of it loads, as `generated_configs` draws them.
     for mode in list(MODES) * 24:
         while True:
             before = len(tables.drawn)
@@ -1511,111 +1513,10 @@ def test_each_rule_type_reads_exactly_the_keys_it_declares(world: World) -> None
     assert read.problems() == []
 
 
-TIERS = ["core", "product", "leaf"]
 PATHS = ["core/legacy.py", "core/**", "products/billing/**", "products/alerts/**", "packages/**", "**/facade/**"]
 FILES = ["core/legacy.py", "core/a.py", "products/alerts/backend/facade/api.py", "products/billing/backend/models.py"]
 SILO = 'values = ["cell"], on = "symbol"'
 TWO_SILOS = 'values = ["cell", "control"], on = "symbol"'
-
-
-class Conflicting:
-    """A config that sets labels two ways, built from the fixture's: each shape adds sources that
-    may disagree on some module or symbol. Some are found before any rule runs, the rest where a
-    rule reads them."""
-
-    def __init__(self, rng: random.Random) -> None:
-        self.rng = rng
-        self.base = CONFIG
-        self.added: list[str] = []
-        # Fields whose conflicts are met only where a rule reads them, which rules read more often.
-        self.lazy: list[str] = []
-
-    def assign(self, match: str, sets: str, extra: str = "") -> None:
-        self.added.append(f'\n[[assign]]\nmatch = "{match}"\n{extra}set = {{ {sets} }}\n')
-
-    def module_field(self) -> None:
-        override = "override = true\n" if self.rng.random() < 0.2 else ""
-        self.assign(self.rng.choice(PATHS), f'tier = "{self.rng.choice(TIERS)}"', override)
-
-    def symbol_field_by_modules(self) -> None:
-        self.base = self.base.replace(SILO, TWO_SILOS)
-        for silo in ("cell", "control"):
-            self.assign(self.rng.choice(PATHS), f'silo = "{silo}"')
-
-    def zone_by_assignment(self) -> None:
-        zone = self.rng.choice(["backend", "facade", "internal"])
-        self.assign(self.rng.choice(["products/billing/backend/**", "products/**", "core/**"]), f'zone = "{zone}"')
-
-    def leaf_zones(self) -> None:
-        if self.rng.random() < 0.5:
-            self.base = self.base.replace(
-                'special = { paths = ["backend/shared.py"], override = true }',
-                'special = { paths = ["backend/shared.py"] }',
-            )
-        else:
-            self.base = self.base.replace("[kinds]\n", 'extra = { paths = ["backend/**"] }\n\n[kinds]\n')
-
-    def kinds(self) -> None:
-        test = self.rng.choice(
-            [
-                'subclass_of = "products.billing.backend.models.Base"',
-                'decorated_by = "products.billing.backend.models.cell"',
-            ]
-        )
-        self.base = self.base.replace("[kinds]\n", f"[kinds]\nother = {{ {test} }}\n")
-
-    def symbol_assignments(self) -> None:
-        self.base = self.base.replace(SILO, TWO_SILOS)
-        match = f'match = "{self.rng.choice(FILES)}"\n' if self.rng.random() < 0.5 else ""
-        self.added.append(
-            f'\n[[assign]]\n{match}symbols = {{ decorated_by = "products.billing.backend.models.cell" }}\nset = {{ silo = "control" }}\n'
-        )
-
-    def symbols_of_a_file(self) -> None:
-        self.base = self.base.replace(SILO, TWO_SILOS)
-        path = self.rng.choice(FILES)
-        for silo in ("cell", "control"):
-            self.added.append(f'\n[[assign]]\nmatch = "{path}"\nsymbols = {{}}\nset = {{ silo = "{silo}" }}\n')
-        self.lazy += ["dst.silo", "src.silo"]
-
-    def provider(self) -> None:
-        self.base = self.base.replace("[fields]\n", '[fields]\nlead = { type = "string" }\n')
-        self.added.append('\n[providers.codeowners]\nuse = "codeowners"\nfile = "CODEOWNERS"\nsets = ["lead"]\n')
-        self.assign(self.rng.choice(PATHS), 'lead = "someone"')
-        self.lazy += ["src.lead", "dst.lead"]
-
-    def config(self) -> str:
-        shapes = [
-            self.module_field,
-            self.symbol_field_by_modules,
-            self.zone_by_assignment,
-            self.leaf_zones,
-            self.kinds,
-            self.symbol_assignments,
-            self.symbols_of_a_file,
-            self.provider,
-        ]
-        # The shapes met only where read are drawn more often: they need a rule that reads them.
-        shapes += [self.symbols_of_a_file, self.provider] * 2
-        for shape in dict.fromkeys(self.rng.sample(shapes, self.rng.randint(1, 2))):
-            shape()
-        return self.base + "".join(self.added)
-
-    def rules(self, world: World, base: str) -> str:
-        """One to three generated rules that load over `base`."""
-        refs = REFS + self.lazy * 8
-        out = ""
-        made = 0
-        wanted = self.rng.randint(1, 3)
-        while made < wanted:
-            rule = Tables(self.rng, refs).rules(f"generated{made}")
-            try:
-                world.config(out + rule, base)
-            except ConfigError:
-                continue
-            out += rule
-            made += 1
-        return out
 
 
 def outcome(world: World, config: Config) -> list[str]:
@@ -1719,17 +1620,37 @@ class Varied:
         return out
 
 
-# The runs of the generated configs, stored: one JSON list per line, a config's line (a digest of
-# its base config and rules) before its rows. Rewrite it with `HOGLINT_REFRESH_GENERATED=1` after
-# a change of the generators, and review the diff.
+# A sample of the generated configs, each picked by hand for what its whole run covers, one per
+# rule mode. (generator, place) names a config by the generator that draws it ("tables": generated
+# rules over the fixture's config; "varied": a config that differs outside `[rules]`) and its place
+# among that generator's draws. The generated configs are held to properties, not to stored runs:
+# the relations between sibling rules (`test_rule_relations.py`), the keys each rule type reads,
+# and the schema's reach.
+SAMPLED = {
+    "edge": ("tables", 11),  # `from` reads an edge field, `deny` and `unless` a set field; a level that selects
+    "entrypoint": ("tables", 144),  # no predicate, so `dst.exported` decides; an unresolved edge blocks
+    "use-shape": ("tables", 13),  # `allow_shapes` with a detailed shape, at the surface
+    "signature": ("tables", 201),  # the default unknown types, over slots and imports; unresolved is incomplete
+    "export": ("tables", 180),  # a signature rule beside it; unknown rows are findings; a level
+    "reach": ("tables", 148),  # a search on through denied modules from every module; unresolved findings
+    "cycle": ("varied", 7),  # provider fields, roles, symbol labels; an export and an inventory beside it
+    "layout": ("tables", 150),  # absent files and a `require`, on modules; a level
+    "coverage": ("tables", 140),  # covers that read an edge inventory's columns; a strict level
+    "inventory-classify": ("tables", 174),  # classified identities over three kinds; incomplete unresolved edges
+    "inventory-exactly-one": ("tables", 131),  # one owner per tier, counted; a level grouped by tier
+}
+# The sample's whole runs, stored: one JSON list per line, a config's line (its mode and a digest of
+# its base config and rules) before its rows. Rewrite it with `HOGLINT_REFRESH_GENERATED=1` after a
+# change of the generators or of the sample, and review the diff.
 GENERATED_RUNS = Path(__file__).parent / "generated_runs.jsonl"
 
 
-def generated_configs(world: World) -> Iterator[tuple[str, str]]:
-    """(base config, rules) of every config the generated tests draw: the generated rules over the
-    fixture's config, configs that differ outside `[rules]`, and configs that set a label two ways."""
+def generated_configs(world: World) -> Iterator[tuple[tuple[str, int], str, str]]:
+    """((generator, place), base config, rules) of the generated configs, in the order they are
+    drawn: the generated rules over the fixture's config, then configs that differ outside
+    `[rules]`."""
     tables = Tables(random.Random(20261111))
-    for mode in list(MODES) * 24:
+    for place, mode in enumerate(list(MODES) * 24):
         while True:
             rules = tables.rules("generated", mode)
             try:
@@ -1737,39 +1658,39 @@ def generated_configs(world: World) -> Iterator[tuple[str, str]]:
             except ConfigError:
                 continue
             break
-        yield CONFIG, rules
+        yield ("tables", place), CONFIG, rules
     rng = random.Random(1111)
-    judged = 0
-    while judged < 60:
+    place = 0
+    while place < 60:
         varied = Varied(rng)
         base = varied.config()
         try:
             world.config("", base)
         except ConfigError:
             continue
-        judged += 1
-        yield base, varied.rules(world, base)
-    rng = random.Random(1110)
-    judged = 0
-    while judged < 150:
-        conflicting = Conflicting(rng)
-        text = conflicting.config()
-        try:
-            world.config("", text)
-        except ConfigError:
-            continue
-        text += conflicting.rules(world, text)
-        judged += 1
-        yield text, ""
+        yield ("varied", place), base, varied.rules(world, base)
+        place += 1
+
+
+def sampled_configs(world: World) -> dict[str, tuple[str, str]]:
+    """(base config, rules) of each sampled config, by mode."""
+    wanted = {key: mode for mode, key in SAMPLED.items()}
+    found: dict[str, tuple[str, str]] = {}
+    for key, base, rules in generated_configs(world):
+        if key in wanted:
+            found[wanted[key]] = (base, rules)
+        if len(found) == len(wanted):
+            break
+    return found
 
 
 def config_digest(base: str, rules: str) -> str:
     return hashlib.blake2b((base + rules).encode(), digest_size=8).hexdigest()
 
 
-def stored_runs() -> dict[int, tuple[str, list[list[Any]]]]:
-    """The stored runs by config: its digest and its lines."""
-    out: dict[int, tuple[str, list[list[Any]]]] = {}
+def stored_runs() -> dict[str, tuple[str, list[list[Any]]]]:
+    """The stored runs by mode: the digest of the config and its lines."""
+    out: dict[str, tuple[str, list[list[Any]]]] = {}
     for text in GENERATED_RUNS.read_text().splitlines():
         line = json.loads(text)
         if line[0] == "config":
@@ -1779,26 +1700,26 @@ def stored_runs() -> dict[int, tuple[str, list[list[Any]]]]:
     return out
 
 
-def test_a_generated_config_gives_its_stored_run(world: World) -> None:
-    configs = list(generated_configs(world))
+def test_a_sampled_generated_config_gives_its_stored_run(world: World) -> None:
+    sampled = sampled_configs(world)
     if os.environ.get("HOGLINT_REFRESH_GENERATED"):
         lines: list[list[Any]] = []
-        for at, (base, rules) in enumerate(configs):
-            lines.append(["config", at, config_digest(base, rules)])
-            lines.extend(run_lines(world, at, base, rules))
+        for mode, (base, rules) in sampled.items():
+            lines.append(["config", mode, config_digest(base, rules)])
+            lines.extend(run_lines(world, mode, base, rules))
         GENERATED_RUNS.write_text("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines))
     stored = stored_runs()
-    assert len(stored) == len(configs) == 24 * len(MODES) + 60 + 150
+    assert sorted(stored) == sorted(sampled) == sorted(SAMPLED)
     moved = []
-    for at, (base, rules) in enumerate(configs):
-        digest, lines = stored[at]
+    for mode, (base, rules) in sampled.items():
+        digest, lines = stored[mode]
         if digest != config_digest(base, rules):
-            moved.append(f"config {at} is not the stored one: the generators changed")
+            moved.append(f"{mode}: the config is not the stored one: the generators changed")
             continue
-        found = json.loads(json.dumps(run_lines(world, at, base, rules), ensure_ascii=False))
+        found = json.loads(json.dumps(run_lines(world, mode, base, rules), ensure_ascii=False))
         if found != lines:
             first = next((a, b) for a, b in zip([*found, None], [*lines, None]) if a != b)
-            moved.append(f"config {at}: given {first[0]}, stored {first[1]}")
+            moved.append(f"{mode}: given {first[0]}, stored {first[1]}")
     assert moved == []
 
 
@@ -1826,6 +1747,44 @@ def test_the_native_labeler_reads_what_the_python_labeler_reads(world: World, ba
         for name in ("registry", "lifecycle"):
             assert native.labeler.builtin(module, None, name) == python.builtin(module, None, name)
     assert sorted(native.labeler.conflicts) == sorted(python.conflicts)
+
+
+# An edge rule that sees every edge at its origin, so the evaluator reads each destination symbol.
+READS_SYMBOLS = rule_table(
+    "reads",
+    {
+        **EDGE,
+        "kinds": ["import", "reference", "uses", "declares", "inherit", "exposes"],
+        "contexts": {"exclude": []},
+        "endpoint": "origin",
+        "identity": ["dst.symbol"],
+    },
+)
+
+
+def test_the_evaluator_reads_the_symbol_labels_the_python_labeler_reads(world: World) -> None:
+    """The labeler twin for symbol fields: each one the evaluator reads at an edge's destination
+    symbol (`edge_values`) is what the Python labeler gives that symbol, over the fixture's config
+    and every generated config that differs outside `[rules]` (symbol fields set by module and by
+    `symbols = {}` assignments)."""
+    bases = [CONFIG, *(base for (generator, _), base, _ in generated_configs(world) if generator == "varied")]
+    compared = 0
+    for base in bases:
+        config = world.config(READS_SYMBOLS, base)
+        native = world.context(config)
+        python = Labeler(config, world.graph, world.repo, native.labeler.index)
+        fields = [name for name, spec in config.fields.items() if spec.on == "symbol"]
+        columns = [["dst", "symbol"], ["dst", "module"], *(["dst", name] for name in fields)]
+        handles = [edge.handle for edge in world.graph.edges]
+        for read in native.evaluator.edge_values(native.plan.index["reads"], handles, columns):
+            for symbol, module, *values in read or []:
+                # A destination that is a module, or that does not resolve, has no symbol labels.
+                if symbol in ("-", "?", module) or module in ("-", "?"):
+                    continue
+                for name, value in zip(fields, values):
+                    assert value == render_value(python.field_value(module, symbol, name)[0]), (symbol, name, base)
+                    compared += 1
+    assert compared >= 10_000
 
 
 # A field whose domain is the door packages: the fixture's exports with `within = "products/{product}"`
@@ -2214,6 +2173,15 @@ def test_a_conflict_only_a_level_meets_stops_the_run(world: World, level: str) -
     native = problems(world, config)
     assert_stored(world, f"level conflict {level}", rules, LEAD_SET_TWO_WAYS)
     assert native and all("field 'lead' set differently" in problem for problem in native)
+
+
+def test_a_selection_part_reads_every_field_it_names_before_it_is_judged(world: World) -> None:
+    # One part that reads the edge and the source: `edge.kind` alone decides the `or` on every edge
+    # the rule sees, yet `src.lead` is read first, so its conflict on core modules is met
+    # (src/link/rules/staged.rs).
+    rule = {**EDGE, "kinds": ["import"], "select": "edge.kind == 'import' or src.lead == 'someone'"}
+    found = outcome(world, world.config(rule_table("reads", rule), LEAD_SET_TWO_WAYS))
+    assert found and all("field 'lead' set differently" in problem for problem in found)
 
 
 EXPECTED_KINDS = CONFIG.replace(

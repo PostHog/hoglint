@@ -1,7 +1,7 @@
 # 1. What hoglint is for, and its fixed principles
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 13, 2026.
+> Current as of Nov 16, 2026.
 
 ## Decided
 
@@ -62,7 +62,7 @@ Any reuse must keep this property and prove it with an oracle (D59 point 3, D61)
 **Principle 7: one engine; every changed row is named.**
 The native engine builds the graph and judges every rule (owner, Nov 13: the Python engine is retired, the graph build first, then the rule judgment).
 Python words what the engine judged and holds the rule metadata.
-A change keeps every row of the ten parity tables and every stored message, or names each one it changes: against the model repository's stored rows, tables and messages, the stored runs of the generated and hand-written rule configs, the slot table test, and the real-size compare with a base.
+A change keeps every row of the ten parity tables and every stored message, or names each one it changes: against the model repository's stored rows, tables and messages, the stored runs of the hand-written rule cases and of a sample of generated configs, the slot table test, and the real-size compare with a base.
 See `05-engine.md`.
 
 ## Why

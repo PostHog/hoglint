@@ -1,5 +1,6 @@
 # How `and`, `or` and `not` carry truth (Kleene logic). Both sides read this table:
-# tests/native/test_rule_relations.py composes a selection's truth from its parts with it, and
+# tests/native/test_rule_relations.py composes a selection's truth from its parts with it,
+# tests/model_repo/test_explain.py joins the truths `explain edge:` prints with it, and
 # src/link/rules/selector.rs holds the evaluator's `and`, `or`, `not` and the staged `and` of a
 # selection's parts to it.
 #

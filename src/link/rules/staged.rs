@@ -2,9 +2,10 @@
 //!
 //! A selector's truth never depends on this order. Which labels a run reads does: a label set two
 //! ways is a config error only where something reads it (a provider's labels of a module, the
-//! labels of a symbol outside the graph's symbols). So the order is part of the output, and the
-//! stored runs hold it. A selection is judged in parts (`Staged`), and in a config that has such a
-//! label (`Rules::touch`) every field a part names is read before the part is judged.
+//! labels of a symbol outside the graph's symbols). So the order is part of the output. A selection
+//! is judged in parts (`Staged`), and in a config that has such a label (`Rules::touch`) every field
+//! a part names is read before the part is judged; `tests/native/test_evaluator.py`
+//! (`test_a_selection_part_reads_every_field_it_names_before_it_is_judged`) holds it.
 
 use super::env::{Cx, Endpoint, Env};
 use super::labels::Field;
