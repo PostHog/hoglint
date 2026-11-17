@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from hoglint import adapters  # noqa: F401 - registers the builtin coverage adapters and providers
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
 from hoglint.config.model import (
+    WAY_SAFETIES,
     Assignment,
     Config,
     CoverSpec,
@@ -28,9 +29,11 @@ from hoglint.config.model import (
     ProviderSpec,
     RegistrySpec,
     Roles,
+    RuleExample,
     RuleSpec,
     ShapePolicy,
     SymbolMatch,
+    Way,
     ZoneSpec,
     ZoneTable,
 )
@@ -129,11 +132,16 @@ NAMED_IDENTITIES: dict[str, tuple[str, ...]] = {
     "file": ("subject",),
 }
 
+# The keys that hold a rule's words: what it is for, why a finding matters, the ways out, an example.
+TEXT_KEYS = frozenset({"doc", "why", "ways", "example"})
 COMMON_RULE_KEYS = frozenset(
-    {"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "remedy", "requires", "on_unresolved"}
+    {"primitive", "report", "ledger", "identity", "counted", "growth_key", "remedy", "requires", "on_unresolved"}
+    | TEXT_KEYS
 )
-# The keys the engine and the ledger read for every rule, whatever its type.
-EVERY_RULE_READS = frozenset({"primitive", "doc", "report", "ledger", "identity", "counted", "growth_key", "requires"})
+# The keys the engine, the ledger and the output read for every rule, whatever its type.
+EVERY_RULE_READS = (
+    frozenset({"primitive", "report", "ledger", "identity", "counted", "growth_key", "requires"}) | TEXT_KEYS
+)
 EDGE_SELECT_KEYS = frozenset({"kinds", "contexts", "view", "from", "select", "endpoint", "unless"})
 PRODUCER_OPTION_KEYS = {"flow": ("syntax", "def-use"), "resolve_calls": ("bare-name", "import")}
 RULE_KEYS: dict[str, frozenset[str]] = {
@@ -989,6 +997,37 @@ class SchemaBuilder:
             out.append(CoverSpec(text, selector=selector, endpoint=endpoint))
         return tuple(out)
 
+    def read_ways(self, key: str, raw: Any) -> tuple[Way, ...]:
+        """`ways`: a list of `{ safety, text }` tables, each safety one of `WAY_SAFETIES`."""
+        if raw is None:
+            return ()
+        if not isinstance(raw, list):
+            self.fail(key, "must be a list of { safety, text } tables")
+            return ()
+        out = []
+        for at, item in enumerate(raw):
+            where = f"{key}[{at}]"
+            if not isinstance(item, dict) or set(item) != {"safety", "text"}:
+                self.fail(where, "must be a table with exactly the keys safety and text")
+                continue
+            if not isinstance(item["text"], str) or not item["text"]:
+                self.fail(where, "text must be a string that is not empty")
+                continue
+            out.append(Way(self.check_enum(f"{where}.safety", item["safety"], WAY_SAFETIES), item["text"]))
+        return tuple(out)
+
+    def read_example(self, key: str, raw: Any) -> RuleExample | None:
+        """`example`: `{ finding, fixed }`, the code the rule reports and the same code fixed."""
+        if raw is None:
+            return None
+        if not isinstance(raw, dict) or set(raw) != {"finding", "fixed"}:
+            self.fail(key, "must be a table with exactly the keys finding and fixed")
+            return None
+        if not all(isinstance(value, str) and value for value in raw.values()):
+            self.fail(key, "finding and fixed must be strings that are not empty")
+            return None
+        return RuleExample(raw["finding"], raw["fixed"])
+
     def read_slot_owners(self, key: str, raw: Any) -> tuple[str, ...]:
         """`slots_reported_by`: the signature rules an export rule leaves a slot to where they read
         its row. Each must be a signature rule of the config."""
@@ -1188,6 +1227,9 @@ class SchemaBuilder:
             id=rule_id,
             primitive=primitive,
             doc=str(table.get("doc", "")),
+            why=str(table.get("why", "")),
+            ways=self.read_ways(f"{key}.ways", table.get("ways")),
+            example=self.read_example(f"{key}.example", table.get("example")),
             kinds=kinds,
             contexts_include=include,
             contexts_exclude=exclude,

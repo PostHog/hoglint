@@ -180,11 +180,36 @@ class CoverSpec:
     endpoint: str = ""
 
 
+# How safe a way out of a finding is: `safe` cannot change behavior, `care` is a code change to
+# review, `person` stops and tells the person, `note` asks for no action.
+WAY_SAFETIES = ("safe", "care", "person", "note")
+
+
+@dataclass(frozen=True, slots=True)
+class Way:
+    """One way out of a finding of a rule, as the output prints it under the rule's first finding."""
+
+    safety: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuleExample:
+    """Code the rule reports, and the same code fixed, as `explain <rule>` prints them."""
+
+    finding: str
+    fixed: str
+
+
 @dataclass(frozen=True, slots=True)
 class RuleSpec:
     id: str
     primitive: str
     doc: str = ""
+    # The cause a finding prints, the ways out of it and an example: the rule's one source of text.
+    why: str = ""
+    ways: tuple[Way, ...] = ()
+    example: RuleExample | None = None
     kinds: tuple[str, ...] = ()
     contexts_include: tuple[str, ...] = ()
     contexts_exclude: tuple[str, ...] | None = None  # None: unset, so the primitive's default applies

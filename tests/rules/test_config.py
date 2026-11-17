@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,10 @@ from hoglint.config import ConfigError
 from hoglint.config.explain import ConfigExplainer
 from hoglint.rules.plan import tree
 
-from rules.support import config_from
+from rules.support import (
+    PRESET as PRESET_FILE,
+    config_from,
+)
 
 OTHER_RULE = "[rules.other]\nprimitive = 'edge'\nledger = false\n"
 
@@ -289,12 +293,28 @@ ledger = false
             "condition 'crossing' is an expression and cannot be compared",
         ),
         ("[unknown_section]\nx = 1\n", "unknown section"),
+        (
+            OTHER_RULE + 'ways = [{ safety = "maybe", text = "fix it" }]\n',
+            "rules.other.ways[0].safety: 'maybe' is not one of",
+        ),
+        (OTHER_RULE + 'ways = "fix it"\n', "rules.other.ways: must be a list of { safety, text } tables"),
+        (OTHER_RULE + 'example = { finding = "a" }\n', "rules.other.example: must be a table with exactly the keys"),
     ],
 )
 def test_config_errors_before_any_run(tmp_path: Path, root: str, problem: str) -> None:
     with pytest.raises(ConfigError) as error:
         config_from(tmp_path, BASE + root, {"preset.toml": PRESET})
     assert problem in str(error.value)
+
+
+def test_every_rule_of_the_preset_says_why_and_what_to_do_instead() -> None:
+    """Every rule prints a cause and at least one way out; a rule whose ways hold no safe or careful
+    fix ends with stopping to tell the person, so a reader is never left without a next step."""
+    rules = tomllib.loads(PRESET_FILE.read_text())["rules"]
+    for name, rule in rules.items():
+        safeties = [way["safety"] for way in rule.get("ways", [])]
+        assert rule.get("why") and safeties, name
+        assert {"safe", "care"} & set(safeties) or safeties[-1] == "person", name
 
 
 CROSSING = "src.package != dst.package and dst.tier == none"
