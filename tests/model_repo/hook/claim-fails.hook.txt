@@ -6,8 +6,9 @@ Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hogli
 
 1 group claims a level and fails it.
   inventory claims isolated in products/inventory/turbo.json: 12 x reached-watched, 3 x wiring-watched, 1 x presentation-uses-facade
-  fix (safe): drop the narrowing in the file that the row names. The group then claims no level, and its full test suite runs.
-  fix (needs care): fix each reason. `hoglint check --index --rule <rule>` lists the rows of a rule.
+  fix (safe): If a reason names a file that products/inventory/turbo.json does not watch, add the file to the watched inputs in products/inventory/turbo.json. This can only run more tests, never fewer.
+  fix (needs care): Fix each other reason in the code. `hoglint check --index --rule <rule>` lists the rows of a rule.
+  needs a person: To drop the narrowing in products/inventory/turbo.json, stop and tell the person. The group then claims no level, its full test suite runs on every change, and the product is no longer isolated.
   No ledger line or exception accepts a failed claim.
 
 The first finding of each rule (1 of 3 findings):

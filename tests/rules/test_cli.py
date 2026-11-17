@@ -289,7 +289,7 @@ def test_a_group_that_claims_a_level_it_fails_fails_check_whatever_the_ledger_li
     assert "\n  crossings: strict, so the ledger does not excuse it: " in printed
     # billing fails the level too, but claims nothing
     assert "billing claims" not in printed
-    assert "drop the narrowing" in printed
+    assert "needs a person: To drop the narrowing in inputs.narrowed, stop and tell the person." in printed
 
 
 MEMO_CONFIG = """

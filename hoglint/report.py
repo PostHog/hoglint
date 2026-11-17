@@ -374,9 +374,13 @@ class CheckReport:
         return out
 
     def claim_ways(self, where: str) -> list[str]:
+        """Dropping the narrowing needs a person: it takes the product out of isolation, which its owners decide."""
         return [
-            f"{SAFETY_LABELS['safe']}: drop the narrowing in {where}. The group then claims no level, and its full test suite runs.",
-            f"{SAFETY_LABELS['care']}: fix each reason. `{self.rerun} --rule <rule>` lists the rows of a rule.",
+            f"{SAFETY_LABELS['safe']}: If a reason names a file that {where} does not watch, add the file to the "
+            f"watched inputs in {where}. This can only run more tests, never fewer.",
+            f"{SAFETY_LABELS['care']}: Fix each other reason in the code. `{self.rerun} --rule <rule>` lists the rows of a rule.",
+            f"{SAFETY_LABELS['person']}: To drop the narrowing in {where}, stop and tell the person. The group then "
+            "claims no level, its full test suite runs on every change, and the product is no longer isolated.",
             "No ledger line or exception accepts a failed claim.",
         ]
 
@@ -397,7 +401,8 @@ class CheckReport:
                 rows.append(f"{group} claims {name} in {where}: {by_rule}")
             verb = "claims a level and fails it" if len(failed) == 1 else "claim a level and fail it"
             title = f"{plural(len(failed), 'group')} {verb}."
-            out.append(Problem(title, (*self.cut(rows, GROUPS_SHOWN), *self.claim_ways("the file that the row names"))))
+            where = failed[0][2] if len(failed) == 1 else "the claim file of the group"
+            out.append(Problem(title, (*self.cut(rows, GROUPS_SHOWN), *self.claim_ways(where))))
         for name, error in sorted(self.summary.claim_errors.items()):
             person = f"{SAFETY_LABELS['person']}: stop and tell the person."
             out.append(Problem(f"hoglint cannot read the claims of the level {name}: {error}.", (person,)))

@@ -52,6 +52,7 @@ Its limits, in plain words:
 A product whose own `turbo.json` narrows its contract-check inputs claims the level.
 If it fails the level, `check` fails, and no ledger line or exception can accept that: an unsound skip is never debt.
 `check` names the level's reasons for the product and the two ways out: fix the reasons, or drop the narrowing.
+Dropping the narrowing is a person's decision, because the product is then no longer isolated.
 - In core words, a level may name the outside input in which a group claims it: `claimed_by`, a coverage adapter and its options, the table a coverage rule's `inputs` takes.
   The adapter tells, per directory, whether the inputs that decide there are narrowed, and by which file (`narrowed(handle, directory)`).
   A group claims the level when one of its module files sits in such a directory.

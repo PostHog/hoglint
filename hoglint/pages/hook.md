@@ -34,7 +34,7 @@ A new problem blocks.
 | Stale ledger lines | Run `hoglint ledger shrink`, then stage `hoglint.ledger`. The command only removes lines. | Safe. |
 | The commit adds ledger lines | Remove them. Fix the findings, or stop and tell the person. | Needs a person. |
 | A problem in `hoglint.exceptions.toml` | Stop and tell the person. A person writes and reviews exceptions. | Needs a person. |
-| A product fails the level that it claims | Remove the narrowed inputs from the turbo.json of the product. Or fix each reason. | Safe, or needs care. |
+| A product fails the level that it claims | If a reason names a file that the turbo.json of the product does not watch, add the file to the watched inputs. Fix each other reason in the code. To remove the narrowed inputs, stop and tell the person: the product is then no longer isolated. | Safe, needs care, or needs a person. |
 | New code that hoglint cannot judge | Use a literal name. Else stop and tell the person. | Safe, or needs a person. |
 | A config error | The output names the file and the line. If you did not change the file, stop and tell the person. | Needs a person. |
 
