@@ -292,20 +292,24 @@ class LedgerSpec:
     exceptions: str = "hoglint.exceptions.toml"
 
 
-# What a runner template holds where the pinned version goes.
+# What an install template holds where the pinned version, the directory to install into and this
+# process's interpreter go.
 VERSION_SLOT = "{version}"
+TARGET_SLOT = "{target}"
+PYTHON_SLOT = "{python}"
 DEFAULT_LOCK = "uv.lock"
-DEFAULT_RUNNER = "uv run --no-project --with hoglint=={version} hoglint"
+DEFAULT_INSTALL = "uv pip install --no-deps --python {python} --target {target} hoglint=={version}"
 
 
 @dataclass(frozen=True, slots=True)
 class EngineSpec:
-    """How `compare` finds and runs the engine a base commit pins, when hoglint runs installed:
-    `lock` is the lock file whose `hoglint` entry pins the version, and `runner` the command
-    that runs `hoglint` at the version that replaces `{version}`."""
+    """How `compare` finds and installs the engine a base commit pins, when hoglint runs
+    installed: `lock` is the lock file whose `hoglint` entry pins the version, and `install` the
+    command that installs `hoglint` at that version, without its dependencies, into a directory.
+    The installed engine runs under this process's interpreter, so it reads the same environment."""
 
     lock: str = DEFAULT_LOCK
-    runner: str = DEFAULT_RUNNER
+    install: str = DEFAULT_INSTALL
 
 
 @dataclass(frozen=True, slots=True)

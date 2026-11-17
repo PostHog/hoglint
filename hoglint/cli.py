@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gc
 import os
+import csv
 import sys
 import json
 import shlex
@@ -36,7 +37,7 @@ from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.loader import PACK_PREFIX
-from hoglint.config.model import VERSION_SLOT
+from hoglint.config.model import PYTHON_SLOT, TARGET_SLOT, VERSION_SLOT
 from hoglint.config.schema import as_tuple
 from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
@@ -504,17 +505,109 @@ class Version(argparse.Action):
         parser.exit()
 
 
+# The directory under the cache root that holds the engines base commits pin, one per version.
+ENGINES = "engines"
+
+
+class EngineInstalls:
+    """The engines base commits pin, each installed by `[engine] install` without its
+    dependencies into `engines/<version>` under the cache root. A base engine runs from there
+    under this process's interpreter, so it reads the third-party sources of this environment
+    (`hoglint.facts.site_packages`) as the head engine does. In an environment of its own it would
+    miss them, fail its producers, and make the head's unknowns look introduced.
+
+    A kept install is used only when every file its RECORD lists is there at its size: the cache
+    root's prune deletes files one by one. A cache that cannot hold an install only costs a fresh
+    install in the run's work directory."""
+
+    def __init__(self, repo: Path, work_dir: Path, root: Path | None = None) -> None:
+        self.repo = repo
+        self.work_dir = work_dir
+        self.root = root or cache_root() / ENGINES
+
+    @staticmethod
+    def command(template: str, version: str, target: Path) -> list[str]:
+        """The install command: the template's words, each with its slots filled, so a path with
+        a space stays one word."""
+        slots = {VERSION_SLOT: version, TARGET_SLOT: str(target), PYTHON_SLOT: sys.executable}
+        words = []
+        for word in shlex.split(template):
+            for slot, value in slots.items():
+                word = word.replace(slot, value)
+            words.append(word)
+        return words
+
+    @staticmethod
+    def whole(target: Path, version: str) -> bool:
+        """Whether `target` holds every file the RECORD of `version` lists, at the size it gives."""
+        record = target / f"{DISTRIBUTION}-{version}.dist-info" / "RECORD"
+        try:
+            for path, _, size in csv.reader(record.read_text().splitlines()):
+                if size and (target / path).stat().st_size != int(size):
+                    return False
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def install(self, version: str, template: str, target: Path) -> None:
+        """An install that does not run, fails or leaves a file out is an EngineError."""
+        command = self.command(template, version, target)
+        try:
+            completed = subprocess.run(command, cwd=self.repo, capture_output=True, text=True)
+        except OSError as error:
+            shutil.rmtree(target, ignore_errors=True)
+            raise EngineError(
+                f"the base engine {DISTRIBUTION}=={version} did not install ({command[0]}): {error}"
+            ) from error
+        if completed.returncode != 0 or not self.whole(target, version):
+            shutil.rmtree(target, ignore_errors=True)
+            raise EngineError(
+                f"the base engine {DISTRIBUTION}=={version} did not install (exit {completed.returncode}):\n"
+                f"{completed.stderr[-2000:]}"
+            )
+
+    def keep(self, version: str, fresh: Path) -> Path:
+        """Puts a fresh install where a missing or broken one was, and returns where it is now.
+        Another run may have put a whole one there meanwhile; then that one is used."""
+        kept = self.root / version
+        if self.whole(kept, version):
+            shutil.rmtree(fresh, ignore_errors=True)
+            return kept
+        try:
+            if kept.exists():
+                shutil.rmtree(kept)
+            fresh.rename(kept)
+        except OSError:
+            return fresh
+        return kept
+
+    def target(self, version: str, template: str) -> Path:
+        """The directory that holds `version`: the kept install when it is whole, else a fresh one."""
+        kept = self.root / version
+        if self.whole(kept, version):
+            return kept
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            fresh = Path(tempfile.mkdtemp(prefix=".install-", dir=self.root))
+        except OSError:
+            fresh = Path(tempfile.mkdtemp(prefix="engine-", dir=self.work_dir))
+        self.install(version, template, fresh)
+        return self.keep(version, fresh)
+
+
 class BaseEngines:
     """Pins the engine a base commit's scan runs. An engine inside the repo runs the base's own
     Python sources with an extractor built from the base's own extractor sources. An installed
-    engine runs the version the base pins in its lock file (D15). An engine that cannot run as
-    pinned is an EngineError, which compare reports as incomplete (exit 2)."""
+    engine runs the version the base pins in its lock file (D15), installed by `EngineInstalls`.
+    An engine that cannot run as pinned is an EngineError, which compare reports as incomplete
+    (exit 2)."""
 
     def __init__(self, repo: Path, work_dir: Path, local: LocalEngine, extractors: ExtractorStore) -> None:
         self.repo = repo
         self.work_dir = work_dir
         self.local = local
         self.extractors = extractors
+        self.installs = EngineInstalls(repo, work_dir)
 
     def package(self) -> Path | None:
         """The engine package relative to the repo; None when the engine is installed outside it."""
@@ -536,19 +629,26 @@ class BaseEngines:
         except OSError as error:
             raise EngineError(f"the base engine did not start ({' '.join(engine.command)}): {error}") from error
 
+    @staticmethod
+    def installed_engine(target: Path) -> BaseEngine:
+        """The engine installed in `target`, run by this interpreter with `target` first on its
+        path and without this engine's locators, so it finds its own module and extractor and this
+        environment's packages. It runs in `target`, so no package in the repo shadows it."""
+        env = {name: value for name, value in os.environ.items() if name not in ENGINE_LOCATORS}
+        env["PYTHONPATH"] = str(target)
+        return BaseEngine("", (sys.executable, "-m", "hoglint"), env, target)
+
     def pinned(self, base_root: Path, config: Config) -> BaseEngine | None:
         """The installed engine at the version the base pins in `[engine] lock`: this process when
-        it runs that version, else `[engine] runner` with that version, which is asked for its id
-        before any scan, so its summaries are stored and found under its own id. None when the
-        base pins no version. The runner runs in the repo, without this engine's locators."""
+        it runs that version, else that version installed by `[engine] install`, which is asked
+        for its id before any scan, so its summaries are stored and found under its own id. None
+        when the base pins no version."""
         version = LockPin.read(base_root / config.engine.lock)
         if version is None:
             return None
         if version == LockPin.running():
             return BaseEngine(self.local.id)
-        command = tuple(shlex.split(config.engine.runner.replace(VERSION_SLOT, version)))
-        env = {name: value for name, value in os.environ.items() if name not in ENGINE_LOCATORS}
-        engine = BaseEngine("", command, env, self.repo)
+        engine = self.installed_engine(self.installs.target(version, config.engine.install))
         completed = self.run(engine, ["engine-id"])
         printed = completed.stdout.split()
         if completed.returncode != 0 or not printed:

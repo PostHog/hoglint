@@ -3,7 +3,8 @@
 Root: `$XDG_CACHE_HOME/hoglint`, else `~/.cache/hoglint`, one per machine and shared by every
 worktree. It holds the fact cache (`facts/`, namespaced by the `[facts]` id), run summaries
 (`summaries/`), the inputs digests of known trees (`inputs/`, see inputs.py), answers stored by
-the content they depend on (`answers/`, see cache.py) and extractor binaries (`extractors/`).
+the content they depend on (`answers/`, see cache.py), extractor binaries (`extractors/`) and the
+engines base commits pin (`engines/`, see `EngineInstalls` in cli.py).
 
 Summaries: one manifest per exact key, `summaries/<engine id>/<inputs>/<policy>-<framework>.json`,
 and its sections, `summaries/<engine id>/sections/<sha>.zst`. The key is the envelope (inputs

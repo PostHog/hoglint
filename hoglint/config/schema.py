@@ -15,8 +15,9 @@ from typing import TYPE_CHECKING, Any
 from hoglint import adapters  # noqa: F401 - registers the builtin coverage adapters and providers
 from hoglint.config.loader import NAMED_SECTIONS, ConfigError, MergedConfig
 from hoglint.config.model import (
+    DEFAULT_INSTALL,
     DEFAULT_LOCK,
-    DEFAULT_RUNNER,
+    TARGET_SLOT,
     VERSION_SLOT,
     WAY_SAFETIES,
     Assignment,
@@ -204,11 +205,14 @@ RENAMED_RULE_KEYS: dict[str, dict[str, str]] = {
         "unknown_types": "`unknown_types` of the shape policy each export names: the walk reads its policy's list",
     }
 }
+RENAMED_ENGINE_KEYS = {
+    "runner": "`install`, which installs the version into {target}: the base engine runs under this interpreter",
+}
 EXPORT_KEYS = frozenset({"within", "paths", "audience", "shape", "subclass_of", "symbols", "doc"})
 REGISTRY_KEYS = frozenset({"loader", "module", "attribute", "shape", "lifecycle", "doc"})
 LEVEL_KEYS = frozenset({"doc", "group_by", "select", "requires", "strict", "within_group", "claimed_by", "watch_zones"})
 LEDGER_KEYS = frozenset({"file", "exceptions"})
-ENGINE_KEYS = frozenset({"lock", "runner"})
+ENGINE_KEYS = frozenset({"lock", "install"})
 ROLE_KEYS = frozenset({"owner", "group"})
 OUTPUT_KEYS = frozenset({"view", "format", "path", "doc"})
 DISCOVERY_KEYS = frozenset(
@@ -1352,10 +1356,14 @@ class SchemaBuilder:
 
     def read_engine(self) -> EngineSpec:
         table = self.raw.get("engine", {})
-        self.check_keys("engine", table, ENGINE_KEYS)
-        spec = EngineSpec(str(table.get("lock", DEFAULT_LOCK)), str(table.get("runner", DEFAULT_RUNNER)))
-        if VERSION_SLOT not in spec.runner:
-            self.fail("engine.runner", f"needs {VERSION_SLOT}, which compare replaces with the version the base pins")
+        self.check_keys("engine", table, ENGINE_KEYS, RENAMED_ENGINE_KEYS)
+        spec = EngineSpec(str(table.get("lock", DEFAULT_LOCK)), str(table.get("install", DEFAULT_INSTALL)))
+        if VERSION_SLOT not in spec.install:
+            self.fail("engine.install", f"needs {VERSION_SLOT}, which compare replaces with the version the base pins")
+        if TARGET_SLOT not in spec.install:
+            self.fail(
+                "engine.install", f"needs {TARGET_SLOT}, which compare replaces with the directory to install into"
+            )
         return spec
 
     def read_roles(self, rules: dict[str, RuleSpec]) -> Roles:

@@ -19,6 +19,12 @@
 - A consuming monorepo: its preset, the root `hoglint.toml` (which extends the packs it uses, such as `hoglint:posthog`), and the ledger and exceptions files.
   It pins the wheel and holds no hoglint Python.
 
+**compare's base engine** (architect, Nov 17):
+- When the base commit pins another hoglint version, `compare` installs that version without its dependencies (`[engine] install`, by default `uv pip install --no-deps --target`) into `engines/<version>` under the cache root.
+  It runs that engine under the head's interpreter, so both engines read the same third-party sources.
+- A base scan with a producer failure that the head scan does not have makes `compare` exit 2.
+  Such a base is no reference for the head's unknowns.
+
 **Packaging** (a separate crate; owner, Nov 9):
 - A prebuilt, pinned wheel.
   Developers need no Rust compiler.
@@ -32,6 +38,8 @@
 - Own repo: frequent coordinated source changes between the tool and the monorepo do not happen.
   hoglint can iterate, release and build on its own, and the monorepo pins a version.
   `compare` can then run its base engine from the base pin.
+- The base engine in the head's environment: hoglint reads third-party sources, such as Django's, from the interpreter's site-packages.
+  A base scan in another environment is not comparable with the head scan.
 - Prebuilt wheel: a Rust workspace member built locally conflicted with the dev environment's older cargo.
 - The generic core and the Django pack become physically separate from PostHog's preset.
 - Every pack in the wheel: packs no longer sit in two places with two load routes, the engine id and the base pin cover each pack's code, and a run needs no repo root on `sys.path`.
@@ -43,6 +51,7 @@
 | A Rust crate inside the monorepo's `rust/` workspace | Toolchain conflict; coupled CI steps | Plan default; separate crate (owner, Nov 9) | `docs/research/adversarial-reviews.md` |
 | Repack everything the source repo holds when extracting history | When extracting history from a partial clone, pack only the objects the new history reaches | Architect, Nov 11 | `docs/history/decision-log-3.md` |
 | The PostHog pack as the monorepo's own plugin ("The PostHog pack's home", Nov 10) | Packs in two places, loaded two ways | Owner, Nov 17 | not published |
+| The base engine run by `uv run --no-project --with hoglint==<base pin>` | That environment holds only hoglint, so the Django pack's producers fail on the base, and the head's unknowns look introduced | Architect, Nov 17 | not published |
 
 ## Open (the owner's calls)
 

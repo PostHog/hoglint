@@ -291,8 +291,10 @@ ledger = false
             "condition 'crossing' is an expression and cannot be compared",
         ),
         ("[unknown_section]\nx = 1\n", "unknown section"),
-        # a runner that cannot name the version would run some other engine as the base's
-        ("[engine]\nrunner = 'uv run --with hoglint hoglint'\n", "engine.runner: needs {version}"),
+        # an install that cannot name the version would install some other engine as the base's
+        ("[engine]\ninstall = 'uv pip install --target {target} hoglint'\n", "engine.install: needs {version}"),
+        # the runner ran the base engine in another environment; the old key says what replaced it
+        ("[engine]\nrunner = 'uv run --with hoglint=={version} hoglint'\n", "engine: `runner` is now `install`"),
         (
             OTHER_RULE + 'ways = [{ safety = "maybe", text = "fix it" }]\n',
             "rules.other.ways[0].safety: 'maybe' is not one of",

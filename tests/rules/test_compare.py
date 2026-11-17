@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.cli import ENGINE_LOCATORS, LockPin
+from hoglint.cli import ENGINE_LOCATORS, BaseEngines, EngineInstalls, LockPin
 from hoglint.compare import Comparer, RawPolicy, Scans
+from hoglint.config.model import DEFAULT_INSTALL
 from hoglint.facts import find_binary
 from hoglint.ledger.envelope import NATIVE, EngineError, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
@@ -504,21 +505,46 @@ def test_a_lock_without_one_readable_pin_is_unknown_unless_it_is_absent(
 
 
 RUNNING_VERSION = "0.2.0"
-# Run by the runner template with the version first: it records what compare asks of the pinned
-# engine and which of this engine's locators reached it, then runs the local engine as that
-# engine, whose extractor reports another build id.
-STUB_RUNNER = """\
+# The `hoglint/__main__.py` of a pinned engine the stub installs: it records what compare asks of
+# the engine, which of this engine's locators reached it (its own directory on PYTHONPATH is not
+# one) and which interpreter runs it, then runs the engine package it sits in.
+PINNED_MAIN = """\
 import os
 import sys
 import json
+from pathlib import Path
 
-inherited = sorted(name for name in {locators!r} if name in os.environ)
+here = Path(__file__).resolve().parents[1]
+inherited = sorted(name for name in {locators!r} if name in os.environ and Path(os.environ[name]).resolve() != here)
 with open({log!r}, "a") as handle:
-    handle.write(json.dumps([*sys.argv[1:], inherited]) + "\\n")
+    handle.write(json.dumps([*sys.argv[1:], inherited, sys.executable]) + "\\n")
 if {silent!r} and "scan" in sys.argv:
     sys.exit(0)
-env = {{**os.environ, "PYTHONPATH": {site!r}, "HOGLINT_FACTS_BIN": {binary!r}, "HOGLINT_NATIVE_DIR": {native!r}}}
-os.execve(sys.executable, [sys.executable, "-m", "hoglint", *sys.argv[2:]], env)
+from hoglint.cli import entry
+
+sys.exit(entry())
+"""
+# Run by the install template with the version and the target: it installs this engine as that
+# version, with its native module and an extractor that reports another build id, and logs it.
+STUB_INSTALL = """\
+import sys
+import json
+import shutil
+from pathlib import Path
+
+version, target = sys.argv[1], Path(sys.argv[2])
+with open({log!r}, "a") as handle:
+    handle.write(json.dumps(["install", version]) + "\\n")
+shutil.copytree(Path({site!r}) / "hoglint", target / "hoglint")
+shutil.copytree(Path({native!r}) / "hoglint_native", target / "hoglint_native")
+(target / "hoglint" / "__main__.py").write_text({main!r})
+binary = target / "hoglint" / "bin" / "hoglint-facts"
+binary.parent.mkdir()
+shutil.copy({binary!r}, binary)
+info = target / f"hoglint-{{version}}.dist-info"
+info.mkdir()
+(info / "METADATA").write_text(f"Metadata-Version: 2.1\\nName: hoglint\\nVersion: {{version}}\\n")
+(info / "RECORD").write_text(f"hoglint/bin/hoglint-facts,,{{binary.stat().st_size}}\\n")
 """
 
 
@@ -534,39 +560,68 @@ def installed_engine(root: Path) -> Path:
     return site
 
 
-def stub_runner(root: Path, site: Path, silent: bool) -> str:
-    """A runner template for `[engine] runner`, and the stub it runs; the stub logs to root/runner.log."""
+def stub_install(root: Path, site: Path, silent: bool) -> str:
+    """An install template for `[engine] install`, and the stub it runs; both log to root/engine.log."""
     pinned_binary = root / "pinned-facts"
     pinned_binary.write_text(
         f'#!/bin/sh\n[ "$1" = "--build-id" ] && echo pinned-build && exit 0\nexec {find_binary()} "$@"\n'
     )
     pinned_binary.chmod(0o755)
-    stub = root / "runner.py"
-    log, native = str(root / "runner.log"), str(bridge.built_module_dir())
-    stub.write_text(
-        STUB_RUNNER.format(
-            log=log, silent=silent, site=str(site), binary=str(pinned_binary), native=native, locators=ENGINE_LOCATORS
-        )
-    )
-    return f"{shlex.quote(sys.executable)} {shlex.quote(str(stub))} {{version}}"
+    log, native = str(root / "engine.log"), str(bridge.built_module_dir())
+    main = PINNED_MAIN.format(log=log, silent=silent, locators=ENGINE_LOCATORS)
+    stub = root / "install.py"
+    stub.write_text(STUB_INSTALL.format(log=log, site=str(site), native=native, main=main, binary=str(pinned_binary)))
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(stub))} {{version}} {{target}}"
 
 
-def runner_calls(log: Path) -> list[list[str]]:
+def engine_calls(log: Path) -> list[list[str]]:
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def test_compare_installs_the_pinned_engine_and_runs_it_under_this_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ENGINE_LOCATORS:
+        monkeypatch.setenv(name, str(tmp_path / "this-engine"))
+    target = tmp_path / "a cache" / "engines" / "0.1.0"
+    # the target path holds a space, and stays one word
+    installs = [
+        "uv",
+        "pip",
+        "install",
+        "--no-deps",
+        "--python",
+        sys.executable,
+        "--target",
+        str(target),
+        "hoglint==0.1.0",
+    ]
+    assert EngineInstalls.command(DEFAULT_INSTALL, "0.1.0", target) == installs
+    engine = BaseEngines.installed_engine(target)
+    assert engine.command == (sys.executable, "-m", "hoglint")
+    assert {name: engine.env.get(name) for name in ENGINE_LOCATORS} == {
+        name: str(target) if name == "PYTHONPATH" else None for name in ENGINE_LOCATORS
+    }
 
 
 @needs_extractor
 @pytest.mark.parametrize(
     "pin, silent, code, says, asked",
     [
-        # the base pins the running version: this process scans it, no runner runs
+        # the base pins the running version: this process scans it, nothing is installed
         (RUNNING_VERSION, False, 1, "code growth (fails) (1)", []),
-        # another version: the runner gives its id, then scans base and head under it
-        ("0.1.0", False, 1, "code growth (fails) (1)", ["engine-id", "scan", "scan"]),
+        # another version: it is installed, gives its id, then scans base and head
+        ("0.1.0", False, 1, "code growth (fails) (1)", ["install", "engine-id", "scan", "scan"]),
         # no pin: the base predates hoglint
         (None, False, 0, "growth check skipped: the base commit predates hoglint", []),
-        # a runner that prints no summary is a base engine that failed
-        ("0.1.0", True, 2, "base scan failed (blocks): the base engine failed (exit 0)", ["engine-id", "scan"]),
+        # an engine that prints no summary is a base engine that failed
+        (
+            "0.1.0",
+            True,
+            2,
+            "base scan failed (blocks): the base engine failed (exit 0)",
+            ["install", "engine-id", "scan"],
+        ),
     ],
     ids=["same version", "other version", "no pin", "no summary"],
 )
@@ -574,10 +629,10 @@ def test_an_installed_engine_scans_the_base_with_the_version_the_base_pins(
     tmp_path: Path, pin: str | None, silent: bool, code: int, says: str, asked: list[str]
 ) -> None:
     site = installed_engine(tmp_path)
-    runner = stub_runner(tmp_path, site, silent)
+    install = stub_install(tmp_path, site, silent)
     repo = tmp_path / "repo"
     lock = f'version = 1\n\n[[package]]\nname = "hoglint"\nversion = "{pin}"\n' if pin else "version = 1\n"
-    write_files(repo, {**FILES, "uv.lock": lock, "hoglint.toml": CONFIG + f"\n[engine]\nrunner = '{runner}'\n"})
+    write_files(repo, {**FILES, "uv.lock": lock, "hoglint.toml": CONFIG + f"\n[engine]\ninstall = '{install}'\n"})
     git_in(repo, "init", "-q")
     assert hoglint(repo, "check", "--write-ledger", "--record-growth", package_root=site).returncode == 0
     git_in(repo, "add", "-A")
@@ -590,16 +645,25 @@ def test_an_installed_engine_scans_the_base_with_the_version_the_base_pins(
     compared = hoglint(repo, "compare", "--base", "base", package_root=site)
     assert compared.returncode == code, compared.stdout + compared.stderr
     assert says in compared.stdout
-    calls = runner_calls(tmp_path / "runner.log")
-    assert ["scan" if "scan" in call else call[1] for call in calls] == asked
-    assert all(call[0] == pin and call[-1] == [] for call in calls)
-    if asked != ["engine-id", "scan", "scan"]:
+    log = tmp_path / "engine.log"
+    calls = engine_calls(log)
+    assert ["scan" if "scan" in call else call[0] for call in calls] == asked
+    # The pinned engine runs under the head's interpreter, with none of the head engine's locators.
+    assert all(call == ["install", pin] or call[-2:] == [[], sys.executable] for call in calls)
+    if pin is None or asked != ["install", "engine-id", "scan", "scan"]:
         return
-    # The pinned engine's summaries are stored under its own id, so the next compare reads them.
+    # The install is kept by version, and the pinned engine's summaries under its own id, so the
+    # next compare installs nothing and reads them.
     again = hoglint(repo, "compare", "--base", "base", package_root=site)
     assert "base summary: the stored summary" in again.stdout, again.stdout + again.stderr
-    assert runner_calls(tmp_path / "runner.log")[len(calls) :] == [[pin, "engine-id", []]]
+    assert engine_calls(log)[len(calls) :] == [["engine-id", [], sys.executable]]
     assert list((repo.parent / "repo-cache").rglob("native-pinned-build"))
+    # A kept install that lost a file to the cache's prune is installed again, never used.
+    calls = engine_calls(log)
+    (repo.parent / "repo-cache" / "hoglint" / "engines" / pin / "hoglint" / "bin" / "hoglint-facts").unlink()
+    pruned = hoglint(repo, "compare", "--base", "base", package_root=site)
+    assert pruned.returncode == code, pruned.stdout + pruned.stderr
+    assert engine_calls(log)[len(calls) :] == [["install", pin], ["engine-id", [], sys.executable]]
 
 
 @needs_extractor
