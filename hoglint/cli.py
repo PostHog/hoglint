@@ -68,6 +68,7 @@ from hoglint.native.source import NativeGraphSource, batch_mode
 from hoglint.rules.base import EdgeRule
 from hoglint.rules.engine import Engine, RunResult, primitive_of
 from hoglint.rules.exceptions import ExceptionsFile
+from hoglint.rules.page import RulePage
 from hoglint.selectors import State
 from hoglint.source import GraphSource
 
@@ -976,6 +977,13 @@ class Commands:
             path.write_text(json.dumps(edges))
 
     def explain(self, target: str) -> int:
+        """A rule's page by its name (D113), with no run; else the labels of a path or module, or
+        why an edge was selected."""
+        config = load_config(self.repo, self.repo / CONFIG_FILE)
+        rule = config.rules.get(target)
+        if rule is not None:
+            sys.stdout.write(RulePage(rule, config).render())
+            return 0
         run = self.runner.run(self.repo)
         if target.startswith("edge:"):
             return self.explain_edge(run, target.removeprefix("edge:"))
@@ -1278,7 +1286,10 @@ def parser() -> argparse.ArgumentParser:
     ledger = sub.add_parser("ledger", help="shrink: remove stale ledger lines; it never adds a line")
     ledger.add_argument("action", choices=("shrink",))
     ledger.set_defaults(handler=lambda commands, args: commands.shrink_ledger())
-    explain = sub.add_parser("explain", help="labels of a path or module, or why an edge (edge:<id>) was selected")
+    explain = sub.add_parser(
+        "explain",
+        help="a rule's page by its name, the labels of a path or module, or why an edge (edge:<id>) was selected",
+    )
     explain.add_argument("target")
     explain.set_defaults(handler=lambda commands, args: commands.explain(args.target))
     query = sub.add_parser("query", help="open findings and accepted debt, grouped")

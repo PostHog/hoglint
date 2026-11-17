@@ -35,6 +35,7 @@ from hoglint.labels import HANDOUT_ZONES
 from hoglint.model import Edge
 from hoglint.native.labels import NativeLabeler
 from hoglint.rules.engine import primitive_of
+from hoglint.rules.page import SAFETY_LABELS, RulePage
 from native.require import native_module
 
 from model_repo.harness import copy_tree, stub_site
@@ -62,6 +63,10 @@ SAMPLE_EDGES = [
     ("import", "products.warehouse_sources.sources.sdk.base", "common.hogvm.stl.quote"),  # SV02: `unless` read
     ("import", "products.reports.backend.logic.build", "products.inventory.backend.facade.api.get_stock"),  # PS06
 ]
+
+# The rules whose page the sample holds: an entrypoint rule, a signature rule with the core model
+# list's way out, and a coverage rule that keeps no exception.
+SAMPLE_RULES = ["public-surface", "facade-signature", "wiring-watched"]
 
 # A row's kind in the result: a finding, or an incomplete item.
 FINDING = "finding"
@@ -330,8 +335,8 @@ def test_explain_edge_reads_each_search_path_as_the_run_found_it(explained: tupl
 
 
 def sample_lines(commands: Commands, run: Run) -> list[str]:
-    """What `explain` prints for the sample: each module's labels, then `explain edge:` of each
-    sample edge."""
+    """What `explain` prints for the sample: each module's labels, `explain edge:` of each sample
+    edge, then each sample rule's page."""
     labeler = run.result.labeler
     lines = []
     for module in SAMPLE_MODULES:
@@ -345,7 +350,22 @@ def sample_lines(commands: Commands, run: Run) -> list[str]:
             with contextlib.redirect_stdout(out):
                 commands.explain_edge(run, edge.run_id(ordinals.get(edge.handle, 0)))
             lines.extend(out.getvalue().splitlines())
+    for rule in SAMPLE_RULES:
+        out = StringIO()
+        with contextlib.redirect_stdout(out):
+            assert commands.explain(rule) == 0
+        lines.extend(out.getvalue().splitlines())
     return lines
+
+
+def test_every_rule_page_says_what_the_rule_is_for_and_what_to_do(explained: tuple[Commands, Run]) -> None:
+    _, run = explained
+    for spec in run.config.rules.values():
+        if spec.id in ("core-door",):  # the model repository's own rule, outside the preset
+            continue
+        page = RulePage(spec, run.config).render()
+        assert page.startswith(f"{spec.id}  (") and "\npurpose: " in page and "\nwhy: " in page, spec.id
+        assert any(f"\n{label}: " in page for label in SAFETY_LABELS.values()), spec.id
 
 
 def test_explain_says_what_its_stored_sample_says(explained: tuple[Commands, Run]) -> None:
