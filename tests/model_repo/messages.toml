@@ -110,6 +110,16 @@ text = "products.legacy.backend.facade.contracts names products.catalog.backend.
 
 [[finding]]
 rule = "public-surface"
+identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
+text = "products.legacy.backend.logic.payloads names posthog.ingress.handlers, which is not exported to it; cannot tell, unassigned: dst.exported"
+
+[[finding]]
+rule = "public-surface"
+identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
+text = "products.legacy.backend.logic.widgets names posthog.ingress.dispatch.route_payload, which is not exported to it"
+
+[[finding]]
+rule = "public-surface"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "import"]
 text = "products.legacy.backend.logic.widgets names products.inventory.backend.models.StockItem, which is not exported to it"
 
@@ -1152,21 +1162,6 @@ text = "products/racks/backend/facade/api.py defines no function"
 rule = "health-checks-no-dags"
 identity = []
 text = "products.reports.backend.health_checks reaches posthog.dags.backfill.backfill_partition: products.reports.backend.health_checks -> posthog.dags.backfill.backfill_partition"
-
-[[finding]]
-rule = "core-door"
-identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
-text = "products.legacy.backend.facade.aboveworkers imports '......gone', which hoglint cannot find"
-
-[[finding]]
-rule = "core-door"
-identity = ["posthog.ingress.handlers", "products.legacy.backend.logic.payloads", "import"]
-text = "products.legacy.backend.logic.payloads names posthog.ingress.handlers, which is not exported to it; cannot tell, unassigned: dst.exported"
-
-[[finding]]
-rule = "core-door"
-identity = ["posthog.ingress.dispatch.route_payload", "products.legacy.backend.logic.widgets", "import"]
-text = "products.legacy.backend.logic.widgets names posthog.ingress.dispatch.route_payload, which is not exported to it"
 
 [[finding]]
 rule = "wiring-watched"

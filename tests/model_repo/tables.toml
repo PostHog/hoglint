@@ -20,24 +20,24 @@ rows = 0
 digest = "cae66941d9efbd404e4d88758ea67670"
 
 ["findings"]
-rows = 307
-digest = "65b4066418a0e4d869508500b11e209b"
+rows = 306
+digest = "c133cc0091168e67cd85af1cc3e3a821"
 
 ["incomplete"]
 rows = 96
 digest = "1edb1e3320a960057e45084d6d36b9d4"
 
 ["scan-lines"]
-rows = 249
-digest = "a5611d8160d3c50c12aaa4fb1400519a"
+rows = 248
+digest = "b0741bafbae4d974ecc9640fe1a2d8ae"
 
 ["couplings"]
 rows = 1539
 digest = "82b5983eaa7199693f667c2188ae3774"
 
 ["stored-summary"]
-rows = 1536
-digest = "1a2ef6a0788d03c038f578c15615edc9"
+rows = 1522
+digest = "bb9c101cf3b32ab0f809ecdf8fd45704"
 
 ["levels"]
 rows = 1

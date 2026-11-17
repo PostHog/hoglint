@@ -10,4 +10,4 @@ debt the new scanner, policy or environment no longer sees (review) (1)
   public-surface products.catalog.backend.logic.pricing.price_for import core: 1 -> 0  [policy]
 counts: findings new 0, resolved 0; ledger lines added 0, removed 0; zero-net swaps 0; rule growth 0; new group edges 0; old unknowns 96. Show every section: hoglint compare --base base --all.
 
-hoglint: no new problems (24 advisory rows, 96 old unknowns, 209 old findings in the ledger).
+hoglint: no new problems (24 advisory rows, 96 old unknowns, 208 old findings in the ledger).

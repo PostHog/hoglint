@@ -113,7 +113,7 @@ labels sandbox.shapes runs_by_name = none <- outside the field's domain
 edge     import posthog/api/widget_report.py:1 products.legacy.backend.logic.widgets -> ['products.legacy.backend.logic.widgets']
          resolution=resolved contexts=['prod']
 rule     public-surface (endpoint surface, products.legacy.backend.logic.widgets)
-           select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
+           select: crosses-package and (dst.tier == 'product' or (dst.door and 'test' not in edge.context)) and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     presentation-uses-facade (endpoint surface, products.legacy.backend.logic.widgets)
            from: src.zone == 'presentation' -> false
@@ -164,14 +164,11 @@ rule     leaves-stay-leaves (endpoint origin, products.legacy.backend.logic.widg
 rule     health-checks-no-dags (endpoint origin, products.legacy.backend.logic.widgets)
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> false
-rule     core-door (endpoint surface, products.legacy.backend.logic.widgets)
-           select: crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context -> false
-           allow: dst.exported -> false
 finding  [new] public-surface products.legacy.backend.logic.widgets posthog.api.widget_report import
 edge     reference products/reports/backend/logic/build.py:14 products.catalog.backend.facade.models.CatalogEntry -> ['products.catalog.backend.models.CatalogEntry']
          resolution=resolved contexts=['function_local', 'prod']
 rule     public-surface (endpoint surface, products.catalog.backend.facade.models.CatalogEntry)
-           select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
+           select: crosses-package and (dst.tier == 'product' or (dst.door and 'test' not in edge.context)) and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     model-crossings (endpoint origin, products.catalog.backend.models.CatalogEntry)
            select: dst.kind == 'model' and dst.tier == 'product' and crosses-package and edge.shape != none and not public-surface-reports -> true
@@ -183,9 +180,6 @@ rule     foundation-direction (endpoint origin, products.catalog.backend.models.
 rule     infrastructure-direction (endpoint origin, products.catalog.backend.models.CatalogEntry)
            from: src.zone == 'infrastructure' -> false
            deny: dst.tier == 'product' or dst.stage == 'proto-product' -> true
-rule     core-door (endpoint surface, products.catalog.backend.facade.models.CatalogEntry)
-           select: crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context -> false
-           allow: dst.exported -> true
 finding  [new] model-crossings products.catalog.backend.models.CatalogEntry products.reports.backend.logic.build instance-many(filter)
 edge     exposes products/catalog/backend/facade/api.py:108 typing.Any -> ['typing.Any']
          resolution=external contexts=['prod']
@@ -257,7 +251,7 @@ finding  [new] facade-signature products.catalog.backend.facade.api give_list_an
 edge     import products/catalog/backend/facade/api.py:7 posthog.models.ghost.Ghost -> []
          resolution=unresolved contexts=['prod']
 rule     public-surface (endpoint surface, posthog.models.ghost.Ghost)
-           select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
+           select: crosses-package and (dst.tier == 'product' or (dst.door and 'test' not in edge.context)) and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     presentation-uses-facade (endpoint surface, posthog.models.ghost.Ghost)
            from: src.zone == 'presentation' -> false
@@ -308,15 +302,12 @@ rule     leaves-stay-leaves (endpoint origin, posthog.models.ghost.Ghost)
 rule     health-checks-no-dags (endpoint origin, posthog.models.ghost.Ghost)
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> unknown
-rule     core-door (endpoint surface, posthog.models.ghost.Ghost)
-           select: crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context -> false
-           allow: dst.exported -> false
 finding  [new] facade-no-drf products.catalog.backend.facade.api ?
 finding  [new] prod-imports-test products.catalog.backend.facade.api ?
 edge     import products/legacy/backend/logic/widgets.py:8 scripts.helpers.slug -> ['scripts.helpers.slug']
          resolution=resolved contexts=['prod']
 rule     public-surface (endpoint surface, scripts.helpers.slug)
-           select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> unknown
+           select: crosses-package and (dst.tier == 'product' or (dst.door and 'test' not in edge.context)) and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> unknown
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     presentation-uses-facade (endpoint surface, scripts.helpers.slug)
            from: src.zone == 'presentation' -> false
@@ -367,13 +358,10 @@ rule     leaves-stay-leaves (endpoint origin, scripts.helpers.slug)
 rule     health-checks-no-dags (endpoint origin, scripts.helpers.slug)
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> false
-rule     core-door (endpoint surface, scripts.helpers.slug)
-           select: crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context -> false
-           allow: dst.exported -> false
 edge     import products/warehouse_sources/sources/sdk/base.py:2 common.hogvm.stl.quote -> ['common.hogvm.stl.quote']
          resolution=resolved contexts=['prod']
 rule     public-surface (endpoint surface, common.hogvm.stl.quote)
-           select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
+           select: crosses-package and (dst.tier == 'product' or (dst.door and 'test' not in edge.context)) and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> false
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> false
 rule     presentation-uses-facade (endpoint surface, common.hogvm.stl.quote)
            from: src.zone == 'presentation' -> false
@@ -424,14 +412,11 @@ rule     leaves-stay-leaves (endpoint origin, common.hogvm.stl.quote)
 rule     health-checks-no-dags (endpoint origin, common.hogvm.stl.quote)
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> false
-rule     core-door (endpoint surface, common.hogvm.stl.quote)
-           select: crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context -> false
-           allow: dst.exported -> false
 finding  [new] sources-vendors-use-sdk products.warehouse_sources.sources.sdk.base common.hogvm.stl
 edge     import products/reports/backend/logic/build.py:5 products.inventory.backend.facade.api.get_stock -> ['products.inventory.backend.facade.api.get_stock']
          resolution=resolved contexts=['prod']
 rule     public-surface (endpoint surface, products.inventory.backend.facade.api.get_stock)
-           select: crosses-package and dst.tier == 'product' and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
+           select: crosses-package and (dst.tier == 'product' or (dst.door and 'test' not in edge.context)) and src.history != true and not (edge.kind == 'dotted-path' and 'test' in edge.context) -> true
            allow: dst.exported or (src.settings == true and edge.kind == 'dotted-path') or (src.wiring == 'registration' and dst.wiring == 'location') or (dst.permanent == true and src.tier == 'core' and 'test' not in edge.context) -> true
 rule     presentation-uses-facade (endpoint surface, products.inventory.backend.facade.api.get_stock)
            from: src.zone == 'presentation' -> false
@@ -482,12 +467,9 @@ rule     leaves-stay-leaves (endpoint origin, products.inventory.backend.facade.
 rule     health-checks-no-dags (endpoint origin, products.inventory.backend.facade.api.get_stock)
            from: src.registry == 'health_checks' -> false
            deny: dst.module startswith 'posthog.dags' -> false
-rule     core-door (endpoint surface, products.inventory.backend.facade.api.get_stock)
-           select: crosses-package and dst.tier == 'core' and dst.door and 'test' not in edge.context -> false
-           allow: dst.exported -> true
 public-surface  (blocking, ledgered, entrypoint rule)
 defined in tools/hoglint/presets/posthog.toml
-purpose: Other packages name a product only through an export whose audience includes them. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings; a core registration point may name a wiring location; core production code may name a declared permanent interface. A test's patch target is wiring-watched's, not this rule's.
+purpose: Other packages name a product, or a core package with a declared door, only through an export whose audience includes them; tests may reach into a core door package. A later use of an imported name is judged once, at its import. Migrations are frozen history and are not judged; Django settings may name product paths as strings; a core registration point may name a wiring location; core production code may name a declared permanent interface. A test's patch target is wiring-watched's, not this rule's.
 why: Code outside a product must use the product only through its facade. A name from inside the product makes a coupling that the owners of the product cannot see.
 fix (safe): If the facade of the product exports the same object, import it from the facade.
 fix (needs care): If the code belongs to the product, move it into the product.
