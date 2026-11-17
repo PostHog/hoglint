@@ -105,6 +105,13 @@ The preset has no `off` key yet: a rule that is off is a commented-out table wit
 - A use whose name resolves to nothing makes no edge; the import's own unresolved edge is what other rules read (model repository `NS16`).
 - An empty list makes no edge and no work, so a config without the key runs as before.
 
+**Writes the Django pack reads on a model use** (the architect, Nov 17, for D115).
+- The write vocabulary holds the async twin of each write (`abulk_update`, `aget_or_create` and `aupdate_or_create` were missing).
+- `save` and `asave` write one instance and no manager chain has them, so the flow shape (`flow_shape`) does not show them.
+  A use whose value one of them is called on, in its own chain or by a later use of the local it is assigned to, gets the attr `instance_write` (`save`).
+- Considered and rejected: `save` in the write vocabulary.
+  The flow shape is the label `model-crossings` ledgers, so a cross-package save on a local would change label and move ledger lines of another rule.
+
 **A reach stops at a denied module, unless it says otherwise** (Nov 12).
 A `reach` reports each denied module it meets and does not enter it, whatever the order of the imports.
 With `through_denied = true` it goes on through a denied module, so every denied module on a chain past the first is reported too, each with its chain.

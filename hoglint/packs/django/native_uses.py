@@ -157,8 +157,13 @@ class UseReading:
             if refined is not None and refined != positions[index].shape:
                 flow_shapes[index] = refined.text()
         for index, (row, found) in enumerate(zip(rows, positions)):
-            flow = (("flow_shape", flow_shapes[index]),) if index in flow_shapes else ()
-            out.add(uses.handles[row], found.shape.kind, found.shape.detail, flow)
+            attrs: list[tuple[str, str]] = []
+            if index in flow_shapes:
+                attrs.append(("flow_shape", flow_shapes[index]))
+            written = self.shapes.instance_write(found.position, later.get(index, []))
+            if written is not None:
+                attrs.append(("instance_write", written))
+            out.add(uses.handles[row], found.shape.kind, found.shape.detail, tuple(attrs))
 
     @staticmethod
     def aggregate_edges(scope: FileScope, found: list[AttributeUse]) -> list[Edge]:

@@ -67,16 +67,23 @@ SHAPES = [
     ("Order", ".objects.filter().order_by()[].values()", "assign:rows", "scalar-chain", "values", ""),
     ("Invoice", ".objects.filter()", "await assign:qs", "instance-many", "filter", "lock"),
     ("Invoice", ".objects.all()", "assign:later", "instance-many", "all", ""),
+    ("Order", ".objects.get()", "assign:saved", "instance-single", "", ""),
+    ("Order", "().save()", "expr", "other", "Attribute:save", ""),
 ]
+# The uses above whose value is saved (`instance_write`), by line: a row a later use saves
+# through its local (line 45), and a built instance saved in its own chain. The flow shape of
+# neither changes.
+INSTANCE_WRITES = {43: "save", 44: "save"}
 # Later uses of the locals above: (line, root, chain, up). `o` flows into a delete; `qs` into an
 # update before line 33 reassigns it, and into a lock after, through `qs2`, a local assigned from
-# it; `later` only into a read, which changes nothing.
+# it; `later` only into a read, which changes nothing; `saved` into a save.
 DERIVED = [
     (20, "qs", ".update()", "expr"),
     (40, "o", ".delete()", "expr"),
     (42, "qs", ".filter()", "assign:qs2"),
     (43, "qs2", ".select_for_update().first()", "expr"),
     (44, "later", ".count()", "expr"),
+    (45, "saved", ".save()", "expr"),
 ]
 
 
@@ -141,6 +148,12 @@ def test_the_link_gives_every_use_its_shape_and_fails_the_files_it_cannot_read()
         for handle, shape, detail, pairs in zip(array("I", ids), shapes, details, attrs)
     ]
     assert sorted(found) == [(line, *row[3:]) for line, row in enumerate(SHAPES, start=3)]
+    written = {
+        lines[handle]: dict(pairs)["instance_write"]
+        for handle, pairs in zip(array("I", ids), attrs)
+        if "instance_write" in dict(pairs)
+    }
+    assert written == INSTANCE_WRITES
 
     paths = graph.link.paths()
     assert sorted(paths[file] for file in staged.failed()) == sorted(UNREADABLE)

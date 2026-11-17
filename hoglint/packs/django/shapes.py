@@ -43,8 +43,15 @@ WRITE_METHODS = frozenset(
         "aupdate",
         "adelete",
         "abulk_create",
+        "abulk_update",
+        "aget_or_create",
+        "aupdate_or_create",
     }
 )
+# Methods that write one model instance and that no manager chain has, so the flow shape, which
+# reads manager chains, does not show them: a use whose value one of them is called on gets the
+# edge attr `instance_write`.
+INSTANCE_WRITES = frozenset({"save", "asave"})
 SUBQUERY_CALLS = frozenset({"Exists", "Subquery"})
 # The keyword a signal's `connect`, `send` and `receiver` take the sending model by.
 SENDER_KEYWORDS = frozenset({"sender"})
@@ -120,6 +127,7 @@ VOCABULARY: dict[str, list[str]] = {
     "meta_managers": sorted(META_MANAGERS),
     "meta_class_attrs": sorted(META_CLASS_ATTRS),
     "write_methods": sorted(WRITE_METHODS),
+    "instance_writes": sorted(INSTANCE_WRITES),
     "subquery_calls": sorted(SUBQUERY_CALLS),
     "value_methods": sorted(VALUE_METHODS),
     "sender_keywords": sorted(SENDER_KEYWORDS),
@@ -331,3 +339,14 @@ class OrmShapes:
         if refined.kind not in ("lock", "write"):
             return None
         return refined
+
+    @staticmethod
+    def instance_write(source: UsePosition, later: list[UsePosition]) -> str | None:
+        """The methods of `INSTANCE_WRITES` called on the value of a use, sorted and joined by
+        commas: in its own chain (`M.objects.get().save()`, `M(...).save()`) or by a later use of
+        the local it is assigned to (`obj = ...; obj.save()`). None when there is none."""
+        methods, rest = source.methods()
+        names = [*methods, *UsePosition.called_after_subscript(rest)]
+        for position in later:
+            names.extend(position.methods()[0])
+        return ",".join(sorted({name for name in names if name in INSTANCE_WRITES})) or None

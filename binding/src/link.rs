@@ -522,6 +522,7 @@ impl Link {
             meta_managers: names("meta_managers")?,
             meta_class_attrs: names("meta_class_attrs")?,
             write_methods: names("write_methods")?,
+            instance_writes: names("instance_writes")?,
             subquery_calls: names("subquery_calls")?,
             value_methods: names("value_methods")?,
             sender_keywords: names("sender_keywords")?,

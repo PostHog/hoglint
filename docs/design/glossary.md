@@ -32,6 +32,9 @@ Some words have two meanings; the entry names both.
 - **Reference names** (`[discovery] reference_names`).
   Full dotted names whose every use is a reference edge, one per scope and attribute chain.
   Core makes none otherwise for a third-party name or a first-party function.
+- **Flow shape, instance write** (edge attrs `flow_shape`, `instance_write`; the Django pack).
+  The flow shape is the shape of a manager chain together with the later uses of the local it is assigned to (`qs = ...; qs.update()` is `write(update)`).
+  The instance write names `save` or `asave` when the code calls it on the use's value, in its own chain or through such a local.
 - **Listed** (edge attr `listed`; fact kind `listed`).
   `listed = "1"` on a reference edge whose name sits in a list, tuple, set or dict literal (past stars, `+` and the like), and on an import edge when every load of the name it binds in the file does.
   A name the file never loads, or loads in any other way, has no attr.
