@@ -1231,6 +1231,11 @@ UNKNOWN_TYPES = ["typing.Any", "builtins.dict", "products.billing.backend.models
 CONTEXT_PARTS = [{"exclude": ["test"]}, {"include": ["prod"]}, {"exclude": []}, {"include": ["test", "prod"]}]
 
 
+# A rule's words: they change no judgment, the schema tests hold their shape, and the generators
+# leave them out so the stored sample stays the same configs.
+WORDS_ONLY = frozenset({"why", "ways", "example"})
+
+
 class Tables:
     """Rule tables generated from the schema's key lists: in each mode, every key `RULE_KEYS`
     accepts for its primitive is set in some tables and left out of others, a key the mode
@@ -1344,7 +1349,7 @@ class Tables:
         """A table of `mode`; a ledgered one mostly with the identity and growth key it needs."""
         rng = self.rng
         table: dict[str, Any] = {"primitive": MODES[mode]}
-        for key in sorted(RULE_KEYS[MODES[mode]] - {"primitive", "growth_key"}):
+        for key in sorted(RULE_KEYS[MODES[mode]] - {"primitive", "growth_key"} - WORDS_ONLY):
             if rng.random() < self.chance(mode, key):
                 table[key] = self.value(mode, key, named)
         if table.get("ledger", True) and "identity" not in table and rng.random() < 0.9:
@@ -1393,7 +1398,7 @@ def schema_gaps(drawn: list[tuple[str, frozenset[str], bool]]) -> list[str]:
     for mode, primitive in MODES.items():
         tables = [(keys, loaded) for drawn_mode, keys, loaded in drawn if drawn_mode == mode]
         unread = unread_keys(TYPES[mode])
-        for key in sorted(RULE_KEYS[primitive] - {"primitive"}):
+        for key in sorted(RULE_KEYS[primitive] - {"primitive"} - WORDS_ONLY):
             held = [loaded for keys, loaded in tables if key in keys]
             # The key that picks an inventory's mode is left out only in the other mode.
             if not held or (len(held) == len(tables) and key != MODE_KEYS.get(mode)):
