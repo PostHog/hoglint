@@ -40,5 +40,5 @@ wiring-watched: products/catalog/turbo.json does not watch products/catalog/back
 wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/events.py: the AppConfig module of the product imports this module at setup
 wiring-watched: products/catalog/turbo.json does not watch products/catalog/backend/hogql_queries/__init__.py: a test outside the product runs this wiring
 
-Not shown: 34 more findings, 59 advisory rows, 96 old unknowns, 209 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+Not shown: 34 more findings, 59 advisory rows, 96 old unknowns, 215 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

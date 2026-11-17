@@ -334,6 +334,24 @@ identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 # export-shape
 
 [[row]]
+case = "WA01"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.depot.backend.temporal.ACTIVITIES", "products.depot.backend.facade.temporal", "export-unknown"]
+
+[[row]]
+case = "WA01"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.depot.backend.temporal.WORKFLOWS", "products.depot.backend.facade.temporal", "export-unknown"]
+
+[[row]]
+case = "WA06"
+rule = "export-shape"
+verdict = "unknown"
+identity = ["products.racks.backend.temporal.WORKFLOWS", "products.racks.backend.facade.temporal", "export-unknown"]
+
+[[row]]
 case = "AC01"
 rule = "export-shape"
 verdict = "unknown"
@@ -1290,6 +1308,19 @@ verdict = "incomplete"
 identity = ["scripts.shapes|reference|products.inventory.backend.models.StockItem"]
 
 # no-product-lists-in-core
+
+[[row]]
+case = "WA01"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.management.commands.start_temporal_worker", "products.depot.backend.temporal"]
+count = 2
+
+[[row]]
+case = "WA06"
+rule = "no-product-lists-in-core"
+verdict = "finding"
+identity = ["posthog.management.commands.start_temporal_worker", "products.racks.backend.temporal"]
 
 [[row]]
 case = "DP07"
@@ -2571,6 +2602,6 @@ match = ["products.catalog.backend.facade.aliases.built"]
 # Levels: the products that pass and fail each level, and the products that claim it.
 
 [levels.isolated]
-passing = ["shelf"]
+passing = ["depot", "shelf"]
 failing = ["access_control", "batch_exports", "catalog", "gatekeeper", "inventory", "kiosk", "legacy", "notifications", "racks", "reports", "visual_review", "warehouse_sources"]
 claimed = ["catalog", "gatekeeper", "inventory", "legacy", "reports", "shelf"]

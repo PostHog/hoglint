@@ -345,6 +345,16 @@ text = "products.catalog.backend.facade.starred exports products.catalog.backend
 
 [[finding]]
 rule = "export-shape"
+identity = ["products.depot.backend.temporal.ACTIVITIES", "products.depot.backend.facade.temporal", "export-unknown"]
+text = "products.depot.backend.facade.temporal exports products.depot.backend.temporal.ACTIVITIES, and hoglint cannot tell whether its shape policy allows it"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.depot.backend.temporal.WORKFLOWS", "products.depot.backend.facade.temporal", "export-unknown"]
+text = "products.depot.backend.facade.temporal exports products.depot.backend.temporal.WORKFLOWS, and hoglint cannot tell whether its shape policy allows it"
+
+[[finding]]
+rule = "export-shape"
 identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
 text = "products.legacy.backend.facade.aboveworkers exports ......gone, which hoglint cannot find"
 
@@ -367,6 +377,11 @@ text = "products.legacy.backend.facade.colonlazy exports products.legacy.backend
 rule = "export-shape"
 identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
 text = "products.legacy.backend.facade.lazygoneworkers exports products.legacy.backend.temporal.gone.run_gone, which hoglint cannot find"
+
+[[finding]]
+rule = "export-shape"
+identity = ["products.racks.backend.temporal.WORKFLOWS", "products.racks.backend.facade.temporal", "export-unknown"]
+text = "products.racks.backend.facade.temporal exports products.racks.backend.temporal.WORKFLOWS, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
@@ -1010,6 +1025,16 @@ text = "posthog.hogql_queries.query_runner imports products.legacy.backend.hogql
 
 [[finding]]
 rule = "no-product-lists-in-core"
+identity = ["posthog.management.commands.start_temporal_worker", "products.depot.backend.temporal"]
+text = "posthog.management.commands.start_temporal_worker imports products.depot.backend.temporal.ACTIVITIES"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.management.commands.start_temporal_worker", "products.depot.backend.temporal"]
+text = "posthog.management.commands.start_temporal_worker imports products.depot.backend.temporal.WORKFLOWS"
+
+[[finding]]
+rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_cleanup"]
 text = "posthog.management.commands.start_temporal_worker imports products.inventory.backend.logic.stock_cleanup.stock_cleanup"
 
@@ -1022,6 +1047,11 @@ text = "posthog.management.commands.start_temporal_worker imports products.inven
 rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_warmup"]
 text = "posthog.management.commands.start_temporal_worker imports products.inventory.backend.logic.stock_warmup.warm_stock"
+
+[[finding]]
+rule = "no-product-lists-in-core"
+identity = ["posthog.management.commands.start_temporal_worker", "products.racks.backend.temporal"]
+text = "posthog.management.commands.start_temporal_worker imports products.racks.backend.temporal.WORKFLOWS"
 
 [[finding]]
 rule = "no-product-lists-in-core"
