@@ -53,7 +53,7 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.errors import RepoRootError
-from hoglint.ledger.file import ABSENT, LedgerFile, render_key
+from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, change_row, grown_lines, render_key, shrunk_lines
 from hoglint.ledger.growth import Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
@@ -152,6 +152,13 @@ class Snapshots:
                 ["git", "-C", str(self.repo), "worktree", "remove", "--force", str(target)], capture_output=True
             )
         self.worktrees.clear()
+
+    def ledger_at(self, ref: str, path: str) -> LedgerFile:
+        """The ledger file a commit holds; an absent one when it holds none."""
+        try:
+            return LedgerFile.parse(git(self.repo, "show", f"{ref}:{path}"))
+        except subprocess.CalledProcessError:
+            return LedgerFile(source=ABSENT)
 
     def merge_base(self, ref: str) -> str:
         try:
@@ -337,6 +344,13 @@ CLAIM_WAY_OUT = (
     "the way out: fix each reason, or drop the narrowing in the file that claims the level;"
     " no ledger line or exception accepts a claim on a level the group fails"
 )
+# What `check` tells the reader of a stale ledger line, and of ledger lines a change adds by hand.
+SHRINK_WAY_OUT = "run `hoglint ledger shrink`, then stage the ledger: it removes stale lines and never adds one"
+RECORD_GROWTH_WAY_OUT = (
+    "new debt needs a person: fix the findings, or stop and tell the person; a person who accepts "
+    "the debt, or a policy change that finds more, records it with --write-ledger --record-growth"
+)
+GROWTH_WAY_OUT = "new debt needs a person: remove these lines and fix the findings, or stop and tell the person"
 # What a command that could not run at all prints, in one line (D104.3, D111). The hook's command
 # lets the commit through on exit 3; CI runs the full check.
 COULD_NOT_RUN = 3
@@ -385,12 +399,14 @@ class CheckReport:
         today: datetime.date,
         touched: set[str] | None = None,
         attributed: Attributed | None = None,
+        grown: list[LineChange] | None = None,
     ) -> None:
         self.summary = summary
         self.owners = owners
         self.today = today
         self.touched = touched
         self.attributed = attributed
+        self.grown = grown or []
 
     def keep(self, finding: FindingRecord) -> bool:
         if self.touched is None:
@@ -467,6 +483,12 @@ class CheckReport:
             out.extend(f"  {problem}" for problem in equality.header)
             out.extend(f"  new    {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.new)
             out.extend(f"  stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.stale)
+            if equality.stale:
+                out.append(f"  {SHRINK_WAY_OUT}")
+        if self.grown:
+            out.append(f"ledger lines this change adds, with no policy change ({len(self.grown)})")
+            out.extend(f"  {change_row(change)}" for change in self.grown)
+            out.append(f"  {GROWTH_WAY_OUT}")
         for label in summary.exceptions.stale:
             out.append(f"stale exception: {label} matches nothing")
         for review_by, label in summary.exceptions.expired(self.today):
@@ -505,7 +527,7 @@ class CheckReport:
         unequal = summary.equality is not None and not summary.equality.equal
         exceptions_failed = summary.exceptions.stale or summary.exceptions.problems
         claims_failed = summary.failed_claims() or summary.claim_errors
-        failed = self.violations() or unequal or exceptions_failed or claims_failed
+        failed = self.violations() or unequal or exceptions_failed or claims_failed or self.grown
         return 1 if failed else 0
 
 
@@ -728,10 +750,7 @@ class Baselines:
     ) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
         graph can be freed before the run. A commit's baseline takes the staged thread count."""
-        try:
-            ledger = LedgerFile.parse(git(self.repo, "show", f"{head_tree}:{ledger_path}"))
-        except subprocess.CalledProcessError:
-            ledger = LedgerFile(source=ABSENT)
+        ledger = self.snapshots.ledger_at(head_tree, ledger_path)
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
         runner = Runner(NativeGraphSource(work, self.store.stores))
         run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
@@ -829,7 +848,55 @@ class Commands:
         the working tree as git sees it."""
         return self.snapshots.head_tree_in_worktree(config)
 
-    def check(self, index: bool, write_ledger: bool, changed: bool) -> int:
+    def ledger_growth(self, policy_root: Path, config: Config) -> list[LineChange]:
+        """The rule lines the run's ledger adds or raises against HEAD's when the policy is HEAD's:
+        new debt recorded by hand or by a re-record, which needs a person. A policy change can
+        move lines, so its lines go to compare's growth check."""
+        head = self.snapshots.ledger_at("HEAD", config.ledger.file)
+        if not head.exists or head.policy != config.policy_hash:
+            return []
+        return grown_lines(head, LedgerFile.read(policy_root / config.ledger.file))
+
+    def write_ledger(self, run: Run, record_growth: bool) -> int | None:
+        """Writes the run's ledger over the file, and says what it added and removed. It refuses
+        to add or raise a line without `record_growth` and returns the exit code then."""
+        path = self.repo / run.config.ledger.file
+        before = LedgerFile.read(path)
+        grown, shrunk = grown_lines(before, run.ledger), shrunk_lines(before, run.ledger)
+        if grown and not record_growth:
+            sys.stdout.write(f"not written: the scan adds {len(grown)} lines to {run.config.ledger.file}\n")
+            sys.stdout.write("".join(f"  {change_row(change)}\n" for change in grown))
+            sys.stdout.write(f"  {RECORD_GROWTH_WAY_OUT}\n")
+            return 1
+        run.ledger.write(path)
+        sys.stdout.write(
+            f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}: "
+            f"{len(grown)} added or raised, {len(shrunk)} removed or lowered\n"
+        )
+        sys.stdout.write("".join(f"  added  {change_row(change)}\n" for change in grown))
+        return None
+
+    def shrink_ledger(self) -> int:
+        """`ledger shrink`: removes the ledger's stale lines and lowers its counts to the scan of
+        the working tree. It never adds or raises a line, so it needs no person."""
+        config = load_config(self.repo, self.repo / CONFIG_FILE)
+        path = self.repo / config.ledger.file
+        before = LedgerFile.read(path)
+        if not before.exists:
+            sys.stdout.write(f"{config.ledger.file} does not exist, so there is nothing to shrink\n")
+            return 0
+        run = self.runner.run(self.repo, tree=self.worktree_tree(config))
+        after = before.shrunk(run.result.scan)
+        removed = shrunk_lines(before, after)
+        if not removed:
+            sys.stdout.write(f"{config.ledger.file} has no stale lines\n")
+            return 0
+        after.write(path)
+        sys.stdout.write(f"removed or lowered {len(removed)} lines of {config.ledger.file}\n")
+        sys.stdout.write("".join(f"  {change_row(change)}\n" for change in removed))
+        return 0
+
+    def check(self, index: bool, write_ledger: bool, changed: bool, record_growth: bool = False) -> int:
         """With `index`, the index is captured once as a git tree, and the run reads everything
         from that tree: code, policy, side inputs and the owners it prints. Without it, the run
         reads HEAD's tree when the working tree holds HEAD's inputs, else the working tree."""
@@ -845,20 +912,22 @@ class Commands:
             config = load_config(self.repo, self.repo / CONFIG_FILE)
             tree = self.worktree_tree(config)
         files_root = self.runner.files_root(self.repo, tree, config)
+        grown = [] if changed or write_ledger else self.ledger_growth(policy_root, config)
         baseline = None if changed else self.baselines.prepare(policy_root, tree, index)
         if baseline is not None and self.memo is not None and not write_ledger:
             stored = self.memo.lookup(baseline, policy_root)
             if stored is not None:
                 attributed = self.baselines.attribute(baseline, stored)
-                return self.report(stored, baseline.config, policy_root, files_root, None, attributed)
+                return self.report(stored, baseline.config, policy_root, files_root, None, attributed, grown)
         run = self.runner.run(
             policy_root, self.repo, staged=index, rewrite_ledger=write_ledger, tree=tree, files_root=files_root
         )
         if write_ledger:
             if index:
                 sys.stderr.write("--write-ledger writes the working tree file, not the index\n")
-            run.ledger.write(self.repo / run.config.ledger.file)
-            sys.stdout.write(f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}\n")
+            refused = self.write_ledger(run, record_growth)
+            if refused is not None:
+                return refused
         self.write_outputs(run)
         if baseline is None:  # --changed: advisory, so it always exits 0
             touched = set(self.snapshots.changed_paths(None, tree if index else ""))
@@ -870,7 +939,7 @@ class Commands:
         if not write_ledger:
             self.summaries.put(summary.envelope, summary)
         attributed = self.baselines.attribute(baseline, summary)
-        return self.report(summary, run.config, policy_root, files_root, None, attributed)
+        return self.report(summary, run.config, policy_root, files_root, None, attributed, grown)
 
     def report(
         self,
@@ -880,11 +949,13 @@ class Commands:
         files_root: Path,
         touched: set[str] | None,
         attributed: Attributed | None,
+        grown: list[LineChange] | None = None,
     ) -> int:
         """Prints the check report of a summary and returns its exit code. Owners are read from
         `files_root`, the run's own files."""
         owners = ReadTimeOwners(PolicyFiles(config).anchored(policy_root, self.repo), summary.modules, files_root)
-        report = CheckReport(summary, owners, self.runner.today or datetime.date.today(), touched, attributed)
+        today = self.runner.today or datetime.date.today()
+        report = CheckReport(summary, owners, today, touched, attributed, grown)
         sys.stdout.write(report.render())
         return report.exit_code()
 
@@ -1194,9 +1265,19 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--index", action="store_true", help="check the staged snapshot (git index), config included")
     check.add_argument("--write-ledger", action="store_true", help="rewrite the ledger from the current scan")
     check.add_argument(
+        "--record-growth",
+        action="store_true",
+        help="with --write-ledger, also add and raise lines: new debt, which needs a person",
+    )
+    check.add_argument(
         "--changed", action="store_true", help="advisory: only what the touched files show; always exits 0"
     )
-    check.set_defaults(handler=lambda commands, args: commands.check(args.index, args.write_ledger, args.changed))
+    check.set_defaults(
+        handler=lambda commands, args: commands.check(args.index, args.write_ledger, args.changed, args.record_growth)
+    )
+    ledger = sub.add_parser("ledger", help="shrink: remove stale ledger lines; it never adds a line")
+    ledger.add_argument("action", choices=("shrink",))
+    ledger.set_defaults(handler=lambda commands, args: commands.shrink_ledger())
     explain = sub.add_parser("explain", help="labels of a path or module, or why an edge (edge:<id>) was selected")
     explain.add_argument("target")
     explain.set_defaults(handler=lambda commands, args: commands.explain(args.target))

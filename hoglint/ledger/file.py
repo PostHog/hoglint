@@ -15,6 +15,8 @@ ABSENT = "absent"  # the source of a ledger file that does not exist
 ESCAPES = (("\\", "\\\\"), ("\t", "\\t"), ("\n", "\\n"))
 
 LineKey = tuple[str, tuple[str, ...]]
+# A line one ledger holds at another count than a second ledger: (key, count before, count after).
+LineChange = tuple[LineKey, int, int]
 LEVEL_PREFIX = "level:"  # the rule column of a level line: `level:<name><TAB><group>`
 
 
@@ -121,3 +123,35 @@ class LedgerFile:
     def write(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.render())
+
+    def shrunk(self, scan: dict[LineKey, int]) -> LedgerFile:
+        """This ledger with every count cut to what `scan` counts, and the lines it no longer
+        counts gone. It never adds or raises a line, and keeps the header."""
+        lines = {key: min(count, scan.get(key, 0)) for key, count in self.lines.items()}
+        kept = {key: count for key, count in lines.items() if count > 0}
+        return LedgerFile(self.schema, self.policy, kept, exists=True)
+
+
+def grown_lines(before: LedgerFile, after: LedgerFile) -> list[LineChange]:
+    """The rule lines `after` adds or raises against `before`: recorded debt. A level line records
+    a group that passes a level, which is no debt."""
+    out = []
+    for key, count in sorted(after.lines.items()):
+        recorded = before.lines.get(key, 0)
+        if count > recorded and not is_level_line(key):
+            out.append((key, recorded, count))
+    return out
+
+
+def shrunk_lines(before: LedgerFile, after: LedgerFile) -> list[LineChange]:
+    """The lines `after` removes or lowers against `before`."""
+    return [
+        (key, count, after.lines.get(key, 0))
+        for key, count in sorted(before.lines.items())
+        if count > after.lines.get(key, 0)
+    ]
+
+
+def change_row(change: LineChange) -> str:
+    key, before, after = change
+    return f"{render_key(key)}  {before} -> {after}"

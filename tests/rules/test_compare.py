@@ -266,23 +266,62 @@ def test_cli_check_write_ledger_and_compare_on_a_real_repo(tmp_path: Path) -> No
 
     git("init", "-q")
     assert hoglint(tmp_path, "check").returncode == 1
-    assert hoglint(tmp_path, "check", "--write-ledger").returncode == 0
+    assert hoglint(tmp_path, "check", "--write-ledger", "--record-growth").returncode == 0
     git("add", "-A")
     git("commit", "-qm", "base")
     git("branch", "base")
 
     git("mv", "products/billing/util.py", "products/alerts/util.py")
-    assert hoglint(tmp_path, "check", "--write-ledger").returncode == 0
+    assert hoglint(tmp_path, "check", "--write-ledger", "--record-growth").returncode == 0
     git("add", "-A")
     moved = hoglint(tmp_path, "compare", "--base", "base")
     assert moved.returncode == 0, moved.stdout + moved.stderr
     assert "admitted moves (review) (1)" in moved.stdout
 
     (tmp_path / "core" / "api.py").write_text("from products.billing.logic import charge\n")
-    assert hoglint(tmp_path, "check", "--write-ledger").returncode == 0
+    assert hoglint(tmp_path, "check", "--write-ledger", "--record-growth").returncode == 0
     grown = hoglint(tmp_path, "compare", "--base", "base")
     assert grown.returncode == 1
     assert "code growth (fails) (1)" in grown.stdout
+
+
+@needs_extractor
+def test_the_ledger_shrinks_freely_and_grows_only_with_a_person(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, FILES)
+    git_in(repo, "init", "-q")
+    assert hoglint(repo, "check", "--write-ledger").returncode == 1
+    assert not (repo / "hoglint.ledger").exists()
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    ledger = (repo / "hoglint.ledger").read_text()
+
+    # A fix and a new finding in one change: the shrink takes the fixed line and adds nothing.
+    (repo / "products/alerts/logic.py").write_text("from products.billing.facade import charge\n")
+    (repo / "core/api.py").write_text("from products.billing.logic import charge\n")
+    shrunk = hoglint(repo, "ledger", "shrink")
+    assert shrunk.returncode == 0 and "removed or lowered 1 lines" in shrunk.stdout, shrunk.stdout + shrunk.stderr
+    lines = (repo / "hoglint.ledger").read_text().splitlines()
+    assert lines == [line for line in ledger.splitlines() if "alerts.logic" not in line] != ledger.splitlines()
+    assert hoglint(repo, "check").returncode == 1
+
+    # Recording the new line needs the switch, and the hook still blocks it with HEAD's policy.
+    refused = hoglint(repo, "check", "--write-ledger")
+    assert refused.returncode == 1 and "not written: the scan adds 1 lines" in refused.stdout
+    assert (repo / "hoglint.ledger").read_text().splitlines() == lines
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
+    git_in(repo, "add", "-A")
+    hook = hoglint(repo, "check", "--index")
+    assert hook.returncode == 1 and "ledger lines this change adds, with no policy change (1)" in hook.stdout
+
+    # A policy change in the same commit moves lines by design: compare judges them, not the hook.
+    (repo / "hoglint.toml").write_text(
+        CONFIG.replace('growth_key = ["dst.symbol"]', 'growth_key = ["dst.symbol"]\ndoc = "changed"')
+    )
+    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    git_in(repo, "add", "-A")
+    assert hoglint(repo, "check", "--index").returncode == 0
 
 
 @needs_extractor
@@ -291,7 +330,7 @@ def test_compare_blocks_a_config_name_the_change_made_stale(tmp_path: Path) -> N
     repo = tmp_path / "repo"
     write_files(repo, {**FILES, "hoglint.toml": seeded})
     git_in(repo, "init", "-q")
-    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "base")
     git_in(repo, "branch", "base")
@@ -346,7 +385,7 @@ def test_compare_tells_a_base_without_engine_from_a_base_engine_that_fails(
     shutil.rmtree(repo / "tools", ignore_errors=True)
     shutil.copytree(package, repo / ENGINE_PACKAGE, ignore=shutil.ignore_patterns("__pycache__"))
     head_engine = repo / "tools/hoglint"
-    assert hoglint(repo, "check", "--write-ledger", package_root=head_engine).returncode == 0
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth", package_root=head_engine).returncode == 0
     git_in(repo, "add", "-A")
     compared = hoglint(repo, "compare", "--base", "base", package_root=head_engine, env=env)
     assert compared.returncode == code, compared.stdout + compared.stderr
@@ -385,7 +424,7 @@ def test_compare_reads_a_ci_summary_by_its_key(tmp_path: Path, imported: bool, s
     repo = tmp_path / "repo"
     write_files(repo, FILES)
     git_in(repo, "init", "-q")
-    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
     git_in(repo, "add", "-A")
     git_in(repo, "commit", "-qm", "base")
     git_in(repo, "branch", "base")
@@ -396,7 +435,7 @@ def test_compare_reads_a_ci_summary_by_its_key(tmp_path: Path, imported: bool, s
     assert hoglint(repo, "summary", "key", "--ref", "base", env=ci).stdout.strip() == key
 
     (repo / "core" / "api.py").write_text("from products.billing.logic import charge\n")
-    assert hoglint(repo, "check", "--write-ledger").returncode == 0
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
     git_in(repo, "add", "-A")
     pr = {"XDG_CACHE_HOME": str(tmp_path / "pr-cache"), "CI": "true"}
     if imported:

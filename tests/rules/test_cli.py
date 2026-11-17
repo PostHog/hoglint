@@ -73,7 +73,7 @@ def commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Commands:
 
 def test_write_ledger_converges_in_one_run(commands: Commands) -> None:
     # the run that writes the ledger must already count the level lines that ledger makes pass
-    assert commands.check(index=False, write_ledger=True, changed=False) == 0
+    assert commands.check(index=False, write_ledger=True, changed=False, record_growth=True) == 0
     assert commands.check(index=False, write_ledger=False, changed=False) == 0
 
 
@@ -407,7 +407,7 @@ def check_once(
     work.mkdir(exist_ok=True)
     commands = Commands(repo, work, today=today, memo=memo)
     try:
-        return commands.check(index=staged, write_ledger=write_ledger, changed=False)
+        return commands.check(index=staged, write_ledger=write_ledger, changed=False, record_growth=write_ledger)
     finally:
         commands.snapshots.close()
 
