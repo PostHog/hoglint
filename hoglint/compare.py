@@ -11,8 +11,8 @@ It lists apart:
 - growth by attribution, debt the new engine, policy or environment no longer sees, and
   incomplete results split into introduced, ambiguous and inherited.
 
-A base that has hoglint but whose engine cannot run is incomplete (exit 2), never a skip. Only a
-base that predates hoglint skips the growth check.
+A base that has hoglint but whose engine cannot run, or fails a producer that the head runs, is
+incomplete (exit 2), never a skip. Only a base that predates hoglint skips the growth check.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from hoglint.ledger.file import LedgerFile, LineKey, render_key
 from hoglint.ledger.growth import AttributionCheck, GrowthItem, GrowthKey, GrowthResult, Renames, growth_key
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute, rows
 from hoglint.ledger.scan import Obligation, ScanSummary, Triple
+from hoglint.model import IncompleteCause, IncompleteKind
 
 EXCEPTION_ENTRY = "exception"
 FILE_ENTRY = "file"
@@ -60,11 +61,20 @@ class RawPolicy:
     files: dict[str, str] = field(default_factory=dict)
 
 
+def producer_failures(summary: ScanSummary) -> list[str]:
+    """Why each producer of the scan failed, in the scan's order."""
+    return [
+        item.reason
+        for item in summary.incomplete
+        if item.kind is IncompleteKind.PRODUCER_FAILED and item.cause is IncompleteCause.EXTRACTOR
+    ]
+
+
 @dataclass(frozen=False, slots=True)
 class Scans:
     """head: head code, head policy. base_head: base code, head policy (same engine).
     base and head_base use the base engine and base policy; None when the base has no hoglint or
-    its engine could not run (`base_failure` says which)."""
+    its engine could not run fully (`base_failure` says which)."""
 
     head: ScanSummary
     base_head: ScanSummary | None = None
@@ -72,6 +82,22 @@ class Scans:
     head_base: ScanSummary | None = None
     base_failure: str = ""
     base_source: str = ""
+
+    def drop_incomplete_base(self) -> None:
+        """A scan of the base engine with a producer failure that the head scan does not have is
+        no reference: the base engine missed something of this environment, so the head's
+        unknowns would look introduced. Compare then cannot decide (exit 2), and the head's
+        unknowns are judged against base code under the head engine."""
+        known = set(producer_failures(self.head))
+        for scan in (self.base, self.head_base):
+            if scan is None:
+                continue
+            failures = [reason for reason in producer_failures(scan) if reason not in known]
+            if failures:
+                self.base_failure = f"the base engine could not run fully in this environment: {failures[0]}"
+                self.base = None
+                self.head_base = None
+                return
 
 
 def growth_row(item: GrowthItem) -> str:

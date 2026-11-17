@@ -18,9 +18,9 @@ from hoglint.facts import find_binary
 from hoglint.ledger.envelope import NATIVE, EngineError, EngineSources, Envelope
 from hoglint.ledger.file import LedgerFile, LineKey
 from hoglint.ledger.growth import AttributionCheck, Renames
-from hoglint.ledger.records import FindingRecord, StoredFindings
+from hoglint.ledger.records import FindingRecord, IncompleteRecord, StoredFindings
 from hoglint.ledger.scan import GrowthColumns, ScanSummary
-from hoglint.model import FindingStatus
+from hoglint.model import FindingStatus, IncompleteCause, IncompleteKind
 from hoglint.native import bridge
 from native.require import native_required
 
@@ -247,6 +247,9 @@ select = "src.package != dst.package and dst.tier == 'product'"
 identity = "module-symbol"
 growth_key = ["dst.symbol"]
 """
+
+# The producer failure the Django pack gives in an environment without Django.
+FAILED_PRODUCER = "producer django.models@1 failed: NoModels: no first-party model found"
 
 FILES = {
     "hoglint.toml": CONFIG,
@@ -668,15 +671,21 @@ def test_an_installed_engine_scans_the_base_with_the_version_the_base_pins(
 
 @needs_extractor
 @pytest.mark.parametrize(
-    "imported, says",
+    "imported, code, says",
     [
         # a summary exported by CI and imported by key replaces the base scan
-        (True, "base summary: the stored summary {key}"),
+        ("as exported", 1, "base summary: the stored summary {key}"),
         # without it, compare runs the base scan and says no CI summary was found
-        (False, "base summary: no CI summary was found for {key}, so the full base scan ran"),
+        ("none", 1, "base summary: no CI summary was found for {key}, so the full base scan ran"),
+        # a base summary with a producer failure the head scan does not have is no reference
+        (
+            "failed producer",
+            2,
+            f"base scan failed (blocks): the base engine could not run fully in this environment: {FAILED_PRODUCER}\n",
+        ),
     ],
 )
-def test_compare_reads_a_ci_summary_by_its_key(tmp_path: Path, imported: bool, says: str) -> None:
+def test_compare_reads_a_ci_summary_by_its_key(tmp_path: Path, imported: str, code: int, says: str) -> None:
     repo = tmp_path / "repo"
     write_files(repo, FILES)
     git_in(repo, "init", "-q")
@@ -689,13 +698,33 @@ def test_compare_reads_a_ci_summary_by_its_key(tmp_path: Path, imported: bool, s
     key = hoglint(repo, "summary", "export", "--file", str(published), env=ci).stdout.strip()
     assert key.startswith("hoglint-summary-p")
     assert hoglint(repo, "summary", "key", "--ref", "base", env=ci).stdout.strip() == key
+    if imported == "failed producer":
+        summary = ScanSummary.read(published)
+        summary.incomplete.append(
+            IncompleteRecord(
+                "public-surface",
+                FAILED_PRODUCER,
+                FAILED_PRODUCER,
+                IncompleteCause.EXTRACTOR,
+                (),
+                "",
+                IncompleteKind.PRODUCER_FAILED,
+                "",
+                0,
+            )
+        )
+        summary.write(published)
 
     (repo / "core" / "api.py").write_text("from products.billing.logic import charge\n")
     assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
     git_in(repo, "add", "-A")
     pr = {"XDG_CACHE_HOME": str(tmp_path / "pr-cache"), "CI": "true"}
-    if imported:
+    if imported != "none":
         assert hoglint(repo, "summary", "import", "--file", str(published), env=pr).stdout.strip() == key
     compared = hoglint(repo, "compare", "--base", "base", env=pr)
-    assert says.format(key=key) in compared.stdout, compared.stdout + compared.stderr
-    assert "code growth (fails) (1)" in compared.stdout
+    assert compared.returncode == code, compared.stdout + compared.stderr
+    assert says.format(key=key) in compared.stdout
+    if code == 1:
+        assert "code growth (fails) (1)" in compared.stdout
+        return
+    assert compared.stdout.startswith("hoglint compare: the change cannot be decided: the base scan failed.\n")

@@ -47,7 +47,7 @@ The config can extend the built-in Django pack (`extends = ["hoglint:django"]`) 
 |---|---|
 | 0 | Clean. |
 | 1 | Violations: new findings, code growth, a ledger that is not equal to the scan, or a stale exception. |
-| 2 | hoglint cannot decide: new code that it cannot judge, a base engine that cannot run, or a config error. |
+| 2 | hoglint cannot decide: new code that it cannot judge, a base engine that cannot run fully, or a config error. |
 | 3 | hoglint could not run. It prints one line that says why. |
 
 ## The pre-commit hook

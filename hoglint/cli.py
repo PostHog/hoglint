@@ -1292,6 +1292,7 @@ class Commands:
                 )
             except EngineError as error:
                 scans.base_failure = str(error)
+            scans.drop_incomplete_base()
         base_head: RunResult | None = None
         if scans.base is None or not same_policy:
             # Head policy on base code: the reference when no base scan exists, and the evidence
