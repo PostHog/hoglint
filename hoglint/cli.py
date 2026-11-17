@@ -72,6 +72,8 @@ from hoglint.rules.page import RulePage
 from hoglint.source import GraphSource
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+# The pages `hoglint help <topic>` prints; they ship in the package, so they match its version.
+PAGES = PACKAGE_DIR / "pages"
 
 
 # ── snapshots ─────────────────────────────────────────────────────
@@ -1103,6 +1105,8 @@ def parser() -> argparse.ArgumentParser:
             args.index, args.write_ledger, args.changed, args.record_growth, view_of(args, "hoglint check")
         )
     )
+    page = sub.add_parser("help", help="print a page: hook, what the pre-commit hook checks and what to do")
+    page.add_argument("topic", choices=("hook",))
     ledger = sub.add_parser("ledger", help="shrink: remove stale ledger lines; it never adds a line")
     ledger.add_argument("action", choices=("shrink",))
     ledger.set_defaults(handler=lambda commands, args: commands.shrink_ledger())
@@ -1166,10 +1170,18 @@ def could_not_run(args: argparse.Namespace, reason: str, trace: str = "") -> int
     return COULD_NOT_RUN
 
 
+def show_page(topic: str) -> int:
+    """Prints a page; it needs no repo, so a reader can run it where the hook failed."""
+    sys.stdout.write((PAGES / f"{topic}.md").read_text())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Exit 1 means violations, so a run that could not finish exits 3, never 1: an engine error, a
     crash, and a Rust panic, which PyO3 raises as a BaseException."""
     args = parser().parse_args(argv)
+    if args.command == "help":
+        return show_page(args.topic)
     try:
         return command(args)
     except (KeyboardInterrupt, SystemExit):

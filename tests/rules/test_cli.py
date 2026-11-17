@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hoglint.cli import Commands, Run, Runner, Snapshots, main
+from hoglint.cli import COULD_NOT_RUN, HOOK_COULD_NOT_RUN, Commands, Run, Runner, Snapshots, main
 from hoglint.config import Config, load_config
 from hoglint.ledger.envelope import EngineError
 from hoglint.ledger.listing import WorktreeStatus
@@ -146,6 +146,16 @@ def test_a_run_that_could_not_finish_exits_3_with_one_line_never_1(
         monkeypatch.setenv("HOGLINT_TRACEBACK", "1")
         assert main(["--repo", str(tmp_path / "repo"), *argv]) == 3
         assert "Traceback (most recent call last)" in capsys.readouterr().err
+
+
+def test_the_hook_page_prints_with_no_repo_and_names_every_exit_and_the_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["--repo", str(tmp_path / "nowhere"), "help", "hook"]) == 0
+    page = capsys.readouterr().out
+    assert [f"| {code} |" in page for code in range(COULD_NOT_RUN + 1)] == [True] * (COULD_NOT_RUN + 1)
+    assert HOOK_COULD_NOT_RUN.format(reason="<reason>") in page
+    assert "hoglint ledger shrink" in page and "hoglint explain <rule>" in page
 
 
 def test_the_python_engine_is_refused_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
