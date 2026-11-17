@@ -310,8 +310,9 @@ pub struct Producing {
     pub path_callees: Vec<String>,
     /// Modules (dotted names or `*` globs) whose strings are paths wherever they stand.
     pub path_modules: Vec<String>,
-    /// Full dotted names whose every use makes a reference edge (`named_references`).
-    pub reference_names: FxHashSet<Sid>,
+    /// Every way an edge's target can spell a `[discovery] reference_names` entry: each split of
+    /// the dotted name into a module and the symbol inside it (`named_references`).
+    pub reference_names: FxHashSet<Ent>,
     /// The files of exports whose signatures are part of their contract.
     pub contract_surfaces: Vec<ExportPaths>,
     /// The files of every export.
@@ -503,13 +504,30 @@ impl Producing {
             reference_names: config
                 .reference_names
                 .iter()
-                .map(|name| it.intern(name))
+                .flat_map(|name| spellings(it, name))
                 .collect(),
             contract_surfaces,
             export_surfaces,
             k,
         }
     }
+}
+
+/// Every entity whose text is `dotted`: the module itself, and each split into a module and the
+/// symbol inside it (`a.b.c` is the module `a.b.c`, `c` in `a.b` and `b.c` in `a`), so a target
+/// is compared with a listed name with no string built per use.
+fn spellings(it: &mut Interner, dotted: &str) -> Vec<Ent> {
+    let mut out = vec![Ent {
+        m: it.intern(dotted),
+        s: EMPTY,
+    }];
+    for (at, _) in dotted.match_indices('.') {
+        out.push(Ent {
+            m: it.intern(&dotted[..at]),
+            s: it.intern(&dotted[at + 1..]),
+        });
+    }
+    out
 }
 
 const WRAPPER_STEPS: [&str; 7] = [
@@ -1354,11 +1372,7 @@ impl Producers<'_> {
             let Some(target) = resolved.target else {
                 continue;
             };
-            if !self
-                .settings
-                .reference_names
-                .contains(&core.ent_sid(target))
-            {
+            if !self.settings.reference_names.contains(&target) {
                 continue;
             }
             let remaining: String = names[used..]
