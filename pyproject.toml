@@ -1,11 +1,42 @@
+# One wheel: the hoglint package, the hoglint_native module (binding/) and the hoglint-facts binary.
+# Build it with bin/stage-facts, then `maturin build --release --locked`; see .github/workflows/wheels.yml.
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
 [project]
 name = "hoglint"
 version = "0.1.0"
+description = "Boundary linter for large Python and Django monorepos, with a Rust engine"
+readme = "README.md"
 requires-python = ">=3.12"
+authors = [{ name = "PostHog" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "orjson==3.11.9",
     "pyyaml==6.0.3",
 ]
+
+[project.scripts]
+hoglint = "hoglint.cli:entry"
+
+[project.urls]
+Repository = "https://github.com/PostHog/hoglint"
+
+[tool.maturin]
+manifest-path = "binding/Cargo.toml"
+module-name = "hoglint_native"
+python-packages = ["hoglint"]
+# bin/stage-facts puts the binary under platlib/hoglint/bin/, so it installs next to the package.
+data = "wheel-data"
+compatibility = "manylinux2014"
 
 [dependency-groups]
 dev = [

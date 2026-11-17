@@ -2,9 +2,10 @@
 # Builds the hoglint-facts binary and the hoglint_native Python extension (the native engine)
 # with the toolchain pinned in rust-toolchain.toml. A cargo from flox or Homebrew is often
 # older than the ruff crates allow, so this script always asks rustup for the pinned cargo.
-# The extension is built by maturin (from PATH, else through uvx) into an abi3 wheel, then
-# unpacked into $CARGO_TARGET_DIR/python, where hoglint.native.bridge finds it. Prints the
-# binary path on success.
+# maturin (from PATH, else through uvx) then builds the hoglint wheel of pyproject.toml, with
+# the binary staged by bin/stage-facts, into $CARGO_TARGET_DIR/wheels. The extension is unpacked
+# from it into $CARGO_TARGET_DIR/python, where hoglint.native.bridge finds it. Prints the binary
+# path on success.
 #
 # Usage: bin/build [extra cargo args]
 # Env:   CARGO_TARGET_DIR (default: ~/.cache/hoglint-target)
@@ -31,6 +32,8 @@ export PATH="$(dirname "$cargo_bin"):$PATH"
 "$cargo_bin" build --release --locked "$@" >&2
 binary="$CARGO_TARGET_DIR/release/hoglint-facts"
 echo "built native id $("$binary" --native-id) with rust $toolchain" >&2
+# The wheel build needs the binary in its data directory; the cargo build above made it already.
+bin/stage-facts >&2
 
 maturin_version="1.16.0"
 if command -v maturin >/dev/null 2>&1; then
@@ -42,14 +45,14 @@ else
     exit 1
 fi
 wheels="$CARGO_TARGET_DIR/wheels"
-rm -f "$wheels"/hoglint_native-*.whl
-# A local wheel is unpacked here, never shipped, so it skips the manylinux audit, which fails on a
-# glibc above 2.17. Release wheels keep `manylinux2014` (binding/pyproject.toml) and are built in
-# a manylinux container.
-(cd binding && "${maturin_cmd[@]}" build --release --locked --compatibility linux --out "$wheels" "$@" >&2)
+rm -f "$wheels"/hoglint-*.whl
+# A local wheel is never shipped, so it skips the manylinux audit, which fails on a glibc above
+# 2.17. Release wheels keep `manylinux2014` (pyproject.toml) and are built in a manylinux
+# container (.github/workflows/wheels.yml).
+"${maturin_cmd[@]}" build --release --locked --compatibility linux --out "$wheels" "$@" >&2
 module_dir="$CARGO_TARGET_DIR/python"
 rm -rf "$module_dir/hoglint_native"
 mkdir -p "$module_dir"
-unzip -q -o "$wheels"/hoglint_native-*.whl 'hoglint_native/*' -d "$module_dir"
+unzip -q -o "$wheels"/hoglint-*.whl 'hoglint_native/*' -d "$module_dir"
 echo "built hoglint_native into $module_dir" >&2
 echo "$binary"
