@@ -42,6 +42,7 @@ from hoglint.facts import find_binary
 from hoglint.index import GraphIndex, index_of
 from hoglint.labels import CandidateCache
 from hoglint.ledger.cache import RunStores
+from hoglint.ledger.couplings import CouplingScan
 from hoglint.ledger.envelope import (
     ENGINE,
     ENGINE_NATIVE,
@@ -58,8 +59,8 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.errors import RepoRootError
-from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, change_row, grown_lines, shrunk_lines
-from hoglint.ledger.growth import Renames
+from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, LineKey, change_row, grown_lines, shrunk_lines
+from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
 from hoglint.ledger.obligations import attribute
@@ -187,9 +188,10 @@ class Snapshots:
         untracked = records(git(self.repo, "ls-files", "-z", "--others", "--exclude-standard"))
         return tracked + untracked
 
-    def renames(self, ref: str) -> list[tuple[str, str]]:
+    def renames(self, ref: str, tree: str = "") -> list[tuple[str, str]]:
+        """(old path, new path) of each file `tree` renames against `ref`, else the working tree."""
         out = []
-        for line in git(self.repo, "diff", "-M", "--name-status", ref).splitlines():
+        for line in git(self.repo, "diff", "-M", "--name-status", ref, *([tree] if tree else [])).splitlines():
             parts = line.split("\t")
             if parts and parts[0].startswith("R") and len(parts) == 3:
                 out.append((parts[1], parts[2]))
@@ -689,7 +691,13 @@ class Baselines:
         return Baseline(own, computed, config, summary.obligations(), staged=staged)
 
     def evaluate(
-        self, policy_root: Path, ledger_path: str, head_tree: str, envelope: Envelope, staged: bool
+        self,
+        policy_root: Path,
+        ledger_path: str,
+        head_tree: str,
+        envelope: Envelope,
+        staged: bool,
+        scope: frozenset[str] = frozenset(),
     ) -> ScanSummary:
         """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
         graph can be freed before the run. A commit's baseline takes the staged thread count."""
@@ -697,7 +705,20 @@ class Baselines:
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
         runner = Runner(NativeGraphSource(work, self.store.stores))
         run = runner.run(policy_root, self.repo, staged=staged, tree=head_tree, ledger=ledger)
-        return summary_of(run, envelope, with_triples=False)
+        return summary_of(run, envelope, scope, with_triples=False)
+
+    def head_scan(self, policy_root: Path, scope: frozenset[str], staged: bool) -> ScanSummary:
+        """HEAD's tree under the run's policy with the couplings of `scope`, from the store or from
+        a run that is then stored: the base that a check judges a move against."""
+        head_tree = self.snapshots.tree_of("HEAD")
+        wanted, config = self.engine.envelope_at(policy_root, self.repo, head_tree)
+        stored = self.store.get(wanted, frozenset({"envelope", "findings", "couplings"}))
+        if stored is not None and stored.covers(scope):
+            return stored
+        summary = self.evaluate(policy_root, config.ledger.file, head_tree, wanted, staged, scope)
+        gc.collect()  # frees HEAD's graph, as in `prepare`
+        self.store.put(summary.envelope, summary)
+        return summary
 
     def attribute(self, baseline: Baseline, summary: ScanSummary) -> Attributed:
         head = summary.obligations()
@@ -773,24 +794,86 @@ class Commands:
         the working tree as git sees it."""
         return self.snapshots.head_tree_in_worktree(config)
 
-    def ledger_growth(self, policy_root: Path, config: Config) -> list[LineChange]:
-        """The rule lines the run's ledger adds or raises against HEAD's when the policy is HEAD's:
-        new debt recorded by hand or by a re-record, which needs a person. A policy change can
+    def head_ledger(self, config: Config) -> LedgerFile | None:
+        """HEAD's ledger when HEAD wrote it under `config`'s policy, else None. A policy change can
         move lines, so its lines go to compare's growth check."""
         head = self.snapshots.ledger_at("HEAD", config.ledger.file)
         if not head.exists or head.policy != config.policy_hash:
-            return []
-        return grown_lines(head, LedgerFile.read(policy_root / config.ledger.file))
+            return None
+        return head
 
-    def write_ledger(self, run: Run, record_growth: bool) -> int | None:
-        """Writes the run's ledger over the file, and says what it added and removed. It refuses
-        to add or raise a line without `record_growth` and returns the exit code then."""
+    def move_renames(
+        self, head: LedgerFile | None, ledger: LedgerFile, scan: dict[LineKey, int], config: Config, tree: str
+    ) -> Renames | None:
+        """The module renames from HEAD to the run's tree when the ledger file or the scan adds a
+        line to HEAD's ledger, so the added lines need judging; else None."""
+        if head is None:
+            return None
+        if not grown_lines(head, ledger) and not grown_lines(head, LedgerFile(lines=scan)):
+            return None
+        return self.module_renames("HEAD", config, tree)
+
+    def attribution(
+        self,
+        policy_root: Path,
+        head: LedgerFile,
+        summary: ScanSummary,
+        renames: Renames,
+        scope: frozenset[str],
+        staged: bool,
+    ) -> AttributionCheck:
+        """Compare's growth check of the run against HEAD, with the couplings of `scope`."""
+        base = self.baselines.head_scan(policy_root, scope, staged)
+        # HEAD's ledger lines stand in for HEAD's scan lines, so a line is judged against the recorded debt.
+        recorded = dataclasses.replace(base, lines=head.lines)
+        return AttributionCheck(recorded, summary, summary, renames)
+
+    def moved_lines(
+        self,
+        policy_root: Path,
+        head: LedgerFile | None,
+        summary: ScanSummary,
+        renames: Renames | None,
+        staged: bool,
+        run: Run | None,
+    ) -> frozenset[LineKey]:
+        """The lines of the run's scan above HEAD's ledger that only changed place, judged as
+        compare judges growth. Growth keys judge first. Only growth that is left, with a rename,
+        needs move admission, which reads the couplings of the renamed modules in `run` and in
+        HEAD's scan: a walk over every edge of both. A check that the memo serves has no rename."""
+        if head is None or renames is None:
+            return frozenset()
+        check = self.attribution(policy_root, head, summary, renames, frozenset(), staged)
+        moved = check.moved()
+        grown = {line for lines in check.grown.values() for line in lines}
+        if moved == grown or not renames.head_to_base or run is None:
+            return moved
+        scope = renames.modules()
+        couplings = CouplingScan(run.result, run.graph, scope)
+        scoped = dataclasses.replace(
+            summary, scope=scope, couplings=couplings.counts(), witnesses=couplings.witnesses()
+        )
+        return self.attribution(policy_root, head, scoped, renames, scope, staged).moved()
+
+    @staticmethod
+    def ledger_growth(head: LedgerFile | None, ledger: LedgerFile, moved: frozenset[LineKey]) -> list[LineChange]:
+        """The rule lines the ledger file adds or raises against HEAD's ledger, under HEAD's policy,
+        that did not only move: new debt recorded by hand or by a re-record, which needs a person."""
+        if head is None:
+            return []
+        return [change for change in grown_lines(head, ledger) if change[0] not in moved]
+
+    def write_ledger(self, run: Run, record_growth: bool, moved: frozenset[LineKey]) -> int | None:
+        """Writes the run's ledger over the file, and says what it added and removed. Without
+        `record_growth` it refuses to add or raise a line that did not only move, and returns the
+        exit code then."""
         path = self.repo / run.config.ledger.file
         before = LedgerFile.read(path)
         grown, shrunk = grown_lines(before, run.ledger), shrunk_lines(before, run.ledger)
-        if grown and not record_growth:
-            sys.stdout.write(f"not written: the scan adds {len(grown)} lines to {run.config.ledger.file}\n")
-            sys.stdout.write("".join(f"  {change_row(change)}\n" for change in grown))
+        debt = [change for change in grown if change[0] not in moved]
+        if debt and not record_growth:
+            sys.stdout.write(f"not written: the scan adds {len(debt)} lines to {run.config.ledger.file}\n")
+            sys.stdout.write("".join(f"  {change_row(change)}\n" for change in debt))
             sys.stdout.write(f"  {RECORD_GROWTH_WAY_OUT}\n")
             return 1
         run.ledger.write(path)
@@ -798,7 +881,8 @@ class Commands:
             f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}: "
             f"{len(grown)} added or raised, {len(shrunk)} removed or lowered\n"
         )
-        sys.stdout.write("".join(f"  added  {change_row(change)}\n" for change in grown))
+        for change in grown:
+            sys.stdout.write(f"  {'moved' if change[0] in moved else 'added'}  {change_row(change)}\n")
         return None
 
     def shrink_ledger(self) -> int:
@@ -839,34 +923,48 @@ class Commands:
             config = load_config(self.repo, self.repo / CONFIG_FILE)
             tree = self.worktree_tree(config)
         files_root = self.runner.files_root(self.repo, tree, config)
-        grown = [] if changed or write_ledger else self.ledger_growth(policy_root, config)
+        ledger = LedgerFile.read(policy_root / config.ledger.file)
+        # Recorded growth needs no judgment of moves.
+        head = None if changed or record_growth else self.head_ledger(config)
         baseline = None if changed else self.baselines.prepare(policy_root, tree, index)
         if baseline is not None and self.memo is not None and not write_ledger:
             stored = self.memo.lookup(baseline, policy_root)
-            if stored is not None:
+            renames = None if stored is None else self.move_renames(head, ledger, stored.lines, config, tree)
+            # A stored summary stands in without its couplings (`RunMemo.SECTIONS`), so a rename runs live.
+            if stored is not None and (renames is None or not renames.head_to_base):
+                moved = self.moved_lines(policy_root, head, stored, renames, index, None)
                 attributed = self.baselines.attribute(baseline, stored)
-                return self.report(stored, baseline.config, policy_root, files_root, None, attributed, grown, view)
+                grown = self.ledger_growth(head, ledger, moved)
+                return self.report(
+                    stored, baseline.config, policy_root, files_root, None, attributed, grown, view, moved
+                )
         run = self.runner.run(
             policy_root, self.repo, staged=index, rewrite_ledger=write_ledger, tree=tree, files_root=files_root
         )
+        summary: ScanSummary | None = None
+        moved: frozenset[LineKey] = frozenset()
+        if baseline is not None:
+            summary = summary_of(run, baseline.envelope, with_triples=False)
+            renames = self.move_renames(head, ledger, run.result.scan, config, tree)
+            moved = self.moved_lines(policy_root, head, summary, renames, index, run)
         if write_ledger:
             if index:
                 sys.stderr.write("--write-ledger writes the working tree file, not the index\n")
-            refused = self.write_ledger(run, record_growth)
+            refused = self.write_ledger(run, record_growth, moved)
             if refused is not None:
                 return refused
         self.write_outputs(run)
-        if baseline is None:  # --changed: advisory, so it always exits 0
+        if baseline is None or summary is None:  # --changed: advisory, so it always exits 0
             touched = set(self.snapshots.changed_paths(None, tree if index else ""))
             touched |= {m for m, p in run.graph.modules.items() if p in touched}
             summary = summary_of(run, Envelope(), with_triples=False, touched=touched)
             self.report(summary, run.config, policy_root, files_root, touched, None, view=view)
             return 0
-        summary = summary_of(run, baseline.envelope, with_triples=False)
         if not write_ledger:
             self.summaries.put(summary.envelope, summary)
         attributed = self.baselines.attribute(baseline, summary)
-        return self.report(summary, run.config, policy_root, files_root, None, attributed, grown, view)
+        grown = [] if write_ledger else self.ledger_growth(head, ledger, moved)
+        return self.report(summary, run.config, policy_root, files_root, None, attributed, grown, view, moved)
 
     def report(
         self,
@@ -878,13 +976,14 @@ class Commands:
         attributed: Attributed | None,
         grown: list[LineChange] | None = None,
         view: View = HOOK_VIEW,
+        moved: frozenset[LineKey] = frozenset(),
     ) -> int:
         """Prints the check report of a summary and returns its exit code. Owners are read from
         `files_root`, the run's own files."""
         owners = ReadTimeOwners(PolicyFiles(config).anchored(policy_root, self.repo), summary.modules, files_root)
         today = self.runner.today or datetime.date.today()
         policy = Policy.of(config, CONFIG_FILE)
-        report = CheckReport(summary, owners, today, policy, view, touched, attributed, grown)
+        report = CheckReport(summary, owners, today, policy, view, touched, attributed, grown, moved)
         sys.stdout.write(report.render())
         return report.exit_code()
 
@@ -1059,12 +1158,13 @@ class Commands:
         sys.stdout.write(CheckReport(scans.head, owners, today, policy, head_view, attributed=attributed).render())
         return code
 
-    def module_renames(self, base_sha: str, config: Config) -> Renames:
+    def module_renames(self, ref: str, config: Config, tree: str = "") -> Renames:
+        """The modules `tree`, else the working tree, renames against `ref`."""
         from hoglint.core.modules import ModuleNamer  # noqa: PLC0415 — the extractor stack loads only when needed
 
         namer = ModuleNamer(as_tuple(config.discovery.get("source_roots", ["."])))
         mapping = {}
-        for old, new in self.snapshots.renames(base_sha):
+        for old, new in self.snapshots.renames(ref, tree):
             if old.endswith(".py") and new.endswith(".py"):
                 mapping[namer.module_of(new)[0]] = namer.module_of(old)[0]
         return Renames(mapping)

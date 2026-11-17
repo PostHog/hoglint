@@ -17,7 +17,7 @@ from pathlib import Path
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.labels import Labeler
-from hoglint.ledger.file import LineChange, change_row, is_level_line, render_key
+from hoglint.ledger.file import LineChange, LineKey, change_row, is_level_line, render_key
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels
 from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import ScanSummary
@@ -55,6 +55,10 @@ GROUPS_SHOWN = 10
 NOTES_SHOWN = 3
 PAGE = "What the hook checks and what to do: hoglint help hook."
 SHRINK = "run `hoglint ledger shrink`, then stage {ledger}. It removes stale lines and never adds one."
+WRITE_MOVES = (
+    "run `hoglint check --write-ledger`, then stage {ledger}. It records the new places and removes stale lines. "
+    "It refuses new debt."
+)
 
 # What a reader of a blocking unknown does, by its kind: (title, ways).
 KIND_WORDS: dict[IncompleteKind, tuple[str, list[tuple[str, str]]]] = {
@@ -196,7 +200,10 @@ class CheckReport:
         touched: set[str] | None = None,
         attributed: Attributed | None = None,
         grown: list[LineChange] | None = None,
+        moved: frozenset[LineKey] = frozenset(),
     ) -> None:
+        """`moved` names the scan's lines that only changed place against HEAD's ledger: a new
+        finding on one of them asks for the ledger to be written, not for a fix."""
         self.summary = summary
         self.owners = owners
         self.today = today
@@ -205,6 +212,7 @@ class CheckReport:
         self.touched = touched
         self.attributed = attributed
         self.grown = grown or []
+        self.moved = moved
         self.show_all = view.all or bool(view.rule) or touched is not None
         self.rule = view.rule
 
@@ -219,7 +227,10 @@ class CheckReport:
         return [f for f in self.summary.findings.with_status(FindingStatus.NEW) if self.keep(f)]
 
     def violations(self) -> list[FindingRecord]:
-        return [f for f in self.new() if f.rule not in self.summary.advisory]
+        return [f for f in self.new() if f.rule not in self.summary.advisory and f.key not in self.moved]
+
+    def moved_findings(self) -> list[FindingRecord]:
+        return [f for f in self.new() if f.rule not in self.summary.advisory and f.key in self.moved]
 
     def advisory(self) -> list[FindingRecord]:
         return [f for f in self.new() if f.rule in self.summary.advisory]
@@ -331,6 +342,13 @@ class CheckReport:
         ledger = self.policy.ledger
         equality = self.summary.equality
         out = []
+        moved = self.moved_findings()
+        if moved:
+            rows = self.cut([f"moved  {render_key(finding.key)}" for finding in moved], ROWS_SHOWN)
+            why = "why: a ledger line names the place of a finding. A move to a new place adds no debt."
+            fix = f"{SAFETY_LABELS['safe']}: {WRITE_MOVES.format(ledger=ledger)}"
+            title = f"{plural(len(moved), 'finding')} moved, and {ledger} records the old place."
+            out.append(Problem(title, (*rows, why, fix)))
         if equality is not None and not equality.equal:
             out.extend(
                 Problem(f"{ledger}: {header}.", ("needs a person: stop and tell the person.",))

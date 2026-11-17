@@ -22,6 +22,9 @@ Move admission: code growth passes as an admitted move when every coupling behin
 already existed in base, under the renamed modules, with at least the same count. A coupling
 carries the rule's `edge.*` identity columns (see `couplings.py`), so new uses bundled into a
 move, and a use whose shape changed in the move, still fail.
+
+`check` asks the same of a commit: HEAD's scan is the base, HEAD's ledger lines are its debt, and
+the lines `moved` names need no person, so `--write-ledger` records them and the hook passes them.
 """
 
 from __future__ import annotations
@@ -140,6 +143,12 @@ class AttributionCheck:
         if result.shrink:
             result.shrink_causes = self.head_base.envelope.causes(self.head.envelope)
         return result
+
+    def moved(self) -> frozenset[LineKey]:
+        """The head lines above their base count that only changed place: their growth key did not
+        grow, or it grew as an admitted move."""
+        grew = {(item.rule, item.key) for item in self.run().code_growth}
+        return frozenset(line for key, lines in self.grown.items() if key not in grew for line in lines)
 
     def admitted(self, key: GrowthKey) -> bool:
         lines = self.grown.get(key, [])

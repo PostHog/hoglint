@@ -1,0 +1,27 @@
+exit 1
+hoglint: this commit is blocked: 1 new finding, 2 other problems.
+New findings by rule:
+     1  public-surface
+Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
+
+1 finding moved, and hoglint.ledger records the old place.
+  moved  public-surface products.shelf.backend.logic.count.shelf_count products.reports.backend.logic.shelf_totals import
+  why: a ledger line names the place of a finding. A move to a new place adds no debt.
+  fix (safe): run `hoglint check --write-ledger`, then stage hoglint.ledger. It records the new places and removes stale lines. It refuses new debt.
+
+hoglint.ledger records 1 finding that the code no longer has.
+  stale  public-surface products.shelf.backend.logic.count.shelf_count products.reports.backend.logic.shelf_counts import  1 -> 0
+  why: the ledger must equal the scan, so a fixed finding leaves the ledger.
+  fix (safe): run `hoglint ledger shrink`, then stage hoglint.ledger. It removes stale lines and never adds one.
+
+The first finding of each rule (1 of 1 findings):
+public-surface: products.reports.backend.logic.shelf_totals names products.shelf.backend.logic.labels.label_for, which is not exported to it
+  at products/reports/backend/logic/shelf_totals.py:2
+  why: Code outside a product must use the product only through its facade. A name from inside the product makes a coupling that the owners of the product cannot see.
+  fix (safe): If the facade of the product exports the same object, import it from the facade.
+  fix (needs care): If the code belongs to the product, move it into the product.
+  needs a person: If the facade must export a new name, stop and tell the person. The owners of the product decide what its facade exports.
+  see: hoglint explain public-surface
+
+Not shown: 24 advisory rows, 96 old unknowns, 208 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+What the hook checks and what to do: hoglint help hook.

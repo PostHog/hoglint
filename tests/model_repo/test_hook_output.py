@@ -1,9 +1,10 @@
 """What the hook (`check --index`) and CI (`compare`) print on the model repository, held to stored
 golden outputs: a clean commit, one new finding, 64 findings in six rules, a failed claim, a new
-unknown, a stale ledger line, an exception without a reason, and growth that a complete new
-exception carries to review. The 64-finding hook output stays under a harness's cap, and what a
-reader must see comes first. Rewrite the golden files with `HOGLINT_REFRESH_GENERATED=1` and read
-the diff."""
+unknown, a stale ledger line, an exception without a reason, growth that a complete new exception
+carries to review, and a module with ledgered findings moved inside a product, moved with one new
+use, and moved to another product, each with `check --write-ledger` and the hook after a write.
+The 64-finding hook output stays under a harness's cap, and what a reader must see comes first.
+Rewrite the golden files with `HOGLINT_REFRESH_GENERATED=1` and read the diff."""
 
 from __future__ import annotations
 
@@ -63,6 +64,10 @@ def hook(commands: Commands) -> int:
 
 def compare(commands: Commands) -> int:
     return commands.compare("base", View("hoglint compare"))
+
+
+def write_ledger(commands: Commands) -> int:
+    return commands.check(index=False, write_ledger=True, changed=False, view=View("hoglint check"))
 
 
 def write(repo: Path, path: str, text: str) -> None:
@@ -194,6 +199,28 @@ def exception_complete(repo: Path) -> None:
     write(repo, "hoglint.exceptions.toml", EXCEPTION.format(reason=reason))
 
 
+# A module with a ledgered public-surface finding that no other module imports.
+SHELF_COUNTS = "products/reports/backend/logic/shelf_counts.py"
+
+
+def move_in_product(repo: Path) -> None:
+    (repo / SHELF_COUNTS).rename(repo / "products/reports/backend/logic/shelf_totals.py")
+
+
+def move_with_new_use(repo: Path) -> None:
+    moved = repo / "products/reports/backend/logic/shelf_totals.py"
+    (repo / SHELF_COUNTS).rename(moved)
+    moved.write_text(
+        "from products.shelf.backend.logic.count import shelf_count\n"
+        "from products.shelf.backend.logic.labels import label_for\n\n\n"
+        "def shelves_in_report(team_id: int) -> int:\n    return shelf_count(team_id) + len(label_for(team_id))\n"
+    )
+
+
+def move_across_products(repo: Path) -> None:
+    (repo / SHELF_COUNTS).rename(repo / "products/legacy/backend/logic/shelf_counts.py")
+
+
 SCENARIOS: dict[str, Callable[[Path], None]] = {
     "clean": clean,
     "one-finding": one_finding,
@@ -204,9 +231,15 @@ SCENARIOS: dict[str, Callable[[Path], None]] = {
     "stale-ledger-line": stale_ledger_line,
     "exception-no-reason": exception_no_reason,
     "exception-complete": exception_complete,
+    "move-in-product": move_in_product,
+    "move-with-new-use": move_with_new_use,
+    "move-across-products": move_across_products,
 }
 # The scenarios whose compare output is held too.
 COMPARED = ("sixty-findings", "exception-complete")
+# The scenarios that move a module: `check --write-ledger` without a person's switch, then the
+# hook again with the ledger it wrote staged.
+MOVES = ("move-in-product", "move-with-new-use", "move-across-products")
 
 
 @pytest.fixture(scope="module")
@@ -239,6 +272,12 @@ def outputs(base: Path) -> dict[str, str]:
             change(repo)
             git(repo, "add", "-A")
             found[f"{name}.hook"] = run(repo, base.parent / f"work-{name}", hook)
+            if name in MOVES:
+                written = run(repo, base.parent / f"work-{name}-write", write_ledger)
+                found[f"{name}.write-ledger"] = written
+                if written.startswith("exit 0"):
+                    git(repo, "add", "--", "hoglint.ledger")
+                    found[f"{name}.rehook"] = run(repo, base.parent / f"work-{name}-rehook", hook)
             if name in COMPARED:
                 git(repo, "commit", "-qm", name)
                 found[f"{name}.compare"] = run(repo, base.parent / f"work-{name}-ci", compare)
