@@ -929,18 +929,18 @@ ways       = [
 ]
 example    = { finding = "\"inputs\": [\"backend/facade/**\"]  # backend/admin.py is not watched", fixed = "\"inputs\": [\"backend/facade/**\", \"backend/admin.py\"]" }
 covers     = [
-  "rules.drives.dst.path",
-  "rules.request-path.dst.path",
-  "edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src",
-  "edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface",
-  "zone in ['models', 'migrations']: module",
-  "registry != none and tier == 'product': module",
-  "permanent == true and testcode != true: module",
-  "runs_by_name == true and testcode != true: location",
-  "edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface",
-  "edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface",
-  "edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst",
-  "edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface",
+  { cover = "rules.drives.dst.path", why = "a test outside the product runs this wiring" },
+  { cover = "rules.request-path.dst.path", why = "the request pipeline of core imports this file" },
+  { cover = "edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src", why = "this file holds a receiver or a hook callback" },
+  { cover = "edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface", why = "a test outside the product patches this module" },
+  { cover = "zone in ['models', 'migrations']: module", why = "this file holds models or migrations of the product" },
+  { cover = "registry != none and tier == 'product': module", why = "a registry loads this module by name" },
+  { cover = "permanent == true and testcode != true: module", why = "this module is a declared permanent interface" },
+  { cover = "runs_by_name == true and testcode != true: location", why = "core runs this location by name, and one watched file in it is enough" },
+  { cover = "edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface", why = "Django settings name this module" },
+  { cover = "edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface", why = "the AppConfig module of the product imports this module at setup" },
+  { cover = "edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst", why = "the admin autodiscovery of Django imports this module" },
+  { cover = "edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface", why = "the admin module of the product imports this module" },
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
@@ -965,9 +965,9 @@ ways       = [
 ]
 example    = { finding = "\"inputs\": [\"backend/facade/**\"]  # core imports backend/logic/invoices.py", fixed = "\"inputs\": [\"backend/facade/**\", \"backend/logic/invoices.py\"]" }
 covers     = [
-  "edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface",
-  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain",
-  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain",
+  { cover = "edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface", why = "code outside the product imports this file past the facade" },
+  { cover = "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain", why = "code outside the product reads a name that this file defines, through a facade" },
+  { cover = "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain", why = "code outside the product reads a name that this file defines, through a module that took it from a facade" },
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"

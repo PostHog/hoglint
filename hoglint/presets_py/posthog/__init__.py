@@ -6,4 +6,5 @@ from hoglint.presets_py.posthog.owners import OWNERS_YAML
 from hoglint.presets_py.posthog.pack import POSTHOG_PACK
 
 REGISTRY.add_pack(POSTHOG_PACK)
+REGISTRY.add_headlines({"drives": "the test {src} runs {dst} ({label})"})
 REGISTRY.add_provider(OWNERS_YAML)

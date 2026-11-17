@@ -101,7 +101,7 @@ text = "products.legacy.backend.api.widgets names products.catalog.backend.prese
 [[finding]]
 rule = "public-surface"
 identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
-text = "import '......gone' did not resolve"
+text = "products.legacy.backend.facade.aboveworkers imports '......gone', which hoglint cannot find"
 
 [[finding]]
 rule = "public-surface"
@@ -211,222 +211,222 @@ text = "products.reports.backend.stock_names names products.inventory.backend.lo
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
-text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.logic.handouts.HandoutBox: export-shape(class)"
+text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.logic.handouts.HandoutBox, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.handouts.HandoutHolder.Kind", "products.catalog.backend.facade.alias_listed", "export-shape(class)"]
-text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.logic.handouts.HandoutHolder.Kind: export-shape(class)"
+text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.logic.handouts.HandoutHolder.Kind, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.facade.alias_listed.made", "products.catalog.backend.facade.alias_listed", "export-unknown"]
-text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.facade.alias_listed.made: export-unknown"
+text = "products.catalog.backend.facade.alias_listed exports products.catalog.backend.facade.alias_listed.made, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.aliases", "export-denied(model)"]
-text = "products.catalog.backend.facade.aliases exports products.catalog.backend.models.CatalogEntry: export-denied(model)"
+text = "products.catalog.backend.facade.aliases exports products.catalog.backend.models.CatalogEntry, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.api", "export-shape(class)"]
-text = "products.catalog.backend.facade.api exports products.catalog.backend.api.serializers.EntrySerializer: export-shape(class)"
+text = "products.catalog.backend.facade.api exports products.catalog.backend.api.serializers.EntrySerializer, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.facade.bases.EntryHeld", "products.catalog.backend.facade.bases", "export-unknown"]
-text = "products.catalog.backend.facade.bases exports products.catalog.backend.facade.bases.EntryHeld: export-unknown"
+text = "products.catalog.backend.facade.bases exports products.catalog.backend.facade.bases.EntryHeld, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.facade.bases.EntryLocked", "products.catalog.backend.facade.bases", "export-unknown"]
-text = "products.catalog.backend.facade.bases exports products.catalog.backend.facade.bases.EntryLocked: export-unknown"
+text = "products.catalog.backend.facade.bases exports products.catalog.backend.facade.bases.EntryLocked, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.batches", "export-denied(model)"]
-text = "products.catalog.backend.facade.batches exports products.catalog.backend.logic.errors.EntryBatchRejected -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.batches exports products.catalog.backend.logic.errors.EntryBatchRejected -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.errors.EntryBroken", "products.catalog.backend.facade.errors", "export-unknown"]
-text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryBroken: export-unknown"
+text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryBroken, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.errors", "export-denied(model)"]
-text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryExpired -> products.catalog.backend.models.CatalogEntry: export-denied(model)"
+text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryExpired -> products.catalog.backend.models.CatalogEntry, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.errors", "export-denied(model)"]
-text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryRejected -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.errors exports products.catalog.backend.logic.errors.EntryRejected -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.exporters.CatalogFlush", "products.catalog.backend.facade.exporters", "export-shape(class)"]
-text = "products.catalog.backend.facade.exporters exports products.catalog.backend.logic.exporters.CatalogFlush: export-shape(class)"
+text = "products.catalog.backend.facade.exporters exports products.catalog.backend.logic.exporters.CatalogFlush, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.facade.generics.EntryProps", "products.catalog.backend.facade.generics", "export-shape(class)"]
-text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryProps: export-shape(class)"
+text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryProps, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.facade.generics.EntryRecord", "products.catalog.backend.facade.generics", "export-shape(class)"]
-text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryRecord: export-shape(class)"
+text = "products.catalog.backend.facade.generics exports products.catalog.backend.facade.generics.EntryRecord, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.handout", "export-denied(model)"]
-text = "products.catalog.backend.facade.handout exports scripts.shapes.ExternalView -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.handout exports scripts.shapes.ExternalView -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.limits.PAGE_SIZE", "products.catalog.backend.facade.limits", "export-unknown"]
-text = "products.catalog.backend.facade.limits exports products.catalog.backend.logic.limits.PAGE_SIZE: export-unknown"
+text = "products.catalog.backend.facade.limits exports products.catalog.backend.logic.limits.PAGE_SIZE, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.models", "export-denied(model)"]
-text = "products.catalog.backend.facade.models exports products.catalog.backend.models.CatalogEntry: export-denied(model)"
+text = "products.catalog.backend.facade.models exports products.catalog.backend.models.CatalogEntry, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_names", "export-denied(model)"]
-text = "products.catalog.backend.facade.private_names exports products.catalog.backend.logic.views_out.PrivateView -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.private_names exports products.catalog.backend.logic.views_out.PrivateView -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.private_tracking", "export-denied(model)"]
-text = "products.catalog.backend.facade.private_tracking exports products.catalog.backend.facade.private_tracking.track_private -> products.catalog.backend.logic.views_out.PrivateView -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.private_tracking exports products.catalog.backend.facade.private_tracking.track_private -> products.catalog.backend.logic.views_out.PrivateView -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["typing.Any", "products.catalog.backend.facade.rows", "export-unknown"]
-text = "products.catalog.backend.facade.rows exports products.catalog.backend.logic.errors.EntryPayloadDetail -> typing.Any: export-unknown"
+text = "products.catalog.backend.facade.rows exports products.catalog.backend.logic.errors.EntryPayloadDetail -> typing.Any, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.rows", "export-denied(model)"]
-text = "products.catalog.backend.facade.rows exports products.catalog.backend.logic.errors.EntryRow -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.rows exports products.catalog.backend.logic.errors.EntryRow -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.api.serializers.EntrySerializer", "products.catalog.backend.facade.serializers", "export-shape(class)"]
-text = "products.catalog.backend.facade.serializers exports products.catalog.backend.api.serializers.EntrySerializer: export-shape(class)"
+text = "products.catalog.backend.facade.serializers exports products.catalog.backend.api.serializers.EntrySerializer, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.facade.shapes.EntryDraft", "products.catalog.backend.facade.shapes", "export-shape(class)"]
-text = "products.catalog.backend.facade.shapes exports products.catalog.backend.facade.shapes.EntryDraft: export-shape(class)"
+text = "products.catalog.backend.facade.shapes exports products.catalog.backend.facade.shapes.EntryDraft, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.catalog.backend.facade.sinks", "export-denied(model)"]
-text = "products.catalog.backend.facade.sinks exports products.catalog.backend.logic.errors.StockSink -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.catalog.backend.facade.sinks exports products.catalog.backend.logic.errors.StockSink -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.handouts.HandoutBox", "products.catalog.backend.facade.starred", "export-shape(class)"]
-text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutBox: export-shape(class)"
+text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutBox, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.logic.handouts.HandoutHolder", "products.catalog.backend.facade.starred", "export-shape(class)"]
-text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutHolder: export-shape(class)"
+text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutHolder, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.catalog.backend.facade.starred", "export-denied(model)"]
-text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutRejected -> products.catalog.backend.models.CatalogEntry: export-denied(model)"
+text = "products.catalog.backend.facade.starred exports products.catalog.backend.logic.handouts.HandoutRejected -> products.catalog.backend.models.CatalogEntry, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "unresolved-import"]
-text = "products.legacy.backend.facade.aboveworkers exports ......gone: unresolved-import"
+text = "products.legacy.backend.facade.aboveworkers exports ......gone, which hoglint cannot find"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.legacy.backend.facade.backfill_command.Command", "products.legacy.backend.facade.backfill_command", "export-denied(command)"]
-text = "products.legacy.backend.facade.backfill_command exports products.legacy.backend.facade.backfill_command.Command: export-denied(command)"
+text = "products.legacy.backend.facade.backfill_command exports products.legacy.backend.facade.backfill_command.Command, a command that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.legacy.backend.facade.barelazy.run_job", "products.legacy.backend.facade.barelazy", "export-unknown"]
-text = "products.legacy.backend.facade.barelazy exports products.legacy.backend.facade.barelazy.run_job: export-unknown"
+text = "products.legacy.backend.facade.barelazy exports products.legacy.backend.facade.barelazy.run_job, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.legacy.backend.facade.colonlazy.run_job", "products.legacy.backend.facade.colonlazy", "export-unknown"]
-text = "products.legacy.backend.facade.colonlazy exports products.legacy.backend.facade.colonlazy.run_job: export-unknown"
+text = "products.legacy.backend.facade.colonlazy exports products.legacy.backend.facade.colonlazy.run_job, and hoglint cannot tell whether its shape policy allows it"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.legacy.backend.temporal.gone.run_gone", "products.legacy.backend.facade.lazygoneworkers", "unresolved-import"]
-text = "products.legacy.backend.facade.lazygoneworkers exports products.legacy.backend.temporal.gone.run_gone: unresolved-import"
+text = "products.legacy.backend.facade.lazygoneworkers exports products.legacy.backend.temporal.gone.run_gone, which hoglint cannot find"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.reports.backend.models.ReportRun", "products.reports.backend.facade.run_handle", "export-denied(model)"]
-text = "products.reports.backend.facade.run_handle exports products.reports.backend.models.ReportRun: export-denied(model)"
+text = "products.reports.backend.facade.run_handle exports products.reports.backend.models.ReportRun, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.reports.backend.models.ReportRun.Status", "products.reports.backend.facade.run_status", "export-shape(class)"]
-text = "products.reports.backend.facade.run_status exports products.reports.backend.models.ReportRun.Status: export-shape(class)"
+text = "products.reports.backend.facade.run_status exports products.reports.backend.models.ReportRun.Status, a class that its shape policy does not allow"
 
 [[finding]]
 rule = "export-shape"
 identity = ["posthog.models.team.team.Team", "products.inventory.backend.routes", "export-denied(model)"]
-text = "products.inventory.backend.routes exports products.inventory.backend.routes.stock_owner -> products.inventory.backend.facade.owners.StockOwner -> posthog.models.team.team.Team: export-denied(model)"
+text = "products.inventory.backend.routes exports products.inventory.backend.routes.stock_owner -> products.inventory.backend.facade.owners.StockOwner -> posthog.models.team.team.Team, a model that its shape policy denies"
 
 [[finding]]
 rule = "export-shape"
 identity = ["products.inventory.backend.models.StockItem", "products.inventory.backend.routes", "export-denied(model)"]
-text = "products.inventory.backend.routes exports products.inventory.backend.route_helpers.stock_route_name -> products.inventory.backend.models.StockItem: export-denied(model)"
+text = "products.inventory.backend.routes exports products.inventory.backend.route_helpers.stock_route_name -> products.inventory.backend.models.StockItem, a model that its shape policy denies"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.alias_listed", "place", "param:entry", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.alias_listed.place exposes products.catalog.backend.models.CatalogEntry in param:entry"
+text = "products.catalog.backend.facade.alias_listed.place takes products.catalog.backend.models.CatalogEntry in the parameter entry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.alias_listed", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.alias_listed.MaybeEntry exposes products.catalog.backend.models.CatalogEntry in alias"
+text = "products.catalog.backend.facade.alias_listed.MaybeEntry has products.catalog.backend.models.CatalogEntry in its alias"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "get_entry", "return", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.api.get_entry exposes products.catalog.backend.models.CatalogEntry in return"
+text = "products.catalog.backend.facade.api.get_entry returns products.catalog.backend.models.CatalogEntry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "entries_for", "return", "django.db.models.query.QuerySet"]
-text = "products.catalog.backend.facade.api.entries_for exposes django.db.models.query.QuerySet in return"
+text = "products.catalog.backend.facade.api.entries_for returns django.db.models.query.QuerySet"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "entries_for", "return", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.api.entries_for exposes products.catalog.backend.models.CatalogEntry in return"
+text = "products.catalog.backend.facade.api.entries_for returns products.catalog.backend.models.CatalogEntry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "entry_manager", "return", "products.catalog.backend.models.EntryManager"]
-text = "products.catalog.backend.facade.api.entry_manager exposes products.catalog.backend.models.EntryManager in return"
+text = "products.catalog.backend.facade.api.entry_manager returns products.catalog.backend.models.EntryManager"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "for_integration", "param:integration", "posthog.models.integration.Integration"]
-text = "products.catalog.backend.facade.api.for_integration exposes posthog.models.integration.Integration in param:integration"
+text = "products.catalog.backend.facade.api.for_integration takes posthog.models.integration.Integration in the parameter integration"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "integration_of", "return", "posthog.models.integration.Integration"]
-text = "products.catalog.backend.facade.api.integration_of exposes posthog.models.integration.Integration in return"
+text = "products.catalog.backend.facade.api.integration_of returns posthog.models.integration.Integration"
 
 [[finding]]
 rule = "facade-signature"
@@ -456,7 +456,7 @@ text = "products.catalog.backend.facade.api.give_object_payload: return has no u
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "take_unannotated", "param:value", "?"]
-text = "exposes '' did not resolve"
+text = "products.catalog.backend.facade.api names the type '' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-signature"
@@ -471,302 +471,302 @@ text = "products.catalog.backend.facade.api.give_list_any: return has no usable 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "for_ghost", "param:ghost", "posthog.models.ghost.Ghost"]
-text = "exposes 'posthog.models.ghost.Ghost' did not resolve"
+text = "products.catalog.backend.facade.api names the type 'posthog.models.ghost.Ghost' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "run_import", "param:command", "products.catalog.backend.management.commands.import_entries.Command"]
-text = "products.catalog.backend.facade.api.run_import exposes products.catalog.backend.management.commands.import_entries.Command in param:command"
+text = "products.catalog.backend.facade.api.run_import takes products.catalog.backend.management.commands.import_entries.Command in the parameter command"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.api", "import_command", "return", "products.catalog.backend.management.commands.import_entries.Command"]
-text = "products.catalog.backend.facade.api.import_command exposes products.catalog.backend.management.commands.import_entries.Command in return"
+text = "products.catalog.backend.facade.api.import_command returns products.catalog.backend.management.commands.import_entries.Command"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "EntryRecord", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.EntryRecord exposes products.catalog.backend.models.CatalogEntry in attr:entry"
+text = "products.catalog.backend.facade.generics.EntryRecord has products.catalog.backend.models.CatalogEntry in its attr:entry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "first_entry", "param:entries", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.first_entry exposes products.catalog.backend.models.CatalogEntry in param:entries"
+text = "products.catalog.backend.facade.generics.first_entry takes products.catalog.backend.models.CatalogEntry in the parameter entries"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "first_entry", "return", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.first_entry exposes products.catalog.backend.models.CatalogEntry in return"
+text = "products.catalog.backend.facade.generics.first_entry returns products.catalog.backend.models.CatalogEntry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "first_note", "param:notes", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.first_note exposes products.catalog.backend.models.CatalogEntry in param:notes"
+text = "products.catalog.backend.facade.generics.first_note takes products.catalog.backend.models.CatalogEntry in the parameter notes"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "first_note", "return", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.first_note exposes products.catalog.backend.models.CatalogEntry in return"
+text = "products.catalog.backend.facade.generics.first_note returns products.catalog.backend.models.CatalogEntry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "echo", "param:value", "products.catalog.backend.facade.generics.AnyT"]
-text = "products.catalog.backend.facade.generics.echo exposes products.catalog.backend.facade.generics.AnyT in param:value; cannot tell, unassigned: dst.kind"
+text = "products.catalog.backend.facade.generics.echo takes products.catalog.backend.facade.generics.AnyT in the parameter value; cannot tell, unassigned: dst.kind"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "echo", "return", "products.catalog.backend.facade.generics.AnyT"]
-text = "products.catalog.backend.facade.generics.echo exposes products.catalog.backend.facade.generics.AnyT in return; cannot tell, unassigned: dst.kind"
+text = "products.catalog.backend.facade.generics.echo returns products.catalog.backend.facade.generics.AnyT; cannot tell, unassigned: dst.kind"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "newest", "param:entries", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.newest exposes products.catalog.backend.models.CatalogEntry in param:entries"
+text = "products.catalog.backend.facade.generics.newest takes products.catalog.backend.models.CatalogEntry in the parameter entries"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "newest", "return", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.newest exposes products.catalog.backend.models.CatalogEntry in return"
+text = "products.catalog.backend.facade.generics.newest returns products.catalog.backend.models.CatalogEntry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "same", "param:value", "products.catalog.backend.facade.generics.V"]
-text = "exposes 'products.catalog.backend.facade.generics.V' did not resolve"
+text = "products.catalog.backend.facade.generics names the type 'products.catalog.backend.facade.generics.V' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "same", "return", "products.catalog.backend.facade.generics.V"]
-text = "exposes 'products.catalog.backend.facade.generics.V' did not resolve"
+text = "products.catalog.backend.facade.generics names the type 'products.catalog.backend.facade.generics.V' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.generics", "EntryProps", "attr:entry", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.generics.EntryProps exposes products.catalog.backend.models.CatalogEntry in attr:entry"
+text = "products.catalog.backend.facade.generics.EntryProps has products.catalog.backend.models.CatalogEntry in its attr:entry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.handout", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.handout.InternalView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.handout.InternalView.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.handout", "SandboxView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.handout.SandboxView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.handout.SandboxView.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.handout", "ToolView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.handout.ToolView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.handout.ToolView.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.lazy_types", "EntryRef", "alias", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.lazy_types.EntryRef exposes products.catalog.backend.models.CatalogEntry in alias"
+text = "products.catalog.backend.facade.lazy_types.EntryRef has products.catalog.backend.models.CatalogEntry in its alias"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.limits", "ENTRY_KINDS", "constant", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.limits.ENTRY_KINDS exposes products.catalog.backend.models.CatalogEntry in constant"
+text = "products.catalog.backend.facade.limits.ENTRY_KINDS has products.catalog.backend.models.CatalogEntry in its constant"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.limits", "MaybeEntry", "alias", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.limits.MaybeEntry exposes products.catalog.backend.models.CatalogEntry in alias"
+text = "products.catalog.backend.facade.limits.MaybeEntry has products.catalog.backend.models.CatalogEntry in its alias"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.named", "InternalView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.named.InternalView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.named.InternalView.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.private_names", "lookup", "param:entry", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.private_names.lookup exposes products.catalog.backend.models.CatalogEntry in param:entry"
+text = "products.catalog.backend.facade.private_names.lookup takes products.catalog.backend.models.CatalogEntry in the parameter entry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.records", "EntryStockRecord.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.records.EntryStockRecord.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.records.EntryStockRecord.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "EntryIntegration.__init__", "field:integration", "posthog.models.integration.Integration"]
-text = "products.catalog.backend.facade.shapes.EntryIntegration.__init__ exposes posthog.models.integration.Integration in field:integration"
+text = "products.catalog.backend.facade.shapes.EntryIntegration.__init__ has posthog.models.integration.Integration in its field:integration"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "EntryOutOfStock", "attr:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.shapes.EntryOutOfStock exposes products.inventory.backend.models.StockItem in attr:item"
+text = "products.catalog.backend.facade.shapes.EntryOutOfStock has products.inventory.backend.models.StockItem in its attr:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "EntryStockView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.shapes.EntryStockView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.shapes.EntryStockView.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "StockListener.__call__", "param:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.shapes.StockListener.__call__ exposes products.inventory.backend.models.StockItem in param:item"
+text = "products.catalog.backend.facade.shapes.StockListener.__call__ takes products.inventory.backend.models.StockItem in the parameter item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "EntryTeams.__init__", "field:integrations", "posthog.models.integration.Integration"]
-text = "products.catalog.backend.facade.shapes.EntryTeams.__init__ exposes posthog.models.integration.Integration in field:integrations"
+text = "products.catalog.backend.facade.shapes.EntryTeams.__init__ has posthog.models.integration.Integration in its field:integrations"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "EntryJob.__init__", "field:command", "products.catalog.backend.management.commands.import_entries.Command"]
-text = "products.catalog.backend.facade.shapes.EntryJob.__init__ exposes products.catalog.backend.management.commands.import_entries.Command in field:command"
+text = "products.catalog.backend.facade.shapes.EntryJob.__init__ has products.catalog.backend.management.commands.import_entries.Command in its field:command"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shapes", "StockHolder", "attr:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.shapes.StockHolder exposes products.inventory.backend.models.StockItem in attr:item"
+text = "products.catalog.backend.facade.shapes.StockHolder has products.inventory.backend.models.StockItem in its attr:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.shipments", "ShipmentView.__init__", "field:item", "products.inventory.backend.models.StockItem"]
-text = "products.catalog.backend.facade.shipments.ShipmentView.__init__ exposes products.inventory.backend.models.StockItem in field:item"
+text = "products.catalog.backend.facade.shipments.ShipmentView.__init__ has products.inventory.backend.models.StockItem in its field:item"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.catalog.backend.facade.starred", "place_entry", "param:entry", "products.catalog.backend.models.CatalogEntry"]
-text = "products.catalog.backend.facade.starred.place_entry exposes products.catalog.backend.models.CatalogEntry in param:entry"
+text = "products.catalog.backend.facade.starred.place_entry takes products.catalog.backend.models.CatalogEntry in the parameter entry"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:args", "?"]
-text = "exposes '' did not resolve"
+text = "products.legacy.backend.facade.backfill_command names the type '' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.legacy.backend.facade.backfill_command", "Command.handle", "param:options", "?"]
-text = "exposes '' did not resolve"
+text = "products.legacy.backend.facade.backfill_command names the type '' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-signature"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "run_gone", "signature", "products.legacy.backend.temporal.gone.run_gone"]
-text = "exposes 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+text = "products.legacy.backend.facade.lazygoneworkers names the type 'products.legacy.backend.temporal.gone.run_gone' in a signature, which hoglint cannot find"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.aliasworkers.start_alias", "products.legacy.backend.facade.aliasworkers"]
-text = "products.legacy.backend.facade.aliasworkers -> products.legacy.backend.facade.aliasworkers.start_alias (declares)"
+text = "products.legacy.backend.facade.aliasworkers defines products.legacy.backend.facade.aliasworkers.start_alias"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.lazyworkers.start_lazy", "products.legacy.backend.facade.lazyworkers"]
-text = "products.legacy.backend.facade.lazyworkers -> products.legacy.backend.facade.lazyworkers.start_lazy (declares)"
+text = "products.legacy.backend.facade.lazyworkers defines products.legacy.backend.facade.lazyworkers.start_lazy"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.nsworkers.job_names", "products.legacy.backend.facade.nsworkers"]
-text = "products.legacy.backend.facade.nsworkers -> products.legacy.backend.facade.nsworkers.job_names (declares)"
+text = "products.legacy.backend.facade.nsworkers defines products.legacy.backend.facade.nsworkers.job_names"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.queries.widget_names", "products.legacy.backend.facade.queries"]
-text = "products.legacy.backend.facade.queries -> products.legacy.backend.facade.queries.widget_names (declares)"
+text = "products.legacy.backend.facade.queries defines products.legacy.backend.facade.queries.widget_names"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.relativeworkers.start_relative", "products.legacy.backend.facade.relativeworkers"]
-text = "products.legacy.backend.facade.relativeworkers -> products.legacy.backend.facade.relativeworkers.start_relative (declares)"
+text = "products.legacy.backend.facade.relativeworkers defines products.legacy.backend.facade.relativeworkers.start_relative"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.legacy.backend.facade.workers.start", "products.legacy.backend.facade.workers"]
-text = "products.legacy.backend.facade.workers -> products.legacy.backend.facade.workers.start (declares)"
+text = "products.legacy.backend.facade.workers defines products.legacy.backend.facade.workers.start"
 
 [[finding]]
 rule = "facade-logic"
 identity = ["products.reports.backend.facade.run_handle.run_count", "products.reports.backend.facade.run_handle"]
-text = "products.reports.backend.facade.run_handle -> products.reports.backend.facade.run_handle.run_count (declares)"
+text = "products.reports.backend.facade.run_handle defines products.reports.backend.facade.run_handle.run_count"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.inventory.backend.routes", "products.inventory.backend.route_helpers"]
-text = "products.inventory.backend.routes -> products.inventory.backend.route_helpers.stock_route_name (import)"
+text = "products.inventory.backend.routes imports products.inventory.backend.route_helpers.stock_route_name"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.drafts"]
-text = "products.legacy.backend.presentation.review_views -> products.legacy.backend.drafts (import)"
+text = "products.legacy.backend.presentation.review_views imports products.legacy.backend.drafts"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.presentation.views", "products.catalog.backend.presentation.views"]
-text = "products.legacy.backend.presentation.views -> products.catalog.backend.presentation.views.EntryExportView (import)"
+text = "products.legacy.backend.presentation.views imports products.catalog.backend.presentation.views.EntryExportView"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.presentation.views", "products.inventory.backend.presentation.serializers"]
-text = "products.legacy.backend.presentation.views -> products.inventory.backend.presentation.serializers.StockSerializer (import)"
+text = "products.legacy.backend.presentation.views imports products.inventory.backend.presentation.serializers.StockSerializer"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.presentation.views", "products.legacy.backend.helpers"]
-text = "products.legacy.backend.presentation.views -> products.legacy.backend.helpers.widget_label (import)"
+text = "products.legacy.backend.presentation.views imports products.legacy.backend.helpers.widget_label"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.presentation.views", "products.legacy.backend.models"]
-text = "products.legacy.backend.presentation.views -> products.legacy.backend.models.Widget (import)"
+text = "products.legacy.backend.presentation.views imports products.legacy.backend.models.Widget"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.routes", "products.legacy.backend.api.widgets"]
-text = "products.legacy.backend.routes -> products.legacy.backend.api.widgets.WidgetViewSet (import)"
+text = "products.legacy.backend.routes imports products.legacy.backend.api.widgets.WidgetViewSet"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.legacy.backend.routes", "products.legacy.backend.route_helpers"]
-text = "products.legacy.backend.routes -> products.legacy.backend.route_helpers.widget_route_name (import)"
+text = "products.legacy.backend.routes imports products.legacy.backend.route_helpers.widget_route_name"
 
 [[finding]]
 rule = "presentation-uses-facade"
 identity = ["products.shelf.backend.presentation.views", "products.inventory.backend.logic.stock"]
-text = "products.shelf.backend.presentation.views -> products.inventory.backend.logic.stock.move_stock (import)"
+text = "products.shelf.backend.presentation.views imports products.inventory.backend.logic.stock.move_stock"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.catalog.backend.facade.api", "?"]
-text = "import 'posthog.models.ghost.Ghost' did not resolve"
+text = "products.catalog.backend.facade.api imports 'posthog.models.ghost.Ghost', which hoglint cannot find"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.catalog.backend.facade.api", "products.catalog.backend.api.serializers"]
-text = "products.catalog.backend.facade.api -> products.catalog.backend.api.serializers.EntrySerializer (import)"
+text = "products.catalog.backend.facade.api imports products.catalog.backend.api.serializers.EntrySerializer"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.catalog.backend.facade.serializers", "products.catalog.backend.api.serializers"]
-text = "products.catalog.backend.facade.serializers -> products.catalog.backend.api.serializers.EntrySerializer (import)"
+text = "products.catalog.backend.facade.serializers imports products.catalog.backend.api.serializers.EntrySerializer"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.legacy.backend.facade.aboveworkers", "?"]
-text = "import '......gone' did not resolve"
+text = "products.legacy.backend.facade.aboveworkers imports '......gone', which hoglint cannot find"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.legacy.backend.facade.api", "django.http"]
-text = "products.legacy.backend.facade.api -> django.http.Http404 (import)"
+text = "products.legacy.backend.facade.api imports django.http.Http404"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.legacy.backend.facade.api", "rest_framework.exceptions"]
-text = "products.legacy.backend.facade.api -> rest_framework.exceptions.PermissionDenied (import)"
+text = "products.legacy.backend.facade.api imports rest_framework.exceptions.PermissionDenied"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.legacy.backend.facade.api", "products.legacy.backend.presentation.views"]
-text = "products.legacy.backend.facade.api -> products.legacy.backend.presentation.views.widget_page (import)"
+text = "products.legacy.backend.facade.api imports products.legacy.backend.presentation.views.widget_page"
 
 [[finding]]
 rule = "facade-no-drf"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
-text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+text = "products.legacy.backend.facade.lazygoneworkers imports 'products.legacy.backend.temporal.gone.run_gone', which hoglint cannot find"
 
 [[finding]]
 rule = "contracts-no-django"
@@ -776,72 +776,72 @@ text = "products.legacy.backend.facade.contracts reaches django.conf.settings: p
 [[finding]]
 rule = "thin-commands"
 identity = ["products.legacy.backend.management.commands.backfill_widget_names", "products.legacy.backend.logic.widgets"]
-text = "products.legacy.backend.management.commands.backfill_widget_names -> products.legacy.backend.logic.widgets.widget_total (import)"
+text = "products.legacy.backend.management.commands.backfill_widget_names imports products.legacy.backend.logic.widgets.widget_total"
 
 [[finding]]
 rule = "thin-commands"
 identity = ["products.legacy.backend.management.commands.seed_widgets", "products.legacy.backend.models"]
-text = "products.legacy.backend.management.commands.seed_widgets -> products.legacy.backend.models.Widget (import)"
+text = "products.legacy.backend.management.commands.seed_widgets imports products.legacy.backend.models.Widget"
 
 [[finding]]
 rule = "thin-commands"
 identity = ["products.legacy.backend.management.commands.sync_widgets", "products.legacy.backend.tasks.cleanup"]
-text = "products.legacy.backend.management.commands.sync_widgets -> products.legacy.backend.tasks.cleanup.cleanup (import)"
+text = "products.legacy.backend.management.commands.sync_widgets imports products.legacy.backend.tasks.cleanup.cleanup"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["posthog.request_log", "?"]
-text = "import 'products.gatekeeper.backend.facade.trail' did not resolve"
+text = "posthog.request_log imports 'products.gatekeeper.backend.facade.trail', which hoglint cannot find"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["products.catalog.backend.facade.api", "?"]
-text = "import 'posthog.models.ghost.Ghost' did not resolve"
+text = "products.catalog.backend.facade.api imports 'posthog.models.ghost.Ghost', which hoglint cannot find"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["products.catalog.backend.logic.errors", "?"]
-text = "import 'products.catalog.backend.logic.nowhere.MissingFailure' did not resolve"
+text = "products.catalog.backend.logic.errors imports 'products.catalog.backend.logic.nowhere.MissingFailure', which hoglint cannot find"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["products.legacy.backend.facade.aboveworkers", "?"]
-text = "import '......gone' did not resolve"
+text = "products.legacy.backend.facade.aboveworkers imports '......gone', which hoglint cannot find"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["products.legacy.backend.facade.lazygoneworkers", "?"]
-text = "import 'products.legacy.backend.temporal.gone.run_gone' did not resolve"
+text = "products.legacy.backend.facade.lazygoneworkers imports 'products.legacy.backend.temporal.gone.run_gone', which hoglint cannot find"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["products.legacy.backend.presentation.review_views", "products.legacy.backend.reviews.tests"]
-text = "products.legacy.backend.presentation.review_views -> products.legacy.backend.reviews.tests (import)"
+text = "products.legacy.backend.presentation.review_views imports products.legacy.backend.reviews.tests"
 
 [[finding]]
 rule = "prod-imports-test"
 identity = ["products.legacy.backend.tasks.cleanup", "products.legacy.backend.tests.factories"]
-text = "products.legacy.backend.tasks.cleanup -> products.legacy.backend.tests.factories.make_widget (import)"
+text = "products.legacy.backend.tasks.cleanup imports products.legacy.backend.tests.factories.make_widget"
 
 [[finding]]
 rule = "sources-vendors-use-sdk"
 identity = ["products.warehouse_sources.sources.alpha.source", "products.inventory.backend.facade.api"]
-text = "products.warehouse_sources.sources.alpha.source -> products.inventory.backend.facade.api (import)"
+text = "products.warehouse_sources.sources.alpha.source imports products.inventory.backend.facade.api"
 
 [[finding]]
 rule = "sources-vendors-use-sdk"
 identity = ["products.warehouse_sources.sources.alpha.source", "posthog.models.team.team"]
-text = "products.warehouse_sources.sources.alpha.source -> posthog.models.team.team.Team (import)"
+text = "products.warehouse_sources.sources.alpha.source imports posthog.models.team.team.Team"
 
 [[finding]]
 rule = "sources-vendors-use-sdk"
 identity = ["products.warehouse_sources.sources.conftest", "posthog.models.team.team"]
-text = "products.warehouse_sources.sources.conftest -> posthog.models.team.team.Team (import)"
+text = "products.warehouse_sources.sources.conftest imports posthog.models.team.team.Team"
 
 [[finding]]
 rule = "sources-vendors-use-sdk"
 identity = ["products.warehouse_sources.sources.sdk.base", "common.hogvm.stl"]
-text = "products.warehouse_sources.sources.sdk.base -> common.hogvm.stl.quote (import)"
+text = "products.warehouse_sources.sources.sdk.base imports common.hogvm.stl.quote"
 
 [[finding]]
 rule = "sources-vendors-independent"
@@ -861,62 +861,62 @@ text = "products.warehouse_sources.sources.sdk.catalog reaches products.warehous
 [[finding]]
 rule = "webhook-consumers-use-facade"
 identity = ["products.legacy.backend.webhook_consumers", "products.legacy.backend.logic.widgets"]
-text = "products.legacy.backend.webhook_consumers -> products.legacy.backend.logic.widgets.WIDGET_LIMIT (import)"
+text = "products.legacy.backend.webhook_consumers imports products.legacy.backend.logic.widgets.WIDGET_LIMIT"
 
 [[finding]]
 rule = "model-crossings"
 identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.backend.logic.build", "instance-many(filter)"]
-text = "products.reports.backend.logic.build uses products.catalog.backend.models.CatalogEntry as instance-many(filter)"
+text = "products.reports.backend.logic.build uses products.catalog.backend.models.CatalogEntry in the shape instance-many(filter), which the rule does not allow"
 
 [[finding]]
 rule = "get-model"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.logic.widgets", "get_model"]
-text = "products.legacy.backend.logic.widgets -> products.inventory.backend.models.StockItem (model-label)"
+text = "products.legacy.backend.logic.widgets loads the model products.inventory.backend.models.StockItem by its label"
 
 [[finding]]
 rule = "reverse-accessor"
 identity = ["products.legacy.backend.models.Widget", "posthog.models.sharing.SharingConfiguration", "widget", "sharingconfiguration_set"]
-text = "posthog.models.sharing -> products.legacy.backend.models.Widget (reverse-accessor)"
+text = "the relation posthog.models.sharing.SharingConfiguration.widget gives products.legacy.backend.models.Widget the reverse accessor sharingconfiguration_set"
 
 [[finding]]
 rule = "reverse-accessor"
 identity = ["posthog.models.team.team.Team", "products.legacy.backend.models.Widget", "team", "widget_set"]
-text = "products.legacy.backend.models -> posthog.models.team.team.Team (reverse-accessor)"
+text = "the relation products.legacy.backend.models.Widget.team gives posthog.models.team.team.Team the reverse accessor widget_set"
 
 [[finding]]
 rule = "reverse-accessor"
 identity = ["products.inventory.backend.models.StockItem", "products.legacy.backend.models.Widget", "stock", "widget_set"]
-text = "products.legacy.backend.models -> products.inventory.backend.models.StockItem (reverse-accessor)"
+text = "the relation products.legacy.backend.models.Widget.stock gives products.inventory.backend.models.StockItem the reverse accessor widget_set"
 
 [[finding]]
 rule = "receiver-direction"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.receivers"]
-text = "products.legacy.backend.receivers -> products.inventory.backend.models.StockItem (signal)"
+text = "products.legacy.backend.receivers listens to a signal of products.inventory.backend.models.StockItem"
 
 [[finding]]
 rule = "receiver-direction"
 identity = ["products.inventory.backend.models.StockItem", "legacy", "products.legacy.backend.stock_listeners"]
-text = "products.legacy.backend.stock_listeners -> products.inventory.backend.models.StockItem (signal)"
+text = "products.legacy.backend.stock_listeners listens to a signal of products.inventory.backend.models.StockItem"
 
 [[finding]]
 rule = "receiver-direction"
 identity = ["products.inventory.backend.facade.count_signals.stock_counted", "reports", "products.reports.backend.count_watch"]
-text = "products.reports.backend.count_watch -> products.inventory.backend.facade.count_signals.stock_counted (signal)"
+text = "products.reports.backend.count_watch listens to a signal of products.inventory.backend.facade.count_signals.stock_counted"
 
 [[finding]]
 rule = "drives"
 identity = ["reports:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(WidgetQuery)"]
-text = "posthog.test.test_widget_query -> products.reports.backend.hogql_queries (drives)"
+text = "the test posthog.test.test_widget_query runs products.reports.backend.hogql_queries (query-kind(WidgetQuery))"
 
 [[finding]]
 rule = "drives"
 identity = ["catalog:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(EntryQuery)"]
-text = "posthog.test.test_widget_query -> products.catalog.backend.hogql_queries (drives)"
+text = "the test posthog.test.test_widget_query runs products.catalog.backend.hogql_queries (query-kind(EntryQuery))"
 
 [[finding]]
 rule = "drives"
 identity = ["legacy:backend/hogql_queries/", "posthog.test.test_widget_query", "query-kind(AuditQuery)"]
-text = "posthog.test.test_widget_query -> products.legacy.backend.hogql_queries (drives)"
+text = "the test posthog.test.test_widget_query runs products.legacy.backend.hogql_queries (query-kind(AuditQuery))"
 
 [[finding]]
 rule = "request-path"
@@ -971,117 +971,117 @@ text = "posthog.settings.web reaches products.gatekeeper.backend.logic.session.t
 [[finding]]
 rule = "no-new-package-cycles"
 identity = ["catalog", "reports"]
-text = "catalog -> reports closes a cycle (1 edges)"
+text = "the dependency catalog -> reports closes a cycle (1 edge)"
 
 [[finding]]
 rule = "no-new-package-cycles"
 identity = ["reports", "catalog"]
-text = "reports -> catalog closes a cycle (9 edges)"
+text = "the dependency reports -> catalog closes a cycle (9 edges)"
 
 [[finding]]
 rule = "foundation-direction"
 identity = ["access_control", "gatekeeper"]
-text = "products.access_control.backend.logic.rules -> products.gatekeeper.backend.facade.api.may_enter (import)"
+text = "products.access_control.backend.logic.rules imports products.gatekeeper.backend.facade.api.may_enter"
 
 [[finding]]
 rule = "infrastructure-direction"
 identity = ["egress", "gatekeeper"]
-text = "posthog.egress.client -> products.gatekeeper.backend.facade.api.may_enter (import)"
+text = "posthog.egress.client imports products.gatekeeper.backend.facade.api.may_enter"
 
 [[finding]]
 rule = "infrastructure-direction"
 identity = ["kafka_client", "billing"]
-text = "posthog.kafka_client.client -> ee.billing.quota.over_quota (import)"
+text = "posthog.kafka_client.client imports ee.billing.quota.over_quota"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.hogql_queries.query_runner", "products.reports.backend.hogql_queries.widget"]
-text = "posthog.hogql_queries.query_runner -> products.reports.backend.hogql_queries.widget.WidgetQueryRunner (import)"
+text = "posthog.hogql_queries.query_runner imports products.reports.backend.hogql_queries.widget.WidgetQueryRunner"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.hogql_queries.query_runner", "products.catalog.backend.hogql_queries.entries"]
-text = "posthog.hogql_queries.query_runner -> products.catalog.backend.hogql_queries.entries.EntryQueryRunner (import)"
+text = "posthog.hogql_queries.query_runner imports products.catalog.backend.hogql_queries.entries.EntryQueryRunner"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.hogql_queries.query_runner", "products.legacy.backend.hogql_queries.audit"]
-text = "posthog.hogql_queries.query_runner -> products.legacy.backend.hogql_queries.audit.AuditQueryRunner (import)"
+text = "posthog.hogql_queries.query_runner imports products.legacy.backend.hogql_queries.audit.AuditQueryRunner"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_cleanup"]
-text = "posthog.management.commands.start_temporal_worker -> products.inventory.backend.logic.stock_cleanup.stock_cleanup (import)"
+text = "posthog.management.commands.start_temporal_worker imports products.inventory.backend.logic.stock_cleanup.stock_cleanup"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_jobs"]
-text = "posthog.management.commands.start_temporal_worker -> products.inventory.backend.logic.stock_jobs.stock_schedule (import)"
+text = "posthog.management.commands.start_temporal_worker imports products.inventory.backend.logic.stock_jobs.stock_schedule"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.inventory.backend.logic.stock_warmup"]
-text = "posthog.management.commands.start_temporal_worker -> products.inventory.backend.logic.stock_warmup.warm_stock (import)"
+text = "posthog.management.commands.start_temporal_worker imports products.inventory.backend.logic.stock_warmup.warm_stock"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.management.commands.start_temporal_worker", "products.reports.backend.temporal.workflows"]
-text = "posthog.management.commands.start_temporal_worker -> products.reports.backend.temporal.workflows.BuildReportWorkflow (import)"
+text = "posthog.management.commands.start_temporal_worker imports products.reports.backend.temporal.workflows.BuildReportWorkflow"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.tasks.scheduled", "products.catalog.backend.tasks.reindex"]
-text = "posthog.tasks.scheduled -> products.catalog.backend.tasks.reindex.reindex_catalog (import)"
+text = "posthog.tasks.scheduled imports products.catalog.backend.tasks.reindex.reindex_catalog"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.tasks.scheduled", "products.inventory.backend.tasks.restock"]
-text = "posthog.tasks.scheduled -> products.inventory.backend.tasks.restock.restock (import)"
+text = "posthog.tasks.scheduled imports products.inventory.backend.tasks.restock.restock"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.tasks.scheduled", "products.reports.backend.tasks.nightly"]
-text = "posthog.tasks.scheduled -> products.reports.backend.tasks.nightly.nightly_reports (import)"
+text = "posthog.tasks.scheduled imports products.reports.backend.tasks.nightly.nightly_reports"
 
 [[finding]]
 rule = "no-product-lists-in-core"
 identity = ["posthog.temporal.health_checks.registry", "products.legacy.backend.temporal.jobs"]
-text = "posthog.temporal.health_checks.registry -> products.legacy.backend.temporal.jobs (dotted-path)"
+text = "posthog.temporal.health_checks.registry names products.legacy.backend.temporal.jobs in a string"
 
 [[finding]]
 rule = "leaves-stay-leaves"
 identity = ["packages.owners_yaml.django_glue", "django.conf"]
-text = "packages.owners_yaml.django_glue -> django.conf.settings (import)"
+text = "packages.owners_yaml.django_glue imports django.conf.settings"
 
 [[finding]]
 rule = "leaves-stay-leaves"
 identity = ["packages.owners_yaml.django_glue", "posthog.redis"]
-text = "packages.owners_yaml.django_glue -> posthog.redis.get_client (import)"
+text = "packages.owners_yaml.django_glue imports posthog.redis.get_client"
 
 [[finding]]
 rule = "orm-independent"
 identity = ["posthog.egress.client", "send_for_team", "param:team", "posthog.models.team.team.Team"]
-text = "posthog.egress.client.send_for_team exposes posthog.models.team.team.Team in param:team"
+text = "posthog.egress.client.send_for_team takes posthog.models.team.team.Team in the parameter team"
 
 [[finding]]
 rule = "migration-database"
 identity = ["legacy.0001_initial", "posthog.0001_initial"]
-text = "products.legacy.backend.migrations.0001_initial -> posthog.migrations.0001_initial (migration-parent)"
+text = "the migration products.legacy.backend.migrations.0001_initial depends on the migration posthog.migrations.0001_initial"
 
 [[finding]]
 rule = "product-code-at-home"
 identity = ["ai_observability", "posthog.temporal.ai_observability"]
-text = "posthog.temporal.ai_observability"
+text = "posthog.temporal.ai_observability is in a place that the rule does not allow"
 
 [[finding]]
 rule = "product-code-at-home"
 identity = ["ai_observability", "posthog.temporal.ai_observability.summarize"]
-text = "posthog.temporal.ai_observability.summarize"
+text = "posthog.temporal.ai_observability.summarize is in a place that the rule does not allow"
 
 [[finding]]
 rule = "temporal-placement"
 identity = ["alerts", "posthog.temporal.alerts.checks"]
-text = "posthog.temporal.alerts.checks"
+text = "posthog.temporal.alerts.checks is in a place that the rule does not allow"
 
 [[finding]]
 rule = "has-facade"
@@ -1156,7 +1156,7 @@ text = "products.reports.backend.health_checks reaches posthog.dags.backfill.bac
 [[finding]]
 rule = "core-door"
 identity = ["......gone", "products.legacy.backend.facade.aboveworkers", "import"]
-text = "import '......gone' did not resolve"
+text = "products.legacy.backend.facade.aboveworkers imports '......gone', which hoglint cannot find"
 
 [[finding]]
 rule = "core-door"
@@ -1171,367 +1171,367 @@ text = "products.legacy.backend.logic.widgets names posthog.ingress.dispatch.rou
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/admin.py"]
-text = "products/catalog/backend/admin.py is needed by edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/admin.py: the admin autodiscovery of Django imports this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/apps.py"]
-text = "products/catalog/backend/apps.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/apps.py: Django settings name this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/console.py"]
-text = "products/catalog/backend/console.py is needed by registry != none and tier == 'product': module but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/console.py: a registry loads this module by name"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/events.py"]
-text = "products/catalog/backend/events.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/events.py: the AppConfig module of the product imports this module at setup"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/hogql_queries/__init__.py"]
-text = "products/catalog/backend/hogql_queries/__init__.py is needed by rules.drives.dst.path but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/hogql_queries/__init__.py: a test outside the product runs this wiring"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/logic/refusals.py"]
-text = "products/catalog/backend/logic/refusals.py is needed by edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/logic/refusals.py: the admin module of the product imports this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/migrations/0001_initial.py"]
-text = "products/catalog/backend/migrations/0001_initial.py is needed by zone in ['models', 'migrations']: module but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/migrations/0001_initial.py: this file holds models or migrations of the product"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/catalog/backend/migrations/__init__.py"]
-text = "products/catalog/backend/migrations/__init__.py is needed by zone in ['models', 'migrations']: module but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/migrations/__init__.py: this file holds models or migrations of the product"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/admin_gate.py"]
-text = "products/gatekeeper/backend/admin_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/admin_gate.py: the request pipeline of core imports this file"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/debug_gate.py"]
-text = "products/gatekeeper/backend/debug_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/debug_gate.py: the request pipeline of core imports this file"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/logic/decisions.py"]
-text = "products/gatekeeper/backend/logic/decisions.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/logic/decisions.py: the request pipeline of core imports this file"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/login_flow.py"]
-text = "products/gatekeeper/backend/login_flow.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/login_flow.py: Django settings name this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/session_gate.py"]
-text = "products/gatekeeper/backend/session_gate.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/session_gate.py: the request pipeline of core imports this file"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/throttles.py"]
-text = "products/gatekeeper/backend/throttles.py is needed by edge.kind == 'dotted-path' and src.settings == true and dst.tier == 'product': surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/throttles.py: Django settings name this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/token_check.py"]
-text = "products/gatekeeper/backend/token_check.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/token_check.py: the request pipeline of core imports this file"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/gatekeeper/backend/validator.py"]
-text = "products/gatekeeper/backend/validator.py is needed by rules.request-path.dst.path but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/validator.py: the request pipeline of core imports this file"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/inventory/backend/admin/__init__.py"]
-text = "products/inventory/backend/admin/__init__.py is needed by edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/admin/__init__.py: the admin autodiscovery of Django imports this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/inventory/backend/admin/stock_admin.py"]
-text = "products/inventory/backend/admin/stock_admin.py is needed by edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/admin/stock_admin.py: the admin module of the product imports this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/inventory/backend/tasks/"]
-text = "products/inventory/backend/tasks/ is needed by runs_by_name == true and testcode != true: location but products/inventory/turbo.json watches no file in it"
+text = "products/inventory/turbo.json watches no file in products/inventory/backend/tasks/: core runs this location by name, and one watched file in it is enough"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/apps.py"]
-text = "products/legacy/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/apps.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/health_checks.py"]
-text = "products/legacy/backend/health_checks.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/health_checks.py: a registry loads this module by name"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/hooks.py"]
-text = "products/legacy/backend/hooks.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/hooks.py: the AppConfig module of the product imports this module at setup"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/logic/widgets.py"]
-text = "products/legacy/backend/logic/widgets.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/logic/widgets.py: a test outside the product patches this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/rotation_listeners.py"]
-text = "products/legacy/backend/rotation_listeners.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/rotation_listeners.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/routes.py"]
-text = "products/legacy/backend/routes.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/routes.py: a registry loads this module by name"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/stock_listeners.py"]
-text = "products/legacy/backend/stock_listeners.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/stock_listeners.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/tasks/"]
-text = "products/legacy/backend/tasks/ is needed by runs_by_name == true and testcode != true: location but products/legacy/turbo.json watches no file in it"
+text = "products/legacy/turbo.json watches no file in products/legacy/backend/tasks/: core runs this location by name, and one watched file in it is enough"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/temporal/"]
-text = "products/legacy/backend/temporal/ is needed by runs_by_name == true and testcode != true: location but products/legacy/turbo.json watches no file in it"
+text = "products/legacy/turbo.json watches no file in products/legacy/backend/temporal/: core runs this location by name, and one watched file in it is enough"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/legacy/backend/webhook_consumers.py"]
-text = "products/legacy/backend/webhook_consumers.py is needed by registry != none and tier == 'product': module but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/webhook_consumers.py: a registry loads this module by name"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/apps.py"]
-text = "products/reports/backend/apps.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/apps.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/count_watch.py"]
-text = "products/reports/backend/count_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/count_watch.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/health_checks.py"]
-text = "products/reports/backend/health_checks.py is needed by registry != none and tier == 'product': module but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/health_checks.py: a registry loads this module by name"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/hogql_queries/widget.py"]
-text = "products/reports/backend/hogql_queries/widget.py is needed by rules.drives.dst.path but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/hogql_queries/widget.py: a test outside the product runs this wiring"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/listeners.py"]
-text = "products/reports/backend/listeners.py is needed by edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/listeners.py: the AppConfig module of the product imports this module at setup"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/logic/build.py"]
-text = "products/reports/backend/logic/build.py is needed by edge.kind == 'dotted-path' and edge.context == 'test' and crosses-package: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/logic/build.py: a test outside the product patches this module"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/logic/console_pages.py"]
-text = "products/reports/backend/logic/console_pages.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/logic/console_pages.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/stock_watch.py"]
-text = "products/reports/backend/stock_watch.py is needed by edge.kind in ['signal', 'installs'] and 'test' not in edge.context and crosses-package and edge.hook == none: src but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/stock_watch.py: this file holds a receiver or a hook callback"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/tasks/"]
-text = "products/reports/backend/tasks/ is needed by runs_by_name == true and testcode != true: location but products/reports/turbo.json watches no file in it"
+text = "products/reports/turbo.json watches no file in products/reports/backend/tasks/: core runs this location by name, and one watched file in it is enough"
 
 [[finding]]
 rule = "wiring-watched"
 identity = ["products/reports/backend/temporal/"]
-text = "products/reports/backend/temporal/ is needed by runs_by_name == true and testcode != true: location but products/reports/turbo.json watches no file in it"
+text = "products/reports/turbo.json watches no file in products/reports/backend/temporal/: core runs this location by name, and one watched file in it is enough"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/catalog/backend/apps.py"]
-text = "products/catalog/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/apps.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/catalog/backend/events.py"]
-text = "products/catalog/backend/events.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/events.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/catalog/backend/hogql_queries/entries.py"]
-text = "products/catalog/backend/hogql_queries/entries.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/hogql_queries/entries.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/catalog/backend/logic/pricing.py"]
-text = "products/catalog/backend/logic/pricing.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/logic/pricing.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/catalog/backend/sql.py"]
-text = "products/catalog/backend/sql.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/sql.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/catalog/backend/tasks/reindex.py"]
-text = "products/catalog/backend/tasks/reindex.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/catalog/turbo.json does not watch it"
+text = "products/catalog/turbo.json does not watch products/catalog/backend/tasks/reindex.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/admin_gate.py"]
-text = "products/gatekeeper/backend/admin_gate.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/admin_gate.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/debug_gate.py"]
-text = "products/gatekeeper/backend/debug_gate.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/debug_gate.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/logic/lazy_rules.py"]
-text = "products/gatekeeper/backend/logic/lazy_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/logic/lazy_rules.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/login_flow.py"]
-text = "products/gatekeeper/backend/login_flow.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/login_flow.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/session_gate.py"]
-text = "products/gatekeeper/backend/session_gate.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/session_gate.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/throttles.py"]
-text = "products/gatekeeper/backend/throttles.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/throttles.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/token_check.py"]
-text = "products/gatekeeper/backend/token_check.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/token_check.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/validator.py"]
-text = "products/gatekeeper/backend/validator.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/turbo.json does not watch products/gatekeeper/backend/validator.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/__init__.py"]
-text = "products/inventory/backend/logic/__init__.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/__init__.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/reorder_points.py"]
-text = "products/inventory/backend/logic/reorder_points.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/reorder_points.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/restock_rules.py"]
-text = "products/inventory/backend/logic/restock_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/restock_rules.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/shelf_life.py"]
-text = "products/inventory/backend/logic/shelf_life.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/shelf_life.py: code outside the product reads a name that this file defines, through a module that took it from a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_cleanup.py"]
-text = "products/inventory/backend/logic/stock_cleanup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/stock_cleanup.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_labels.py"]
-text = "products/inventory/backend/logic/stock_labels.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/stock_labels.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_sweeps.py"]
-text = "products/inventory/backend/logic/stock_sweeps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/stock_sweeps.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_warmup.py"]
-text = "products/inventory/backend/logic/stock_warmup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/stock_warmup.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/windows.py"]
-text = "products/inventory/backend/logic/windows.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/windows.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/tasks/restock.py"]
-text = "products/inventory/backend/tasks/restock.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/tasks/restock.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/tests/factories.py"]
-text = "products/inventory/backend/tests/factories.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/turbo.json does not watch products/inventory/backend/tests/factories.py: code outside the product reads a name that this file defines, through a facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/legacy/backend/api/widgets.py"]
-text = "products/legacy/backend/api/widgets.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/api/widgets.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/legacy/backend/apps.py"]
-text = "products/legacy/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/apps.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/legacy/backend/logic/widgets.py"]
-text = "products/legacy/backend/logic/widgets.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/logic/widgets.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/legacy/backend/temporal/jobs.py"]
-text = "products/legacy/backend/temporal/jobs.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/legacy/turbo.json does not watch it"
+text = "products/legacy/turbo.json does not watch products/legacy/backend/temporal/jobs.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/reports/backend/apps.py"]
-text = "products/reports/backend/apps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/apps.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/reports/backend/hogql_queries/widget.py"]
-text = "products/reports/backend/hogql_queries/widget.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/hogql_queries/widget.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/reports/backend/logic/build.py"]
-text = "products/reports/backend/logic/build.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/logic/build.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/reports/backend/tasks/nightly.py"]
-text = "products/reports/backend/tasks/nightly.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/tasks/nightly.py: code outside the product imports this file past the facade"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/reports/backend/temporal/workflows.py"]
-text = "products/reports/backend/temporal/workflows.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
+text = "products/reports/turbo.json does not watch products/reports/backend/temporal/workflows.py: code outside the product imports this file past the facade"
 
 [[incomplete]]
 rule = "public-surface"

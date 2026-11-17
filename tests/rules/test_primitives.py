@@ -317,7 +317,7 @@ def test_use_shape_with_flow_keeps_the_graph_edge_and_its_ordinal(tmp_path: Path
     assert sorted(f.identity[-1] for f in findings) == ["0", "1"]
     handles = {edge.handle for edge in graph.edges}
     assert all(f.witnesses[0].handle in handles and f.witnesses[0].shape == "instance-single" for f in findings)
-    assert {f.message.rsplit(" as ", 1)[1] for f in findings} == {"write(save)"}
+    assert {f.message.split(" in the shape ", 1)[1].split(",")[0] for f in findings} == {"write(save)"}
 
 
 REACH = """
@@ -429,7 +429,7 @@ def test_signature_denies_models_and_reads_any_as_unknown(tmp_path: Path) -> Non
     assert found == {
         ("charge", "return", "products.billing.models.Invoice"): (
             False,
-            "products.billing.facade.api.charge exposes products.billing.models.Invoice in return",
+            "products.billing.facade.api.charge returns products.billing.models.Invoice",
         ),
         ("charge", "param:payload", "typing.Any"): (
             True,

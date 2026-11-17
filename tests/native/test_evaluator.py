@@ -697,7 +697,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.nowhere: unresolved-import",
+                "products.billing.backend.facade.slots exports products.billing.backend.nowhere, which hoglint cannot find",
                 True,
             ),
             (
@@ -709,7 +709,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk: export-shape(class)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk, a class that its shape policy does not allow",
                 False,
             ),
             (
@@ -721,7 +721,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft: export-shape(class)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft, a class that its shape policy does not allow",
                 False,
             ),
             (
@@ -733,7 +733,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice: export-denied(model)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice, a model that its shape policy denies",
                 False,
             ),
             (
@@ -745,7 +745,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note: export-unknown",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note, and hoglint cannot tell whether its shape policy allows it",
                 True,
             ),
             (
@@ -757,12 +757,12 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port: export-shape(class)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port, a class that its shape policy does not allow",
                 False,
             ),
             (
                 ("products.billing.backend.facade.slots", "typing.Any", "export-unknown", "-", "product", "-"),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> typing.Any: export-unknown",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> typing.Any, and hoglint cannot tell whether its shape policy allows it",
                 True,
             ),
             (
@@ -774,7 +774,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> products.billing.backend.models.Loose: export-unknown",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge -> products.billing.backend.models.Loose, and hoglint cannot tell whether its shape policy allows it",
                 True,
             ),
             (
@@ -786,7 +786,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge: export-unknown",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.charge, and hoglint cannot tell whether its shape policy allows it",
                 True,
             ),
             (
@@ -798,7 +798,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.presentation.mixins exports products.billing.backend.presentation.mixins.Mixin: export-shape(class)",
+                "products.billing.backend.presentation.mixins exports products.billing.backend.presentation.mixins.Mixin, a class that its shape policy does not allow",
                 False,
             ),
             (
@@ -810,7 +810,7 @@ EXPORT_CORNER_ROWS = {
                     "product",
                     "-",
                 ),
-                "products.billing.backend.presentation.views exports products.billing.backend.presentation.views.View: export-shape(class)",
+                "products.billing.backend.presentation.views exports products.billing.backend.presentation.views.View, a class that its shape policy does not allow",
                 False,
             ),
         ],
@@ -820,22 +820,22 @@ EXPORT_CORNER_ROWS = {
         [
             (
                 ("products.billing.backend.facade.slots.Desk",),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk: export-shape(class)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Desk, a class that its shape policy does not allow",
                 False,
             ),
             (
                 ("products.billing.backend.facade.slots.Draft",),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft: export-shape(class)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Draft, a class that its shape policy does not allow",
                 False,
             ),
             (
                 ("products.billing.backend.models.Invoice",),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice: export-denied(model)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Note -> products.billing.backend.models.Invoice, a model that its shape policy denies",
                 False,
             ),
             (
                 ("products.billing.backend.facade.slots.Port",),
-                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port: export-shape(class)",
+                "products.billing.backend.facade.slots exports products.billing.backend.facade.slots.Port, a class that its shape policy does not allow",
                 False,
             ),
         ],
@@ -938,7 +938,7 @@ def test_a_cycle_over_a_group_a_provider_sets_finds_its_pairs_natively(world: Wo
     config = world.config(rules, PROVIDED)
     native = world.context(config)
     run = primitive_of(config.rules["teams"])(native, config.rules["teams"]).evaluate()
-    assert {finding.message.split(" closes")[0] for finding in run.findings} >= {
+    assert {finding.message.split(" closes")[0].removeprefix("the dependency ") for finding in run.findings} >= {
         "@team-alerts -> @team-billing",
         "@team-billing -> @team-alerts",
     }
@@ -1906,7 +1906,7 @@ def test_a_location_cover_needs_one_watched_file_in_each_location_an_entity_sele
         "products/alerts/backend/queries/",
         "products/alerts/jobs.py",
     ]
-    assert unwatched["products/alerts/backend/queries/"].endswith("watches no file in it")
+    assert "watches no file in products/alerts/backend/queries/: " in unwatched["products/alerts/backend/queries/"]
     assert not run.incomplete
 
 

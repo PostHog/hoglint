@@ -178,6 +178,8 @@ class CoverSpec:
     column: str = ""
     selector: Selector | None = None
     endpoint: str = ""
+    # Why the cover needs a path, in words, as a finding's message names it.
+    why: str = ""
 
 
 # How safe a way out of a finding is: `safe` cannot change behavior, `care` is a code change to

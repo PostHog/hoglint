@@ -104,7 +104,7 @@ class UseShapePrimitive(EdgeRule):
         self.flow = dict(spec.producer_options).get("flow") == "def-use"
 
     def describe(self, seen: Seen) -> str:
-        return f"{seen.src.module} uses {seen.dst.symbol} as {seen.label}"
+        return f"{seen.src.module} uses {seen.dst.symbol} in the shape {seen.label}, which the rule does not allow"
 
     def verdict_plan(self) -> dict[str, Any]:
         spec = self.spec
@@ -176,8 +176,12 @@ class SignaturePrimitive(EdgeRule):
         return super().flags(judgment)
 
     def describe(self, seen: Seen) -> str:
-        slot = seen.edge.attr("slot") or "signature"
-        return f"{self.subject(seen)} exposes {seen.dst.symbol} in {slot}"
+        slot, type_name = seen.edge.attr("slot") or "signature", seen.dst.symbol
+        if slot.startswith("param:"):
+            return f"{self.subject(seen)} takes {type_name} in the parameter {slot.removeprefix('param:')}"
+        if slot == "return":
+            return f"{self.subject(seen)} returns {type_name}"
+        return f"{self.subject(seen)} has {type_name} in its {slot}"
 
     def plan(self) -> dict[str, Any]:
         return {**super().plan(), "signature": {"unknown_types": list(self.spec.unknown_types)}}

@@ -181,8 +181,20 @@ class ExportPrimitive(RuleType):
 
     @staticmethod
     def message(module: str, trail: Sequence[str], label: str) -> str:
-        """A finding's message, worded from the evaluator's row."""
-        return f"{module} exports {' -> '.join(trail)}: {label}"
+        """A finding's message, worded from the evaluator's row: `export-shape(<kind>)` is a kind
+        the export's shape policy does not allow, `export-denied(<kind>)` one it denies."""
+        exported = f"{module} exports {' -> '.join(trail)}"
+        kind, _, detail = label.partition("(")
+        detail = detail.rstrip(")")
+        if kind == "export-shape":
+            return f"{exported}, a {detail} that its shape policy does not allow"
+        if kind == "export-denied":
+            return f"{exported}, a {detail} that its shape policy denies"
+        if kind == "export-unknown":
+            return f"{exported}, and hoglint cannot tell whether its shape policy allows it"
+        if kind == "unresolved-import":
+            return f"{exported}, which hoglint cannot find"
+        return f"{exported}: {label}"
 
     @staticmethod
     def unknown_item(

@@ -116,7 +116,7 @@ class LayoutPrimitive(EntityRule):
 
     def message(self, subject: str, count: int) -> str:
         if self.spec.require is None:
-            return subject
+            return f"{subject} is in a place that the rule does not allow"
         return f"{subject} does not meet `{self.spec.require.source}`"
 
     def root_module(self, root: str, namespaces: dict[str, str]) -> str | None:
@@ -329,7 +329,9 @@ class CoveragePrimitive(EntityRule):
 
     @staticmethod
     def why(cover: CoverSpec) -> str:
-        """Why a cover needs a path, as a finding's message names it."""
+        """Why a cover needs a path, as a finding's message names it: its own words, else its text."""
+        if cover.why:
+            return cover.why
         return f"rules.{cover.rule}.{cover.column}" if cover.rule else cover.text
 
     def everywhere(self, key: str, reason: str) -> None:
@@ -396,9 +398,7 @@ class CoveragePrimitive(EntityRule):
                     continue
                 _, decided = adapter.covered(handle, paths[0])
                 resolve = self.resolver(module, None, location)
-                self.emit(
-                    location, module, f"{location} is needed by {why} but {decided} watches no file in it", resolve
-                )
+                self.emit(location, module, f"{decided} watches no file in {location}: {why}", resolve)
                 continue
             for path in paths:
                 covered, decided = adapter.covered(handle, path)
@@ -406,5 +406,5 @@ class CoveragePrimitive(EntityRule):
                     continue
                 owner_module = module or self.ctx.labeler.path_to_module.get(path)
                 resolve = self.resolver(owner_module, None, path)
-                self.emit(path, owner_module, f"{path} is needed by {why} but {decided} does not watch it", resolve)
+                self.emit(path, owner_module, f"{decided} does not watch {path}: {why}", resolve)
         return self.run

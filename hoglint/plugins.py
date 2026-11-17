@@ -359,6 +359,8 @@ class Registry:
         self.packs: dict[str, Pack] = {}
         self.providers: dict[str, Provider] = {}
         self.coverage_adapters: dict[str, CoverageAdapter] = {}
+        # A finding's headline by the kind of its edge, for the kinds a pack makes.
+        self.headlines: dict[str, str] = {}
 
     @staticmethod
     def add(table: dict, name: str, plugin: object, kind: str) -> None:
@@ -374,6 +376,12 @@ class Registry:
 
     def add_coverage_adapter(self, adapter: CoverageAdapter) -> None:
         self.add(self.coverage_adapters, adapter.name, adapter, "coverage adapter")
+
+    def add_headlines(self, headlines: Mapping[str, str]) -> None:
+        """Templates that word a finding on an edge of a kind the pack makes: `{src}`, `{dst}`,
+        `{label}` and the edge's attrs by name."""
+        for kind, template in headlines.items():
+            self.add(self.headlines, kind, template, "headline of edge kind")
 
 
 REGISTRY = Registry()

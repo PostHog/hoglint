@@ -973,14 +973,24 @@ class SchemaBuilder:
         return column.startswith("src.") and "src.module" in identity and name in self.fields
 
     def read_covers(self, key: str, raw: Any, rule_ids: set[str]) -> tuple[CoverSpec, ...]:
+        """Each cover as its text, or as `{ cover, why }` with the words a finding gives for it."""
         out: list[CoverSpec] = []
-        for text in as_tuple(raw):
+        for entry in raw if isinstance(raw, list) else as_tuple(raw):
+            text, why = entry, ""
+            if isinstance(entry, dict):
+                if set(entry) != {"cover", "why"} or not all(isinstance(value, str) for value in entry.values()):
+                    self.fail(key, f"covers {entry!r}: a table holds exactly the strings cover and why")
+                    continue
+                text, why = entry["cover"], entry["why"]
+            if not isinstance(text, str):
+                self.fail(key, f"covers {text!r}: expected a string or a {{ cover, why }} table")
+                continue
             if text.startswith("rules."):
                 parts = text.split(".", 2)
                 if len(parts) != 3 or parts[1] not in rule_ids:
                     self.fail(key, f"covers {text!r}: expected rules.<rule id>.<column>, with a defined rule")
                     continue
-                out.append(CoverSpec(text, rule=parts[1], column=parts[2]))
+                out.append(CoverSpec(text, rule=parts[1], column=parts[2], why=why))
                 continue
             selector_text, _, endpoint = text.rpartition(":")
             endpoint = endpoint.strip()
@@ -994,7 +1004,7 @@ class SchemaBuilder:
             entity = endpoint in ("module", "location")
             catalog = self.entity_catalog() if entity else self.edge_catalog(COVER_ROOTS)
             selector = self.parse(key, selector_text, catalog)
-            out.append(CoverSpec(text, selector=selector, endpoint=endpoint))
+            out.append(CoverSpec(text, selector=selector, endpoint=endpoint, why=why))
         return tuple(out)
 
     def read_ways(self, key: str, raw: Any) -> tuple[Way, ...]:

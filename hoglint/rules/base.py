@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from hoglint.rules.exports import ExportPrimitive
     from hoglint.rules.graphs import CyclePrimitive, CycleRow, Found, ReachPrimitive
 
+from hoglint.plugins import REGISTRY
 from hoglint.rules.findings import FindingTable
 from hoglint.rules.plan import identity_paths, ref_paths, selector_tree, tree
 from hoglint.selectors import Ref, Resolver, Selector, State, conjuncts, render_value
@@ -51,6 +52,15 @@ PRIMITIVE_KINDS: dict[str, tuple[str, ...]] = {
     "export": ("import", "exposes", "inherit", "decorate"),
 }
 DEFAULT_CONTEXTS: frozenset[str] = frozenset({Context.PROD})
+# A finding's headline by the kind of its core edge: what the source does to the destination. A pack
+# words its own kinds (`Registry.add_headlines`); a kind with neither reads `src -> dst (kind)`.
+EDGE_HEADLINES = {
+    "import": "{src} imports {dst}",
+    "reference": "{src} uses {dst}",
+    "dotted-path": "{src} names {dst} in a string",
+    "declares": "{src} defines {dst}",
+    "exposes": "{src} names the type {dst} in a signature",
+}
 # The selectors of a rule over edges that `explain edge:` shows, by `RuleSpec` key, in order.
 EXPLAINED_SELECTORS = ("from_", "select", "deny", "allow", "require", "unless")
 
@@ -270,6 +280,19 @@ class RuleContext:
         return ()
 
 
+def headline(edge: Edge, src: str, dst: str, label: str = "") -> str:
+    """What the source of `edge` does to its destination, in words. A template that names an attr
+    the edge lacks falls back to the plain form."""
+    plain = f"{src} -> {dst} ({edge.kind})"
+    template = EDGE_HEADLINES.get(edge.kind) or REGISTRY.headlines.get(edge.kind)
+    if template is None:
+        return plain
+    try:
+        return template.format_map({**dict(edge.attrs), "src": src, "dst": dst, "label": label})
+    except KeyError:
+        return plain
+
+
 def subjects_of(src: str | None, dst: str | None) -> tuple[str, ...]:
     """A finding's subjects on an edge: its source module, and its destination module when that
     is another; a module with no name is none."""
@@ -414,11 +437,11 @@ class EdgeRule(RuleType):
         return ()
 
     def on_unresolved(self, seen: Seen) -> None:
-        what = f"{seen.edge.kind} {seen.edge.surface!r} did not resolve"
         if self.spec.on_unresolved == "incomplete":
-            self.incomplete(seen, what)
+            self.incomplete(seen, f"{seen.edge.kind} {seen.edge.surface!r} did not resolve")
             return
-        self.emit(seen, Judgment.UNRESOLVED, what)
+        named = headline(seen.edge, seen.src.module or "", repr(seen.edge.surface))
+        self.emit(seen, Judgment.UNRESOLVED, f"{named}, which hoglint cannot find")
 
     def report(self, seen: Seen, judgment: Judgment, describe: str) -> None:
         """The finding or incomplete `judgment` makes for one destination, all of it from what was
@@ -446,7 +469,7 @@ class EdgeRule(RuleType):
             self.run = saved
 
     def describe(self, seen: Seen) -> str:
-        return f"{seen.src.module} -> {seen.dst.symbol or seen.dst.module} ({seen.edge.kind})"
+        return headline(seen.edge, seen.src.module or "", seen.dst.symbol or seen.dst.module or "", seen.label)
 
     def edges_plan(self) -> dict[str, Any]:
         """Which edges the rule sees, and its selection in the order it applies."""

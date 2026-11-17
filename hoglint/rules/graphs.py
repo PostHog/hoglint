@@ -204,7 +204,7 @@ class CyclePrimitive(EdgeRule):
             finding = self.ctx.finding(
                 self.spec,
                 identity,
-                f"{src} -> {dst} closes a cycle ({pair.count} edges)",
+                f"the dependency {src} -> {dst} closes a cycle ({pair.count} {'edge' if pair.count == 1 else 'edges'})",
                 first.src.module,
                 subjects_of(first.src.module, first.dst.module),
                 tuple(pair.witnesses),
