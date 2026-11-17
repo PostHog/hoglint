@@ -144,37 +144,51 @@ def sixty(repo: Path) -> None:
     )
 
 
-SCENARIOS: dict[str, Callable[[Path], None]] = {
-    "clean": lambda repo: write(
+def clean(repo: Path) -> None:
+    write(
         repo,
         "products/inventory/backend/logic/totals.py",
         "def total(items: list[int]) -> int:\n    return sum(items)\n",
-    ),
-    "one-finding": lambda repo: write(repo, *ONE_FINDING),
+    )
+
+
+def one_finding(repo: Path) -> None:
+    write(repo, *ONE_FINDING)
+
+
+def claim_fails(repo: Path) -> None:
+    shutil.copy(TREE / "products/inventory/turbo.json", repo / "products/inventory/turbo.json")
+
+
+def blocking_incomplete(repo: Path) -> None:
+    loader = "import importlib\n\n\ndef load(product: str):\n    return importlib.import_module(f'products.{product}.backend.facade.api')\n"
+    write(repo, "posthog/api/plugin_loader.py", loader)
+
+
+def stale_ledger_line(repo: Path) -> None:
+    write(repo, "posthog/api/widget_report.py", "from products.legacy.backend.facade.api import *  # noqa: F403\n")
+
+
+def exception_no_reason(repo: Path) -> None:
+    write(repo, *ONE_FINDING)
+    write(repo, "hoglint.exceptions.toml", EXCEPTION.format(reason=""))
+
+
+def exception_complete(repo: Path) -> None:
+    write(repo, *ONE_FINDING)
+    reason = 'reason = "the badge needs the price until the facade has it"\n'
+    write(repo, "hoglint.exceptions.toml", EXCEPTION.format(reason=reason))
+
+
+SCENARIOS: dict[str, Callable[[Path], None]] = {
+    "clean": clean,
+    "one-finding": one_finding,
     "sixty-findings": sixty,
-    "claim-fails": lambda repo: shutil.copy(
-        TREE / "products/inventory/turbo.json", repo / "products/inventory/turbo.json"
-    ),
-    "blocking-incomplete": lambda repo: write(
-        repo,
-        "posthog/api/plugin_loader.py",
-        "import importlib\n\n\ndef load(product: str):\n    return importlib.import_module(f'products.{product}.backend.facade.api')\n",
-    ),
-    "stale-ledger-line": lambda repo: write(
-        repo, "posthog/api/widget_report.py", "from products.legacy.backend.facade.api import *  # noqa: F403\n"
-    ),
-    "exception-no-reason": lambda repo: (
-        write(repo, *ONE_FINDING),
-        write(repo, "hoglint.exceptions.toml", EXCEPTION.format(reason="")),
-    ),
-    "exception-complete": lambda repo: (
-        write(repo, *ONE_FINDING),
-        write(
-            repo,
-            "hoglint.exceptions.toml",
-            EXCEPTION.format(reason='reason = "the badge needs the price until the facade has it"\n'),
-        ),
-    ),
+    "claim-fails": claim_fails,
+    "blocking-incomplete": blocking_incomplete,
+    "stale-ledger-line": stale_ledger_line,
+    "exception-no-reason": exception_no_reason,
+    "exception-complete": exception_complete,
 }
 # The scenarios whose compare output is held too.
 COMPARED = ("sixty-findings", "exception-complete")
