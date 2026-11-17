@@ -20,8 +20,8 @@ rows = 0
 digest = "cae66941d9efbd404e4d88758ea67670"
 
 ["findings"]
-rows = 308
-digest = "986345469fa64f373c4ba5dfc74aaaa2"
+rows = 307
+digest = "3ca5c00fe93a72781b3a936b2ffc1824"
 
 ["incomplete"]
 rows = 96
@@ -36,9 +36,9 @@ rows = 1539
 digest = "82b5983eaa7199693f667c2188ae3774"
 
 ["stored-summary"]
-rows = 1537
-digest = "4121ba545aabbee9144257e10996b79c"
+rows = 1536
+digest = "119545d7d85f79a58150aafa491dc309"
 
 ["levels"]
 rows = 1
-digest = "957895a6caf2b45e362705b7d8b62bef"
+digest = "8a4fb374f9d0bd000ea77851ed0bc77b"

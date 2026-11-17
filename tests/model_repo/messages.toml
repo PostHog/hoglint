@@ -1406,7 +1406,7 @@ text = "products/gatekeeper/backend/debug_gate.py is needed by edge.kind in ['im
 [[finding]]
 rule = "reached-watched"
 identity = ["products/gatekeeper/backend/logic/lazy_rules.py"]
-text = "products/gatekeeper/backend/logic/lazy_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/gatekeeper/turbo.json does not watch it"
+text = "products/gatekeeper/backend/logic/lazy_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/gatekeeper/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
@@ -1436,52 +1436,52 @@ text = "products/gatekeeper/backend/validator.py is needed by edge.kind in ['imp
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/__init__.py"]
-text = "products/inventory/backend/logic/__init__.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/__init__.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/reorder_points.py"]
-text = "products/inventory/backend/logic/reorder_points.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/reorder_points.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/restock_alerts.py"]
-text = "products/inventory/backend/logic/restock_alerts.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/restock_alerts.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/restock_rules.py"]
-text = "products/inventory/backend/logic/restock_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/restock_rules.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/shelf_life.py"]
-text = "products/inventory/backend/logic/shelf_life.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/shelf_life.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and via-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_cleanup.py"]
-text = "products/inventory/backend/logic/stock_cleanup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/stock_cleanup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_labels.py"]
-text = "products/inventory/backend/logic/stock_labels.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/stock_labels.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_sweeps.py"]
-text = "products/inventory/backend/logic/stock_sweeps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/stock_sweeps.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/stock_warmup.py"]
-text = "products/inventory/backend/logic/stock_warmup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/stock_warmup.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/logic/windows.py"]
-text = "products/inventory/backend/logic/windows.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/logic/windows.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
@@ -1491,7 +1491,7 @@ text = "products/inventory/backend/tasks/restock.py is needed by edge.kind in ['
 [[finding]]
 rule = "reached-watched"
 identity = ["products/inventory/backend/tests/factories.py"]
-text = "products/inventory/backend/tests/factories.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
+text = "products/inventory/backend/tests/factories.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain but products/inventory/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"
@@ -1527,11 +1527,6 @@ text = "products/reports/backend/hogql_queries/widget.py is needed by edge.kind 
 rule = "reached-watched"
 identity = ["products/reports/backend/logic/build.py"]
 text = "products/reports/backend/logic/build.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface but products/reports/turbo.json does not watch it"
-
-[[finding]]
-rule = "reached-watched"
-identity = ["products/reports/backend/logic/stock_alerts.py"]
-text = "products/reports/backend/logic/stock_alerts.py is needed by edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain but products/reports/turbo.json does not watch it"
 
 [[finding]]
 rule = "reached-watched"

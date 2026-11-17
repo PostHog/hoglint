@@ -833,14 +833,15 @@ growth_key = ["subject"]
 # debt. A facade re-export does not end the reach (T7): the file that defines what a
 # facade module hands out is watched too, with every module on the name's path to it (`: chain`),
 # read at the module the code names or at one the name passes through on its way there. A facade
-# that defines the name itself ends it.
+# that defines the name itself ends it. When the module the code names belongs to the reader, that
+# module's own import is the crossing, and the covers judge that import.
 [rules.reached-watched]
 primitive  = "coverage"
-doc        = "Every product file that code outside the product (core, tools or another product; production or test) reaches past the product's export is in the contract-check inputs, so a change there runs the full suite. So is the product file that defines a name a facade module only passes on, with every module on the name's path to it, when such code reads the name, outside type checking, through that facade module or through a module that took it from one; a registration point that only puts the name into a literal does not read it. A facade that defines the name itself is the end. The Isolated level reads it; public-surface holds the crossing as debt, so this is a list."
+doc        = "Every product file that code outside the product (core, tools or another product; production or test) reaches past the product's export is in the contract-check inputs, so a change there runs the full suite. So is the product file that defines a name a facade module only passes on, with every module on the name's path to it, when such code reads the name, outside type checking, through that facade module or through a module that took it from one; a registration point that only puts the name into a literal does not read it. A facade that defines the name itself is the end. When the module the code names belongs to the reader, that module's own import is the crossing, and the covers judge that import. The Isolated level reads it; public-surface holds the crossing as debt, so this is a list."
 covers     = [
   "edge.kind in ['import', 'reference', 'dotted-path'] and crosses-package and dst.tier == 'product' and not dst.exported: surface",
-  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface-hands-out and handed-out-origin and not only-registers: chain",
-  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and via-hands-out and handed-out-origin and not only-registers: chain",
+  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and surface-hands-out and handed-out-origin and not only-registers: chain",
+  "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and crosses-package and surface.package != src.package and via-hands-out and handed-out-origin and not only-registers: chain",
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"
