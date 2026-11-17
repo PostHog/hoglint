@@ -275,6 +275,9 @@ class LevelSpec:
     # The outside input where a group claims the level, as a coverage adapter and its options; a
     # claiming group that fails the level fails the run. Empty: nothing claims the level.
     claimed_by: tuple[tuple[str, Any], ...] = ()
+    # The zones whose files `hoglint watched` adds to each group's watched files, whatever imports
+    # them: the export, the surface reached with no import, the model surface.
+    watch_zones: tuple[str, ...] = ()
 
     def claim_option(self, key: str, default: Any = None) -> Any:
         for name, value in self.claimed_by:

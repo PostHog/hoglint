@@ -1,7 +1,7 @@
 # 3. Levels and the Isolated test skip
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
-> Current as of Nov 16, 2026.
+> Current as of Nov 17, 2026.
 
 Background: in the PostHog monorepo, a product on the Isolated rung skips other products' test suites when only that product changes.
 The skip is sound only if no coupling is missed.
@@ -46,7 +46,7 @@ Its limits, in plain words:
 1. `reached-watched` reads the file the code names and, for a facade hand-out, the files on the name's path to its definition; not what those files import, nor the `__init__.py` files above them (as the request path, D103).
 2. An edge whose source tier cannot be told is an incomplete item of `reached-watched` on the source module, so it blocks no product.
 3. A name read through a module alias of an export module (`from ...facade import api as x`, then `x.f()`) is read once per scope and attribute chain, at its first use; the use has no statement flags, so one under `if TYPE_CHECKING:` counts as a read.
-4. The files of what sits in a handed-out list are not asked for; a registration point that only lists the hand-out asks for nothing.
+4. The files of what sits in a handed-out list are not asked for; a registration point that only lists the hand-out asks for nothing. A preset that derives watched sets lifts this with an `: items` cover (below).
 
 **A product that narrows must pass Isolated** (Nov 16).
 A product whose own `turbo.json` narrows its contract-check inputs claims the level.
@@ -67,6 +67,54 @@ Why a level key and not a rule that reads a level's result:
 - Rules run before levels, and a level reads rules; a rule that reads a level would need a second order between rules, and its findings would sit next to the level they help to judge (selectors that depend on the level they help compute were turned down on Nov 11).
 - A rule's finding is a ledger line or an advisory row, so "no ledger accepts it" would need an exemption; a failed claim is no finding at all, like a stale exception.
 - The claim lives in the outside input the coverage rules already read, so the level needs no new field, provider or rule.
+
+**Test selection reads the watched files from hoglint** (owner, Nov 17; the design `watched-live-design.md`, the architect's picks).
+A repo can drop its hand-kept input lists: `hoglint watched` derives each group's watched files, and the selector reads them.
+- `hoglint watched [--level NAME] [--out FILE] [--map FILE]` prints one JSON object, format 1: `format`, `hoglint` (the version), `engine` (the engine id), `policy` (the policy digest), `level`, `complete`, `problems`, and per group of the level `claimed` (the file that claims it, or null), `passes`, `reasons` (cut to a count over 20) and `watched` (path -> the first reason that asks for it).
+  Keys are sorted and nothing in it names a time or a machine: one tree, policy and engine give the same bytes.
+  It runs every rule as `check` does and judges nothing: exit 0 with an answer, 2 on a config error, 3 when it could not run.
+  `--level` defaults to the one level with `claimed_by`.
+  `--map` also writes the dependents map of the same graph, the bytes `map` prints, so a CI job that needs both builds the graph once.
+- A group's watched files are the union of:
+  1. every path a coverage rule the level requires needs;
+  2. every tracked file under the level's `watch_zones`, matched against each zone's `paths` inside the group's zone root, non-Python files too;
+  3. for a location that one watched file covers (a `: location` cover), its entry: the package's `__init__.py`, else the module files directly inside the directory that the cover keeps, else every module under it;
+  4. the `__init__.py` of each package above a watched file, in the same group, which Python runs on import.
+  A path belongs to the group of its module, so a group's paths outside its directory appear too.
+- **Isolated for selection** is `complete`, a claim and `passes`.
+  `complete` is false when an unknown can make a set too small: a claim that cannot be read, an unknown of a required rule with no subject (a failed producer), a file that cannot be read, a watched path in no group.
+  A selector treats anything less than a complete answer as no product isolated: more tests, never fewer.
+- A coverage rule with no `inputs` records the paths it needs and emits no finding; what it cannot tell stays incomplete.
+  The turbo and globs adapters stay for repos that keep input lists.
+- The claim adapter `yaml-key` (`claimed_by = { adapter = "yaml-key", file = "product.yaml", key = "isolated" }`): a directory is claimed when the nearest such file at or above it sets the key to true.
+  A value that is not a boolean, or a file that is no YAML mapping, is a claim error.
+  It declares the files as its inputs, so a claim change reaches the run's key.
+  It answers claims only; a coverage rule cannot name it in `inputs`.
+  The claim texts follow the adapter: with an input list, a missing file is added to it; with a key there is no list, so the ways are to fix the reasons in the code or, as a person's decision, remove the claim.
+- **The item reading** (the architect's pick 1): a registration point that registers a list asks for the module that defines each item (`<edge selector>: items`).
+  This lifts limit 4 of the level for derived sets.
+  The link reads each first-party module-level name bound to a sequence: a list, tuple or set literal, the values of a dict literal, `+` of such values, `*x` items, `sorted`, `list`, `tuple` or `set` of one, another name; `+=` at module level adds items.
+  Each item name resolves where the module binds it; an item that is itself such a list adds its own items, and its module, which defines that item.
+  A call item is its callee's and the list module's.
+  An item it cannot read (a subscript, an unresolved name), a second binding of the name, or a binding in a block is an incomplete item of the list's module, so the list's product cannot be isolated.
+  The table lives on the link next to the hand-outs and outlives the fact rows; it is no edge, so no table moves.
+- **Hook callback bodies** (the architect's pick 2): a call of a declared hook records the callables it hands on, the `callback` attr of its `installs` edge, as the decorator form always did.
+  The Django pack asks the extractor for `calls` rows of the declared hooks' names (`watch_hooks`), also where a file imports a hook under another name, and in those rows a call argument keeps its callee.
+  A `[django] hooks` entry is a qualified name, or a table `{ name = "...", callables = ["hook", 1] }` that names the arguments that hand the hook a callable, by keyword and position (the architect, Nov 17).
+  Of a hook given by name alone every argument may be a callable; of a table, only the declared ones, and the others are data by declaration.
+  A callable argument that names a function or a class is a callable, and of a table's declared argument a module-level value too; a call of a first-party class hands on its instance; a constant or a lambda hands on none; a module, a variable or an enum member in an argument a table does not declare is data.
+  A callable argument the facts cannot tell (a parameter, a local variable, a name that does not resolve, a call of a first-party function, any other expression, a `*` argument before a declared position) makes `callback` unknown, and the calling module's group cannot pass.
+  The import edges that run when a callable runs get `hook_callback`: `body` for an import inside a callable the file defines, `binds` for the import that binds a callable the file imports.
+  An import inside a function that the running `ready()` defines gets `app_setup = "callback"`.
+  One hop: what those modules import is not followed.
+  A connect helper is no declared hook, so its calls record no callable.
+- `compare` lists, as advisory rows, the files a group watches at the base and no longer at the head, both under the head's policy, so a change that narrows a set by moving code shows.
+
+Its limits, in plain words:
+1. A list that code changes after its assignment (`WORKFLOWS.append(x)`) is read as assigned.
+2. A callable handed to a hook through a parameter or a local variable is not followed, so it is unknown; a wrapper that forwards its parameter to a hook is followed where its callers call it, when the wrapper is a declared hook too.
+3. The modules a registered item's module imports, a callback's own imports past one hop, and the helpers behind a watched file are not watched (the Nov 11 deferral; the owner let them leave selection, Nov 17).
+4. Nothing compares a derived set with an independent list: the same run makes the set and the level's verdict.
 
 **The linter carries the skip's safety** (owner, Nov 4).
 Rules that feed the skip block, and unknowns count against the product.
@@ -176,6 +224,11 @@ This holds for the locations `drives` names; a location run by name is watched t
 | A facade re-export ends the reach (D108 as first built) | Core can call a function the facade only passes on; a change to the file that defines it skipped the core suite, in the merge queue too | Owner, Nov 16 (D120, T7) | not published |
 | Only code that is not a product reads past the export (D108's reader scope) | `turbo-discover.js` retests a product's dependents only when its contract-check is affected, so another product's reader misses a change to an unwatched file (D108's spectrum paper had it "to verify") | Architect, Nov 17 (D123), for the owner's call | not published |
 | T7 asks for a hand-out a registration point only lists (reading (b)) | Registration is not a read; engineering_analytics would lose the skip on its worker lists | Owner, Nov 16 (D120) | not published |
+| A derived location reads its entry only | A renamed workflow in a product's `temporal/` skips the core test that reads every registered workflow | Architect, Nov 17 (the item reading) | not published |
+| A derived location reads every file under it | One product pays most of its skip for files no registration names | Architect, Nov 17 (the item reading) | not published |
+| Hook callback recording behind a new `[django]` key | Declaring a hook already says its callables run later; the key would be a second switch for the same fact | Architect, Nov 17 | not published |
+| A parameter or a local variable in a hook call is data | It can carry a callable, and unknown is never clean; a hook's declaration says which arguments are callables instead | Architect, Nov 17 | not published |
+| Watch every aliased callee (patch, connect) for hook calls | It would add `calls` rows the core reads for paths and could move edges; only declared hook names are watched through an alias | Architect, Nov 17 | not published |
 | Every file of an admin package, or what the admin module's imports import | Entry modules only, as for the AppConfig module and hook callbacks | Owner, Nov 9; architect, Nov 16 | not published |
 
 ## Measured state

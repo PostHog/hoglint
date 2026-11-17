@@ -4,13 +4,15 @@
 //! Usage:
 //!   hoglint-facts --facts-id | --native-id | --build-id
 //!   hoglint-facts <repo_root> <file_list|-> [--jobs N] [--first-party a,b]
-//!      [--watch-callees a,b] [--watch-prefixes a,b] [--watch-keys a,b]
+//!      [--watch-callees a,b] [--watch-prefixes a,b] [--watch-keys a,b] [--watch-hooks a,b]
 //!      [--kinds k,k] [--lite-list PATH] [--lite-kinds k,k]
 //!      [--mode stream|cache] [--out PATH] [--cache DIR] [--timing]
 //!
 //! `--watch-callees` / `--watch-prefixes`: a call whose callee's last dotted part equals / starts
 //! with one of these gets a `calls` row. `--watch-keys`: a dict entry whose key is one of these
-//! str constants gets a `watched` row. All empty by default.
+//! str constants gets a `watched` row. `--watch-hooks`: a call of one of these, also through an
+//! import alias (`from m import a as b`, then `b(...)`), gets a `calls` row in which a call
+//! argument keeps its callee. All empty by default.
 //! `--kinds` names the fact lists records carry (default: all). Files listed in `--lite-list`
 //! (a subset of the main list, same format) carry only `--lite-kinds` (default:
 //! imports,defs,assigns). Both kind sets are part of the record `cfg`.
@@ -167,6 +169,7 @@ impl Options {
         let callees = args.list("--watch-callees")?;
         let prefixes = args.list("--watch-prefixes")?;
         let keys = args.list("--watch-keys")?;
+        let hooks = args.list("--watch-hooks")?;
         let kinds = args.kinds("--kinds", "")?;
         let lite_list = args.value("--lite-list")?;
         let lite_kinds = args.kinds("--lite-kinds", DEFAULT_LITE_KINDS)?;
@@ -185,7 +188,9 @@ impl Options {
             return Err(usage("hoglint-facts <repo_root> <file_list|-> [options]"));
         };
         let files = read_list(listing)?;
-        let config = ExtractConfig::new(first_party).watching(callees, prefixes, keys);
+        let config = ExtractConfig::new(first_party)
+            .watching(callees, prefixes, keys)
+            .watching_hooks(hooks);
         let lite = match lite_list {
             None => None,
             Some(listing) => {

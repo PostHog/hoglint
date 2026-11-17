@@ -71,10 +71,12 @@ pub struct BlobStats {
 pub fn configs(
     first_party: Vec<String>,
     kinds: &[String],
-    watch: (Vec<String>, Vec<String>, Vec<String>),
+    watch: (Vec<String>, Vec<String>, Vec<String>, Vec<String>),
     lite_kinds: &[String],
 ) -> Result<(ExtractConfig, ExtractConfig), String> {
-    let base = ExtractConfig::new(first_party).watching(watch.0, watch.1, watch.2);
+    let base = ExtractConfig::new(first_party)
+        .watching(watch.0, watch.1, watch.2)
+        .watching_hooks(watch.3);
     let full = base.clone().with_kinds(Kinds::parse(kinds)?);
     let lite = base.with_kinds(Kinds::parse(lite_kinds)?);
     Ok((full, lite))

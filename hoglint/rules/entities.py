@@ -296,6 +296,20 @@ class CoveragePrimitive(EntityRule):
         """path -> (the cover that needs it, module) for every path that must be covered."""
         return self.ctx.coverage_required(self)
 
+    @classmethod
+    def cover_kinds(cls, spec: RuleSpec) -> set[str] | None:
+        """The edge kinds the rule's edge covers read; None when one reads every kind. A failed
+        producer of one of them leaves the rule's paths short, so the rule is incomplete."""
+        out: set[str] = set()
+        for cover in spec.covers:
+            if cover.rule or cover.endpoint in ("module", "location"):
+                continue
+            kinds, _, _ = cls.split(cover)
+            if kinds is None:
+                return None
+            out |= kinds
+        return out
+
     @staticmethod
     def column_path(cover: CoverSpec) -> tuple[str, ...]:
         """The ref of a rule cover's column: `edge.<column>` when it names no root."""
@@ -350,6 +364,10 @@ class CoveragePrimitive(EntityRule):
         reason = f"cannot place {surface!r} for coverage"
         self.incomplete(f"{module}|{surface}", module, reason, IncompleteKind.NOT_MODELLED)
 
+    def unread_items(self, module: str | None, sequence: str) -> None:
+        reason = f"cannot read every item of {sequence!r}, so the modules that define them are unknown"
+        self.incomplete(f"{module}|{sequence}", module, reason, IncompleteKind.NOT_MODELLED)
+
     def unknown_selection(self, module: str | None, cover: CoverSpec) -> None:
         reason = f"cannot tell whether `{cover.text}` selects {module}"
         self.incomplete(f"{module}|{cover.text}", module, reason, IncompleteKind.UNKNOWN_LABEL)
@@ -371,6 +389,13 @@ class CoveragePrimitive(EntityRule):
     def reads_kind_and_context(node: Node) -> bool:
         return all(ref.path in KIND_AND_CONTEXT for ref in refs(node))
 
+    def record(self) -> RuleRun:
+        """A rule with no outside input list: its paths are what `hoglint watched` derives the
+        watched files from, so it emits no finding. What it cannot tell stays incomplete."""
+        self.run.required = self.required()
+        self.inherit_unknowns()
+        return self.run
+
     def expand(self, location: str) -> list[str]:
         if not location.endswith("/"):
             return [location]
@@ -384,6 +409,8 @@ class CoveragePrimitive(EntityRule):
         return cover.endpoint == "location" and location.endswith("/")
 
     def evaluate(self) -> RuleRun:
+        if not self.spec.inputs:
+            return self.record()
         repo = self.ctx.repo_root
         name = str(self.spec.input("adapter"))
         adapter = REGISTRY.coverage_adapters[name]
@@ -396,7 +423,7 @@ class CoveragePrimitive(EntityRule):
         except Exception as error:  # noqa: BLE001 - unreadable inputs make the rule incomplete, never clean
             self.everywhere("inputs", f"cannot read the {name} inputs: {error}")
             return self.run
-        required = self.required()
+        required = self.run.required = self.required()
         self.inherit_unknowns()
         for location, (cover, module) in sorted(required.items()):
             why = self.why(cover)

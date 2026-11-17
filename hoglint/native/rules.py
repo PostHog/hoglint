@@ -531,6 +531,8 @@ class NativeRuleContext(RuleContext):
                 rule.not_run(covers[at])
             elif what == "unknown-selection":
                 rule.unknown_selection(module, covers[at])
+            elif what == "unread-items":
+                rule.unread_items(module, surface)
             else:
                 rule.unplaced(module, surface)
         return {path: (covers[at], module) for path, at, module in paths}

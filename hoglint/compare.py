@@ -78,6 +78,9 @@ def growth_row(item: GrowthItem) -> str:
     return f"{item.rule} {' '.join(item.key)}: {item.before} -> {item.after}"
 
 
+UNWATCHED_TITLE = "files that stop being watched (advisory: a change to one no longer runs the full suite)"
+
+
 @dataclass(frozen=False, slots=True)
 class CompareReport:
     reference: str = ""
@@ -93,6 +96,9 @@ class CompareReport:
     new_triples: list[Triple] = field(default_factory=list)
     growth: GrowthResult = field(default_factory=GrowthResult)
     labels: Labels = field(default_factory=dict)
+    # Files a group watches at the base and no longer at the head, under the head's policy: the
+    # test selection then skips more for them. Advisory (hoglint/watched.py `stopped_watching`).
+    unwatched: list[str] = field(default_factory=list)
 
     def incomplete(self, label: Attribution) -> list[Obligation]:
         return [obligation for attribution, obligation in rows(self.labels) if attribution is label]
@@ -162,6 +168,7 @@ class CompareReport:
             out.append("Needs a person's review (it passes here; the owners of the files hold the gate):")
             for title, rows in review:
                 section(title, rows)
+        section(UNWATCHED_TITLE, self.unwatched)
         out.append(
             f"counts: findings new {len(self.new)}, resolved {len(self.resolved)}; ledger lines added "
             f"{len(self.ledger_added)}, removed {len(self.ledger_removed)}; zero-net swaps {len(self.swaps)}; "
@@ -200,6 +207,7 @@ class CompareReport:
         )
         section("policy entries changed", [f"{c.label:8} {c.change:8} {c.entry}  ({c.why})" for c in self.policy])
         section("new group edges (pair, kind, context)", [" ".join(t) for t in self.new_triples])
+        section(UNWATCHED_TITLE, self.unwatched)
         if self.growth.skipped:
             out.append(f"growth check skipped: {self.growth.skipped}")
         section("code growth (fails)", [growth_row(g) for g in self.growth.code_growth])

@@ -316,6 +316,8 @@ class TurboAdapter:
 
     name = "turbo"
     allowed_options = frozenset({"task"})
+    # A file the inputs leave out is fixed by adding it to the inputs in the package's turbo.json.
+    adds_paths = True
     STORE = AnswerStore(TURBO_ANSWERS, __file__)
 
     def inputs(self, options: Mapping[str, Any]) -> tuple[str, ...]:

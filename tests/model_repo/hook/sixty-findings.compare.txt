@@ -83,5 +83,5 @@ public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pri
 public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.owner, which is not exported to it
   at posthog/api/bulk_report.py:5
 
-Not shown: 54 more findings, 24 advisory rows, 99 old unknowns, 220 old findings in the ledger. Show every row: hoglint compare --base base --all. Show one rule: hoglint compare --base base --rule <rule>.
+Not shown: 54 more findings, 24 advisory rows, 99 old unknowns, 226 old findings in the ledger. Show every row: hoglint compare --base base --all. Show one rule: hoglint compare --base base --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

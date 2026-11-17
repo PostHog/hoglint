@@ -20,6 +20,7 @@ def globs(options: Mapping[str, Any], key: str) -> tuple[str, ...]:
 class GlobsAdapter:
     name = "globs"
     allowed_options = frozenset({"paths", "narrowed"})
+    adds_paths = True
 
     def open(self, options: Mapping[str, Any], root: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
         return globs(options, "paths"), globs(options, "narrowed")

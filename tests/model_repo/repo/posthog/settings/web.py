@@ -11,6 +11,7 @@ INSTALLED_APPS = [
     "products.legacy.backend.apps.LegacyConfig",
     "products.reports.backend.apps.ReportsConfig",
     "products.gatekeeper.backend.apps.GatekeeperConfig",
+    "products.depot.backend.apps.DepotConfig",
 ]
 
 _DEBUG_GATES = ["products.gatekeeper.backend.debug_gate.DebugGateMiddleware"] if DEBUG else []

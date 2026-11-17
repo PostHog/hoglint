@@ -83,11 +83,13 @@ pub struct DefTable<'a> {
     index: HashMap<u32, usize>,
 }
 
-/// An import-bound name: whether it looks like a class and whether it is first-party.
+/// An import-bound name: whether it looks like a class, whether it is first-party, and whether
+/// it binds a hook name under another name (`ExtractConfig::watch_hooks`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Binding {
     pub class_like: bool,
     pub first_party: bool,
+    pub hook_alias: bool,
 }
 
 /// Bound name -> binding; a name bound twice ORs both flags. Shadowing is ignored.
@@ -143,6 +145,10 @@ impl<'a> Collector<'a, '_> {
         old.first_party |= first_party;
     }
 
+    fn bind_hook_alias(&mut self, name: &'a str) {
+        self.bound.entry(name).or_default().hook_alias = true;
+    }
+
     fn body(&mut self, body: &'a [Stmt], owner: Option<u32>) {
         for stmt in body {
             self.stmt(stmt, owner);
@@ -179,6 +185,9 @@ impl<'a> Collector<'a, '_> {
                     let bound = alias.asname.as_ref().map(|a| a.as_str()).unwrap_or(name);
                     let class_like = name.starts_with(|c: char| c.is_ascii_uppercase());
                     self.bind(bound, class_like, first_party);
+                    if bound != name && self.config.is_hook(name) {
+                        self.bind_hook_alias(bound);
+                    }
                 }
             }
             Stmt::If(i) => {
