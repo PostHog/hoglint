@@ -1631,10 +1631,10 @@ SAMPLED = {
     "entrypoint": ("tables", 144),  # no predicate, so `dst.exported` decides; an unresolved edge blocks
     "use-shape": ("tables", 13),  # `allow_shapes` with a detailed shape, at the surface
     "signature": ("tables", 201),  # the default unknown types, over slots and imports; unresolved is incomplete
-    "export": ("tables", 180),  # a signature rule beside it; unknown rows are findings; a level
-    "reach": ("tables", 148),  # a search on through denied modules from every module; unresolved findings
-    "cycle": ("varied", 7),  # provider fields, roles, symbol labels; an export and an inventory beside it
-    "layout": ("tables", 150),  # absent files and a `require`, on modules; a level
+    "export": ("tables", 59),  # an unresolved hand-out is incomplete, an unknown type blocks; no draw adds a level
+    "reach": ("tables", 5),  # a search on through denied modules from where `from` holds; unresolved blocks; a level
+    "cycle": ("varied", 28),  # provider fields, roles, symbol labels; two inventories beside it, each with a level
+    "layout": ("tables", 128),  # absent and required files and a registry, on symbols; a level
     "coverage": ("tables", 140),  # covers that read an edge inventory's columns; a strict level
     "inventory-classify": ("tables", 174),  # classified identities over three kinds; incomplete unresolved edges
     "inventory-exactly-one": ("tables", 131),  # one owner per tier, counted; a level grouped by tier
