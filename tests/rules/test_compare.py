@@ -324,6 +324,48 @@ def test_the_ledger_shrinks_freely_and_grows_only_with_a_person(tmp_path: Path) 
     assert hoglint(repo, "check", "--index").returncode == 0
 
 
+EXCEPTION = """schema = 1
+
+[[exception]]
+rule = "public-surface"
+match = {{ "dst.symbol" = "products.billing.logic.charge", "src.module" = "core.api" }}
+reason = "core reads the charge until the facade has it"
+owners = ["team-billing"]
+scope = "prod"
+{review_by}"""
+
+
+@needs_extractor
+@pytest.mark.parametrize(
+    "review_by, hook, ci, says",
+    [
+        ("", 1, 1, "missing review_by"),
+        ('review_by = "2027-03-01"\n', 0, 0, "code growth a new exception allows (needs a person's review) (1)"),
+    ],
+    ids=["no review date", "complete"],
+)
+def test_growth_a_complete_new_exception_allows_passes_compare_for_review(
+    tmp_path: Path, review_by: str, hook: int, ci: int, says: str
+) -> None:
+    repo = tmp_path / "repo"
+    write_files(repo, FILES)
+    git_in(repo, "init", "-q")
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+    (repo / "core/api.py").write_text("from products.billing.logic import charge\n")
+    (repo / "hoglint.exceptions.toml").write_text(EXCEPTION.format(review_by=review_by))
+    git_in(repo, "add", "-A")
+    checked = hoglint(repo, "check", "--index")
+    assert checked.returncode == hook, checked.stdout + checked.stderr
+    git_in(repo, "commit", "-qm", "head")
+    compared = hoglint(repo, "compare", "--base", "base")
+    assert compared.returncode == ci, compared.stdout + compared.stderr
+    assert says in compared.stdout
+    assert "code growth (fails) (0)" in compared.stdout or ci == 1
+
+
 @needs_extractor
 def test_compare_blocks_a_config_name_the_change_made_stale(tmp_path: Path) -> None:
     seeded = CONFIG + '[fields.seed]\ntype = "bool"\n\n[[assign]]\nmatch = "core/api.py"\nset = { seed = true }\n'

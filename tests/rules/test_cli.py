@@ -346,6 +346,7 @@ match = { "src.module" = "products.gone" }
 reason = "removed"
 owners = ["team-alerts"]
 scope = "prod"
+review_by = 2026-06-01
 """
 DAY = datetime.date(2026, 5, 1)
 

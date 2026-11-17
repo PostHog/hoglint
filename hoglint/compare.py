@@ -138,6 +138,10 @@ class CompareReport:
             out.append(f"growth check skipped: {self.growth.skipped}")
         section("code growth (fails)", [growth_row(g) for g in self.growth.code_growth])
         section("admitted moves (review)", [growth_row(g) for g in self.growth.admitted_moves])
+        section(
+            "code growth a new exception allows (needs a person's review)",
+            [growth_row(g) for g in self.growth.excepted],
+        )
         section("rule growth (passes)", [growth_row(g) for g in self.growth.rule_growth])
         causes = "+".join(self.growth.shrink_causes)
         section(

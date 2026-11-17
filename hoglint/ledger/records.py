@@ -236,6 +236,11 @@ class StoredFindings:
         allowed = FindingStatus.ALLOWED.value
         return {(row[self.RULE], tuple(row[self.IDENTITY])) for row in self.rows if row[self.STATUS] != allowed}
 
+    def allowed_keys(self) -> set[LineKey]:
+        """The ledger key (rule, identity) of every row an exception allows."""
+        allowed = FindingStatus.ALLOWED.value
+        return {(row[self.RULE], tuple(row[self.IDENTITY])) for row in self.rows if row[self.STATUS] == allowed}
+
     def open_rows(self) -> Iterator[tuple[FindingStatus, str, str, str]]:
         """(status, rule, owner module, target) of every row no exception allows: what `query`
         groups by. The target is the first witness's first target, else the identity's first
@@ -338,7 +343,7 @@ class ExceptionsRecord:
         entries = exceptions.entries if exceptions is not None else []
         return ExceptionsRecord(
             tuple(entry.label() for entry in report.stale),
-            tuple((entry.review_by.isoformat(), entry.label()) for entry in entries if entry.review_by is not None),
+            tuple((entry.review_by.isoformat(), entry.label()) for entry in entries),
             tuple(report.problems),
         )
 

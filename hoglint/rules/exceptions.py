@@ -2,8 +2,10 @@
 no finding. It never removes an edge, so impact views and levels still see the coupling.
 
 Each entry needs: rule, match (identity columns of that rule and their values), reason, owners,
-scope (prod or test). review_by is optional. An entry that matches nothing is stale and fails.
-A passed review_by is reported, without blocking unrelated changes.
+scope (prod or test) and review_by. An entry that lacks one is a problem, which fails the check: an
+exception is a person's decision, and a complete one is what `compare` lets new debt through on.
+An entry that matches nothing is stale and fails. A passed review_by is reported, without blocking
+unrelated changes.
 """
 
 from __future__ import annotations
@@ -18,8 +20,8 @@ from hoglint.config.model import Config
 from hoglint.rules.base import RuleRun, contexts_of
 from hoglint.selectors import render_data
 
-REQUIRED = ("rule", "match", "reason", "owners", "scope")
-ALLOWED_KEYS = frozenset({*REQUIRED, "review_by"})
+REQUIRED = ("rule", "match", "reason", "owners", "scope", "review_by")
+ALLOWED_KEYS = frozenset(REQUIRED)
 SCOPES = ("prod", "test")
 
 
@@ -31,7 +33,7 @@ class ExceptionEntry:
     reason: str
     owners: tuple[str, ...]
     scope: str
-    review_by: datetime.date | None = None
+    review_by: datetime.date
 
     def label(self) -> str:
         return f"exception #{self.index} ({self.rule})"
@@ -104,9 +106,9 @@ class ExceptionsFile:
             return None
         reported = len(self.problems)
         match = self.parse_match(where, raw["match"], rule.id, rule.identity)
-        review_by = self.parse_review_by(where, raw.get("review_by"))
+        review_by = self.parse_review_by(where, raw["review_by"])
         owners = self.parse_owners(where, raw["owners"])
-        if len(self.problems) > reported:
+        if len(self.problems) > reported or review_by is None:
             return None
         return ExceptionEntry(index, rule.id, match, str(raw["reason"]), owners, raw["scope"], review_by)
 
@@ -133,8 +135,6 @@ class ExceptionsFile:
         return tuple(match)
 
     def parse_review_by(self, where: str, raw: Any) -> datetime.date | None:
-        if raw is None:
-            return None
         if isinstance(raw, datetime.datetime):
             return raw.date()
         if isinstance(raw, datetime.date):
@@ -197,6 +197,6 @@ def apply_exceptions(runs: dict[str, RuleRun], exceptions: ExceptionsFile, today
     for entry in exceptions.entries:
         if entry.index not in used:
             report.stale.append(entry)
-        if entry.review_by is not None and entry.review_by < today:
+        if entry.review_by < today:
             report.expired.append(entry)
     return report

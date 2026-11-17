@@ -687,6 +687,7 @@ match = { "src.module" = "core.gone" }
 reason = "placeholder"
 owners = ["team-billing"]
 scope = "prod"
+review_by = "2027-01-01"
 """
 
 
@@ -766,10 +767,11 @@ def test_an_assignment_that_names_no_file_or_symbol_is_incomplete_not_silent(tmp
 @pytest.mark.parametrize(
     "entry, problem",
     [
-        ('match = "core.api"', "match must be a table"),
-        ('match = { "src.module" = { nested = 1 } }', "match value for 'src.module'"),
+        ('match = "core.api"\nreview_by = 2027-01-01', "match must be a table"),
+        ('match = { "src.module" = { nested = 1 } }\nreview_by = 2027-01-01', "match value for 'src.module'"),
         ('match = { "src.module" = "core.api" }\nreview_by = "soon"', "review_by must be a date"),
         ('match = { "src.module" = "core.api" }\nreview_by = 5', "review_by must be a date"),
+        ('match = { "src.module" = "core.api" }', "missing review_by"),
     ],
 )
 def test_malformed_exceptions_are_reported_not_raised(tmp_path: Path, entry: str, problem: str) -> None:
@@ -791,7 +793,7 @@ select = "src.package != dst.package and dst.tier == 'product'"
 identity = ["src.module", "dst.exported"]
 growth_key = ["src.module"]
 """
-    text = 'schema = 1\n[[exception]]\nrule = "unexported"\nmatch = { "dst.exported" = false }\nreason = "r"\nowners = "t"\nscope = "prod"\n'
+    text = 'schema = 1\n[[exception]]\nrule = "unexported"\nmatch = { "dst.exported" = false }\nreason = "r"\nowners = "t"\nscope = "prod"\nreview_by = 2027-01-01\n'
     graph = base_graph().edge("import", "core.api", "products.billing.logic.charge").graph
     result = run(tmp_path, ENTRYPOINT + rules, graph, LedgerFile(), text)
     assert [f.status for f in result.runs["unexported"].findings] == [FindingStatus.ALLOWED]

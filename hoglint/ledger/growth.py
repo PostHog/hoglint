@@ -13,6 +13,11 @@ old debt, so it passes and the change lists it. Less debt in head than in head_b
 the new engine, policy or environment no longer sees debt that the head code still has. It
 passes, and the change lists it with the cause for the DevEx reviewer.
 
+Growth an exception allows: code growth passes, listed for a person's review, when an exception
+of the head policy allows every line behind it. The base policy cannot hold that exception, or the
+lines would not have grown, so the change adds it; an exception without a reason or a review date
+is a problem the check fails on, and owner review of the exceptions file is the person's gate.
+
 Move admission: code growth passes as an admitted move when every coupling behind the new lines
 already existed in base, under the renamed modules, with at least the same count. A coupling
 carries the rule's `edge.*` identity columns (see `couplings.py`), so new uses bundled into a
@@ -43,6 +48,7 @@ class GrowthResult:
     code_growth: list[GrowthItem] = field(default_factory=list)
     rule_growth: list[GrowthItem] = field(default_factory=list)
     admitted_moves: list[GrowthItem] = field(default_factory=list)
+    excepted: list[GrowthItem] = field(default_factory=list)
     shrink: list[GrowthItem] = field(default_factory=list)
     shrink_causes: list[str] = field(default_factory=list)
     skipped: str = ""
@@ -118,6 +124,7 @@ class AttributionCheck:
         result = GrowthResult()
         base_sums = sums(self.base.lines, self.base.growth, self.base.labels)
         head_base_sums = sums(self.head_base.lines, self.base.growth, self.head_base.labels)
+        allowed = self.head.findings.allowed_keys()
         for key, after in sorted(head_base_sums.items()):
             before = base_sums.get(key, 0)
             if after <= before:
@@ -125,6 +132,8 @@ class AttributionCheck:
             item = GrowthItem(key[0], key[1], before, after)
             if self.admitted(key):
                 result.admitted_moves.append(item)
+            elif self.excepted(key, allowed):
+                result.excepted.append(item)
             else:
                 result.code_growth.append(item)
         result.rule_growth, result.shrink = self.engine_and_policy_change()
@@ -141,6 +150,11 @@ class AttributionCheck:
             if not couplings or not all(self.existed(coupling) for coupling in couplings):
                 return False
         return True
+
+    def excepted(self, key: GrowthKey, allowed: set[LineKey]) -> bool:
+        """Whether an exception of the head policy allows every line that grew under `key`."""
+        lines = self.grown.get(key, [])
+        return bool(lines) and all(line in allowed for line in lines)
 
     def existed(self, coupling: Coupling) -> bool:
         rule, src, dst, kind, values = coupling
