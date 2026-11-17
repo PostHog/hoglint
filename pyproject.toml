@@ -9,19 +9,24 @@ name = "hoglint"
 version = "0.1.0"
 description = "Boundary linter for large Python and Django monorepos, with a Rust engine"
 readme = "README.md"
-requires-python = ">=3.12"
+license = { file = "LICENSE" }
+# The code imports compression.zstd, which Python 3.14 added.
+requires-python = ">=3.14"
 authors = [{ name = "PostHog" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Rust",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
+    "License :: OSI Approved :: MIT License",
     "Topic :: Software Development :: Quality Assurance",
 ]
+# Lower bounds only: a repo that pins hoglint resolves these with its own pins.
 dependencies = [
-    "orjson==3.11.9",
-    "pyyaml==6.0.3",
+    "orjson>=3.11.9",
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]

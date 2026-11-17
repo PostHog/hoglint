@@ -50,7 +50,7 @@
 - **History cleanup:** some replayed commits do not build alone, carry another phase's files, or have messages with numbers later corrected.
   Squashing the build-agent rounds is not decided; the architect's view is to keep them.
 - Repo state after the move (Nov 11):
-  - `requires-python` says 3.12, but `ledger/scan.py` and `store.py` import `compression.zstd` (Python 3.14);
+  - `requires-python` is 3.14 or newer, because `ledger/scan.py` and `store.py` import `compression.zstd`; CI tests 3.14 and 3.15;
   - `ty` reports a baseline of diagnostics on the whole tree; add none;
   - ruff's `src = ["src"]` is a workaround;
   - the PostHog owners provider imports a monorepo package, so two tests fail in the repo's own environment.
