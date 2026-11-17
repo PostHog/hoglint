@@ -1,10 +1,10 @@
 """Finds and imports the `hoglint_native` extension module.
 
 `bin/build` unpacks the module it builds into `<target>/python/`, next to the
-`hoglint-facts` binary; a module found there wins, as the binary does. Otherwise an installed
-wheel is imported, so a developer needs no Rust toolchain at run time. In a checkout, the module
-must report the `[native]` id of the checkout's own Rust sources, or the run stops: a stale
-module would link with old semantics.
+`hoglint-facts` binary; in a checkout, a module found there wins, as the binary does. The
+installed hoglint wheel imports the module it ships, so a developer needs no Rust toolchain at run
+time. In a checkout, the module must report the `[native]` id of the checkout's own Rust sources,
+or the run stops: a stale module would link with old semantics.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 
-from hoglint.facts import DEFAULT_TARGET_DIR
+from hoglint.facts import DEFAULT_TARGET_DIR, installed_wheel
 from hoglint.ledger.envelope import NATIVE, EngineError, EngineSources
 
 MODULE = "hoglint_native"
@@ -35,10 +35,14 @@ def engine_errors() -> Iterator[None]:
         raise EngineError(f"the native evaluator failed: {error}") from error
 
 
-def built_module_dir() -> Path:
+def built_module_dir() -> Path | None:
+    """Where a module built outside the wheel sits: HOGLINT_NATIVE_DIR, else bin/build's directory
+    in the cargo target. None in the installed wheel, which imports the module it ships."""
     override = os.environ.get("HOGLINT_NATIVE_DIR")
     if override:
         return Path(override)
+    if installed_wheel():
+        return None
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or DEFAULT_TARGET_DIR)
     return target_dir / "python"
 
@@ -47,7 +51,10 @@ def import_module() -> ModuleType:
     loaded = sys.modules.get(MODULE)
     if loaded is not None:
         return loaded
-    init = built_module_dir() / MODULE / "__init__.py"
+    built = built_module_dir()
+    if built is None:
+        return importlib.import_module(MODULE)
+    init = built / MODULE / "__init__.py"
     if not init.is_file():
         return importlib.import_module(MODULE)
     spec = importlib.util.spec_from_file_location(MODULE, init, submodule_search_locations=[str(init.parent)])

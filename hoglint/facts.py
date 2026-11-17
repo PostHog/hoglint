@@ -16,6 +16,8 @@ from hoglint.ledger.cache import FACTS, SITE_PACKAGES_ANSWERS, AnswerStore, cach
 BINARY_NAME = "hoglint-facts"
 # Where bin/build puts the binary when CARGO_TARGET_DIR is not set.
 DEFAULT_TARGET_DIR = Path.home() / ".cache" / "hoglint-target"
+# Where the hoglint wheel installs its own binary (bin/stage-facts). A checkout has none here.
+PACKAGED_BINARY = Path(__file__).resolve().parent / "bin" / BINARY_NAME
 FACT_KINDS = frozenset(
     {
         "assigns",
@@ -163,12 +165,20 @@ class SitePackagesFiles:
         return files
 
 
+def installed_wheel() -> bool:
+    """Whether this package came from the hoglint wheel, which ships its own binary and native
+    module. Then a build in the cargo target directory is another engine's and is never used."""
+    return PACKAGED_BINARY.is_file()
+
+
 def find_binary() -> Path:
-    """The hoglint-facts binary: HOGLINT_FACTS_BIN, else the release build in the cargo target
-    directory, else one on PATH."""
+    """The hoglint-facts binary: HOGLINT_FACTS_BIN, else the wheel's own binary, else the release
+    build in the cargo target directory, else one on PATH."""
     override = os.environ.get("HOGLINT_FACTS_BIN")
     if override:
         return Path(override)
+    if installed_wheel():
+        return PACKAGED_BINARY
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or DEFAULT_TARGET_DIR)
     built = target_dir / "release" / BINARY_NAME
     if built.exists():

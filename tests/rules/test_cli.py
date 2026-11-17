@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from hoglint import facts
 from hoglint.cli import COULD_NOT_RUN, HOOK_COULD_NOT_RUN, Commands, Run, Runner, Snapshots, main
 from hoglint.config import Config, load_config
 from hoglint.ledger.envelope import EngineError
@@ -156,6 +157,27 @@ def test_the_hook_page_prints_with_no_repo_and_names_every_exit_and_the_one_line
     assert [f"| {code} |" in page for code in range(COULD_NOT_RUN + 1)] == [True] * (COULD_NOT_RUN + 1)
     assert HOOK_COULD_NOT_RUN.format(reason="<reason>") in page
     assert "hoglint ledger shrink" in page and "hoglint explain <rule>" in page
+
+
+@pytest.mark.parametrize("wheel", [True, False], ids=["installed wheel", "checkout"])
+def test_the_installed_wheel_runs_its_own_extractor_and_module_unless_one_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wheel: bool
+) -> None:
+    packaged = tmp_path / "site-packages" / "hoglint" / "bin" / facts.BINARY_NAME
+    built = tmp_path / "target" / "release" / facts.BINARY_NAME
+    for binary in [packaged, built] if wheel else [built]:
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+    monkeypatch.setattr(facts, "PACKAGED_BINARY", packaged)
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "target"))
+    monkeypatch.delenv("HOGLINT_FACTS_BIN", raising=False)
+    monkeypatch.delenv("HOGLINT_NATIVE_DIR", raising=False)
+    assert facts.find_binary() == (packaged if wheel else built)
+    assert bridge.built_module_dir() == (None if wheel else tmp_path / "target" / "python")
+    monkeypatch.setenv("HOGLINT_FACTS_BIN", str(tmp_path / "named"))
+    monkeypatch.setenv("HOGLINT_NATIVE_DIR", str(tmp_path / "named-native"))
+    assert facts.find_binary() == tmp_path / "named"
+    assert bridge.built_module_dir() == tmp_path / "named-native"
 
 
 def test_the_python_engine_is_refused_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
