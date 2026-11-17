@@ -246,6 +246,9 @@ match = [
   "products/warehouse_sources/backend/temporal/data_imports/sources/snowflake/**",
   "products/warehouse_sources/backend/temporal/data_imports/sources/stripe/**",
 ]
+# warehouse_sources keeps its REST source framework out of its own contract-check inputs, and no code
+# outside the product reads it: it is no interface. A reader outside would be a public-surface row.
+except_paths = ["products/warehouse_sources/backend/temporal/data_imports/sources/common/rest_source/**"]
 set = { permanent = true }
 
 # Where core keeps Temporal code (T9, the core placement study of Nov 16): the loose platform
