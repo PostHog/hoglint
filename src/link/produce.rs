@@ -2,7 +2,7 @@
 //! edges. hoglint/core/catalog.py names the edge kinds and fact kinds of each.
 
 use super::LinkConfig;
-use super::facts::{Argument, Assign, Def, Import, Op, V};
+use super::facts::{Argument, Assign, COPY_CALLEES, Def, Import, Op, V};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
     Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, import_surface, module_assigns,
@@ -999,7 +999,14 @@ pub struct Producers<'p> {
     pub hand_outs: FxHashMap<Sid, HandOut>,
     /// Whether each class has a dataclass base, by (owner, def index) (`has_dataclass_base`).
     pub dataclass_bases: FxHashMap<(usize, u32), bool>,
+    /// What each module-level sequence of names holds (`sequences`).
+    pub sequences: Sequences,
 }
+
+/// What each module-level sequence of names holds, by (module, name): per item, the entity its
+/// name resolves to, or None for an item that cannot be read. Rules read it after the fact rows
+/// are released (`Link::sequences`), to need the modules that define a registered list's items.
+pub type Sequences = FxHashMap<(Sid, Sid), Vec<Option<Ent>>>;
 
 impl Producers<'_> {
     #[allow(clippy::too_many_arguments)]
@@ -1053,6 +1060,7 @@ impl Producers<'_> {
     pub fn run(&mut self) {
         self.each(Self::imports);
         self.each(Self::references);
+        self.each(Self::sequences);
         self.each(Self::declarations);
         self.each(Self::strings);
         self.each(Self::dynamic_imports);
@@ -1184,6 +1192,152 @@ impl Producers<'_> {
             }
         }
         self.lazy_imports(owner);
+    }
+
+    /// The items of each module-level name bound to a sequence: a list, tuple or set literal, the
+    /// values of a dict literal, a sum of such values, `sorted`, `list`, `tuple` or `set` of one, or
+    /// another name. `+=` at module level adds items. A second binding, a binding in a block or
+    /// another augmented assignment makes the name unread (a None item), and so does an item that
+    /// is no name, call, constant or literal of those.
+    fn sequences(&mut self, owner: usize) {
+        let facts = self.core.facts.clone();
+        let file = self.scopes[owner].file as usize;
+        let record = &facts.files[file];
+        if !record.ok() {
+            return;
+        }
+        let module = self.scopes[owner].module;
+        let mut bindings: FxHashMap<Sid, Vec<&Assign>> = FxHashMap::default();
+        for row in record
+            .assigns
+            .iter()
+            .filter(|row| row.s == -1 && row.value.is_some())
+        {
+            for target in &row.targets {
+                if let V::Chain(name) = target
+                    && !self.core.it.s(*name).contains('.')
+                {
+                    bindings.entry(*name).or_default().push(row);
+                }
+            }
+        }
+        let mut names: Vec<Sid> = bindings.keys().copied().collect();
+        names.sort_unstable();
+        for name in names {
+            let rows = &bindings[&name];
+            if !rows.iter().any(|row| {
+                row.value
+                    .as_ref()
+                    .is_some_and(|value| self.is_sequence(value))
+            }) {
+                continue;
+            }
+            let assigned = rows
+                .iter()
+                .filter(|row| matches!(row.op, Op::Assign | Op::Annotated))
+                .count();
+            let plain = |row: &&Assign| {
+                row.f == 0 && matches!(row.op, Op::Assign | Op::Annotated | Op::AddAssign)
+            };
+            let mut items: Vec<Option<Ent>> = Vec::new();
+            if assigned != 1 || !rows.iter().all(plain) {
+                items.push(None);
+            }
+            for row in rows {
+                if let Some(value) = row.value.as_ref() {
+                    self.sequence_items(owner, module, value, row.l, &mut items);
+                }
+            }
+            if !items.is_empty() {
+                self.sequences.insert((module, name), items);
+            }
+        }
+    }
+
+    /// The one argument of a call of `sorted`, `list`, `tuple` or `set`: a copy of a sequence.
+    fn copied<'v>(&self, value: &'v V) -> Option<&'v V> {
+        let V::Call(callee, _, Some(sole)) = value else {
+            return None;
+        };
+        let V::Chain(name) = &**callee else {
+            return None;
+        };
+        COPY_CALLEES
+            .contains(&self.core.it.s(*name))
+            .then_some(&**sole)
+    }
+
+    /// Whether `sequences` reads a value: a literal, a sum, a copy of one, or a name.
+    fn is_sequence(&self, value: &V) -> bool {
+        let literal = matches!(
+            value,
+            V::List(_) | V::Tuple(_) | V::Set(_) | V::Dict(_) | V::Bin(false, _, _) | V::Chain(_)
+        );
+        literal || self.copied(value).is_some()
+    }
+
+    /// The items of one value, in order, into `out`. A name resolves where the module binds it,
+    /// before `line`; a call item is the callee's and the module's own (the module makes it).
+    fn sequence_items(
+        &mut self,
+        owner: usize,
+        module: Sid,
+        value: &V,
+        line: u32,
+        out: &mut Vec<Option<Ent>>,
+    ) {
+        match value {
+            V::List(items) | V::Tuple(items) | V::Set(items) => {
+                for item in items {
+                    self.sequence_items(owner, module, item, line, out);
+                }
+            }
+            V::Dict(entries) => {
+                for (key, item) in entries {
+                    if let Some(key) = key.as_ref().filter(|key| !matches!(key, V::Str(_, None))) {
+                        self.sequence_items(owner, module, key, line, out);
+                    }
+                    self.sequence_items(owner, module, item, line, out);
+                }
+            }
+            V::Star(inner) => self.sequence_items(owner, module, inner, line, out),
+            V::Bin(false, left, right) => {
+                self.sequence_items(owner, module, left, line, out);
+                self.sequence_items(owner, module, right, line, out);
+            }
+            V::Str(_, None) | V::Scalar | V::Null => {}
+            V::Unary(inner) => self.sequence_items(owner, module, inner, line, out),
+            V::Opaque(what) => match self.core.it.s(*what) {
+                // A constant the tree does not spell out holds no item a module defines.
+                "badstr" | "longstr" | "int" | "float" | "complex" | "bytes" | "..."
+                | "JoinedStr" => {}
+                // A lambda is defined where the list is.
+                "Lambda" => out.push(Some(Ent {
+                    m: module,
+                    s: EMPTY,
+                })),
+                _ => out.push(None),
+            },
+            V::Chain(_) | V::Call(..) => {
+                if let Some(sole) = self.copied(value) {
+                    self.sequence_items(owner, module, sole, line, out);
+                    return;
+                }
+                let (_, resolved) = self.lookup_value(owner, value, -1, line);
+                match resolved.res {
+                    Res::Resolved => out.push(resolved.target),
+                    Res::External => {}
+                    _ => out.push(None),
+                }
+                if matches!(value, V::Call(..)) {
+                    out.push(Some(Ent {
+                        m: module,
+                        s: EMPTY,
+                    }));
+                }
+            }
+            _ => out.push(None),
+        }
     }
 
     fn references(&mut self, owner: usize) {

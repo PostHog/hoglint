@@ -999,10 +999,10 @@ class SchemaBuilder:
                 continue
             selector_text, _, endpoint = text.rpartition(":")
             endpoint = endpoint.strip()
-            if not selector_text or endpoint not in ("src", "dst", "surface", "chain", "module", "location"):
+            if not selector_text or endpoint not in ("src", "dst", "surface", "chain", "items", "module", "location"):
                 self.fail(
                     key,
-                    f"covers {text!r}: expected `<edge selector>: src`, `: dst`, `: surface`, `: chain`, "
+                    f"covers {text!r}: expected `<edge selector>: src`, `: dst`, `: surface`, `: chain`, `: items`, "
                     "or `<entity selector>: module` or `: location`",
                 )
                 continue

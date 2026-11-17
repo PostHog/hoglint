@@ -3,7 +3,7 @@
 //! and the modules or the locations an entity selection keeps.
 //! Whether an outside input covers each path stays with the coverage adapter, a Python plugin.
 
-use super::env::{Cx, Endpoint, EntityEnv, Env, Role};
+use super::env::{Cx, Endpoint, EntityEnv, Env, Role, Symbol};
 use super::labels::Field;
 use super::plan::CoverPlan;
 use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
@@ -11,7 +11,7 @@ use super::staged::{Staged, class_truth};
 use super::value::{Truth, Value, all_of, render};
 use crate::link::Link;
 use crate::link::intern::Sid;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One thing a coverage rule needs covered (`CoverSpec`), compiled.
 pub enum Cover {
@@ -34,6 +34,8 @@ pub enum Cover {
         /// The selection reads `via.*`: it holds when it holds at one module the name passes
         /// through between the surface and the origin.
         via: bool,
+        /// The modules that define the items of the sequence the origin names (`: items`).
+        items: bool,
     },
     /// The files of the modules an entity selection keeps, in its `and` parts. With `location`,
     /// the place each such module stands in instead (`location_of`).
@@ -79,6 +81,7 @@ impl Cover {
             surface: plan.endpoint == "surface",
             chain: plan.endpoint == "chain",
             via,
+            items: plan.endpoint == "items",
         })
     }
 
@@ -103,7 +106,8 @@ impl Cover {
 /// (`CoveragePrimitive`): every path with the cover that names it first (a location cover
 /// last) and the module that needs it, sorted by path; and in order, what it cannot tell, (what,
 /// cover, source module, surface): "not-run" for a cover whose rule did not run, "unplaced" for
-/// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps.
+/// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps,
+/// "unread-items" for a sequence with an item it cannot read (the surface is the sequence).
 #[derive(Default)]
 pub struct Required {
     pub paths: Vec<(String, u32, Option<String>)>,
@@ -161,6 +165,7 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                 surface,
                 chain,
                 via,
+                items,
                 ..
             } => {
                 let role = if *surface {
@@ -207,6 +212,10 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                             found: &mut found,
                             out: &mut out,
                         };
+                        if *items {
+                            need.items(dst);
+                            continue;
+                        }
                         need.endpoint(endpoint);
                         if *chain {
                             for hop in named.iter().chain(&hops) {
@@ -300,6 +309,45 @@ impl<'a> Need<'_, 'a> {
         };
         for path in files {
             self.found.entry(path).or_insert((self.at, None));
+        }
+    }
+}
+
+impl Need<'_, '_> {
+    /// The files of the modules that define the items of the sequence `origin` names, through
+    /// each item that is itself such a sequence. An origin that names no sequence needs nothing.
+    fn items(&mut self, origin: &Endpoint) {
+        let cx = self.cx;
+        let Symbol::Inside(module, name) = origin.symbol else {
+            return;
+        };
+        let mut stack = vec![(module, name)];
+        let mut seen = FxHashSet::default();
+        while let Some(list) = stack.pop() {
+            if !seen.insert(list) {
+                continue;
+            }
+            let Some(members) = cx.link.sequences.get(&list) else {
+                continue;
+            };
+            for member in members {
+                let place = member.and_then(|ent| cx.module_at(ent.m).map(|at| (ent, at)));
+                let Some((ent, at)) = place else {
+                    // The unknown is the list's product's: its set may miss the item.
+                    let named = format!("{}.{}", cx.text(list.0), cx.text(list.1));
+                    let module = Some(cx.text(list.0).to_string());
+                    self.out
+                        .incomplete
+                        .push(("unread-items", self.at, module, named));
+                    continue;
+                };
+                let path = cx.rules.module_path(cx.link, at).to_string();
+                let owner = Some(cx.text(ent.m).to_string());
+                self.found.entry(path).or_insert((self.at, owner));
+                if cx.link.sequences.contains_key(&(ent.m, ent.s)) {
+                    stack.push((ent.m, ent.s));
+                }
+            }
         }
     }
 }
