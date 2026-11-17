@@ -210,6 +210,33 @@ def load():
 }
 
 #[test]
+fn a_hook_call_keeps_its_arguments_through_an_import_alias_and_a_call_argument_keeps_its_callee() {
+    let source = r#"from app.hooks import add_hook as on_ready, add_hook
+from app.other import add_hook as unrelated
+
+def wire():
+    on_ready(handler)
+    add_hook(Provider(), key="x")
+    unrelated(other)
+    apps.get_model(Thing())
+"#;
+    let hooks = config().watching_hooks(strings(&["add_hook"]));
+    assert_eq!(
+        line_with(source, &hooks)["calls"].to_string(),
+        r#"[[0,-1,5,4,4,"on_ready",["handler"],[]],[0,-1,6,4,4,"add_hook",[{"call":"Provider","o":"Call"}],[["key",{"s":"x"}]]],[0,-1,7,4,4,"unrelated",["other"],[]],[0,-1,8,4,4,"apps.get_model",[{"o":"Call"}],[]]]"#
+    );
+    // Without the hook watch, neither alias is a watched callee.
+    assert_eq!(
+        line_with(source, &config())["calls"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    // The option is part of the record's cfg only when it is set.
+    assert_ne!(hooks.config_id(), config().config_id());
+}
+
+#[test]
 fn a_loop_over_a_literal_sequence_gives_one_call_row_per_value() {
     let source = r#"LABELS = ("app.Thing", "app.Other")
 GROWN = ["app.Thing"]

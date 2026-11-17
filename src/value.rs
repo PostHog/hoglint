@@ -400,20 +400,41 @@ impl Encoder {
         Value::opaque(class_name(expr))
     }
 
-    pub fn shallow_args(&self, call: &ast::ExprCall, src: &str) -> Vec<Value> {
+    /// The shallow arguments of a call; of a hook call (`callees`), a call argument keeps its
+    /// callee, so a reader can tell what it builds.
+    pub fn shallow_args(&self, call: &ast::ExprCall, src: &str, callees: bool) -> Vec<Value> {
         call.arguments
             .args
             .iter()
-            .map(|a| self.shallow(a, src))
+            .map(|a| self.shallow_argument(a, src, callees))
             .collect()
     }
 
-    pub fn shallow_keywords(&self, call: &ast::ExprCall, src: &str) -> Vec<Keyword> {
+    pub fn shallow_keywords(&self, call: &ast::ExprCall, src: &str, callees: bool) -> Vec<Keyword> {
         call.arguments
             .keywords
             .iter()
-            .map(|k| Keyword(keyword_name(k), self.shallow(&k.value, src)))
+            .map(|k| {
+                Keyword(
+                    keyword_name(k),
+                    self.shallow_argument(&k.value, src, callees),
+                )
+            })
             .collect()
+    }
+
+    /// SV, or for a call of a chain with `callees` set, `{"call": chain, "o": "Call"}`.
+    fn shallow_argument(&self, expr: &Expr, src: &str, callees: bool) -> Value {
+        if callees
+            && let Expr::Call(inner) = expr
+            && let Some(callee) = chain_text(&inner.func)
+        {
+            return Value::BigCall(BigCall {
+                call: Box::new(Value::Chain(callee)),
+                o: "Call",
+            });
+        }
+        self.shallow(expr, src)
     }
 
     /// Decorator form: a chain, or a call with shallow arguments.
@@ -422,9 +443,9 @@ impl Encoder {
             return self.shallow(expr, src);
         };
         Value::Call(Call {
-            args: self.shallow_args(call, src),
+            args: self.shallow_args(call, src, false),
             call: Box::new(self.shallow(&call.func, src)),
-            kw: self.shallow_keywords(call, src),
+            kw: self.shallow_keywords(call, src, false),
         })
     }
 

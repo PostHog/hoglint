@@ -93,6 +93,7 @@ class NativeAnalysis:
                 "watch_callees": sorted(needs.watch_callees),
                 "watch_prefixes": sorted(needs.watch_prefixes),
                 "watch_keys": sorted(needs.watch_keys),
+                "watch_hooks": sorted(needs.watch_hooks),
                 "lite_kinds": list(LITE_KINDS),
             }
         )

@@ -811,7 +811,7 @@ fn strings(spec: &serde_json::Value, key: &str) -> Vec<String> {
 /// Links a snapshot given as blobs: (path, blob oid, read from the working tree) in discovery
 /// order, then third-party files as (record path, file). Facts come from the fact database `db`
 /// (a SQLite file, one per facts id) or are extracted in process. `extract` is the extractor's options as JSON: first_party,
-/// kinds, watch_callees, watch_prefixes, watch_keys, lite_kinds. Returns the link and (cache
+/// kinds, watch_callees, watch_prefixes, watch_keys, watch_hooks, lite_kinds. Returns the link and (cache
 /// hits, files extracted).
 #[pyfunction]
 #[pyo3(signature = (repo, blobs, external, extract, config, db=None, threads=0))]
@@ -834,6 +834,7 @@ pub(crate) fn link_blobs(
         strings(&spec, "watch_callees"),
         strings(&spec, "watch_prefixes"),
         strings(&spec, "watch_keys"),
+        strings(&spec, "watch_hooks"),
     );
     let (full, lite) = configs(
         strings(&spec, "first_party"),

@@ -1398,6 +1398,9 @@ class SchemaBuilder:
                 self.fail(name, f"[{name}] must be a table")
                 continue
             self.check_keys(name, table, pack.allowed_keys)
+            section_problems = getattr(pack, "section_problems", None)
+            for problem in section_problems(table) if section_problems is not None else ():
+                self.fail(name, problem)
         return names
 
     def read_discovery(self) -> None:

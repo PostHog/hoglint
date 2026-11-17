@@ -126,6 +126,10 @@ pub struct ExtractConfig {
     pub watch_prefixes: Vec<String>,
     /// A dict entry whose key is one of these str constants gets a `watched` row.
     pub watch_keys: Vec<String>,
+    /// Hook names: a call whose callee's last dotted part is one, or that calls a name a file
+    /// imports one as (`from m import NAME as ALIAS`), gets a `calls` row, in which a call
+    /// argument keeps its callee (`{"call": chain, "o": "Call"}`).
+    pub watch_hooks: Vec<String>,
     pub kinds: Kinds,
 }
 
@@ -137,6 +141,7 @@ impl ExtractConfig {
             watch_callees: Vec::new(),
             watch_prefixes: Vec::new(),
             watch_keys: Vec::new(),
+            watch_hooks: Vec::new(),
             kinds: Kinds::ALL,
         }
     }
@@ -151,6 +156,16 @@ impl ExtractConfig {
         self.watch_prefixes = sorted_unique(prefixes);
         self.watch_keys = sorted_unique(keys);
         self
+    }
+
+    pub fn watching_hooks(mut self, names: Vec<String>) -> Self {
+        self.watch_hooks = sorted_unique(names);
+        self
+    }
+
+    /// Whether `name` is a hook name (`watch_hooks`).
+    pub fn is_hook(&self, name: &str) -> bool {
+        self.watch_hooks.iter().any(|hook| hook == name)
     }
 
     pub fn with_kinds(mut self, kinds: Kinds) -> Self {
@@ -174,13 +189,17 @@ impl ExtractConfig {
 
     /// Short hash of every option that changes record content: the record's `cfg`.
     pub fn config_id(&self) -> String {
-        let parts = [
+        let mut parts = vec![
             self.first_party.join(","),
             self.watch_callees.join(","),
             self.watch_prefixes.join(","),
             self.watch_keys.join(","),
             self.kinds.names().join(","),
         ];
+        // Only when set, so a config without it keeps the id it had.
+        if !self.watch_hooks.is_empty() {
+            parts.push(format!("hooks:{}", self.watch_hooks.join(",")));
+        }
         sha256_hex(parts.join("|").as_bytes())[..8].to_string()
     }
 

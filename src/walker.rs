@@ -860,13 +860,19 @@ impl<'a, 'w> Walker<'a, 'w> {
             count(&mut self.out.callees, key, l, c);
         }
         let last = callee.rsplit('.').next().unwrap_or("");
-        if !want_calls || !self.config.is_watched_callee(last) {
+        let hook = self.config.is_hook(last)
+            || (!callee.contains('.')
+                && self
+                    .bound
+                    .get(callee.as_str())
+                    .is_some_and(|binding| binding.hook_alias));
+        if !want_calls || !(self.config.is_watched_callee(last) || hook) {
             return;
         }
         let row = WatchedCall {
             site: at.site((l, c)),
-            args: self.enc.shallow_args(call, self.src),
-            kws: self.enc.shallow_keywords(call, self.src),
+            args: self.enc.shallow_args(call, self.src, hook),
+            kws: self.enc.shallow_keywords(call, self.src, hook),
             callee,
         };
         let rows = self.loop_rows(row, at.scope);

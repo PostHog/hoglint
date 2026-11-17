@@ -3,7 +3,8 @@
 Django calls `ready()` of each installed app's AppConfig once at setup, in every process, so an
 import in its body runs as surely as one at module level. The attr says so (`app_setup =
 "ready"`), and a rule reads it next to the `function_local` context. A function that `ready()`
-defines or hands on runs later, if ever: its imports sit in another scope and get no attr.
+defines runs later, if ever, often as a callback that `ready()` hands to a hook: its imports get
+`app_setup = "callback"` (one hop: not what the module they name imports).
 
 The `ready()` that runs is the first one along the AppConfig's MRO. One in a class outside the
 repo's sources has no edges to mark.
@@ -18,6 +19,7 @@ from hoglint.plugins import PackReader, Refinement
 APP_SETUP_PRODUCER = "django.app-setup@1"
 APP_SETUP = "app_setup"
 READY = "ready"
+CALLBACK = "callback"
 IMPORT = "import"
 
 
@@ -65,6 +67,9 @@ class AppSetupImports:
                 names.update(module.rpartition(".")[2] for module in self.reader.imported_modules(scope))
         out: list[Refinement] = []
         for edge in self.reader.edges_spelled(IMPORT, names) if names else ():
-            if edge.site.scope in scopes.get(edge.site.path, ()):
+            ready = scopes.get(edge.site.path, ())
+            if edge.site.scope in ready:
                 out.append(Refinement(edge.handle, attrs=((APP_SETUP, READY),)))
+            elif any(edge.site.scope.startswith(f"{scope}.") for scope in ready):
+                out.append(Refinement(edge.handle, attrs=((APP_SETUP, CALLBACK),)))
         return out

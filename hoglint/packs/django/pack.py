@@ -16,7 +16,7 @@ from hoglint.model import Edge
 from hoglint.native.graph import NativeSink
 from hoglint.packs.django.app_setup import APP_SETUP_PRODUCER, AppSetupImports
 from hoglint.packs.django.apps import AppReader, AppRegistry
-from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig
+from hoglint.packs.django.config import ALLOWED_KEYS, SECTION, DjangoPackConfig, hook_problems
 from hoglint.packs.django.installs import INSTALLS_PRODUCER, InstallsItems, InstallsProducer
 from hoglint.packs.django.loaders import AUTODISCOVERED_PRODUCER, LOADS_PRODUCER, AdminImports, AppLoads
 from hoglint.packs.django.migrations import (
@@ -198,7 +198,8 @@ class DjangoRun:
 
     def installs_items(self) -> InstallsItems:
         signals = SignalValues(self.reader, self.config.signal_bases)
-        return InstallsItems(InstallsProducer(self.reader, self.config.hooks), signals, self.files)
+        producer = InstallsProducer(self.reader, self.config.hooks, self.config.hook_callables)
+        return InstallsItems(producer, signals, self.files)
 
     def load_edges(self) -> list[Edge]:
         assert self.apps is not None
@@ -258,8 +259,12 @@ class DjangoRun:
                 ProducerStep(
                     SIGNALS_PRODUCER, frozenset({"signal"}), after=(MODELS_PRODUCER,), items=self.signal_items
                 ),
+                # It refines the import edges that run when a handed callable runs (`hook_callback`).
                 ProducerStep(
-                    INSTALLS_PRODUCER, frozenset({"installs"}), after=(APPS_PRODUCER,), items=self.installs_items
+                    INSTALLS_PRODUCER,
+                    frozenset({"installs", "import"}),
+                    after=(APPS_PRODUCER,),
+                    items=self.installs_items,
                 ),
                 ProducerStep(LOADS_PRODUCER, frozenset({"loads"}), self.load_edges, (APPS_PRODUCER,)),
                 ProducerStep(SETTINGS_PRODUCER, frozenset({"dotted-path"}), self.setting_names, (APPS_PRODUCER,)),
@@ -279,7 +284,14 @@ class DjangoPack:
     policy_file_keys = ("db_routing",)  # keys that name policy data files; see hoglint/ledger/envelope.py
 
     def fact_needs(self, section: Mapping[str, Any]) -> FactNeeds:
-        return FACT_NEEDS
+        """A declared hook's calls get `calls` rows, also under an import alias, so its `installs`
+        edges record the callables they hand on."""
+        names = frozenset(hook.rpartition(".")[2] for hook in DjangoPackConfig.from_section(section).hooks)
+        return FACT_NEEDS | FactNeeds(watch_hooks=names)
+
+    @staticmethod
+    def section_problems(section: Mapping[str, Any]) -> list[str]:
+        return hook_problems(section.get("hooks"))
 
     def path_modules(self, section: Mapping[str, Any]) -> tuple[str, ...]:
         """The settings modules: Django imports every dotted path a setting holds, wherever the
