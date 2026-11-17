@@ -6,7 +6,7 @@ taken out) changes it in memory or in a copy outside the tree, never the file in
 
 The old tools live only in the monorepo's interpreter, so their modules are imported by name.
 
-Usage: python -m hoglint.presets_py.posthog.parity.drivers <driver>
+Usage: python -m hoglint.packs.posthog.parity.drivers <driver>
 """
 
 from __future__ import annotations

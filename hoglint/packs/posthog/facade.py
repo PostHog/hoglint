@@ -24,8 +24,8 @@ from hoglint.core.records import RecordBodies, chain_last, is_class_var, sequenc
 from hoglint.core.sites import binding_surface
 from hoglint.core.symbols import TYPE_ONLY, ModuleTable, absolute_import
 from hoglint.model import LANGUAGE_PYTHON, Context, Edge, EntityId, Resolution, Site, flag
+from hoglint.packs.posthog.layout import backend_product, backend_rel
 from hoglint.plugins import PackReader
-from hoglint.presets_py.posthog.layout import backend_product, backend_rel
 
 FACADE_PRODUCER = "posthog.facade-facts@1"
 # Only the facade makes `export` edges, and its `exposes` add the slots of re-exported functions.

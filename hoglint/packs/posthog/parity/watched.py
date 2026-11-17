@@ -17,18 +17,10 @@ from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
-from hoglint.presets_py.posthog.parity import old_tools
-from hoglint.presets_py.posthog.parity.hoglint_check import HoglintFacts
-from hoglint.presets_py.posthog.parity.tach_map import SourceNames
-from hoglint.presets_py.posthog.parity.verdict import (
-    HOGLINT_ONLY,
-    OLD_ONLY,
-    Comparison,
-    Difference,
-    Effect,
-    Match,
-    Reason,
-)
+from hoglint.packs.posthog.parity import old_tools
+from hoglint.packs.posthog.parity.hoglint_check import HoglintFacts
+from hoglint.packs.posthog.parity.tach_map import SourceNames
+from hoglint.packs.posthog.parity.verdict import HOGLINT_ONLY, OLD_ONLY, Comparison, Difference, Effect, Match, Reason
 
 TOOL = "watched-inputs"
 

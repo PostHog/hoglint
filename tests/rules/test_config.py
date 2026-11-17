@@ -264,6 +264,8 @@ ledger = false
             "`classify` is the path of a classification file, not False",
         ),
         ("[discovery]\nsource_root = ['.']\n", "unknown key 'source_root'"),
+        # a pack loads one way, by `extends = ["hoglint:<name>"]`, never by its module path
+        ("[discovery]\nplugins = ['hoglint.packs.posthog']\n", "unknown key 'plugins'"),
         # a condition's name stands where an expression stands, so it may not read as anything else
         ("[conditions]\npackage = \"src.package == 'a'\"\n", "'package' is already a field"),
         ("[conditions]\nmodule = \"src.package == 'a'\"\n", "'module' is already a field, an attribute"),

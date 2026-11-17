@@ -1,8 +1,8 @@
 """Extension points: packs make edges, providers set labels, coverage adapters read outside input lists.
 
-Generic code (cli, labels, rules) only looks plugins up here by name. A pack or preset
-registers its plugins when its module is imported; `extends` and `[discovery] plugins`
-in the config name the modules to import.
+Generic code (cli, labels, rules) only looks plugins up here by name. A pack is a directory
+of `hoglint/packs/` with its `pack.toml`; it registers its plugins when its module is imported,
+and a config's `extends = ["hoglint:<name>"]` is the one way to import it.
 
 The pack API (D22): a pack reads one snapshot through a `PackReader` and writes what it makes
 into a `PackSink`. A pack never copies an edge core made: it refines it by handle.

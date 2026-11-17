@@ -369,14 +369,11 @@ def test_a_config_file_that_only_patches_a_key_predicts_everything(
 
 DRIVES_CONFIG = """
 schema = 1
+extends = ["hoglint:posthog"]
 
 [discovery]
 source_roots = ["."]
 first_party = ["posthog", "products", "common"]
-plugins = ["hoglint.presets_py.posthog"]
-
-[vocabulary]
-sections = ["posthog"]
 
 [posthog]
 """

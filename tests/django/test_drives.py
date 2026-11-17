@@ -10,8 +10,8 @@ from hoglint.core import memo
 from hoglint.core.config import CoreConfig
 from hoglint.core.harness import PRODUCER_ERROR
 from hoglint.model import Graph, Resolution
-from hoglint.presets_py.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
-from hoglint.presets_py.posthog.pack import PosthogPack
+from hoglint.packs.posthog.drives import DISPATCH_CALLS, MAX_CALL_DEPTH, DrivesProducer
+from hoglint.packs.posthog.pack import PosthogPack
 
 DISPATCH = sorted(DISPATCH_CALLS)[0]
 HELPERS = MAX_CALL_DEPTH + 1  # h1 -> ... -> h<last> -> dispatcher: one hop past the limit from h1

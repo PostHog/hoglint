@@ -12,8 +12,8 @@ from typing import Any
 
 from hoglint.core.harness import ProducerPlan, ProducerStep
 from hoglint.facts import FactNeeds
+from hoglint.packs.posthog.drives import DRIVES_PRODUCER, DriveItems, DrivesProducer
 from hoglint.plugins import PackReader, PackSink
-from hoglint.presets_py.posthog.drives import DRIVES_PRODUCER, DriveItems, DrivesProducer
 
 SECTION = "posthog"
 EDGE_KINDS = frozenset({"drives"})

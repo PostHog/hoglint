@@ -1,0 +1,7 @@
+# The PostHog pack's config: the edge kind its producer emits, and its section.
+# Settings for one repo go in that repo's `[posthog]` table.
+schema = 1
+
+[vocabulary]
+edge_kinds = ["drives"]
+sections   = ["posthog"]

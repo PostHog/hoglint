@@ -221,7 +221,6 @@ DISCOVERY_KEYS = frozenset(
         "external",
         "tests",
         "migrations",
-        "plugins",
         "dataclass_decorators",
         "frozen_dataclass_decorators",
         "dataclass_bases",
@@ -1384,9 +1383,7 @@ class SchemaBuilder:
                 continue
             pack = REGISTRY.packs.get(name)
             if pack is None:
-                self.fail(
-                    name, f"no pack registered for [{name}]; extend the pack or name its module in [discovery] plugins"
-                )
+                self.fail(name, f"no pack registered for [{name}]; extend its pack (`hoglint:<pack>`)")
                 continue
             if not isinstance(table, dict):
                 self.fail(name, f"[{name}] must be a table")

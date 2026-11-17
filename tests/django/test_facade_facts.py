@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.support import func_def
 from django_facts import FactRepo
 from hoglint.core.config import CoreConfig
-from hoglint.presets_py.posthog.facade import FacadeFacts
+from hoglint.packs.posthog.facade import FacadeFacts
 
 FACADE = {
     "products/shop/backend/facade/api.py": {

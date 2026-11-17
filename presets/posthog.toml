@@ -1,11 +1,13 @@
 # PostHog preset: fields, assignments, zones, exports, registries, rules and levels.
 # Nothing here is built into hoglint core. The repo root hoglint.toml extends it next to the
-# Django pack and adds discovery, `[django]`, providers, the ledger and outputs.
+# Django and PostHog packs (`hoglint:django`, `hoglint:posthog`) and adds discovery, `[django]`,
+# providers, the ledger and outputs.
 schema = 1
 
+# Also in the PostHog pack's pack.toml: rules here name `drives`, and a config may extend this preset alone.
 [vocabulary]
 edge_kinds = ["drives"]
-sections   = ["posthog"]  # the PostHog pack (hoglint.presets_py.posthog): drives
+sections   = ["posthog"]  # the PostHog pack (hoglint:posthog): drives
 
 # These decorators make a dataclass: its fields are slots of the class's `__init__`. The house
 # `frozen` always makes it frozen; the others do when they pass `frozen=True`.

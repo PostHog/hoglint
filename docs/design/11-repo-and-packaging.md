@@ -13,11 +13,11 @@
   The head tree is equal to the old folder's tree.
   One commit was skipped, because it changed only the monorepo's root config.
 
-**What lives where** (D15; "The PostHog pack's home"):
-- The hoglint repo: all Rust (facts, link, evaluator, the PyO3 module), the generic core and the Django pack.
+**What lives where** (D15; "Every pack in the wheel", owner, Nov 17):
+- The hoglint repo: all Rust (facts, link, evaluator, the PyO3 module), the generic core and every pack, each under `hoglint/packs/<name>/` with its `pack.toml` (Django; PostHog: `drives`, the owners provider, name lists).
   It ships one abi3 wheel.
-- A consuming monorepo: its preset, its own plugin (for PostHog: `drives`, the owners provider, name lists), the root `hoglint.toml`, and the ledger and exceptions files.
-  It pins the wheel.
+- A consuming monorepo: its preset, the root `hoglint.toml` (which extends the packs it uses, such as `hoglint:posthog`), and the ledger and exceptions files.
+  It pins the wheel and holds no hoglint Python.
 
 **Packaging** (a separate crate; owner, Nov 9):
 - A prebuilt, pinned wheel.
@@ -34,6 +34,7 @@
   `compare` can then run its base engine from the base pin.
 - Prebuilt wheel: a Rust workspace member built locally conflicted with the dev environment's older cargo.
 - The generic core and the Django pack become physically separate from PostHog's preset.
+- Every pack in the wheel: packs no longer sit in two places with two load routes, the engine id and the base pin cover each pack's code, and a run needs no repo root on `sys.path`.
 
 ## Considered and rejected
 
@@ -41,6 +42,7 @@
 |---|---|---|---|
 | A Rust crate inside the monorepo's `rust/` workspace | Toolchain conflict; coupled CI steps | Plan default; separate crate (owner, Nov 9) | `docs/research/adversarial-reviews.md` |
 | Repack everything the source repo holds when extracting history | When extracting history from a partial clone, pack only the objects the new history reaches | Architect, Nov 11 | `docs/history/decision-log-3.md` |
+| The PostHog pack as the monorepo's own plugin ("The PostHog pack's home", Nov 10) | Packs in two places, loaded two ways | Owner, Nov 17 | not published |
 
 ## Open (the owner's calls)
 
@@ -51,9 +53,9 @@
   - `requires-python` says 3.12, but `ledger/scan.py` and `store.py` import `compression.zstd` (Python 3.14);
   - `ty` reports a baseline of diagnostics on the whole tree; add none;
   - ruff's `src = ["src"]` is a workaround;
-  - the PostHog owners provider imports a monorepo package, so two tests fail in the repo's own environment until that provider moves out.
-- The PostHog preset and pack still sit in this repo, to move to the monorepo (D15).
+  - the PostHog owners provider imports a monorepo package, so two tests fail in the repo's own environment.
+- The PostHog preset still sits in this repo, to move to the monorepo (D15); the PostHog pack stays (owner, Nov 17).
 
 ## Sources
 
-`docs/history/decision-log.md` (D15); `docs/history/decision-log-2.md` (D32, "The PostHog pack's home"); `docs/history/decision-log-3.md` (D15 step 2, D68); `docs/research/adversarial-reviews.md`; not published (the history cleanup list, the build commands, the plan).
+`docs/history/decision-log.md` (D15); `docs/history/decision-log-2.md` (D32, "The PostHog pack's home"); `docs/history/decision-log-3.md` (D15 step 2, D68); `docs/research/adversarial-reviews.md`; not published (the history cleanup list, the build commands, the plan; "Every pack in the wheel", Nov 17).
