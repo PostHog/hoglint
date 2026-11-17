@@ -239,10 +239,19 @@ class StoredFindings:
         allowed = FindingStatus.ALLOWED.value
         return {(row[self.RULE], tuple(row[self.IDENTITY])) for row in self.rows if row[self.STATUS] == allowed}
 
-    def open_rows(self) -> Iterator[tuple[FindingStatus, str, str, str]]:
-        """(status, rule, owner module, target) of every row no exception allows: what `query`
-        groups by. The target is the first witness's first target, else the identity's first
-        column, else "?"."""
+    def source_module(self, row: Any, source_columns: dict[str, int]) -> str:
+        """The module a row's line comes from: its identity's `src.module` column when its rule
+        has one (`source_columns`: rule -> that column), else its owner module; empty for none."""
+        column = source_columns.get(row[self.RULE])
+        identity = row[self.IDENTITY]
+        if column is not None and column < len(identity):
+            return identity[column]
+        return row[self.OWNER]
+
+    def open_rows(self, source_columns: dict[str, int]) -> Iterator[tuple[FindingStatus, str, str, str, str]]:
+        """(status, rule, owner module, target, source module) of every row no exception allows:
+        what `query` groups by. The target is the first witness's first target, else the
+        identity's first column, else "?"."""
         allowed = FindingStatus.ALLOWED.value
         targets = self.WITNESS_TARGETS
         for row in self.rows:
@@ -252,7 +261,8 @@ class StoredFindings:
             identity = row[self.IDENTITY]
             first = identity[0] if identity else "?"
             target = next((witness[targets][0] for witness in row[self.WITNESSES] if witness[targets]), first)
-            yield FindingStatus(status), row[self.RULE], row[self.OWNER], target
+            source = self.source_module(row, source_columns)
+            yield FindingStatus(status), row[self.RULE], row[self.OWNER], target, source
 
     def to_json(self) -> list[Any]:
         return self.rows

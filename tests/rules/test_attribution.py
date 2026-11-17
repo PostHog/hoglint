@@ -682,6 +682,52 @@ def test_query_reads_owners_from_the_owners_files_not_from_the_summary(tmp_path:
     assert "@team-b  " in owned and "@team-a" not in owned
 
 
+PACKAGED_CONFIG = (
+    CONFIG.replace('first_party = ["products", "core"]', 'first_party = ["products", "core", "scripts"]').replace(
+        'growth_key = ["dst.symbol"]', 'growth_key = ["dst.symbol", "src.package"]'
+    )
+    + """
+[[assign]]
+match = "products/alerts/digest.py"
+set = { package = "reports", tier = "product" }
+override = true
+
+[rules.billing-logic-uses]
+primitive = "entrypoint"
+kinds = ["import"]
+select = "dst.package == 'billing'"
+identity = "module-pair"
+report = "advisory"
+ledger = false
+"""
+)
+
+
+@needs_extractor
+def test_query_groups_by_the_package_label_of_the_source_module(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    use = "from products.billing.logic import charge\n"
+    write_files(repo, {**FILES, "hoglint.toml": PACKAGED_CONFIG, "products/alerts/digest.py": use})
+    git_in(repo, "init", "-q")
+    assert hoglint(repo, "check", "--write-ledger", "--record-growth").returncode == 0
+    write_files(repo, {"scripts/__init__.py": "", "scripts/seed.py": use})
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    # digest.py sits in alerts, and the override moves it to reports; scripts has no package.
+    # billing's own uses come from no ledgered line, so only the finding labels their modules.
+    groups = [
+        {"key": "(no package)", "counts": {"new": {"billing-logic-uses": 1, "public-surface": 1}}},
+        {"key": "alerts", "counts": {"accepted": {"public-surface": 1}, "new": {"billing-logic-uses": 1}}},
+        {"key": "billing", "counts": {"new": {"billing-logic-uses": 2}}},
+        {"key": "reports", "counts": {"accepted": {"public-surface": 1}, "new": {"billing-logic-uses": 1}}},
+    ]
+    found = hoglint(repo, "query", "--by", "package", "--json").stdout
+    assert found.endswith("}\n") and found.count("\n") == 1
+    assert json.loads(found) == {"by": "package", "groups": groups}
+    text = hoglint(repo, "query", "--by", "package").stdout
+    assert "reports  2  (accepted:public-surface 1, new:billing-logic-uses 1)\n" in text
+
+
 @needs_extractor
 def test_a_file_no_rule_reads_never_keeps_a_staged_summary_from_the_next_commit(tmp_path: Path) -> None:
     repo = tmp_path / "repo"

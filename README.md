@@ -36,7 +36,7 @@ The config can extend the built-in Django pack (`extends = ["hoglint:django"]`) 
 | `hoglint ledger shrink` | Removes stale ledger lines. It never adds a line. |
 | `hoglint compare --base <ref>` | Checks a pull request against the merge base of `<ref>`. |
 | `hoglint explain <rule>` | Prints the page of a rule. It also explains the labels of a path or module. |
-| `hoglint query --by owners` | Lists open findings and accepted debt, grouped by owners or by target. |
+| `hoglint query --by owners` | Lists open findings and accepted debt, grouped by owners, by target or by package (`--by package`, the package label of the module a line comes from). `--json` prints the counts per group, status and rule as one JSON object. |
 | `hoglint map` | Prints the dependents map of the repo's Python files. It runs no rule. |
 | `hoglint --version` | Prints the installed version. |
 

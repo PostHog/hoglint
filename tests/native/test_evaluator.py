@@ -27,6 +27,7 @@ from hoglint.config.schema import EVERY_RULE_READS, RULE_KEYS, unread_keys
 from hoglint.core.harness import Output, ProducerPlan, ProducerStep
 from hoglint.labels import Labeler
 from hoglint.ledger.errors import EngineError
+from hoglint.ledger.records import StoredFindings
 from hoglint.ledger.scan import group_triples, source_labels
 from hoglint.model import Context, Edge, EntityId, Graph, Resolution, Site
 from hoglint.native.plan import RulePlan
@@ -2031,7 +2032,7 @@ def test_the_scan_names_a_set_label_by_its_sorted_items(world: World) -> None:
     rules = rule_table("crossing", {**crossing, "growth_key": ["src.owners"]}) + '\n[roles]\ngroup = "owners"\n'
     result = Engine(world.config(rules, base), world.graph, world.repo).evaluate()
     owners = "frozenset({" + ", ".join(repr(owner) for owner in sorted(OWNERS)) + "})"
-    assert owners in source_labels(result, {})["owners"].values()
+    assert owners in source_labels(result, {}, StoredFindings())["owners"].values()
     assert owners in {group for src, dst, _, _ in group_triples(result, world.graph) for group in (src, dst)}
 
 

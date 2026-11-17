@@ -64,7 +64,7 @@ from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
 from hoglint.ledger.obligations import attribute
-from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary
+from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, source_columns
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, Graph, IncompleteCause
 from hoglint.native.bridge import engine_errors
@@ -1072,17 +1072,39 @@ class Commands:
                 sys.stdout.write(f"finding  [{finding.status.value}] {finding.rule} {' '.join(finding.identity)}\n")
         return 0
 
-    def query(self, by: str) -> int:
+    def query(self, by: str, as_json: bool = False) -> int:
         summary, config, files_root = self.current_summary()
         owners = ReadTimeOwners(config, summary.modules, files_root) if by == "owners" else None
-        counts: dict[str, Counter[str]] = {}
-        for status, rule, owner, target in summary.findings.open_rows():
-            keys = (owners.of_module(owner) or ("(no owner)",)) if owners is not None else (target,)
+        # The package label of each row's source module, as the scan labelled it for growth keys.
+        packages = summary.labels.get("package")
+        if by == "package" and packages is None:
+            raise EngineError(
+                "query --by package: the scan keeps no package labels; no group role or growth key reads `package`"
+            )
+        counts: dict[str, Counter[tuple[str, str]]] = {}
+        for status, rule, owner, target, source in summary.findings.open_rows(source_columns(config.rules.values())):
+            if owners is not None:
+                keys = owners.of_module(owner) or ("(no owner)",)
+            elif packages is not None and by == "package":
+                if source and source not in packages:
+                    raise EngineError(f"query --by package: the scan keeps no package label of {source}")
+                keys = (packages.get(source) or "(no package)",)
+            else:
+                keys = (target,)
             for key in keys:
-                counts.setdefault(key, Counter())[f"{status.value}:{rule}"] += 1
+                counts.setdefault(key, Counter())[(status.value, rule)] += 1
+        if as_json:
+            groups = []
+            for key in sorted(counts):
+                by_status: dict[str, dict[str, int]] = {}
+                for (status, rule), count in sorted(counts[key].items()):
+                    by_status.setdefault(status, {})[rule] = count
+                groups.append({"key": key, "counts": by_status})
+            sys.stdout.write(json.dumps({"by": by, "groups": groups}) + "\n")
+            return 0
         for key in sorted(counts, key=lambda k: (-sum(counts[k].values()), k)):
             total = sum(counts[key].values())
-            detail = ", ".join(f"{name} {count}" for name, count in counts[key].most_common())
+            detail = ", ".join(f"{status}:{rule} {count}" for (status, rule), count in counts[key].most_common())
             sys.stdout.write(f"{key}  {total}  ({detail})\n")
         return 0
 
@@ -1352,8 +1374,14 @@ def parser() -> argparse.ArgumentParser:
     explain.add_argument("target")
     explain.set_defaults(handler=lambda commands, args: commands.explain(args.target))
     query = sub.add_parser("query", help="open findings and accepted debt, grouped")
-    query.add_argument("--by", choices=("owners", "target"), required=True)
-    query.set_defaults(handler=lambda commands, args: commands.query(args.by))
+    query.add_argument(
+        "--by",
+        choices=("owners", "target", "package"),
+        required=True,
+        help="owners: of the owner module; target: the coupling's target; package: the package label of the line's source module",
+    )
+    query.add_argument("--json", action="store_true", help="print one JSON object: rows per group, status and rule")
+    query.set_defaults(handler=lambda commands, args: commands.query(args.by, args.json))
     compare = sub.add_parser("compare", help="PR mode against the merge base of a ref")
     compare.add_argument("--base", required=True)
     add_view_arguments(compare)
