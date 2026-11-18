@@ -147,6 +147,8 @@ class CoreConfig:
       they hand out from other modules.
     - export_surfaces: the files of every export. Core records what each of them hands out by
       import (`Graph.hand_outs`), so every rule reads one notion of what a module exports.
+    - registries: (file glob, attribute) of each `[registries]` entry, in config order. Core reads
+      what the attribute's value registers in each such file, as it reads a module-level list.
     """
 
     source_roots: tuple[str, ...] = (".",)
@@ -165,6 +167,7 @@ class CoreConfig:
     reference_names: tuple[str, ...] = ()
     contract_surfaces: tuple[ExportPaths, ...] = ()
     export_surfaces: tuple[ExportPaths, ...] = ()
+    registries: tuple[tuple[str, str], ...] = ()
     include_hidden: bool = False
 
     @classmethod
@@ -174,6 +177,7 @@ class CoreConfig:
         contract_surfaces: tuple[ExportPaths, ...] = (),
         export_surfaces: tuple[ExportPaths, ...] = (),
         path_modules: tuple[str, ...] = (),
+        registries: tuple[tuple[str, str], ...] = (),
     ) -> CoreConfig:
         """A config's `[discovery]`, parsed: a bare string is a list of one name, and a key it
         does not set keeps core's default."""
@@ -195,7 +199,11 @@ class CoreConfig:
             if key in discovery:
                 fields[field_name] = as_tuple(discovery[key])
         return cls(
-            **fields, contract_surfaces=contract_surfaces, export_surfaces=export_surfaces, path_modules=path_modules
+            **fields,
+            contract_surfaces=contract_surfaces,
+            export_surfaces=export_surfaces,
+            path_modules=path_modules,
+            registries=registries,
         )
 
     @cached_property

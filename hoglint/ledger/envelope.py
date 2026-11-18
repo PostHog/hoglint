@@ -366,6 +366,8 @@ class ConfigInputs:
         exports = config.exports.values()
         self.contract_surfaces = tuple(spec.files for spec in exports if config.shapes[spec.shape].signatures)
         self.export_surfaces = tuple(spec.files for spec in exports)
+        # The link reads what each registry's attribute registers in the registry's files.
+        self.registries = tuple((spec.module, spec.attribute) for spec in config.registries.values())
 
     @staticmethod
     def of(config: Config) -> ConfigInputs:
@@ -377,20 +379,22 @@ class ConfigInputs:
     def key(self, sections: Mapping[str, Any] | None = None) -> str:
         """The inputs as one canonical text, which the graph key holds. `sections` stands in for
         the config's own: the pack memo names each policy file there by the bytes a pack reads."""
-        return canonical(
-            {
-                "sections": self.sections if sections is None else sections,
-                "contract_surfaces": [(surface.within, surface.paths) for surface in self.contract_surfaces],
-                "export_surfaces": [(surface.within, surface.paths) for surface in self.export_surfaces],
-            }
-        )
+        inputs: dict[str, Any] = {
+            "sections": self.sections if sections is None else sections,
+            "contract_surfaces": [(surface.within, surface.paths) for surface in self.contract_surfaces],
+            "export_surfaces": [(surface.within, surface.paths) for surface in self.export_surfaces],
+        }
+        # Run summaries key on this text: a config with no registries keeps the text it had.
+        if self.registries:
+            inputs["registries"] = self.registries
+        return canonical(inputs)
 
     @cached_property
     def core(self) -> CoreConfig:
-        """`[discovery]`, the surfaces and the packs' path modules as core reads them, parsed
-        once: the link and the rules read this one value."""
+        """`[discovery]`, the surfaces, the packs' path modules and the registries as core reads
+        them, parsed once: the link and the rules read this one value."""
         return CoreConfig.from_discovery(
-            self.config.discovery, self.contract_surfaces, self.export_surfaces, self.path_modules()
+            self.config.discovery, self.contract_surfaces, self.export_surfaces, self.path_modules(), self.registries
         )
 
     def path_modules(self) -> tuple[str, ...]:

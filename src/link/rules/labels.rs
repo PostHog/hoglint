@@ -310,6 +310,8 @@ pub struct Registry {
     pub name: String,
     glob: Glob,
     loader_module: String,
+    /// The attribute the loader reads in each file.
+    pub attribute: String,
     pub lifecycle: String,
 }
 
@@ -322,6 +324,7 @@ impl Registry {
                 .loader
                 .rsplit_once('.')
                 .map_or(String::new(), |(head, _)| head.to_string()),
+            attribute: plan.attribute.clone(),
             lifecycle: plan.lifecycle.clone(),
         })
     }

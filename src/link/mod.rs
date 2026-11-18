@@ -204,6 +204,10 @@ pub struct LinkConfig {
     /// The files of every export.
     #[serde(default)]
     pub export_surfaces: Vec<SurfaceConfig>,
+    /// Each `[registries]` entry's file and attribute: the link reads what the attribute's value
+    /// registers (`Producers::sequences`).
+    #[serde(default)]
+    pub registries: Vec<RegistryConfig>,
     /// Python's `dir(builtins)` of the interpreter that runs the packs.
     #[serde(default)]
     pub builtins: Vec<String>,
@@ -216,6 +220,14 @@ pub struct LinkConfig {
     /// interface (`trace`). Off in a normal check.
     #[serde(default)]
     pub trace: bool,
+}
+
+/// One registry: the files a loader imports by path (`module`, a glob) and the attribute it
+/// reads there.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RegistryConfig {
+    pub module: String,
+    pub attribute: String,
 }
 
 /// One contract surface: an export's `within` and `paths` (hoglint/globs.py `ExportPaths`).

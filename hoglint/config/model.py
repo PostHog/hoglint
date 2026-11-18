@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from hoglint.globs import ExportPaths
 from hoglint.selectors import FieldType, Selector
@@ -170,8 +170,9 @@ class ProviderSpec:
 @dataclass(frozen=True, slots=True)
 class CoverSpec:
     """One thing a coverage rule needs covered: another rule's column, an edge selection read at
-    an endpoint (`src`, `dst`, `surface`), or an entity selection over modules (`module`) or over
-    the locations they stand in (`location`)."""
+    an endpoint (`src`, `dst`, `surface`, `chain`, `items`), or an entity selection over modules
+    (`module`), over the locations they stand in (`location`), or over what the attribute their
+    registry's loader reads registers (`registered`)."""
 
     text: str
     rule: str = ""
@@ -180,6 +181,13 @@ class CoverSpec:
     endpoint: str = ""
     # Why the cover needs a path, in words, as a finding's message names it.
     why: str = ""
+
+    ENTITY_ENDPOINTS: ClassVar[tuple[str, ...]] = ("module", "location", "registered")
+
+    @property
+    def entity(self) -> bool:
+        """Whether its selection is over modules, not edges."""
+        return self.endpoint in self.ENTITY_ENDPOINTS
 
 
 # How safe a way out of a finding is: `safe` cannot change behavior, `care` is a code change to

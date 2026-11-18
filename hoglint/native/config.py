@@ -35,6 +35,7 @@ def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping
         "export_surfaces": [
             {"within": surface.within, "paths": list(surface.paths)} for surface in config.export_surfaces
         ],
+        "registries": [{"module": module, "attribute": attribute} for module, attribute in config.registries],
         "builtins": sorted(dir(builtins)),
         "external": sorted(external.items()),
         "analyzed": list(analyzed),

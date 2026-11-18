@@ -2,12 +2,12 @@
 //! edges. hoglint/core/catalog.py names the edge kinds and fact kinds of each.
 
 use super::LinkConfig;
-use super::facts::{Argument, Assign, COPY_CALLEES, Def, Import, Op, V};
+use super::facts::{Argument, Assign, COPY_CALLEES, Def, Import, Op, V, value as value_tree};
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
     Binding, CLASS, Core, Ent, FUNC, HitId, HitKind, OrderedMap, import_surface, module_assigns,
 };
-use super::rules::glob::ExportPaths;
+use super::rules::glob::{ExportPaths, Glob};
 use super::scope::{Lookup, LookupNames, Res, Resolved, Scope, UNRESOLVED, ctx};
 use super::surface::{
     ALL_CLAUSE, HandOut, Handed, HandedOut, LAZY_CLAUSE, annotated_constant, star_names,
@@ -15,6 +15,7 @@ use super::surface::{
 use super::trace::{Kind, Memo};
 use crate::path::listed;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde_json::Value as J;
 use std::borrow::Cow;
 use std::rc::Rc;
 
@@ -317,6 +318,8 @@ pub struct Producing {
     pub contract_surfaces: Vec<ExportPaths>,
     /// The files of every export.
     pub export_surfaces: Vec<ExportPaths>,
+    /// Each registry's files and the attribute its loader reads there, in config order.
+    pub registries: Vec<(Glob, Sid)>,
     k: Keys,
 }
 
@@ -389,6 +392,14 @@ struct Keys {
 }
 
 impl Producing {
+    /// The attribute the first registry whose files match `path` reads there.
+    fn registry_attribute(&self, path: &str) -> Option<Sid> {
+        self.registries
+            .iter()
+            .find(|(glob, _)| glob.is_match(path))
+            .map(|(_, attribute)| *attribute)
+    }
+
     /// (export, root) of every contract surface that covers a path.
     fn surface_roots(&self, path: &str) -> Vec<(usize, String)> {
         self.contract_surfaces
@@ -508,6 +519,15 @@ impl Producing {
                 .collect(),
             contract_surfaces,
             export_surfaces,
+            // A glob that does not compile fails the rules' plan, which compiles the same one.
+            registries: config
+                .registries
+                .iter()
+                .filter_map(|registry| {
+                    let glob = Glob::new(&registry.module).ok()?;
+                    Some((glob, it.intern(&registry.attribute)))
+                })
+                .collect(),
             k,
         }
     }
@@ -1224,6 +1244,8 @@ impl Producers<'_> {
     /// another name. `+=` at module level adds items. A second binding, a binding in a block or
     /// another augmented assignment makes the name unread (a None item), and so does an item that
     /// is no name, call, constant or literal of those.
+    /// In a registry's file, the attribute its loader reads is a declaration, whatever it is bound
+    /// to (`declaration_items`).
     fn sequences(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
@@ -1232,51 +1254,157 @@ impl Producers<'_> {
             return;
         }
         let module = self.scopes[owner].module;
-        let mut bindings: FxHashMap<Sid, Vec<&Assign>> = FxHashMap::default();
-        for row in record
-            .assigns
-            .iter()
-            .filter(|row| row.s == -1 && row.value.is_some())
-        {
+        let declared = self.settings.registry_attribute(&record.path);
+        let mut bindings: FxHashMap<Sid, Vec<(usize, &Assign)>> = FxHashMap::default();
+        for (at, row) in record.assigns.iter().enumerate() {
+            if row.s != -1 || row.value.is_none() {
+                continue;
+            }
             for target in &row.targets {
                 if let V::Chain(name) = target
                     && !self.core.it.s(*name).contains('.')
                 {
-                    bindings.entry(*name).or_default().push(row);
+                    bindings.entry(*name).or_default().push((at, row));
                 }
             }
+        }
+        if let Some(attribute) = declared
+            && !bindings.contains_key(&attribute)
+        {
+            self.imported_declaration(owner, module, attribute);
         }
         let mut names: Vec<Sid> = bindings.keys().copied().collect();
         names.sort_unstable();
         for name in names {
             let rows = &bindings[&name];
-            if !rows.iter().any(|row| {
-                row.value
-                    .as_ref()
-                    .is_some_and(|value| self.is_sequence(value))
-            }) {
+            let declaration = declared == Some(name);
+            if !declaration
+                && !rows.iter().any(|(_, row)| {
+                    row.value
+                        .as_ref()
+                        .is_some_and(|value| self.is_sequence(value))
+                })
+            {
                 continue;
             }
             let assigned = rows
                 .iter()
-                .filter(|row| matches!(row.op, Op::Assign | Op::Annotated))
+                .filter(|(_, row)| matches!(row.op, Op::Assign | Op::Annotated))
                 .count();
-            let plain = |row: &&Assign| {
+            let plain = |(_, row): &(usize, &Assign)| {
                 row.f == 0 && matches!(row.op, Op::Assign | Op::Annotated | Op::AddAssign)
             };
             let mut items: Vec<Option<Ent>> = Vec::new();
             if assigned != 1 || !rows.iter().all(plain) {
                 items.push(None);
             }
-            for row in rows {
-                if let Some(value) = row.value.as_ref() {
-                    self.sequence_items(owner, module, value, row.l, &mut items);
+            if declaration {
+                self.declaration_rows(owner, module, file, rows, &mut items);
+            } else {
+                for (_, row) in rows {
+                    if let Some(value) = row.value.as_ref() {
+                        self.sequence_items(owner, module, value, row.l, &mut items);
+                    }
                 }
             }
             if !items.is_empty() {
                 self.sequences.insert((module, name), items);
             }
         }
+    }
+
+    /// A registry's attribute that its file binds by an import: the value is built where it is
+    /// declared, which no loader reads as a declaration, so it is unread. One the file does not
+    /// bind, or binds by a def or a class, registers no value.
+    fn imported_declaration(&mut self, owner: usize, module: Sid, attribute: Sid) {
+        let (_, resolved) = self.lookup_value(owner, &V::Chain(attribute), -1, u32::MAX);
+        let elsewhere = resolved.target.is_some_and(|target| target.m != module);
+        if matches!(resolved.res, Res::Resolved) && elsewhere {
+            self.sequences.insert((module, attribute), vec![None]);
+        }
+    }
+
+    /// The items of the rows that bind a registry's attribute, read from the record's JSON text,
+    /// which keeps every argument of a call; a text that cannot be read is an unread item.
+    fn declaration_rows(
+        &mut self,
+        owner: usize,
+        module: Sid,
+        file: usize,
+        rows: &[(usize, &Assign)],
+        out: &mut Vec<Option<Ent>>,
+    ) {
+        let facts = self.core.facts.clone();
+        let parsed = match facts.raw(file, "assigns") {
+            Ok(Some(text)) => serde_json::from_slice::<J>(&text).ok(),
+            _ => None,
+        };
+        for (at, row) in rows {
+            match parsed.as_ref().and_then(|rows| rows.get(*at)?.get("v")) {
+                Some(value) => self.declaration_items(owner, module, value, row.l, out),
+                None => out.push(None),
+            }
+        }
+    }
+
+    /// The items of one value of a declaration a registry's loader reads, as the extractor wrote
+    /// it: as a list's items (`sequence_items`), except that a call also holds what its arguments
+    /// name, so a record the declaration builds (`Registration(queues=(Queue(workflows=W),))`)
+    /// holds the items of `W`. A call whose arguments the extractor left out (over its budget) is
+    /// unread.
+    fn declaration_items(
+        &mut self,
+        owner: usize,
+        module: Sid,
+        json: &J,
+        line: u32,
+        out: &mut Vec<Option<Ent>>,
+    ) {
+        let J::Object(map) = json else {
+            let value = value_tree(&mut self.core.it, json);
+            self.sequence_items(owner, module, &value, line, out);
+            return;
+        };
+        if map.contains_key("call") {
+            let call = value_tree(&mut self.core.it, json);
+            self.sequence_items(owner, module, &call, line, out);
+            if self.copied(&call).is_some() {
+                return;
+            }
+            if map.contains_key("o") {
+                out.push(None);
+                return;
+            }
+            let args = map.get("args").and_then(J::as_array).into_iter().flatten();
+            let keywords = map.get("kw").and_then(J::as_array).into_iter().flatten();
+            let keyword_values = keywords.filter_map(|pair| pair.as_array()?.get(1));
+            for arg in args.chain(keyword_values) {
+                self.declaration_items(owner, module, arg, line, out);
+            }
+            return;
+        }
+        for key in ["list", "tuple", "set"] {
+            if let Some(J::Array(items)) = map.get(key) {
+                for item in items {
+                    self.declaration_items(owner, module, item, line, out);
+                }
+                return;
+            }
+        }
+        if let Some(J::Array(pairs)) = map.get("dict") {
+            for pair in pairs.iter().filter_map(J::as_array) {
+                for part in pair.iter().filter(|part| !part.is_null()) {
+                    self.declaration_items(owner, module, part, line, out);
+                }
+            }
+            return;
+        }
+        if let Some(inner) = map.get("star") {
+            self.declaration_items(owner, module, inner, line, out);
+            return;
+        }
+        let value = value_tree(&mut self.core.it, json);
+        self.sequence_items(owner, module, &value, line, out);
     }
 
     /// The one argument of a call of `sorted`, `list`, `tuple` or `set`: a copy of a sequence.

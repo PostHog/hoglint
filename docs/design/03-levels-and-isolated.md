@@ -99,6 +99,13 @@ A repo can drop its hand-kept input lists: `hoglint watched` derives each group'
   A call item is its callee's and the list module's.
   An item it cannot read (a subscript, an unresolved name), a second binding of the name, or a binding in a block is an incomplete item of the list's module, so the list's product cannot be isolated.
   The table lives on the link next to the hand-outs and outlives the fact rows; it is no edge, so no table moves.
+- **The declaration reading** (the architect, Nov 18): what a registry's loader reads is registered like a list core imports by name (`<entity selector>: registered`, for the modules the selection keeps).
+  In a registry's file the link reads the attribute the registry names (`[registries.<name>] attribute`) as a declaration: as a list's items, except that a call also holds what its arguments name, so the records a declaration builds hold their items (`TEMPORAL = TemporalRegistration(queues=(QueueBinding(workflows=WORKFLOWS),), schedules=(reconcile,))` registers the items of `WORKFLOWS` and `reconcile`).
+  The call's callee counts as an item, as in a list; core's record classes (`TemporalRegistration`, `QueueBinding`) are core's files, so no product watches them.
+  It reads the arguments from the record's JSON text, the one place the link does, because the link's value trees keep no call's arguments.
+  The attribute bound by an import is unread (its value is built where no loader reads it as a declaration); a file that does not bind it, or binds it by a def or a class, registers no value.
+  The preset declares `[registries.temporal]` (`products/{product}/backend/facade/temporal.py`, `TEMPORAL`, read by `posthog.products.load_product_modules` at worker start).
+  The derived form selects that registry only (`registry == 'temporal'`): the admin console's `console` attribute is the imported registry object, which this reading would call unread.
 - **Hook callback bodies** (the architect's pick 2): a call of a declared hook records the callables it hands on, the `callback` attr of its `installs` edge, as the decorator form always did.
   The Django pack asks the extractor for `calls` rows of the declared hooks' names (`watch_hooks`), also where a file imports a hook under another name, and in those rows a call argument keeps its callee.
   A `[django] hooks` entry is a qualified name, or a table `{ name = "...", callables = ["hook", 1] }` that names the arguments that hand the hook a callable, by keyword and position (the architect, Nov 17).

@@ -140,7 +140,13 @@ class RulePlan:
                 ],
             },
             "registries": [
-                {"name": spec.name, "module": spec.module, "loader": spec.loader, "lifecycle": spec.lifecycle}
+                {
+                    "name": spec.name,
+                    "module": spec.module,
+                    "loader": spec.loader,
+                    "attribute": spec.attribute,
+                    "lifecycle": spec.lifecycle,
+                }
                 for spec in config.registries.values()
             ],
             "exports": [

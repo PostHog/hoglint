@@ -302,7 +302,7 @@ class CoveragePrimitive(EntityRule):
         producer of one of them leaves the rule's paths short, so the rule is incomplete."""
         out: set[str] = set()
         for cover in spec.covers:
-            if cover.rule or cover.endpoint in ("module", "location"):
+            if cover.rule or cover.entity:
                 continue
             kinds, _, _ = cls.split(cover)
             if kinds is None:

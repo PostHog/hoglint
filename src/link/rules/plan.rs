@@ -107,6 +107,7 @@ pub struct RegistryPlan {
     pub name: String,
     pub module: String,
     pub loader: String,
+    pub attribute: String,
     pub lifecycle: String,
 }
 
@@ -201,8 +202,8 @@ pub struct CoverPlan {
     /// conjunct of an entity selection is in `rest`.
     pub by_edge: Option<NodePlan>,
     pub rest: Vec<NodePlan>,
-    /// src, dst, surface or chain for an edge selection, module or location for an entity
-    /// selection.
+    /// src, dst, surface, chain or items for an edge selection, module, location or registered
+    /// for an entity selection.
     pub endpoint: String,
 }
 

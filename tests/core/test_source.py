@@ -173,6 +173,19 @@ def test_the_graph_key_text_of_a_fixed_config_does_not_move(tmp_path: Path) -> N
     assert GraphSource.key(Path("/repo"), load_config(tmp_path), True) == ("/repo:staged", PINNED_KEY)
 
 
+def test_a_registrys_attribute_is_in_the_graph_key(tmp_path: Path) -> None:
+    """The link reads what each registry's attribute registers, so a graph built under one
+    registry is no answer under another."""
+    keys = []
+    for attribute in ("TEMPORAL", "WORKFLOWS"):
+        registry = (
+            f'\n[registries.jobs]\nloader = "pkg.load"\nmodule = "app/{{name}}/jobs.py"\nattribute = "{attribute}"\n'
+        )
+        write_files(tmp_path / attribute, {"hoglint.toml": PINNED_CONFIG + registry})
+        keys.append(GraphSource.key(Path("/repo"), load_config(tmp_path / attribute), True)[1])
+    assert keys[0] != keys[1]
+
+
 def test_a_bare_string_and_a_list_in_discovery_parse_to_one_value_on_every_side(tmp_path: Path) -> None:
     parsed = []
     for name, value in (("bare", '"pkg.frozen"'), ("listed", '["pkg.frozen"]')):

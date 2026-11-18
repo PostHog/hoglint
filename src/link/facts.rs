@@ -242,8 +242,9 @@ impl FileFacts {
     }
 }
 
-/// Reads one record's JSON text, by the record's place in fact order, when something asks:
-/// the link itself never reads it, and no reader holds the whole snapshot's text.
+/// Reads one record's JSON text, by the record's place in fact order, when something asks: the
+/// link itself reads it only for a registry's declaration (`Producers::declaration_rows`), and no
+/// reader holds the whole snapshot's text.
 pub trait RecordText: Send + Sync {
     fn record(&self, file: usize) -> Result<Vec<u8>, String>;
 

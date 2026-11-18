@@ -2,8 +2,9 @@
 level claimed by `isolated: true` in a product's `product.yaml`, its structural zones named once,
 and the two coverage rules with no inputs, so they record the paths they need and judge none. It
 adds the covers the derived set needs: the modules that define the items of a list a registration
-point registers, the imports a hook callback or a function `ready()` defines makes, and an unknown
-for a hook call whose callables cannot be told.
+point registers, and of what a declaration a registry loads registers, the imports a hook callback
+or a function `ready()` defines makes, and an unknown for a hook call whose callables cannot be
+told.
 
 The model repository's watched cases and the real-size run lay this form over the preset with
 `derive_preset`. Each edit names the exact text it replaces, so a preset that moved fails loudly.
@@ -25,6 +26,8 @@ DERIVED_COVERS = (
     "  { cover = \"edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and "
     "src.wiring == 'registration' and crosses-package and dst.tier == 'product': items\", "
     'why = "core registers an item of a list, and this file defines the item" },\n'
+    "  { cover = \"registry == 'temporal' and tier == 'product': registered\", "
+    'why = "core loads a declaration by name, and this file defines what it registers" },\n'
     "  { cover = \"edge.kind == 'import' and (edge.hook_callback != none or edge.app_setup == 'callback') and "
     "'test' not in edge.context and 'type_only' not in edge.context and dst.package == src.package: chain\", "
     'why = "a hook callback, or a function that ready() defines, imports this module" },\n'

@@ -181,6 +181,80 @@ def test_the_module_that_builds_a_registered_list_is_watched(
     assert "backend/facade/temporal.py" in files
 
 
+DECLARATION_TREE = {
+    "posthog/temporal/common/registration.py": (
+        "class QueueBinding:\n"
+        "    def __init__(self, queue_setting, workflows=(), activities=()):\n"
+        "        self.queue_setting = queue_setting\n\n\n"
+        "class TemporalRegistration:\n"
+        "    def __init__(self, queues=(), schedules=(), log_sources=()):\n"
+        "        self.queues = queues\n"
+    ),
+    "products/shelf/backend/facade/temporal.py": (
+        "from posthog.temporal.common.registration import QueueBinding, TemporalRegistration\n\n"
+        "from products.shelf.backend.temporal import ACTIVITIES, WORKFLOWS\n"
+        "from products.shelf.backend.temporal.logs import resolve_log_source\n"
+        "from products.shelf.backend.temporal.schedule import reconcile_restock_schedule\n\n"
+        "TEMPORAL = TemporalRegistration(\n"
+        '    queues=(QueueBinding(queue_setting="SHELF_TASK_QUEUE", workflows=WORKFLOWS, activities=ACTIVITIES),),\n'
+        "    schedules=(reconcile_restock_schedule,),\n"
+        "    log_sources=(resolve_log_source,),\n"
+        ")\n"
+    ),
+    "products/shelf/backend/temporal/__init__.py": (
+        "from products.shelf.backend.temporal.restock import RestockShelfWorkflow, restock_activity\n\n"
+        "WORKFLOWS = (RestockShelfWorkflow,)\n"
+        "ACTIVITIES = (restock_activity,)\n"
+    ),
+    "products/shelf/backend/temporal/restock.py": (
+        "from products.shelf.backend.temporal.restock_helpers import batch\n\n\n"
+        "class RestockShelfWorkflow:\n    def run(self, shelf_id):\n        return batch(shelf_id)\n\n\n"
+        "def restock_activity(shelf_id):\n    return shelf_id\n"
+    ),
+    "products/shelf/backend/temporal/restock_helpers.py": "def batch(shelf_id):\n    return [shelf_id]\n",
+    "products/shelf/backend/temporal/schedule.py": "async def reconcile_restock_schedule(client):\n    return client\n",
+    "products/shelf/backend/temporal/logs.py": "def resolve_log_source(workflow_type, workflow_id):\n    return None\n",
+    # A declaration bound by an import is built where no loader reads it as one.
+    "products/racks/backend/temporal/registration.py": (
+        "from posthog.temporal.common.registration import TemporalRegistration\n\nTEMPORAL = TemporalRegistration()\n"
+    ),
+    "products/racks/backend/facade/temporal.py": (
+        "from products.racks.backend.temporal import WORKFLOWS\n"
+        "from products.racks.backend.temporal.registration import TEMPORAL\n\n"
+        '__all__ = ["TEMPORAL", "WORKFLOWS"]\n'
+    ),
+}
+
+
+def test_a_declaration_a_registry_loads_is_read_like_a_registered_list(tmp_path: Path) -> None:
+    """A registry's loader reads `TEMPORAL` in each facade: the modules that define the workflows,
+    activities and callbacks the declaration names are watched, with the module that builds the
+    list they come from; core's record classes and a helper behind an item are not. A declaration
+    bound by an import is unread."""
+    repo = tmp_path / "repo"
+    copy_tree(repo)
+    for path, text in DECLARATION_TREE.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    lay_derived(repo)
+    answer, _ = watched(repo, tmp_path / "run")
+    assert answer["complete"], answer["problems"]
+    shelf = answer["groups"]["shelf"]
+    assert shelf["passes"], shelf["reasons"]
+    registered = {path for path, why in shelf["watched"].items() if "core loads a declaration" in why}
+    temporal = "products/shelf/backend/temporal"
+    assert registered == {
+        f"{temporal}/restock.py",
+        f"{temporal}/schedule.py",
+        f"{temporal}/logs.py",
+    }
+    # The facade and the list's module are watched by the registry's and the location's covers first.
+    assert {"products/shelf/backend/facade/temporal.py", f"{temporal}/__init__.py"} <= set(shelf["watched"])
+    assert f"{temporal}/restock_helpers.py" not in shelf["watched"]
+    unread = "products.racks.backend.facade.temporal.TEMPORAL"
+    assert any(unread in reason for reason in answer["groups"]["racks"]["reasons"])
+
+
 def test_an_unread_list_item_is_the_lists_products_unknown(derived: tuple[dict[str, Any], Path]) -> None:
     racks = derived[0]["groups"]["racks"]
     assert not racks["passes"]
