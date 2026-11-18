@@ -93,6 +93,29 @@ pub fn listed(up: &str) -> bool {
     first.is_some_and(|step| step.starts_with("elt:") || step.starts_with("dict:"))
 }
 
+/// The attribute a `getattr(x, "name")` call reads of `x`, with or without a default: its
+/// second argument when that is a string literal that is an identifier. The call reads as
+/// `x.name`.
+fn getattr_literal(call: &ast::ExprCall) -> Option<&str> {
+    let Expr::Name(callee) = call.func.as_ref() else {
+        return None;
+    };
+    let args = &call.arguments.args;
+    if callee.id.as_str() != "getattr"
+        || !call.arguments.keywords.is_empty()
+        || !(2..=3).contains(&args.len())
+    {
+        return None;
+    }
+    let Expr::StringLiteral(literal) = &args[1] else {
+        return None;
+    };
+    let text = literal.value.to_str();
+    let mut chars = text.chars();
+    let starts = chars.next().is_some_and(|c| c == '_' || c.is_alphabetic());
+    (starts && chars.all(|c| c == '_' || c.is_alphanumeric())).then_some(text)
+}
+
 /// Use-site context of the node on top of `path`: the trailer chain directly above it
 /// (`.objects.filter()`), then the space-joined escape steps up to the first terminal step.
 pub fn climb(path: &[Frame]) -> (String, String) {
@@ -104,6 +127,13 @@ pub fn climb(path: &[Frame]) -> (String, String) {
                 chain.push('.');
                 chain.push_str(a);
             }
+            Frame::Arg(call, 0) => match getattr_literal(call) {
+                Some(name) => {
+                    chain.push('.');
+                    chain.push_str(name);
+                }
+                None => break,
+            },
             Frame::CallFunc => chain.push_str("()"),
             Frame::SubValue => chain.push_str("[]"),
             _ => break,

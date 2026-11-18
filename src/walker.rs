@@ -394,7 +394,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                         .iter()
                         .map(|t| self.value(Some(t), false))
                         .collect();
-                    let v = self.value(Some(&a.value), false);
+                    let v = self.enc.assigned(Some(&a.value), self.src);
                     self.emit_assign(stmt, at, "=".to_string(), t, None, v);
                 }
                 for t in &a.targets {
@@ -406,7 +406,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.target), false)];
                     let ann = self.value(Some(&a.annotation), true);
-                    let v = self.value(a.value.as_deref(), false);
+                    let v = self.enc.assigned(a.value.as_deref(), self.src);
                     self.emit_assign(stmt, at, ":".to_string(), t, Some(ann), v);
                 }
                 self.child(Frame::Terminal("annassign-target"), &a.target, at);
@@ -418,7 +418,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 let op = binop(a.op);
                 if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.target), false)];
-                    let v = self.value(Some(&a.value), false);
+                    let v = self.enc.assigned(Some(&a.value), self.src);
                     self.emit_assign(stmt, at, format!("{op}="), t, None, v);
                 }
                 self.child(Frame::Terminal("augassign-target"), &a.target, at);

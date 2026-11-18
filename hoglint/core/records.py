@@ -65,7 +65,8 @@ def value_text(value: object) -> str:
         return value
     if isinstance(value, dict) and len(value) == 1 and "s" in value:
         return repr(value["s"])
-    if isinstance(value, dict) and len(value) == 1 and "o" in value:
+    # An opaque node, also one an assigned value spells out (a conditional, a comprehension).
+    if isinstance(value, dict) and "o" in value and "call" not in value:
         return f"<{value['o']}>"
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 

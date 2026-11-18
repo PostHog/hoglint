@@ -36,6 +36,8 @@ pub enum Value {
     Dict(Dict),
     Star(Star),
     Bin(Bin),
+    Branches(Branches),
+    Comprehension(Comprehension),
     BoolOp(BoolOps),
     Unary(Unary),
     Compare(Compare),
@@ -118,6 +120,26 @@ pub struct Bin {
     pub bin: &'static str,
     pub l: Box<Value>,
     pub r: Box<Value>,
+}
+
+/// A conditional expression in an assigned value: `{"body": V, "o": "IfExp", "orelse": V}`, its
+/// two branches without the test.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Branches {
+    pub body: Box<Value>,
+    pub o: &'static str,
+    pub orelse: Box<Value>,
+}
+
+/// A list or set comprehension or a generator expression with one plain `for` in an assigned
+/// value: `{"elt": V, "in": V, "o": "ListComp", "t": V}`, without its `if` filters.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Comprehension {
+    pub elt: Box<Value>,
+    #[serde(rename = "in")]
+    pub iter: Box<Value>,
+    pub o: &'static str,
+    pub t: Box<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -371,6 +393,9 @@ fn name_elements(elts: &[Expr]) -> Option<Vec<Value>> {
 #[derive(Default)]
 pub struct Encoder {
     count: usize,
+    /// An assigned value is being encoded: its conditional expressions and one-loop
+    /// comprehensions are spelled out (`assigned`).
+    assigned: bool,
 }
 
 impl Encoder {
@@ -467,6 +492,39 @@ impl Encoder {
             });
         }
         Value::opaque("big")
+    }
+
+    /// An assignment's value, as `value` under the assignment budget, except that a conditional
+    /// expression keeps its branches and a comprehension with one plain `for` keeps its element,
+    /// target and iterable, so the link can read the items of a list built that way.
+    pub fn assigned(&mut self, expr: Option<&Expr>, src: &str) -> Value {
+        self.assigned = true;
+        let value = self.value(expr, false, MAX_NODES, src);
+        self.assigned = false;
+        value
+    }
+
+    /// A comprehension's parts when it has one `for` that is not async; else None.
+    fn comprehension(
+        &mut self,
+        elt: &Expr,
+        generators: &[ast::Comprehension],
+        what: &'static str,
+        depth: usize,
+        src: &str,
+    ) -> Option<Value> {
+        let [generator] = generators else {
+            return None;
+        };
+        if generator.is_async {
+            return None;
+        }
+        Some(Value::Comprehension(Comprehension {
+            elt: self.boxed(elt, false, depth, src),
+            iter: self.boxed(&generator.iter, false, depth, src),
+            o: what,
+            t: self.boxed(&generator.target, false, depth, src),
+        }))
     }
 
     fn type_string(&mut self, value: &StrValue) -> Value {
@@ -605,6 +663,20 @@ impl Encoder {
                     ops: c.ops.iter().map(|o| cmpop(*o)).collect(),
                 })
             }
+            Expr::If(branches) if self.assigned => Value::Branches(Branches {
+                body: self.boxed(&branches.body, false, d, src),
+                o: "IfExp",
+                orelse: self.boxed(&branches.orelse, false, d, src),
+            }),
+            Expr::ListComp(c) if self.assigned => self
+                .comprehension(&c.elt, &c.generators, "ListComp", d, src)
+                .unwrap_or_else(|| Value::opaque("ListComp")),
+            Expr::SetComp(c) if self.assigned => self
+                .comprehension(&c.elt, &c.generators, "SetComp", d, src)
+                .unwrap_or_else(|| Value::opaque("SetComp")),
+            Expr::Generator(c) if self.assigned => self
+                .comprehension(&c.elt, &c.generators, "GeneratorExp", d, src)
+                .unwrap_or_else(|| Value::opaque("GeneratorExp")),
             other => Value::opaque(class_name(other)),
         }
     }
