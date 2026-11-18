@@ -116,6 +116,25 @@ fn getattr_literal(call: &ast::ExprCall) -> Option<&str> {
     (starts && chars.all(|c| c == '_' || c.is_alphanumeric())).then_some(text)
 }
 
+/// The attribute a call reads of its first argument: `getattr(x, "name")` reads `x.name`; one
+/// with a computed name (`getattr(x, NAME)`), and `vars(x)`, read an attribute no one can name,
+/// written `?`. None for any other call.
+fn computed_attribute(call: &ast::ExprCall) -> Option<&str> {
+    if let Some(name) = getattr_literal(call) {
+        return Some(name);
+    }
+    let Expr::Name(callee) = call.func.as_ref() else {
+        return None;
+    };
+    let args = call.arguments.args.len();
+    let computed = match callee.id.as_str() {
+        "getattr" => (2..=3).contains(&args),
+        "vars" => args == 1,
+        _ => false,
+    };
+    computed.then_some("?")
+}
+
 /// Use-site context of the node on top of `path`: the trailer chain directly above it
 /// (`.objects.filter()`), then the space-joined escape steps up to the first terminal step.
 pub fn climb(path: &[Frame]) -> (String, String) {
@@ -127,7 +146,7 @@ pub fn climb(path: &[Frame]) -> (String, String) {
                 chain.push('.');
                 chain.push_str(a);
             }
-            Frame::Arg(call, 0) => match getattr_literal(call) {
+            Frame::Arg(call, 0) => match computed_attribute(call) {
                 Some(name) => {
                     chain.push('.');
                     chain.push_str(name);

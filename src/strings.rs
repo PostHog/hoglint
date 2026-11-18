@@ -64,6 +64,11 @@ pub fn leading_attrs(chain: &str) -> &str {
     let mut i = 0;
     while i < bytes.len() && bytes[i] == b'.' {
         let rest = &chain[i + 1..];
+        // An attribute no one can name (`getattr(x, NAME)`, `vars(x)`; `path::climb`) ends it.
+        if rest.starts_with('?') {
+            end = i + 2;
+            break;
+        }
         let len = rest
             .find(|c: char| !(c.is_alphanumeric() || c == '_'))
             .unwrap_or(rest.len());

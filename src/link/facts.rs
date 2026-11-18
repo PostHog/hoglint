@@ -124,6 +124,11 @@ pub enum Op {
     Other,
     /// `+=`, the one augmented assignment a reader of `__all__` follows.
     AddAssign,
+    /// `()`: a module-level call that changes the name in place (`WORKFLOWS.append(B)`); the
+    /// target is `name.method`, the value the call.
+    Mutate,
+    /// `global`: a function may rebind the module-level name; no value.
+    Global,
 }
 
 pub struct Assign {
@@ -754,6 +759,8 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 ":" => Op::Annotated,
                 "type" => Op::TypeAlias,
                 "+=" => Op::AddAssign,
+                "()" => Op::Mutate,
+                "global" => Op::Global,
                 _ => Op::Other,
             };
             let object = a.as_object();

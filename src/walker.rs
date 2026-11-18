@@ -59,6 +59,10 @@ fn name_id(expr: &Expr) -> &str {
     }
 }
 
+/// The methods that change a list, set or dict in place, read at module level as rows that add
+/// to a name's items (`emit_mutation`).
+const MUTATORS: [&str; 5] = ["append", "extend", "insert", "update", "add"];
+
 /// Where a node sits: its scope, the def whose header holds it (-1 = none), and the flags of
 /// the enclosing statements.
 #[derive(Clone, Copy)]
@@ -436,7 +440,11 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
                 self.child(Frame::TypeAliasValue(name_id(&a.name)), &a.value, at);
             }
-            Stmt::Expr(e) => self.child(Frame::Terminal("expr"), &e.value, at),
+            Stmt::Expr(e) => {
+                self.emit_mutation(stmt, &e.value, at);
+                self.child(Frame::Terminal("expr"), &e.value, at)
+            }
+            Stmt::Global(g) => self.emit_global(stmt, g, at),
             Stmt::Return(r) => self.opt_child(Frame::Terminal("return"), r.value.as_deref(), at),
             Stmt::Delete(d) => {
                 for t in &d.targets {
@@ -685,6 +693,50 @@ impl<'a, 'w> Walker<'a, 'w> {
             t,
             v,
         });
+    }
+
+    /// A module-level call that changes a module-level name in place (`WORKFLOWS.append(B)`),
+    /// as an assignment row: op `()`, the target `name.method`, the call as the value. Only a
+    /// reader of a name's items reads it; the others read `=`, `:` and `+=` rows.
+    fn emit_mutation(&mut self, stmt: &Stmt, value: &Expr, at: At) {
+        if at.scope != -1 || !self.emits_assign(at.scope) {
+            return;
+        }
+        let Expr::Call(call) = value else {
+            return;
+        };
+        let Expr::Attribute(method) = call.func.as_ref() else {
+            return;
+        };
+        let Expr::Name(name) = method.value.as_ref() else {
+            return;
+        };
+        if !MUTATORS.contains(&method.attr.as_str()) {
+            return;
+        }
+        let target = Value::Chain(format!("{}.{}", name.id, method.attr));
+        let v = self.enc.assigned(Some(value), self.src);
+        self.emit_assign(stmt, at, "()".to_string(), vec![target], None, v);
+    }
+
+    /// `global NAME` in a function: the function may rebind the module-level name, so the name
+    /// gets a module-level row with op `global`, no value, and the statement's flags.
+    fn emit_global(&mut self, stmt: &Stmt, global: &ast::StmtGlobal, at: At) {
+        if at.scope == -1 || !self.wants(Kind::Assigns) {
+            return;
+        }
+        let module = At { scope: -1, ..at };
+        for name in &global.names {
+            let target = Value::Chain(name.to_string());
+            self.emit_assign(
+                stmt,
+                module,
+                "global".to_string(),
+                vec![target],
+                None,
+                Value::Null,
+            );
+        }
     }
 
     fn expr(&mut self, expr: &'a Expr, at: At) {

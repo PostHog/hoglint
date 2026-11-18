@@ -597,6 +597,8 @@ pub fn decode_body(
             1 => Op::Annotated,
             2 => Op::TypeAlias,
             4 => Op::AddAssign,
+            5 => Op::Mutate,
+            6 => Op::Global,
             _ => Op::Other,
         };
         let targets = d.values()?;
