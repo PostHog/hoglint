@@ -2498,7 +2498,10 @@ impl Producers<'_> {
             // through `__dict__` or another dunder, or read by a name no one can write (`?`:
             // `getattr(alias, NAME)`, `vars(alias)`). What it hands out cannot be told there.
             let attrs = core.it.s(row.attrs);
-            if attrs.is_empty() || attrs.starts_with(".?") || attrs.starts_with(".__") {
+            if attrs.starts_with(".__") {
+                self.computed_reads.insert((scope.module, module));
+            }
+            if attrs.is_empty() || attrs.starts_with(".?") {
                 self.computed_reads.insert((scope.module, module));
                 continue;
             }
