@@ -91,7 +91,8 @@ A repo can drop its hand-kept input lists: `hoglint watched` derives each group'
   It declares the files as its inputs, so a claim change reaches the run's key.
   It answers claims only; a coverage rule cannot name it in `inputs`.
   The claim texts follow the adapter: with an input list, a missing file is added to it; with a key there is no list, so the ways are to fix the reasons in the code or, as a person's decision, remove the claim.
-- **The item reading** (the architect's pick 1): a registration point that registers a list asks for the module that defines each item (`<edge selector>: items`).
+- **The item reading** (the architect's pick 1): a registration point that registers a list asks for the module that builds the list and the module that defines each item (`<edge selector>: items`).
+  The module that builds the list is where the name core reads is bound, past every re-export (the architect, Nov 18): it decides what core registers, as the items' modules do.
   This lifts limit 4 of the level for derived sets.
   The link reads each first-party module-level name bound to a sequence: a list, tuple or set literal, the values of a dict literal, `+` of such values, `*x` items, `sorted`, `list`, `tuple` or `set` of one, another name; `+=` at module level adds items.
   Each item name resolves where the module binds it; an item that is itself such a list adds its own items, and its module, which defines that item.

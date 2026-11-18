@@ -34,7 +34,8 @@ pub enum Cover {
         /// The selection reads `via.*`: it holds when it holds at one module the name passes
         /// through between the surface and the origin.
         via: bool,
-        /// The modules that define the items of the sequence the origin names (`: items`).
+        /// The module that builds the sequence the origin names and the modules that define its
+        /// items (`: items`).
         items: bool,
     },
     /// The files of the modules an entity selection keeps, in its `and` parts. With `location`,
@@ -314,8 +315,9 @@ impl<'a> Need<'_, 'a> {
 }
 
 impl Need<'_, '_> {
-    /// The files of the modules that define the items of the sequence `origin` names, through
-    /// each item that is itself such a sequence. An origin that names no sequence needs nothing.
+    /// The files of the module that builds the sequence `origin` names and of the modules that
+    /// define its items, through each item that is itself such a sequence. An origin that names
+    /// no sequence needs nothing.
     fn items(&mut self, origin: &Endpoint) {
         let cx = self.cx;
         let Symbol::Inside(module, name) = origin.symbol else {
@@ -330,6 +332,11 @@ impl Need<'_, '_> {
             let Some(members) = cx.link.sequences.get(&list) else {
                 continue;
             };
+            // The module that builds the list decides what core registers, as an item's module
+            // does. A list outside the graph (library code) needs no file.
+            if let Some(at) = cx.module_at(list.0) {
+                self.module(list.0, at);
+            }
             for member in members {
                 let place = member.and_then(|ent| cx.module_at(ent.m).map(|at| (ent, at)));
                 let Some((ent, at)) = place else {
@@ -341,14 +348,20 @@ impl Need<'_, '_> {
                         .push(("unread-items", self.at, module, named));
                     continue;
                 };
-                let path = cx.rules.module_path(cx.link, at).to_string();
-                let owner = Some(cx.text(ent.m).to_string());
-                self.found.entry(path).or_insert((self.at, owner));
+                self.module(ent.m, at);
                 if cx.link.sequences.contains_key(&(ent.m, ent.s)) {
                     stack.push((ent.m, ent.s));
                 }
             }
         }
+    }
+
+    /// Needs the file of the graph module `module` at place `at`.
+    fn module(&mut self, module: Sid, at: u32) {
+        let cx = self.cx;
+        let path = cx.rules.module_path(cx.link, at).to_string();
+        let owner = Some(cx.text(module).to_string());
+        self.found.entry(path).or_insert((self.at, owner));
     }
 }
 

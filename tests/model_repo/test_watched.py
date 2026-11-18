@@ -118,6 +118,69 @@ def test_a_clean_neighbor_stays_out(derived: tuple[dict[str, Any], Path], path: 
     assert path not in depot_files(derived[0])
 
 
+LIST_MODULE_TREE = {
+    # A list a module of the location builds from other modules' items, which the facade hands
+    # out under another name.
+    "backend/temporal/metadata_settings.py": (
+        "from products.depot.backend.temporal.enrich import EnrichWorkflow, enrich_activity\n"
+        "from products.depot.backend.temporal.stats import compute_stats\n\n"
+        "WORKFLOWS = [EnrichWorkflow]\n"
+        "ACTIVITIES = [enrich_activity, compute_stats]\n"
+    ),
+    "backend/temporal/enrich.py": (
+        "class EnrichWorkflow:\n    def run(self, table):\n        return table\n\n\n"
+        "def enrich_activity(table):\n    return table\n"
+    ),
+    "backend/temporal/stats.py": "def compute_stats(table):\n    return table\n",
+    "backend/temporal/sweep.py": "class SweepWorkflow:\n    def run(self, bin_id):\n        return bin_id\n",
+    # A list the facade builds itself.
+    "backend/facade/temporal.py": (
+        "from products.depot.backend.temporal import ACTIVITIES, WORKFLOWS\n"
+        "from products.depot.backend.temporal.metadata_settings import (\n"
+        "    ACTIVITIES as METADATA_ACTIVITIES,\n"
+        "    WORKFLOWS as METADATA_WORKFLOWS,\n"
+        ")\n"
+        "from products.depot.backend.temporal.sweep import SweepWorkflow\n\n"
+        "SWEEP_WORKFLOWS = [SweepWorkflow]\n\n"
+        '__all__ = ["ACTIVITIES", "METADATA_ACTIVITIES", "METADATA_WORKFLOWS", "SWEEP_WORKFLOWS", "WORKFLOWS"]\n'
+    ),
+}
+LIST_MODULE_CORE = (
+    "\nfrom products.depot.backend.facade.temporal import (\n"
+    "    METADATA_ACTIVITIES as DEPOT_METADATA_ACTIVITIES,\n"
+    "    METADATA_WORKFLOWS as DEPOT_METADATA_WORKFLOWS,\n"
+    "    SWEEP_WORKFLOWS as DEPOT_SWEEP_WORKFLOWS,\n"
+    ")\n\n"
+    "METADATA_QUEUES = [\n"
+    '    ("depot-metadata", DEPOT_METADATA_WORKFLOWS + DEPOT_SWEEP_WORKFLOWS, DEPOT_METADATA_ACTIVITIES),\n'
+    "]\n"
+)
+
+
+def test_the_module_that_builds_a_registered_list_is_watched(
+    derived: tuple[dict[str, Any], Path], tmp_path: Path
+) -> None:
+    """Core registers lists that a module builds from other modules' items: the list's module is
+    watched next to the items' modules. A list the facade builds adds only its items' modules, as
+    the facade is watched already."""
+    repo = tmp_path / "repo"
+    copy_tree(repo)
+    for path, text in LIST_MODULE_TREE.items():
+        (repo / DEPOT / path).write_text(text)
+    command = repo / "posthog/management/commands/start_temporal_worker.py"
+    command.write_text(command.read_text() + LIST_MODULE_CORE)
+    lay_derived(repo)
+    answer, _ = watched(repo, tmp_path / "run")
+    assert answer["complete"], answer["problems"]
+    assert answer["groups"]["depot"]["passes"], answer["groups"]["depot"]["reasons"]
+    files = depot_files(answer)
+    added = set(files) - set(depot_files(derived[0]))
+    names = ["metadata_settings.py", "enrich.py", "stats.py", "sweep.py"]
+    assert added == {f"backend/temporal/{name}" for name in names}
+    assert all("core registers an item of a list" in files[path] for path in added)
+    assert "backend/facade/temporal.py" in files
+
+
 def test_an_unread_list_item_is_the_lists_products_unknown(derived: tuple[dict[str, Any], Path]) -> None:
     racks = derived[0]["groups"]["racks"]
     assert not racks["passes"]
