@@ -882,6 +882,14 @@ impl<'a> Env<'a> {
             if !same_door {
                 return Value::Bool(false);
             }
+            // An origin its own module keeps is no hand-out: asking `exported` of it would ask
+            // this again with the same edge's origins, without end (a facade that rebinds an
+            // imported name to itself, `WORKFLOWS = WORKFLOWS`).
+            match self.hands_out(origin) {
+                Truth::True => {}
+                Truth::False => return Value::Bool(false),
+                Truth::Unknown => return Value::Unknown,
+            }
             match self.exported(origin) {
                 Value::Bool(true) => {}
                 Value::Unknown => return Value::Unknown,
