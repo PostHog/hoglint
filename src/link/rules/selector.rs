@@ -35,6 +35,9 @@ pub enum EndField {
     Decl,
     Registry,
     Lifecycle,
+    /// The registry whose declared loader is the endpoint's symbol: the function or method the
+    /// edge sits in. None anywhere else, the registry's own files too.
+    RegistryLoader,
     /// The zones of what the endpoint's module hands out (`Labeler.handout_zones`).
     HandoutZones,
     /// Whether an export's `within` holds the endpoint's module (`Labeler.door`).
@@ -323,6 +326,7 @@ impl Compiler<'_> {
             "decl" => EndField::Decl,
             "registry" => EndField::Registry,
             "lifecycle" => EndField::Lifecycle,
+            "registry_loader" => EndField::RegistryLoader,
             "handout_zones" => EndField::HandoutZones,
             "door" => EndField::Door,
             "context" => EndField::Context,

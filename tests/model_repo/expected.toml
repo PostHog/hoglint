@@ -323,6 +323,12 @@ rule = "dynamic-imports"
 verdict = "incomplete"
 identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 
+[[row]]
+case = "DI03"
+rule = "dynamic-imports"
+verdict = "incomplete"
+identity = ["products.legacy.backend.health_checks|dynamic-import|"]
+
 # export-shape
 
 [[row]]

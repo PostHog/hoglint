@@ -1715,6 +1715,12 @@ text = "installs 'self.registry.register_moved_action' did not resolve"
 
 [[incomplete]]
 rule = "dynamic-imports"
+identity = ["products.legacy.backend.health_checks|dynamic-import|"]
+kind = "not-modelled"
+text = "dynamic-import '' did not resolve"
+
+[[incomplete]]
+rule = "dynamic-imports"
 identity = ["products.legacy.backend.logic.widgets|dynamic-import|"]
 kind = "not-modelled"
 text = "dynamic-import '' did not resolve"

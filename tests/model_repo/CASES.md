@@ -267,6 +267,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `UK02` | `products/legacy/backend/logic/widgets.py`, `scripts/helpers.py` | A product imports from such a folder (the destination end unknown) | public-surface and cycle incomplete | D105 |
 | `DI01` | `products/legacy/backend/logic/widgets.py` | A computed import outside a registry loader | dynamic-imports incomplete | |
 | `DI02` | `posthog/products.py` | The registry loader's computed import | clean | |
+| `DI03` | `products/legacy/backend/health_checks.py` | A computed import in a file a registry loads (a lazy `__getattr__`), outside the registry's loader | dynamic-imports incomplete | Only a declared loader's own call is exempt; a registry's files are judged as any other file (the architect, Nov 18) |
 | `CY01` | `products/catalog/backend/facade/api.py`, `products/reports/backend/logic/build.py` | Two products that depend on each other | no-new-package-cycles finding, one per direction | |
 | `CY02` | `products/reports/backend/logic/build.py`, `products/catalog/backend/facade/shapes.py` | One-way dependencies | clean | |
 | `CY03` | `products/legacy/backend/logic/widgets.py`, `products/legacy/backend/facade/aboveworkers.py`, `products/legacy/backend/facade/lazygoneworkers.py` | An unresolved model label; an unresolved relative import; a lazy entry no module answers for | no-new-package-cycles incomplete, one item each | An edge whose end hoglint cannot tell names no package pair (Nov 16) |

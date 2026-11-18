@@ -253,6 +253,8 @@ ENDPOINT_FIELDS: dict[str, FieldInfo] = {
     "scope": FieldInfo(FieldType.STRING),
     "external": FieldInfo(FieldType.STRING),
     "context": FieldInfo(FieldType.ENUM, CONTEXTS),
+    # The registry whose declared loader is the function or method the edge sits in, else none.
+    "registry_loader": FieldInfo(FieldType.STRING),
 }
 BUILTIN_NAMES = frozenset({*ENTITY_FIELDS, *ENDPOINT_FIELDS, "kind", "exported", "subject"})
 CORE_SECTIONS = ("assign", "zones", "vocabulary", "ledger", "engine", "roles", "conditions")

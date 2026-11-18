@@ -434,6 +434,18 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// The registry whose declared loader is `symbol`, else none.
+    fn registry_loader(&self, symbol: Symbol) -> Value<'a> {
+        let Some(text) = self.symbol_text(symbol) else {
+            return Value::None;
+        };
+        let registries = &self.rules.labels.registries;
+        match registries.iter().find(|registry| registry.loader == *text) {
+            Some(registry) => Value::text(&registry.name),
+            None => Value::None,
+        }
+    }
+
     /// The registry of a graph module, and its lifecycle.
     fn registry(&self, at: Option<u32>, lifecycle: bool) -> Value<'a> {
         let Some(found) = at.and_then(|at| self.rules.labels.registry_of[at as usize]) else {
@@ -711,6 +723,7 @@ impl<'a> Env<'a> {
             },
             EndField::Registry => cx.registry(endpoint.at, false),
             EndField::Lifecycle => cx.registry(endpoint.at, true),
+            EndField::RegistryLoader => cx.registry_loader(endpoint.symbol),
             EndField::HandoutZones => cx.handout_zones(endpoint.module),
             EndField::Door => cx.door(endpoint.module, endpoint.at),
             EndField::Field(at, attr) => self.declared(endpoint, at, attr),

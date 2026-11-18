@@ -310,6 +310,8 @@ pub struct Registry {
     pub name: String,
     glob: Glob,
     loader_module: String,
+    /// The callable that loads the files (`posthog.products.load_product_modules`).
+    pub loader: String,
     /// The attribute the loader reads in each file.
     pub attribute: String,
     pub lifecycle: String,
@@ -324,6 +326,7 @@ impl Registry {
                 .loader
                 .rsplit_once('.')
                 .map_or(String::new(), |(head, _)| head.to_string()),
+            loader: plan.loader.clone(),
             attribute: plan.attribute.clone(),
             lifecycle: plan.lifecycle.clone(),
         })
