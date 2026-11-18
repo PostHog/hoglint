@@ -11,7 +11,7 @@ from pathlib import Path
 from hoglint.native.parity import compare_dumps, seed_env
 from hoglint.native.replay import SEEDS, THREADS
 
-from prove.base import Check, Context, Native, Outcome, last_lines
+from prove.base import Check, Context, Native, Outcome, clone, last_lines
 
 # Tests that fail in this repo's environment for a known reason; any other failure fails the suite.
 KNOWN_FAILURES = {
@@ -206,6 +206,15 @@ class ModelRepoDumps:
     def differing(self, first: Path, other: Path) -> list[str]:
         return [diff.name for diff in compare_dumps(first, other) if not diff.equal]
 
+    def replace(self, path: str, old: str, new: str) -> None:
+        """One line of the copy changed and staged: the dump reads the git index."""
+        file = self.repo / path
+        text = file.read_text()
+        if text.count(f"{old}\n") != 1:
+            raise RuntimeError(f"{path} does not hold the line {old!r} once")
+        file.write_text(text.replace(f"{old}\n", f"{new}\n"))
+        subprocess.run(["git", "-C", str(self.repo), "add", path], check=True)
+
 
 class Determinism(Check):
     """Every hash seed times one and four threads, each with an empty cache: all tables equal."""
@@ -239,15 +248,52 @@ STORE_SWITCHES = {
     "answers off": {"HOGLINT_NO_ANSWER_CACHE": "1"},
     "trace on": {"HOGLINT_LINK_TRACE": "1"},
 }
+# Edits after the fill, each a (path, old line, new line): a warm dump on the filled cache must
+# equal a cold one. A file that calls a hook through a module-level instance stays unchanged
+# while the instance's class becomes one hoglint can tell, or one it cannot.
+STORE_EDITS = {
+    "instance class told": (
+        "posthog/admin/console/registry.py",
+        "actions = _made_registry()",
+        "actions = ConsoleRegistry()",
+    ),
+    "instance class untold": (
+        "posthog/admin/console/registry.py",
+        "console = ConsoleRegistry()",
+        "console = _made_registry()",
+    ),
+}
 
 
 class StoreModes(Check):
     """Memo off, answers off, trace on, a fill and a warm check on the filled cache: all tables
     equal to a cold dump, and the warm check reused stored work. The warm check is of the same
     tree, so a step that reuses items runs none of its items again: an item that runs every time
-    has a read no later run can answer, or an output the memo cannot store."""
+    has a read no later run can answer, or an output the memo cannot store. Then each edit of
+    `STORE_EDITS`, one at a time: a warm dump on a copy of the filled cache equals a cold dump of
+    the edited tree, which differs from the unedited one, so the compare is not vacuous."""
 
     name = "store modes (model repository)"
+
+    def edits(self, dumps: ModelRepoDumps, base: Path, filled: Path) -> list[str]:
+        """What each edit got wrong: tables where warm and cold differ, no reuse, or no change."""
+        wrong = []
+        for label, (path, old, new) in STORE_EDITS.items():
+            name = label.replace(" ", "-")
+            dumps.replace(path, old, new)
+            cache = dumps.work / f"cache-{name}-warm"
+            clone(filled, cache)
+            stats = dumps.work / f"{name}-stats.jsonl"
+            warm = dumps.dump(f"{name}-warm", cache, {"HOGLINT_PACK_MEMO_STATS": str(stats)})
+            cold = dumps.dump(f"{name}-cold", dumps.fresh_cache(f"{name}-cold"), {})
+            dumps.replace(path, new, old)
+            wrong.extend(f"{label}: {table}" for table in dumps.differing(cold, warm))
+            steps = [json.loads(line) for line in stats.read_text().splitlines()] if stats.exists() else []
+            if not sum(step["reused"] for step in steps):
+                wrong.append(f"{label}: the warm dump reused nothing")
+            if not dumps.differing(base, cold):
+                wrong.append(f"{label}: the edit moved no table")
+        return wrong
 
     def run(self, context: Context) -> list[Outcome]:
         dumps = ModelRepoDumps(context, "store-modes")
@@ -263,6 +309,7 @@ class StoreModes(Check):
             extra = {"HOGLINT_PACK_MEMO_STATS": str(stats)} if label == "warm" else {}
             out = dumps.dump(label, shared, extra)
             unequal.extend(f"{label}: {name}" for name in dumps.differing(cold, out))
+        unequal.extend(self.edits(dumps, cold, shared))
         steps = [json.loads(line) for line in stats.read_text().splitlines()] if stats.exists() else []
         reused = sum(step["reused"] for step in steps)
         reran = [f"{step['step']} ran {step['ran']}" for step in steps if step["reused"] and step["ran"]]
@@ -274,7 +321,13 @@ class StoreModes(Check):
             return [
                 Outcome(self.name, False, f"all equal, but the warm check ran stored items again: {', '.join(reran)}")
             ]
-        return [Outcome(self.name, True, f"5 modes equal to a cold dump; warm reused {reused} steps")]
+        return [
+            Outcome(
+                self.name,
+                True,
+                f"5 modes equal to a cold dump; warm reused {reused} steps; {len(STORE_EDITS)} edits warm equal to cold",
+            )
+        ]
 
 
 LOCAL_CHECKS: tuple[type[Check], ...] = (

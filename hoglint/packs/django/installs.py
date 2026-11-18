@@ -60,6 +60,7 @@ CONSTANT_NODES = frozenset(
 IMPORT = "import"
 HOOK_CALLBACK = "hook_callback"
 CALLBACK = "callback"
+INSTANCE_HOOKS = "django.installs.instance-hooks"
 
 
 @dataclass(frozen=False)
@@ -128,6 +129,10 @@ class InstanceHook:
     cls: EntityId | None
 
 
+def instance_hooks_form(hooks: list[InstanceHook]) -> object:
+    return [(str(hook.entity), hook.method, None if hook.cls is None else str(hook.cls)) for hook in hooks]
+
+
 def decorator_callees(d: dict) -> set[str]:
     return {dec["call"] for dec in d.get("dec", ()) if isinstance(dec, dict) and isinstance(dec.get("call"), str)}
 
@@ -158,8 +163,16 @@ class InstallsProducer:
         self.hooks = frozenset(hooks)
         self.hook_names = frozenset(hook.rpartition(".")[2] for hook in hooks)
         self.hook_words = Words.ending(self.hook_names)
-        found = (self.instance_hook(hook) for hook in sorted(hooks))
-        self.instance_hooks = [hook for hook in found if hook is not None]
+        by_method: dict[str, list[InstanceHook]] = defaultdict(list)
+        for hook in sorted(hooks):
+            found = self.instance_hook(hook)
+            if found is not None:
+                by_method[found.method].append(found)
+        # Resolved outside any item, so an item reads the instance hooks of a method when a call
+        # resolves to a member of that name (keyed by method, not by file): a change to an
+        # instance's class, in a file the item never reads, still reaches the item.
+        tracer = self.reader.tracer
+        self.instance_hooks = PerFileRead(tracer, INSTANCE_HOOKS, dict(by_method), instance_hooks_form, [])
 
     def instance_hook(self, hook: str) -> InstanceHook | None:
         """The hook as a method of a module-level instance, when the config names it so."""
@@ -184,9 +197,7 @@ class InstallsProducer:
         owner, _, method = hit.origin.symbol.rpartition(".")
         cls = EntityId(hit.origin.language, hit.origin.module, owner)
         maybe = None
-        for hook in self.instance_hooks:
-            if hook.method != method:
-                continue
+        for hook in self.instance_hooks.read(method):
             if hook.cls == cls:
                 return hook, True
             if hook.cls is None or cls in self.reader.classes.mro(hook.cls):
