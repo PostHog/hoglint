@@ -17,7 +17,9 @@ use super::surface::{
 use super::trace::{Kind, Memo};
 use crate::path::listed;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Deserialize;
 use serde_json::Value as J;
+use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1053,11 +1055,20 @@ const CONSTANT_NODES: [&str; 3] = ["longstr", "badstr", "JoinedStr"];
 /// How deep `registrable` follows names that hold names before it calls an argument an item.
 const MAX_REGISTRABLE_DEPTH: usize = 16;
 
-/// A file's assignment rows as the extractor wrote them, parsed on first use.
+/// A file's assignment rows as the extractor wrote them: the record's JSON text split into rows
+/// on first use, and a row's value parsed when it is asked for. Most rows of a file are never
+/// read, so no value tree is built for them.
 struct AssignText {
     facts: Arc<FactSet>,
     file: usize,
-    rows: Option<Option<J>>,
+    rows: Option<Option<Vec<Box<RawValue>>>>,
+    values: FxHashMap<usize, Option<J>>,
+}
+
+/// The value of one assignment row; the other keys are skipped.
+#[derive(Deserialize)]
+struct AssignValue {
+    v: Option<J>,
 }
 
 impl AssignText {
@@ -1066,19 +1077,27 @@ impl AssignText {
             facts,
             file,
             rows: None,
+            values: FxHashMap::default(),
         }
     }
 
     /// The value of assignment row `at`; None when the text cannot be read.
     fn value(&mut self, at: usize) -> Option<&J> {
-        let (facts, file) = (&self.facts, self.file);
-        let rows = self
-            .rows
-            .get_or_insert_with(|| match facts.raw(file, "assigns") {
-                Ok(Some(text)) => serde_json::from_slice::<J>(&text).ok(),
-                _ => None,
-            });
-        rows.as_ref()?.get(at)?.get("v")
+        if !self.values.contains_key(&at) {
+            let (facts, file) = (&self.facts, self.file);
+            let rows = self
+                .rows
+                .get_or_insert_with(|| match facts.raw(file, "assigns") {
+                    Ok(Some(text)) => serde_json::from_slice::<Vec<Box<RawValue>>>(&text).ok(),
+                    _ => None,
+                });
+            let value = (rows.as_ref())
+                .and_then(|rows| rows.get(at))
+                .and_then(|row| serde_json::from_str::<AssignValue>(row.get()).ok())
+                .and_then(|row| row.v);
+            self.values.insert(at, value);
+        }
+        self.values[&at].as_ref()
     }
 }
 
