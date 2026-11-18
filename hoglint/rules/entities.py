@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+from functools import cached_property
 from typing import Any
 
 from hoglint.config.loader import read_table
@@ -397,12 +398,17 @@ class CoveragePrimitive(EntityRule):
         self.inherit_unknowns()
         return self.run
 
-    @staticmethod
-    def expand(location: str, paths: list[str]) -> list[str]:
-        """The files a location stands for: a directory's are the module paths inside it, which
-        sit side by side in `paths` (every module path, sorted), else its `__init__.py`."""
+    @cached_property
+    def module_paths(self) -> list[str]:
+        """Every module path, sorted: the paths inside a directory sit side by side."""
+        return sorted(self.ctx.graph.modules.values())
+
+    def expand(self, location: str) -> list[str]:
+        """The files a location stands for: a directory's are the module paths inside it, else
+        its `__init__.py`."""
         if not location.endswith("/"):
             return [location]
+        paths = self.module_paths
         start = end = bisect.bisect_left(paths, location)
         while end < len(paths) and paths[end].startswith(location):
             end += 1
@@ -431,10 +437,9 @@ class CoveragePrimitive(EntityRule):
             return self.run
         required = self.run.required = self.required()
         self.inherit_unknowns()
-        module_paths = sorted(self.ctx.graph.modules.values())
         for location, (cover, module) in sorted(required.items()):
             why = self.why(cover)
-            paths = self.expand(location, module_paths)
+            paths = self.expand(location)
             if self.any_inside(location, cover):
                 if any(adapter.covered(handle, path)[0] for path in paths):
                     continue
