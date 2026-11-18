@@ -17,8 +17,9 @@ from pathlib import Path
 
 from hoglint.config.model import Config, RuleSpec
 from hoglint.labels import Labeler
+from hoglint.ledger.equality import EqualityResult
 from hoglint.ledger.file import LineChange, LineKey, change_row, is_level_line, render_key
-from hoglint.ledger.obligations import BLOCKING, Attribution, Labels
+from hoglint.ledger.obligations import BLOCKING, Attribution, Inherited, Labels
 from hoglint.ledger.records import FindingRecord, IncompleteRecord, touches
 from hoglint.ledger.scan import ScanSummary
 from hoglint.model import FindingStatus, Graph, IncompleteCause, IncompleteKind
@@ -55,6 +56,7 @@ ROWS_SHOWN = 5
 GROUPS_SHOWN = 10
 NOTES_SHOWN = 3
 PAGE = "What the hook checks and what to do: hoglint help hook."
+CARRIED = "Already at HEAD and not in step with the ledger: {parts}. CI judges them; the ledger catches up there."
 SHRINK = "run `hoglint ledger shrink`, then stage {ledger}. It removes stale lines and never adds one."
 WRITE_MOVES = (
     "run `hoglint check --write-ledger`, then stage {ledger}. It records the new places and removes stale lines. "
@@ -108,10 +110,17 @@ def plural(count: int, word: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Attributed:
-    """Incomplete items labelled against a baseline summary; `against` names the baseline."""
+    """Incomplete items labelled against a baseline summary; `against` names the baseline.
+    `inherited` names the new findings and ledger lines that HEAD has already, for a staged run
+    judged against HEAD (see `Inherited`); None for a run judged against its ledger alone."""
 
     labels: Labels
     against: str
+    inherited: Inherited | None = None
+
+    @property
+    def inherited_keys(self) -> frozenset[LineKey]:
+        return self.inherited.keys if self.inherited is not None else frozenset()
 
     @property
     def blocking(self) -> bool:
@@ -219,6 +228,8 @@ class CheckReport:
         self.rerun = view.rerun
         self.touched = touched
         self.attributed = attributed
+        self.inherited = attributed.inherited if attributed is not None else None
+        self.inherited_keys = attributed.inherited_keys if attributed is not None else frozenset()
         self.grown = grown or []
         self.moved = moved
         self.show_all = view.all or bool(view.rule) or touched is not None
@@ -234,11 +245,29 @@ class CheckReport:
     def new(self) -> list[FindingRecord]:
         return [f for f in self.summary.findings.with_status(FindingStatus.NEW) if self.keep(f)]
 
+    def blocking(self) -> list[FindingRecord]:
+        """The new findings of rules that are not advisory, without those HEAD has already."""
+        return [f for f in self.new() if f.rule not in self.summary.advisory and f.key not in self.inherited_keys]
+
     def violations(self) -> list[FindingRecord]:
-        return [f for f in self.new() if f.rule not in self.summary.advisory and f.key not in self.moved]
+        return [f for f in self.blocking() if f.key not in self.moved]
 
     def moved_findings(self) -> list[FindingRecord]:
-        return [f for f in self.new() if f.rule not in self.summary.advisory and f.key in self.moved]
+        return [f for f in self.blocking() if f.key in self.moved]
+
+    def inherited_findings(self) -> list[FindingRecord]:
+        return [f for f in self.new() if f.rule not in self.summary.advisory and f.key in self.inherited_keys]
+
+    def equality(self) -> EqualityResult | None:
+        """The ledger's equality with the scan, without what HEAD has already: the lines of new
+        findings HEAD has, and the lines out of step at HEAD the same way."""
+        equality = self.summary.equality
+        inherited = self.inherited
+        if equality is None or inherited is None:
+            return equality
+        new = [d for d in equality.new if d.key not in inherited.keys and d not in inherited.lines]
+        stale = [d for d in equality.stale if d not in inherited.lines]
+        return EqualityResult(new, stale, equality.header)
 
     def advisory(self) -> list[FindingRecord]:
         return [f for f in self.new() if f.rule in self.summary.advisory]
@@ -268,7 +297,8 @@ class CheckReport:
             return 2
         if any(item.cause in BLOCKING_CAUSES for item in summary.incomplete):
             return 2
-        unequal = summary.equality is not None and not summary.equality.equal
+        equality = self.equality()
+        unequal = equality is not None and not equality.equal
         exceptions_failed = summary.exceptions.stale or summary.exceptions.problems
         claims_failed = summary.failed_claims() or summary.claim_errors
         failed = self.violations() or unequal or exceptions_failed or claims_failed or self.grown
@@ -348,7 +378,7 @@ class CheckReport:
 
     def ledger_problems(self) -> list[Problem]:
         ledger = self.policy.ledger
-        equality = self.summary.equality
+        equality = self.equality()
         out = []
         moved = self.moved_findings()
         if moved:
@@ -470,6 +500,15 @@ class CheckReport:
         ]
         return self.cut(notes, NOTES_SHOWN)
 
+    def carried(self) -> list[str]:
+        """The line that names what HEAD has already and this commit is not blocked on; none when
+        there is nothing."""
+        findings = len(self.inherited_findings())
+        lines = len(self.inherited.lines) if self.inherited is not None else 0
+        parts = [plural(findings, "finding")] if findings else []
+        parts += [plural(lines, "ledger line")] if lines else []
+        return [CARRIED.format(parts=", ".join(parts))] if parts else []
+
     # ── views ──
 
     def counts(self) -> tuple[int, int, int]:
@@ -496,7 +535,7 @@ class CheckReport:
         notes = self.notes()
         if not violations and not problems:
             line = f"hoglint: no new problems ({advisory} advisory rows, {old_unknowns} old unknowns, {accepted} old findings in the ledger)."
-            return "\n".join([line, *notes]) + "\n"
+            return "\n".join([line, *self.carried(), *notes]) + "\n"
         out = [self.verdict(violations, problems)]
         if violations:
             out.extend(self.by_rule(violations))
@@ -509,6 +548,7 @@ class CheckReport:
             f"Not shown: {hidden}{advisory} advisory rows, {old_unknowns} old unknowns, {accepted} old findings in the ledger. "
             f"Show every row: {self.rerun} --all. Show one rule: {self.rerun} --rule <rule>."
         )
+        out.extend(self.carried())
         out.extend(notes)
         out.append(PAGE)
         return "\n".join(out) + "\n"
@@ -603,6 +643,7 @@ class CheckReport:
         for name, passing in summary.levels.items():
             out.append(f"level {name}: {len(passing)} pass, {len(summary.level_failures.get(name, {}))} fail")
         out.append(f"{summary.findings.count(FindingStatus.ACCEPTED)} findings accepted by the ledger")
+        out.extend(self.carried())
         out.extend(self.notes())
         if violations or problems:
             out.append(PAGE)

@@ -11,6 +11,7 @@ the snapshot's owners files when it renders them.
 from __future__ import annotations
 
 import datetime
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -233,6 +234,13 @@ class StoredFindings:
         """The ledger key (rule, identity) of every row no exception allows."""
         allowed = FindingStatus.ALLOWED.value
         return {(row[self.RULE], tuple(row[self.IDENTITY])) for row in self.rows if row[self.STATUS] != allowed}
+
+    def new_rows(self) -> dict[LineKey, int]:
+        """Per ledger key (rule, identity), the number of new rows: findings that the run's ledger
+        does not accept and no exception allows."""
+        new = FindingStatus.NEW.value
+        keys = ((row[self.RULE], tuple(row[self.IDENTITY])) for row in self.rows if row[self.STATUS] == new)
+        return dict(Counter(keys))
 
     def allowed_keys(self) -> set[LineKey]:
         """The ledger key (rule, identity) of every row an exception allows."""

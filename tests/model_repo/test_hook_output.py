@@ -3,6 +3,8 @@ golden outputs: a clean commit, one new finding, 64 findings in six rules, a fai
 unknown, a stale ledger line, an exception without a reason, growth that a complete new exception
 carries to review, and a module with ledgered findings moved inside a product, moved with one new
 use, and moved to another product, each with `check --write-ledger` and the hook after a write.
+Four commits sit on a HEAD that carries debt the ledger lacks: a finding or two stale lines, which
+the hook lets through and names, under a clean change, a new finding or a new stale line.
 The 64-finding hook output stays under a harness's cap, and what a reader must see comes first.
 Rewrite the golden files with `HOGLINT_REFRESH_GENERATED=1` and read the diff."""
 
@@ -164,6 +166,15 @@ def one_finding(repo: Path) -> None:
     write(repo, *ONE_FINDING)
 
 
+def another_finding(repo: Path) -> None:
+    write(
+        repo,
+        "posthog/api/page_badge.py",
+        "from products.catalog.backend.logic.limits import PAGE_SIZE\n\n\ndef badge() -> str:\n"
+        "    return f'{PAGE_SIZE} per page'\n",
+    )
+
+
 def claim_fails(repo: Path) -> None:
     shutil.copy(TREE / "products/inventory/turbo.json", repo / "products/inventory/turbo.json")
 
@@ -234,6 +245,17 @@ SCENARIOS: dict[str, Callable[[Path], None]] = {
     "move-in-product": move_in_product,
     "move-with-new-use": move_with_new_use,
     "move-across-products": move_across_products,
+    "head-finding-clean": clean,
+    "head-finding-new-finding": another_finding,
+    "head-stale-clean": clean,
+    "head-finding-stale-line": stale_ledger_line,
+}
+# The scenarios whose HEAD commits a change first, with debt the ledger lacks, by that change.
+AT_HEAD: dict[str, Callable[[Path], None]] = {
+    "head-finding-clean": one_finding,
+    "head-finding-new-finding": one_finding,
+    "head-stale-clean": stale_ledger_line,
+    "head-finding-stale-line": one_finding,
 }
 # The scenarios whose compare output is held too.
 COMPARED = ("sixty-findings", "exception-complete")
@@ -269,6 +291,10 @@ def outputs(base: Path) -> dict[str, str]:
         for name, change in SCENARIOS.items():
             repo = base.parent / name
             shutil.copytree(base, repo, symlinks=True)
+            if name in AT_HEAD:
+                AT_HEAD[name](repo)
+                git(repo, "add", "-A")
+                git(repo, "commit", "-qm", "debt at HEAD")
             change(repo)
             git(repo, "add", "-A")
             found[f"{name}.hook"] = run(repo, base.parent / f"work-{name}", hook)

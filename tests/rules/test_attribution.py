@@ -34,11 +34,12 @@ from hoglint.ledger.envelope import (
     PolicyFiles,
     policy_digest,
 )
+from hoglint.ledger.equality import EqualityResult, LineDiff
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeListing, WorktreeStatus, read_blobs
-from hoglint.ledger.obligations import Attribution, attribute, rows
-from hoglint.ledger.records import IncompleteRecord, ShownRecord, StoredFindings
+from hoglint.ledger.obligations import Attribution, Inherited, Standing, attribute, rows
+from hoglint.ledger.records import FindingRecord, IncompleteRecord, ShownRecord, StoredFindings
 from hoglint.ledger.scan import ProtocolError, ScanSummary
 from hoglint.ledger.store import CacheRoot, SummaryStore
 from hoglint.model import FindingStatus, IncompleteCause, IncompleteKind
@@ -85,6 +86,38 @@ def test_incomplete_items_are_attributed_by_count_and_fingerprint_through_serial
 ) -> None:
     stored = ScanSummary.from_json(json.loads(json.dumps(ScanSummary(incomplete=records(base)).to_json())))
     assert [label for label, _ in rows(attribute(head, stored.obligations()))] == labels
+
+
+CROSSING = ("public-surface", ("products.billing.logic.price", "core.api.badge", "import"))
+STALE = LineDiff(("public-surface", ("products.billing.logic.total", "core.api.report", "import")), 1, 2)
+
+
+def standing(new: int, stale: list[LineDiff]) -> Standing:
+    """A summary with `new` new findings of `CROSSING` and the `stale` lines, through serialization."""
+    finding = FindingRecord(*CROSSING, FindingStatus.NEW, None, (), "core.api.badge", (), True, False)
+    summary = ScanSummary(findings=StoredFindings.of([finding] * new), equality=EqualityResult(stale=stale))
+    summary.new_rows = summary.findings.new_rows()
+    return Standing.of(ScanSummary.from_json(json.loads(json.dumps(summary.to_json()))))
+
+
+@pytest.mark.parametrize(
+    "head, staged, keys, lines",
+    [
+        # what HEAD has already: inherited
+        (standing(1, [STALE]), standing(1, [STALE]), {CROSSING}, {STALE}),
+        # a second use of the same name: the count rises, so the key blocks as without HEAD
+        (standing(1, []), standing(2, []), set(), set()),
+        # the change fixes one of HEAD's two, and the ledger still records more
+        (standing(2, []), standing(1, []), {CROSSING}, set()),
+        # the change fixes one more finding of a line that is stale at HEAD: the line moves, so it blocks
+        (standing(0, [STALE]), standing(0, [dataclasses.replace(STALE, scanned=0)]), set(), set()),
+    ],
+)
+def test_a_commit_inherits_new_findings_and_stale_lines_by_key_and_count(
+    head: Standing, staged: Standing, keys: set, lines: set
+) -> None:
+    inherited = Inherited.of(staged, head)
+    assert (set(inherited.keys), set(inherited.lines)) == (keys, lines)
 
 
 STORED = Envelope("tree1", "python-e1", "p1", "f1")
@@ -897,9 +930,11 @@ def test_the_working_tree_is_what_git_status_shows_and_only_a_tree_run_is_stored
         reports.append((done.returncode, printed, stored_manifests(cache)))
     shutil.rmtree(cache, ignore_errors=True)
     hoglint(repo, "summary", "export", "--file", str(tmp_path / "summary"))
-    assert reports[0] == reports[1], reports
+    assert reports[0][2] == reports[1][2], reports
     assert stored_manifests(cache) == reports[0][2] and len(reports[0][2]) == 1
-    assert "blocked: 1 new finding." in reports[0][1] and "core.api" not in reports[0][1]
+    assert reports[0][0] == 1 and "blocked: 1 new finding." in reports[0][1] and "core.api" not in reports[0][1]
+    # The index holds HEAD's tree, so the commit adds nothing: HEAD's finding is named, not blocked on.
+    assert reports[1][0] == 0 and "Already at HEAD and not in step with the ledger: 1 finding." in reports[1][1]
     (repo / "products/alerts/new.py").write_text("X = 1\n")
     dirty = hoglint(repo, "check")
     assert "blocked: 1 new finding." in dirty.stdout and "core.api" not in dirty.stdout, dirty.stdout
@@ -924,17 +959,20 @@ def test_a_symlink_reads_as_its_target_inside_the_tree_and_as_unreadable_outside
     config = OWNED_CONFIG.replace('file = "CODEOWNERS"', 'file = ".github/CODEOWNERS"')
     write_files(repo, {**FILES, "hoglint.toml": config, "CODEOWNERS": "*.py @team-a\n"})
     (tmp_path / "outside.py").write_text("from products.billing.logic import charge\n")
+    (repo / ".github").mkdir()
+    (repo / ".github/CODEOWNERS").symlink_to(LINKS[".github/CODEOWNERS"])
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "owners")
+    # The code and its links are staged on top, so the hook judges their findings as the commit's.
     for path, target in LINKS.items():
         if path == "core/impl.py":
             (repo / path).write_text(target)
-            continue
-        (repo / path).parent.mkdir(parents=True, exist_ok=True)
-        (repo / path).symlink_to(target)
-    git_in(repo, "init", "-q")
+        elif path.startswith("core/"):
+            (repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (repo / path).symlink_to(target)
     git_in(repo, "add", "-A")
-    git_in(repo, "commit", "-qm", "links")
     outputs = [hoglint(repo, *args, "--all").stdout for args in (("check",), ("check", "--index"))]
-    assert outputs[0] == outputs[1]
     # An untracked file makes `check` read the working tree, which follows the same links.
     (repo / "core/notes.py").write_text("")
     outputs.append(hoglint(repo, "check", "--all").stdout)

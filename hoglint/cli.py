@@ -64,7 +64,7 @@ from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, LineKey, change_
 from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
-from hoglint.ledger.obligations import attribute
+from hoglint.ledger.obligations import Inherited, Standing, attribute
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, source_columns
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
@@ -189,6 +189,15 @@ class Snapshots:
         tracked = records(git(self.repo, "diff", "-z", "--name-only", "HEAD"))
         untracked = records(git(self.repo, "ls-files", "-z", "--others", "--exclude-standard"))
         return tracked + untracked
+
+    def changes_policy(self, tree: str, policy_root: Path, config: Config) -> bool:
+        """Whether `tree` changes against HEAD a file of its policy, which `policy_of(tree)` wrote
+        to `policy_root`: the config, the files it extends, the exceptions or a data file the
+        policy names. The ledger is no policy: the run judges it."""
+        written = {path.relative_to(policy_root).as_posix() for path in policy_root.rglob("*") if path.is_file()}
+        policy = written | {config.ledger.exceptions, *PolicyFiles(config).paths()}
+        policy.discard(config.ledger.file)
+        return not policy.isdisjoint(self.changed_paths(None, tree))
 
     def renames(self, ref: str, tree: str = "") -> list[tuple[str, str]]:
         """(old path, new path) of each file `tree` renames against `ref`, else the working tree."""
@@ -751,7 +760,11 @@ class Baseline:
     tree's for a staged run, so the run's summary is stored for the next commit, and HEAD's for a
     working tree that holds HEAD's inputs. A run of the working tree itself has none, so it is
     never stored and never read from the store. `reference` is None when the run itself is the baseline (`is_self`) or
-    when there is no commit to compare with. `config` is the run's policy, as the key read it."""
+    when there is no commit to compare with. `config` is the run's policy, as the key read it.
+
+    With `against_head`, a staged run whose policy HEAD shares, the run's new findings and ledger
+    lines are judged against HEAD's too: `head` is how HEAD stands against its own ledger, or None
+    when the run is its own baseline."""
 
     envelope: Envelope
     against: str
@@ -759,6 +772,8 @@ class Baseline:
     reference: dict[Obligation, list[str]] | None = None
     is_self: bool = False
     staged: bool = False
+    against_head: bool = False
+    head: Standing | None = None
 
 
 class Baselines:
@@ -767,7 +782,11 @@ class Baselines:
     from the per-machine summary cache; else the run itself is HEAD; else HEAD's tree is evaluated
     once by blob id, with no checkout, and stored. A staged run stores its own summary under the
     inputs of the index's tree, so the next commit finds its baseline in the cache. A commit that
-    changes no input has HEAD's key, so the run is its own baseline."""
+    changes no input has HEAD's key, so the run is its own baseline.
+
+    A commit that changes no policy file is judged against HEAD for its findings and ledger lines
+    too (`Inherited`): what HEAD has already does not block it. The stored summary holds that in
+    its equality section, so the baseline needs no run when the store has HEAD."""
 
     def __init__(self, snapshots: Snapshots, engine: LocalEngine, store: SummaryStore) -> None:
         self.snapshots = snapshots
@@ -776,29 +795,46 @@ class Baselines:
         self.engine = engine
         self.store = store
 
-    def prepare(self, policy_root: Path, tree: str, staged: bool) -> Baseline:
+    def prepare(self, policy_root: Path, tree: str, staged: bool, against_head: bool = False) -> Baseline:
         """`tree` is the tree the run reads: a staged run's, written from the index, or HEAD's for
-        a working tree that holds HEAD's inputs; empty for a run of the working tree itself."""
+        a working tree that holds HEAD's inputs; empty for a run of the working tree itself. With
+        `against_head`, a staged run's findings and ledger lines are judged against HEAD's too,
+        unless the staged tree changes the policy."""
         head_tree = self.snapshots.tree_of("HEAD")
         wanted, config = self.engine.envelope_at(policy_root, self.repo, head_tree)
         own = dataclasses.replace(wanted, inputs=self.engine.inputs(self.repo, tree, config))
         if not head_tree:
             return Baseline(own, "nothing (no commit yet)", config, staged=staged)
         short = head_tree[:12]
-        stored = self.store.get(wanted, frozenset({"envelope", "incompletes"}))
+        against_head = against_head and not self.snapshots.changes_policy(tree, policy_root, config)
+        sections = {"envelope", "incompletes", *(["equality"] if against_head else [])}
+        stored = self.store.get(wanted, frozenset(sections))
+        # A summary judged against another ledger, such as an ignored one, says nothing of HEAD's debt.
+        if stored is not None and against_head and stored.ledger != self.head_ledger_source(head_tree, config):
+            stored = None
         if stored is not None:
             against = f"HEAD (tree {short}, stored summary)"
-            return Baseline(own, against, config, stored.obligations(), staged=staged)
+            head = Standing.of(stored) if against_head else None
+            return Baseline(
+                own, against, config, stored.obligations(), staged=staged, against_head=against_head, head=head
+            )
         if own.inputs == wanted.inputs:
             this_run = f"HEAD (tree {short}, this run)"
-            return Baseline(own, this_run, config, is_self=True, staged=staged)
+            return Baseline(own, this_run, config, is_self=True, staged=staged, against_head=against_head)
         summary = self.evaluate(policy_root, config.ledger.file, head_tree, wanted, staged)
         # The baseline's graph sits in reference cycles (a rule's findings hold the rule), and a
         # native run turns the cyclic collector off, so only a collection frees it before the run.
         gc.collect()
         self.store.put(summary.envelope, summary)
         computed = f"HEAD (tree {short}, computed and stored)"
-        return Baseline(own, computed, config, summary.obligations(), staged=staged)
+        head = Standing.of(summary) if against_head else None
+        return Baseline(
+            own, computed, config, summary.obligations(), staged=staged, against_head=against_head, head=head
+        )
+
+    def head_ledger_source(self, head_tree: str, config: Config) -> str:
+        """The `source` of the ledger HEAD holds, which `evaluate` judges HEAD against."""
+        return self.snapshots.ledger_at(head_tree, config.ledger.file).source
 
     def evaluate(
         self,
@@ -833,7 +869,11 @@ class Baselines:
     def attribute(self, baseline: Baseline, summary: ScanSummary) -> Attributed:
         head = summary.obligations()
         reference = head if baseline.is_self else baseline.reference
-        return Attributed(attribute(head, reference), baseline.against)
+        inherited = None
+        if baseline.against_head:
+            standing = Standing.of(summary)
+            inherited = Inherited.of(standing, baseline.head if baseline.head is not None else standing)
+        return Attributed(attribute(head, reference), baseline.against, inherited)
 
 
 class RunMemo:
@@ -851,7 +891,7 @@ class RunMemo:
     `--write-ledger`, a policy with outputs (they are written from the graph), and a summary with
     an extractor failure, which can be transient."""
 
-    SECTIONS = frozenset({"envelope", "incompletes", "findings", "levels"})
+    SECTIONS = frozenset({"envelope", "incompletes", "findings", "equality", "levels"})
 
     def __init__(self, snapshots: Snapshots, store: SummaryStore) -> None:
         self.snapshots = snapshots
@@ -913,13 +953,21 @@ class Commands:
         return head
 
     def move_renames(
-        self, head: LedgerFile | None, ledger: LedgerFile, scan: dict[LineKey, int], config: Config, tree: str
+        self,
+        head: LedgerFile | None,
+        ledger: LedgerFile,
+        scan: dict[LineKey, int],
+        config: Config,
+        tree: str,
+        inherited: frozenset[LineKey] = frozenset(),
     ) -> Renames | None:
         """The module renames from HEAD to the run's tree when the ledger file or the scan adds a
-        line to HEAD's ledger, so the added lines need judging; else None."""
+        line to HEAD's ledger, so the added lines need judging; else None. A line of new findings
+        that HEAD has already (`inherited`) needs no judging: it blocks nothing."""
         if head is None:
             return None
-        if not grown_lines(head, ledger) and not grown_lines(head, LedgerFile(lines=scan)):
+        added = [change for change in grown_lines(head, LedgerFile(lines=scan)) if change[0] not in inherited]
+        if not grown_lines(head, ledger) and not added:
             return None
         return self.module_renames("HEAD", config, tree)
 
@@ -1036,18 +1084,21 @@ class Commands:
         ledger = LedgerFile.read(policy_root / config.ledger.file)
         # Recorded growth needs no judgment of moves.
         head = None if changed or record_growth else self.head_ledger(config)
-        baseline = None if changed else self.baselines.prepare(policy_root, tree, index)
+        against_head = index and not write_ledger
+        baseline = None if changed else self.baselines.prepare(policy_root, tree, index, against_head)
+        attributed: Attributed | None = None
         if baseline is not None and self.memo is not None and not write_ledger:
             stored = self.memo.lookup(baseline, policy_root)
-            renames = None if stored is None else self.move_renames(head, ledger, stored.lines, config, tree)
-            # A stored summary stands in without its couplings (`RunMemo.SECTIONS`), so a rename runs live.
-            if stored is not None and (renames is None or not renames.head_to_base):
-                moved = self.moved_lines(policy_root, head, stored, renames, index, None)
+            if stored is not None:
                 attributed = self.baselines.attribute(baseline, stored)
-                grown = self.ledger_growth(head, ledger, moved)
-                return self.report(
-                    stored, baseline.config, policy_root, files_root, None, attributed, grown, view, moved
-                )
+                renames = self.move_renames(head, ledger, stored.lines, config, tree, attributed.inherited_keys)
+                # A stored summary stands in without its couplings (`RunMemo.SECTIONS`), so a rename runs live.
+                if renames is None or not renames.head_to_base:
+                    moved = self.moved_lines(policy_root, head, stored, renames, index, None)
+                    grown = self.ledger_growth(head, ledger, moved)
+                    return self.report(
+                        stored, baseline.config, policy_root, files_root, None, attributed, grown, view, moved
+                    )
         run = self.runner.run(
             policy_root, self.repo, staged=index, rewrite_ledger=write_ledger, tree=tree, files_root=files_root
         )
@@ -1055,7 +1106,8 @@ class Commands:
         moved: frozenset[LineKey] = frozenset()
         if baseline is not None:
             summary = summary_of(run, baseline.envelope, with_triples=False)
-            renames = self.move_renames(head, ledger, run.result.scan, config, tree)
+            attributed = self.baselines.attribute(baseline, summary)
+            renames = self.move_renames(head, ledger, run.result.scan, config, tree, attributed.inherited_keys)
             moved = self.moved_lines(policy_root, head, summary, renames, index, run)
         if write_ledger:
             if index:
@@ -1064,7 +1116,7 @@ class Commands:
             if refused is not None:
                 return refused
         self.write_outputs(run)
-        if baseline is None or summary is None:  # --changed: advisory, so it always exits 0
+        if baseline is None or summary is None or attributed is None:  # --changed: advisory, so it always exits 0
             touched = set(self.snapshots.changed_paths(None, tree if index else ""))
             touched |= {m for m, p in run.graph.modules.items() if p in touched}
             summary = summary_of(run, Envelope(), with_triples=False, touched=touched)
@@ -1072,7 +1124,6 @@ class Commands:
             return 0
         if not write_ledger:
             self.summaries.put(summary.envelope, summary)
-        attributed = self.baselines.attribute(baseline, summary)
         grown = [] if write_ledger else self.ledger_growth(head, ledger, moved)
         return self.report(summary, run.config, policy_root, files_root, None, attributed, grown, view, moved)
 

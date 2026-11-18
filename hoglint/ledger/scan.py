@@ -18,8 +18,10 @@ refuses any other protocol instead of guessing. It holds:
 - levels: the groups that pass each level, and why the others fail (a blocking finding by its
   key, not its message); the groups that claim a level, with the reasons of each one that fails
   it, and why a level's claims cannot be read;
-- what else `check` prints: ledger equality, stale exceptions with every review date, exception
-  problems, advisory rules, and the module of each path for `--changed`;
+- equality: the ledger lines out of step with the scan, and per ledger key the number of new
+  findings, which a staged run judges against HEAD's (see `Standing` in obligations.py);
+- what else `check` prints: stale exceptions with every review date, exception problems, advisory
+  rules, and the module of each path for `--changed`;
 - ledger: the `source` of the ledger file the run read, so a summary stands in for a `check` run
   only when that run would read the same ledger (see `RunMemo` in cli.py).
 
@@ -67,7 +69,8 @@ ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a f
 SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
     "envelope": ("protocol", "envelope", "schema", "growth", "docs", "scope", "with_triples", "advisory", "ledger"),
     "incompletes": ("incomplete",),
-    "findings": ("findings", "lines", "labels", "equality", "exceptions", "modules"),
+    "findings": ("findings", "lines", "labels", "exceptions", "modules"),
+    "equality": ("equality", "new_rows"),
     "couplings": ("triples", "couplings", "witnesses"),
     "levels": ("levels", "level_failures", "level_claims", "claim_errors"),
 }
@@ -205,6 +208,7 @@ class ScanSummary:
     level_claims: dict[str, dict[str, tuple[str, list[str]]]] = field(default_factory=dict)
     claim_errors: dict[str, str] = field(default_factory=dict)  # level -> why its claims cannot be read
     equality: EqualityResult | None = None
+    new_rows: dict[LineKey, int] = field(default_factory=dict)  # ledger key -> its new findings
     exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
     advisory: frozenset[str] = frozenset()
     modules: dict[str, str] = field(default_factory=dict)
@@ -257,6 +261,7 @@ class ScanSummary:
             if level.claim_error:
                 summary.claim_errors[name] = portable.text(level.claim_error)
         summary.equality = result.equality
+        summary.new_rows = summary.findings.new_rows()
         summary.exceptions = ExceptionsRecord.of(result.exceptions, exceptions)
         summary.advisory = frozenset(rule for rule in config.rules if result.advisory(rule))
         summary.modules = dict(graph.modules)
@@ -334,6 +339,7 @@ class ScanSummary:
             },
             "claim_errors": self.claim_errors,
             "equality": equality_to_json(self.equality),
+            "new_rows": [[render_key(key), count] for key, count in sorted(self.new_rows.items())],
             "exceptions": self.exceptions.to_json(),
             "advisory": sorted(self.advisory),
             "modules": self.modules,
@@ -379,6 +385,7 @@ class ScanSummary:
             },
             claim_errors={name: str(error) for name, error in data.get("claim_errors", {}).items()},
             equality=equality_from_json(data.get("equality")),
+            new_rows={parse_key(text): int(count) for text, count in data.get("new_rows", [])},
             exceptions=ExceptionsRecord.from_json(data.get("exceptions", {})),
             advisory=frozenset(data.get("advisory", [])),
             modules=dict(data.get("modules", {})),

@@ -22,6 +22,8 @@ An adversarial review showed that relabels in `hoglint.toml` can launder policy 
   - **Equality.**
     The scan and the ledger match line by line, with counts.
     A stale line fails, so a fixed finding must leave the ledger.
+    The hook (`check --index`) judges a commit, not HEAD (owner, Nov 18): a new finding that HEAD has as often, and a line that is out of step at HEAD at the same counts, do not block it; CI judges them.
+    A commit that changes the policy is judged against the ledger alone.
   - **Growth.**
     Per growth key, against the merge base.
     Growth from code fails.
