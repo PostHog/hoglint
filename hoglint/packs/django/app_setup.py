@@ -60,14 +60,18 @@ class AppSetupImports:
         return out
 
     def produce(self) -> list[Refinement]:
+        """An import counts when its surface ends in the last name of a module that a file with a
+        running `ready()` imports."""
         scopes = self.ready_scopes()
+        files = [scope for scope in self.reader.files if scope.path in scopes]
         names: set[str] = set()
-        for scope in self.reader.files:
-            if scope.path in scopes:
-                names.update(module.rpartition(".")[2] for module in self.reader.imported_modules(scope))
+        for scope in files:
+            names.update(module.rpartition(".")[2] for module in self.reader.imported_modules(scope))
         out: list[Refinement] = []
-        for edge in self.reader.edges_spelled(IMPORT, names) if names else ():
-            ready = scopes.get(edge.site.path, ())
+        for edge in self.reader.edges_in(IMPORT, files) if names else ():
+            if edge.surface.rpartition(".")[2] not in names:
+                continue
+            ready = scopes[edge.site.path]
             if edge.site.scope in ready:
                 out.append(Refinement(edge.handle, attrs=((APP_SETUP, READY),)))
             elif any(edge.site.scope.startswith(f"{scope}.") for scope in ready):

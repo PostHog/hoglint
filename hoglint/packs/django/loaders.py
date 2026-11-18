@@ -82,15 +82,15 @@ class AdminImports:
         return {f"{app.name}.{ADMIN}" for app in self.apps.apps}
 
     def produce(self) -> list[Refinement]:
+        """An import counts when its surface ends in the last name of a module one of the admin
+        modules imports."""
         modules = self.admin_modules()
-        paths: set[str] = set()
+        files = [scope for scope in self.reader.files if scope.module in modules]
         names: set[str] = set()
-        for scope in self.reader.files:
-            if scope.module in modules:
-                paths.add(scope.path)
-                names.update(module.rpartition(".")[2] for module in self.reader.imported_modules(scope))
+        for scope in files:
+            names.update(module.rpartition(".")[2] for module in self.reader.imported_modules(scope))
         out: list[Refinement] = []
-        for edge in self.reader.edges_spelled(IMPORT, names) if names else ():
-            if edge.site.path in paths and edge.site.scope == MODULE_SCOPE:
+        for edge in self.reader.edges_in(IMPORT, files) if names else ():
+            if edge.surface.rpartition(".")[2] in names and edge.site.scope == MODULE_SCOPE:
                 out.append(Refinement(edge.handle, attrs=((AUTODISCOVERED, ADMIN),)))
         return out
