@@ -3,11 +3,6 @@ golden outputs: a clean commit, one new finding, 64 findings in six rules, a fai
 unknown, a stale ledger line, an exception without a reason, growth that a complete new exception
 carries to review, and a module with ledgered findings moved inside a product, moved with one new
 use, and moved to another product, each with `check --write-ledger` and the hook after a write.
-Four commits sit on a HEAD that carries debt the ledger lacks: a finding or two stale lines, which
-the hook lets through and names, under a clean change, a new finding or a new stale line. Two
-commits finish a merge whose other side carries such debt and records a finding in the ledger, as
-is and with a new finding. Two changes go to compare against a base that carries such debt, as is
-and with a new finding.
 The 64-finding hook output stays under a harness's cap, and what a reader must see comes first.
 Rewrite the golden files with `HOGLINT_REFRESH_GENERATED=1` and read the diff."""
 
@@ -169,46 +164,6 @@ def one_finding(repo: Path) -> None:
     write(repo, *ONE_FINDING)
 
 
-def another_finding(repo: Path) -> None:
-    write(
-        repo,
-        "posthog/api/page_badge.py",
-        "from products.catalog.backend.logic.limits import PAGE_SIZE\n\n\ndef badge() -> str:\n"
-        "    return f'{PAGE_SIZE} per page'\n",
-    )
-
-
-def third_finding(repo: Path) -> None:
-    write(
-        repo,
-        "posthog/api/retry_badge.py",
-        "from products.catalog.backend.logic.limits import RETRY_LIMIT\n\n\ndef badge() -> str:\n"
-        "    return f'{RETRY_LIMIT} retries'\n",
-    )
-
-
-# The ledger line of `another_finding`, as a catch-up records it.
-PAGE_LINE = "public-surface\tproducts.catalog.backend.logic.limits.PAGE_SIZE\tposthog.api.page_badge\timport\t1\n"
-
-
-def debt(repo: Path) -> None:
-    """Debt the ledger lacks: a finding and two stale lines."""
-    one_finding(repo)
-    stale_ledger_line(repo)
-
-
-def other_side(repo: Path) -> None:
-    """Debt the ledger lacks, and a finding the ledger records."""
-    debt(repo)
-    another_finding(repo)
-    with (repo / "hoglint.ledger").open("a") as ledger:
-        ledger.write(PAGE_LINE)
-
-
-def merge_only(repo: Path) -> None:
-    """The commit holds what the merge brings in, and nothing more."""
-
-
 def claim_fails(repo: Path) -> None:
     shutil.copy(TREE / "products/inventory/turbo.json", repo / "products/inventory/turbo.json")
 
@@ -279,31 +234,9 @@ SCENARIOS: dict[str, Callable[[Path], None]] = {
     "move-in-product": move_in_product,
     "move-with-new-use": move_with_new_use,
     "move-across-products": move_across_products,
-    "head-finding-clean": clean,
-    "head-finding-new-finding": another_finding,
-    "head-stale-clean": clean,
-    "head-finding-stale-line": stale_ledger_line,
-    "merge-debt-clean": merge_only,
-    "merge-debt-new-finding": third_finding,
-    "base-debt-clean": clean,
-    "base-debt-new-finding": another_finding,
 }
-# The scenarios whose HEAD commits a change first, with debt the ledger lacks, by that change.
-AT_HEAD: dict[str, Callable[[Path], None]] = {
-    "head-finding-clean": one_finding,
-    "head-finding-new-finding": one_finding,
-    "head-stale-clean": stale_ledger_line,
-    "head-finding-stale-line": one_finding,
-}
-# The scenarios that finish a merge (`git merge --no-commit`) whose other side commits this change.
-MERGED: dict[str, Callable[[Path], None]] = {
-    "merge-debt-clean": other_side,
-    "merge-debt-new-finding": other_side,
-}
-# The scenarios whose compare base commits a change first, with debt the ledger lacks.
-AT_BASE: dict[str, Callable[[Path], None]] = {"base-debt-clean": debt, "base-debt-new-finding": debt}
 # The scenarios whose compare output is held too.
-COMPARED = ("sixty-findings", "exception-complete", *AT_BASE)
+COMPARED = ("sixty-findings", "exception-complete")
 # The scenarios that move a module: `check --write-ledger` without a person's switch, then the
 # hook again with the ledger it wrote staged.
 MOVES = ("move-in-product", "move-with-new-use", "move-across-products")
@@ -336,25 +269,6 @@ def outputs(base: Path) -> dict[str, str]:
         for name, change in SCENARIOS.items():
             repo = base.parent / name
             shutil.copytree(base, repo, symlinks=True)
-            if name in AT_HEAD:
-                AT_HEAD[name](repo)
-                git(repo, "add", "-A")
-                git(repo, "commit", "-qm", "debt at HEAD")
-            if name in AT_BASE:
-                AT_BASE[name](repo)
-                git(repo, "add", "-A")
-                git(repo, "commit", "-qm", "debt at the base")
-                git(repo, "branch", "-f", "base")
-            if name in MERGED:
-                git(repo, "checkout", "-qb", "side")
-                MERGED[name](repo)
-                git(repo, "add", "-A")
-                git(repo, "commit", "-qm", "debt on the other side")
-                git(repo, "checkout", "-q", "-")
-                clean(repo)
-                git(repo, "add", "-A")
-                git(repo, "commit", "-qm", "work on this side")
-                git(repo, "merge", "-q", "--no-ff", "--no-commit", "side")
             change(repo)
             git(repo, "add", "-A")
             found[f"{name}.hook"] = run(repo, base.parent / f"work-{name}", hook)

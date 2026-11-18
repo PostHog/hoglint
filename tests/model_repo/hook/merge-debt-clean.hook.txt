@@ -1,3 +1,0 @@
-exit 0
-hoglint: no new problems (24 advisory rows, 100 old unknowns, 225 old findings in the ledger).
-Already in a parent of this merge and not in step with the ledger: 1 finding, 2 ledger lines. CI judges them; the ledger catches up there.

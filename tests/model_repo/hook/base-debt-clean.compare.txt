@@ -1,7 +1,0 @@
-exit 0
-hoglint compare: the change passes.
-base summary: the stored summary hoglint-summary-<key> lacks the group edges compare lists, so the full base scan ran
-counts: findings new 0, resolved 0; ledger lines added 0, removed 0; zero-net swaps 0; rule growth 0; new group edges 0; old unknowns 100. Show every section: hoglint compare --base base --all.
-
-hoglint: no new problems (24 advisory rows, 100 old unknowns, 224 old findings in the ledger).
-Already at the base and not in step with the ledger: 1 finding, 2 ledger lines. `hoglint check` of the base reports them; the ledger catches up there.

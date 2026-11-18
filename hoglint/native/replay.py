@@ -118,7 +118,7 @@ from hoglint.rules.base import IncompleteItem
 GRAPH_OUTPUTS = (*LIST_OUTPUTS, "labels", "finding-files", "incomplete-files")
 CHECK_OUTPUTS = ("check-summary", "check-report", "check-exit")
 # The summary sections a stored summary stands in for a run with (`RunMemo.SECTIONS`).
-MEMO_SECTIONS = ("envelope", "incompletes", "findings", "equality", "levels")
+MEMO_SECTIONS = ("envelope", "incompletes", "findings", "levels")
 if set(MEMO_SECTIONS) != RunMemo.SECTIONS:
     raise ImportError(f"MEMO_SECTIONS {MEMO_SECTIONS} differs from RunMemo.SECTIONS {sorted(RunMemo.SECTIONS)}")
 # Edge rows: where the site path and the producer sit.

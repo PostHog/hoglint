@@ -1,3 +1,0 @@
-exit 0
-hoglint: no new problems (24 advisory rows, 100 old unknowns, 226 old findings in the ledger).
-Already at HEAD and not in step with the ledger: 1 finding. CI judges them; the ledger catches up there.

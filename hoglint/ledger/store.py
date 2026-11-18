@@ -12,14 +12,14 @@ digest, engine id, policy hash, framework digest; see `envelope.py`), and the en
 namespace, so an old engine's summaries age out together. The manifest is JSON: the protocol, the
 envelope section inline, and the sha256 (first 32 hex) of every other section's JSON (see
 `SUMMARY_SECTIONS` in scan.py). A section file is that JSON, zstd-compressed, named by its own
-hash: a reader loads only the sections it reads (a baseline reads incompletes, and equality for a
-commit), and a section equal to a stored one is never written twice. `get` answers only the exact
-key, and the envelope inside the manifest must match it too: a corrupt or missing file, another
-protocol or another envelope is a miss, never a result. A summary of a working tree has no inputs
-digest and is never stored. The ledger never stands in for a summary: it lacks incompletes,
-triples, couplings and every finding the ledger does not count. A CI job may later publish
-summaries of master trees as `hoglint summary export` files (the whole summary in one zstd JSON
-file) for readers to import by `Envelope.key`; nothing here fetches or publishes.
+hash: a reader loads only the sections it reads (a baseline reads incompletes only), and a section
+equal to a stored one is never written twice. `get` answers only the exact key, and the envelope
+inside the manifest must match it too: a corrupt or missing file, another protocol or another
+envelope is a miss, never a result. A summary of a working tree has no inputs digest and is never
+stored. The ledger never stands in for a summary: it lacks incompletes, triples, couplings and
+every finding the ledger does not count. A CI job may later publish summaries of master trees as
+`hoglint summary export` files (the whole summary in one zstd JSON file) for readers to import by
+`Envelope.key`; nothing here fetches or publishes.
 
 Pruning: the first store use of each day removes every file under the root that is older than
 30 days, then the oldest files until the root holds 1 GB at most. A summary hit refreshes the
