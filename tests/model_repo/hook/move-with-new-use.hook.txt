@@ -23,5 +23,5 @@ public-surface: products.reports.backend.logic.shelf_totals names products.shelf
   needs a person: If the facade must export a new name, stop and tell the person. The owners of the product decide what its facade exports.
   see: hoglint explain public-surface
 
-Not shown: 24 advisory rows, 99 old unknowns, 225 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+Not shown: 24 advisory rows, 100 old unknowns, 225 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
 What the hook checks and what to do: hoglint help hook.
