@@ -64,7 +64,7 @@ from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, LineKey, change_
 from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
-from hoglint.ledger.obligations import Inherited, Standing, attribute
+from hoglint.ledger.obligations import Inherited, Standing, attribute, union
 from hoglint.ledger.scan import Obligation, ProtocolError, ScanSummary, source_columns
 from hoglint.ledger.store import ExtractorStore, SummaryStore, cache_root
 from hoglint.model import Finding, FindingStatus, Graph, IncompleteCause
@@ -97,15 +97,23 @@ class Snapshots:
         self.work_dir = work_dir
         self.worktrees: list[Path] = []
         self.trees: dict[str, str] = {}
+        # The commits a merge in progress brings in (`MERGE_HEAD`), as `write_tree` read them.
+        self.merging: list[str] = []
 
     def write_tree(self) -> str:
         """The index as a git tree: the one read of the index a staged run makes. Empty when the
-        index holds conflicts, which no tree can hold.
+        index holds conflicts, which no tree can hold. It also reads `MERGE_HEAD`, so a commit that
+        finishes a merge knows its other parents (`merging`).
 
         `git write-tree` takes the index's lock, which another git process or a parallel hoglint
         run may hold, so it runs on a copy of the index. Git replaces the index by renaming a
         new file over it, so the copy is one whole index."""
-        index = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
+        paths = git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "index", "--git-path", "MERGE_HEAD")
+        index, merge_head = (Path(line) for line in paths.splitlines())
+        try:
+            self.merging = merge_head.read_text().split()
+        except FileNotFoundError:
+            self.merging = []
         copy = Path(tempfile.mkdtemp(prefix="index-", dir=self.work_dir)) / "index"
         if index.is_file():
             shutil.copyfile(index, copy)
@@ -190,14 +198,15 @@ class Snapshots:
         untracked = records(git(self.repo, "ls-files", "-z", "--others", "--exclude-standard"))
         return tracked + untracked
 
-    def changes_policy(self, tree: str, policy_root: Path, config: Config) -> bool:
-        """Whether `tree` changes against HEAD a file of its policy, which `policy_of(tree)` wrote
-        to `policy_root`: the config, the files it extends, the exceptions or a data file the
-        policy names. The ledger is no policy: the run judges it."""
+    def changes_policy(self, tree: str, policy_root: Path, config: Config, parent: str) -> bool:
+        """Whether `tree` changes against the tree `parent` a file of its policy, which
+        `policy_of(tree)` wrote to `policy_root`: the config, the files it extends, the exceptions
+        or a data file the policy names. The ledger is no policy: the run judges it."""
         written = {path.relative_to(policy_root).as_posix() for path in policy_root.rglob("*") if path.is_file()}
         policy = written | {config.ledger.exceptions, *PolicyFiles(config).paths()}
         policy.discard(config.ledger.file)
-        return not policy.isdisjoint(self.changed_paths(None, tree))
+        changed = records(git(self.repo, "diff-tree", "-r", "-z", "--name-only", parent, tree))
+        return not policy.isdisjoint(changed)
 
     def renames(self, ref: str, tree: str = "") -> list[tuple[str, str]]:
         """(old path, new path) of each file `tree` renames against `ref`, else the working tree."""
@@ -762,9 +771,9 @@ class Baseline:
     never stored and never read from the store. `reference` is None when the run itself is the baseline (`is_self`) or
     when there is no commit to compare with. `config` is the run's policy, as the key read it.
 
-    With `against_head`, a staged run whose policy HEAD shares, the run's new findings and ledger
-    lines are judged against HEAD's too: `head` is how HEAD stands against its own ledger, or None
-    when the run is its own baseline."""
+    With `against_head`, a staged run whose policy a parent shares, the run's new findings and
+    ledger lines are judged against that parent's too: `parents` is how those parents stand
+    against their own ledgers, or None when the run is its own baseline."""
 
     envelope: Envelope
     against: str
@@ -773,7 +782,8 @@ class Baseline:
     is_self: bool = False
     staged: bool = False
     against_head: bool = False
-    head: Standing | None = None
+    parents: Standing | None = None
+    merge: bool = False
 
 
 class Baselines:
@@ -786,7 +796,11 @@ class Baselines:
 
     A commit that changes no policy file is judged against HEAD for its findings and ledger lines
     too (`Inherited`): what HEAD has already does not block it. The stored summary holds that in
-    its equality section, so the baseline needs no run when the store has HEAD."""
+    its equality section, so the baseline needs no run when the store has HEAD.
+
+    A commit that finishes a merge has more parents: HEAD and each commit of `MERGE_HEAD`. What any
+    parent has does not block it: each parent's tree is a baseline, stored like HEAD's, and judges
+    findings and ledger lines only when the commit changes no policy file against it."""
 
     def __init__(self, snapshots: Snapshots, engine: LocalEngine, store: SummaryStore) -> None:
         self.snapshots = snapshots
@@ -798,43 +812,69 @@ class Baselines:
     def prepare(self, policy_root: Path, tree: str, staged: bool, against_head: bool = False) -> Baseline:
         """`tree` is the tree the run reads: a staged run's, written from the index, or HEAD's for
         a working tree that holds HEAD's inputs; empty for a run of the working tree itself. With
-        `against_head`, a staged run's findings and ledger lines are judged against HEAD's too,
-        unless the staged tree changes the policy."""
+        `against_head`, a staged run's findings and ledger lines are judged against each parent's
+        too, unless the staged tree changes the policy against that parent."""
         head_tree = self.snapshots.tree_of("HEAD")
         wanted, config = self.engine.envelope_at(policy_root, self.repo, head_tree)
         own = dataclasses.replace(wanted, inputs=self.engine.inputs(self.repo, tree, config))
         if not head_tree:
             return Baseline(own, "nothing (no commit yet)", config, staged=staged)
-        short = head_tree[:12]
-        against_head = against_head and not self.snapshots.changes_policy(tree, policy_root, config)
-        sections = {"envelope", "incompletes", *(["equality"] if against_head else [])}
-        stored = self.store.get(wanted, frozenset(sections))
-        # A summary judged against another ledger, such as an ignored one, says nothing of HEAD's debt.
-        if stored is not None and against_head and stored.ledger != self.head_ledger_source(head_tree, config):
-            stored = None
-        if stored is not None:
-            against = f"HEAD (tree {short}, stored summary)"
-            head = Standing.of(stored) if against_head else None
-            return Baseline(
-                own, against, config, stored.obligations(), staged=staged, against_head=against_head, head=head
+        judged = against_head and not self.snapshots.changes_policy(tree, policy_root, config, head_tree)
+        stored = self.stored_summary(wanted, config, head_tree, judged)
+        if stored is None and own.inputs == wanted.inputs:
+            this_run = f"HEAD (tree {head_tree[:12]}, this run)"
+            return Baseline(own, this_run, config, is_self=True, staged=staged, against_head=judged)
+        parents = [("HEAD", head_tree, wanted, judged, stored)]
+        for commit in self.snapshots.merging if against_head else []:
+            parent_tree = self.snapshots.tree_of(commit)
+            key = dataclasses.replace(wanted, inputs=self.engine.inputs(self.repo, parent_tree, config))
+            counts = not self.snapshots.changes_policy(tree, policy_root, config, parent_tree)
+            parents.append(
+                ("MERGE_HEAD", parent_tree, key, counts, self.stored_summary(key, config, parent_tree, counts))
             )
-        if own.inputs == wanted.inputs:
-            this_run = f"HEAD (tree {short}, this run)"
-            return Baseline(own, this_run, config, is_self=True, staged=staged, against_head=against_head)
-        summary = self.evaluate(policy_root, config.ledger.file, head_tree, wanted, staged)
+        against, references, standings = [], [], []
+        for name, parent_tree, key, counts, summary in parents:
+            how = "stored summary"
+            if summary is None:
+                summary = self.computed_summary(policy_root, config, parent_tree, key, staged)
+                how = "computed and stored"
+            against.append(f"{name} (tree {parent_tree[:12]}, {how})")
+            references.append(summary.obligations())
+            if counts:
+                standings.append(Standing.of(summary))
+        standing = Standing.union(standings) if standings else None
+        return Baseline(
+            own,
+            ", ".join(against),
+            config,
+            union(references),
+            staged=staged,
+            against_head=standing is not None,
+            parents=standing,
+            merge=len(parents) > 1,
+        )
+
+    def stored_summary(self, key: Envelope, config: Config, parent_tree: str, judged: bool) -> ScanSummary | None:
+        """A parent's summary from the store, with its equality section when it `judged` findings."""
+        sections = {"envelope", "incompletes", *(["equality"] if judged else [])}
+        stored = self.store.get(key, frozenset(sections))
+        if stored is None or not judged:
+            return stored
+        # A summary judged against another ledger, such as an ignored one, says nothing of the parent's debt.
+        if stored.ledger != self.snapshots.ledger_at(parent_tree, config.ledger.file).source:
+            return None
+        return stored
+
+    def computed_summary(
+        self, policy_root: Path, config: Config, parent_tree: str, key: Envelope, staged: bool
+    ) -> ScanSummary:
+        """A parent's summary from a run of its tree, which is then stored."""
+        summary = self.evaluate(policy_root, config.ledger.file, parent_tree, key, staged)
         # The baseline's graph sits in reference cycles (a rule's findings hold the rule), and a
         # native run turns the cyclic collector off, so only a collection frees it before the run.
         gc.collect()
         self.store.put(summary.envelope, summary)
-        computed = f"HEAD (tree {short}, computed and stored)"
-        head = Standing.of(summary) if against_head else None
-        return Baseline(
-            own, computed, config, summary.obligations(), staged=staged, against_head=against_head, head=head
-        )
-
-    def head_ledger_source(self, head_tree: str, config: Config) -> str:
-        """The `source` of the ledger HEAD holds, which `evaluate` judges HEAD against."""
-        return self.snapshots.ledger_at(head_tree, config.ledger.file).source
+        return summary
 
     def evaluate(
         self,
@@ -845,8 +885,9 @@ class Baselines:
         staged: bool,
         scope: frozenset[str] = frozenset(),
     ) -> ScanSummary:
-        """HEAD's tree under the run's policy, with HEAD's own ledger, in a runner of its own so its
-        graph can be freed before the run. A commit's baseline takes the staged thread count."""
+        """A parent's tree (HEAD's, unless a merge names another) under the run's policy, with the
+        tree's own ledger, in a runner of its own so its graph can be freed before the run. A
+        commit's baseline takes the staged thread count."""
         ledger = self.snapshots.ledger_at(head_tree, ledger_path)
         work = Path(tempfile.mkdtemp(prefix="baseline-", dir=self.work_dir))
         runner = Runner(NativeGraphSource(work, self.store.stores))
@@ -872,8 +913,9 @@ class Baselines:
         inherited = None
         if baseline.against_head:
             standing = Standing.of(summary)
-            inherited = Inherited.of(standing, baseline.head if baseline.head is not None else standing)
-        return Attributed(attribute(head, reference), baseline.against, inherited)
+            inherited = Inherited.of(standing, baseline.parents if baseline.parents is not None else standing)
+        where = "in a parent of this merge" if baseline.merge else "at HEAD"
+        return Attributed(attribute(head, reference), baseline.against, inherited, where)
 
 
 class RunMemo:
@@ -946,10 +988,16 @@ class Commands:
 
     def head_ledger(self, config: Config) -> LedgerFile | None:
         """HEAD's ledger when HEAD wrote it under `config`'s policy, else None. A policy change can
-        move lines, so its lines go to compare's growth check."""
+        move lines, so its lines go to compare's growth check. For a commit that finishes a merge,
+        each line counts as the most that a parent's ledger under that policy records, so a line
+        that the other side brings in is no growth of the commit."""
         head = self.snapshots.ledger_at("HEAD", config.ledger.file)
         if not head.exists or head.policy != config.policy_hash:
             return None
+        for commit in self.snapshots.merging:
+            other = self.snapshots.ledger_at(commit, config.ledger.file)
+            if other.exists and other.policy == config.policy_hash:
+                head = dataclasses.replace(head, lines=dict(Counter(head.lines) | Counter(other.lines)))
         return head
 
     def move_renames(

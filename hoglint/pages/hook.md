@@ -7,6 +7,7 @@ An old problem does not block.
 A new problem blocks.
 A finding or a ledger line that HEAD has already, out of step with the ledger, is an old problem: the output names them in one line, and CI judges them.
 This is so only when the commit does not change the policy: `hoglint.toml`, the files it extends, `hoglint.exceptions.toml` and the data files it names.
+A commit that finishes a merge compares the result with each parent: what any parent has is an old problem.
 
 ## What the hook checks
 

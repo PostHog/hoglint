@@ -56,7 +56,7 @@ ROWS_SHOWN = 5
 GROUPS_SHOWN = 10
 NOTES_SHOWN = 3
 PAGE = "What the hook checks and what to do: hoglint help hook."
-CARRIED = "Already at HEAD and not in step with the ledger: {parts}. CI judges them; the ledger catches up there."
+CARRIED = "Already {where} and not in step with the ledger: {parts}. CI judges them; the ledger catches up there."
 SHRINK = "run `hoglint ledger shrink`, then stage {ledger}. It removes stale lines and never adds one."
 WRITE_MOVES = (
     "run `hoglint check --write-ledger`, then stage {ledger}. It records the new places and removes stale lines. "
@@ -112,11 +112,13 @@ def plural(count: int, word: str) -> str:
 class Attributed:
     """Incomplete items labelled against a baseline summary; `against` names the baseline.
     `inherited` names the new findings and ledger lines that HEAD has already, for a staged run
-    judged against HEAD (see `Inherited`); None for a run judged against its ledger alone."""
+    judged against HEAD (see `Inherited`); None for a run judged against its ledger alone. `where`
+    names the commits they come from: HEAD, or the parents of a merge."""
 
     labels: Labels
     against: str
     inherited: Inherited | None = None
+    where: str = "at HEAD"
 
     @property
     def inherited_keys(self) -> frozenset[LineKey]:
@@ -507,7 +509,8 @@ class CheckReport:
         lines = len(self.inherited.lines) if self.inherited is not None else 0
         parts = [plural(findings, "finding")] if findings else []
         parts += [plural(lines, "ledger line")] if lines else []
-        return [CARRIED.format(parts=", ".join(parts))] if parts else []
+        where = self.attributed.where if self.attributed is not None else "at HEAD"
+        return [CARRIED.format(where=where, parts=", ".join(parts))] if parts else []
 
     # ── views ──
 

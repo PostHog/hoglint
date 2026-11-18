@@ -12,7 +12,8 @@ a reference summary, per obligation:
 A staged run whose policy HEAD shares judges its findings and ledger lines against HEAD the same
 way (`Inherited`): new findings of a ledger key that HEAD has as new at least as many times, and a
 ledger line out of step with the scan exactly as at HEAD, are HEAD's debt, not the commit's. CI
-judges them; the ledger catches up there.
+judges them; the ledger catches up there. A commit that finishes a merge has several parents, and
+what any of them has is inherited (`union`, `Standing.union`).
 """
 
 from __future__ import annotations
@@ -62,6 +63,16 @@ def attribute(head: dict[Obligation, list[str]], reference: dict[Obligation, lis
     return out
 
 
+def union(references: list[dict[Obligation, list[str]]]) -> dict[Obligation, list[str]]:
+    """The reference of several parents: per obligation, each mark as often as the parent that
+    has it most often."""
+    counts: dict[Obligation, Counter[str]] = {}
+    for reference in references:
+        for obligation, marks in reference.items():
+            counts[obligation] = counts.get(obligation, Counter()) | Counter(marks)
+    return {obligation: sorted(marks.elements()) for obligation, marks in counts.items()}
+
+
 def rows(labels: Labels) -> list[tuple[Attribution, Obligation]]:
     """One row per item, in obligation order."""
     return [(label, obligation) for (obligation, _), items in sorted(labels.items()) for label in items]
@@ -83,6 +94,17 @@ class Standing:
             return Standing(summary.new_rows, frozenset())
         levels = (diff for diff in equality.new if is_level_line(diff.key))
         return Standing(summary.new_rows, frozenset([*equality.stale, *levels]))
+
+    @staticmethod
+    def union(standings: list[Standing]) -> Standing:
+        """What several parents have: per key the most new findings one parent has, and each line
+        any parent has out of step."""
+        new_rows: Counter[LineKey] = Counter()
+        lines: set[LineDiff] = set()
+        for standing in standings:
+            new_rows |= Counter(standing.new_rows)
+            lines |= standing.lines
+        return Standing(dict(new_rows), frozenset(lines))
 
 
 @dataclass(frozen=True, slots=True)
