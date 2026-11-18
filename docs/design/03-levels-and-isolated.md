@@ -94,15 +94,21 @@ A repo can drop its hand-kept input lists: `hoglint watched` derives each group'
 - **The item reading** (the architect's pick 1): a registration point that registers a list asks for the module that builds the list and the module that defines each item (`<edge selector>: items`).
   The module that builds the list is where the name core reads is bound, past every re-export (the architect, Nov 18): it decides what core registers, as the items' modules do.
   This lifts limit 4 of the level for derived sets.
-  The link reads each first-party module-level name bound to a sequence: a list, tuple or set literal, the values of a dict literal, `+` of such values, `*x` items, `sorted`, `list`, `tuple` or `set` of one, another name; `+=` at module level adds items.
+  The link reads what each first-party module-level name is bound to: a list, tuple or set literal, the keys and values of a dict literal, both sides of `+`, `|` and the other operations, `*x` items, `sorted`, `list`, `tuple` or `set` of one, `x.copy()`, both branches of a conditional expression, the items of what a comprehension loops over when its element is its own target (a filter only drops items), another name; `+=` at module level adds items.
+  A class attribute is read the same way where core reads it as `Class.ATTR` and the class body binds it.
   Each item name resolves where the module binds it; an item that is itself such a list adds its own items, and its module, which defines that item.
   A call item is its callee's and the list module's.
-  An item it cannot read (a subscript, an unresolved name), a second binding of the name, or a binding in a block is an incomplete item of the list's module, so the list's product cannot be isolated.
+  Of a library callee, `itertools.chain` holds the items of each argument, `functools.partial` the function it wraps, `dataclasses.replace` the items of the base and of the overrides; any other library call handed something that holds an item is unread, as the library may hand it on.
+  `getattr(module, "NAME")` with a literal identifier reads as `module.NAME`.
+  An item it cannot read (a subscript, an unresolved name, an attribute of a call), a second binding of the name, a binding in a block, a binding by unpacking, or any other expression is an incomplete item of the list's module, so the list's product cannot be isolated: a name the link cannot read is never a name with no items (Nov 18, the adversarial run on watched).
+  A registered name that resolves to nothing inside a module of the graph (a name only the module's `__getattr__` serves) is that module's incomplete item.
+  A registration point that registers a list the cover's selection leaves out (a core module's) carries the cover through to each list it holds, at any depth: `HOP_ALL = [*P_WORKFLOWS]` in a core module registers the items of `P_WORKFLOWS`.
   The table lives on the link next to the hand-outs and outlives the fact rows; it is no edge, so no table moves.
 - **The declaration reading** (the architect, Nov 18): what a registry's loader reads is registered like a list core imports by name (`<entity selector>: registered`, for the modules the selection keeps).
   In a registry's file the link reads the attribute the registry names (`[registries.<name>] attribute`) as a declaration: as a list's items, except that a call also holds what its arguments name, so the records a declaration builds hold their items (`TEMPORAL = TemporalRegistration(queues=(QueueBinding(workflows=WORKFLOWS),), schedules=(reconcile,))` registers the items of `WORKFLOWS` and `reconcile`).
   The call's callee counts as an item, as in a list; core's record classes (`TemporalRegistration`, `QueueBinding`) are core's files, so no product watches them.
-  It reads the arguments from the record's JSON text, the one place the link does, because the link's value trees keep no call's arguments.
+  A name a declaration names is read as a declaration where its module binds it, in the same file or across an import, so a record bound to a name (`_MAIN = QueueBinding(...)`), tuples built in another module, `*args` and `**kwargs`, `TEMPORAL = other.TEMPORAL`, `TEMPORAL = _TEMPORAL` and `dataclasses.replace(_BASE, ...)` keep their items.
+  It reads the arguments from the record's JSON text, as the item reading does for a call and for the parts of an assigned conditional or comprehension, because the link's value trees keep no call's arguments.
   The attribute bound by an import is unread (its value is built where no loader reads it as a declaration); a file that does not bind it, or binds it by a def or a class, registers no value.
   The preset declares `[registries.temporal]` (`products/{product}/backend/facade/temporal.py`, `TEMPORAL`, read by `posthog.products.load_product_modules` at worker start).
   The derived form selects that registry only (`registry == 'temporal'`): the admin console's `console` attribute is the imported registry object, which this reading would call unread.
@@ -123,6 +129,9 @@ Its limits, in plain words:
 2. A callable handed to a hook through a parameter or a local variable is not followed, so it is unknown; a wrapper that forwards its parameter to a hook is followed where its callers call it, when the wrapper is a declared hook too.
 3. The modules a registered item's module imports, a callback's own imports past one hop, and the helpers behind a watched file are not watched (the Nov 11 deferral; the owner let them leave selection, Nov 17).
 4. Nothing compares a derived set with an independent list: the same run makes the set and the level's verdict.
+5. A class attribute the class body does not bind (inherited, or set in a method) reads as the class, which defines no list.
+6. An item of a core list that the link cannot read is the core module's unknown, which no group owns; only the lists a core list holds carry the cover through to a product.
+7. A worker the preset does not mark as a registration point, and a management command core runs by name (`call_command`), ask for nothing: no cover reads them.
 
 **The linter carries the skip's safety** (owner, Nov 4).
 Rules that feed the skip block, and unknowns count against the product.

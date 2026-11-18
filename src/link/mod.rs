@@ -419,6 +419,7 @@ impl Link {
             hand_outs: FxHashMap::default(),
             dataclass_bases: FxHashMap::default(),
             sequences: FxHashMap::default(),
+            class_reads: FxHashSet::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);

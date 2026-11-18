@@ -8,6 +8,7 @@ use super::value::{Truth, Value, any_of, split_list};
 use super::{Handed, Rules, longest_module, name_owner};
 use crate::link::Link;
 use crate::link::intern::{EMPTY, Sid};
+use crate::link::resolve::Ent;
 use crate::link::scope::Res;
 use std::borrow::Cow;
 use std::cell::Cell as Flag;
@@ -214,6 +215,20 @@ impl<'a> Cx<'a> {
             external: None,
             unresolved: false,
             scope: if scoped { scope_text } else { "" },
+        }
+    }
+
+    /// The endpoint a first-party name inside a module is, as an edge's origin would be.
+    pub fn entity_endpoint(&self, ent: Ent) -> Endpoint<'a> {
+        let at = self.module_at(ent.m);
+        Endpoint {
+            module: Some(ent.m),
+            at,
+            symbol: Symbol::Inside(ent.m, ent.s),
+            path: self.path_at(at),
+            external: None,
+            unresolved: false,
+            scope: "",
         }
     }
 

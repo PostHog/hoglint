@@ -7,7 +7,7 @@ use super::env::{Cx, Endpoint, EntityEnv, Env, Role, Symbol};
 use super::labels::Field;
 use super::plan::CoverPlan;
 use super::selector::{Compiler, Node, Ref, Resolve, evaluate};
-use super::staged::{Staged, class_truth};
+use super::staged::{Staged, class_truth, parts_truth};
 use super::value::{Truth, Value, all_of, render};
 use crate::link::Link;
 use crate::link::intern::Sid;
@@ -129,6 +129,7 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
     let mut dsts: Vec<Endpoint> = Vec::with_capacity(2);
     let mut hops: Vec<Endpoint> = Vec::new();
     let mut named: Vec<Endpoint> = Vec::with_capacity(1);
+    let mut surfaces: Vec<Endpoint> = Vec::with_capacity(1);
     // A location cover's rows go in last: a directory another cover needs file by file (an empty
     // directory without `__init__.py`) keeps that need.
     let mut locations: Vec<(String, u32, String)> = Vec::new();
@@ -194,6 +195,15 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         cx.dst_endpoints(id, Role::Surface, &mut named);
                     }
                     for dst in dsts.iter() {
+                        let mut dst = dst;
+                        // An origin the link cannot name, inside a module of the graph (a name
+                        // only a module's `__getattr__` serves), is judged as that module's.
+                        if *items && dst.unresolved {
+                            cx.dst_endpoints(id, Role::Surface, &mut surfaces);
+                            if let Some(inside) = surfaces.first().filter(|end| end.at.is_some()) {
+                                dst = inside;
+                            }
+                        }
                         let held = if *via {
                             via_truth(cx, rest, id, src, *dst, &hops)
                         } else {
@@ -201,6 +211,25 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         };
                         let truth = all_of([edge_truth, held]);
                         if truth == Truth::False {
+                            // Only a source the selection keeps registers what a list holds.
+                            let env = Env::new(cx, Some(id), src, *dst);
+                            if *items
+                                && let Symbol::Inside(module, name) = dst.symbol
+                                && parts_truth(rest.src(), &env) == Truth::True
+                            {
+                                let list = read_list(cx, id, (module, name));
+                                let mut through = Through {
+                                    cx,
+                                    rest,
+                                    edge_truth,
+                                    id,
+                                    src,
+                                    at,
+                                    found: &mut found,
+                                    out: &mut out,
+                                };
+                                through.lists(list);
+                            }
                             continue;
                         }
                         if truth == Truth::Unknown {
@@ -208,8 +237,18 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                             continue;
                         }
                         if *items {
-                            if let Symbol::Inside(module, name) = dst.symbol {
-                                sequence_files(cx, (module, name), at, &mut found, &mut out);
+                            match dst.symbol {
+                                Symbol::Inside(module, name) => {
+                                    let list = read_list(cx, id, (module, name));
+                                    sequence_files(cx, list, at, &mut found, &mut out);
+                                }
+                                Symbol::Name(surface) if dst.module.is_some() => {
+                                    let module =
+                                        dst.module.map(|module| cx.text(module).to_string());
+                                    let named = cx.text(surface).to_string();
+                                    out.incomplete.push(("unread-items", at, module, named));
+                                }
+                                _ => {}
                             }
                             continue;
                         }
@@ -334,6 +373,21 @@ fn registered_attribute(cx: Cx, place: u32) -> Option<Sid> {
     cx.link.core.it.get(attribute)
 }
 
+/// The list edge `id` reads at its origin `name`: the class attribute its chain reads next
+/// (`Class.ATTR`) when the link holds one, else the name.
+fn read_list(cx: Cx, id: u32, name: (Sid, Sid)) -> (Sid, Sid) {
+    let chain = cx.attr(id, cx.link.core.it.get("chain"));
+    let Some(rest) = chain.strip_prefix('.') else {
+        return name;
+    };
+    let attribute = rest.split(['.', '(', '[']).next().unwrap_or_default();
+    let key = format!("{}.{attribute}", cx.text(name.1));
+    match cx.link.core.it.get(&key) {
+        Some(sid) if cx.link.sequences.contains_key(&(name.0, sid)) => (name.0, sid),
+        _ => name,
+    }
+}
+
 /// The files of the module that builds the sequence `list` names and of the modules that define
 /// its items, through each item that is itself such a sequence. A name that is no sequence needs
 /// nothing.
@@ -375,6 +429,51 @@ fn sequence_files(
             need(ent.m);
             if cx.link.sequences.contains_key(&(ent.m, ent.s)) {
                 stack.push((ent.m, ent.s));
+            }
+        }
+    }
+}
+
+/// A registered list the selection leaves out (a core module's) may hold lists it keeps: a core
+/// module that re-lists a product's list (`ALL = [*P_WORKFLOWS]`) carries the registration
+/// through to that list. Each list it holds, at any depth, is judged as the edge's destination.
+struct Through<'n, 'a> {
+    cx: Cx<'a>,
+    rest: &'n Staged,
+    edge_truth: Truth,
+    id: u32,
+    src: Endpoint<'a>,
+    at: u32,
+    found: &'n mut FxHashMap<String, (u32, Option<String>)>,
+    out: &'n mut Required,
+}
+
+impl Through<'_, '_> {
+    fn lists(&mut self, list: (Sid, Sid)) {
+        let cx = self.cx;
+        let mut stack = vec![list];
+        let mut seen = FxHashSet::default();
+        while let Some(list) = stack.pop() {
+            if !seen.insert(list) {
+                continue;
+            }
+            let Some(members) = cx.link.sequences.get(&list) else {
+                continue;
+            };
+            for member in members.iter().flatten() {
+                let inner = (member.m, member.s);
+                if !cx.link.sequences.contains_key(&inner) || cx.module_at(member.m).is_none() {
+                    continue;
+                }
+                let env = Env::new(cx, Some(self.id), self.src, cx.entity_endpoint(*member));
+                match all_of([self.edge_truth, self.rest.truth(&env)]) {
+                    Truth::True => sequence_files(cx, inner, self.at, self.found, self.out),
+                    Truth::Unknown => {
+                        let row = unplaced(cx, self.at, &self.src, self.id);
+                        self.out.incomplete.push(row);
+                    }
+                    Truth::False => stack.push(inner),
+                }
             }
         }
     }
