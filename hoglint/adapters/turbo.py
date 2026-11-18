@@ -27,7 +27,7 @@ import re
 import json
 import posixpath
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -234,6 +234,16 @@ class TurboReader:
         return posixpath.normpath(posixpath.join(directory, glob))
 
 
+def any_glob(globs: Iterable[str]) -> re.Pattern[str] | None:
+    """One regex that matches a path when one of the globs matches it; None for no glob. Each glob
+    compiles alone first, so a bad one fails as it would alone. Turbo braces make no named group,
+    so the globs join as alternatives."""
+    patterns = [compile_glob(glob, Braces.ALTERNATION) for glob in globs]
+    if not patterns:
+        return None
+    return re.compile("|".join(f"(?:{pattern.pattern})" for pattern in patterns))
+
+
 class TurboInputs:
     """Answers whether the task's inputs watch a path. `table` is the task's table when it is known
     already; else it is read from the files under `repo_root`."""
@@ -244,13 +254,7 @@ class TurboInputs:
         self.table = TurboReader(repo_root, task).read() if table is None else table
         self.directory_set = frozenset(self.table.directories)
         self.task_by_directory = {task.directory: task for task in self.table.tasks}
-        self.globs = {
-            task.directory: (
-                [compile_glob(glob, Braces.ALTERNATION) for glob in task.excludes],
-                [compile_glob(glob, Braces.ALTERNATION) for glob in task.includes],
-            )
-            for task in self.table.tasks
-        }
+        self.globs = {task.directory: (any_glob(task.excludes), any_glob(task.includes)) for task in self.table.tasks}
         self.answers: dict[str, tuple[bool, str]] = {}
 
     def tracked(self, path: str) -> bool:
@@ -260,9 +264,9 @@ class TurboInputs:
 
     def watches(self, task: PackageTask, path: str) -> bool:
         excludes, includes = self.globs[task.directory]
-        if any(pattern.match(path) for pattern in excludes):
+        if excludes is not None and excludes.match(path):
             return False
-        if any(pattern.match(path) for pattern in includes):
+        if includes is not None and includes.match(path):
             return True
         inside = not task.directory or path.startswith(task.directory + "/")
         return task.default and inside and self.tracked(path)
