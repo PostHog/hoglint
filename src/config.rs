@@ -20,6 +20,7 @@ pub enum Kind {
     Calls,
     Defs,
     Derived,
+    Escapes,
     Imports,
     Listed,
     Names,
@@ -32,13 +33,14 @@ pub enum Kind {
 
 impl Kind {
     /// In name order, which is also the order `cfg` lists them in.
-    pub const ALL: [Kind; 14] = [
+    pub const ALL: [Kind; 15] = [
         Kind::Assigns,
         Kind::Branches,
         Kind::Callees,
         Kind::Calls,
         Kind::Defs,
         Kind::Derived,
+        Kind::Escapes,
         Kind::Imports,
         Kind::Listed,
         Kind::Names,
@@ -57,6 +59,7 @@ impl Kind {
             Kind::Calls => "calls",
             Kind::Defs => "defs",
             Kind::Derived => "derived",
+            Kind::Escapes => "escapes",
             Kind::Imports => "imports",
             Kind::Listed => "listed",
             Kind::Names => "names",

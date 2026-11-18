@@ -295,6 +295,15 @@ impl Enc<'_> {
         for &name in &f.listed {
             self.sid(name);
         }
+        self.u32(f.escapes.len() as u32);
+        for r in &f.escapes {
+            self.i32(r.scope);
+            self.i32(r.header);
+            self.u32(r.line);
+            self.u32(r.col);
+            self.u32(r.flags);
+            self.sid(r.name);
+        }
     }
 
     fn counts(&mut self, rows: &[CountRow]) {
@@ -599,6 +608,7 @@ pub fn decode_body(
             4 => Op::AddAssign,
             5 => Op::Mutate,
             6 => Op::Global,
+            7 => Op::OrAssign,
             _ => Op::Other,
         };
         let targets = d.values()?;
@@ -710,6 +720,18 @@ pub fn decode_body(
     for _ in 0..n {
         listed.push(d.sid()?);
     }
+    let n = d.u32()? as usize;
+    let mut escapes = Vec::with_capacity(n);
+    for _ in 0..n {
+        escapes.push(TagRow {
+            scope: d.i32()?,
+            header: d.i32()?,
+            line: d.u32()?,
+            col: d.u32()?,
+            flags: d.u32()?,
+            name: d.sid()?,
+        });
+    }
     Ok(FileFacts {
         path: path.into(),
         status,
@@ -724,6 +746,7 @@ pub fn decode_body(
         names,
         tags,
         listed,
+        escapes,
         line: line_start..line_start + json_len,
         keys,
     })

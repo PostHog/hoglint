@@ -25,6 +25,8 @@ struct Line<'r> {
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     derived: &'r [Ref],
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    escapes: &'r [Tag],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
     imports: &'r [Import],
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     listed: &'r [Count<TextKey>],
@@ -58,6 +60,7 @@ pub fn record_line(record: &FileRecord, cfg: &str, path: &str) -> serde_json::Re
         cfg,
         defs: &facts.defs,
         derived: &facts.derived,
+        escapes: &facts.escapes,
         imports: &facts.imports,
         listed: &facts.listed,
         names: &facts.names,

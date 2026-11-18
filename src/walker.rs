@@ -19,10 +19,11 @@ use ruff_text_size::{Ranged, TextSize};
 use std::collections::{HashMap, HashSet};
 
 /// Kinds whose rows come from expressions. Without any of them the walk skips expressions.
-const EXPRESSION_KINDS: [Kind; 10] = [
+const EXPRESSION_KINDS: [Kind; 11] = [
     Kind::Callees,
     Kind::Calls,
     Kind::Derived,
+    Kind::Escapes,
     Kind::Listed,
     Kind::Names,
     Kind::Refs,
@@ -63,6 +64,135 @@ fn name_id(expr: &Expr) -> &str {
 /// to a name's items (`emit_mutation`).
 const MUTATORS: [&str; 5] = ["append", "extend", "insert", "update", "add"];
 
+/// Calls handed a name that read it and change no value they are handed, by the callee's last
+/// name: copies and the read-only builtins.
+const READING_CALLEES: [&str; 27] = [
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "sorted",
+    "reversed",
+    "len",
+    "iter",
+    "enumerate",
+    "zip",
+    "map",
+    "filter",
+    "any",
+    "all",
+    "sum",
+    "min",
+    "max",
+    "isinstance",
+    "issubclass",
+    "print",
+    "repr",
+    "str",
+    "bool",
+    "chain",
+    "replace",
+    "copy",
+    "deepcopy",
+];
+
+/// Methods of a list, set or dict that read it, or only take items out of it.
+const READING_METHODS: [&str; 13] = [
+    "copy", "values", "keys", "items", "get", "index", "count", "remove", "pop", "clear",
+    "discard", "sort", "reverse",
+];
+
+/// Whether the item reading understands a load of a name with this use-site context (`climb`'s
+/// chain and escape steps): one that cannot change what the name holds, or one it reads as a
+/// change (a module-level `name.append(x)` statement, a subscript store). Anything else, such
+/// as handing the name to a call, an attribute store, or another method, is not understood.
+fn understood_use(chain: &str, up: &str, module_level: bool) -> bool {
+    let first = up.split(' ').next().unwrap_or_default();
+    if chain.is_empty() {
+        if let Some(call) = first.strip_prefix("arg:") {
+            let callee = call.split_once(':').map_or("", |(_, callee)| callee);
+            let last = callee.rsplit('.').next().unwrap_or_default();
+            return READING_CALLEES.contains(&last);
+        }
+        let parts = [
+            "elt:",
+            "star",
+            "dict:",
+            "bin:",
+            "bool:",
+            "ifexp:",
+            "cmp:",
+            "unary:",
+            "assign:",
+            "annassign:",
+            "augassign:",
+            "comp:",
+            "slice",
+            "await",
+            "kw:**:",
+        ];
+        let terminals = [
+            "expr",
+            "for-iter",
+            "if-test",
+            "while-test",
+            "assert",
+            "assert-msg",
+            "return",
+            "case",
+            "match",
+            "annotation",
+            "returns",
+            "except",
+            "raise",
+        ];
+        let headers = ["base:", "classkw:", "param-ann:"];
+        if headers.iter().any(|header| first.starts_with(header)) {
+            return true;
+        }
+        return parts.iter().any(|part| first.starts_with(part)) || terminals.contains(&first);
+    }
+    if chain.starts_with("()") {
+        return true;
+    }
+    if chain == "[]" {
+        return !first.starts_with("augassign-target");
+    }
+    let Some(attrs) = chain.strip_prefix('.') else {
+        return false;
+    };
+    match attrs.split_once("()") {
+        // One method called on the name.
+        Some((method, "")) if !method.contains('.') => {
+            let statement = module_level && first == "expr";
+            READING_METHODS.contains(&method) || (statement && MUTATORS.contains(&method))
+        }
+        Some(_) => false,
+        // An attribute read, not a store.
+        None => !attrs.contains('[') && !first.ends_with("-target") && first != "del",
+    }
+}
+
+/// What a use the item reading does not understand makes unread: the name itself when the code
+/// hands it on or calls another method of it (`W.setdefault(...)`); `name.ATTR` when it changes
+/// an attribute of it (`Reg.WORKFLOWS = ...`, `Reg.WORKFLOWS.append(B)`); `name.*`, every
+/// attribute, when it is handed to `setattr` or `delattr`.
+fn escaped_name(id: &str, chain: &str, first: &str) -> String {
+    let callee = first.strip_prefix("arg:0:").unwrap_or_default();
+    if chain.is_empty() && matches!(callee, "setattr" | "delattr") {
+        return format!("{id}.*");
+    }
+    let Some(attrs) = chain.strip_prefix('.') else {
+        return id.to_string();
+    };
+    let attribute = attrs.split(['.', '(', '[']).next().unwrap_or_default();
+    let called = attrs[attribute.len()..] == *"()";
+    if attribute.is_empty() || called {
+        return id.to_string();
+    }
+    format!("{id}.{attribute}")
+}
+
 /// Where a node sits: its scope, the def whose header holds it (-1 = none), and the flags of
 /// the enclosing statements.
 #[derive(Clone, Copy)]
@@ -97,6 +227,7 @@ pub struct Walk {
     pub strs: Vec<DottedStr>,
     pub tags: Vec<Tag>,
     pub watched: Vec<WatchedKey>,
+    pub escapes: Vec<Tag>,
     pub branches: Vec<Branch>,
     pub uses: Counts<UseKey>,
     pub callees: Counts<TextKey>,
@@ -145,6 +276,8 @@ pub struct Walker<'a, 'w> {
     stored: &'w HashSet<&'a str>,
     sequences: &'w Sequences<'a>,
     loops: Vec<LoopValues<'a>>,
+    /// The names each function declares `global`, by its scope (`emit_global`).
+    globals: HashMap<i64, HashSet<String>>,
     config: &'w ExtractConfig,
     /// Whether any requested kind needs the expression walk.
     exprs: bool,
@@ -175,6 +308,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             stored,
             sequences,
             loops: Vec::new(),
+            globals: HashMap::new(),
             config,
             exprs: config.kinds.any(&EXPRESSION_KINDS),
             enc: Encoder::default(),
@@ -400,6 +534,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                         .collect();
                     let v = self.enc.assigned(Some(&a.value), self.src);
                     self.emit_assign(stmt, at, "=".to_string(), t, None, v);
+                } else {
+                    let targets: Vec<&Expr> = a.targets.iter().collect();
+                    self.emit_global(stmt, at, &targets, Some(&a.value));
                 }
                 for t in &a.targets {
                     self.child(Frame::Terminal("assign-target"), t, at);
@@ -412,6 +549,8 @@ impl<'a, 'w> Walker<'a, 'w> {
                     let ann = self.value(Some(&a.annotation), true);
                     let v = self.enc.assigned(a.value.as_deref(), self.src);
                     self.emit_assign(stmt, at, ":".to_string(), t, Some(ann), v);
+                } else if a.value.is_some() {
+                    self.emit_global(stmt, at, &[&*a.target], a.value.as_deref());
                 }
                 self.child(Frame::Terminal("annassign-target"), &a.target, at);
                 self.child(Frame::Terminal("annotation"), &a.annotation, at);
@@ -424,6 +563,8 @@ impl<'a, 'w> Walker<'a, 'w> {
                     let t = vec![self.value(Some(&a.target), false)];
                     let v = self.enc.assigned(Some(&a.value), self.src);
                     self.emit_assign(stmt, at, format!("{op}="), t, None, v);
+                } else {
+                    self.emit_global(stmt, at, &[&*a.target], Some(&a.value));
                 }
                 self.child(Frame::Terminal("augassign-target"), &a.target, at);
                 self.child(Frame::AugAssignValue(op, &a.target), &a.value, at);
@@ -444,7 +585,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.emit_mutation(stmt, &e.value, at);
                 self.child(Frame::Terminal("expr"), &e.value, at)
             }
-            Stmt::Global(g) => self.emit_global(stmt, g, at),
+            Stmt::Global(g) => {
+                let names = self.globals.entry(at.scope).or_default();
+                names.extend(g.names.iter().map(|name| name.to_string()));
+            }
             Stmt::Return(r) => self.opt_child(Frame::Terminal("return"), r.value.as_deref(), at),
             Stmt::Delete(d) => {
                 for t in &d.targets {
@@ -719,24 +863,95 @@ impl<'a, 'w> Walker<'a, 'w> {
         self.emit_assign(stmt, at, "()".to_string(), vec![target], None, v);
     }
 
-    /// `global NAME` in a function: the function may rebind the module-level name, so the name
-    /// gets a module-level row with op `global`, no value, and the statement's flags.
-    fn emit_global(&mut self, stmt: &Stmt, global: &ast::StmtGlobal, at: At) {
-        if at.scope == -1 || !self.wants(Kind::Assigns) {
+    /// An assignment in a function to a name the function declares `global`: a module-level row
+    /// with op `global`, the statement's flags and the assigned value, so the reading knows what
+    /// the function may bind the name to.
+    fn emit_global(&mut self, stmt: &Stmt, at: At, targets: &[&Expr], value: Option<&Expr>) {
+        if at.scope == -1 || self.emits_assign(at.scope) || !self.wants(Kind::Assigns) {
             return;
         }
+        let Some(names) = self.globals.get(&at.scope) else {
+            return;
+        };
+        let bound: Vec<String> = targets
+            .iter()
+            .filter_map(|target| match target {
+                Expr::Name(name) if names.contains(name.id.as_str()) => Some(name.id.to_string()),
+                _ => None,
+            })
+            .collect();
+        if bound.is_empty() {
+            return;
+        }
+        let v = self.enc.assigned(value, self.src);
         let module = At { scope: -1, ..at };
-        for name in &global.names {
-            let target = Value::Chain(name.to_string());
+        for name in bound {
+            let target = Value::Chain(name);
             self.emit_assign(
                 stmt,
                 module,
                 "global".to_string(),
                 vec![target],
                 None,
-                Value::Null,
+                v.clone(),
             );
         }
+    }
+
+    /// An `escapes` row: a name the item reading cannot read at the name node's site.
+    fn emit_escape(&mut self, name: &ast::ExprName, at: At, escaped: &str) {
+        let (l, c) = self.lines.pos(name.range.start());
+        self.out.escapes.push(Tag {
+            site: at.site((l, c)),
+            name: escaped.to_string(),
+        });
+    }
+
+    /// The `escapes` rows of a name node: a load at module level or in a class body, of a name
+    /// no import binds, in a position the item reading does not understand (`understood_use`);
+    /// `globals()` and `sys.modules[__name__]`, which reach every name of the module (`*`); and a
+    /// store of a name a function declares `global` that is no assignment (a `for` target, say),
+    /// sited at module level.
+    fn emit_use(&mut self, name: &ast::ExprName, at: At) {
+        if !self.wants(Kind::Escapes) {
+            return;
+        }
+        let id = name.id.as_str();
+        let (chain, up) = climb(&self.path);
+        let first = up.split(' ').next().unwrap_or_default();
+        if name.ctx != ExprContext::Load {
+            let global = at.scope != -1
+                && !self.emits_assign(at.scope)
+                && self
+                    .globals
+                    .get(&at.scope)
+                    .is_some_and(|names| names.contains(id));
+            let assigned = matches!(
+                first,
+                "assign-target" | "annassign-target" | "augassign-target"
+            );
+            if global && !assigned {
+                let module = At { scope: -1, ..at };
+                self.emit_escape(name, module, id);
+            }
+            return;
+        }
+        if !self.emits_assign(at.scope) {
+            return;
+        }
+        let everything =
+            (id == "globals" && chain == "()") || (id == "__name__" && first == "slice");
+        if everything {
+            self.emit_escape(name, at, "*");
+            return;
+        }
+        if id.starts_with("__")
+            || self.bound.contains_key(id)
+            || understood_use(&chain, &up, at.scope == -1)
+        {
+            return;
+        }
+        self.emit_escape(name, at, &escaped_name(id, &chain, first));
     }
 
     fn expr(&mut self, expr: &'a Expr, at: At) {
@@ -995,6 +1210,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// `uses` count. Another load may be a derived local: it becomes a candidate. `derived`
     /// needs the `refs` rows too: they seed the derivation.
     fn emit_ref(&mut self, name: &'a ast::ExprName, at: At) {
+        self.emit_use(name, at);
         if !self.wants_any(&[Kind::Refs, Kind::Derived, Kind::Uses, Kind::Listed]) {
             return;
         }

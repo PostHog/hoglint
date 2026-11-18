@@ -157,6 +157,7 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             tags: walk.tags,
             uses: counts(walk.uses),
             watched: walk.watched,
+            escapes: walk.escapes,
         }
     }
 

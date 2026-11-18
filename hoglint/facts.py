@@ -26,6 +26,7 @@ FACT_KINDS = frozenset(
         "calls",
         "defs",
         "derived",
+        "escapes",
         "imports",
         "listed",
         "names",

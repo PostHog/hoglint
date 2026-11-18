@@ -127,8 +127,10 @@ pub enum Op {
     /// `()`: a module-level call that changes the name in place (`WORKFLOWS.append(B)`); the
     /// target is `name.method`, the value the call.
     Mutate,
-    /// `global`: a function may rebind the module-level name; no value.
+    /// `global`: a function rebinds the module-level name, to the value when there is one.
     Global,
+    /// `|=`: adds to a set or a dict in place.
+    OrAssign,
 }
 
 pub struct Assign {
@@ -237,6 +239,9 @@ pub struct FileFacts {
     pub tags: Vec<TagRow>,
     /// The import-bound names every load of which sits in a list, tuple, set or dict literal.
     pub listed: Vec<Sid>,
+    /// The names the item reading cannot read at a site (the record's `escapes`); `*` for every
+    /// name of the module.
+    pub escapes: Vec<TagRow>,
     pub line: Range<usize>,
     pub keys: Vec<(Box<str>, Range<usize>)>,
 }
@@ -606,6 +611,7 @@ struct Parsed {
     names: J,
     tags: J,
     listed: J,
+    escapes: J,
 }
 
 fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
@@ -628,6 +634,7 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
         names: J::Null,
         tags: J::Null,
         listed: J::Null,
+        escapes: J::Null,
     };
     for (key, raw) in &map {
         let at = raw.get().as_ptr() as usize - start;
@@ -649,6 +656,7 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
             "names" => parsed.names = decode(raw)?,
             "tags" => parsed.tags = decode(raw)?,
             "listed" => parsed.listed = decode(raw)?,
+            "escapes" => parsed.escapes = decode(raw)?,
             _ => {}
         }
     }
@@ -761,6 +769,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 "+=" => Op::AddAssign,
                 "()" => Op::Mutate,
                 "global" => Op::Global,
+                "|=" => Op::OrAssign,
                 _ => Op::Other,
             };
             let object = a.as_object();
@@ -854,17 +863,21 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
     };
     let callees = counts(it, &parsed.callees);
     let names = counts(it, &parsed.names);
-    let tags = rows(&parsed.tags)
-        .iter()
-        .map(|r| TagRow {
-            scope: int(row(r, 0)) as i32,
-            header: int(row(r, 1)) as i32,
-            line: int(row(r, 2)) as u32,
-            col: int(row(r, 3)) as u32,
-            flags: int(row(r, 4)) as u32,
-            name: it.intern(text(row(r, 5))),
-        })
-        .collect();
+    let tag_rows = |it: &mut Interner, value: &J| -> Vec<TagRow> {
+        rows(value)
+            .iter()
+            .map(|r| TagRow {
+                scope: int(row(r, 0)) as i32,
+                header: int(row(r, 1)) as i32,
+                line: int(row(r, 2)) as u32,
+                col: int(row(r, 3)) as u32,
+                flags: int(row(r, 4)) as u32,
+                name: it.intern(text(row(r, 5))),
+            })
+            .collect()
+    };
+    let tags = tag_rows(it, &parsed.tags);
+    let escapes = tag_rows(it, &parsed.escapes);
     let listed = rows(&parsed.listed)
         .iter()
         .map(|r| it.intern(text(row(r, 2))))
@@ -883,6 +896,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
         names,
         tags,
         listed,
+        escapes,
         line,
         keys: parsed.keys,
     }

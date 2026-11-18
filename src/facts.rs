@@ -231,6 +231,11 @@ pub struct Facts {
     pub calls: Vec<WatchedCall>,
     pub defs: Vec<Def>,
     pub derived: Vec<Ref>,
+    /// The names the item reading cannot read at a site: a module-level or class-body use it does
+    /// not understand (handed to a call, an attribute store, another method), a store of a name a
+    /// function declares `global` by no assignment, or `*` for `globals()` and
+    /// `sys.modules[__name__]`, which reach every name.
+    pub escapes: Vec<Tag>,
     pub imports: Vec<Import>,
     /// The import-bound names every load of which in the file sits in a list, tuple, set or dict
     /// literal: one row per name (scope and header -1), with its count of loads.
@@ -290,6 +295,7 @@ impl Facts {
         clear(&mut self.calls, kinds, Kind::Calls);
         clear(&mut self.defs, kinds, Kind::Defs);
         clear(&mut self.derived, kinds, Kind::Derived);
+        clear(&mut self.escapes, kinds, Kind::Escapes);
         clear(&mut self.imports, kinds, Kind::Imports);
         clear(&mut self.listed, kinds, Kind::Listed);
         clear(&mut self.names, kinds, Kind::Names);
@@ -307,6 +313,7 @@ impl Facts {
         sort_rows(&mut self.callees);
         sort_rows(&mut self.calls);
         sort_rows(&mut self.derived);
+        sort_rows(&mut self.escapes);
         sort_rows(&mut self.imports);
         sort_rows(&mut self.listed);
         sort_rows(&mut self.names);
