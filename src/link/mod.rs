@@ -297,9 +297,13 @@ pub struct Link {
     /// (module, module it reads by a computed name) (produce.rs `computed_reads`): the `: items`
     /// cover cannot tell which list such a read registers.
     pub computed_reads: FxHashSet<(Sid, Sid)>,
-    /// The names bound to a value shaped like a list (produce.rs `lists`): an unread item of a
-    /// core one a registration point registers is a problem of the answer.
-    pub lists: FxHashSet<(Sid, Sid)>,
+    /// Every name a module or a class body binds by assignment, constants too (produce.rs
+    /// `bound`): a name a registration point iterates that holds no list is a constant, not
+    /// something the link cannot read.
+    pub bound: FxHashSet<(Sid, Sid)>,
+    /// The defs and classes the body of a class whose attributes an edge reads defines, as
+    /// (module, `Class.NAME`) (produce.rs `defined`).
+    pub defined: FxHashSet<(Sid, Sid)>,
     /// The bases of the third-party classes the inherit edges reach (`outside_bases`), by class.
     pub outside_bases: FxHashMap<String, Vec<String>>,
     /// Each `[discovery] reference_names` entry with the definition it resolves to, or None when it
@@ -429,7 +433,9 @@ impl Link {
             declared: FxHashMap::default(),
             registrable: FxHashMap::default(),
             computed_reads: FxHashSet::default(),
-            lists: FxHashSet::default(),
+            attributes: FxHashMap::default(),
+            bound: FxHashSet::default(),
+            defined: FxHashSet::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
@@ -440,7 +446,8 @@ impl Link {
         let hand_outs = std::mem::take(&mut producers.hand_outs);
         let sequences = std::mem::take(&mut producers.sequences);
         let computed_reads = std::mem::take(&mut producers.computed_reads);
-        let lists = std::mem::take(&mut producers.lists);
+        let bound = std::mem::take(&mut producers.bound);
+        let defined = std::mem::take(&mut producers.defined);
         let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
         let reference_definitions = Self::reference_definitions(&mut core, &config.reference_names);
         edges.kind_names = KIND_NAMES.iter().map(|kind| core.it.intern(kind)).collect();
@@ -464,7 +471,8 @@ impl Link {
             hand_outs,
             sequences,
             computed_reads,
-            lists,
+            bound,
+            defined,
             outside_bases,
             reference_definitions,
             first_party,

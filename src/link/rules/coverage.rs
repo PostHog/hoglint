@@ -214,21 +214,30 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         if truth == Truth::False {
                             // Only a source the selection keeps registers what a list holds.
                             let env = Env::new(cx, Some(id), src, *dst);
-                            if *items
-                                && let Registered::List(list) = registered(cx, id, &src, dst)
-                                && parts_truth(rest.src(), &env) == Truth::True
-                            {
-                                let mut through = Through {
-                                    cx,
-                                    rest,
-                                    edge_truth,
-                                    id,
-                                    src,
-                                    at,
-                                    found: &mut found,
-                                    out: &mut out,
-                                };
-                                through.lists(list);
+                            if !*items || parts_truth(rest.src(), &env) != Truth::True {
+                                continue;
+                            }
+                            match registered(cx, id, &src, dst) {
+                                Registered::List(list) => {
+                                    let mut through = Through {
+                                        cx,
+                                        rest,
+                                        edge_truth,
+                                        id,
+                                        src,
+                                        at,
+                                        found: &mut found,
+                                        out: &mut out,
+                                    };
+                                    through.lists(list);
+                                }
+                                // What a registration point registers from a module no group
+                                // owns, which the link cannot read, may be any product's list.
+                                Registered::Unread(module, named) => {
+                                    let row = ("unread-core-items", at, Some(module), named);
+                                    out.incomplete.push(row);
+                                }
+                                Registered::Nothing => {}
                             }
                             continue;
                         }
@@ -382,17 +391,25 @@ enum Registered {
 
 /// What edge `id` registers at destination `dst`:
 /// - a name: the list the link holds for it, or for the class attribute the edge's chain reads
-///   next (`Class.ATTR`, `Outer.Inner.ATTR`); one read off an instance (`Class().ATTR`) is unread,
-///   as what the instance holds can differ;
+///   next (`Class.ATTR`, `Outer.Inner.ATTR`); when the origin holds no list (a one-class
+///   container resolves to the class), the list of the name the code names or a name it passes
+///   on the way; an attribute read off an instance (`Class().ATTR`) is unread, as what the
+///   instance holds can differ; a name iterated (`[f.value for f in Flows]`) that the link holds
+///   no list for and that no assignment binds is unread;
 /// - a name the link cannot resolve inside a module of the graph (only a module `__getattr__`
-///   serves it, or the code reads it by a computed name, `getattr(module, NAME)`): unread;
-/// - a whole module the source reads by a computed name (`getattr(module, NAME)`, `vars(module)`):
-///   unread;
-/// - a whole module a loader call returns (`import_module("m").ATTR`, the module's path as the
-///   call's first argument): the attribute read next, else, with no attribute, unread.
+///   serves it): unread;
+/// - a whole module the source uses other than by `module.NAME` (handed to a call, read through
+///   `__dict__`, `getattr(module, NAME)`, `vars(module)`): unread;
+/// - a whole module whose path the code hands to a call or a subscript (`import_module("m")`,
+///   `sys.modules["m"]`): the attribute read next, else unread.
 fn registered(cx: Cx, id: u32, src: &Endpoint, dst: &Endpoint) -> Registered {
     match dst.symbol {
-        Symbol::Inside(module, name) => read_list(cx, id, (module, name)),
+        Symbol::Inside(module, name) => match read_list(cx, id, (module, name)) {
+            Registered::List(list) if !cx.link.sequences.contains_key(&list) => {
+                passed_list(cx, id, list)
+            }
+            found => found,
+        },
         Symbol::Name(surface) if dst.external.is_none() => match dst.module {
             Some(module) => {
                 Registered::Unread(cx.text(module).to_string(), cx.text(surface).to_string())
@@ -411,9 +428,41 @@ fn registered(cx: Cx, id: u32, src: &Endpoint, dst: &Endpoint) -> Registered {
     }
 }
 
+/// When the origin `list` of edge `id` holds no list: the list of a name the code names or passes
+/// on the way to it, when the link holds one; else, for an iterated name no assignment binds,
+/// unread; else the origin.
+fn passed_list(cx: Cx, id: u32, list: (Sid, Sid)) -> Registered {
+    let mut names = Vec::new();
+    cx.dst_endpoints(id, Role::Via, &mut names);
+    let mut surfaces = Vec::new();
+    cx.dst_endpoints(id, Role::Surface, &mut surfaces);
+    for endpoint in surfaces.iter().chain(&names) {
+        let (Some(module), Some(text)) = (endpoint.module, cx.symbol_text(endpoint.symbol)) else {
+            continue;
+        };
+        let Some(name) = text
+            .strip_prefix(cx.text(module))
+            .and_then(|rest| rest.strip_prefix('.'))
+        else {
+            continue;
+        };
+        if let Some(name) = cx.link.core.it.get(name)
+            && cx.link.sequences.contains_key(&(module, name))
+        {
+            return Registered::List((module, name));
+        }
+    }
+    let iterated = cx.text(cx.link.edges.use_of(id)) == "iterate";
+    if iterated && !cx.link.bound.contains(&list) {
+        let named = format!("{}.{}", cx.text(list.0), cx.text(list.1));
+        return Registered::Unread(cx.text(list.0).to_string(), named);
+    }
+    Registered::List(list)
+}
+
 /// The list edge `id` reads at its origin `name`: the class attribute its chain reads next
-/// (`Class.ATTR`; nested, `Outer.Inner.ATTR`) when the link holds one, else the name. Read off an
-/// instance (`Class().ATTR`), such an attribute is unread.
+/// (`Class.ATTR`; nested, `Outer.Inner.ATTR`) when the link holds one, else the name. An
+/// attribute read off an instance (`Class().ATTR`) is unread.
 fn read_list(cx: Cx, id: u32, name: (Sid, Sid)) -> Registered {
     let chain = cx.attr(id, cx.link.core.it.get("chain"));
     let (instance, path) = match chain.strip_prefix("()") {
@@ -423,6 +472,22 @@ fn read_list(cx: Cx, id: u32, name: (Sid, Sid)) -> Registered {
     let Some(rest) = path.strip_prefix('.') else {
         return Registered::List(name);
     };
+    if instance {
+        // An attribute the class body binds or defines (a property), read off an instance; a
+        // method called on one is a call, and any other attribute reads as the class.
+        let attribute = rest.split(['.', '(', '[']).next().unwrap_or_default();
+        let called = rest[attribute.len()..].starts_with("()");
+        let key = format!("{}.{attribute}", cx.text(name.1));
+        let known = cx.link.core.it.get(&key).is_some_and(|key| {
+            cx.link.sequences.contains_key(&(name.0, key))
+                || cx.link.defined.contains(&(name.0, key))
+        });
+        if known && !called {
+            let named = format!("{}.{}{chain}", cx.text(name.0), cx.text(name.1));
+            return Registered::Unread(cx.text(name.0).to_string(), named);
+        }
+        return Registered::List(name);
+    }
     let mut key = cx.text(name.1).to_string();
     let mut found = None;
     for part in rest.split('.') {
@@ -441,27 +506,23 @@ fn read_list(cx: Cx, id: u32, name: (Sid, Sid)) -> Registered {
         }
     }
     match found {
-        Some(_) if instance => {
-            let named = format!("{}.{}(){chain}", cx.text(name.0), cx.text(name.1));
-            Registered::Unread(cx.text(name.0).to_string(), named.replacen("()()", "()", 1))
-        }
         Some(sid) => Registered::List((name.0, sid)),
         None => Registered::List(name),
     }
 }
 
-/// What a dotted-path edge to a whole module registers when the module's path is the first
-/// argument of a loader call (`up` starts `arg:0:...import_module`): the attribute the code reads
-/// off the call next (`import_module("m").WORKFLOWS`), else, read by no attribute, unread. Any
-/// other edge to a whole module registers nothing an item cover reads.
+/// What a dotted-path edge to a whole module registers when the code hands the module's path to
+/// a call or a subscript (`up` starts `arg:N:` or `slice`): something loads the module there
+/// (`import_module("m")`, `__import__("m")`, `sys.modules["m"]`), so what it registers is the
+/// attribute the code reads right after (`.WORKFLOWS`), else unread. A path in any other place
+/// (a list of locations, say) registers nothing an item cover reads.
 fn loaded_list(cx: Cx, id: u32, module: Sid) -> Registered {
     let up = cx.attr(id, cx.link.core.it.get("up"));
     let mut steps = up.split(' ');
-    let loader = steps
+    let loaded = steps
         .next()
-        .and_then(|step| step.strip_prefix("arg:0:"))
-        .is_some_and(|callee| callee.rsplit('.').next() == Some("import_module"));
-    if !loader {
+        .is_some_and(|step| step.starts_with("arg:") || step == "slice");
+    if !loaded {
         return Registered::Nothing;
     }
     let attribute = steps
@@ -551,10 +612,9 @@ impl Through<'_, '_> {
             let Some(members) = cx.link.sequences.get(&list) else {
                 continue;
             };
-            // An item of a list (not a type alias or a constant) the link cannot read may be a
-            // product's list: no group owns the list, so the unknown is everyone's (a problem of
-            // the answer).
-            if members.contains(&None) && cx.link.lists.contains(&list) {
+            // An item of the list the link cannot read may be a product's list: no group owns the
+            // list, so the unknown is everyone's (a problem of the answer).
+            if members.contains(&None) {
                 let module = cx.text(list.0).to_string();
                 let named = format!("{module}.{}", cx.text(list.1));
                 self.out

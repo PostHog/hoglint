@@ -1035,8 +1035,9 @@ enum Reading {
 }
 
 /// Where a value is read: its file's scope, its module, the scope its names are looked up in
-/// (-1 for the module's, else a class body's), the line they resolve before, and the name whose
-/// binding is read (EMPTY for none), which a value that reads it again names (`W = W + [B]`).
+/// (-1 for the module's, else a class body's), the line they resolve before, the name whose
+/// binding is read (EMPTY for none), which a value that reads it again names (`W = W + [B]`),
+/// and whether the row is the name's first binding in that scope.
 #[derive(Clone, Copy)]
 struct Place {
     owner: usize,
@@ -1044,6 +1045,7 @@ struct Place {
     scope: i32,
     line: u32,
     binding: Sid,
+    first: bool,
 }
 
 /// The nodes only an assigned value's JSON text spells out (`value::Encoder::assigned`).
@@ -1111,10 +1113,27 @@ enum Touch {
     Add,
     /// The element at this index of a tuple or list that a target of the same length unpacks.
     Element(usize),
-    /// Anything else: `global name` in a function, another augmented assignment, a type alias,
-    /// an unpacking the link cannot pair. What the name holds cannot be told.
+    /// The elements from the first index up to the second that a starred target takes.
+    Elements(usize, usize),
+    /// Anything else: another augmented assignment, an unpacking the link cannot pair. What the
+    /// name holds cannot be told.
     Other,
+    /// An escape (`FileFacts::escapes`): code the reading does not understand may change the
+    /// value in place, so a value that can grow, or holds items already, cannot be told.
+    Escaped,
 }
+
+/// The row an escape (`FileFacts::escapes`) touches a name with: no value, so it adds no item.
+static ESCAPED: Assign = Assign {
+    s: -1,
+    l: 0,
+    c: 0,
+    f: 0,
+    op: Op::Other,
+    targets: Vec::new(),
+    value: None,
+    ann: None,
+};
 
 /// One assignment row that touches a name, and how.
 struct Touching<'r> {
@@ -1180,15 +1199,21 @@ pub struct Producers<'p> {
     /// their class-body bindings too (`read_classes`).
     pub read_classes: FxHashSet<(Sid, Sid)>,
     /// What each name a declaration names holds, read as a declaration where it is bound, by
-    /// (module, key); merged into `sequences` once every file is read (`bound_declaration`).
+    /// (module, key); merged into `sequences` once every file is read (`bound_name`).
     pub declared: Sequences,
     /// Whether each name a library call is handed can be registered (`registrable`).
     pub registrable: FxHashMap<Ent, bool>,
     /// (module, module it reads by a computed name: `getattr(alias, NAME)`, `vars(alias)`)
     /// (`alias_references`).
     pub computed_reads: FxHashSet<(Sid, Sid)>,
-    /// The names bound to a value shaped like a list, by (module, key) (`list_shaped`).
-    pub lists: FxHashSet<(Sid, Sid)>,
+    /// What each class attribute a value reads past a class holds (`Base.WORKFLOWS`), read as a
+    /// list's items, by (module, key); merged into `sequences` with `declared` (`bound_name`).
+    pub attributes: Sequences,
+    /// Every name a module or a class body binds by assignment, constants too, by (module, key).
+    pub bound: FxHashSet<(Sid, Sid)>,
+    /// The defs and classes the body of each class in `read_classes` defines, as
+    /// (module, `Class.NAME`): a property read off an instance is one of them.
+    pub defined: FxHashSet<(Sid, Sid)>,
 }
 
 /// What each module-level sequence of names holds, by (module, name): per item, the entity its
@@ -1250,7 +1275,9 @@ impl Producers<'_> {
         self.each(Self::references);
         self.read_classes();
         self.each(Self::sequences);
-        for (key, items) in std::mem::take(&mut self.declared) {
+        let read = std::mem::take(&mut self.declared);
+        let attributes = std::mem::take(&mut self.attributes);
+        for (key, items) in read.into_iter().chain(attributes) {
             self.sequences.entry(key).or_default().extend(items);
         }
         self.each(Self::declarations);
@@ -1435,41 +1462,32 @@ impl Producers<'_> {
         match value {
             V::Call(..) => false,
             V::Opaque(what) => !SPELLED_NODES.contains(&self.core.it.s(*what)),
-            V::List(items) | V::Tuple(items) | V::Set(items) => {
+            V::List(items) | V::Tuple(items) | V::Set(items) | V::BoolOp(items) => {
                 items.iter().all(|item| self.spelled(item))
             }
             V::Dict(entries) => entries.iter().all(|(key, item)| {
                 key.as_ref().is_none_or(|key| self.spelled(key)) && self.spelled(item)
             }),
             V::Star(inner) | V::Unary(inner) => self.spelled(inner),
-            V::Bin(_, left, right) => self.spelled(left) && self.spelled(right),
+            V::Bin(_, left, right) | V::Sub(left, right) => {
+                self.spelled(left) && self.spelled(right)
+            }
             _ => true,
         }
     }
 
-    /// Whether a value is shaped like a list: a list, tuple, set or dict literal, a comprehension,
-    /// a copy (`list(...)`, `x.copy()`, `x.values()`, `chain(...)`), `+` of anything, or `|` with
-    /// a set or dict literal. A type alias (`Literal[...]`, `A | B` of types), a constant or any
-    /// other call is not.
-    fn list_shaped(&self, value: &V) -> bool {
-        match value {
-            V::List(_) | V::Tuple(_) | V::Set(_) | V::Dict(_) => true,
-            V::Opaque(what) => SPELLED_NODES[1..].contains(&self.core.it.s(*what)),
-            V::Bin(false, _, _) => true,
-            V::Bin(true, left, right) => {
-                matches!(**left, V::Set(_) | V::Dict(_))
-                    || matches!(**right, V::Set(_) | V::Dict(_))
+    /// Whether a row binds or adds a value that can grow in place: a list, set or dict, a
+    /// comprehension, an operation on one, a call's result, or another name's value. A constant,
+    /// a tuple and a subscript (a type alias, say) cannot.
+    fn grows(&self, touching: &Touching) -> bool {
+        if !matches!(touching.touch, Touch::Bind | Touch::Add) {
+            return false;
+        }
+        match &touching.row.value {
+            Some(V::List(_) | V::Set(_) | V::Dict(_) | V::Bin(..) | V::Call(..) | V::Chain(_)) => {
+                true
             }
-            V::Call(callee, _, _) => {
-                let V::Chain(callee) = &**callee else {
-                    return false;
-                };
-                let callee = self.core.it.s(*callee);
-                COPY_CALLEES.contains(&callee)
-                    || [".copy", ".values", "chain"]
-                        .iter()
-                        .any(|end| callee.ends_with(end))
-            }
+            Some(V::Opaque(what)) => SPELLED_NODES.contains(&self.core.it.s(*what)),
             _ => false,
         }
     }
@@ -1484,16 +1502,15 @@ impl Producers<'_> {
                         .strip_prefix(name)
                         .is_some_and(|rest| rest.starts_with('.'))
             }
-            V::List(items) | V::Tuple(items) | V::Set(items) => {
+            V::List(items) | V::Tuple(items) | V::Set(items) | V::BoolOp(items) => {
                 items.iter().any(|item| self.reads_name(item, name))
             }
             V::Dict(entries) => entries.iter().any(|(key, item)| {
                 key.as_ref().is_some_and(|key| self.reads_name(key, name))
                     || self.reads_name(item, name)
             }),
-            V::Star(inner) | V::Unary(inner) | V::Attr(inner, _) | V::Sub(inner, _) => {
-                self.reads_name(inner, name)
-            }
+            V::Star(inner) | V::Unary(inner) | V::Attr(inner, _) => self.reads_name(inner, name),
+            V::Sub(inner, index) => self.reads_name(inner, name) || self.reads_name(index, name),
             V::Bin(_, left, right) => self.reads_name(left, name) || self.reads_name(right, name),
             V::Call(callee, _, sole) => {
                 self.reads_name(callee, name)
@@ -1530,26 +1547,25 @@ impl Producers<'_> {
         Some(self.core.it.intern(&key))
     }
 
-    /// The rows of a file that touch each name it binds, by key (`binding_key`), in source order;
-    /// with `wanted`, only that key's. A bare annotation touches nothing.
+    /// The rows of a file that touch each name it binds, by key (`binding_key`), in source order.
+    /// After them, each escape of the file (`FileFacts::escapes`) makes its name, and the class
+    /// attributes of a class of that name, `Other`; `*` makes every name `Other`. A name another
+    /// name aliases (`_ALL = W`) is `Other` when the alias is changed in place (`_ALL.append(B)`).
+    /// A bare annotation touches nothing.
     fn touches<'r>(
         &mut self,
         owner: usize,
         record: &'r FileFacts,
-        wanted: Option<Sid>,
+        all_classes: bool,
     ) -> Touches<'r> {
-        let all_classes = wanted.is_some();
-        let class_key = wanted.is_some_and(|key| self.core.it.s(key).contains('.'));
         let mut out: Touches<'r> = FxHashMap::default();
         for (at, row) in record.assigns.iter().enumerate() {
-            if wanted.is_some() && (row.s == -1) == class_key {
-                continue;
-            }
             let touch = match row.op {
                 Op::Assign | Op::Annotated if row.value.is_none() => continue,
-                Op::Assign | Op::Annotated => Touch::Bind,
-                Op::AddAssign | Op::Mutate => Touch::Add,
-                Op::TypeAlias | Op::Global | Op::Other => Touch::Other,
+                Op::Assign | Op::Annotated | Op::TypeAlias => Touch::Bind,
+                Op::Global if row.value.is_some() => Touch::Bind,
+                Op::AddAssign | Op::Mutate | Op::OrAssign => Touch::Add,
+                Op::Global | Op::Other => Touch::Other,
             };
             let mut named: Vec<(Sid, Touch)> = Vec::new();
             for target in &row.targets {
@@ -1557,9 +1573,9 @@ impl Producers<'_> {
                     V::Chain(name) => {
                         let text = self.core.it.s(*name);
                         if row.op == Op::Mutate {
-                            if let Some((bare, _)) = text.split_once('.') {
-                                let bare = bare.to_string();
-                                named.push((self.core.it.intern(&bare), touch));
+                            if let Some((receiver, _)) = text.rsplit_once('.') {
+                                let receiver = receiver.to_string();
+                                named.push((self.core.it.intern(&receiver), touch));
                             }
                         } else if !text.contains('.') {
                             named.push((*name, touch));
@@ -1573,24 +1589,7 @@ impl Producers<'_> {
                         }
                     }
                     V::Tuple(items) | V::List(items) if row.s == -1 => {
-                        let flat = items.iter().all(|item| {
-                            matches!(item, V::Chain(name) if !self.core.it.s(*name).contains('.'))
-                        });
-                        let paired = touch == Touch::Bind
-                            && flat
-                            && matches!(&row.value, Some(V::Tuple(values) | V::List(values))
-                                if values.len() == items.len()
-                                    && !values.iter().any(|value| matches!(value, V::Star(_))));
-                        let mut names = Vec::new();
-                        unpacked_targets(target, &mut names);
-                        for (index, name) in names.into_iter().enumerate() {
-                            let touch = if paired {
-                                Touch::Element(index)
-                            } else {
-                                Touch::Other
-                            };
-                            named.push((name, touch));
-                        }
+                        self.unpacked(target, items, row, touch, &mut named);
                     }
                     V::Star(_) if row.s == -1 => {
                         let mut names = Vec::new();
@@ -1604,26 +1603,142 @@ impl Producers<'_> {
                 let Some(key) = self.binding_key(owner, row.s, name, all_classes) else {
                     continue;
                 };
-                if wanted.is_some_and(|wanted| wanted != key) {
-                    continue;
-                }
                 let entry = out.entry(key).or_insert_with(|| (name, Vec::new()));
                 entry.1.push(Touching { at, row, touch });
+            }
+        }
+        let mut changed: Vec<(Sid, usize, &'r Assign)> = Vec::new();
+        for (name, rows) in out.values() {
+            if !rows.iter().any(|touching| touching.touch == Touch::Add) {
+                continue;
+            }
+            for touching in rows.iter().filter(|touching| touching.touch == Touch::Bind) {
+                if let Some(V::Chain(aliased)) = &touching.row.value
+                    && aliased != name
+                    && touching.row.s == -1
+                {
+                    changed.push((*aliased, touching.at, touching.row));
+                }
+            }
+        }
+        for (aliased, at, row) in changed {
+            if let Some(entry) = out.get_mut(&aliased) {
+                entry.1.push(Touching {
+                    at,
+                    row,
+                    touch: Touch::Other,
+                });
+            }
+        }
+        for escape in &record.escapes {
+            let name = self.core.it.s(escape.name).to_string();
+            let keys: Vec<Sid> = if name == "*" {
+                out.keys().copied().collect()
+            } else if let Some(class) = name.strip_suffix(".*") {
+                let prefix = format!("{class}.");
+                out.keys()
+                    .copied()
+                    .filter(|key| escape.scope == -1 && self.core.it.s(*key).starts_with(&prefix))
+                    .collect()
+            } else {
+                let own = self.binding_key(owner, escape.scope, escape.name, all_classes);
+                own.into_iter()
+                    .filter(|key| out.contains_key(key))
+                    .collect()
+            };
+            for key in keys {
+                if let Some(entry) = out.get_mut(&key) {
+                    entry.1.push(Touching {
+                        at: usize::MAX,
+                        row: &ESCAPED,
+                        touch: Touch::Escaped,
+                    });
+                }
             }
         }
         out
     }
 
+    /// The names an unpacking binds and how: paired with the elements of a tuple or list value
+    /// when the target is flat and the value has no star (a starred target takes the elements
+    /// between the others), else `Other`.
+    fn unpacked(
+        &self,
+        target: &V,
+        items: &[V],
+        row: &Assign,
+        touch: Touch,
+        out: &mut Vec<(Sid, Touch)>,
+    ) {
+        let flat = items.iter().all(|item| {
+            let item = match item {
+                V::Star(inner) => &**inner,
+                item => item,
+            };
+            matches!(item, V::Chain(name) if !self.core.it.s(*name).contains('.'))
+        });
+        let values = match &row.value {
+            Some(V::Tuple(values) | V::List(values))
+                if !values.iter().any(|value| matches!(value, V::Star(_))) =>
+            {
+                Some(values.len())
+            }
+            _ => None,
+        };
+        let stars = items
+            .iter()
+            .filter(|item| matches!(item, V::Star(_)))
+            .count();
+        let paired = touch == Touch::Bind
+            && flat
+            && stars <= 1
+            && values.is_some_and(|len| len + stars >= items.len());
+        if !paired {
+            let mut names = Vec::new();
+            unpacked_targets(target, &mut names);
+            out.extend(names.into_iter().map(|name| (name, Touch::Other)));
+            return;
+        }
+        let len = values.unwrap_or_default();
+        let after = items.len();
+        let star_at = items.iter().position(|item| matches!(item, V::Star(_)));
+        for (index, item) in items.iter().enumerate() {
+            match item {
+                V::Chain(name) => {
+                    let element = match star_at {
+                        Some(star) if index > star => len - (after - index),
+                        _ => index,
+                    };
+                    out.push((*name, Touch::Element(element)));
+                }
+                V::Star(inner) => {
+                    if let V::Chain(name) = &**inner {
+                        let end = len - (after - index - 1);
+                        out.push((*name, Touch::Elements(index, end)));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Whether a name's rows read exactly, so the union of what they hold is what the name holds:
     /// one binds it, none is `Other`, none sits in a block (a class body is none), and each
     /// binding after the first reads the name itself (`W = W + [B]`).
-    fn exact(&self, name: Sid, rows: &[Touching]) -> bool {
+    fn exact(&self, name: Sid, rows: &[Touching], grows: bool) -> bool {
         let mut bound = false;
         for touching in rows {
-            if touching.touch == Touch::Other || touching.row.f & !CLASS != 0 {
+            if touching.touch == Touch::Escaped && !grows {
+                continue;
+            }
+            let unknown = matches!(touching.touch, Touch::Other | Touch::Escaped);
+            if unknown || touching.row.f & !CLASS != 0 {
                 return false;
             }
-            if !matches!(touching.touch, Touch::Bind | Touch::Element(_)) {
+            if !matches!(
+                touching.touch,
+                Touch::Bind | Touch::Element(_) | Touch::Elements(..)
+            ) {
                 continue;
             }
             let reads_itself = touching
@@ -1641,7 +1756,8 @@ impl Producers<'_> {
 
     /// What a name holds, read from the rows that touch it: the union of each row's items, and
     /// an unread item when the rows do not read exactly and can hold something (a name bound
-    /// twice, or in a block, to constants holds nothing either way).
+    /// twice, or in a block, to constants holds nothing either way), or when something the
+    /// reading does not understand touches it.
     #[allow(clippy::too_many_arguments)]
     fn name_items(
         &mut self,
@@ -1654,6 +1770,7 @@ impl Producers<'_> {
         seen: &mut FxHashSet<Ent>,
     ) -> Vec<Option<Ent>> {
         let mut found = Vec::new();
+        let mut first = true;
         for touching in rows {
             let place = Place {
                 owner,
@@ -1661,11 +1778,20 @@ impl Producers<'_> {
                 scope: touching.row.s,
                 line: touching.row.l,
                 binding: name,
+                first,
             };
+            if matches!(
+                touching.touch,
+                Touch::Bind | Touch::Element(_) | Touch::Elements(..)
+            ) {
+                first = false;
+            }
             self.touch_items(place, touching, reading, text, seen, &mut found);
         }
         let unknown = rows.iter().any(|touching| touching.touch == Touch::Other);
-        if (unknown || !found.is_empty()) && !self.exact(name, rows) {
+        let escaped = rows.iter().any(|touching| touching.touch == Touch::Escaped);
+        let grows = escaped && rows.iter().any(|touching| self.grows(touching));
+        if (unknown || grows || !found.is_empty()) && !self.exact(name, rows, grows) {
             found.push(None);
         }
         found
@@ -1687,23 +1813,29 @@ impl Producers<'_> {
             return;
         };
         match touching.touch {
-            Touch::Other => {}
-            Touch::Element(index) => {
+            Touch::Other | Touch::Escaped => {}
+            Touch::Element(index) | Touch::Elements(index, _) => {
+                let end = match touching.touch {
+                    Touch::Elements(_, end) => end,
+                    _ => index + 1,
+                };
                 let (V::Tuple(values) | V::List(values)) = value else {
                     out.push(None);
                     return;
                 };
-                if reading == Reading::List && self.spelled(&values[index]) {
-                    self.sequence_items(place, &values[index], out);
-                    return;
-                }
-                let element = text.value(touching.at).and_then(|json| {
-                    let values = json.get("tuple").or_else(|| json.get("list"))?;
-                    values.get(index)
-                });
-                match element {
-                    Some(json) => self.json_items(place, json, reading, seen, out),
-                    None => out.push(None),
+                for at in index..end {
+                    if reading == Reading::List && self.spelled(&values[at]) {
+                        self.sequence_items(place, &values[at], seen, out);
+                        continue;
+                    }
+                    let element = text.value(touching.at).and_then(|json| {
+                        let values = json.get("tuple").or_else(|| json.get("list"))?;
+                        values.get(at)
+                    });
+                    match element {
+                        Some(json) => self.json_items(place, json, reading, seen, out),
+                        None => out.push(None),
+                    }
                 }
             }
             Touch::Add if row.op == Op::Mutate => {
@@ -1717,7 +1849,7 @@ impl Producers<'_> {
             }
             Touch::Bind | Touch::Add => {
                 if reading == Reading::List && self.spelled(value) {
-                    self.sequence_items(place, value, out);
+                    self.sequence_items(place, value, seen, out);
                     return;
                 }
                 match text.value(touching.at) {
@@ -1728,17 +1860,12 @@ impl Producers<'_> {
         }
     }
 
-    /// The items of each name a module binds by assignment, for the rules to read where core
-    /// registers the name (`Link::sequences`), by `name_items`; class-body bindings of the
-    /// classes in `read_classes` under `Class.NAME`. A list, tuple or set literal holds its
-    /// items, a dict literal its keys and values, an operation (`+`, `|`) both sides, `*x` the
-    /// items of `x`, a copy (`sorted`, `list`, `tuple` or `set` of one, `x.copy()`,
-    /// `x.values()`) the items of what it copies, a conditional expression both branches, a
-    /// comprehension whose element is its target the items it loops over, a name what it names,
-    /// and a call as `call_items` reads it. `+=`, `name[key] = value` and a method that changes
-    /// the name at module level (`append`, `extend`, `insert`, `update`, `add`) add items. A name
-    /// the link cannot read is never a name with no items. A name bound to constants holds none
-    /// and is left out.
+    /// What each name a module binds holds, for the rules to read where core registers the name
+    /// (`Link::sequences`), by `name_items`; class-body bindings of the classes in
+    /// `read_classes` under `Class.NAME`. A name is read exactly only when every row that binds,
+    /// changes or uses it at module level, or in a class body, is one the reading understands;
+    /// else it is unread. A name the link cannot read is never a name with no items. A name bound
+    /// to constants holds none and is left out of the table, and is noted in `bound`.
     /// In a registry's file, the attribute its loader reads is a declaration (`Reading`).
     fn sequences(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
@@ -1749,7 +1876,19 @@ impl Producers<'_> {
         }
         let module = self.scopes[owner].module;
         let declared = self.settings.registry_attribute(&record.path);
-        let touches = self.touches(owner, record, None);
+        for node in &record.defs {
+            let scope = &self.scopes[owner];
+            if node.s < 0 || scope.in_function[node.s as usize] {
+                continue;
+            }
+            let class = scope.qualnames[node.s as usize];
+            if self.read_classes.contains(&(module, class)) {
+                let key = format!("{}.{}", self.core.it.s(class), self.core.it.s(node.n));
+                let key = self.core.it.intern(&key);
+                self.defined.insert((module, key));
+            }
+        }
+        let touches = self.touches(owner, record, false);
         if let Some(attribute) = declared
             && !touches.contains_key(&attribute)
         {
@@ -1768,19 +1907,9 @@ impl Producers<'_> {
             let mut seen = FxHashSet::default();
             seen.insert(Ent { m: module, s: key });
             let items = self.name_items(owner, module, *name, rows, reading, &mut text, &mut seen);
+            self.bound.insert((module, key));
             if !items.is_empty() {
                 self.sequences.insert((module, key), items);
-            }
-            let shaped = rows.iter().any(|touching| {
-                touching.touch == Touch::Bind
-                    && touching
-                        .row
-                        .value
-                        .as_ref()
-                        .is_some_and(|value| self.list_shaped(value))
-            });
-            if shaped {
-                self.lists.insert((module, key));
             }
         }
     }
@@ -1798,7 +1927,9 @@ impl Producers<'_> {
 
     /// The items of one value as the extractor wrote it (the record's JSON text, which keeps
     /// every argument of a call and the parts of an assigned conditional or comprehension), in
-    /// order, into `out`.
+    /// order, into `out`. A subscript of a library generic holds what its parts hold (a type
+    /// alias); of anything else, nothing when its parts hold nothing, else it is unread; `a or b`
+    /// holds what either side holds.
     fn json_items(
         &mut self,
         at: Place,
@@ -1816,7 +1947,7 @@ impl Producers<'_> {
             self.call_items(at, map, reading, seen, out);
             return;
         }
-        for key in ["list", "tuple", "set"] {
+        for key in ["list", "tuple", "set", "vs"] {
             if let Some(J::Array(items)) = map.get(key) {
                 for item in items {
                     self.json_items(at, item, reading, seen, out);
@@ -1836,18 +1967,32 @@ impl Producers<'_> {
             self.json_items(at, inner, reading, seen, out);
             return;
         }
-        if map.contains_key("bin") {
-            for side in ["l", "r"] {
-                match map.get(side) {
-                    Some(part) => self.json_items(at, part, reading, seen, out),
-                    None => out.push(None),
+        if let Some(inner) = map.get("sub") {
+            let mut parts = Vec::new();
+            for part in ["sub", "i"] {
+                match map.get(part) {
+                    Some(part) => self.json_items(at, part, reading, seen, &mut parts),
+                    None => parts.push(None),
                 }
+            }
+            let inner = value_tree(&mut self.core.it, inner);
+            if self.library_generic(at, &inner) {
+                out.extend(parts);
+            } else if !parts.is_empty() {
+                out.push(None);
             }
             return;
         }
-        if map.contains_key("orelse") {
-            for branch in ["body", "orelse"] {
-                match map.get(branch) {
+        let parts = if map.contains_key("bin") {
+            Some(["l", "r"])
+        } else if map.contains_key("orelse") {
+            Some(["body", "orelse"])
+        } else {
+            None
+        };
+        if let Some(parts) = parts {
+            for part in parts {
+                match map.get(part) {
                     Some(part) => self.json_items(at, part, reading, seen, out),
                     None => out.push(None),
                 }
@@ -2018,10 +2163,8 @@ impl Producers<'_> {
         found
     }
 
-    /// The items of a value with no call and no spelled part: as a list's (`sequence_items`). In
-    /// a declaration, a name also holds what its module binds it to, read as a declaration there
-    /// (`bound_declaration`), so a record bound to a name keeps its arguments' items; a class
-    /// attribute (`Queues.MAIN`) is read from the class body.
+    /// The items of a value with no call and no spelled part: a name by `chain_items`, anything
+    /// else as a list's (`sequence_items`).
     fn leaf_items(
         &mut self,
         at: Place,
@@ -2030,10 +2173,25 @@ impl Producers<'_> {
         seen: &mut FxHashSet<Ent>,
         out: &mut Vec<Option<Ent>>,
     ) {
-        if reading == Reading::List || !matches!(value, V::Chain(_)) {
-            self.sequence_items(at, value, out);
-            return;
+        match value {
+            V::Chain(_) => self.chain_items(at, value, reading, seen, out),
+            _ => self.sequence_items(at, value, seen, out),
         }
+    }
+
+    /// The items of a name. It is the item its lookup names; in a declaration, what that name
+    /// holds is also read as a declaration where it is bound (`bound_name`), so a record bound to
+    /// a name keeps its arguments' items. A name read past what the lookup names
+    /// (`Base.WORKFLOWS`, `Queues.MAIN`) is that attribute of the class: what the class body binds
+    /// it to, the class itself when the body defines it by a def or a class, else unread.
+    fn chain_items(
+        &mut self,
+        at: Place,
+        value: &V,
+        reading: Reading,
+        seen: &mut FxHashSet<Ent>,
+        out: &mut Vec<Option<Ent>>,
+    ) {
         let (surface, resolved) = self.resolve_item(at, value);
         let target = match resolved.res {
             Res::Resolved => resolved.target,
@@ -2047,60 +2205,87 @@ impl Producers<'_> {
             out.push(target);
             return;
         };
+        out.push(Some(target));
         let origin = self.core.it.join(target.m, target.s);
         let rest = (self.core.it.s(surface).strip_prefix(self.core.it.s(origin)))
             .and_then(|rest| rest.strip_prefix('.'))
             .map(str::to_string);
-        let named = match rest {
-            Some(rest) => {
-                let key = format!("{}.{rest}", self.core.it.s(target.s));
-                out.push(Some(target));
-                Ent {
-                    m: target.m,
-                    s: self.core.it.intern(&key),
-                }
+        let Some(rest) = rest else {
+            // A class member the lookup lands on (`Base.WORKFLOWS` read in another class body)
+            // is stored as one: no reference edge may read it from outside.
+            if reading == Reading::Declaration || self.core.it.s(target.s).contains('.') {
+                self.bound_name(target, reading, seen);
             }
-            None => target,
+            return;
         };
-        out.push(Some(named));
-        self.bound_declaration(named, seen);
+        let key = format!("{}.{rest}", self.core.it.s(target.s));
+        let attribute = Ent {
+            m: target.m,
+            s: self.core.it.intern(&key),
+        };
+        if self.bound_name(attribute, reading, seen) {
+            out.push(Some(attribute));
+        } else if !self.class_defines(target, &rest) {
+            out.push(None);
+        }
     }
 
-    /// A name's lookup where a value reads it. A module-level binding that reads the name it
-    /// binds (`W = W + [B]` after `from x import W`) reads the import before it, when there is
-    /// one, not itself.
+    /// A name's lookup where a value reads it. A binding that reads the name it binds is exact
+    /// only where the name is bound before it: by the scope's own earlier binding (the union of
+    /// the rows is what it holds), by an import (`from x import W` then `W = W + [B]`), or, in a
+    /// class body, by the module (`class R: W = W`). A first binding of a module-level name that
+    /// no import binds before it (a star import, say), or whose import leads back to itself, is
+    /// unread.
     fn resolve_item(&mut self, at: Place, value: &V) -> (Sid, Resolved) {
         let found = self.lookup_value(at.owner, value, at.scope, at.line);
+        let reads_itself =
+            at.binding != EMPTY && matches!(value, V::Chain(name) if *name == at.binding);
+        if !reads_itself || !at.first {
+            return found;
+        }
+        if at.scope != -1 {
+            return self.lookup_value(at.owner, value, -1, at.line);
+        }
         let itself = Some(Ent {
             m: at.module,
             s: at.binding,
         });
-        if at.scope != -1
-            || found.1.target != itself
-            || !matches!(value, V::Chain(name) if *name == at.binding)
-        {
+        if found.1.target != itself {
             return found;
         }
         let core = &mut *self.core;
-        match core.import_before(&self.scopes[at.owner], at.binding, at.line) {
-            Some(lookup) => (lookup.surface, core.classify_lookup(lookup)),
-            None => found,
+        let Some(lookup) = core.import_before(&self.scopes[at.owner], at.binding, at.line) else {
+            return (EMPTY, UNRESOLVED);
+        };
+        let resolved = core.classify_lookup(lookup);
+        if resolved.target == itself {
+            return (EMPTY, UNRESOLVED);
         }
+        (lookup.surface, resolved)
     }
 
-    /// What a name a declaration names holds, read as a declaration where it is bound, stored
-    /// under its own key (`declared`), so an unknown there is its module's, never the
-    /// declaration's product's. Read once.
-    fn bound_declaration(&mut self, target: Ent, seen: &mut FxHashSet<Ent>) {
+    /// Reads what a name holds where it is bound, as `reading` reads it, and stores it under its
+    /// own key (`declared`, `attributes`), so an unknown there is its module's, never the reader's
+    /// product's. Read once. Whether the module binds the name by assignment.
+    fn bound_name(&mut self, target: Ent, reading: Reading, seen: &mut FxHashSet<Ent>) -> bool {
         let key = (target.m, target.s);
-        if self.declared.contains_key(&key) || !seen.insert(target) {
-            return;
+        let stored = match reading {
+            Reading::Declaration => &self.declared,
+            Reading::List => &self.attributes,
+        };
+        if stored.contains_key(&key) || !seen.insert(target) {
+            return true;
         }
-        if let Some(items) = self.binding_items(target, Reading::Declaration, seen)
-            && !items.is_empty()
-        {
-            self.declared.insert(key, items);
+        let Some(items) = self.binding_items(target, reading, seen) else {
+            return false;
+        };
+        if !items.is_empty() {
+            match reading {
+                Reading::Declaration => self.declared.insert(key, items),
+                Reading::List => self.attributes.insert(key, items),
+            };
         }
+        true
     }
 
     /// What a name holds where its module binds it (a class attribute too, `Class.NAME`), read as
@@ -2121,11 +2306,46 @@ impl Producers<'_> {
         if !record.ok() {
             return Some(vec![None]);
         }
-        let mut touches = self.touches(owner, record, Some(target.s));
+        let mut touches = self.touches(owner, record, true);
         let (name, rows) = touches.remove(&target.s)?;
         let mut text = AssignText::new(facts.clone(), file as usize);
         let items = self.name_items(owner, target.m, name, &rows, reading, &mut text, seen);
         Some(items)
+    }
+
+    /// Whether the body of class `class` defines the first attribute of `rest` by a def or a
+    /// class (a method, a nested class).
+    fn class_defines(&mut self, class: Ent, rest: &str) -> bool {
+        let first = rest.split('.').next().unwrap_or_default();
+        let Some(table) = self.core.table(class.m) else {
+            return false;
+        };
+        let Some(file) = self.core.table_at(table).record else {
+            return false;
+        };
+        let Some(&owner) = self.scope_of_file.get(&file) else {
+            return false;
+        };
+        let scope = &self.scopes[owner as usize];
+        let Some(index) = (0..scope.qualnames.len())
+            .find(|&at| scope.qualnames[at] == class.s && !scope.in_function[at])
+        else {
+            return false;
+        };
+        let facts = self.core.facts.clone();
+        let defs = &facts.files[file as usize].defs;
+        defs.iter()
+            .any(|node| node.s == index as i32 && self.core.it.s(node.n) == first)
+    }
+
+    /// Whether the value a subscript reads is a name of library code (`Callable`, `list`): the
+    /// subscript then builds a type alias, not an item of a value.
+    fn library_generic(&mut self, at: Place, inner: &V) -> bool {
+        if !matches!(inner, V::Chain(_)) {
+            return false;
+        }
+        let (_, resolved) = self.lookup_value(at.owner, inner, at.scope, at.line);
+        resolved.res == Res::External
     }
 
     /// The one argument of a call of `sorted`, `list`, `tuple` or `set`: a copy of a sequence.
@@ -2141,30 +2361,50 @@ impl Producers<'_> {
             .then_some(&**sole)
     }
 
-    /// The items of one value tree with no call, in order, into `out`. A name resolves where the
-    /// module binds it, before `line`; a value the tree cannot spell out is unread.
-    fn sequence_items(&mut self, at: Place, value: &V, out: &mut Vec<Option<Ent>>) {
+    /// The items of one value tree with no call, as a list's, in order, into `out`. A name is
+    /// read by `chain_items`; a subscript holds nothing when its parts hold nothing, else it is
+    /// unread; `a or b` holds what either side holds; a value the tree cannot spell out is unread.
+    fn sequence_items(
+        &mut self,
+        at: Place,
+        value: &V,
+        seen: &mut FxHashSet<Ent>,
+        out: &mut Vec<Option<Ent>>,
+    ) {
         match value {
-            V::List(items) | V::Tuple(items) | V::Set(items) => {
+            V::List(items) | V::Tuple(items) | V::Set(items) | V::BoolOp(items) => {
                 for item in items {
-                    self.sequence_items(at, item, out);
+                    self.sequence_items(at, item, seen, out);
                 }
             }
             V::Dict(entries) => {
                 for (key, item) in entries {
                     if let Some(key) = key.as_ref().filter(|key| !matches!(key, V::Str(_, None))) {
-                        self.sequence_items(at, key, out);
+                        self.sequence_items(at, key, seen, out);
                     }
-                    self.sequence_items(at, item, out);
+                    self.sequence_items(at, item, seen, out);
                 }
             }
-            V::Star(inner) => self.sequence_items(at, inner, out),
+            V::Star(inner) | V::Unary(inner) => self.sequence_items(at, inner, seen, out),
             V::Bin(_, left, right) => {
-                self.sequence_items(at, left, out);
-                self.sequence_items(at, right, out);
+                self.sequence_items(at, left, seen, out);
+                self.sequence_items(at, right, seen, out);
             }
-            V::Str(_, None) | V::Scalar | V::Null => {}
-            V::Unary(inner) => self.sequence_items(at, inner, out),
+            // A subscript of a library generic is a type alias (`Callable[[A], B]`,
+            // `Literal["a"]`): it holds what its parts hold. Of anything else, it holds nothing
+            // when its parts hold nothing, else it picks an item the link cannot tell.
+            V::Sub(inner, index) => {
+                let mut parts = Vec::new();
+                self.sequence_items(at, inner, seen, &mut parts);
+                self.sequence_items(at, index, seen, &mut parts);
+                if self.library_generic(at, inner) {
+                    out.extend(parts);
+                } else if !parts.is_empty() {
+                    out.push(None);
+                }
+            }
+            // A string holds nothing, also one that spells a type (`Literal["a"]`, `list["W"]`).
+            V::Str(..) | V::Scalar | V::Null => {}
             V::Opaque(what) => match self.core.it.s(*what) {
                 // A constant the tree does not spell out holds no item a module defines.
                 "badstr" | "longstr" | "int" | "float" | "complex" | "bytes" | "..."
@@ -2176,16 +2416,9 @@ impl Producers<'_> {
                 })),
                 _ => out.push(None),
             },
-            V::Chain(_) => {
-                let (_, resolved) = self.resolve_item(at, value);
-                match resolved.res {
-                    Res::Resolved => out.push(resolved.target),
-                    Res::External => {}
-                    _ => out.push(None),
-                }
-            }
+            V::Chain(_) => self.chain_items(at, value, Reading::List, seen, out),
             V::Call(..) => match self.copied(value) {
-                Some(sole) => self.sequence_items(at, sole, out),
+                Some(sole) => self.sequence_items(at, sole, seen, out),
                 None => out.push(None),
             },
             _ => out.push(None),
@@ -2253,9 +2486,6 @@ impl Producers<'_> {
         let k = &self.settings.k;
         let file = self.scopes[owner].file as usize;
         for row in &facts.files[file].uses {
-            if row.attrs == EMPTY {
-                continue;
-            }
             let core = &mut *self.core;
             let scope = &mut self.scopes[owner];
             let first =
@@ -2264,9 +2494,11 @@ impl Producers<'_> {
                 continue;
             };
             let module = core.origin(module).m;
-            // `getattr(alias, NAME)` or `vars(alias)`: the extractor writes the attribute no
-            // one can name as `?`.
-            if core.it.s(row.attrs).starts_with(".?") {
+            // The module object itself used, not a name of it: handed to a call, stored, read
+            // through `__dict__` or another dunder, or read by a name no one can write (`?`:
+            // `getattr(alias, NAME)`, `vars(alias)`). What it hands out cannot be told there.
+            let attrs = core.it.s(row.attrs);
+            if attrs.is_empty() || attrs.starts_with(".?") || attrs.starts_with(".__") {
                 self.computed_reads.insert((scope.module, module));
                 continue;
             }

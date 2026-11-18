@@ -1,6 +1,6 @@
 """`hoglint watched` on the shapes a registered list or a declaration takes (CASES.md `WA08` to
-`WA13`): one small product per shape, laid over a copy of the model repository with the preset in
-the derived form, in one run. Each product's probe files define what core runs: each is watched, or
+`WA14`): one small product per shape, laid over a copy of the model repository with the preset in
+the derived form, in one run (the round-4 rows of `shapes_round4.py` in two runs of their own). Each product's probe files define what core runs: each is watched, or
 the product cannot pass because the link cannot read an item. Unknown is never clean. An unread
 item of a core list a registration point registers is a problem of the whole answer, in a run of
 its own."""
@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from model_repo.harness import copy_tree
+from model_repo.shapes_round4 import ROUND4
 from model_repo.test_watched import lay_derived, watched
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
@@ -929,10 +930,12 @@ def lay(repo: Path, shapes: dict[str, dict[str, Any]]) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         # A facade with no declaration hands out a list the worker registers.
-        declares = "TEMPORAL" in files["backend/facade/temporal.py"]
-        appended = shape.get("core") or ({} if declares else {WORKER: registered(p)})
+        declares = "TEMPORAL" in files.get("backend/facade/temporal.py", "TEMPORAL")
+        default = {} if declares else {WORKER: registered(p)}
+        appended = shape["core"] if "core" in shape else default
         for path, text in appended.items():
-            core[path] = core.get(path, "") + text
+            if text not in core.get(path, ""):
+                core[path] = core.get(path, "") + text
     for path, text in core.items():
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -995,3 +998,60 @@ def test_an_unread_item_of_a_core_list_core_registers_is_a_problem(tmp_path: Pat
     assert not found["complete"]
     assert any("posthog.temporal.hop_unread.HOP_MAPPED" in problem for problem in found["problems"]), found["problems"]
     assert not found["groups"]["hop_unread"]["passes"]
+
+
+def answer_of(tmp_path_factory: pytest.TempPathFactory, shapes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    work = tmp_path_factory.mktemp("round4")
+    repo = work / "repo"
+    copy_tree(repo)
+    lay(repo, shapes)
+    lay_derived(repo)
+    found, _ = watched(repo, work / "run")
+    return found
+
+
+ROUND4_PROBLEMS = {p: shape for p, shape in ROUND4.items() if shape["outcome"] == "problem"}
+ROUND4_OTHERS = {p: shape for p, shape in ROUND4.items() if shape["outcome"] != "problem"}
+
+
+@pytest.fixture(scope="module")
+def round4(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND4_OTHERS)
+
+
+@pytest.fixture(scope="module")
+def round4_problems(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND4_PROBLEMS)
+
+
+def test_round4_without_a_core_hop_problem_is_complete(round4: dict[str, Any]) -> None:
+    assert round4["complete"], round4["problems"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND4_OTHERS.items() if shape["outcome"] == "watched"])
+def test_round4_each_file_core_runs_is_watched(round4: dict[str, Any], p: str) -> None:
+    group = round4["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in ROUND4[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND4_OTHERS.items() if shape["outcome"] == "unread"])
+def test_round4_a_shape_the_link_cannot_read_fails_the_level(round4: dict[str, Any], p: str) -> None:
+    group = round4["groups"][p]
+    assert not group["passes"]
+    assert any("cannot read every item" in reason for reason in group["reasons"]), group["reasons"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND4_OTHERS.items() if shape["outcome"] == "kept"])
+def test_round4_a_written_limit_or_the_call_rule_keeps_the_product(round4: dict[str, Any], p: str) -> None:
+    """These pass as the design writes them (`why`); a change here is a change to a limit."""
+    group = round4["groups"][p]
+    assert group["passes"], (ROUND4[p]["why"], group["reasons"])
+
+
+def test_round4_an_unread_core_hop_is_a_problem(round4_problems: dict[str, Any]) -> None:
+    assert not round4_problems["complete"]
+    problems = " ".join(round4_problems["problems"])
+    missing = [p for p in ROUND4_PROBLEMS if p not in problems]
+    assert missing == []
