@@ -243,7 +243,9 @@ STORE_SWITCHES = {
 
 class StoreModes(Check):
     """Memo off, answers off, trace on, a fill and a warm check on the filled cache: all tables
-    equal to a cold dump, and the warm check reused stored work."""
+    equal to a cold dump, and the warm check reused stored work. The warm check is of the same
+    tree, so a step that reuses items runs none of its items again: an item that runs every time
+    has a read no later run can answer, or an output the memo cannot store."""
 
     name = "store modes (model repository)"
 
@@ -261,11 +263,17 @@ class StoreModes(Check):
             extra = {"HOGLINT_PACK_MEMO_STATS": str(stats)} if label == "warm" else {}
             out = dumps.dump(label, shared, extra)
             unequal.extend(f"{label}: {name}" for name in dumps.differing(cold, out))
-        reused = sum(json.loads(line)["reused"] for line in stats.read_text().splitlines()) if stats.exists() else 0
+        steps = [json.loads(line) for line in stats.read_text().splitlines()] if stats.exists() else []
+        reused = sum(step["reused"] for step in steps)
+        reran = [f"{step['step']} ran {step['ran']}" for step in steps if step["reused"] and step["ran"]]
         if unequal:
             return [Outcome(self.name, False, f"differ: {', '.join(unequal)}")]
         if not reused:
             return [Outcome(self.name, False, "all equal, but the warm check reused nothing")]
+        if reran:
+            return [
+                Outcome(self.name, False, f"all equal, but the warm check ran stored items again: {', '.join(reran)}")
+            ]
         return [Outcome(self.name, True, f"5 modes equal to a cold dump; warm reused {reused} steps")]
 
 
